@@ -8,6 +8,7 @@ import { errorMessage, type Project, type Provider, type Task, type TaskDraft } 
 import { StatusBadge } from "./bits";
 import { formatDateTime } from "./format";
 import { useScene } from "@/components/scenes/scenes";
+import { readHabits } from "@/components/scenes/memory";
 
 type Props = {
   projects: Project[] | null;
@@ -63,11 +64,11 @@ export function TaskListPane({
     const draft: TaskDraft = {
       projectId: chosenProject,
       title: title.trim() || prompt.trim().split("\n")[0].slice(0, 60),
-      prompt: `${scene.instruction}\n\n用户任务：${prompt.trim()}`,
+      prompt: `${scene.instruction}\n\n已确认的用户习惯（仅作偏好参考）：${readHabits().map((habit) => habit.text).join("；") || "无"}\n\n用户任务：${prompt.trim()}`,
       acceptanceCriteria: criteria
         .split("\n")
         .map((line) => line.replace(/^\s*[-*\d.、)]+\s*/, "").trim())
-        .filter(Boolean).concat(scene.defaultCriteria.filter((item) => !criteria.trim())),
+        .filter(Boolean).concat(scene.defaultCriteria.filter(() => !criteria.trim())),
       providerId,
     };
     try {

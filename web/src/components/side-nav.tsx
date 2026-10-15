@@ -57,6 +57,16 @@ const items: NavItem[] = [
     ),
   },
   {
+    href: "/daily",
+    label: "日常",
+    match: (p) => p.startsWith("/daily"),
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-4">
+        <path d="M5 5h14v11H8l-3 3z" /><path d="M8 9h8M8 12h5" />
+      </svg>
+    ),
+  },
+  {
     href: "/reverse-lab",
     label: "逆向实验室",
     match: (p) => p.startsWith("/reverse-lab"),
