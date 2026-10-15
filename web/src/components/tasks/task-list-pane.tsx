@@ -7,6 +7,7 @@ import { Panel } from "@/components/panel";
 import { errorMessage, type Project, type Provider, type Task, type TaskDraft } from "./api";
 import { StatusBadge } from "./bits";
 import { formatDateTime } from "./format";
+import { useScene } from "@/components/scenes/scenes";
 
 type Props = {
   projects: Project[] | null;
@@ -41,6 +42,7 @@ export function TaskListPane({
   const [showComposer, setShowComposer] = useState(false);
   const [submitting, setSubmitting] = useState<"idle" | "create" | "create-run">("idle");
   const [error, setError] = useState<string | null>(null);
+  const { scene } = useScene();
 
   const usableProjects = projects ?? [];
   const chosenProject = projectId || usableProjects[0]?.id || "";
@@ -61,11 +63,11 @@ export function TaskListPane({
     const draft: TaskDraft = {
       projectId: chosenProject,
       title: title.trim() || prompt.trim().split("\n")[0].slice(0, 60),
-      prompt: prompt.trim(),
+      prompt: `${scene.instruction}\n\n用户任务：${prompt.trim()}`,
       acceptanceCriteria: criteria
         .split("\n")
         .map((line) => line.replace(/^\s*[-*\d.、)]+\s*/, "").trim())
-        .filter(Boolean),
+        .filter(Boolean).concat(scene.defaultCriteria.filter((item) => !criteria.trim())),
       providerId,
     };
     try {

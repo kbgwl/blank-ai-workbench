@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { HealthPill } from "@/components/health-pill";
 import { SideNav } from "@/components/side-nav";
+import { SceneProvider, SceneSwitcher } from "@/components/scenes/scenes";
 
 export const metadata: Metadata = {
   title: "空白格 AI 操作台",
@@ -12,6 +13,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="zh-CN">
       <body className="flex h-dvh flex-col overflow-hidden">
+        <SceneProvider>
         <header className="flex h-11 shrink-0 items-center justify-between border-b border-line bg-bg px-4">
           <div className="flex items-center gap-3">
             <div className="grid size-6 place-items-center rounded-md bg-brand/12 ring-1 ring-brand/25">
@@ -20,6 +22,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <div className="text-[13px] font-semibold tracking-tight">空白格</div>
           </div>
           <div className="flex items-center gap-3">
+            <SceneSwitcher />
             <HealthPill />
           </div>
         </header>
@@ -30,6 +33,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           </aside>
           <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
         </div>
+        </SceneProvider>
       </body>
     </html>
   );
