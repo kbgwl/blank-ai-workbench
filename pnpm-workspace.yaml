@@ -1,0 +1,10 @@
+packages:
+  - web
+  - packages/*
+
+allowBuilds:
+  unrs-resolver: set this to true or false
+
+ignoredBuiltDependencies:
+  - sharp
+  - unrs-resolver

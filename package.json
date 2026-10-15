@@ -1,0 +1,15 @@
+{
+  "name": "blank-ai-workbench",
+  "private": true,
+  "packageManager": "pnpm@10.4.1",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "pnpm -C web dev",
+    "test:api": "pnpm -C services/api exec uv run pytest -q",
+    "build:web": "pnpm -C web build",
+    "lint:web": "pnpm -C web lint",
+    "typecheck:web": "pnpm -C web exec tsc --noEmit",
+    "regression": "node scripts/regression.mjs",
+    "evals": "node evals/run_evals.mjs"
+  }
+}

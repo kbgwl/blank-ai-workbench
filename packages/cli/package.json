@@ -1,0 +1,12 @@
+{
+  "name": "@blank-ai/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "blank": "src/index.mjs"
+  },
+  "files": ["src", "README.md"],
+  "engines": {
+    "node": ">=22"
+  }
+}

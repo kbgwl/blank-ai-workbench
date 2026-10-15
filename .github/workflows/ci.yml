@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck:web
+      - run: pnpm lint:web
+      - run: pnpm build:web
+
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: blank
+          POSTGRES_PASSWORD: blank_dev_password
+          POSTGRES_DB: blank
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: build sandbox image
+        run: docker build -t blank-sandbox:dev -f sandbox/Dockerfile sandbox
+      - run: uv sync
+        working-directory: services/api
+      - run: uv run pytest -q
+        working-directory: services/api
+      - name: migrations roundtrip
+        env:
+          BLANK_DATABASE_URL: postgresql+asyncpg://blank:blank_dev_password@localhost:5432/blank
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+        working-directory: services/api
