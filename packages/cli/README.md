@@ -1,9 +1,9 @@
-# @blank-ai/cli
+# blank-ai-cli
 
 空白格 AI 工程操作台的命令行入口。
 
 ```bash
-npm install -g @blank-ai/cli
+npm install -g blank-ai-cli
 blank
 ```
 

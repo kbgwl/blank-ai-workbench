@@ -35,7 +35,7 @@ pnpm dev
 目标分发方式：发布 CLI 后，用户可以直接安装并启动本地工作台：
 
 ```bash
-npm install -g @blank-ai/cli
+npm install -g blank-ai-cli
 blank
 ```
 
