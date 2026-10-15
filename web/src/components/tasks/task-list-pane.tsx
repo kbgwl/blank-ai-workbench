@@ -61,10 +61,13 @@ export function TaskListPane({
     }
     setSubmitting(run ? "create-run" : "create");
     setError(null);
+    const habitContext = scene.id === "daily"
+      ? readHabits().map((habit) => habit.text).join("；") || "无"
+      : "当前场景不使用日常习惯记忆";
     const draft: TaskDraft = {
       projectId: chosenProject,
       title: title.trim() || prompt.trim().split("\n")[0].slice(0, 60),
-      prompt: `${scene.instruction}\n\n已确认的用户习惯（仅作偏好参考）：${readHabits().map((habit) => habit.text).join("；") || "无"}\n\n用户任务：${prompt.trim()}`,
+      prompt: `${scene.instruction}\n\n场景上下文：${habitContext}\n\n用户任务：${prompt.trim()}`,
       acceptanceCriteria: criteria
         .split("\n")
         .map((line) => line.replace(/^\s*[-*\d.、)]+\s*/, "").trim())
