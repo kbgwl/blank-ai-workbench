@@ -19,7 +19,7 @@ from blank_api.models.model_provider import ModelUsage
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.context import compact_messages
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
-from blank_api.services.tools.base import ToolContext, ToolDefinition
+from blank_api.services.tools.base import ToolContext, ToolDefinition, approval_key
 from blank_api.services.tools.gateway import ToolGateway
 
 MAX_REPAIR_ROUNDS = 3
@@ -66,10 +66,11 @@ class AgentSession:
     acceptance_criteria: list[str] = field(default_factory=list)
     max_steps: int = 8
     approved_tools: set[str] = field(default_factory=set)
+    approved_actions: set[str] = field(default_factory=set)
     is_cancelled: Callable[[], Awaitable[bool]] = _never_cancelled
 
     def approval_policy(self, tool: ToolDefinition, arguments: dict) -> bool:
-        return tool.name in self.approved_tools
+        return approval_key(tool.name, arguments) in self.approved_actions or tool.name in self.approved_tools
 
     async def ask(self, state: AgentState, prompt: str, node: str, *, messages: list[dict] | None = None) -> dict:
         messages = list(messages) if messages is not None else list(state.get("messages") or [])
@@ -247,8 +248,9 @@ async def _approval_gate(session: AgentSession, node: str, pending: list[dict]) 
         risk = tool.resolve_risk(arguments)
         decision = bool(interrupt({"tool": name, "arguments": arguments, "risk_level": risk}))
         if decision:
-            session.approved_tools.add(name)
-            await session.recorder.add("approval.granted", node, {"tool": name})
+            action = approval_key(name, arguments)
+            session.approved_actions.add(action)
+            await session.recorder.add("approval.granted", node, {"tool": name, "approval_key": action})
         else:
             denied.add(name)
             await session.recorder.add("approval.denied", node, {"tool": name})

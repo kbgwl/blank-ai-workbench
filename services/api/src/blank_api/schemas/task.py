@@ -40,6 +40,7 @@ class TaskRunIn(BaseModel):
     provider_id: str | None = None
     approve_high_risk: bool = False
     approved_tools: list[str] = Field(default_factory=list)
+    approved_actions: list[str] = Field(default_factory=list, max_length=50)
 
 
 class EventOut(BaseModel):

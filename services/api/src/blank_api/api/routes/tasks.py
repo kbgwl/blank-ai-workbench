@@ -120,6 +120,7 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         max_steps=int(task.max_steps),
         approve_high_risk=payload.approve_high_risk,
         approved_tools=set(payload.approved_tools),
+        approved_actions=set(payload.approved_actions),
     )
 
 

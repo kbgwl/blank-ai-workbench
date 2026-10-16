@@ -25,7 +25,7 @@ from blank_api.services.agent.graph import AgentSession, build_agent_graph, init
 from blank_api.services.agent.store import SerializedSessionFactory
 from blank_api.services.models.base import ModelAdapter, ModelError
 from blank_api.services.tools import build_default_tools
-from blank_api.services.tools.base import ToolContext
+from blank_api.services.tools.base import ToolContext, approval_key
 from blank_api.services.tools.gateway import ToolGateway
 from blank_api.services.workspace import mask_path
 
@@ -89,6 +89,7 @@ class RunRequest:
     max_steps: int = 8
     approve_high_risk: bool = False
     approved_tools: set[str] | None = None
+    approved_actions: set[str] | None = None
 
 
 @dataclass
@@ -111,6 +112,7 @@ class AgentRuntime:
         recorder = EventRecorder(store, request.task_id)
         gateway = ToolGateway(build_default_tools())
         allowed = set(request.approved_tools or set())
+        approved_actions = set(request.approved_actions or set())
         if request.approve_high_risk:
             allowed.update(tool.name for tool in gateway.tools.values() if tool.requires_approval)
         context = ToolContext(
@@ -118,10 +120,12 @@ class AgentRuntime:
             task_id=request.task_id,
             session_factory=store,
             approval_policy=lambda tool, arguments: (
-                tool.name in allowed
+                approval_key(tool.name, arguments) in approved_actions
+                or (tool.resolve_risk(arguments) not in ("high", "critical") and tool.name in allowed)
                 or (request.approve_high_risk and tool.resolve_risk(arguments) in ("high", "critical"))
             ),
             extra_secrets=tuple(s for s in (request.adapter.config.api_key,) if s),
+            approved_actions=frozenset(approved_actions),
         )
         session = AgentSession(
             adapter=request.adapter,
@@ -135,6 +139,7 @@ class AgentRuntime:
             acceptance_criteria=[str(item) for item in request.acceptance_criteria or ()],
             max_steps=max(1, int(request.max_steps)),
             approved_tools=allowed,
+            approved_actions=approved_actions,
             is_cancelled=_CancelledLookup(store, request.task_id),
         )
         graph = build_agent_graph(session, SqlAlchemyCheckpointSaver(store))

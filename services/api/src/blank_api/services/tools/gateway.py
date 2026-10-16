@@ -11,7 +11,7 @@ from blank_api.api.errors import ApiError
 from blank_api.models.task import ToolCall
 from blank_api.services.log_safety import redact
 from blank_api.services.models.base import ToolSpecLite
-from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, validate_arguments
+from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key, validate_arguments
 
 MAX_LOGGED_CHARS = 4000
 MAX_RESULT_CHARS = 8000
@@ -122,6 +122,7 @@ class ToolGateway:
                 "arguments": arguments,
                 "risk_level": risk,
                 "approval_state": "待审批",
+                "approval_key": approval_key(tool.name, arguments),
             },
         )
 

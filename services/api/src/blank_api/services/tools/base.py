@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from blank_api.services.models.base import ToolSpecLite
 
 ApprovalPolicy = Callable[["ToolDefinition", dict], Any]
+
+
+def approval_key(tool_name: str, arguments: dict) -> str:
+    """Stable fingerprint for one exact tool action."""
+    encoded = json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(f"{tool_name}:{encoded}".encode("utf-8")).hexdigest()
 
 TYPE_CHECKS: dict[str, tuple[type, ...]] = {
     "string": (str,),
@@ -30,6 +38,7 @@ class ToolContext:
     session_factory: async_sessionmaker[AsyncSession]
     approval_policy: ApprovalPolicy
     extra_secrets: tuple[str, ...] = ()
+    approved_actions: frozenset[str] = frozenset()
 
 
 @dataclass
