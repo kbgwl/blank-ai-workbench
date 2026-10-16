@@ -102,6 +102,7 @@ async def build_evidence(
     completion_tokens = sum(row.completion_tokens for row, _ in usage_rows)
     models = sorted({row.model for row, _ in usage_rows if row.model})
     providers = sorted({name for _, name in usage_rows})
+    trace_ids = sorted({row.trace_id for row, _ in usage_rows if row.trace_id})
     unverified = [
         f"验收条件未验证：{item['criterion']}"
         for item in acceptance
@@ -147,6 +148,7 @@ async def build_evidence(
         "usage": {
             "providers": providers,
             "models": models,
+            "trace_ids": trace_ids,
             "calls": len(usage_rows),
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
@@ -157,6 +159,7 @@ async def build_evidence(
         "tools": [
             {
                 "id": call.id,
+                "trace_id": call.trace_id,
                 "node": call.node,
                 "name": call.name,
                 "arguments": call.arguments,
