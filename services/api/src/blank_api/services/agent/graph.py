@@ -112,6 +112,13 @@ class AgentSession:
             await self._record_usage(node, "", Usage(), 0, "error", role=role)
             raise
         usage = response.usage
+        selected_provider = str(getattr(adapter, "last_provider", adapter.config.name))
+        if selected_provider != adapter.config.name:
+            await self.recorder.add(
+                "model.fallback",
+                node,
+                {"role": role, "from": adapter.config.name, "to": selected_provider},
+            )
         await self._record_usage(node, response.model, usage, int((time.perf_counter() - started) * 1000), "ok", role=role)
         return response, accumulate_usage(usage)
     async def _record_usage(
