@@ -195,23 +195,28 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
     active_skills = (
         await db.execute(select(Skill.instructions).where(Skill.status == "active").order_by(Skill.updated_at))
     ).scalars().all()
+    # rollback 会让本事务里的 ORM 实例全部过期，之后再读属性会触发同步懒加载，
+    # 在异步会话里直接抛 MissingGreenlet。所以先把要用的字段取成普通值。
+    snapshot = {
+        "task_id": task.id,
+        "provider_id": provider.id,
+        "provider_name": provider.name,
+        "root": workspace.path,
+        "title": task.title,
+        "goal": task.goal,
+        "acceptance_criteria": list(task.acceptance_criteria or []),
+        "max_steps": int(task.max_steps),
+        "skill_instructions": [str(item) for item in active_skills],
+    }
     # The runtime owns its own sessions; end this request transaction first so a
     # single-connection SQLite backend never interleaves them mid-run.
     await db.rollback()
     return RunRequest(
-        task_id=task.id,
-        provider_id=provider.id,
-        provider_name=provider.name,
+        **snapshot,
         adapter=adapter,
-        root=workspace.path,
-        title=task.title,
-        goal=task.goal,
-        acceptance_criteria=list(task.acceptance_criteria or []),
-        max_steps=int(task.max_steps),
         approve_high_risk=payload.approve_high_risk,
         approved_tools=set(payload.approved_tools),
         approved_actions=set(payload.approved_actions),
-        skill_instructions=[str(item) for item in active_skills],
         role_adapters=role_adapters,
         role_provider_ids=role_provider_ids,
     )
