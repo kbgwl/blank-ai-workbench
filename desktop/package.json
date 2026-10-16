@@ -6,8 +6,9 @@
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "shot": "electron .",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "dist:portable": "electron-builder --win portable",
+    "dist:nsis": "electron-builder --win nsis"
   },
   "devDependencies": {
     "electron": "^38.2.2",
@@ -16,6 +17,11 @@
   "build": {
     "appId": "ai.blank.workbench",
     "productName": "空白格 AI 操作台",
+    "copyright": "Copyright © 2026 Blank AI Workbench contributors",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
     "files": [
       "main.cjs",
       "preload.cjs",
@@ -25,17 +31,48 @@
       {
         "from": "../web/out",
         "to": "web"
+      },
+      {
+        "from": "../services/api",
+        "to": "backend/api",
+        "filter": [
+          "**/*",
+          "!.venv/**",
+          "!.venv",
+          "!data/**",
+          "!data",
+          "!tests/**",
+          "!__pycache__/**",
+          "!**/__pycache__/**",
+          "!.pytest_cache/**",
+          "!*.pyc"
+        ]
       }
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
-        "nsis",
-        "portable"
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        },
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
       ]
+    },
+    "portable": {
+      "artifactName": "空白格-便携版-${version}.exe"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "空白格-安装版-${version}.exe",
+      "shortcutName": "空白格 AI 操作台",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     }
   }
 }
