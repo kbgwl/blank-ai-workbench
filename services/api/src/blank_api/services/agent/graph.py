@@ -94,6 +94,8 @@ class AgentSession:
     async def call_model(self, messages: list[dict], node: str) -> tuple[Any, dict]:
         role = role_for_node(node)
         adapter = self.role_adapters.get(role, self.adapter)
+        if not adapter.config.supports_tools:
+            adapter = self.adapter
         chat = [
             ChatMessage(
                 role=item["role"],
