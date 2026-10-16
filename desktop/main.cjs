@@ -31,7 +31,7 @@ const API_DIR = app.isPackaged
   : path.resolve(__dirname, "..", "services", "api");
 
 /** 打包后自带的 Python 运行时（见 docs/APP-DESIGN 第 4 节）。缺失时退回本机环境。 */
-const BUNDLED_PYTHON = path.join(process.resourcesPath ?? "", "backend", "python", "python.exe");
+const BUNDLED_PYTHON = path.join(process.resourcesPath ?? "", "backend", "runtime", "python.exe");
 
 /** 用户数据目录：打包态落 %APPDATA%\blank-workbench。 */
 const DATA_DIR = app.getPath("userData");

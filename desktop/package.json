@@ -33,6 +33,10 @@
         "to": "web"
       },
       {
+        "from": "build/runtime",
+        "to": "backend/runtime"
+      },
+      {
         "from": "../services/api",
         "to": "backend/api",
         "filter": [

@@ -30,3 +30,6 @@ services/api/data/*
 # 上面的 `build/` 规则会把它一起忽略，这里显式放行。
 !desktop/build/
 !desktop/build/**
+
+# 但随包分发的 Python 运行时是构建产物（约 125MB），绝不入库。
+desktop/build/runtime/
