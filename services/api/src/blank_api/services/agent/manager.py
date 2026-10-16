@@ -28,11 +28,15 @@ class RunManager:
                 raise RunAlreadyActive(run_id)
             task = asyncio.create_task(runner(), name=f"blank-run-{run_id}")
             self._runs[run_id] = task
-            task.add_done_callback(lambda _: self._runs.pop(run_id, None))
+            task.add_done_callback(lambda finished: self._remove_if_current(run_id, finished))
 
     def is_active(self, run_id: str) -> bool:
         task = self._runs.get(run_id)
         return task is not None and not task.done()
+
+    def _remove_if_current(self, run_id: str, finished: asyncio.Task) -> None:
+        if self._runs.get(run_id) is finished:
+            self._runs.pop(run_id, None)
 
     async def shutdown(self) -> None:
         tasks = list(self._runs.values())
