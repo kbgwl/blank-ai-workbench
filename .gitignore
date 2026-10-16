@@ -33,3 +33,6 @@ services/api/data/*
 
 # 但随包分发的 Python 运行时是构建产物（约 125MB），绝不入库。
 desktop/build/runtime/
+
+# electron-builder 产物（含改名隔离用的 dist-prev 等）
+desktop/dist*/
