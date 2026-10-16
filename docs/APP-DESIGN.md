@@ -252,3 +252,25 @@
 | 代码签名证书 | ❌ 需采购 |
 | 自动更新 | ❌ |
 | 崩溃上报与日志导出 | ❌ |
+
+## 11. 参考：WorkBuddy 5.8.2 的实测构成
+
+不是照抄对象，是**同构参照** —— 它证明这条路是生产级的，并给出体积预期与打包做法。
+
+| 组成 | 体积 | 说明 |
+|---|---|---|
+| Electron / Chromium 运行时 | — | Electron 37.10.3 / Chromium 138 |
+| `app.asar` | 94MB | 全部 JS/TS 代码与静态资源 |
+| `app.asar.unpacked/node_modules` | 243MB | 原生模块（`.node` / `.dll`） |
+| `vendor/` | 223MB | 自带 PortableGit、`node.zip`(36MB)、genie-trash |
+| `cli/` | 95MB | 独立 CLI 子系统（`product.json` + 4 种部署变体） |
+| `vendor/python` | 53MB | **完整 CPython 3.13.14** |
+| **总计** | **1.3GB** | |
+
+可借鉴的点：
+
+- **`app.asar` + `app.asar.unpacked`**：JS 代码进 asar，原生模块（`.node`/`.dll`/`.exe`）放外面 —— 原生模块无法从 asar 内加载，我们用 electron-builder 时也要按这个方式配 `asarUnpack`
+- **`renderer/` 只是 `index.html` + 静态资源**：没有 SSR，和我们静态导出同构
+- **自带完整运行时**（Python / Node / Git）而不是靠用户机器 —— 见第 4 节，我们的后端打包改推这个
+- **真终端靠 `@lydell/node-pty` + Windows ConPTY**（`OpenConsole.exe`、`conpty.dll`）—— 我们要做"终端"页时用同一套
+- **体积大头不是 Electron 本体**，而是原生模块与自带运行时 —— 所以"为省 100 多 MB 去重写原生界面"是亏账
