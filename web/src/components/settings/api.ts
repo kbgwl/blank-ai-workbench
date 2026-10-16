@@ -85,6 +85,15 @@ export type UsageSummary = {
   total_cost?: { amount: number; currency: string };
 };
 
+export type ObservabilitySummary = {
+  traces: number;
+  model_calls: number;
+  roles: Record<string, { calls: number; failed: number; prompt_tokens: number; completion_tokens: number; latency_ms: number }>;
+  models: Record<string, { calls: number; failed: number; latency_ms: number }>;
+  runs: Record<string, number>;
+  tools: Record<string, number>;
+};
+
 const api = "/api/v1";
 
 export function fetchPresets(): Promise<PresetsResponse> {
@@ -121,6 +130,10 @@ export function testProvider(id: string): Promise<TestResult> {
 
 export function fetchUsage(): Promise<UsageSummary> {
   return request<UsageSummary>(`${api}/usage/summary`, { cache: "no-store" });
+}
+
+export function fetchObservability(): Promise<ObservabilitySummary> {
+  return request<ObservabilitySummary>(`${api}/observability/summary`, { cache: "no-store" });
 }
 
 export function chatProvider(providerId: string, message: string): Promise<{ text: string; model?: string }> {

@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from sqlalchemy import text
 
-from blank_api.api.routes import files, projects, providers, skills, tasks
+from blank_api.api.routes import files, observability, projects, providers, skills, tasks
 from blank_api.db import get_session_factory
 
 api_router = APIRouter()
@@ -27,3 +27,4 @@ api_router.include_router(files.router)
 api_router.include_router(providers.router)
 api_router.include_router(tasks.router)
 api_router.include_router(skills.router)
+api_router.include_router(observability.router)
