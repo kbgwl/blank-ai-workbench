@@ -4,6 +4,7 @@ import { createContext, useContext, useMemo, useState, type ReactNode } from "re
 
 export type SceneId = "coding" | "docs" | "research" | "brainstorm" | "reverse" | "daily";
 export type Scene = { id: SceneId; name: string; short: string; description: string; instruction: string; defaultCriteria: string[]; modes?: string[] };
+export const QUIET_RULE = "执行规则：不要寒暄、不要夸奖或拍马屁、不要复述用户原话；只输出已执行动作、结果、阻塞和下一步。";
 
 export const SCENES: Scene[] = [
   { id: "coding", name: "开发", short: "代码、测试、Diff", description: "修改项目、执行测试、交付可验证 Diff。", instruction: "你处于开发场景。优先读取现有代码，实际修改文件并运行相关测试；回复只保留动作、结果和阻塞。", defaultCriteria: ["实现需求", "补充或更新测试", "相关测试通过并说明未验证项"] },

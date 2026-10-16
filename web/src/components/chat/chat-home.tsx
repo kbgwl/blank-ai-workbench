@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { chatProvider } from "@/components/settings/api";
 import { createTask, fetchProjects, fetchProviders, fetchTasks, runTask, type Project, type Provider, type Task } from "@/components/tasks/api";
-import { useScene } from "@/components/scenes/scenes";
+import { QUIET_RULE, useScene } from "@/components/scenes/scenes";
 
 type Message = { id: string; role: "user" | "agent"; text: string; task?: Task };
 
@@ -39,14 +39,14 @@ export function ChatHome() {
           projectId: project.id,
           providerId: provider?.id,
           title: text.split("\n")[0].slice(0, 80),
-          prompt: `${scene.instruction}\n\n用户任务：${text}`,
+          prompt: `${QUIET_RULE}\n${scene.instruction}\n\n用户任务：${text}`,
           acceptanceCriteria: scene.defaultCriteria,
         });
         setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
         setMessages((current) => [...current, { id: crypto.randomUUID(), role: "agent", text: "已开始执行。完成后我会只汇报结果、变更和未验证项。", task }]);
         await runTask(task.id);
       } else if (provider) {
-        const response = await chatProvider(provider.id, `${scene.instruction}\n\n用户内容：${text}`);
+        const response = await chatProvider(provider.id, `${QUIET_RULE}\n${scene.instruction}\n\n用户内容：${text}`);
         setMessages((current) => [...current, { id: crypto.randomUUID(), role: "agent", text: response.text }]);
       } else {
         setNotice("请先配置一个模型；代码任务会自动使用内部工作目录，不需要手动选择项目。 ");

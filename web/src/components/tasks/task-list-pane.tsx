@@ -7,7 +7,7 @@ import { Panel } from "@/components/panel";
 import { errorMessage, type Project, type Provider, type Task, type TaskDraft } from "./api";
 import { StatusBadge } from "./bits";
 import { formatDateTime } from "./format";
-import { useScene } from "@/components/scenes/scenes";
+import { QUIET_RULE, useScene } from "@/components/scenes/scenes";
 import { readHabits } from "@/components/scenes/memory";
 
 type Props = {
@@ -67,7 +67,7 @@ export function TaskListPane({
     const draft: TaskDraft = {
       projectId: chosenProject,
       title: title.trim() || prompt.trim().split("\n")[0].slice(0, 60),
-      prompt: `${scene.instruction}\n\n场景上下文：${habitContext}\n\n用户任务：${prompt.trim()}`,
+      prompt: `${QUIET_RULE}\n${scene.instruction}\n\n场景上下文：${habitContext}\n\n用户任务：${prompt.trim()}`,
       acceptanceCriteria: criteria
         .split("\n")
         .map((line) => line.replace(/^\s*[-*\d.、)]+\s*/, "").trim())
