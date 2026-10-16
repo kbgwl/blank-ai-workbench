@@ -16,6 +16,7 @@ from blank_api.deps import DbSession
 from blank_api.models.model_provider import ModelProvider
 from blank_api.models.task import AgentEvent, Task
 from blank_api.models.run import AgentRun
+from blank_api.models.skill import Skill
 from blank_api.schemas.task import EventOut, TaskApprovalIn, TaskCreate, TaskOut, TaskRunIn
 from blank_api.services.agent.evidence import build_evidence, load_task
 from blank_api.services.agent.events import EventRecorder
@@ -190,6 +191,9 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
             if role_provider is not None:
                 role_adapters[role] = build_adapter(role_provider, client_factory)
                 role_provider_ids[role] = role_provider.id
+    active_skills = (
+        await db.execute(select(Skill.instructions).where(Skill.status == "active").order_by(Skill.updated_at))
+    ).scalars().all()
     # The runtime owns its own sessions; end this request transaction first so a
     # single-connection SQLite backend never interleaves them mid-run.
     await db.rollback()
@@ -206,6 +210,7 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         approve_high_risk=payload.approve_high_risk,
         approved_tools=set(payload.approved_tools),
         approved_actions=set(payload.approved_actions),
+        skill_instructions=[str(item) for item in active_skills],
         role_adapters=role_adapters,
         role_provider_ids=role_provider_ids,
     )

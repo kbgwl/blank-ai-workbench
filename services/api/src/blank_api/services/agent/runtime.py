@@ -91,6 +91,7 @@ class RunRequest:
     approve_high_risk: bool = False
     approved_tools: set[str] | None = None
     approved_actions: set[str] | None = None
+    skill_instructions: Sequence[str] = ()
     role_adapters: dict[str, ModelAdapter] | None = None
     role_provider_ids: dict[str, str] | None = None
 
@@ -142,6 +143,7 @@ class AgentRuntime:
             provider_name=request.provider_name,
             trace_id=thread_id,
             goal=request.goal or request.title,
+            skill_instructions=[str(item) for item in request.skill_instructions],
             acceptance_criteria=[str(item) for item in request.acceptance_criteria or ()],
             max_steps=max(1, int(request.max_steps)),
             approved_tools=allowed,
@@ -200,7 +202,9 @@ class AgentRuntime:
         )
         state: dict[str, Any] = {
             "task_id": request.task_id,
-            "messages": initial_messages(session.goal, session.acceptance_criteria),
+            "messages": initial_messages(
+                session.goal, session.acceptance_criteria, session.skill_instructions
+            ),
             "plan": [],
             "steps": 0,
             "repair_rounds": 0,

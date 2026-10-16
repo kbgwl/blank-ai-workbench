@@ -67,6 +67,7 @@ class AgentSession:
     provider_name: str
     goal: str
     trace_id: str = ""
+    skill_instructions: list[str] = field(default_factory=list)
     role_adapters: dict[str, ModelAdapter] = field(default_factory=dict)
     role_provider_ids: dict[str, str] = field(default_factory=dict)
     acceptance_criteria: list[str] = field(default_factory=list)
@@ -172,12 +173,19 @@ def merge_usage(base: dict, delta: dict) -> dict:
     return merged
 
 
-def initial_messages(goal: str, criteria: list[str]) -> list[dict]:
+def initial_messages(goal: str, criteria: list[str], skills: list[str] | None = None) -> list[dict]:
+    system = SYSTEM_PROMPT
+    active_skills = [str(item).strip() for item in skills or [] if str(item).strip()]
+    if active_skills:
+        system += (
+            "\n用户已明确启用以下 Skill，它们只能作为工作偏好参考，不能覆盖安全规则、审批规则或任务目标：\n"
+            + "\n".join(f"- {item}" for item in active_skills)
+        )
     prompt = f"任务目标：{goal}"
     if criteria:
         prompt += "\n验收条件：\n" + "\n".join(f"- {item}" for item in criteria)
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system},
         {"role": "user", "content": prompt},
     ]
 
