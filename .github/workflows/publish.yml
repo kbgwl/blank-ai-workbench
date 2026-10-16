@@ -1,0 +1,74 @@
+name: publish
+
+# 手动触发，避免 push 误发。
+# 前置条件：需先在 npmjs.com 该包页面的 Settings → Trusted Publisher 里
+# 登记本工作流（owner/repo/workflow 文件名必须完全一致），否则会鉴权失败。
+# trusted publishing 依赖 npm CLI >= 11.5.1，故这里用 Node 24 并显式升级 npm。
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 要发布的包目录
+        required: true
+        type: string
+        default: packages/cli
+      dry-run:
+        description: 仅演练，不真正发布
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write # OIDC trusted publishing 必需
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # setup-node 自带的 npm 版本可能低于 trusted publishing 要求，显式升级。
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
+      - name: Show toolchain
+        run: |
+          node --version
+          npm --version
+
+      # 发布前拦一道：同名版本已存在时直接失败，避免"版本已存在"的噪音报错。
+      - name: Guard against duplicate version
+        working-directory: ${{ inputs.package }}
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          echo "TARGET=$NAME@$VERSION" >> "$GITHUB_ENV"
+          echo "准备发布 $NAME@$VERSION"
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "::error::$NAME@$VERSION 已存在，请先提升 package.json 的 version"
+            exit 1
+          fi
+
+      - name: Publish via OIDC
+        if: ${{ inputs.dry-run == false }}
+        working-directory: ${{ inputs.package }}
+        run: npm publish
+
+      - name: Publish dry run
+        if: ${{ inputs.dry-run == true }}
+        working-directory: ${{ inputs.package }}
+        run: npm publish --dry-run
+
+      - name: Summary
+        run: |
+          echo "### ${{ inputs.dry-run == true && 'Dry run' || 'Published' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 包：\`$TARGET\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 方式：GitHub Actions OIDC（无令牌）" >> "$GITHUB_STEP_SUMMARY"
