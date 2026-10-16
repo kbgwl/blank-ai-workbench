@@ -1,12 +1,25 @@
 {
   "name": "blank-ai-cli",
   "version": "0.1.0",
+  "description": "空白格 AI 工程操作台的命令行入口",
   "type": "module",
   "bin": {
     "blank": "src/index.mjs"
   },
   "files": ["src", "README.md"],
+  "keywords": ["ai", "cli", "workbench", "agent", "blank-ai"],
+  "homepage": "https://github.com/kbgwl/blank-ai-workbench",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kbgwl/blank-ai-workbench.git",
+    "directory": "packages/cli"
+  },
+  "license": "MIT",
   "engines": {
     "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }
