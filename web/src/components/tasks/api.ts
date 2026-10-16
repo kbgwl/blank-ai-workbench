@@ -577,6 +577,14 @@ export function createTask(projectId: string, draft: TaskDraft): Promise<Task> {
 export function runTask(taskId: string, input: { approveHigh?: boolean } = {}): Promise<unknown> {
   const body: Record<string, unknown> = {};
   if (input.approveHigh) body.approve_high_risk = true;
+  if (typeof window !== "undefined") {
+    try {
+      const roles = JSON.parse(window.localStorage.getItem("blank.model.roles") ?? "{}") as Record<string, string>;
+      if (Object.keys(roles).length > 0) body.role_provider_ids = roles;
+    } catch {
+      // Ignore malformed local preferences and use the primary model.
+    }
+  }
   return request<unknown>(`${api}/tasks/${taskId}/start`, { method: "POST", ...jsonInit, body: JSON.stringify(body) });
 }
 

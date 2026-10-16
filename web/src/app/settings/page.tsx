@@ -1,5 +1,6 @@
 import { Panel } from "@/components/panel";
 import { ProvidersView } from "@/components/settings/providers-view";
+import { RoleModelSettings } from "@/components/settings/role-model-settings";
 
 export default function SettingsPage() {
   return (
@@ -28,6 +29,7 @@ export default function SettingsPage() {
           <p className="text-[13px] leading-relaxed text-faint">
             顶部可切换当前模型；任务接口支持备用模型，在可重试故障时自动切换。
           </p>
+          <RoleModelSettings />
         </Panel>
       </div>
     </div>
