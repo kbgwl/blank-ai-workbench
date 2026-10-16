@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -13,11 +14,13 @@ from blank_api.db import get_session_factory
 from blank_api.deps import DbSession
 from blank_api.models.model_provider import ModelProvider
 from blank_api.models.task import AgentEvent, Task
+from blank_api.models.run import AgentRun
 from blank_api.schemas.task import EventOut, TaskApprovalIn, TaskCreate, TaskOut, TaskRunIn
 from blank_api.services.agent.evidence import build_evidence, load_task
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
+from blank_api.services.agent.queue import claim_run, enqueue_run, finish_run
 from blank_api.services.models.registry import build_adapter
 from blank_api.services.models.routing import FallbackAdapter
 
@@ -157,25 +160,31 @@ async def run_task(task_id: str, payload: TaskRunIn, request: Request, db: DbSes
 async def start_task(task_id: str, payload: TaskRunIn, request: Request, db: DbSession) -> dict:
     """Start a run without holding the HTTP request open."""
     task = await load_task(db, task_id)
-    if task.status == "running" or run_manager.is_active(task_id):
+    if task.status in ("running", "queued"):
         raise ApiError(code="task_running", message="任务正在执行中", status_code=409)
     run_request = await _run_request(db, task, payload, request)
+    run = await enqueue_run(db, task_id)
     task.status = "queued"
     await db.commit()
 
     async def runner() -> None:
+        worker_id = f"{os.environ.get('COMPUTERNAME', 'worker')}-{uuid.uuid4().hex[:8]}"
+        async with get_session_factory()() as session:
+            if not await claim_run(session, run.id, worker_id):
+                return
         try:
-            await AgentRuntime(get_session_factory()).run(run_request)
+            evidence = await AgentRuntime(get_session_factory()).run(run_request)
+            status = str((evidence.get("task") or {}).get("status") or "succeeded")
         except Exception:
-            # Runtime persists the terminal failure whenever it can. The
-            # background task must not leak an unhandled exception into uvicorn.
-            return
+            status = "failed"
+        async with get_session_factory()() as session:
+            await finish_run(session, run.id, status)
 
     try:
-        await run_manager.start(task_id, runner)
+        await run_manager.start(run.id, runner)
     except RunAlreadyActive:
         raise ApiError(code="task_running", message="任务正在执行中", status_code=409) from None
-    return {"task_id": task_id, "status": "queued"}
+    return {"task_id": task_id, "run_id": run.id, "status": "queued"}
 
 
 async def recover_pending_runs() -> int:
@@ -183,25 +192,33 @@ async def recover_pending_runs() -> int:
     async def load():
         items: list[tuple[str, object]] = []
         async with get_session_factory()() as session:
-            rows = (
-                await session.execute(select(Task).where(Task.status.in_(("queued", "running"))))
-            ).scalars().all()
-            for task in rows:
+            runs = (await session.execute(select(AgentRun).where(AgentRun.status.in_(("queued", "running"))))).scalars().all()
+        for run in runs:
+            async with get_session_factory()() as session:
+                task = await session.get(Task, run.task_id)
+                if task is None:
+                    continue
                 try:
                     request = await _run_request(session, task, TaskRunIn(provider_id=task.provider_id), None)
                 except Exception:
-                    task.status = "failed"
-                    task.failure_reason = "服务重启后无法恢复任务运行参数"
+                    async with get_session_factory()() as failed_session:
+                        await finish_run(failed_session, run.id, "failed")
                     continue
 
-                async def runner(request=request):
+                async def runner(run_id=run.id, request=request):
+                    worker_id = f"recovery-{uuid.uuid4().hex[:8]}"
+                    async with get_session_factory()() as claim_session:
+                        if not await claim_run(claim_session, run_id, worker_id):
+                            return
                     try:
-                        await AgentRuntime(get_session_factory()).run(request)
+                        evidence = await AgentRuntime(get_session_factory()).run(request)
+                        status = str((evidence.get("task") or {}).get("status") or "succeeded")
                     except Exception:
-                        return
+                        status = "failed"
+                    async with get_session_factory()() as finish_session:
+                        await finish_run(finish_session, run_id, status)
 
-                items.append((task.id, runner))
-            await session.commit()
+                items.append((run.id, runner))
         return items
 
     return await run_manager.recover(load)
