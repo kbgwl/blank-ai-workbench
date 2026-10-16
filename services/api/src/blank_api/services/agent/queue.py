@@ -19,7 +19,7 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-async def enqueue_run(db: AsyncSession, task_id: str) -> AgentRun:
+async def enqueue_run(db: AsyncSession, task_id: str, request_payload: dict | None = None) -> AgentRun:
     existing = (await db.execute(select(AgentRun).where(AgentRun.task_id == task_id))).scalar_one_or_none()
     if existing is not None:
         if existing.status not in TERMINAL_RUN_STATES:
@@ -28,9 +28,12 @@ async def enqueue_run(db: AsyncSession, task_id: str) -> AgentRun:
         existing.worker_id = ""
         existing.lease_expires_at = None
         existing.attempts = 0
+        existing.request_payload = dict(request_payload or existing.request_payload or {})
         await db.flush()
         return existing
-    run = AgentRun(id=str(uuid4()), task_id=task_id, status="queued")
+    run = AgentRun(
+        id=str(uuid4()), task_id=task_id, status="queued", request_payload=dict(request_payload or {})
+    )
     db.add(run)
     await db.flush()
     return run
@@ -66,3 +69,14 @@ async def finish_run(db: AsyncSession, run_id: str, status: str) -> None:
         .values(status=status, lease_expires_at=None)
     )
     await db.commit()
+
+
+async def renew_run(db: AsyncSession, run_id: str, worker_id: str, lease_seconds: int = 90) -> bool:
+    """Extend a lease only for its current owner; stale workers cannot revive a run."""
+    result = await db.execute(
+        update(AgentRun)
+        .where(AgentRun.id == run_id, AgentRun.status == "running", AgentRun.worker_id == worker_id)
+        .values(lease_expires_at=utc_now() + timedelta(seconds=lease_seconds))
+    )
+    await db.commit()
+    return result.rowcount == 1

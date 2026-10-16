@@ -21,7 +21,7 @@ from blank_api.services.agent.evidence import build_evidence, load_task
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
-from blank_api.services.agent.queue import claim_run, enqueue_run, finish_run
+from blank_api.services.agent.queue import claim_run, enqueue_run, finish_run, renew_run
 from blank_api.services.models.registry import build_adapter
 from blank_api.services.models.routing import FallbackAdapter
 from blank_api.services.sandbox import SnapshotStore
@@ -100,6 +100,27 @@ async def list_tasks(
 @router.get("/tasks/{task_id}", response_model=TaskOut)
 async def get_task(task_id: str, db: DbSession) -> TaskOut:
     return TaskOut.model_validate(await load_task(db, task_id))
+
+
+@router.get("/tasks/{task_id}/run")
+async def get_task_run(task_id: str, db: DbSession) -> dict:
+    await load_task(db, task_id)
+    run = (
+        await db.execute(select(AgentRun).where(AgentRun.task_id == task_id))
+    ).scalar_one_or_none()
+    if run is None:
+        return {"task_id": task_id, "status": "not_started", "attempts": 0}
+    lease = run.lease_expires_at
+    return {
+        "id": run.id,
+        "task_id": run.task_id,
+        "status": run.status,
+        "worker_id": run.worker_id,
+        "attempts": run.attempts,
+        "lease_expires_at": lease.isoformat() if lease else None,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+    }
 
 
 @router.get("/tasks/{task_id}/snapshots")
@@ -202,6 +223,31 @@ async def run_task(task_id: str, payload: TaskRunIn, request: Request, db: DbSes
         return {"task": TaskOut.model_validate(finished).model_dump(), "evidence": evidence}
 
 
+async def _execute_claimed_run(run_id: str, worker_id: str, run_request: RunRequest) -> None:
+    """Run one claimed job and keep its database lease alive while it works."""
+    async def heartbeat() -> None:
+        while True:
+            await asyncio.sleep(30)
+            async with get_session_factory()() as session:
+                if not await renew_run(session, run_id, worker_id):
+                    return
+
+    lease_task = asyncio.create_task(heartbeat(), name=f"blank-lease-{run_id}")
+    try:
+        evidence = await AgentRuntime(get_session_factory()).run(run_request)
+        status = str((evidence.get("task") or {}).get("status") or "succeeded")
+    except asyncio.CancelledError:
+        # Keep the row running so startup recovery can safely reclaim it.
+        raise
+    except Exception:
+        status = "failed"
+    finally:
+        lease_task.cancel()
+        await asyncio.gather(lease_task, return_exceptions=True)
+    async with get_session_factory()() as session:
+        await finish_run(session, run_id, status)
+
+
 @router.post("/tasks/{task_id}/start", status_code=202)
 async def start_task(task_id: str, payload: TaskRunIn, request: Request, db: DbSession) -> dict:
     """Start a run without holding the HTTP request open."""
@@ -209,7 +255,7 @@ async def start_task(task_id: str, payload: TaskRunIn, request: Request, db: DbS
     if task.status in ("running", "queued"):
         raise ApiError(code="task_running", message="任务正在执行中", status_code=409)
     run_request = await _run_request(db, task, payload, request)
-    run = await enqueue_run(db, task_id)
+    run = await enqueue_run(db, task_id, payload.model_dump(mode="json"))
     task.status = "queued"
     await db.commit()
 
@@ -218,13 +264,7 @@ async def start_task(task_id: str, payload: TaskRunIn, request: Request, db: DbS
         async with get_session_factory()() as session:
             if not await claim_run(session, run.id, worker_id):
                 return
-        try:
-            evidence = await AgentRuntime(get_session_factory()).run(run_request)
-            status = str((evidence.get("task") or {}).get("status") or "succeeded")
-        except Exception:
-            status = "failed"
-        async with get_session_factory()() as session:
-            await finish_run(session, run.id, status)
+        await _execute_claimed_run(run.id, worker_id, run_request)
 
     try:
         await run_manager.start(run.id, runner)
@@ -245,7 +285,8 @@ async def recover_pending_runs() -> int:
                 if task is None:
                     continue
                 try:
-                    request = await _run_request(session, task, TaskRunIn(provider_id=task.provider_id), None)
+                    request_payload = TaskRunIn.model_validate(run.request_payload or {})
+                    request = await _run_request(session, task, request_payload, None)
                 except Exception:
                     async with get_session_factory()() as failed_session:
                         await finish_run(failed_session, run.id, "failed")
@@ -256,13 +297,7 @@ async def recover_pending_runs() -> int:
                     async with get_session_factory()() as claim_session:
                         if not await claim_run(claim_session, run_id, worker_id):
                             return
-                    try:
-                        evidence = await AgentRuntime(get_session_factory()).run(request)
-                        status = str((evidence.get("task") or {}).get("status") or "succeeded")
-                    except Exception:
-                        status = "failed"
-                    async with get_session_factory()() as finish_session:
-                        await finish_run(finish_session, run_id, status)
+                    await _execute_claimed_run(run_id, worker_id, request)
 
                 items.append((run.id, runner))
         return items
