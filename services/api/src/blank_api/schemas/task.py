@@ -41,6 +41,7 @@ class TaskRunIn(BaseModel):
     approve_high_risk: bool = False
     approved_tools: list[str] = Field(default_factory=list)
     approved_actions: list[str] = Field(default_factory=list, max_length=50)
+    fallback_provider_ids: list[str] = Field(default_factory=list, max_length=5)
 
 
 class EventOut(BaseModel):

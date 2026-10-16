@@ -19,6 +19,7 @@ from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
 from blank_api.services.models.registry import build_adapter
+from blank_api.services.models.routing import FallbackAdapter
 
 router = APIRouter(tags=["tasks"], dependencies=[Depends(require_token)])
 
@@ -104,7 +105,23 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
     provider = await _resolve_provider(db, task, payload.provider_id)
     task.provider_id = provider.id
     await db.commit()
-    adapter = build_adapter(provider, _factory_from(request))
+    client_factory = _factory_from(request)
+    adapters = [build_adapter(provider, client_factory)]
+    if payload.fallback_provider_ids:
+        fallback_rows = (
+            await db.execute(
+                select(ModelProvider).where(
+                    ModelProvider.id.in_(payload.fallback_provider_ids),
+                    ModelProvider.enabled == True,  # noqa: E712
+                )
+            )
+        ).scalars().all()
+        by_id = {row.id: row for row in fallback_rows}
+        for fallback_id in payload.fallback_provider_ids:
+            fallback = by_id.get(fallback_id)
+            if fallback is not None and fallback.id != provider.id:
+                adapters.append(build_adapter(fallback, client_factory))
+    adapter = FallbackAdapter(adapters) if len(adapters) > 1 else adapters[0]
     # The runtime owns its own sessions; end this request transaction first so a
     # single-connection SQLite backend never interleaves them mid-run.
     await db.rollback()
