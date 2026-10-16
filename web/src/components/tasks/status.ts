@@ -6,6 +6,12 @@ export type StatusMeta = {
 };
 
 const STATUS_META: Record<string, StatusMeta> = {
+  queued: {
+    label: "排队中",
+    dot: "bg-brand animate-pulse",
+    text: "text-brand",
+    chip: "border-brand/35 bg-brand/10 text-brand",
+  },
   draft: {
     label: "草稿",
     dot: "bg-faint",

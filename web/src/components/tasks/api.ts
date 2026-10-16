@@ -577,7 +577,7 @@ export function createTask(projectId: string, draft: TaskDraft): Promise<Task> {
 export function runTask(taskId: string, input: { approveHigh?: boolean } = {}): Promise<unknown> {
   const body: Record<string, unknown> = {};
   if (input.approveHigh) body.approve_high_risk = true;
-  return request<unknown>(`${api}/tasks/${taskId}/run`, { method: "POST", ...jsonInit, body: JSON.stringify(body) });
+  return request<unknown>(`${api}/tasks/${taskId}/start`, { method: "POST", ...jsonInit, body: JSON.stringify(body) });
 }
 
 export function cancelTask(taskId: string): Promise<unknown> {
@@ -669,7 +669,7 @@ function emitFrame(data: string, onEvent: StreamHandlers["onEvent"]): void {
 export async function streamTaskEvents(taskId: string, handlers: StreamHandlers): Promise<void> {
   let response: Response;
   try {
-    response = await fetch(`${api}/tasks/${taskId}/stream`, {
+    response = await fetch(`${api}/tasks/${taskId}/events/stream`, {
       method: "GET",
       headers: { accept: "text/event-stream" },
       cache: "no-store",
