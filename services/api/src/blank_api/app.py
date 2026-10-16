@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from blank_api.api.exception_handlers import register_error_handlers
 from blank_api.api.routes import api_router
 from blank_api.config import get_settings
+from blank_api.services.agent.manager import run_manager
 
 
 def create_app() -> FastAPI:
@@ -17,6 +18,11 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router, prefix="/api/v1")
+
+    @app.on_event("shutdown")
+    async def stop_runs() -> None:
+        await run_manager.shutdown()
+
     return app
 
 

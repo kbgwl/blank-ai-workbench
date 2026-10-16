@@ -1,6 +1,9 @@
+import asyncio
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from blank_api.api.auth import require_token
@@ -14,6 +17,7 @@ from blank_api.schemas.task import EventOut, TaskApprovalIn, TaskCreate, TaskOut
 from blank_api.services.agent.evidence import build_evidence, load_task
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
+from blank_api.services.agent.manager import RunAlreadyActive, run_manager
 from blank_api.services.models.registry import build_adapter
 
 router = APIRouter(tags=["tasks"], dependencies=[Depends(require_token)])
@@ -131,6 +135,29 @@ async def run_task(task_id: str, payload: TaskRunIn, request: Request, db: DbSes
         return {"task": TaskOut.model_validate(finished).model_dump(), "evidence": evidence}
 
 
+@router.post("/tasks/{task_id}/start", status_code=202)
+async def start_task(task_id: str, payload: TaskRunIn, request: Request, db: DbSession) -> dict:
+    """Start a run without holding the HTTP request open."""
+    task = await load_task(db, task_id)
+    if task.status == "running" or run_manager.is_active(task_id):
+        raise ApiError(code="task_running", message="任务正在执行中", status_code=409)
+    run_request = await _run_request(db, task, payload, request)
+
+    async def runner() -> None:
+        try:
+            await AgentRuntime(get_session_factory()).run(run_request)
+        except Exception:
+            # Runtime persists the terminal failure whenever it can. The
+            # background task must not leak an unhandled exception into uvicorn.
+            return
+
+    try:
+        await run_manager.start(task_id, runner)
+    except RunAlreadyActive:
+        raise ApiError(code="task_running", message="任务正在执行中", status_code=409) from None
+    return {"task_id": task_id, "status": "queued"}
+
+
 @router.get("/tasks/{task_id}/events", response_model=list[EventOut])
 async def task_events(
     task_id: str,
@@ -148,6 +175,44 @@ async def task_events(
         )
     ).scalars()
     return [EventOut.model_validate(row) for row in rows]
+
+
+@router.get("/tasks/{task_id}/events/stream")
+async def task_event_stream(
+    task_id: str,
+    db: DbSession,
+    after_seq: int = Query(default=0, ge=0),
+) -> StreamingResponse:
+    """Replay persisted events and wait for new ones from a sequence cursor."""
+    await load_task(db, task_id)
+
+    async def events():
+        cursor = after_seq
+        idle_rounds = 0
+        terminal = {"succeeded", "failed", "cancelled", "paused", "waiting_approval"}
+        while idle_rounds < 600:
+            async with get_session_factory()() as session:
+                rows = (
+                    await session.execute(
+                        select(AgentEvent)
+                        .where(AgentEvent.task_id == task_id, AgentEvent.seq > cursor)
+                        .order_by(AgentEvent.seq)
+                    )
+                ).scalars().all()
+                status = (await session.execute(select(Task.status).where(Task.id == task_id))).scalar_one_or_none()
+            if rows:
+                for row in rows:
+                    cursor = row.seq
+                    yield f"id: {row.seq}\ndata: {json.dumps(EventOut.model_validate(row).model_dump(), ensure_ascii=False)}\n\n"
+                idle_rounds = 0
+            else:
+                idle_rounds += 1
+                if status in terminal:
+                    break
+                yield ": keep-alive\n\n"
+                await asyncio.sleep(0.5)
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.get("/tasks/{task_id}/evidence")
