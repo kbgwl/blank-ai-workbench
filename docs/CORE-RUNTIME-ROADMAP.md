@@ -24,6 +24,23 @@
 - Usage 记录存在，但还没有完整 trace/span、指标和评测闭环
 - 日常习惯尚未形成“候选记忆 -> 用户确认 -> Skill 版本”的生命周期
 
+## 2026-10-16 实现审计
+
+以下能力已落地并有代码或测试证据：
+
+- Durable Run：`/tasks/{id}/start` 返回 `run_id`，Run 请求参数持久化，数据库租约、续租、后台恢复扫描和运行状态查询已接入。
+- 事件流：SSE 支持 `after_seq` 回放；事件带 `run_id`、`step_id`、`parent_event_id` 和 `trace_id`。
+- Safe Compute：Docker 不可用时默认失败；本地执行必须显式开启；审批绑定参数哈希并带过期时间；运行前快照可在证明面板恢复。
+- Context / Skill：工具结果有独立上限；历史消息自动压缩；用户确认后的 active Skill 才会进入 Agent 上下文，并支持禁用、版本和回滚。
+- Model Runtime：planner/coder/reviewer 路由、工具能力降级、可重试 fallback、审查修复回路、token/延迟/成本/成功率聚合已接入。
+
+仍未完成的生产门槛：
+
+- 当前 Worker 仍运行在 API 进程内，后台数据库扫描解决的是单机恢复，不是独立多副本 Worker 调度。
+- 工具大输出目前只做截断和证据摘要，还没有独立 artifact 存储与按需读取 API。
+- 快照恢复、审批过期、跨进程恢复和模型 fallback 仍需要真实数据库、Docker 和多进程端到端评测作为发布门禁。
+- 固定评测集尚未形成自动化 CI 门禁。
+
 ## 阶段 1：Durable Run Kernel
 
 ### 交付
