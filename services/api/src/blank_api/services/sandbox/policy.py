@@ -31,6 +31,7 @@ def _env(name: str, default: str) -> str:
 class SandboxPolicy:
     image: str = field(default_factory=lambda: _env("SANDBOX_IMAGE", "blank-sandbox:dev"))
     enabled: bool = field(default_factory=lambda: _env("SANDBOX_ENABLED", "true").lower() in {"1", "true", "yes"})
+    allow_local: bool = field(default_factory=lambda: _env("SANDBOX_ALLOW_LOCAL", "false").lower() in {"1", "true", "yes"})
     cpus: float = field(default_factory=lambda: float(_env("SANDBOX_CPUS", "1.0")))
     memory: str = field(default_factory=lambda: _env("SANDBOX_MEMORY", "512m"))
     pids: int = field(default_factory=lambda: int(_env("SANDBOX_PIDS", "128")))

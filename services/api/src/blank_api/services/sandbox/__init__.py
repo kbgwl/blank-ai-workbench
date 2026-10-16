@@ -4,6 +4,7 @@ from blank_api.services.sandbox.runner import (
     DockerSandbox,
     LocalSandbox,
     SandboxResult,
+    SandboxUnavailable,
     cleanup_containers,
     get_sandbox,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "LocalSandbox",
     "SandboxPolicy",
     "SandboxResult",
+    "SandboxUnavailable",
     "SnapshotStore",
     "cleanup_containers",
     "get_sandbox",

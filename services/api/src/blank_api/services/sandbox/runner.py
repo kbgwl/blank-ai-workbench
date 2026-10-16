@@ -2,7 +2,7 @@
 
 DockerSandbox 把命令放进一次性容器执行：工作区是唯一可写挂载点，默认无网络，
 CPU/内存/进程数/文件大小/时长都有上限，超时后强制删除容器以清干净进程树。
-Docker 不可用时退回 LocalSandbox，仅用于本地开发，不承诺隔离强度。
+Docker 不可用时默认拒绝执行；只有显式开启 SANDBOX_ALLOW_LOCAL 才允许本地开发回退。
 """
 
 from __future__ import annotations
@@ -19,6 +19,10 @@ from blank_api.services.log_safety import redact
 from blank_api.services.sandbox.policy import SandboxPolicy
 
 MAX_OUTPUT_CHARS = 20000
+
+
+class SandboxUnavailable(RuntimeError):
+    """The configured isolated execution backend is not available."""
 
 
 @dataclass(slots=True)
@@ -204,10 +208,14 @@ async def kill_process_tree(pid: int) -> None:
 
 
 def get_sandbox(policy: SandboxPolicy | None = None):
-    """按策略返回沙箱实现；Docker 不在 PATH 时退回本地模式。"""
+    """按策略返回沙箱实现；生产配置不会静默降级到宿主机。"""
     chosen = policy or SandboxPolicy()
-    if not chosen.enabled or shutil_which("docker") is None:
+    if not chosen.enabled:
         return LocalSandbox(chosen)
+    if shutil_which("docker") is None:
+        if chosen.allow_local:
+            return LocalSandbox(chosen)
+        raise SandboxUnavailable("Docker 沙箱不可用；如需开发机直连执行，请显式设置 BLANK_SANDBOX_ALLOW_LOCAL=1")
     return DockerSandbox(chosen)
 
 

@@ -14,6 +14,7 @@ from blank_api.services.sandbox import (
     DockerSandbox,
     LocalSandbox,
     SandboxPolicy,
+    SandboxUnavailable,
     SnapshotStore,
     cleanup_containers,
     get_sandbox,
@@ -139,6 +140,15 @@ async def test_local_sandbox_used_when_docker_disabled(tmp_path):
     result = await sandbox.run("python -V" if shutil.which("python") else "echo hi", workspace=str(tmp_path))
     assert result.backend == "local"
     assert "本地模式无隔离" in " ".join(result.notes)
+
+
+def test_enabled_sandbox_does_not_silently_fallback_to_host(tmp_path):
+    if DOCKER is not None:
+        pytest.skip("本机有 docker，无法验证缺失后端分支")
+    policy = _policy(tmp_path)
+    policy.allow_local = False
+    with pytest.raises(SandboxUnavailable):
+        get_sandbox(policy)
 
 
 async def test_audit_log_reconstructs_tool_calls(tmp_path):
