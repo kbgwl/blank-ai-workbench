@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { HealthPill } from "@/components/health-pill";
-import { SceneProvider, SceneSwitcher } from "@/components/scenes/scenes";
+import { ModelSwitcher, SceneProvider, SceneSwitcher } from "@/components/scenes/scenes";
 
 export const metadata: Metadata = {
   title: "空白格 AI 操作台",
@@ -22,6 +22,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           </div>
           <div className="flex items-center gap-3">
             <SceneSwitcher />
+            <ModelSwitcher />
             <HealthPill />
           </div>
         </header>

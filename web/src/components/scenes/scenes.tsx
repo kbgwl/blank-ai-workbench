@@ -1,6 +1,8 @@
 "use client";
 
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { useEffect } from "react";
+import { fetchProviders, type Provider } from "@/components/settings/api";
 
 export type SceneId = "coding" | "docs" | "research" | "brainstorm" | "reverse" | "daily";
 export type Scene = { id: SceneId; name: string; short: string; description: string; instruction: string; defaultCriteria: string[]; modes?: string[] };
@@ -18,6 +20,10 @@ export const SCENES: Scene[] = [
 type SceneContextValue = { scene: Scene; setSceneId: (id: SceneId) => void };
 const SceneContext = createContext<SceneContextValue | null>(null);
 const STORAGE_KEY = "blank.scene";
+const MODEL_STORAGE_KEY = "blank.model";
+
+type ModelContextValue = { providers: Provider[]; modelId: string; setModelId: (id: string) => void };
+const ModelContext = createContext<ModelContextValue | null>(null);
 
 export function SceneProvider({ children }: { children: ReactNode }) {
   const [sceneId, setSceneId] = useState<SceneId>(() => {
@@ -30,7 +36,27 @@ export function SceneProvider({ children }: { children: ReactNode }) {
     setSceneId(id);
     window.localStorage.setItem(STORAGE_KEY, id);
   }
-  return <SceneContext.Provider value={{ scene, setSceneId: changeScene }}>{children}</SceneContext.Provider>;
+  return <SceneContext.Provider value={{ scene, setSceneId: changeScene }}><ModelProvider>{children}</ModelProvider></SceneContext.Provider>;
+}
+
+function ModelProvider({ children }: { children: ReactNode }) {
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [modelId, setModelIdState] = useState(() => typeof window === "undefined" ? "" : window.localStorage.getItem(MODEL_STORAGE_KEY) ?? "");
+  useEffect(() => {
+    const saved = window.localStorage.getItem(MODEL_STORAGE_KEY) ?? "";
+    void fetchProviders().then((next) => {
+      const enabled = next.filter((provider) => provider.enabled);
+      setProviders(enabled);
+      if (!saved || !enabled.some((provider) => provider.id === saved)) {
+        setModelIdState(enabled[0]?.id ?? "");
+      }
+    }).catch(() => setProviders([]));
+  }, []);
+  function setModelId(id: string) {
+    setModelIdState(id);
+    window.localStorage.setItem(MODEL_STORAGE_KEY, id);
+  }
+  return <ModelContext.Provider value={{ providers, modelId, setModelId }}>{children}</ModelContext.Provider>;
 }
 
 export function useScene() {
@@ -39,7 +65,25 @@ export function useScene() {
   return value;
 }
 
+export function useModel() {
+  const value = useContext(ModelContext);
+  if (!value) throw new Error("useModel must be used inside SceneProvider");
+  return value;
+}
+
 export function SceneSwitcher() {
   const { scene, setSceneId } = useScene();
   return <label className="flex items-center gap-2 rounded-md border border-line bg-surface/40 px-2 py-1 text-[11px] text-muted"><span className="text-faint">场景</span><select value={scene.id} onChange={(event) => setSceneId(event.target.value as SceneId)} className="bg-transparent text-text outline-none" aria-label="选择工作场景">{SCENES.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.short}</option>)}</select></label>;
+}
+
+export function ModelSwitcher() {
+  const { providers, modelId, setModelId } = useModel();
+  const selected = providers.find((provider) => provider.id === modelId);
+  return <label className="flex items-center gap-2 rounded-md border border-line bg-surface/40 px-2 py-1 text-[11px] text-muted">
+    <span className="text-faint">模型</span>
+    <select value={modelId} onChange={(event) => setModelId(event.target.value)} className="max-w-52 bg-transparent text-text outline-none" aria-label="选择模型" disabled={providers.length === 0}>
+      {providers.length === 0 ? <option value="">未配置模型</option> : providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
+    </select>
+    {selected && <span className="hidden text-faint lg:inline">{selected.kind}</span>}
+  </label>;
 }
