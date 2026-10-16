@@ -1,9 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Notice } from "@/components/projects/ui";
 import { formatDuration, formatNumber, orNone } from "./format";
 import { StatusBadge } from "./bits";
-import type { Evidence } from "./api";
+import { errorMessage, fetchTaskSnapshots, restoreTaskSnapshot, type Evidence, type TaskSnapshot } from "./api";
 
 function Row({ label, value, tone }: { label: string; value: string; tone?: "accent" | "danger" | "warn" }) {
   const valueClass =
@@ -18,7 +19,29 @@ function Row({ label, value, tone }: { label: string; value: string; tone?: "acc
   );
 }
 
-export function EvidencePanel({ evidence, error }: { evidence: Evidence | null; error: string | null }) {
+export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evidence: Evidence | null; error: string | null }) {
+  const [snapshots, setSnapshots] = useState<TaskSnapshot[]>([]);
+  const [restoring, setRestoring] = useState<string | null>(null);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!taskId) return;
+    void fetchTaskSnapshots(taskId).then(setSnapshots).catch(() => setSnapshots([]));
+  }, [taskId, evidence?.status]);
+
+  async function restore(snapshot: TaskSnapshot) {
+    if (!window.confirm("恢复此快照会覆盖工作区中的文件，确定继续吗？")) return;
+    setRestoring(snapshot.id);
+    setSnapshotError(null);
+    try {
+      await restoreTaskSnapshot(taskId, snapshot.id);
+      setSnapshotError("已恢复工作区快照");
+    } catch (restoreError) {
+      setSnapshotError(errorMessage(restoreError));
+    } finally {
+      setRestoring(null);
+    }
+  }
   if (error) {
     return (
       <div className="flex flex-col gap-2">
@@ -125,6 +148,21 @@ export function EvidencePanel({ evidence, error }: { evidence: Evidence | null; 
         <Row label="调用次数" value={formatNumber(evidence.usage.calls)} />
         <Row label="模型" value={evidence.usage.models.length > 0 ? evidence.usage.models.join("、") : "暂无"} />
       </section>
+
+      {snapshots.length > 0 && (
+        <section className="flex flex-col gap-1.5 border-t border-line pt-3">
+          <h4 className="font-mono text-[10px] tracking-wide text-faint uppercase">回滚点</h4>
+          {snapshots.map((snapshot) => (
+            <div key={snapshot.id} className="flex items-center justify-between gap-2 rounded-md border border-line bg-black/20 px-2.5 py-2">
+              <span className="min-w-0 truncate text-[11px] text-muted" title={snapshot.reason}>{snapshot.reason}</span>
+              <button type="button" disabled={restoring !== null} onClick={() => void restore(snapshot)} className="shrink-0 rounded border border-line px-2 py-1 text-[10px] text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50">
+                {restoring === snapshot.id ? "恢复中" : "恢复"}
+              </button>
+            </div>
+          ))}
+          {snapshotError && <p className="text-[11px] text-muted">{snapshotError}</p>}
+        </section>
+      )}
 
       {evidence.unverified.length > 0 && (
         <section className="flex flex-col gap-1.5 border-t border-line pt-3">

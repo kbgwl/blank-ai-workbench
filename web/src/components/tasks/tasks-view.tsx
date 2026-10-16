@@ -303,7 +303,7 @@ export function TasksView({ initialTaskId = null }: Props) {
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
           {rightTab === "files" && <FilePanel project={project} />}
           {rightTab === "diff" && <div id="tasks-diff-panel">{evidenceError ? <Notice>{evidenceError}</Notice> : <DiffPanel changes={evidence?.changes ?? []} focusPath={focusPath} />}</div>}
-          {rightTab === "evidence" && <EvidencePanel evidence={evidence} error={evidenceError} />}
+          {rightTab === "evidence" && <EvidencePanel taskId={selectedId ?? ""} evidence={evidence} error={evidenceError} />}
           {rightTab === "terminal" && <div className="flex flex-col gap-2">
             {rightBlocks.filter((block) => block.kind === "terminal").map((block) => <TimelineBlock key={block.key} block={block} busyApprovalKey={null} onHighlight={() => undefined} onDecide={() => undefined} />)}
             {rightBlocks.every((block) => block.kind !== "terminal") && <div className="py-8 text-center font-mono text-[11px] text-faint">还没有终端输出</div>}

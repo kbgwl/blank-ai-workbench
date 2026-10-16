@@ -614,6 +614,16 @@ export function fetchEvidence(taskId: string): Promise<Evidence> {
   return request<unknown>(`${api}/tasks/${taskId}/evidence`, { cache: "no-store" }).then(normalizeEvidence);
 }
 
+export type TaskSnapshot = { id: string; reason: string; created_at: number; files: string[] };
+
+export function fetchTaskSnapshots(taskId: string): Promise<TaskSnapshot[]> {
+  return request<TaskSnapshot[]>(`${api}/tasks/${taskId}/snapshots`, { cache: "no-store" });
+}
+
+export function restoreTaskSnapshot(taskId: string, snapshotId: string): Promise<unknown> {
+  return request<unknown>(`${api}/tasks/${taskId}/snapshots/${snapshotId}/restore`, { method: "POST" });
+}
+
 export type TreeEntry = { name: string; path: string; is_dir: boolean; size: number | null };
 export type TreeResponse = { root: string; path: string; entries: TreeEntry[] };
 export type FileContent = { path: string; content: string; binary: boolean; truncated: boolean; message: string; size: number | null };
