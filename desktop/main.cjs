@@ -142,7 +142,12 @@ function createWindow() {
     },
   });
 
-  win.once("ready-to-show", () => win.show());
+  win.once("ready-to-show", () => {
+    console.log("[desktop] 窗口就绪并显示");
+    win.show();
+  });
+  win.on("closed", () => console.log("[desktop] 窗口被关闭"));
+  win.webContents.on("did-finish-load", () => console.log("[desktop] 页面加载完成"));
   win.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
     return { action: "deny" };
