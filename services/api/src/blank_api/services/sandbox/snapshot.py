@@ -33,6 +33,7 @@ class SnapshotStore:
             str(path.relative_to(source)).replace("\\", "/")
             for path in source.rglob("*")
             if path.is_file()
+            and not any(part in TREE_IGNORE or part == ".git" for part in path.relative_to(source).parts)
         )
         selected = files if rel_paths is None else [f for f in files if f in set(rel_paths)]
         record = {
@@ -66,6 +67,19 @@ class SnapshotStore:
         if relative is not None:
             shutil.copyfile(source / relative, target / relative)
             return [relative]
+        snapshot_files = {
+            path.relative_to(source).as_posix()
+            for path in source.rglob("*")
+            if path.is_file()
+        }
+        # A full rollback must remove files created after the snapshot too.
+        for path in sorted(target.rglob("*"), reverse=True):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(target).as_posix()
+            if rel in snapshot_files or any(part in TREE_IGNORE or part == ".git" for part in Path(rel).parts):
+                continue
+            path.unlink()
         restored: list[str] = []
         for path in source.rglob("*"):
             if not path.is_file():

@@ -95,6 +95,7 @@ async def build_evidence(
                     "risk_level": str(payload.get("risk_level") or "high"),
                     "message": "高风险操作等待人工审批",
                     "approval_state": "待审批",
+                    "expires_at": (payload.get("expires_at") if isinstance(payload, dict) else None),
                 }
             )
             break

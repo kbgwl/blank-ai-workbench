@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from functools import partial
@@ -271,11 +272,12 @@ async def _approval_gate(session: AgentSession, node: str, pending: list[dict]) 
         if not _needs_approval(session, tool, arguments):
             continue
         risk = tool.resolve_risk(arguments)
-        decision = bool(interrupt({"tool": name, "arguments": arguments, "risk_level": risk}))
+        action = approval_key(name, arguments)
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+        decision = bool(interrupt({"tool": name, "arguments": arguments, "risk_level": risk, "approval_key": action, "expires_at": expires_at}))
         if decision:
-            action = approval_key(name, arguments)
             session.approved_actions.add(action)
-            await session.recorder.add("approval.granted", node, {"tool": name, "approval_key": action})
+            await session.recorder.add("approval.granted", node, {"tool": name, "approval_key": action, "expires_at": expires_at})
         else:
             denied.add(name)
             await session.recorder.add("approval.denied", node, {"tool": name})

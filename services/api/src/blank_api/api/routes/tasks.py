@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
@@ -23,6 +24,7 @@ from blank_api.services.agent.manager import RunAlreadyActive, run_manager
 from blank_api.services.agent.queue import claim_run, enqueue_run, finish_run
 from blank_api.services.models.registry import build_adapter
 from blank_api.services.models.routing import FallbackAdapter
+from blank_api.services.sandbox import SnapshotStore
 
 router = APIRouter(tags=["tasks"], dependencies=[Depends(require_token)])
 
@@ -98,6 +100,31 @@ async def list_tasks(
 @router.get("/tasks/{task_id}", response_model=TaskOut)
 async def get_task(task_id: str, db: DbSession) -> TaskOut:
     return TaskOut.model_validate(await load_task(db, task_id))
+
+
+@router.get("/tasks/{task_id}/snapshots")
+async def list_task_snapshots(task_id: str, db: DbSession) -> list[dict]:
+    await load_task(db, task_id)
+    return SnapshotStore().list(task_id)
+
+
+@router.post("/tasks/{task_id}/snapshots/{snapshot_id}/restore")
+async def restore_task_snapshot(task_id: str, snapshot_id: str, db: DbSession) -> dict:
+    task = await load_task(db, task_id)
+    if task.status in ("queued", "running", "waiting_approval"):
+        raise ApiError(code="task_active", message="任务仍在执行，完成后才能恢复快照", status_code=409)
+    store = SnapshotStore()
+    snapshot = next((item for item in store.list(task_id) if item.get("id") == snapshot_id), None)
+    if snapshot is None:
+        raise ApiError(code="snapshot_not_found", message="该任务没有找到对应快照", status_code=404)
+    project = await load_project(db, task.project_id)
+    if project.active_workspace is None:
+        raise ApiError(code="workspace_not_bound", message="该项目尚未绑定工作区目录", status_code=409)
+    restored = store.restore(snapshot_id, project.active_workspace, None)
+    await EventRecorder(get_session_factory(), task_id).add(
+        "snapshot.restored", "complete", {"snapshot_id": snapshot_id, "files": restored}
+    )
+    return {"task_id": task_id, "snapshot_id": snapshot_id, "restored": restored}
 
 
 async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: Request) -> RunRequest:
@@ -331,6 +358,17 @@ async def decide_approval(
         )
     evidence = await build_evidence(get_session_factory(), task_id)
     pending = [str(item.get("tool") or "") for item in evidence.get("pending_approvals") or []]
+    for approval in evidence.get("pending_approvals") or []:
+        expires_at = approval.get("expires_at")
+        if expires_at:
+            try:
+                expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+                if expires <= datetime.now(timezone.utc):
+                    raise ApiError(code="approval_expired", message="审批请求已过期，请重新运行任务生成新的审批请求", status_code=409)
+            except ValueError:
+                raise ApiError(code="approval_invalid", message="审批请求时间无效，无法继续执行", status_code=409) from None
     recorder = EventRecorder(get_session_factory(), task_id)
     await recorder.add("approval.decided", "execute_action", {"approve": payload.approve, "tools": pending})
     # 决定只通过 Command(resume=...) 交回图里：批准时中断返回 True，图写入 approved_tools 并补记 approval.granted。

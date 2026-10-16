@@ -27,6 +27,7 @@ from blank_api.services.models.base import ModelAdapter, ModelError
 from blank_api.services.tools import build_default_tools
 from blank_api.services.tools.base import ToolContext, approval_key
 from blank_api.services.tools.gateway import ToolGateway
+from blank_api.services.sandbox import SnapshotStore
 from blank_api.services.workspace import mask_path
 
 
@@ -168,6 +169,14 @@ class AgentRuntime:
         thread_id = await next_thread_id(self.session_factory, request.task_id)
         scope = self._prepare(request, thread_id)
         recorder, session = scope.recorder, scope.session
+        snapshot = SnapshotStore().capture(
+            str(session.context.root), reason="任务执行前快照", task_id=request.task_id
+        )
+        await recorder.add(
+            "snapshot.created",
+            "receive_task",
+            {"snapshot_id": snapshot["id"], "files": snapshot["files"]},
+        )
         if await session.is_cancelled():
             await recorder.add("task.cancelled", "receive_task", {"reason": "任务已取消，未执行任何工具"})
             await self._finish(scope, "cancelled", summary="", reason="任务已取消", steps=0)
@@ -186,6 +195,7 @@ class AgentRuntime:
                 "max_steps": session.max_steps,
                 "tools": [tool.name for tool in session.gateway.specs()],
                 "thread_id": thread_id,
+                "snapshot_id": snapshot["id"],
             },
         )
         state: dict[str, Any] = {
