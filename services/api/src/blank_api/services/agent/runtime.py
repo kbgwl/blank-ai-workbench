@@ -84,6 +84,7 @@ class RunRequest:
     provider_name: str
     adapter: ModelAdapter
     root: str | Path
+    run_id: str = ""
     title: str = ""
     goal: str = ""
     acceptance_criteria: Sequence[str] = ()
@@ -113,7 +114,7 @@ class AgentRuntime:
 
     def _prepare(self, request: RunRequest, thread_id: str) -> _RunScope:
         store = SerializedSessionFactory(self.session_factory)
-        recorder = EventRecorder(store, request.task_id, trace_id=thread_id)
+        recorder = EventRecorder(store, request.task_id, trace_id=thread_id, run_id=request.run_id)
         gateway = ToolGateway(build_default_tools())
         allowed = set(request.approved_tools or set())
         approved_actions = set(request.approved_actions or set())

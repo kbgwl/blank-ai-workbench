@@ -49,6 +49,9 @@ class EventOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     seq: int
+    run_id: str = ""
+    step_id: str = ""
+    parent_event_id: str = ""
     node: str
     type: str
     payload: dict

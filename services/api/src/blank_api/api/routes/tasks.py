@@ -261,6 +261,7 @@ async def start_task(task_id: str, payload: TaskRunIn, request: Request, db: DbS
         raise ApiError(code="task_running", message="任务正在执行中", status_code=409)
     run_request = await _run_request(db, task, payload, request)
     run = await enqueue_run(db, task_id, payload.model_dump(mode="json"))
+    run_request.run_id = run.id
     task.status = "queued"
     await db.commit()
 
@@ -292,6 +293,7 @@ async def recover_pending_runs() -> int:
                 try:
                     request_payload = TaskRunIn.model_validate(run.request_payload or {})
                     request = await _run_request(session, task, request_payload, None)
+                    request.run_id = run.id
                 except Exception:
                     async with get_session_factory()() as failed_session:
                         await finish_run(failed_session, run.id, "failed")

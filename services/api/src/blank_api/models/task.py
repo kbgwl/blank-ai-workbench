@@ -59,6 +59,9 @@ class AgentEvent(Base):
     task_id: Mapped[str] = mapped_column(
         ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    run_id: Mapped[str] = mapped_column(String(36), nullable=False, default="", index=True)
+    step_id: Mapped[str] = mapped_column(String(36), nullable=False, default="")
+    parent_event_id: Mapped[str] = mapped_column(String(36), nullable=False, default="")
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     node: Mapped[str] = mapped_column(String(60), nullable=False, default="")
     type: Mapped[str] = mapped_column(String(60), nullable=False)
