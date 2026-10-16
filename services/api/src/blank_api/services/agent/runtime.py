@@ -333,7 +333,7 @@ class AgentRuntime:
 
 
 def resolve_status(result: dict) -> str:
-    if result.get("status") in ("cancelled", "paused"):
+    if result.get("status") in ("cancelled", "paused", "failed"):
         return str(result["status"])
     validation = result.get("validation") or {}
     if validation and validation.get("status") != "ok":

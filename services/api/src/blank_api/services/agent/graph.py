@@ -44,6 +44,8 @@ class AgentState(TypedDict, total=False):
     acceptance_results: list[dict]
     usage: dict
     validation: dict
+    review: dict
+    review_rounds: int
     summary: str
     status: str
     error: dict
@@ -380,6 +382,40 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
     return update
 
 
+async def review_result_node(state: AgentState, session: AgentSession) -> AgentState:
+    """Review the produced change and validation evidence before delivery."""
+    node = "review_result"
+    await session.recorder.add("node.started", node, {})
+    prompt = (
+        "你是交付审查 Agent。请审查当前任务的工具结果、测试结论和验收条件，"
+        "只输出 JSON：{\"approved\": true, \"findings\": [\"...\"], \"summary\": \"...\"}。"
+        "如果发现实现缺陷、测试不足或验收条件未覆盖，approved 必须为 false，并给出可执行修复意见。"
+    )
+    try:
+        result = await session.ask(state, prompt, node)
+        parsed = _extract_json(result["text"])
+        review = {
+            "approved": bool(parsed.get("approved")),
+            "findings": [str(item) for item in (parsed.get("findings") or [])][:12],
+            "summary": str(parsed.get("summary") or ""),
+        }
+        rounds = int(state.get("review_rounds") or 0)
+        await session.recorder.add("review.completed", node, {**review, "round": rounds + 1})
+        if not review["approved"]:
+            rounds += 1
+        return {
+            "messages": result["messages"],
+            "review": review,
+            "review_rounds": rounds,
+            "repair_rounds": max(int(state.get("repair_rounds") or 0), rounds),
+            "usage": merge_usage(state.get("usage") or {}, result["usage"]),
+            "status": "failed" if not review["approved"] and rounds > MAX_REPAIR_ROUNDS else "running",
+        }
+    except (ModelError, ValueError, json.JSONDecodeError) as exc:
+        await session.recorder.add("review.unavailable", node, {"reason": str(exc)[:300]})
+        return {"review": {"approved": False, "findings": ["审查模型未返回可解析结果"], "summary": ""}, "status": "running"}
+
+
 async def summarize_result_node(state: AgentState, session: AgentSession) -> AgentState:
     node = "summarize_result"
     await session.recorder.add("node.started", node, {})
@@ -439,6 +475,13 @@ def route_after_validation(state: AgentState, session: AgentSession) -> str:
         state.get("repair_rounds") or 0
     ) <= MAX_REPAIR_ROUNDS:
         return "execute_action"
+    return "review_result"
+
+
+def route_after_review(state: AgentState, session: AgentSession) -> str:
+    review = state.get("review") or {}
+    if not review.get("approved") and int(state.get("review_rounds") or 0) <= MAX_REPAIR_ROUNDS:
+        return "execute_action"
     return "summarize_result"
 
 
@@ -447,6 +490,7 @@ def build_agent_graph(session: AgentSession, checkpointer: BaseCheckpointSaver |
     builder.add_node("create_plan", partial(create_plan_node, session=session))
     builder.add_node("execute_action", partial(execute_action_node, session=session))
     builder.add_node("run_validation", partial(run_validation_node, session=session))
+    builder.add_node("review_result", partial(review_result_node, session=session))
     builder.add_node("summarize_result", partial(summarize_result_node, session=session))
     builder.add_edge(START, "create_plan")
     builder.add_edge("create_plan", "execute_action")
@@ -462,6 +506,11 @@ def build_agent_graph(session: AgentSession, checkpointer: BaseCheckpointSaver |
     builder.add_conditional_edges(
         "run_validation",
         lambda state: route_after_validation(state, session),
+        {"execute_action": "execute_action", "review_result": "review_result"},
+    )
+    builder.add_conditional_edges(
+        "review_result",
+        lambda state: route_after_review(state, session),
         {"execute_action": "execute_action", "summarize_result": "summarize_result"},
     )
     builder.add_edge("summarize_result", END)
