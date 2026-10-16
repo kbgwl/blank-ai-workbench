@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { HealthPill } from "@/components/health-pill";
-import { SideNav } from "@/components/side-nav";
 import { SceneProvider, SceneSwitcher } from "@/components/scenes/scenes";
 
 export const metadata: Metadata = {
@@ -28,9 +27,6 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         </header>
 
         <div className="flex min-h-0 flex-1">
-          <aside className="hidden w-52 shrink-0 border-r border-line bg-surface/30 md:block">
-            <SideNav />
-          </aside>
           <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
         </div>
         </SceneProvider>
