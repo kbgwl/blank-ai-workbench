@@ -5,6 +5,15 @@ import { useCallback, useState } from "react";
 export type Habit = { id: string; text: string; source: string; createdAt: string };
 const STORAGE_KEY = "blank.habits";
 
+export async function submitMemoryCandidate(text: string): Promise<void> {
+  const response = await fetch("/api/v1/skills/memory-candidates", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text, source: "daily" }),
+  });
+  if (!response.ok) throw new Error("候选记忆提交失败");
+}
+
 export function readHabits(): Habit[] {
   if (typeof window === "undefined") return [];
   try {

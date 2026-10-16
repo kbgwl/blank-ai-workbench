@@ -21,12 +21,12 @@ export default function SettingsPage() {
       <div className="grid gap-4 md:grid-cols-2">
         <Panel title="执行与安全" hint="v0.6 接入">
           <p className="text-[13px] leading-relaxed text-faint">
-            工作区路径白名单、Shell 超时与资源限制、风险分级审批将在 v0.6 提供。
+            工作区路径白名单、Shell 超时、Docker 沙箱、本地执行显式授权和参数级风险审批已由运行时执行。
           </p>
         </Panel>
         <Panel title="默认模型与任务级选择" hint="v0.4 接入">
           <p className="text-[13px] leading-relaxed text-faint">
-            Agent 任务在 v0.4 提供后，可在此设定默认供应商，并在任务运行时切换模型重新执行。
+            顶部可切换当前模型；任务接口支持备用模型，在可重试故障时自动切换。
           </p>
         </Panel>
       </div>
