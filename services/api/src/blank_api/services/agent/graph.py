@@ -62,8 +62,8 @@ class AgentSession:
     session_factory: async_sessionmaker[AsyncSession]
     provider_id: str
     provider_name: str
-    trace_id: str = ""
     goal: str
+    trace_id: str = ""
     acceptance_criteria: list[str] = field(default_factory=list)
     max_steps: int = 8
     approved_tools: set[str] = field(default_factory=set)
