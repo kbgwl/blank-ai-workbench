@@ -16,6 +16,7 @@ from blank_api.db import Base
 
 TASK_STATUSES = (
     "draft",
+    "queued",
     "running",
     "waiting_approval",
     "paused",

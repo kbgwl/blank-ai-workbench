@@ -23,9 +23,9 @@ from blank_api.services.models.registry import build_adapter
 router = APIRouter(tags=["tasks"], dependencies=[Depends(require_token)])
 
 
-def _factory_from(request: Request):
+def _factory_from(request: Request | None):
     """Tests embed a mock transport here; production falls back to httpx.AsyncClient."""
-    return getattr(request.app.state, "model_client_factory", None)
+    return getattr(request.app.state, "model_client_factory", None) if request is not None else None
 
 
 async def _resolve_provider(db: DbSession, task: Task, requested: str | None) -> ModelProvider:
@@ -142,6 +142,8 @@ async def start_task(task_id: str, payload: TaskRunIn, request: Request, db: DbS
     if task.status == "running" or run_manager.is_active(task_id):
         raise ApiError(code="task_running", message="任务正在执行中", status_code=409)
     run_request = await _run_request(db, task, payload, request)
+    task.status = "queued"
+    await db.commit()
 
     async def runner() -> None:
         try:
@@ -156,6 +158,35 @@ async def start_task(task_id: str, payload: TaskRunIn, request: Request, db: DbS
     except RunAlreadyActive:
         raise ApiError(code="task_running", message="任务正在执行中", status_code=409) from None
     return {"task_id": task_id, "status": "queued"}
+
+
+async def recover_pending_runs() -> int:
+    """Requeue tasks left queued/running when the API process was restarted."""
+    async def load():
+        items: list[tuple[str, object]] = []
+        async with get_session_factory()() as session:
+            rows = (
+                await session.execute(select(Task).where(Task.status.in_(("queued", "running"))))
+            ).scalars().all()
+            for task in rows:
+                try:
+                    request = await _run_request(session, task, TaskRunIn(provider_id=task.provider_id), None)
+                except Exception:
+                    task.status = "failed"
+                    task.failure_reason = "服务重启后无法恢复任务运行参数"
+                    continue
+
+                async def runner(request=request):
+                    try:
+                        await AgentRuntime(get_session_factory()).run(request)
+                    except Exception:
+                        return
+
+                items.append((task.id, runner))
+            await session.commit()
+        return items
+
+    return await run_manager.recover(load)
 
 
 @router.get("/tasks/{task_id}/events", response_model=list[EventOut])

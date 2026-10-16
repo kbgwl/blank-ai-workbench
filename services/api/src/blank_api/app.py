@@ -23,6 +23,12 @@ def create_app() -> FastAPI:
     async def stop_runs() -> None:
         await run_manager.shutdown()
 
+    @app.on_event("startup")
+    async def recover_runs() -> None:
+        from blank_api.api.routes.tasks import recover_pending_runs
+
+        await recover_pending_runs()
+
     return app
 
 

@@ -42,5 +42,18 @@ class RunManager:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._runs.clear()
 
+    async def recover(self, loader: Callable[[], Awaitable[list[tuple[str, Callable[[], Awaitable[object]]]]]]) -> int:
+        """Enqueue database-backed runs after an API process starts."""
+        recovered = 0
+        for run_id, runner in await loader():
+            if self.is_active(run_id):
+                continue
+            try:
+                await self.start(run_id, runner)
+            except RunAlreadyActive:
+                continue
+            recovered += 1
+        return recovered
+
 
 run_manager = RunManager()
