@@ -1,0 +1,41 @@
+{
+  "name": "blank-ai-workbench-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "空白格 AI 操作台的桌面壳",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "shot": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^38.2.2",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "ai.blank.workbench",
+    "productName": "空白格 AI 操作台",
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../web/out",
+        "to": "web"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

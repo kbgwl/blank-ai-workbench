@@ -9,7 +9,9 @@ class Settings(BaseSettings):
     app_name: str = "blank-ai-workbench"
     database_url: str = "sqlite+aiosqlite:///./data/blank_dev.db"
     redis_url: str = "redis://localhost:6379/0"
-    cors_origins: list[str] = ["http://localhost:3000"]
+    # 网页开发态（localhost:3000）+ 桌面壳（自定义协议 app://bundle）。
+    # 桌面壳是独立来源，不放行的话渲染进程直连本机后端会被 CORS 拦掉。
+    cors_origins: list[str] = ["http://localhost:3000", "app://bundle"]
     # 空字符串 = 本机单用户模式，不校验 token
     api_token: str = ""
     # 默认不把宿主机绝对路径返回给前端
