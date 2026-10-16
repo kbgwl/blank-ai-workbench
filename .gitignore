@@ -25,3 +25,8 @@ evals/results/
 evals/regression/*.json
 services/api/data/*
 !services/api/data/.gitkeep
+
+# desktop/build 是 electron-builder 的 buildResources（图标等），必须入库；
+# 上面的 `build/` 规则会把它一起忽略，这里显式放行。
+!desktop/build/
+!desktop/build/**

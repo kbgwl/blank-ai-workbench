@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!--
+    品牌图标：藏青底 + 单一亮色焦点（青 = AI 色）。
+    构图取「空白格」的「格」：2×2 网格，其中一格点亮。
+    刻意做得粗、少、对比强 —— 应用图标要在 16px 下依然可辨。
+  -->
+  <rect width="64" height="64" rx="14" fill="#1b2a4a"/>
+  <g fill="#38bed4">
+    <rect x="13.5" y="13.5" width="16.5" height="16.5" rx="4.6" fill-opacity="0.4"/>
+    <rect x="34" y="13.5" width="16.5" height="16.5" rx="4.6" fill-opacity="0.4"/>
+    <rect x="13.5" y="34" width="16.5" height="16.5" rx="4.6" fill-opacity="0.4"/>
+    <rect x="34" y="34" width="16.5" height="16.5" rx="4.6"/>
+  </g>
+</svg>
