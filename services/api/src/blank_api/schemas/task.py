@@ -42,6 +42,7 @@ class TaskRunIn(BaseModel):
     approved_tools: list[str] = Field(default_factory=list)
     approved_actions: list[str] = Field(default_factory=list, max_length=50)
     fallback_provider_ids: list[str] = Field(default_factory=list, max_length=5)
+    role_provider_ids: dict[str, str] = Field(default_factory=dict, max_length=8)
 
 
 class EventOut(BaseModel):

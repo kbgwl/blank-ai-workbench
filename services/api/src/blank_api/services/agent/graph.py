@@ -66,6 +66,8 @@ class AgentSession:
     provider_name: str
     goal: str
     trace_id: str = ""
+    role_adapters: dict[str, ModelAdapter] = field(default_factory=dict)
+    role_provider_ids: dict[str, str] = field(default_factory=dict)
     acceptance_criteria: list[str] = field(default_factory=list)
     max_steps: int = 8
     approved_tools: set[str] = field(default_factory=set)
@@ -90,6 +92,8 @@ class AgentSession:
         }
 
     async def call_model(self, messages: list[dict], node: str) -> tuple[Any, dict]:
+        role = role_for_node(node)
+        adapter = self.role_adapters.get(role, self.adapter)
         chat = [
             ChatMessage(
                 role=item["role"],
@@ -101,22 +105,21 @@ class AgentSession:
         ]
         started = time.perf_counter()
         try:
-            response = await self.adapter.bind_tools(self.gateway.specs(), chat)
+            response = await adapter.bind_tools(self.gateway.specs(), chat)
         except ModelError:
-            await self._record_usage(node, "", Usage(), 0, "error")
+            await self._record_usage(node, "", Usage(), 0, "error", role=role)
             raise
         usage = response.usage
-        await self._record_usage(node, response.model, usage, int((time.perf_counter() - started) * 1000), "ok")
+        await self._record_usage(node, response.model, usage, int((time.perf_counter() - started) * 1000), "ok", role=role)
         return response, accumulate_usage(usage)
-
     async def _record_usage(
-        self, node: str, model: str, usage: Usage, latency_ms: int, status: str
+        self, node: str, model: str, usage: Usage, latency_ms: int, status: str, *, role: str = "coder"
     ) -> None:
         async with self.session_factory() as session:
             session.add(
                 ModelUsage(
                     id=str(uuid.uuid4()),
-                    provider_id=self.provider_id,
+                    provider_id=self.role_provider_ids.get(role, self.provider_id),
                     task_id=self.context.task_id,
                     trace_id=self.trace_id,
                     node=node,
@@ -128,6 +131,15 @@ class AgentSession:
                 )
             )
             await session.commit()
+
+
+def role_for_node(node: str) -> str:
+    return {
+        "create_plan": "planner",
+        "execute_action": "coder",
+        "review_result": "reviewer",
+        "summarize_result": "reviewer",
+    }.get(node, "coder")
 
 
 def accumulate_usage(usage: Usage) -> dict:

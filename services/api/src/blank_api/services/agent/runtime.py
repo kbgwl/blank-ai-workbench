@@ -90,6 +90,8 @@ class RunRequest:
     approve_high_risk: bool = False
     approved_tools: set[str] | None = None
     approved_actions: set[str] | None = None
+    role_adapters: dict[str, ModelAdapter] | None = None
+    role_provider_ids: dict[str, str] | None = None
 
 
 @dataclass
@@ -115,6 +117,7 @@ class AgentRuntime:
         approved_actions = set(request.approved_actions or set())
         if request.approve_high_risk:
             allowed.update(tool.name for tool in gateway.tools.values() if tool.requires_approval)
+        adapters = [request.adapter, *(request.role_adapters or {}).values()]
         context = ToolContext(
             root=Path(request.root),
             task_id=request.task_id,
@@ -124,7 +127,7 @@ class AgentRuntime:
                 or (tool.resolve_risk(arguments) not in ("high", "critical") and tool.name in allowed)
                 or (request.approve_high_risk and tool.resolve_risk(arguments) in ("high", "critical"))
             ),
-            extra_secrets=tuple(s for s in (request.adapter.config.api_key,) if s),
+            extra_secrets=tuple({s for adapter in adapters for s in (adapter.config.api_key,) if s}),
             approved_actions=frozenset(approved_actions),
             trace_id=thread_id,
         )
@@ -142,6 +145,8 @@ class AgentRuntime:
             max_steps=max(1, int(request.max_steps)),
             approved_tools=allowed,
             approved_actions=approved_actions,
+            role_adapters=request.role_adapters or {},
+            role_provider_ids=request.role_provider_ids or {},
             is_cancelled=_CancelledLookup(store, request.task_id),
         )
         graph = build_agent_graph(session, SqlAlchemyCheckpointSaver(store))

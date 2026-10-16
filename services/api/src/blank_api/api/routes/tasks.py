@@ -125,6 +125,23 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
             if fallback is not None and fallback.id != provider.id:
                 adapters.append(build_adapter(fallback, client_factory))
     adapter = FallbackAdapter(adapters) if len(adapters) > 1 else adapters[0]
+    role_adapters = {}
+    role_provider_ids = {}
+    if payload.role_provider_ids:
+        role_rows = (
+            await db.execute(
+                select(ModelProvider).where(
+                    ModelProvider.id.in_(list(payload.role_provider_ids.values())),
+                    ModelProvider.enabled == True,  # noqa: E712
+                )
+            )
+        ).scalars().all()
+        by_id = {row.id: row for row in role_rows}
+        for role, provider_id in payload.role_provider_ids.items():
+            role_provider = by_id.get(provider_id)
+            if role_provider is not None:
+                role_adapters[role] = build_adapter(role_provider, client_factory)
+                role_provider_ids[role] = role_provider.id
     # The runtime owns its own sessions; end this request transaction first so a
     # single-connection SQLite backend never interleaves them mid-run.
     await db.rollback()
@@ -141,6 +158,8 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         approve_high_risk=payload.approve_high_risk,
         approved_tools=set(payload.approved_tools),
         approved_actions=set(payload.approved_actions),
+        role_adapters=role_adapters,
+        role_provider_ids=role_provider_ids,
     )
 
 
