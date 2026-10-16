@@ -157,8 +157,31 @@ h1{font-size:15px;font-weight:650;letter-spacing:-.01em;display:flex;align-items
 .caret{display:inline-block;width:6px;height:11px;background:var(--accent);vertical-align:-1px;animation:blink 1s steps(2) infinite}
 @keyframes blink{50%{opacity:0}}
 
-/* ── 撤销条（可逆操作）── */
-.undo{position:absolute;left:20px;right:20px;bottom:14px;background:var(--text);color:var(--bg);border-radius:9px;padding:9px 12px;display:flex;align-items:center;gap:11px;box-shadow:var(--shadow-2);font-size:12px}
+/* ── 对话流：用户消息与 Agent 回复和工具卡在同一条流里交织 ── */
+.turn{display:flex;gap:10px;margin-bottom:13px}
+.turn .who{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;flex:0 0 auto;font:10px/1 ui-monospace,monospace;font-weight:600}
+.turn.u .who{background:var(--surface-3);color:var(--muted)}
+.turn.a .who{background:var(--accent-soft);color:var(--accent)}
+.turn .say{flex:1;min-width:0}
+.turn .say>.txt{font-size:12.5px;line-height:1.65}
+.turn.u .say>.txt{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 11px;display:inline-block;max-width:80%}
+.turn .say>.meta{font-size:10.5px;color:var(--faint);margin-top:4px}
+
+/* ── 输入区：这是对话的入口。刻意不做成独立页面，而是常驻在需要说话的地方 ── */
+.composer{border-top:1px solid var(--line);background:var(--surface);padding:10px 20px 11px;flex:0 0 auto}
+.composer .box{border:1px solid var(--line-strong);border-radius:var(--r-card);background:var(--surface);padding:8px 10px;display:flex;gap:9px;align-items:flex-end}
+.composer .box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.composer textarea{border:0;outline:0;resize:none;flex:1;font:inherit;font-size:12.5px;background:transparent;color:var(--text);min-height:19px;line-height:1.5}
+.composer .chips{display:flex;gap:6px;align-items:center;margin-top:7px;color:var(--faint);font-size:11px;flex-wrap:wrap}
+.newtask{background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--r-card);padding:10px 12px;margin-bottom:13px;box-shadow:var(--shadow-1)}
+.newtask .box{display:flex;gap:9px;align-items:center}
+.newtask input{border:0;outline:0;flex:1;font:inherit;font-size:13px;background:transparent;color:var(--text)}
+.newtask input::placeholder{color:var(--faint)}
+
+/* ── 撤销条（可逆操作）──
+   参与文档流、放在输入区之上，而不是绝对定位：否则会压在输入框上，
+   长内容下还会被窗口裁掉。 */
+.undo{margin:0 20px 10px;background:var(--text);color:var(--bg);border-radius:9px;padding:9px 12px;display:flex;align-items:center;gap:11px;box-shadow:var(--shadow-1);font-size:12px;flex:0 0 auto}
 .undo .u-i{width:18px;height:18px;border-radius:5px;background:rgba(255,255,255,.16);display:grid;place-items:center;flex:0 0 auto}
 html.dark .undo{background:#e6e9ee;color:#0d1014}
 .undo b{font-weight:600}
@@ -309,9 +332,20 @@ html.dark .note{color:#9aa4b2;background:rgba(255,255,255,.03)}
             <h1>指挥台</h1>
             <div class="sub"><span>2 个运行中 · 1 个待批准</span><span>·</span><span>今日 5 次运行 · 成功率 87%</span><span>·</span><span>2 个并行</span></div>
           </div>
-          <button class="btn pri"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新建任务</button>
+          <span style="font-size:11px;color:var(--faint)">打开的任意运行都可返回</span>
         </div>
         <div class="scroll">
+          <div class="newtask">
+            <div class="box">
+              <input placeholder="描述你要做什么 —— Agent 会先给计划，再动手" />
+              <button class="btn pri"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>开始</button>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;margin-top:8px;color:var(--faint);font-size:11px;flex-wrap:wrap">
+              <span class="pill mute">blank-ai-workbench</span>
+              <span class="pill mute">mock-coder</span>
+              <span>可并行 · 当前 2 个运行中</span>
+            </div>
+          </div>
           <div class="run-grid">
             <div class="run blocked">
               <div class="run-t"><span class="pill warn">待批准</span><span class="tr">重命名数据库迁移文件</span></div>
@@ -349,7 +383,7 @@ html.dark .note{color:#9aa4b2;background:rgba(255,255,255,.03)}
         </div>
       </div>
 
-      <!-- ② 任务详情 -->
+<!-- ② 任务详情：一条对话流，输入框常驻底部 -->
       <div class="screen" id="s-run">
         <div class="head">
           <div>
@@ -361,22 +395,39 @@ html.dark .note{color:#9aa4b2;background:rgba(255,255,255,.03)}
             <button class="btn"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>证据包</button>
           </div>
         </div>
+
         <div class="scroll">
-          <div class="card">
-            <div class="card-h">
-              <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.7"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-              执行计划<span class="hint">执行中 · 已锁定编辑</span>
-            </div>
-            <div class="card-b" style="padding-top:5px;padding-bottom:7px">
-              <div class="plan-row"><span class="grip" style="opacity:.35"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/></svg></span><span class="plan-n" style="background:var(--ok-soft);border-color:transparent;color:var(--ok)">✓</span><span class="plan-t">读取 <span class="mono">src/auth.ts</span>，定位 500 抛出点<em>已找到 session.token 未判空即读取</em></span></div>
-              <div class="plan-row"><span class="grip" style="opacity:.35"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/></svg></span><span class="plan-n" style="background:var(--ok-soft);border-color:transparent;color:var(--ok)">✓</span><span class="plan-t">搜索 <span class="mono">session.token</span> 的全部引用<em>命中 4 处，2 处缺少空值保护</em></span></div>
-              <div class="plan-row"><span class="grip" style="opacity:.35"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/></svg></span><span class="plan-n">3</span><span class="plan-t">应用补丁修复空值分支<em>正在执行</em></span></div>
+          <div class="turn u">
+            <span class="who">你</span>
+            <div class="say">
+              <div class="txt">修复登录接口偶发 500</div>
+              <div class="meta">12:04</div>
             </div>
           </div>
 
-          <div class="card">
-            <div class="card-h">执行时间线<span class="hint">每个工具调用都可展开、可重试</span></div>
-            <div class="card-b" style="padding-top:6px">
+          <div class="turn a">
+            <span class="who">AI</span>
+            <div class="say">
+              <div class="txt">500 来自 <span class="mono">session.token</span> 未判空就取 <span class="mono">.value</span>。计划如下，确认后我开始动手：</div>
+              <div class="card" style="margin-top:9px">
+                <div class="card-h">
+                  <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.7"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                  执行计划<span class="hint">已确认 · 执行中锁定编辑</span>
+                </div>
+                <div class="card-b" style="padding-top:5px;padding-bottom:7px">
+                  <div class="plan-row"><span class="grip" style="opacity:.35"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/></svg></span><span class="plan-n" style="background:var(--ok-soft);border-color:transparent;color:var(--ok)">✓</span><span class="plan-t">读取 <span class="mono">src/auth.ts</span>，定位 500 抛出点<em>已找到 session.token 未判空即读取</em></span></div>
+                  <div class="plan-row"><span class="grip" style="opacity:.35"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/></svg></span><span class="plan-n" style="background:var(--ok-soft);border-color:transparent;color:var(--ok)">✓</span><span class="plan-t">搜索 <span class="mono">session.token</span> 的全部引用<em>命中 4 处，2 处缺少空值保护</em></span></div>
+                  <div class="plan-row"><span class="grip" style="opacity:.35"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/></svg></span><span class="plan-n">3</span><span class="plan-t">应用补丁修复空值分支<em>已执行，可撤销</em></span></div>
+                  <div class="plan-row"><span class="grip" style="opacity:.35"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/></svg></span><span class="plan-n" style="background:var(--accent-soft);border-color:transparent;color:var(--accent)">4</span><span class="plan-t">统一错误码为 <span class="mono">ERR_</span> 前缀<em>执行中插话追加</em></span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="turn a">
+            <span class="who">AI</span>
+            <div class="say">
+              <div class="txt">开始执行。</div>
               <div class="tool">
                 <div class="tool-h">
                   <span class="tool-ico ok"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
@@ -384,7 +435,6 @@ html.dark .note{color:#9aa4b2;background:rgba(255,255,255,.03)}
                   <span class="tool-r">142ms</span>
                 </div>
               </div>
-
               <div class="tool">
                 <div class="tool-h">
                   <span class="tool-ico ok"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
@@ -392,7 +442,6 @@ html.dark .note{color:#9aa4b2;background:rgba(255,255,255,.03)}
                   <span class="tool-r">88ms</span>
                 </div>
               </div>
-
               <div class="tool">
                 <div class="tool-h">
                   <span class="tool-ico wait"><svg viewBox="0 0 24 24"><path d="M12 8v5l3 2"/><circle cx="12" cy="12" r="9"/></svg></span>
@@ -400,7 +449,7 @@ html.dark .note{color:#9aa4b2;background:rgba(255,255,255,.03)}
                   <span class="tool-r"><span class="pill mute">可撤销</span>已执行 · 1.2s</span>
                 </div>
                 <div class="tool-b">
-                  <div class="diff" style="border:1px solid var(--line);border-radius:6px;overflow-x:auto;font-size:11px;background:var(--surface)">
+                  <div style="border:1px solid var(--line);border-radius:6px;overflow-x:auto;font-size:11px;background:var(--surface)">
                     <div class="mono" style="padding:2.5px 9px;color:var(--muted)">@@ -42,7 +42,9 @@</div>
                     <div class="mono" style="padding:2.5px 9px;background:var(--danger-soft);color:var(--danger)">-  const token = session.token.value</div>
                     <div class="mono" style="padding:2.5px 9px;background:var(--ok-soft);color:var(--ok)">+  const token = session.token?.value</div>
@@ -408,7 +457,21 @@ html.dark .note{color:#9aa4b2;background:rgba(255,255,255,.03)}
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
 
+          <div class="turn u">
+            <span class="who">你</span>
+            <div class="say">
+              <div class="txt">顺便把错误码也统一成 <span class="mono">ERR_</span> 前缀</div>
+              <div class="meta">12:07 · 执行中插话，不必等它跑完</div>
+            </div>
+          </div>
+
+          <div class="turn a">
+            <span class="who">AI</span>
+            <div class="say">
+              <div class="txt">好，已加进计划第 4 步 —— 当前这步测试跑完就接着做，不影响已完成的改动，也不用重跑。</div>
               <div class="tool">
                 <div class="tool-h">
                   <span class="tool-ico run"><span class="caret" style="width:5px;height:9px"></span></span>
@@ -436,6 +499,17 @@ html.dark .note{color:#9aa4b2;background:rgba(255,255,255,.03)}
             <button class="solid">撤销这次修改</button>
             <button>查看 Diff</button>
           </span>
+        </div>
+
+        <div class="composer">
+          <div class="box">
+            <textarea rows="1" placeholder="继续说 —— 补充要求、追问，或改方向…"></textarea>
+            <button class="btn pri"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>发送</button>
+          </div>
+          <div class="chips">
+            <span class="pill mute">执行中插话会并入当前计划</span>
+            <span>Enter 发送 · Shift+Enter 换行</span>
+          </div>
         </div>
       </div>
 
@@ -569,6 +643,7 @@ html.dark .note{color:#9aa4b2;background:rgba(255,255,255,.03)}
 
 <!-- ── 屏下设计说明：对照主流产品的出处 ── -->
 <div class="note" id="note" style="margin-top:0">
+  <b>对话在哪？没有删掉，而是不再做成一个独立页面。</b>指挥台顶部常驻一个输入框（打开就能说），运行详情底部常驻一个输入框（说到一半能插话改方向）。主流产品同样是这个结构 —— Cursor 的 Agents Window、Claude Code 的会话、Devin 的任务视图，点进去都是带输入框的对话，列表只是入口。<b>把对话做成独立页面会切裂上下文，把对话删掉则根本没法用。</b><br><br>
   <b>这一版改了什么(对照 2026 年的主流形态)</b><br>
   <span class="tag">结构</span>上一版是「对话 + 右侧时间线」,属于上一代形态。2026 年 2–7 月,VS Code 多 Agent、Cursor 3 Agents Window、Claude Code 桌面版重构、Antigravity Agent Manager、Devin Desktop、Codex 并入 ChatGPT —— <b>六款产品在四个月内收敛到同一个「并行 Agent 指挥台」</b>。所以首页从对话改成指挥台:<b>聊天线程用于对话,任务界面用于状态</b>。<br>
   <span class="tag">计划</span>执行前把计划做成<b>可编辑的结构化步骤</b>,而不是一段 markdown;执行中锁定并显示每步结果 —— 这是"先给计划再动手"的直接落地。<br>
