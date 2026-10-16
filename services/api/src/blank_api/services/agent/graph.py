@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from blank_api.models.model_provider import ModelUsage
 from blank_api.services.agent.events import EventRecorder
+from blank_api.services.agent.context import compact_messages
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.tools.base import ToolContext, ToolDefinition
 from blank_api.services.tools.gateway import ToolGateway
@@ -92,7 +93,7 @@ class AgentSession:
                 tool_call_id=item.get("tool_call_id"),
                 tool_calls=item.get("tool_calls") or [],
             )
-            for item in messages
+            for item in compact_messages(messages)
         ]
         started = time.perf_counter()
         try:
