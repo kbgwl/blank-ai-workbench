@@ -16,9 +16,15 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from blank_api.limits import DEFAULT_MAX_STEPS, WRAP_UP_STEPS
 from blank_api.models.model_provider import ModelUsage
 from blank_api.services.agent.events import EventRecorder
-from blank_api.services.agent.context import compact_messages
+from blank_api.services.agent.context import (
+    ContextCompactor,
+    build_summary_prompt,
+    load_summary_json,
+    render_summary,
+)
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.tools.base import ToolContext, ToolDefinition, approval_key
 from blank_api.services.tools.gateway import ToolGateway
@@ -50,6 +56,8 @@ class AgentState(TypedDict, total=False):
     summary: str
     status: str
     error: dict
+    # 步数预算已耗尽：此后只能取证与总结，不能再进入修复回路，否则图会空转到递归上限。
+    budget_exhausted: bool
 
 
 async def _never_cancelled() -> bool:
@@ -71,10 +79,11 @@ class AgentSession:
     role_adapters: dict[str, ModelAdapter] = field(default_factory=dict)
     role_provider_ids: dict[str, str] = field(default_factory=dict)
     acceptance_criteria: list[str] = field(default_factory=list)
-    max_steps: int = 8
+    max_steps: int = DEFAULT_MAX_STEPS
     approved_tools: set[str] = field(default_factory=set)
     approved_actions: set[str] = field(default_factory=set)
     is_cancelled: Callable[[], Awaitable[bool]] = _never_cancelled
+    compactor: ContextCompactor = field(default_factory=ContextCompactor)
 
     def approval_policy(self, tool: ToolDefinition, arguments: dict) -> bool:
         return approval_key(tool.name, arguments) in self.approved_actions or tool.name in self.approved_tools
@@ -93,11 +102,46 @@ class AgentSession:
             "messages": [*messages, assistant],
         }
 
+    async def summarize_history(self, folded: list[dict], previous: str) -> str:
+        """把滑出上下文窗口的历史折叠进五要素摘要。
+
+        这里直接调用 adapter.invoke，不经过 call_model —— 否则压缩会递归触发压缩。
+        """
+        prompt = build_summary_prompt(folded, previous)
+        chat = [ChatMessage(role=item["role"], content=item["content"]) for item in prompt]
+        started = time.perf_counter()
+        try:
+            response = await self.adapter.invoke(chat)
+        except ModelError:
+            await self._record_usage("context_compact", "", Usage(), 0, "error", role="summarizer")
+            raise
+        await self._record_usage(
+            "context_compact",
+            response.model,
+            response.usage,
+            int((time.perf_counter() - started) * 1000),
+            "ok",
+            role="summarizer",
+        )
+        return render_summary(load_summary_json(response.text))
+
     async def call_model(self, messages: list[dict], node: str) -> tuple[Any, dict]:
         role = role_for_node(node)
         adapter = self.role_adapters.get(role, self.adapter)
         if not adapter.config.supports_tools:
             adapter = self.adapter
+        covered_before = self.compactor.covered
+        compacted = await self.compactor.build(messages, self.summarize_history)
+        if self.compactor.covered > covered_before:
+            await self.recorder.add(
+                "context.compacted",
+                node,
+                {
+                    "folded": self.compactor.covered - covered_before,
+                    "covered": self.compactor.covered,
+                    "summary_chars": len(self.compactor.summary),
+                },
+            )
         chat = [
             ChatMessage(
                 role=item["role"],
@@ -105,7 +149,7 @@ class AgentSession:
                 tool_call_id=item.get("tool_call_id"),
                 tool_calls=item.get("tool_calls") or [],
             )
-            for item in compact_messages(messages)
+            for item in compacted
         ]
         started = time.perf_counter()
         try:
@@ -357,23 +401,46 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
             "status": "paused",
         }
 
-    if steps >= session.max_steps and not results:
-        await session.recorder.add("budget.exceeded", node, {"steps": steps})
-    budget_exceeded = steps >= session.max_steps
+    # 预算处理：循环本身靠"模型不再返回工具调用"自终止，预算只是安全网。
+    # 因此不做生硬截断，而是分三段：正常 / 收尾区 / 耗尽。
+    remaining = session.max_steps - steps
+    if remaining <= 0:
+        await session.recorder.add(
+            "budget.exceeded", node, {"steps": steps, "max_steps": session.max_steps}
+        )
+        prompt = (
+            "步数预算已用完。不要再调用任何工具。"
+            "请基于已经完成的动作和已有的工具结果，直接输出一段中文总结："
+            "做了什么、结果如何、还有哪些没做完。"
+        )
+    elif remaining <= WRAP_UP_STEPS:
+        await session.recorder.add(
+            "budget.warning",
+            node,
+            {"steps": steps, "remaining": remaining, "max_steps": session.max_steps},
+        )
+        prompt = (
+            f"步数预算只剩 {remaining} 步，请立即收尾：不要再启动新的探索或大范围改动，"
+            "优先把当前这一步做完并落下结论。"
+        )
+    else:
+        prompt = "请继续：如未完成请调用工具执行下一步；如已完成请输出中文总结。"
     result = await session.ask(
         state,
-        "请继续：如未完成请调用工具执行下一步；如已完成请输出中文总结。",
+        prompt,
         node,
         messages=messages,
     )
     usage = merge_usage(usage, result["usage"])
-    pending_calls = [] if budget_exceeded else result["tool_calls"]
+    # 只有预算真正耗尽时才丢弃工具调用；收尾区仍允许模型完成最后一个动作。
+    pending_calls = [] if remaining <= 0 else result["tool_calls"]
     return {
         "messages": result["messages"],
         "steps": steps,
         "usage": usage,
         "tool_results": results,
         "pending": pending_calls,
+        "budget_exhausted": remaining <= 0,
     }
 
 
@@ -430,17 +497,22 @@ async def review_result_node(state: AgentState, session: AgentSession) -> AgentS
             "findings": [str(item) for item in (parsed.get("findings") or [])][:12],
             "summary": str(parsed.get("summary") or ""),
         }
-        rounds = int(state.get("review_rounds") or 0)
-        await session.recorder.add("review.completed", node, {**review, "round": rounds + 1})
-        if not review["approved"]:
-            rounds += 1
+        rounds = int(state.get("review_rounds") or 0) + 1
+        # 修复预算必须与验证回路共用同一个计数器：两个独立计数器会把"最多 3 轮自动修复"
+        # 实际放大到 6~8 轮，既费钱也违背验收口径。
+        total_repairs = int(state.get("repair_rounds") or 0) + (0 if review["approved"] else 1)
+        await session.recorder.add(
+            "review.completed", node, {**review, "round": rounds, "repair_rounds": total_repairs}
+        )
         return {
             "messages": result["messages"],
             "review": review,
             "review_rounds": rounds,
-            "repair_rounds": max(int(state.get("repair_rounds") or 0), rounds),
+            "repair_rounds": total_repairs,
             "usage": merge_usage(state.get("usage") or {}, result["usage"]),
-            "status": "failed" if not review["approved"] and rounds > MAX_REPAIR_ROUNDS else "running",
+            "status": (
+                "failed" if not review["approved"] and total_repairs > MAX_REPAIR_ROUNDS else "running"
+            ),
         }
     except (ModelError, ValueError, json.JSONDecodeError) as exc:
         await session.recorder.add("review.unavailable", node, {"reason": str(exc)[:300]})
@@ -502,6 +574,9 @@ def route_after_act(state: AgentState, session: AgentSession) -> str:
 
 def route_after_validation(state: AgentState, session: AgentSession) -> str:
     validation = state.get("validation") or {}
+    # 预算耗尽后不可能再修复，必须直接进审查，否则会在 validation ↔ execute 之间空转到递归上限。
+    if state.get("budget_exhausted"):
+        return "review_result"
     if validation.get("status") in ("failed", "timeout") and int(
         state.get("repair_rounds") or 0
     ) <= MAX_REPAIR_ROUNDS:
@@ -511,7 +586,10 @@ def route_after_validation(state: AgentState, session: AgentSession) -> str:
 
 def route_after_review(state: AgentState, session: AgentSession) -> str:
     review = state.get("review") or {}
-    if not review.get("approved") and int(state.get("review_rounds") or 0) <= MAX_REPAIR_ROUNDS:
+    if state.get("budget_exhausted"):
+        return "summarize_result"
+    # 与验证回路共用同一份修复预算，避免两处各算 3 轮。
+    if not review.get("approved") and int(state.get("repair_rounds") or 0) <= MAX_REPAIR_ROUNDS:
         return "execute_action"
     return "summarize_result"
 

@@ -129,7 +129,7 @@ export function TaskConsole({
               {task.stepsUsed !== null && (
                 <span>
                   步数 {task.stepsUsed}
-                  {task.maxSteps !== null ? ` / ${task.maxSteps}` : ""}
+                  {task.maxSteps !== null && task.maxSteps <= 50 ? ` / ${task.maxSteps}` : ""}
                 </span>
               )}
               {task.updatedAt && <span>{formatDateTime(task.updatedAt)}</span>}

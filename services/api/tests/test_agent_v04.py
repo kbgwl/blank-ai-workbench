@@ -335,6 +335,14 @@ async def test_full_task_run_produces_events_and_evidence(env: Env, workspace: P
                 ],
             },
             {"content": "补丁已应用，文件读取与搜索完成"},
+            # 审核节点插在验证与总结之间，mock 必须多给一条审核结论，
+            # 否则审核拿到的是总结用的 JSON、永远判不通过，修复回路会把 steps_used 撑大。
+            {
+                "content": json.dumps(
+                    {"approved": True, "findings": [], "summary": "实现与验收条件一致"},
+                    ensure_ascii=False,
+                )
+            },
             {
                 "content": json.dumps(
                     {
@@ -381,8 +389,9 @@ async def test_full_task_run_produces_events_and_evidence(env: Env, workspace: P
     assert evidence["changes"]["reversible"] is True
     assert evidence["validation"]["passed"] is True
     assert "pytest" in evidence["validation"]["command"]
-    assert evidence["usage"]["prompt_tokens"] == 480 and evidence["usage"]["calls"] == 4
-    assert evidence["usage"]["total_tokens"] == 600
+    # 5 次模型调用：计划 / 执行 ×2 / 审核 / 总结（mock 每次固定 120+30 tokens）
+    assert evidence["usage"]["prompt_tokens"] == 600 and evidence["usage"]["calls"] == 5
+    assert evidence["usage"]["total_tokens"] == 750
     assert evidence["usage"]["providers"] and evidence["usage"]["models"] == ["mock-coder"]
     async with get_session_factory()() as session:
         latencies = list(

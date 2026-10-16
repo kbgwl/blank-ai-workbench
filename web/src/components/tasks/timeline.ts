@@ -133,10 +133,12 @@ function describeSystem(event: AgentEvent): { title: string; detail: string; ton
   const payload = event.payload;
   if (type === "node.started") {
     const step = numOf(payload, "step");
+    // 默认预算 200 步，" / 共 N 步" 常驻显示只会变成噪音；只有人为把预算调小过才值得展示分母。
     const max = numOf(payload, "max_steps");
+    const showMax = max !== null && max <= 50;
     return {
       title: event.node || "节点",
-      detail: step !== null ? `第 ${step} 步${max !== null ? ` / 共 ${max} 步` : ""}` : "",
+      detail: step !== null ? `第 ${step} 步${showMax ? ` / 共 ${max} 步` : ""}` : "",
       tone: "muted",
     };
   }
@@ -158,8 +160,20 @@ function describeSystem(event: AgentEvent): { title: string; detail: string; ton
       tone: passed === false ? "danger" : "accent",
     };
   }
+  if (type === "budget.warning") {
+    const remaining = numOf(payload, "remaining");
+    return {
+      title: "步数预算即将用完",
+      detail: remaining !== null ? `只剩 ${remaining} 步，模型开始收尾` : "模型开始收尾",
+      tone: "warn",
+    };
+  }
   if (type === "budget.exceeded") {
-    return { title: "已达最大步数上限", detail: textOf(payload, "steps") ? `已执行 ${textOf(payload, "steps")} 步` : "", tone: "warn" };
+    return {
+      title: "步数预算已用完",
+      detail: textOf(payload, "steps") ? `已执行 ${textOf(payload, "steps")} 步，转为总结` : "转为总结",
+      tone: "warn",
+    };
   }
   if (type.startsWith("error")) {
     return { title: "运行出错", detail: clip(eventToolOutput(event), 200), tone: "danger" };

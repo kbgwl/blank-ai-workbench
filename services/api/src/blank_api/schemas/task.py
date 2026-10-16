@@ -2,13 +2,15 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
+from blank_api.limits import DEFAULT_MAX_STEPS, HARD_MAX_STEPS
+
 
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     goal: str = ""
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=20)
     provider_id: str | None = None
-    max_steps: int = Field(default=8, ge=1, le=30)
+    max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=HARD_MAX_STEPS)
 
 
 class TaskOut(BaseModel):

@@ -13,6 +13,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from blank_api.db import Base
+from blank_api.limits import DEFAULT_MAX_STEPS
 
 TASK_STATUSES = (
     "draft",
@@ -41,7 +42,7 @@ class Task(Base):
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="draft")
     acceptance_criteria: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     acceptance_results: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    max_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=8)
+    max_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=DEFAULT_MAX_STEPS)
     steps_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     result_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     failure_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
