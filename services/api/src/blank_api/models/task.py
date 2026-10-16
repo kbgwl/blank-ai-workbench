@@ -81,6 +81,7 @@ class ToolCall(Base):
     name: Mapped[str] = mapped_column(String(60), nullable=False)
     arguments: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     result_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    artifact_path: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="ok")
     risk_level: Mapped[str] = mapped_column(String(20), nullable=False, default="low")
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

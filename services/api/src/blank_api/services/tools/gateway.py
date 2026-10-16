@@ -11,6 +11,7 @@ from blank_api.api.errors import ApiError
 from blank_api.models.task import ToolCall
 from blank_api.services.log_safety import redact
 from blank_api.services.models.base import ToolSpecLite
+from blank_api.services.agent.artifacts import ArtifactStore
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key, validate_arguments
 
 MAX_LOGGED_CHARS = 4000
@@ -88,7 +89,9 @@ class ToolGateway:
             message=_redact(outcome.message, context.extra_secrets, MAX_RESULT_CHARS),
             data=_redact_value(outcome.data, context.extra_secrets),
         )
-        tool_call_id = await self._record(name, arguments, safe, context, node, risk, duration_ms)
+        tool_call_id, artifact_path = await self._record(
+            name, arguments, safe, context, node, risk, duration_ms
+        )
         payload = safe.as_dict()
         payload.update(
             {
@@ -96,6 +99,7 @@ class ToolGateway:
                 "risk_level": risk,
                 "duration_ms": duration_ms,
                 "tool_call_id": tool_call_id,
+                "artifact_path": artifact_path,
             }
         )
         return payload
@@ -159,12 +163,21 @@ class ToolGateway:
         node: str,
         risk: str,
         duration_ms: int,
-    ) -> str:
+    ) -> tuple[str, str]:
         tool_call_id = str(uuid.uuid4())
+        artifact_path = ""
         summary = _redact(
             "\n".join(part for part in (outcome.output, outcome.message) if part),
             context.extra_secrets,
         )
+        full_payload = {
+            "tool": name,
+            "status": outcome.status,
+            "output": _redact(outcome.output, context.extra_secrets, 10_000_000),
+            "message": _redact(outcome.message, context.extra_secrets, 10_000_000),
+            "data": _redact_value(outcome.data, context.extra_secrets, 10_000_000),
+        }
+        artifact_path = ArtifactStore().save(context.task_id, tool_call_id, full_payload)
         async with context.session_factory() as session:
             session.add(
                 ToolCall(
@@ -175,10 +188,11 @@ class ToolGateway:
                     name=name,
                     arguments=_redact_value(arguments, context.extra_secrets, MAX_LOGGED_CHARS),
                     result_summary=summary or outcome.status,
+                    artifact_path=artifact_path,
                     status=outcome.status,
                     risk_level=risk,
                     duration_ms=duration_ms,
                 )
             )
             await session.commit()
-        return tool_call_id
+        return tool_call_id, artifact_path

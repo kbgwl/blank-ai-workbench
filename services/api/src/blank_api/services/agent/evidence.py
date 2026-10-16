@@ -168,6 +168,7 @@ async def build_evidence(
                 "risk_level": call.risk_level,
                 "duration_ms": call.duration_ms,
                 "summary": call.result_summary,
+                "artifact_path": call.artifact_path,
                 "created_at": _iso(call.created_at),
             }
             for call in calls

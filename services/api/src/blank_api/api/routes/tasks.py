@@ -14,11 +14,12 @@ from blank_api.api.routes.projects import load_project
 from blank_api.db import get_session_factory
 from blank_api.deps import DbSession
 from blank_api.models.model_provider import ModelProvider
-from blank_api.models.task import AgentEvent, Task
+from blank_api.models.task import AgentEvent, Task, ToolCall
 from blank_api.models.run import AgentRun
 from blank_api.models.skill import Skill
 from blank_api.schemas.task import EventOut, TaskApprovalIn, TaskCreate, TaskOut, TaskRunIn
 from blank_api.services.agent.evidence import build_evidence, load_task
+from blank_api.services.agent.artifacts import ArtifactStore
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
@@ -329,6 +330,22 @@ async def task_events(
         )
     ).scalars()
     return [EventOut.model_validate(row) for row in rows]
+
+
+@router.get("/tasks/{task_id}/artifacts/{artifact_id}")
+async def get_task_artifact(task_id: str, artifact_id: str, db: DbSession) -> dict:
+    await load_task(db, task_id)
+    call = (
+        await db.execute(
+            select(ToolCall).where(ToolCall.task_id == task_id, ToolCall.id == artifact_id)
+        )
+    ).scalar_one_or_none()
+    if call is None or not call.artifact_path:
+        raise ApiError(code="artifact_not_found", message="工具完整输出不存在", status_code=404)
+    try:
+        return ArtifactStore().load(task_id, call.id)
+    except (FileNotFoundError, json.JSONDecodeError):
+        raise ApiError(code="artifact_not_found", message="工具完整输出不存在", status_code=404) from None
 
 
 @router.get("/tasks/{task_id}/events/stream")
