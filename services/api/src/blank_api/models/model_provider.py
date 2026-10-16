@@ -42,6 +42,7 @@ class ModelUsage(Base):
         ForeignKey("model_providers.id", ondelete="CASCADE"), nullable=False, index=True
     )
     task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    trace_id: Mapped[str] = mapped_column(String(120), nullable=False, default="", index=True)
     node: Mapped[str] = mapped_column(String(60), nullable=False, default="chat")
     model: Mapped[str] = mapped_column(String(200), nullable=False)
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

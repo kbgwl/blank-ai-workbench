@@ -170,6 +170,7 @@ class ToolGateway:
                 ToolCall(
                     id=tool_call_id,
                     task_id=context.task_id,
+                    trace_id=context.trace_id,
                     node=node,
                     name=name,
                     arguments=_redact_value(arguments, context.extra_secrets, MAX_LOGGED_CHARS),

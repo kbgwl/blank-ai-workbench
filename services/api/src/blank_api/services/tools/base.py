@@ -39,6 +39,7 @@ class ToolContext:
     approval_policy: ApprovalPolicy
     extra_secrets: tuple[str, ...] = ()
     approved_actions: frozenset[str] = frozenset()
+    trace_id: str = ""
 
 
 @dataclass

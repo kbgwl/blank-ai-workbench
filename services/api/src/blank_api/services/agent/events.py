@@ -12,11 +12,14 @@ from blank_api.models.task import AgentEvent
 
 
 class EventRecorder:
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession], task_id: str) -> None:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession], task_id: str, trace_id: str = "") -> None:
         self.session_factory = session_factory
         self.task_id = task_id
+        self.trace_id = trace_id or task_id
 
     async def add(self, event_type: str, node: str = "", payload: dict[str, Any] | None = None) -> int:
+        event_payload = dict(payload or {})
+        event_payload.setdefault("trace_id", self.trace_id)
         async with self.session_factory() as session:
             last = (
                 await session.execute(
@@ -31,7 +34,7 @@ class EventRecorder:
                     seq=seq,
                     node=node,
                     type=event_type,
-                    payload=payload or {},
+                    payload=event_payload,
                 )
             )
             await session.commit()

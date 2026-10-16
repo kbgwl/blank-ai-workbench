@@ -62,6 +62,7 @@ class AgentSession:
     session_factory: async_sessionmaker[AsyncSession]
     provider_id: str
     provider_name: str
+    trace_id: str = ""
     goal: str
     acceptance_criteria: list[str] = field(default_factory=list)
     max_steps: int = 8
@@ -115,6 +116,7 @@ class AgentSession:
                     id=str(uuid.uuid4()),
                     provider_id=self.provider_id,
                     task_id=self.context.task_id,
+                    trace_id=self.trace_id,
                     node=node,
                     model=model or self.provider_name,
                     prompt_tokens=usage.prompt_tokens,

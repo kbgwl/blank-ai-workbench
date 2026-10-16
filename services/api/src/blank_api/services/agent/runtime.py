@@ -109,7 +109,7 @@ class AgentRuntime:
 
     def _prepare(self, request: RunRequest, thread_id: str) -> _RunScope:
         store = SerializedSessionFactory(self.session_factory)
-        recorder = EventRecorder(store, request.task_id)
+        recorder = EventRecorder(store, request.task_id, trace_id=thread_id)
         gateway = ToolGateway(build_default_tools())
         allowed = set(request.approved_tools or set())
         approved_actions = set(request.approved_actions or set())
@@ -126,6 +126,7 @@ class AgentRuntime:
             ),
             extra_secrets=tuple(s for s in (request.adapter.config.api_key,) if s),
             approved_actions=frozenset(approved_actions),
+            trace_id=thread_id,
         )
         session = AgentSession(
             adapter=request.adapter,
@@ -135,6 +136,7 @@ class AgentRuntime:
             session_factory=store,
             provider_id=request.provider_id,
             provider_name=request.provider_name,
+            trace_id=thread_id,
             goal=request.goal or request.title,
             acceptance_criteria=[str(item) for item in request.acceptance_criteria or ()],
             max_steps=max(1, int(request.max_steps)),

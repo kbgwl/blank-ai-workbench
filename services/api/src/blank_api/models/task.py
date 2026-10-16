@@ -73,6 +73,7 @@ class ToolCall(Base):
     task_id: Mapped[str] = mapped_column(
         ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    trace_id: Mapped[str] = mapped_column(String(120), nullable=False, default="", index=True)
     node: Mapped[str] = mapped_column(String(60), nullable=False, default="")
     name: Mapped[str] = mapped_column(String(60), nullable=False)
     arguments: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
