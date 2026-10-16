@@ -1,4 +1,4 @@
-import { ApiError, errorCode, errorMessage, jsonInit, request } from "@/lib/http";
+import { API_V1, ApiError, errorCode, errorMessage, jsonInit, request } from "@/lib/http";
 
 export type Workspace = {
   id: string;
@@ -44,7 +44,7 @@ export function errorDetails(error: unknown): { code: string; message: string } 
   return { code: errorCode(error), message: errorMessage(error) };
 }
 
-const api = "/api/v1";
+const api = API_V1;
 
 export function fetchProjects(): Promise<Project[]> {
   return request<Project[]>(`${api}/projects`, { cache: "no-store" });

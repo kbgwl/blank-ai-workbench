@@ -134,7 +134,7 @@ export default function BrainstormPage() {
         <div className="flex items-center gap-3 text-[11px] text-muted"><span>已选：{selectedIdea?.name ?? "未选择"}</span><select value={projectId} onChange={(event) => setProjectId(event.target.value)} className="rounded border border-line bg-transparent px-2 py-1 outline-none" aria-label="选择项目"><option value="">选择项目</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></div>
         <button type="button" onClick={convertToTask} disabled={!selectedIdea || !projectId || busy} className="rounded-md bg-brand px-3 py-1.5 text-[11px] font-medium text-bg hover:bg-brand/85 disabled:cursor-not-allowed disabled:opacity-40">转为开发任务 →</button>
       </section>}
-      {createdTask && <div className="text-[11px] text-muted">任务已创建：<Link className="text-brand hover:underline" href={`/tasks/${createdTask.id}`}>{createdTask.title}</Link></div>}
+      {createdTask && <div className="text-[11px] text-muted">任务已创建：<Link className="text-brand hover:underline" href={`/tasks/detail?id=${createdTask.id}`}>{createdTask.title}</Link></div>}
       {ideas.length === 0 && <div className="py-16 text-center font-mono text-[11px] text-faint">输入问题后，方案会以卡片形式出现。</div>}
     </div>
   );

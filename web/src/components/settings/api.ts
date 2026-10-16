@@ -1,4 +1,4 @@
-import { ApiError, deltaText, drainSse, errorMessage, request, toApiError, parseJson } from "@/lib/http";
+import { API_V1, ApiError, deltaText, drainSse, errorMessage, request, toApiError, parseJson } from "@/lib/http";
 
 export type Provider = {
   id: string;
@@ -94,7 +94,7 @@ export type ObservabilitySummary = {
   tools: Record<string, number>;
 };
 
-const api = "/api/v1";
+const api = API_V1;
 
 export function fetchPresets(): Promise<PresetsResponse> {
   return request<PresetsResponse>(`${api}/providers/presets`, { cache: "no-store" });

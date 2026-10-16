@@ -1,24 +1,40 @@
+"use client";
+
 import { Suspense } from "react";
 import Link from "next/link";
-import type { Metadata } from "next";
+import { useSearchParams } from "next/navigation";
+
 import { TasksView } from "@/components/tasks/tasks-view";
 
-type Props = {
-  params: Promise<{ id: string }>;
-};
-
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { id } = await params;
-  return { title: `任务 ${id.slice(0, 8)} · 空白格 AI 操作台` };
-}
-
+/**
+ * 任务详情。
+ *
+ * 用查询参数 `/tasks/detail?id=xxx` 而不是路径段 `/tasks/[id]`：
+ * 任务 ID 是运行时产生的，静态导出无法为它预生成 HTML，动态路径段会被
+ * `output: "export"` 直接拒绝。改成查询参数后页面本身是静态的，ID 在客户端读取。
+ */
 function DetailFallback() {
   return <div className="p-6 font-mono text-[12px] text-faint">正在打开任务…</div>;
 }
 
-async function TaskDetail({ params }: Props) {
-  const { id } = await params;
-  const taskId = decodeURIComponent(id);
+function TaskDetail() {
+  const taskId = useSearchParams().get("id") ?? "";
+
+  if (!taskId) {
+    return (
+      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4 p-6">
+        <h1 className="text-[19px] font-semibold tracking-tight">任务详情</h1>
+        <p className="text-[13px] text-muted">缺少任务 ID。请从任务列表进入，或附带 <span className="font-mono">?id=</span> 参数。</p>
+        <Link
+          href="/tasks"
+          className="w-fit rounded-md bg-surface-2 px-3 py-1.5 text-[12px] text-muted ring-1 ring-line transition-colors hover:text-text hover:ring-line-strong"
+        >
+          返回任务列表
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -43,10 +59,10 @@ async function TaskDetail({ params }: Props) {
   );
 }
 
-export default function TaskDetailPage({ params }: Props) {
+export default function TaskDetailPage() {
   return (
     <Suspense fallback={<DetailFallback />}>
-      <TaskDetail params={params} />
+      <TaskDetail />
     </Suspense>
   );
 }

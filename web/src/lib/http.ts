@@ -42,6 +42,17 @@ export function toApiError(status: number, body: unknown): ApiError {
 
 export const jsonInit = { headers: { "content-type": "application/json" } };
 
+/**
+ * API 基址。
+ *
+ * - 网页 / 开发态：留空 → 走相对路径 `/api/...`，由 Next 的 rewrite 代理到本机后端。
+ * - 桌面壳构建：`NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000` → 直连后端。
+ *   静态导出没有服务器，rewrite 不生效，所以桌面构建必须给绝对地址。
+ */
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+
+export const API_V1 = `${API_BASE}/api/v1`;
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {

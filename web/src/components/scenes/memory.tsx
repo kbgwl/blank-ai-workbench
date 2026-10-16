@@ -2,11 +2,13 @@
 
 import { useCallback, useState } from "react";
 
+import { API_V1 } from "@/lib/http";
+
 export type Habit = { id: string; text: string; source: string; createdAt: string };
 const STORAGE_KEY = "blank.habits";
 
 export async function submitMemoryCandidate(text: string): Promise<void> {
-  const response = await fetch("/api/v1/skills/memory-candidates", {
+  const response = await fetch(`${API_V1}/skills/memory-candidates`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ text, source: "daily" }),

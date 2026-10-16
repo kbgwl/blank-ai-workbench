@@ -1,4 +1,5 @@
 import {
+  API_V1,
   ApiError,
   drainSse,
   errorCode,
@@ -11,7 +12,7 @@ import {
 
 export { ApiError, errorCode, errorMessage };
 
-const api = "/api/v1";
+const api = API_V1;
 
 // ---------------------------------------------------------------------------
 // 兜底读取：后端 payload 字段名可能存在别名（tool/name、args/arguments、output/result），

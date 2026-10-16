@@ -133,7 +133,7 @@ export function TaskConsole({
                 </span>
               )}
               {task.updatedAt && <span>{formatDateTime(task.updatedAt)}</span>}
-              <Link href={`/tasks/${task.id}`} className="text-brand/80 hover:text-brand">
+              <Link href={`/tasks/detail?id=${task.id}`} className="text-brand/80 hover:text-brand">
                 深链
               </Link>
             </div>

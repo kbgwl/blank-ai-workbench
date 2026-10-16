@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { API_V1 } from "@/lib/http";
+
 type Health = { status: string; database: string };
 
 export function HealthPill() {
@@ -9,7 +11,7 @@ export function HealthPill() {
   const [error, setError] = useState(false);
 
   const check = useCallback(() => {
-    fetch("/api/v1/health")
+    fetch(`${API_V1}/health`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((h: Health) => {
         setHealth(h);
