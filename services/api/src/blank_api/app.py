@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -15,9 +16,22 @@ async def app_lifespan(_: FastAPI) -> AsyncIterator[None]:
     from blank_api.api.routes.tasks import recover_pending_runs
 
     await recover_pending_runs()
+    async def recovery_loop() -> None:
+        while True:
+            await asyncio.sleep(15)
+            try:
+                await recover_pending_runs()
+            except Exception:
+                # A transient database outage must not kill the API lifecycle;
+                # the next tick will retry the durable queue scan.
+                continue
+
+    recovery_task = asyncio.create_task(recovery_loop(), name="blank-run-recovery")
     try:
         yield
     finally:
+        recovery_task.cancel()
+        await asyncio.gather(recovery_task, return_exceptions=True)
         await run_manager.shutdown()
 
 
