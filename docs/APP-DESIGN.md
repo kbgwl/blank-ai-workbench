@@ -85,15 +85,23 @@
 
 ## 4. 后端必须一起打包（不是可选项）
 
-自包含 exe 的前提是后端也进包。后端是 Python（FastAPI + LangGraph）：
+自包含 exe 的前提是后端也进包。后端是 Python（FastAPI + LangGraph）。
 
-| 方案 | 代价 | 结论 |
-|---|---|---|
-| **PyInstaller `onedir` 打成 `blank-backend.exe`** | 体积 +40~80MB；杀软误报需处理 | **采纳**。onedir 比 onefile 启动快、行为可预测 |
-| 目标机已有 Python/uv | 界面零成本 | 只作**开发期过渡**，不作为交付形态 |
-| 后端改写 Rust/Go | 重写量大，放弃 LangGraph 生态 | 不推荐 |
+**关键证据**：实测 WorkBuddy 5.8.2 的安装目录 —— 它**自带一整套完整 CPython 3.13.14（53MB）**，
+而不是用 PyInstaller 打成一个二进制。这给了我们一条风险低得多的路线：
 
-打包要点：alembic 迁移、`data/` 模板、pydantic / LangGraph 的隐藏导入都要收进 spec；启动时由壳拉起 sidecar 并做健康检查。
+| 方案 | 体积 | 风险 | 结论 |
+|---|---|---|---|
+| **整包携带完整 Python 运行时**（照抄 WorkBuddy） | +约 53MB | **低**。依赖树与开发环境一字不差，`python.exe -m uvicorn` 直接跑 | ✅ **采纳** |
+| PyInstaller `onedir` | +40~80MB | 中高。LangGraph / pydantic 这类动态导入多的栈经常漏模块，要反复补 hiddenimports，失败模式是"打包成功但运行时缺模块"，排查成本高 | 备选 |
+| 目标机已有 Python / uv | 0 | — | 只作**开发期过渡**，不作为交付形态 |
+| 后端改写 Rust / Go | — | 重写量大，放弃 LangGraph 生态 | 不推荐 |
+
+**为什么改推「自带 Python」**：多花 53MB，换**零打包风险** —— 依赖与开发环境完全一致，不需要维护一份
+随时会烂的 hiddenimports 清单。对一个还要持续迭代的产品，这个交易是划算的。
+
+打包要点：随包携带运行时 + `services/api` 源码与 `.venv` 的等价依赖；alembic 迁移在首次启动时执行；
+由壳拉起 sidecar 并做健康检查。
 
 ## 5. 应用外壳规格
 
