@@ -414,6 +414,21 @@ async def drain_steer(session: AgentSession, node: str, step: int = 0) -> list[d
 
     try:
         async with session.session_factory() as db:
+            if session.steer_cursor <= 0:
+                # 恢复运行时 AgentSession 是新建的，游标会回到 0；如果不先对齐到
+                # 最后一条 steer.applied，审批恢复后所有历史插话会被重复注入。
+                applied = (
+                    await db.execute(
+                        select(AgentEvent.seq)
+                        .where(
+                            AgentEvent.task_id == session.context.task_id,
+                            AgentEvent.type == "steer.applied",
+                        )
+                        .order_by(AgentEvent.seq.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                session.steer_cursor = int(applied or 0)
             rows = (
                 (
                     await db.execute(

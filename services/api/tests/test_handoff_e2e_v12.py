@@ -222,6 +222,32 @@ async def test_steer_is_applied_on_the_next_model_call(env: Env, workspace: Path
     assert completed[0]["payload"]["steer"]["count"] == 1
 
 
+async def test_steer_is_not_replayed_in_a_later_run(env: Env, workspace: Path) -> None:  # noqa: F811
+    """插话属于"那一次运行"，不能被后续运行再注入一遍。"""
+    task_id, provider_id = await _waiting_push_task(env, workspace)
+    await env.client.post(
+        f"{API}/tasks/{task_id}/steer", json={"message": "改推 feature/old"}
+    )
+    approved = await env.client.post(
+        f"{API}/tasks/{task_id}/approval",
+        json={"approve": True, "provider_id": provider_id},
+    )
+    assert approved.status_code == 200, approved.text
+
+    events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
+    assert [event for event in events if event["type"] == "steer.applied"]
+
+    before = len(env.mock.requests)
+    env.mock.reset([{"content": "重新开始"}])
+    again = await env.client.post(f"{API}/tasks/{task_id}/run", json={"provider_id": provider_id})
+    assert again.status_code == 200, again.text
+
+    text = "\n".join(
+        str(item.get("content") or "") for item in env.mock.requests[before]["messages"]
+    )
+    assert "feature/old" not in text
+
+
 async def test_steer_is_rejected_after_the_task_ended(env: Env, workspace: Path) -> None:  # noqa: F811
     project_id = await create_project(env, workspace)
     provider_id = await create_provider(env)
