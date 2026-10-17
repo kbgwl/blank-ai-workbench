@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
@@ -43,6 +44,10 @@ class TaskRunIn(BaseModel):
     approve_high_risk: bool = False
     approved_tools: list[str] = Field(default_factory=list)
     approved_actions: list[str] = Field(default_factory=list, max_length=50)
+    # 命令前缀放行（对标 Codex 的 approved_command_prefixes）："git status"、"npm run" 这类签名。
+    approved_command_prefixes: list[str] = Field(default_factory=list, max_length=50)
+    # 四档权限模式（对标 Claude Code 的 defaultMode）；空串表示沿用该任务已有的模式。
+    permission_mode: Literal["", "default", "accept_edits", "plan", "bypass"] = ""
     fallback_provider_ids: list[str] = Field(default_factory=list, max_length=5)
     role_provider_ids: dict[str, str] = Field(default_factory=dict, max_length=8)
 
@@ -62,3 +67,5 @@ class EventOut(BaseModel):
 class TaskApprovalIn(BaseModel):
     approve: bool
     provider_id: str | None = None
+    # 批准作用域：仅本次 / 本会话该命令前缀 / 本会话该工具。
+    scope: Literal["once", "prefix", "tool"] = "once"

@@ -5,6 +5,7 @@ import { Button, Notice } from "@/components/projects/ui";
 import { clip, formatClock, formatDuration } from "./format";
 import { nodeLabel, riskLabel, toolStatusClass } from "./status";
 import type { Block, TermLine } from "./timeline";
+import type { ApprovalScope } from "./api";
 import { BlockIcon } from "./bits";
 
 const toneClass: Record<TermLine["tone"], string> = {
@@ -219,7 +220,11 @@ function ApprovalCard({
 }: {
   block: Extract<Block, { kind: "approval" }>;
   busy: boolean;
-  onDecide: (decision: "approve" | "deny", block: Extract<Block, { kind: "approval" }>) => void;
+  onDecide: (
+    decision: "approve" | "deny",
+    block: Extract<Block, { kind: "approval" }>,
+    scope?: ApprovalScope,
+  ) => void;
 }) {
   const decided = block.state !== "pending";
   return (
@@ -254,9 +259,14 @@ function ApprovalCard({
           <Button variant="danger" disabled={busy} onClick={() => onDecide("deny", block)}>
             拒绝
           </Button>
-          <Button variant="primary" disabled={busy} onClick={() => onDecide("approve", block)}>
+          <Button variant="primary" disabled={busy} onClick={() => onDecide("approve", block, "once")}>
             {busy ? "提交中" : "批准并继续"}
           </Button>
+          {block.prefix && (
+            <Button variant="ghost" disabled={busy} onClick={() => onDecide("approve", block, "prefix")}>
+              本会话总是允许 {block.prefix}
+            </Button>
+          )}
           <span className="font-mono text-[10px] text-faint">
             {block.toolCallId ? `调用 ${block.toolCallId.slice(0, 8)}` : ""}
           </span>
@@ -351,7 +361,11 @@ export function TimelineBlock({
   block: Block;
   busyApprovalKey: string | null;
   onHighlight: (path: string) => void;
-  onDecide: (decision: "approve" | "deny", block: Extract<Block, { kind: "approval" }>) => void;
+  onDecide: (
+    decision: "approve" | "deny",
+    block: Extract<Block, { kind: "approval" }>,
+    scope?: ApprovalScope,
+  ) => void;
 }) {
   switch (block.kind) {
     case "plan":
@@ -365,7 +379,7 @@ export function TimelineBlock({
         <ApprovalCard
           block={block}
           busy={busyApprovalKey === block.key}
-          onDecide={(decision, target) => onDecide(decision, target)}
+          onDecide={(decision, target, scope) => onDecide(decision, target, scope)}
         />
       );
     case "result":

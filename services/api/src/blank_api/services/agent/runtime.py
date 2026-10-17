@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from blank_api.api.errors import ApiError
 from blank_api.models.checkpoint import AgentCheckpoint
-from blank_api.models.task import Task
+from blank_api.models.task import AgentEvent, Task
 from blank_api.services.agent.checkpoints import (
     SqlAlchemyCheckpointSaver,
     task_id_from_thread,
@@ -25,8 +25,9 @@ from blank_api.services.agent.graph import AgentSession, build_agent_graph, init
 from blank_api.services.agent.store import SerializedSessionFactory
 from blank_api.services.hooks import HookRunner
 from blank_api.services.models.base import ModelAdapter, ModelError
+from blank_api.services.permissions import MODE_DEFAULT, PermissionPolicy
 from blank_api.services.tools import build_default_tools
-from blank_api.services.tools.base import ToolContext, approval_key
+from blank_api.services.tools.base import ToolContext
 from blank_api.services.tools.gateway import ToolGateway
 from blank_api.services.sandbox import SnapshotStore
 from blank_api.services.workspace import mask_path
@@ -93,6 +94,9 @@ class RunRequest:
     approve_high_risk: bool = False
     approved_tools: set[str] | None = None
     approved_actions: set[str] | None = None
+    approved_command_prefixes: Sequence[str] = ()
+    # 空串表示"沿用该任务已有的模式"：审批恢复时前端不重发模式，不能被默认值悄悄改口径。
+    permission_mode: str = ""
     skill_instructions: Sequence[str] = ()
     role_adapters: dict[str, ModelAdapter] | None = None
     role_provider_ids: dict[str, str] | None = None
@@ -113,6 +117,54 @@ class AgentRuntime:
     def __init__(self, session_factory) -> None:
         self.session_factory = session_factory
 
+    async def _rehydrate(self, task_id: str, permissions: PermissionPolicy) -> None:
+        """从事件日志回放本任务的批准与驳回。
+
+        会话记忆本来只活在进程内存里，而审批恢复、后端重启都会重建 AgentSession；
+        不回放的话，用户"本会话总是允许 git status"的授权每次恢复都会丢。
+        """
+        async with self.session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(AgentEvent)
+                        .where(
+                            AgentEvent.task_id == task_id,
+                            AgentEvent.type.in_(("approval.granted", "approval.denied")),
+                        )
+                        .order_by(AgentEvent.seq)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        for row in rows:
+            payload = row.payload or {}
+            tool = str(payload.get("tool") or "")
+            if not tool:
+                continue
+            arguments = payload.get("arguments") or {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            scope = str(payload.get("scope") or "once")
+            if row.type == "approval.granted":
+                permissions.remember(tool, arguments, scope)
+            else:
+                permissions.forget(tool, arguments, scope)
+
+    async def _stored_mode(self, task_id: str) -> str:
+        """任务首次运行时记下的权限模式，供审批恢复沿用。"""
+        async with self.session_factory() as session:
+            payload = (
+                await session.execute(
+                    select(AgentEvent.payload)
+                    .where(AgentEvent.task_id == task_id, AgentEvent.type == "task.started")
+                    .order_by(AgentEvent.seq.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        return str((payload or {}).get("permission_mode") or "")
+
     def _prepare(self, request: RunRequest, thread_id: str) -> _RunScope:
         store = SerializedSessionFactory(self.session_factory)
         recorder = EventRecorder(store, request.task_id, trace_id=thread_id, run_id=request.run_id)
@@ -121,19 +173,24 @@ class AgentRuntime:
         approved_actions = set(request.approved_actions or set())
         if request.approve_high_risk:
             allowed.update(tool.name for tool in gateway.tools.values() if tool.requires_approval)
+        permissions = PermissionPolicy.build(
+            request.permission_mode or MODE_DEFAULT,
+            approve_high_risk=request.approve_high_risk,
+            approved_tools=allowed,
+            approved_actions=approved_actions,
+            approved_prefixes=request.approved_command_prefixes or (),
+        )
         adapters = [request.adapter, *(request.role_adapters or {}).values()]
         context = ToolContext(
             root=Path(request.root),
             task_id=request.task_id,
             session_factory=store,
-            approval_policy=lambda tool, arguments: (
-                approval_key(tool.name, arguments) in approved_actions
-                or (tool.resolve_risk(arguments) not in ("high", "critical") and tool.name in allowed)
-                or (request.approve_high_risk and tool.resolve_risk(arguments) in ("high", "critical"))
-            ),
+            # 审批回调保留给外部集成；运行时的唯一真源是 permissions（模式 + 前缀 + 会话记忆）。
+            approval_policy=permissions.decide,
             extra_secrets=tuple({s for adapter in adapters for s in (adapter.config.api_key,) if s}),
             approved_actions=frozenset(approved_actions),
             trace_id=thread_id,
+            permissions=permissions,
         )
         session = AgentSession(
             adapter=request.adapter,
@@ -148,8 +205,7 @@ class AgentRuntime:
             skill_instructions=[str(item) for item in request.skill_instructions],
             acceptance_criteria=[str(item) for item in request.acceptance_criteria or ()],
             max_steps=max(1, int(request.max_steps)),
-            approved_tools=allowed,
-            approved_actions=approved_actions,
+            permissions=permissions,
             role_adapters=request.role_adapters or {},
             role_provider_ids=request.role_provider_ids or {},
             is_cancelled=_CancelledLookup(store, request.task_id),
@@ -183,6 +239,7 @@ class AgentRuntime:
     async def run(self, request: RunRequest) -> dict[str, Any]:
         thread_id = await next_thread_id(self.session_factory, request.task_id)
         scope = self._prepare(request, thread_id)
+        await self._rehydrate(request.task_id, scope.session.permissions)
         recorder, session = scope.recorder, scope.session
         snapshot = SnapshotStore().capture(
             str(session.context.root), reason="任务执行前快照", task_id=request.task_id
@@ -208,6 +265,8 @@ class AgentRuntime:
                 "provider": request.provider_name,
                 "model": request.adapter.config.model,
                 "max_steps": session.max_steps,
+                "permission_mode": session.permission_mode,
+                "permissions": session.permissions.snapshot(),
                 "tools": [tool.name for tool in session.gateway.specs()],
                 "thread_id": thread_id,
                 "snapshot_id": snapshot["id"],
@@ -264,14 +323,22 @@ class AgentRuntime:
         )
         return await self._finalize(request, scope, result, interrupts)
 
-    async def resume(self, request: RunRequest, decision: bool = True) -> dict[str, Any]:
+    async def resume(self, request: RunRequest, decision: Any = True) -> dict[str, Any]:
         thread_id = await latest_thread_id(self.session_factory, request.task_id)
+        if not request.permission_mode:
+            request.permission_mode = await self._stored_mode(request.task_id) or MODE_DEFAULT
         scope = self._prepare(request, thread_id)
+        await self._rehydrate(request.task_id, scope.session.permissions)
         await self._set_status(scope, "running")
         await scope.recorder.add(
             "task.resumed",
             "receive_task",
-            {"thread_id": thread_id, "decision": decision, "approved_tools": sorted(request.approved_tools or set())},
+            {
+                "thread_id": thread_id,
+                "decision": decision if isinstance(decision, (bool, str)) else dict(decision),
+                "permission_mode": scope.session.permission_mode,
+                "permissions": scope.session.permissions.snapshot(),
+            },
         )
         try:
             result = await scope.graph.ainvoke(Command(resume=decision), scope.config)

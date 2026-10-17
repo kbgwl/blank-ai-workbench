@@ -14,6 +14,7 @@ import {
   fetchTask,
   fetchTasks,
   runTask,
+  type ApprovalScope,
   type Evidence,
   type Project,
   type Provider,
@@ -164,15 +165,20 @@ export function TasksView({ initialTaskId = null }: Props) {
     [loadDetail, notify, reload],
   );
 
-  /** 审批：POST /tasks/{id}/approval，批准会从断点继续，驳回会保留已完成的步骤并置为 paused。 */
+  /** 审批：POST /tasks/{id}/approval，批准会从断点继续，驳回会保留已完成的步骤并置为 paused。
+   *  scope 决定这次批准记多久：once 仅本次、prefix 记住该命令前缀、tool 记住整个工具。 */
   const decide = useCallback(
-    async (decision: "approve" | "deny", block?: Extract<Block, { kind: "approval" }>) => {
+    async (
+      decision: "approve" | "deny",
+      block?: Extract<Block, { kind: "approval" }>,
+      scope: ApprovalScope = "once",
+    ) => {
       if (!selectedId) return;
       setBusyAction(decision);
       setActionError(null);
       if (block) setApprovalKey(block.key);
       try {
-        await decideApproval(selectedId, { decision });
+        await decideApproval(selectedId, { decision, scope });
         await loadDetail(selectedId);
         reload();
       } catch (error: unknown) {
@@ -211,7 +217,11 @@ export function TasksView({ initialTaskId = null }: Props) {
   );
 
   const onAction = useCallback(
-    async (action: ActionKind, block?: Extract<Block, { kind: "approval" }>) => {
+    async (
+      action: ActionKind,
+      block?: Extract<Block, { kind: "approval" }>,
+      scope: ApprovalScope = "once",
+    ) => {
       if (!selectedId) return;
       if (action === "run") {
         if (task?.status === "waiting_approval") {
@@ -236,7 +246,7 @@ export function TasksView({ initialTaskId = null }: Props) {
         return;
       }
       if (action === "approve" || action === "deny") {
-        await decide(action, block);
+        await decide(action, block, scope);
       }
     },
     [decide, loadDetail, notify, reload, run, selectedId, task?.status],
@@ -283,7 +293,7 @@ export function TasksView({ initialTaskId = null }: Props) {
           busyAction={busyAction}
           approvalKey={approvalKey}
           onHighlight={highlightChange}
-          onAction={(action, block) => void onAction(action, block)}
+          onAction={(action, block, scope) => void onAction(action, block, scope)}
           onReload={() => {
             reload();
             void loadDetail(selectedId);

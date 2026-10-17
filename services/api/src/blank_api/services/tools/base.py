@@ -3,23 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-import hashlib
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from blank_api.services.approvals import approval_key
 from blank_api.services.models.base import ToolSpecLite
+
+if TYPE_CHECKING:  # pragma: no cover - 仅类型检查时导入，运行时无依赖
+    from blank_api.services.permissions import PermissionPolicy
 
 ApprovalPolicy = Callable[["ToolDefinition", dict], Any]
 
-
-def approval_key(tool_name: str, arguments: dict) -> str:
-    """Stable fingerprint for one exact tool action."""
-    encoded = json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(f"{tool_name}:{encoded}".encode("utf-8")).hexdigest()
 
 TYPE_CHECKS: dict[str, tuple[type, ...]] = {
     "string": (str,),
@@ -36,10 +33,14 @@ class ToolContext:
     root: Path
     task_id: str
     session_factory: async_sessionmaker[AsyncSession]
-    approval_policy: ApprovalPolicy
+    # 旧的单值审批回调：只有这一层时按"高风险才拦"的老口径判定，保留给外部集成与单测。
+    # 新代码请用 permissions（四档模式 + 前缀规则 + 会话记忆）。
+    approval_policy: ApprovalPolicy | None = None
     extra_secrets: tuple[str, ...] = ()
     approved_actions: frozenset[str] = frozenset()
     trace_id: str = ""
+    # PermissionPolicy（延迟注解，避免与 permissions 模块循环导入）
+    permissions: "PermissionPolicy | None" = None
 
 
 @dataclass

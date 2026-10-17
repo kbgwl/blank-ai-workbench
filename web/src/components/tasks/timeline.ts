@@ -9,6 +9,7 @@ import {
   pick,
   textOf,
   type AgentEvent,
+  type ApprovalScope,
 } from "./api";
 import { clip } from "./format";
 
@@ -56,6 +57,9 @@ export type Block =
       args: Record<string, unknown>;
       risk: string;
       message: string;
+      /** 命令前缀签名（"git push"）：不为空才能提供「本会话总是允许该前缀」。 */
+      prefix: string;
+      scopes: { scope: ApprovalScope; label: string }[];
       state: "pending" | "granted" | "denied";
     }
   | {
@@ -269,6 +273,13 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
         args: eventToolArgs({ ...event, payload: source }),
         risk: textOf(source, "risk_level", "risk", "level"),
         message: textOf(source, "message", "reason", "approval_state"),
+        prefix: textOf(source, "suggested_prefix", "prefix"),
+        scopes: arrayOf(source, "approval_options", "scopes")
+          .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+          .map((item) => ({
+            scope: (textOf(item, "scope", "value") || "once") as ApprovalScope,
+            label: textOf(item, "label", "title"),
+          })),
         state: "pending",
       };
       openApprovalIndex.set(tool, push(block));

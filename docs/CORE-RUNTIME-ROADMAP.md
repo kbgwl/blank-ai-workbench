@@ -143,12 +143,25 @@ Model Runtime / Observability
   `pre_tool_use` / `post_tool_use` / `post_compact`。配置走 `BLANK_HOOKS`（JSON），
   **默认关闭**；`pre_tool_use` 可拦截工具调用，其余为通知；**钩子失败一律 fail-open**，
   且每次执行都写 `hook.completed` 审计事件。
+- ✅ **审批粒度：前缀放行 + 会话内批准 + 四档权限模式**（`services/permissions.py`）
+  - **命令前缀签名**：`git status -s` → `git status`，`npm run build` → `npm run`。
+    Windows 路径按 basename 归一（`C:\Python312\python.exe` → `python`）。
+  - **逐段覆盖**：`npm test && rm -rf src` 不会被 `npm test` 的规则放行——整条命令的每一段
+    都得命中，否则照样打断。
+  - **四档模式**：`default` / `accept_edits` / `plan` / `bypass`。`plan` 只允许只读取证
+    （网关层硬拒绝，不是"询问"）；`accept_edits` 只吞普通文件写入，敏感路径补丁仍是高风险。
+  - **作用域批准**：审批返回 `once` / `prefix` / `tool` 三档，写回 `PermissionPolicy`；
+    `approval.granted` 事件带上作用域与参数，**审批恢复时从事件日志回放**，
+    前端不重发模式也不会丢授权。
+  - **不可逆护栏**：`mkfs` / `format` / `rm -rf /` / `DROP DATABASE` / `git push --force`
+    即使 `bypass` 也转人工确认；裸可执行名（`rm`/`bash`/`curl`）**不提供"总是允许"这一档**，
+    避免"记住 rm"等于全放行。
+  - 判定唯一入口是 `ToolGateway.decide()`，图中断与网关执行不可能给出两个答案。
 
 ### 待做（按拆解结果排序）
 
 | 优先级 | 差距 | 他们的做法 | 备注 |
 |---|---|---|---|
-| **P1** | 审批粒度过粗 | 命令前缀放行（`approved_command_prefixes` / `prefix_rule`）+ **会话内记住批准**（`user_approved_for_session`）+ 4 档权限模式 | 需同时动 API 与前端，支撑设计里的"审批三档" |
 | **P1** | 上下文只有一层压缩 | **两层**：`microcompact`（细粒度裁剪）+ `auto-compact`（整体压缩）+ 压缩边界 + 压缩前后 token 记账（`active_context_tokens_before/after`） | 现有 `ContextCompactor` 是第二层，缺第一层 |
 | **P1** | Agent 不能主动提问 | Codex `request_user_input` / Claude `AskUserQuestion`（`AskUserQuestionInput` 已确认存在） | 事件流已具备，缺工具与前端交互 |
 | **P1** | 没有子代理 | Codex `thread_spawn` + `parent_thread_id` / `depth` / `agent_path` / `nickname` / `role`；Claude `Task` + **`EnterWorktree`/`ExitWorktree`**（并行代理各占独立 worktree） | worktree 隔离是关键，不然并行会互相踩 |

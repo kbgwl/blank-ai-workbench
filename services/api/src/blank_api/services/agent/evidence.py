@@ -69,6 +69,13 @@ async def build_evidence(
             {"criterion": item, "covered": False, "evidence": "任务未产出验收结论"} for item in criteria
         ]
     validation = _latest_validation(events)
+    # 审批请求里的权限上下文（模式 / 命中规则 / 建议前缀 / 作用域选项）在中断事件里；
+    # 前端要拿它渲染「仅本次 / 总是允许 git status / 总是允许 run_shell」。
+    approval_context: dict[str, Any] = {}
+    for event in reversed(events):
+        if event.type in ("approval.required", "approval.requested") and isinstance(event.payload, dict):
+            approval_context = dict(event.payload)
+            break
     pending_approvals = [
         {
             "tool_call_id": call.id,
@@ -77,6 +84,7 @@ async def build_evidence(
             "risk_level": call.risk_level,
             "message": call.result_summary,
             "approval_state": "待审批",
+            **_approval_hints(approval_context, call.name, call.arguments),
         }
         for call in calls
         if call.status == "awaiting_approval"
@@ -96,6 +104,7 @@ async def build_evidence(
                     "message": "高风险操作等待人工审批",
                     "approval_state": "待审批",
                     "expires_at": (payload.get("expires_at") if isinstance(payload, dict) else None),
+                    **_approval_hints(payload, str(payload.get("tool") or ""), payload.get("arguments") or {}),
                 }
             )
             break
@@ -186,6 +195,23 @@ async def build_evidence(
             for event in events
         ],
     }
+
+
+def _approval_hints(context: dict, tool: str, arguments) -> dict[str, Any]:
+    """把审批事件里的权限上下文摘到待审批项上；上下文不属于该工具时留空，不编造。"""
+    if not context or str(context.get("tool") or "") != tool:
+        return {}
+    hints: dict[str, Any] = {
+        "permission_mode": context.get("permission_mode") or "",
+        "permission_rule": context.get("permission_rule") or "",
+        "command_prefix": context.get("command_prefix") or "",
+        "suggested_prefix": context.get("suggested_prefix") or "",
+        "approval_options": context.get("approval_options") or [],
+    }
+    if not context.get("arguments") and arguments:
+        # 事件里没带参数时，用调用记录补一份，前端才能渲染「总是允许 X」的实际命令。
+        hints["arguments_preview"] = arguments
+    return hints
 
 
 def _latest_validation(events: list[AgentEvent]) -> dict[str, Any] | None:

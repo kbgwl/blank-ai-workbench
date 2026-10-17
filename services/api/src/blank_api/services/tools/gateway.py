@@ -12,6 +12,16 @@ from blank_api.models.task import ToolCall
 from blank_api.services.log_safety import redact
 from blank_api.services.models.base import ToolSpecLite
 from blank_api.services.agent.artifacts import ArtifactStore
+from blank_api.services.permissions import (
+    ASK,
+    DENY,
+    Decision,
+    approval_options,
+    ask,
+    approve,
+    deny,
+    memoizable_prefix,
+)
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key, validate_arguments
 
 MAX_LOGGED_CHARS = 4000
@@ -62,16 +72,37 @@ class ToolGateway:
         if tool is None:
             risk = "high"
             outcome = ToolOutcome(ok=False, status="denied", message=f"未注册的工具：{name}")
+            decision = deny(risk, "unregistered", outcome.message)
         else:
             risk = tool.resolve_risk(arguments)
+            decision = self.decide(tool, arguments, context, risk)
             invalid = validate_arguments(tool.input_schema, arguments)
             if invalid is not None:
                 outcome = ToolOutcome(ok=False, status="error", message=invalid)
-            elif risk in ("high", "critical") and not self._approved(tool, arguments, context):
-                outcome = self._awaiting_approval(tool, arguments, risk)
+            elif decision.outcome == DENY:
+                outcome = self._denied(tool, arguments, decision)
+            elif decision.outcome == ASK:
+                outcome = self._awaiting_approval(tool, arguments, risk, decision)
             else:
                 outcome = await self._run(tool, arguments, context)
-        return await self._finish(name, arguments, outcome, context, node, risk, started)
+        return await self._finish(name, arguments, outcome, context, node, risk, started, decision)
+
+    def decide(
+        self,
+        tool: ToolDefinition,
+        arguments: dict,
+        context: ToolContext,
+        risk: str | None = None,
+    ) -> Decision:
+        """统一的权限判定入口：图里的审批门与网关必须拿到同一个答案。"""
+        risk = tool.resolve_risk(arguments) if risk is None else risk
+        if context.permissions is not None:
+            return context.permissions.decide(tool, arguments, risk)
+        if context.approval_policy is not None and self._approved(tool, arguments, context):
+            return approve(risk, "legacy:approved")
+        if risk in ("high", "critical"):
+            return ask(risk, "legacy:ask")
+        return approve(risk, "legacy:auto")
 
     async def _finish(
         self,
@@ -82,6 +113,7 @@ class ToolGateway:
         node: str,
         risk: str,
         started: float,
+        decision: Decision | None = None,
     ) -> dict:
         duration_ms = int((time.perf_counter() - started) * 1000)
         safe = ToolOutcome(
@@ -102,6 +134,7 @@ class ToolGateway:
                 "duration_ms": duration_ms,
                 "tool_call_id": tool_call_id,
                 "artifact_path": artifact_path,
+                "permission": decision.as_dict() if decision is not None else {},
             }
         )
         return payload
@@ -112,9 +145,28 @@ class ToolGateway:
         except Exception:
             return False
 
-    def _awaiting_approval(
-        self, tool: ToolDefinition, arguments: dict, risk: str
+    def _denied(
+        self, tool: ToolDefinition, arguments: dict, decision: Decision
     ) -> ToolOutcome:
+        return ToolOutcome(
+            ok=False,
+            status="denied",
+            message=decision.reason or f"权限策略拒绝执行：{tool.name}",
+            data={
+                "requires_approval": False,
+                "tool": tool.name,
+                "arguments": arguments,
+                "risk_level": decision.risk,
+                "permission_rule": decision.rule,
+            },
+        )
+
+    def _awaiting_approval(
+        self, tool: ToolDefinition, arguments: dict, risk: str, decision: Decision | None = None
+    ) -> ToolOutcome:
+        raw_prefix = decision.prefix if decision is not None else ""
+        # 只有值得记住的前缀才作为「总是允许 X」的建议下发；rm 这类裸可执行名不会出现在这里。
+        suggested = memoizable_prefix(tool.name, raw_prefix)
         return ToolOutcome(
             ok=False,
             status=APPROVAL_STATUS,
@@ -129,6 +181,10 @@ class ToolGateway:
                 "risk_level": risk,
                 "approval_state": "待审批",
                 "approval_key": approval_key(tool.name, arguments),
+                "permission_rule": decision.rule if decision is not None else "",
+                "command_prefix": raw_prefix,
+                "suggested_prefix": suggested,
+                "approval_options": approval_options(tool.name, raw_prefix),
             },
         )
 

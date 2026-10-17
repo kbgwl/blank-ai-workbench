@@ -27,6 +27,14 @@ from blank_api.services.agent.context import (
 )
 from blank_api.services.hooks import HookRunner, blocking_denial
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
+from blank_api.services.permissions import (
+    MODE_DEFAULT,
+    SCOPE_ONCE,
+    PermissionPolicy,
+    approval_options,
+    memoizable_prefix,
+    parse_decision,
+)
 from blank_api.services.tools.base import ToolContext, ToolDefinition, approval_key
 from blank_api.services.tools.gateway import ToolGateway
 
@@ -83,14 +91,18 @@ class AgentSession:
     role_provider_ids: dict[str, str] = field(default_factory=dict)
     acceptance_criteria: list[str] = field(default_factory=list)
     max_steps: int = DEFAULT_MAX_STEPS
-    approved_tools: set[str] = field(default_factory=set)
-    approved_actions: set[str] = field(default_factory=set)
+    permissions: PermissionPolicy = field(default_factory=PermissionPolicy)
     is_cancelled: Callable[[], Awaitable[bool]] = _never_cancelled
     compactor: ContextCompactor = field(default_factory=ContextCompactor)
     hooks: HookRunner = field(default_factory=HookRunner)
 
+    @property
+    def permission_mode(self) -> str:
+        return self.permissions.mode or MODE_DEFAULT
+
     def approval_policy(self, tool: ToolDefinition, arguments: dict) -> bool:
-        return approval_key(tool.name, arguments) in self.approved_actions or tool.name in self.approved_tools
+        """旧的布尔口径：批准与否。新代码请直接用 gateway.decide / permissions.decide。"""
+        return self.permissions.decide(tool, arguments).allowed
 
     async def ask(self, state: AgentState, prompt: str, node: str, *, messages: list[dict] | None = None) -> dict:
         messages = list(messages) if messages is not None else list(state.get("messages") or [])
@@ -320,18 +332,17 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
     }
 
 
-def _needs_approval(session: AgentSession, tool: ToolDefinition, arguments: dict) -> bool:
-    """审批口径与网关一致：高风险且尚未授权的工具才需要图中断确认。"""
-    if tool.resolve_risk(arguments) not in ("high", "critical"):
-        return False
-    try:
-        return not bool(session.context.approval_policy(tool, arguments))
-    except Exception:
-        return True
+def _decision(session: AgentSession, tool: ToolDefinition, arguments: dict):
+    """审批门与网关共用同一个判定入口，两边口径不可能漂移。"""
+    return session.gateway.decide(tool, arguments, session.context)
 
 
 async def _approval_gate(session: AgentSession, node: str, pending: list[dict]) -> set[str]:
-    """高风险工具只有图中断一条审批路径：批准进 approved_tools，驳回返回待拒绝的工具名。
+    """高风险工具只有图中断一条审批路径。
+
+    中断返回的不再只是"准/不准"，而是带作用域的批准：仅本次 / 本会话该命令前缀 / 本会话该工具。
+    作用域写回 PermissionPolicy 后，后续步骤命中规则就不再重复打断——这就是 Codex 的
+    ``approved_command_prefixes`` 与 Claude 的 ``user_approved_for_session``。
 
     放在执行循环之前，是为了恢复运行时整节重放不会重复执行已经跑过的工具。
     """
@@ -342,18 +353,48 @@ async def _approval_gate(session: AgentSession, node: str, pending: list[dict]) 
         if tool is None or name in denied:
             continue
         arguments = tool_call_args(call)
-        if not _needs_approval(session, tool, arguments):
+        decision = _decision(session, tool, arguments)
+        if not decision.asks:
+            # allow 交给网关执行；deny 交给网关拒绝并留审计——两条都不该在这里中断。
             continue
-        risk = tool.resolve_risk(arguments)
-        action = approval_key(name, arguments)
         expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
-        decision = bool(interrupt({"tool": name, "arguments": arguments, "risk_level": risk, "approval_key": action, "expires_at": expires_at}))
-        if decision:
-            session.approved_actions.add(action)
-            await session.recorder.add("approval.granted", node, {"tool": name, "approval_key": action, "expires_at": expires_at})
+        answer = interrupt(
+            {
+                "tool": name,
+                "arguments": arguments,
+                "risk_level": decision.risk,
+                "approval_key": approval_key(name, arguments),
+                "permission_mode": session.permission_mode,
+                "permission_rule": decision.rule,
+                "command_prefix": decision.prefix,
+                "suggested_prefix": memoizable_prefix(name, decision.prefix),
+                "approval_options": approval_options(name, decision.prefix),
+                "expires_at": expires_at,
+            }
+        )
+        granted, scope = parse_decision(answer)
+        if granted:
+            session.permissions.remember(name, arguments, scope)
+            await session.recorder.add(
+                "approval.granted",
+                node,
+                {
+                    "tool": name,
+                    "arguments": arguments,
+                    "approval_key": approval_key(name, arguments),
+                    "scope": scope,
+                    "prefix": decision.prefix,
+                    "expires_at": expires_at,
+                },
+            )
         else:
             denied.add(name)
-            await session.recorder.add("approval.denied", node, {"tool": name})
+            session.permissions.forget(name, arguments, scope)
+            await session.recorder.add(
+                "approval.denied",
+                node,
+                {"tool": name, "arguments": arguments, "scope": scope, "prefix": decision.prefix},
+            )
     return denied
 
 
@@ -398,7 +439,13 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 reason=f"钩子拒绝执行 {name}：{blocked.reason or '未给出原因'}",
             )
         elif name in denied:
-            payload = await session.gateway.refuse(name, arguments, session.context, node)
+            payload = await session.gateway.refuse(
+                name,
+                arguments,
+                session.context,
+                node,
+                reason=f"用户驳回了该操作，本次会话不再执行：{name}",
+            )
         else:
             payload = await session.gateway.execute(name, arguments, session.context, node)
 
@@ -433,6 +480,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 "status": payload.get("status"),
                 "ok": payload.get("ok"),
                 "risk_level": payload.get("risk_level"),
+                "permission": payload.get("permission") or {},
                 "duration_ms": payload.get("duration_ms"),
                 "tool_call_id": payload.get("tool_call_id"),
                 "summary": str(payload.get("output") or payload.get("message") or "")[:500],

@@ -263,12 +263,20 @@ export type UsageInfo = {
   calls: number | null;
   models: string[];
 };
+/** 审批作用域：仅本次 / 本会话该命令前缀 / 本会话该工具。 */
+export type ApprovalScope = "once" | "prefix" | "tool";
+
 export type PendingApproval = {
   toolCallId: string;
   tool: string;
   args: Record<string, unknown>;
   risk: string;
   message: string;
+  /** 后端给出的前缀签名（"git push"），非命令类工具为空。 */
+  prefix: string;
+  /** 后端下发的可选作用域，前端不自己编造档位。 */
+  scopes: { scope: ApprovalScope; label: string }[];
+  mode: string;
 };
 export type ToolRecord = {
   id: string;
@@ -405,6 +413,16 @@ function normalizeUsage(container: unknown): UsageInfo {
   };
 }
 
+function normalizeApprovalScopes(source: unknown): { scope: ApprovalScope; label: string }[] {
+  return arrayOf(source, "approval_options", "scopes", "options")
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .map((item) => ({
+      scope: (textOf(item, "scope", "value") || "once") as ApprovalScope,
+      label: textOf(item, "label", "title"),
+    }))
+    .filter((item) => item.label !== "" || item.scope !== "once");
+}
+
 function normalizeApprovals(container: unknown): PendingApproval[] {
   const rows = arrayOf(container, "pending_approvals", "approvals", "awaiting_approval");
   return rows
@@ -415,6 +433,9 @@ function normalizeApprovals(container: unknown): PendingApproval[] {
       args: recordOf(item, "arguments", "args", "input", "params"),
       risk: textOf(item, "risk_level", "risk", "level"),
       message: textOf(item, "message", "reason", "summary", "approval_state"),
+      prefix: textOf(item, "suggested_prefix", "prefix"),
+      scopes: normalizeApprovalScopes(item),
+      mode: textOf(item, "permission_mode", "mode"),
     }));
 }
 
@@ -596,9 +617,10 @@ export function cancelTask(taskId: string): Promise<unknown> {
 /** POST /tasks/{id}/approval：批准或驳回待审批的高风险操作，返回 {task, evidence}。 */
 export function decideApproval(
   taskId: string,
-  input: { decision: "approve" | "deny" },
+  input: { decision: "approve" | "deny"; scope?: ApprovalScope },
 ): Promise<{ used: string }> {
   const body: Record<string, unknown> = { approve: input.decision === "approve" };
+  if (input.decision === "approve" && input.scope) body.scope = input.scope;
   return request<unknown>(`${api}/tasks/${taskId}/approval`, {
     method: "POST",
     ...jsonInit,

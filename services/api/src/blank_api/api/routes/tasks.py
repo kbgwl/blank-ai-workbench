@@ -217,6 +217,8 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         approve_high_risk=payload.approve_high_risk,
         approved_tools=set(payload.approved_tools),
         approved_actions=set(payload.approved_actions),
+        approved_command_prefixes=tuple(payload.approved_command_prefixes),
+        permission_mode=payload.permission_mode,
         role_adapters=role_adapters,
         role_provider_ids=role_provider_ids,
     )
@@ -434,13 +436,20 @@ async def decide_approval(
             except ValueError:
                 raise ApiError(code="approval_invalid", message="审批请求时间无效，无法继续执行", status_code=409) from None
     recorder = EventRecorder(get_session_factory(), task_id)
-    await recorder.add("approval.decided", "execute_action", {"approve": payload.approve, "tools": pending})
-    # 决定只通过 Command(resume=...) 交回图里：批准时中断返回 True，图写入 approved_tools 并补记 approval.granted。
-    # 在这里预先塞 approved_tools 会让中断被跳过，审批轨迹反而丢失。
+    await recorder.add(
+        "approval.decided",
+        "execute_action",
+        {"approve": payload.approve, "scope": payload.scope, "tools": pending},
+    )
+    # 决定只通过 Command(resume=...) 交回图里：批准时中断返回带作用域的批准，
+    # 图据此写入会话记忆并补记 approval.granted。在这里预先塞 approved_tools
+    # 会让中断被跳过，审批轨迹反而丢失。
     run_request = await _run_request(
         db, task, TaskRunIn(provider_id=payload.provider_id), request
     )
-    evidence = await AgentRuntime(get_session_factory()).resume(run_request, decision=payload.approve)
+    evidence = await AgentRuntime(get_session_factory()).resume(
+        run_request, decision={"approve": payload.approve, "scope": payload.scope}
+    )
     async with get_session_factory()() as session:
         finished = await load_task(session, task_id)
         return {"task": TaskOut.model_validate(finished).model_dump(), "evidence": evidence}

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Panel } from "@/components/panel";
 import { Notice, Spinner } from "@/components/projects/ui";
-import { isTerminalStatus, type AgentEvent, type Task } from "./api";
+import { isTerminalStatus, type AgentEvent, type ApprovalScope, type Task } from "./api";
 import { LiveBadge, StatusBadge } from "./bits";
 import { formatDateTime, relativeTime } from "./format";
 import { buildBlocks, type Block } from "./timeline";
@@ -21,7 +21,11 @@ type Props = {
   busyAction: string | null;
   approvalKey: string | null;
   onHighlight: (path: string) => void;
-  onAction: (action: "run" | "cancel" | "approve" | "deny", block?: Extract<Block, { kind: "approval" }>) => void;
+  onAction: (
+    action: "run" | "cancel" | "approve" | "deny",
+    block?: Extract<Block, { kind: "approval" }>,
+    scope?: ApprovalScope,
+  ) => void;
   onReload: () => void;
 };
 
@@ -233,8 +237,9 @@ function onDecideAction(
   onAction: Props["onAction"],
   decision: "approve" | "deny",
   target: Extract<Block, { kind: "approval" }>,
+  scope?: ApprovalScope,
 ) {
-  onAction(decision === "approve" ? "approve" : "deny", target);
+  onAction(decision === "approve" ? "approve" : "deny", target, scope);
 }
 
 function EmptyTimeline({ blocks, events }: { blocks: number; events: number }) {
