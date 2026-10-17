@@ -108,6 +108,37 @@ async def build_evidence(
                 }
             )
             break
+    # 提问与审批共用同一条中断通道：等待中的问题单独取出来，前端据此渲染问题卡。
+    pending_questions: list[dict] = []
+    question_expires_at = ""
+    if task.status == "waiting_approval":
+        for event in reversed(events):
+            if event.type != "question.required":
+                continue
+            payload = event.payload or {}
+            pending_questions = [
+                dict(item) for item in payload.get("questions") or [] if isinstance(item, dict)
+            ]
+            question_expires_at = str(payload.get("expires_at") or "")
+            break
+    context_summary = {
+        "active_tokens": 0,
+        "compactions": 0,
+        "micro_trims": 0,
+        "tokens_saved": 0,
+        "boundary": 0,
+    }
+    for event in events:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if event.type == "context.measured":
+            context_summary["active_tokens"] = int(payload.get("active_context_tokens_after") or 0)
+        elif event.type == "context.compacted":
+            context_summary["compactions"] += 1
+            context_summary["tokens_saved"] += int(payload.get("tokens_saved") or 0)
+            context_summary["boundary"] += int(payload.get("folded") or 0)
+        elif event.type == "context.microcompacted":
+            context_summary["micro_trims"] += 1
+            context_summary["tokens_saved"] += int(payload.get("tokens_saved") or 0)
     prompt_tokens = sum(row.prompt_tokens for row, _ in usage_rows)
     completion_tokens = sum(row.completion_tokens for row, _ in usage_rows)
     models = sorted({row.model for row, _ in usage_rows if row.model})
@@ -183,6 +214,9 @@ async def build_evidence(
             for call in calls
         ],
         "pending_approvals": pending_approvals,
+        "pending_questions": pending_questions,
+        "question_expires_at": question_expires_at,
+        "context": context_summary,
         "unverified_risks": unverified,
         "timeline": [
             {

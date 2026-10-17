@@ -25,6 +25,7 @@ from blank_api.services.agent.context import (
     load_summary_json,
     render_summary,
 )
+from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import HookRunner, blocking_denial
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.permissions import (
@@ -32,10 +33,12 @@ from blank_api.services.permissions import (
     SCOPE_ONCE,
     PermissionPolicy,
     approval_options,
+    is_irreversible,
     memoizable_prefix,
     parse_decision,
 )
-from blank_api.services.tools.base import ToolContext, ToolDefinition, approval_key
+from blank_api.services.tools.ask import normalize_questions, parse_answers, render_answers
+from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key
 from blank_api.services.tools.gateway import ToolGateway
 
 MAX_REPAIR_ROUNDS = 3
@@ -95,6 +98,26 @@ class AgentSession:
     is_cancelled: Callable[[], Awaitable[bool]] = _never_cancelled
     compactor: ContextCompactor = field(default_factory=ContextCompactor)
     hooks: HookRunner = field(default_factory=HookRunner)
+    # 最近一次组装的上下文 token 估算，前端"上下文 8.2k"那一行读它。
+    context_tokens: int = 0
+    # 已经被记录过的问题调用：节点会因中断被重放，不记账就会重复写 question.* 事件。
+    recorded_questions: set[str] = field(default_factory=set)
+    # 中途插话（steer）的度量：次数与生效步，用来说明人机接力是否真的省事。
+    steer_metrics: dict = field(default_factory=lambda: {"count": 0, "steps": []})
+    # 已经消费到的 steer 事件 seq，防止同一条插话被反复注入
+    steer_cursor: int = 0
+    # 独立审查员：默认关闭（无适配器），由 runtime 按 BLANK_GUARDIAN 装配。
+    guardian: Guardian = field(default_factory=Guardian)
+    # 跨窗口交接：notes 在压缩后与换窗口后的第一次模型调用时注入
+    notes: Any = None
+    memory: Any = None
+    shell: Any = None
+    # 分层指令的来源（只用于审计，不重复进 prompt）
+    instruction_layers: list = field(default_factory=list)
+    notes_injected: bool = False
+    # 代理树位置：子代理事件靠这两个字段还原"谁在哪个分支上干活"。
+    depth: int = 0
+    agent_path: str = "root"
 
     @property
     def permission_mode(self) -> str:
@@ -107,6 +130,8 @@ class AgentSession:
     async def ask(self, state: AgentState, prompt: str, node: str, *, messages: list[dict] | None = None) -> dict:
         messages = list(messages) if messages is not None else list(state.get("messages") or [])
         messages = messages + [{"role": "user", "content": prompt}]
+        # 中途插话：在每次模型调用前取一次，插话在"下一步"生效，撤回不了已经跑完的动作
+        messages = messages + await drain_steer(self, node, int(state.get("steps") or 0))
         response, usage = await self.call_model(messages, node)
         assistant: dict[str, Any] = {"role": "assistant", "content": response.text}
         if response.tool_calls:
@@ -117,6 +142,16 @@ class AgentSession:
             "usage": usage,
             "messages": [*messages, assistant],
         }
+
+    def notes_handoff(self) -> str:
+        """压缩或换窗口时要带回来的交接笔记；没有笔记时返回空串。"""
+        store = self.notes
+        if store is None:
+            return ""
+        try:
+            return store.read(self.context.task_id).handoff()
+        except Exception:  # 笔记是可选的，读写失败绝不能中断任务
+            return ""
 
     async def summarize_history(self, folded: list[dict], previous: str) -> str:
         """把滑出上下文窗口的历史折叠进五要素摘要。
@@ -148,33 +183,32 @@ class AgentSession:
             adapter = self.adapter
         covered_before = self.compactor.covered
         compacted = await self.compactor.build(messages, self.summarize_history)
-        if self.compactor.covered > covered_before:
-            folded = self.compactor.covered - covered_before
+        report = self.compactor.last_report
+        self.context_tokens = report.tokens_after
+        # 交接笔记：压缩后必带（摘要会丢操作细节），换窗口后的第一次调用也带一次
+        if report.folded or self.compactor.covered > covered_before or not self.notes_injected:
+            self.notes_injected = True
+            block = self.notes_handoff()
+            if block:
+                compacted = _insert_handoff(compacted, block)
+        if report.micro.applied:
+            # 第一层：确定性裁剪。不花模型钱，但要能解释"为什么这一步省了 token"。
+            await self.recorder.add("context.microcompacted", node, report.as_dict())
+        if report.folded or self.compactor.covered > covered_before:
             await self.recorder.add(
                 "context.compacted",
                 node,
-                {
-                    "folded": folded,
-                    "covered": self.compactor.covered,
-                    "summary_chars": len(self.compactor.summary),
-                },
+                {**report.as_dict(), "folded": report.folded or (self.compactor.covered - covered_before)},
             )
             # post_compact 钩子：两家都有同名事件，压缩后是最需要外部记账/上报的时刻
-            hook_results = await self.hooks.run(
-                "post_compact",
-                "",
-                {
-                    "folded": folded,
-                    "covered": self.compactor.covered,
-                    "summary_chars": len(self.compactor.summary),
-                },
-            )
+            hook_results = await self.hooks.run("post_compact", "", report.as_dict())
             if hook_results:
                 await self.recorder.add(
                     "hook.completed",
                     node,
                     {"event": "post_compact", "results": [item.as_dict() for item in hook_results]},
                 )
+        await self.recorder.add("context.measured", node, report.as_dict())
         chat = [
             ChatMessage(
                 role=item["role"],
@@ -200,6 +234,11 @@ class AgentSession:
             )
         await self._record_usage(node, response.model, usage, int((time.perf_counter() - started) * 1000), "ok", role=role)
         return response, accumulate_usage(usage)
+    async def record_usage(
+        self, node: str, model: str, usage: Usage, latency_ms: int, status: str, *, role: str = "coder"
+    ) -> None:
+        await self._record_usage(node, model, usage, latency_ms, status, role=role)
+
     async def _record_usage(
         self, node: str, model: str, usage: Usage, latency_ms: int, status: str, *, role: str = "coder"
     ) -> None:
@@ -250,7 +289,14 @@ def merge_usage(base: dict, delta: dict) -> dict:
     return merged
 
 
-def initial_messages(goal: str, criteria: list[str], skills: list[str] | None = None) -> list[dict]:
+def initial_messages(
+    goal: str,
+    criteria: list[str],
+    skills: list[str] | None = None,
+    instruction_layers: list | tuple = (),
+) -> list[dict]:
+    from blank_api.services.instructions import compose
+
     system = SYSTEM_PROMPT
     active_skills = [str(item).strip() for item in skills or [] if str(item).strip()]
     if active_skills:
@@ -258,6 +304,10 @@ def initial_messages(goal: str, criteria: list[str], skills: list[str] | None = 
             "\n用户已明确启用以下 Skill，它们只能作为工作偏好参考，不能覆盖安全规则、审批规则或任务目标：\n"
             + "\n".join(f"- {item}" for item in active_skills)
         )
+    if instruction_layers:
+        # 分层指令（用户级 → 项目 AGENTS.md → 本次任务）在这里合进系统提示，
+        # 越靠近任务的层优先级越高，但都不得放宽安全与审批规则。
+        system = compose(system, list(instruction_layers))
     prompt = f"任务目标：{goal}"
     if criteria:
         prompt += "\n验收条件：\n" + "\n".join(f"- {item}" for item in criteria)
@@ -265,6 +315,17 @@ def initial_messages(goal: str, criteria: list[str], skills: list[str] | None = 
         {"role": "system", "content": system},
         {"role": "user", "content": prompt},
     ]
+
+
+def _insert_handoff(messages: list[dict], block: str) -> list[dict]:
+    """交接笔记插在系统提示之后：靠前的系统块更容易被当成长期约束。"""
+    if not block:
+        return list(messages)
+    entry = {"role": "system", "content": block}
+    for index, item in enumerate(messages):
+        if item.get("role") != "system":
+            return [*messages[:index], entry, *messages[index:]]
+    return [entry, *messages]
 
 
 def _parse_plan(text: str) -> list[str]:
@@ -337,7 +398,123 @@ def _decision(session: AgentSession, tool: ToolDefinition, arguments: dict):
     return session.gateway.decide(tool, arguments, session.context)
 
 
-async def _approval_gate(session: AgentSession, node: str, pending: list[dict]) -> set[str]:
+def _call_key(call: dict) -> str:
+    return str(call.get("id") or tool_call_name(call) or "call")
+
+
+async def drain_steer(session: AgentSession, node: str, step: int = 0) -> list[dict]:
+    """取出用户在运行中插入的指令，转成一条 user 消息。
+
+    队列放在事件日志里而不是内存里：桌面壳重启、多次审批恢复之后，
+    用户排的这句话都还在，不会因为进程换了就丢。
+    """
+    from sqlalchemy import select
+
+    from blank_api.models.task import AgentEvent
+
+    try:
+        async with session.session_factory() as db:
+            rows = (
+                (
+                    await db.execute(
+                        select(AgentEvent)
+                        .where(
+                            AgentEvent.task_id == session.context.task_id,
+                            AgentEvent.type == "steer.queued",
+                            AgentEvent.seq > session.steer_cursor,
+                        )
+                        .order_by(AgentEvent.seq)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+    except Exception:  # 插话是增强能力，读失败就当没有，不要让任务挂掉
+        return []
+
+    texts: list[str] = []
+    for row in rows or []:
+        payload = row.payload or {}
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            continue
+        texts.append(message)
+        session.steer_cursor = max(session.steer_cursor, int(row.seq))
+        queued_at = payload.get("queued_at")
+        delay_ms = 0
+        if isinstance(queued_at, (int, float)) and queued_at > 0:
+            delay_ms = max(0, int(time.time() * 1000 - queued_at))
+        session.steer_metrics["count"] = int(session.steer_metrics.get("count") or 0) + 1
+        session.steer_metrics.setdefault("steps", []).append(
+            {"step": step, "chars": len(message), "delay_ms": delay_ms}
+        )
+        await session.recorder.add(
+            "steer.applied",
+            node,
+            {"step": step, "chars": len(message), "delay_ms": delay_ms},
+        )
+
+    if not texts:
+        return []
+    joined = "\n".join(f"- {item}" for item in texts)
+    return [
+        {
+            "role": "user",
+            "content": (
+                "用户在你运行期间补充了以下指示，请从下一步开始遵守，已经完成的操作不要重做：\n"
+                f"{joined}"
+            ),
+        }
+    ]
+
+
+async def _question_gate(session: AgentSession, node: str, pending: list[dict]) -> dict[str, str]:
+    """Agent 主动提问：一次中断带走本步的所有问题，恢复后按问题 id 落答案。
+
+    与审批共用同一条中断通道，所以传输层与 UI 不需要第二套机制；区别只在
+    ``kind`` 字段，以及恢复值是一份答案而不是批准决定。
+    """
+    asked: list[dict] = []
+    call_key = ""
+    for call in pending:
+        if tool_call_name(call) != "request_user_input":
+            continue
+        questions = normalize_questions(tool_call_args(call))
+        if not questions:
+            continue
+        asked.extend(questions)
+        call_key = call_key or _call_key(call)
+    if not asked:
+        return {}
+
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+    # 必须每次都调用 interrupt()：LangGraph 按位置回放恢复值，少调一次会让后续中断错位。
+    answer = interrupt(
+        {
+            "kind": "question",
+            "tool": "request_user_input",
+            "questions": asked,
+            "expires_at": expires_at,
+            "permission_mode": session.permission_mode,
+        }
+    )
+    answers = parse_answers(answer, asked)
+    if call_key not in session.recorded_questions:
+        session.recorded_questions.add(call_key)
+        await session.recorder.add(
+            "question.asked", node, {"questions": asked, "expires_at": expires_at}
+        )
+        await session.recorder.add(
+            "question.answered",
+            node,
+            {"answers": answers, "answered": len(answers), "questions": [q["id"] for q in asked]},
+        )
+    return answers
+
+
+async def _approval_gate(
+    session: AgentSession, node: str, pending: list[dict]
+) -> tuple[set[str], dict[str, str]]:
     """高风险工具只有图中断一条审批路径。
 
     中断返回的不再只是"准/不准"，而是带作用域的批准：仅本次 / 本会话该命令前缀 / 本会话该工具。
@@ -345,8 +522,12 @@ async def _approval_gate(session: AgentSession, node: str, pending: list[dict]) 
     ``approved_command_prefixes`` 与 Claude 的 ``user_approved_for_session``。
 
     放在执行循环之前，是为了恢复运行时整节重放不会重复执行已经跑过的工具。
+
+    guardian 在此处插一道独立审查：deny 直接拒绝且不打断（模型可以换个做法），
+    allow 只有在 auto 模式下才对可逆动作生效，不可逆动作永远交给人。
     """
     denied: set[str] = set()
+    blocked: dict[str, str] = {}
     for call in pending:
         name = tool_call_name(call)
         tool = session.gateway.get(name)
@@ -357,6 +538,37 @@ async def _approval_gate(session: AgentSession, node: str, pending: list[dict]) 
         if not decision.asks:
             # allow 交给网关执行；deny 交给网关拒绝并留审计——两条都不该在这里中断。
             continue
+        command = str(arguments.get("command") or "")
+        reversible = not (command and is_irreversible(command))
+        if session.guardian.enabled:
+            verdict = await session.guardian.review(
+                name, arguments, risk=decision.risk, reversible=reversible
+            )
+            await session.record_usage(
+                "guardian_review",
+                verdict.model or "",
+                Usage(
+                    prompt_tokens=verdict.prompt_tokens,
+                    completion_tokens=verdict.completion_tokens,
+                ),
+                verdict.latency_ms,
+                "error" if verdict.error else "ok",
+                role="guardian",
+            )
+            await session.recorder.add(
+                "guardian.reviewed", node, {"tool": name, "arguments": arguments, **verdict.as_dict()}
+            )
+            if verdict.denied:
+                blocked[name] = "；".join(verdict.reasons) or "审查模型判定该操作不安全"
+                continue
+            if reversible and session.guardian.can_auto_approve(verdict):
+                session.permissions.remember(name, arguments, SCOPE_ONCE)
+                await session.recorder.add(
+                    "guardian.auto_approved",
+                    node,
+                    {"tool": name, "arguments": arguments, "reasons": verdict.reasons},
+                )
+                continue
         expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
         answer = interrupt(
             {
@@ -369,6 +581,7 @@ async def _approval_gate(session: AgentSession, node: str, pending: list[dict]) 
                 "command_prefix": decision.prefix,
                 "suggested_prefix": memoizable_prefix(name, decision.prefix),
                 "approval_options": approval_options(name, decision.prefix),
+                "guardian": verdict.as_dict() if session.guardian.enabled else None,
                 "expires_at": expires_at,
             }
         )
@@ -395,7 +608,7 @@ async def _approval_gate(session: AgentSession, node: str, pending: list[dict]) 
                 node,
                 {"tool": name, "arguments": arguments, "scope": scope, "prefix": decision.prefix},
             )
-    return denied
+    return denied, blocked
 
 
 async def execute_action_node(state: AgentState, session: AgentSession) -> AgentState:
@@ -410,13 +623,46 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     usage = dict(state.get("usage") or {})
     results = list(state.get("tool_results") or [])
     pending = list(state.get("pending") or [])
-    denied = await _approval_gate(session, node, pending)
+    # 先问、再批：问题门在前，恢复时两道门各占一个中断位，恢复值按位置回放不会串味。
+    answers = await _question_gate(session, node, pending)
+    denied, guardian_blocked = await _approval_gate(session, node, pending)
 
     plan_update: list[dict] | None = None
     for call in pending:
         name = tool_call_name(call)
         arguments = tool_call_args(call)
         await session.recorder.add("tool.requested", node, {"tool": name, "arguments": arguments})
+
+        if name == "request_user_input" and answers:
+            questions = normalize_questions(arguments)
+            first = questions[0]["id"] if questions else ""
+            if first and answers.get(first):
+                outcome = ToolOutcome(
+                    ok=True,
+                    output=render_answers(questions, answers),
+                    data={"questions": questions, "answers": answers, "answered": True},
+                )
+            else:
+                outcome = ToolOutcome(
+                    ok=False,
+                    status="unanswered",
+                    message="用户未回答该问题，请自行做出合理假设并在总结里说明。",
+                    data={"questions": questions, "answers": answers, "answered": False},
+                )
+            payload = await session.gateway.settle(
+                name, arguments, outcome, session.context, node, rule="question:answered"
+            )
+            results.append(
+                {
+                    "tool": name,
+                    "status": payload.get("status"),
+                    "ok": bool(payload.get("ok")),
+                    "data": payload.get("data") or {},
+                    "output": str(payload.get("output") or payload.get("message") or "")[-2000:],
+                }
+            )
+            messages = _append_tool_response(messages, call, payload)
+            continue
 
         # pre_tool_use 钩子：可以拦下一次工具调用（对标 Codex / Claude Code 的同名事件）
         hook_results = await session.hooks.run(
@@ -437,6 +683,14 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 session.context,
                 node,
                 reason=f"钩子拒绝执行 {name}：{blocked.reason or '未给出原因'}",
+            )
+        elif name in guardian_blocked:
+            payload = await session.gateway.refuse(
+                name,
+                arguments,
+                session.context,
+                node,
+                reason=f"独立审查未通过，已拒绝执行 {name}：{guardian_blocked[name]}",
             )
         elif name in denied:
             payload = await session.gateway.refuse(

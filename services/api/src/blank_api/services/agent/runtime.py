@@ -17,13 +17,19 @@ from blank_api.models.task import AgentEvent, Task
 from blank_api.services.agent.checkpoints import (
     SqlAlchemyCheckpointSaver,
     task_id_from_thread,
-    thread_id_for,
 )
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.evidence import build_evidence
 from blank_api.services.agent.graph import AgentSession, build_agent_graph, initial_messages
 from blank_api.services.agent.store import SerializedSessionFactory
+from blank_api.services.fork import allocate_thread
+from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import HookRunner
+from blank_api.services.instructions import load_layers, provenance
+from blank_api.services.memory import MemoryStore
+from blank_api.services.notes import NoteStore
+from blank_api.services.shell_env import capture as capture_shell
+from blank_api.services.subagent import SubAgentRunner
 from blank_api.services.models.base import ModelAdapter, ModelError
 from blank_api.services.permissions import MODE_DEFAULT, PermissionPolicy
 from blank_api.services.tools import build_default_tools
@@ -68,8 +74,9 @@ async def threads_for_task(session_factory, task_id: str) -> list[str]:
 
 
 async def next_thread_id(session_factory, task_id: str) -> str:
-    attempts = [_attempt(thread) for thread in await threads_for_task(session_factory, task_id)]
-    return thread_id_for(task_id, max(attempts or {0}) + 1)
+    # 分叉出来的空树干没有检查点，只靠检查点算 attempt 会把同一个号发两次
+    async with session_factory() as session:
+        return await allocate_thread(session, task_id)
 
 
 async def latest_thread_id(session_factory, task_id: str) -> str:
@@ -181,6 +188,13 @@ class AgentRuntime:
             approved_prefixes=request.approved_command_prefixes or (),
         )
         adapters = [request.adapter, *(request.role_adapters or {}).values()]
+        guardian = Guardian.from_env((request.role_adapters or {}).get("guardian") or request.adapter)
+        subagents = SubAgentRunner()
+        notes = NoteStore()
+        memory = MemoryStore()
+        shell = capture_shell(request.root)
+        # 用户级 → 项目 AGENTS.md（+ 可选外部指令文件）；任务级偏好走 skill_instructions
+        layers = load_layers(request.root)
         context = ToolContext(
             root=Path(request.root),
             task_id=request.task_id,
@@ -191,6 +205,10 @@ class AgentRuntime:
             approved_actions=frozenset(approved_actions),
             trace_id=thread_id,
             permissions=permissions,
+            subagent_runner=subagents,
+            notes=notes,
+            memory=memory,
+            shell=shell,
         )
         session = AgentSession(
             adapter=request.adapter,
@@ -210,7 +228,13 @@ class AgentRuntime:
             role_provider_ids=request.role_provider_ids or {},
             is_cancelled=_CancelledLookup(store, request.task_id),
             hooks=HookRunner.from_env(),
+            guardian=guardian,
+            notes=notes,
+            memory=memory,
+            shell=shell,
+            instruction_layers=layers,
         )
+        subagents.bind(session)
         graph = build_agent_graph(session, SqlAlchemyCheckpointSaver(store))
         config = {
             "configurable": {"thread_id": thread_id, "checkpoint_ns": ""},
@@ -283,11 +307,23 @@ class AgentRuntime:
             "user_prompt_submit",
             {"goal": session.goal, "acceptance_criteria": session.acceptance_criteria},
         )
+        # shell 快照与指令来源：出问题时能回答"当时是什么环境、读了哪些约定文件"
+        if session.shell is not None:
+            await recorder.add("shell.snapshot", "receive_task", session.shell.as_dict())
+        if session.instruction_layers:
+            await recorder.add(
+                "instructions.loaded",
+                "receive_task",
+                {"layers": provenance(session.instruction_layers)},
+            )
 
         state: dict[str, Any] = {
             "task_id": request.task_id,
             "messages": initial_messages(
-                session.goal, session.acceptance_criteria, session.skill_instructions
+                session.goal,
+                session.acceptance_criteria,
+                session.skill_instructions,
+                session.instruction_layers,
             ),
             "plan": [],
             "steps": 0,
@@ -373,15 +409,21 @@ class AgentRuntime:
         task_id = request.task_id
         if interrupts:
             payload = getattr(interrupts[0], "value", interrupts[0]) or {}
-            await scope.recorder.add("approval.required", "execute_action", dict(payload))
+            payload = dict(payload) if isinstance(payload, dict) else {}
+            waiting_for_input = str(payload.get("kind") or "") == "question"
+            await scope.recorder.add(
+                "question.required" if waiting_for_input else "approval.required",
+                "execute_action",
+                payload,
+            )
             await self._finish(
                 scope,
                 "waiting_approval",
                 summary=str(result.get("summary") or ""),
-                reason="存在待审批的高风险操作",
+                reason="等待用户回答问题" if waiting_for_input else "存在待审批的高风险操作",
                 acceptance=result.get("acceptance_results"),
                 steps=int(result.get("steps") or 0),
-                extra={"thread_id": scope.thread_id, "interrupt": dict(payload)},
+                extra={"thread_id": scope.thread_id, "interrupt": payload},
             )
             return await build_evidence(scope.store, task_id)
 
@@ -406,9 +448,59 @@ class AgentRuntime:
                 "usage": result.get("usage") or {},
                 "validation": validation,
                 "thread_id": scope.thread_id,
+                "context_tokens": scope.session.context_tokens,
+                "steer": scope.session.steer_metrics,
             },
         )
+        if status == "succeeded":
+            await self._consolidate(scope, result, title=request.title)
         return await build_evidence(scope.store, task_id)
+
+    async def _consolidate(self, scope: _RunScope, result: dict, *, title: str) -> None:
+        """任务成功后把结论与笔记蒸馏进项目长期记忆（确定性规则，不调模型）。"""
+        session = scope.session
+        if session.memory is None:
+            return
+        facts: list[str] = []
+        for item in result.get("acceptance_results") or []:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("criterion") or item.get("name") or item.get("text") or "").strip()
+            covered = item.get("covered")
+            if covered is True:
+                state = "覆盖"
+            elif covered is False:
+                state = "未覆盖"
+            else:
+                state = str(item.get("status") or "未知")
+            if text:
+                facts.append(f"验收「{text}」：{state}")
+        validation = result.get("validation") or {}
+        if validation.get("command"):
+            facts.append(
+                f"验证命令 {validation.get('command')} → {validation.get('status') or '未知'}"
+            )
+        notes = ""
+        if session.notes is not None:
+            try:
+                notes = session.notes.read(scope.task_id).content
+            except Exception:
+                notes = ""
+        try:
+            outcome = session.memory.consolidate(
+                session.context.root,
+                task_id=scope.task_id,
+                title=title or session.goal,
+                summary=str(result.get("summary") or ""),
+                notes=notes,
+                facts=facts,
+            )
+        except Exception as exc:  # 固化失败不该让已经成功的任务变成失败
+            await scope.recorder.add(
+                "memory.consolidation_failed", "complete", {"error": str(exc)[:300]}
+            )
+            return
+        await scope.recorder.add("memory.consolidated", "complete", outcome.as_dict())
 
     async def _set_status(self, scope: _RunScope, status: str) -> None:
         async with scope.store() as session:

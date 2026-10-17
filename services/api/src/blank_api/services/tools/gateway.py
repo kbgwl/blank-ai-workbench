@@ -66,6 +66,22 @@ class ToolGateway:
         )
         return await self._finish(name, arguments, outcome, context, node, risk, time.perf_counter())
 
+    async def settle(
+        self,
+        name: str,
+        arguments: dict,
+        outcome: ToolOutcome,
+        context: ToolContext,
+        node: str = "",
+        rule: str = "external",
+    ) -> dict:
+        """结果由外部决定（例如用户回答了问题）：不调用 handler，但照样记账留证据。"""
+        tool = self.tools.get(name)
+        risk = tool.resolve_risk(arguments) if tool else "low"
+        return await self._finish(
+            name, arguments, outcome, context, node, risk, time.perf_counter(), approve(risk, rule)
+        )
+
     async def execute(self, name: str, arguments: dict, context: ToolContext, node: str = "") -> dict:
         started = time.perf_counter()
         tool = self.tools.get(name)

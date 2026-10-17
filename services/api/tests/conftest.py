@@ -1,8 +1,12 @@
 import os
+import tempfile
 
 os.environ.setdefault("BLANK_DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 # 默认让命令在宿主机跑，保持测试夹具与 Docker 无关；沙箱路由由 tests/test_sandbox_v07.py 用真实镜像验证。
 os.environ.setdefault("BLANK_SANDBOX_ENABLED", "0")
+# 交接笔记与长期记忆落到临时目录：跑测试不该在仓库里留 data/notes、data/memory
+os.environ.setdefault("BLANK_NOTES_DIR", tempfile.mkdtemp(prefix="blank-notes-"))
+os.environ.setdefault("BLANK_MEMORY_DIR", tempfile.mkdtemp(prefix="blank-memory-"))
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402

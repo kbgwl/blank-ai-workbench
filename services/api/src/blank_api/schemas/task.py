@@ -69,3 +69,24 @@ class TaskApprovalIn(BaseModel):
     provider_id: str | None = None
     # 批准作用域：仅本次 / 本会话该命令前缀 / 本会话该工具。
     scope: Literal["once", "prefix", "tool"] = "once"
+
+
+class TaskAnswerIn(BaseModel):
+    """回答 Agent 的提问：按问题 id 回填，或直接给一个自由文本答案。"""
+
+    answers: dict[str, str] = Field(default_factory=dict, max_length=8)
+    answer: str = Field(default="", max_length=4000)
+    provider_id: str | None = None
+
+
+class TaskForkIn(BaseModel):
+    """从某个检查点分叉出新线程：trunk_reuse 带上状态继续，trunk_new 只留血缘。"""
+
+    from_thread_id: str = Field(default="", max_length=120)
+    strategy: Literal["trunk_reuse", "trunk_new"] = "trunk_reuse"
+
+
+class TaskSteerIn(BaseModel):
+    """运行中插话：不打断当前步骤，从下一次模型调用开始生效。"""
+
+    message: str = Field(min_length=1, max_length=4000)

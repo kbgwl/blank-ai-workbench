@@ -157,22 +157,64 @@ Model Runtime / Observability
     即使 `bypass` 也转人工确认；裸可执行名（`rm`/`bash`/`curl`）**不提供"总是允许"这一档**，
     避免"记住 rm"等于全放行。
   - 判定唯一入口是 `ToolGateway.decide()`，图中断与网关执行不可能给出两个答案。
+- ✅ **两层上下文压缩**（`services/agent/context.py`）
+  - 第一层 `microcompact`：确定性裁剪——超长工具结果、重复输出、内联 base64 一律先削掉，
+    **不花模型钱**，每次都安全可调用。
+  - 第二层 `ContextCompactor`：窗口滑出时把历史折进五要素摘要（目标 / 约束 / 已完成 /
+    失败 / 待办），增量更新，不重复摘要。
+  - `CompactionReport` 记账 `active_context_tokens_before/after` 与节省量，
+    事件 `context.microcompacted` / `context.compacted` / `context.measured` 三条分开，
+    压缩边界可见可解释；摘要模型不可用时退回确定性截断，绝不因压缩拖垮任务。
+- ✅ **Agent 主动提问**（`tools/ask.py`，工具名 `request_user_input`）
+  - 与审批共用同一条中断通道：`kind=question` 的中断 → `question.required` 事件 →
+    `POST /tasks/{id}/answer` 恢复；支持多问题、选项、自由文本，答案回填为工具结果。
+- ✅ **子代理 + worktree 隔离**（`services/subagent.py` / `services/worktree.py` / `tools/delegate.py`）
+  - `spawn_agent` 起一个受限步数、受限工具集的嵌套代理，事件带 `parent_thread_id` /
+    `depth` / `agent_path`，能还原"谁在哪个分支上干活"。
+  - 隔离模式在 git worktree 副本里跑，回收时产出 diff；子代理**没有第二套审批通道**，
+    写操作照样过 `PermissionPolicy`。
+- ✅ **联网工具**（`tools/web.py`，`web_search` / `web_fetch`）
+  - SSRF 防护：私网 / 回环 / 链路本地地址一律阻断，逐跳校验重定向，
+    域名可配白名单（白名单存在时默认拒绝），响应体与超时都有上限。
+- ✅ **guardian 自动审查**（`services/guardian.py`）
+  - 独立审查线程，按可配模型 / 超时给 `allow` / `deny` / `abstain`；`BLANK_GUARDIAN` 默认关闭。
+  - **只能收紧不能放行**：`abstain` 与解析失败都退回原审批路径；`deny` 直接拒。
+    事件 `guardian.reviewed` 记录模型、延迟、判据。
+- ✅ **指令分层**（`services/instructions.py`）
+  - 层级：内建系统提示 → 用户级 `~/.blank/AGENTS.md` → 项目 `AGENTS.md` / `.blank/AGENTS.md`
+    → 本次任务附加指令，按"越靠近任务优先级越高"拼装，并显式写明**任何层都不得放宽
+    安全与审批规则**。
+  - 单文件 8k / 总预算 12k 双重上限，超预算时**先削最弱层**；
+    `instructions.loaded` 事件只记来源与长度，不把内容抄进日志。
+- ✅ **跨窗口交接笔记**（`services/notes.py` + `write_notes` / `read_notes`）
+  - 笔记按任务落在应用数据目录（不进用户仓库、不进 diff），append 带时间戳与步号；
+  - **压缩后必带、换窗口后首次调用必带**（`_insert_handoff` 插在系统提示之后），
+    模型忘了读也还在；容量上限保留最新内容。
+- ✅ **记忆固化**（`services/memory.py` + `memory_search`）
+  - 任务成功后把结论 / 笔记 / 验收 / 验证命令蒸馏进按工作区划分的 markdown，
+    条目级去重、总长有上限、超限丢弃最旧段落；`memory.consolidated` 记 added/skipped/dropped。
+  - 全程确定性，不额外调模型；写入失败只记 `memory.consolidation_failed`，不改任务结论。
+- ✅ **线程分叉**（`services/fork.py` + `POST /tasks/{id}/fork`）
+  - `trunk_reuse` 复制最新检查点与其写入（可从断点继续），`trunk_new` 只留血缘；
+    复制时**刻意切断 `parent_checkpoint_id`**，源线程被清理后分叉仍可读。
+  - 线程号分配同时统计检查点与 `thread.forked` 事件，空树干不会撞号。
+- ✅ **shell 快照 + 环境策略**（`services/shell_env.py`）
+  - 每个线程记录 cwd / PATH 条目 / 解释器 / venv，事件 `shell.snapshot` 只记形状不记值；
+    项目 venv 自动前置进 PATH，多步命令解析到同一个解释器。
+  - 三档策略 `inherit` / `minimal` / `strict`，并额外按**变量名与值形态**丢弃凭证；
+    **策略只能收窄不能放宽**——`strict` 下起的任务不会因为某个工具要 `inherit` 就拿到更多变量。
+- ✅ **中途插话度量**（`POST /tasks/{id}/steer` + `drain_steer`）
+  - 插话入事件日志（跨进程、跨审批恢复都不丢），在下一次模型调用前注入并写 `steer.applied`
+    （含步号、字数、排队到生效的延迟）；任务收尾的 `steer.count` / `steer.steps` 即 `steer_count`。
 
 ### 待做（按拆解结果排序）
 
 | 优先级 | 差距 | 他们的做法 | 备注 |
 |---|---|---|---|
-| **P1** | 上下文只有一层压缩 | **两层**：`microcompact`（细粒度裁剪）+ `auto-compact`（整体压缩）+ 压缩边界 + 压缩前后 token 记账（`active_context_tokens_before/after`） | 现有 `ContextCompactor` 是第二层，缺第一层 |
-| **P1** | Agent 不能主动提问 | Codex `request_user_input` / Claude `AskUserQuestion`（`AskUserQuestionInput` 已确认存在） | 事件流已具备，缺工具与前端交互 |
-| **P1** | 没有子代理 | Codex `thread_spawn` + `parent_thread_id` / `depth` / `agent_path` / `nickname` / `role`；Claude `Task` + **`EnterWorktree`/`ExitWorktree`**（并行代理各占独立 worktree） | worktree 隔离是关键，不然并行会互相踩 |
-| **P1** | 工具面窄（7 个） | Codex 有 `tool_search`（工具多到让模型自己检索）；两家都有 `web_search`/`web_fetch` | 先补联网，再考虑检索 |
-| **P1** | 没有自动审查 | Codex **`guardian`**：独立线程 + 可配模型/推理强度/超时（`guardian_model` / `guardian_reasoning_effort` / `review_timeout_ms`），审批结果枚举里有 `guardian_approved/denied/aborted` | 这是"两级审批"的上层 |
-| **P2** | 没有项目约定文件 | Codex `AGENTS.md`；Claude `CLAUDE.md`；且 Codex 的指令是**分层拼装**（`include_permissions_instructions` / `include_apps_instructions` / `include_collaboration_mode_instructions` / `include_environment_context` 分别可开关） | |
-| **P2** | 没有跨窗口交接 | Codex：`auto_compact_fallback_buffer_tokens`（16k 触发缓冲）+ 耗尽时要求模型把检查点写进 **`notes`** 工具，并记录窗口 ID / 条目 ID | 压缩不是丢历史，是**有交接的换窗口** |
-| **P2** | 没有记忆固化 | Codex `memory_consolidation` 事件 | |
-| **P2** | 没有线程分叉 | `forked_from_thread_id` / `ephemeral` / `trunk_new` / `trunk_reuse` | |
-| **P2** | shell 状态不跨调用 | Codex `shell_snapshot.thread_id` + `shell_environment_policy` | |
-| **P2** | 没有中途改方向计数 | Codex `steer_count` | 能力已有（执行中插话），缺度量 |
+| **P1** | 工具检索缺失 | Codex `tool_search`：工具多到让模型自己检索 | 我们现在 20+ 个工具还没到需要检索的规模 |
+| **P2** | 分叉缺 `ephemeral` 与并行调度 | 两家都能并行跑多个 worktree 代理 | 隔离已具备，缺并发编排与配额 |
+| **P2** | 压缩触发缓冲未对齐 | Codex `auto_compact_fallback_buffer_tokens`（16k 缓冲） | 我们按字符预算触发，未做剩余 token 水位 |
+| **P2** | guardian 无 UI 配置面 | Codex 可配 `guardian_model` / `reasoning_effort` / `review_timeout_ms` | 后端已支持环境变量，缺设置页 |
 
 ### 另外两条可直接沿用的工程选择
 

@@ -13,22 +13,6 @@ from pathlib import Path
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, ok
 from blank_api.services.workspace import mask_path
 
-ENV_ALLOWLIST = (
-    "PATH",
-    "PATHEXT",
-    "SYSTEMROOT",
-    "COMSPEC",
-    "TEMP",
-    "TMP",
-    "HOME",
-    "USERPROFILE",
-    "LANG",
-    "LC_ALL",
-    "PYTHONPATH",
-    "PYTHONIOENCODING",
-    "NODE_OPTIONS",
-    "VIRTUAL_ENV",
-)
 DESTRUCTIVE = re.compile(
     r"(?i)(\brm\s|\bdel\b|remove-item|\brmdir\b|\bmkfs\b|\bshutdown\b|\bformat\s+[a-z]:|"
     r"\bgit\s+push\b|\bdrop\s+(table|database)\b|\btruncate\b|\bmv\s+.*\s/|\brmdir\s+/s)"
@@ -37,8 +21,16 @@ NETWORK = re.compile(r"(?i)(\bcurl\b|\bwget\b|\bnetworkbrowser\b|\bssh\b|\bscp\b
 MAX_OUTPUT_CHARS = 8000
 
 
-def build_env() -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if key in ENV_ALLOWLIST and value}
+def build_env(policy: str | None = None) -> dict[str, str]:
+    """子进程环境：allowlist + 密钥名过滤，策略见 services/shell_env.py。
+
+    没有快照时（单测、外部集成）退回同一个过滤函数，口径与运行时一致，
+    不会出现"测试能跑、线上把 OPENAI_API_KEY 漏给子进程"这种漂移。
+    """
+    from blank_api.services.shell_env import filter_env
+    from blank_api.services.shell_env import _policy_from_env
+
+    env = filter_env(os.environ, policy=policy or _policy_from_env())
     env["PYTHONIOENCODING"] = env.get("PYTHONIOENCODING", "utf-8")
     return env
 
@@ -53,13 +45,19 @@ def _decode(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def _run_blocking(command: str | list[str], root: Path, timeout: float, shell: bool) -> dict:
+def _run_blocking(
+    command: str | list[str],
+    root: Path,
+    timeout: float,
+    shell: bool,
+    env: dict[str, str] | None = None,
+) -> dict:
     argv = command if shell else [str(part) for part in command]
     try:
         completed = subprocess.run(  # noqa: S603 - 命令来自工具层白名单校验之后
             argv,
             cwd=str(root),
-            env=build_env(),
+            env=env or build_env(),
             capture_output=True,
             timeout=timeout,
             shell=shell,  # noqa: S602 - shell=True 时 argv 已是完整命令字符串
@@ -80,13 +78,17 @@ def _run_blocking(command: str | list[str], root: Path, timeout: float, shell: b
 
 
 async def run_process(
-    command: str | list[str], root: Path, timeout: float, shell: bool = False
+    command: str | list[str],
+    root: Path,
+    timeout: float,
+    shell: bool = False,
+    env: dict[str, str] | None = None,
 ) -> dict:
     kwargs = {
         "cwd": str(root),
         "stdout": asyncio.subprocess.PIPE,
         "stderr": asyncio.subprocess.PIPE,
-        "env": build_env(),
+        "env": env or build_env(),
     }
     try:
         if shell:
@@ -95,7 +97,7 @@ async def run_process(
             process = await asyncio.create_subprocess_exec(*command, **kwargs)  # type: ignore[misc]
     except NotImplementedError:
         # Selector 事件循环（Windows 上 uvicorn --reload 的子进程）不支持 asyncio 子进程，退回线程执行。
-        return await asyncio.to_thread(_run_blocking, command, root, timeout, shell)
+        return await asyncio.to_thread(_run_blocking, command, root, timeout, shell, env)
     timed_out = False
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
@@ -131,7 +133,11 @@ def truncate(text: str) -> tuple[str, bool]:
 
 
 async def execute_command(
-    command: str | list[str], root: Path, timeout: float, shell: bool = True
+    command: str | list[str],
+    root: Path,
+    timeout: float,
+    shell: bool = True,
+    env: dict[str, str] | None = None,
 ) -> dict:
     """BLANK_SANDBOX_ENABLED 时经沙箱执行（容器隔离 + 密钥过滤），否则退回本地进程。"""
     from blank_api.services.sandbox import SandboxPolicy, get_sandbox
@@ -148,7 +154,7 @@ async def execute_command(
             "sandbox": result.backend,
             "notes": list(result.notes),
         }
-    result = await run_process(command, root, timeout, shell=shell)
+    result = await run_process(command, root, timeout, shell=shell, env=env)
     result["sandbox"] = None
     result["notes"] = []
     return result
@@ -164,7 +170,10 @@ def runs_in_docker() -> bool:
 async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
     command = str(arguments["command"]).strip()
     timeout = float(arguments.get("timeout_seconds", 30))
-    result = await execute_command(command, context.root, timeout)
+    # 有 shell 快照就用快照里的环境（含被前置的项目 venv），保证多步命令解析到同一个解释器
+    snapshot = getattr(context, "shell", None)
+    env = snapshot.env_for() if hasattr(snapshot, "env_for") else None
+    result = await execute_command(command, context.root, timeout, env=env)
     stdout = truncate(mask_output(result["stdout"], context.root))[0]
     stderr = truncate(mask_output(result["stderr"], context.root))[0]
     if result["timed_out"]:

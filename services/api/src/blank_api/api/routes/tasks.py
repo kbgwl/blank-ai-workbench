@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -17,11 +18,21 @@ from blank_api.models.model_provider import ModelProvider
 from blank_api.models.task import AgentEvent, Task, ToolCall
 from blank_api.models.run import AgentRun
 from blank_api.models.skill import Skill
-from blank_api.schemas.task import EventOut, TaskApprovalIn, TaskCreate, TaskOut, TaskRunIn
+from blank_api.schemas.task import (
+    EventOut,
+    TaskAnswerIn,
+    TaskApprovalIn,
+    TaskCreate,
+    TaskForkIn,
+    TaskOut,
+    TaskRunIn,
+    TaskSteerIn,
+)
 from blank_api.services.agent.evidence import build_evidence, load_task
 from blank_api.services.agent.artifacts import ArtifactStore
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
+from blank_api.services.fork import FORK_EVENT, fork_thread
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
 from blank_api.services.agent.queue import claim_run, enqueue_run, finish_run, renew_run
 from blank_api.services.models.registry import build_adapter
@@ -453,6 +464,127 @@ async def decide_approval(
     async with get_session_factory()() as session:
         finished = await load_task(session, task_id)
         return {"task": TaskOut.model_validate(finished).model_dump(), "evidence": evidence}
+
+
+@router.post("/tasks/{task_id}/answer")
+async def answer_question(
+    task_id: str, payload: TaskAnswerIn, request: Request, db: DbSession
+) -> dict:
+    """回答 Agent 主动提出的问题：与审批共用同一条中断通道，恢复值换成答案。"""
+    task = await load_task(db, task_id)
+    if task.status != "waiting_approval":
+        raise ApiError(
+            code="task_not_waiting_answer",
+            message=f"任务当前不在等待输入状态（当前状态：{task.status}）",
+            status_code=409,
+        )
+    evidence = await build_evidence(get_session_factory(), task_id)
+    questions = evidence.get("pending_questions") or []
+    if not questions:
+        raise ApiError(
+            code="no_pending_question",
+            message="当前没有待回答的问题，这是一次审批请求，请走审批接口",
+            status_code=409,
+        )
+    known = {str(item.get("id") or "") for item in questions}
+    answers = {key: str(value)[:4000] for key, value in payload.answers.items() if key in known}
+    if payload.answer.strip():
+        first = str(questions[0].get("id") or "")
+        answers.setdefault(first, payload.answer.strip()[:4000])
+    if not answers:
+        raise ApiError(code="answer_empty", message="答案为空，至少回答一个问题", status_code=422)
+
+    expires_at = evidence.get("question_expires_at") or ""
+    if expires_at:
+        try:
+            expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires <= datetime.now(timezone.utc):
+                raise ApiError(
+                    code="question_expired",
+                    message="问题已过期，请重新运行任务",
+                    status_code=409,
+                )
+        except ValueError:
+            raise ApiError(code="question_invalid", message="问题时间无效", status_code=409) from None
+
+    await EventRecorder(get_session_factory(), task_id).add(
+        "question.decided",
+        "execute_action",
+        {"answers": answers, "questions": sorted(known)},
+    )
+    run_request = await _run_request(
+        db, task, TaskRunIn(provider_id=payload.provider_id), request
+    )
+    evidence = await AgentRuntime(get_session_factory()).resume(
+        run_request, decision={"answers": answers}
+    )
+    async with get_session_factory()() as session:
+        finished = await load_task(session, task_id)
+        return {"task": TaskOut.model_validate(finished).model_dump(), "evidence": evidence}
+
+
+@router.post("/tasks/{task_id}/fork")
+async def fork_task(task_id: str, payload: TaskForkIn, db: DbSession) -> dict:
+    """从某个线程的最新检查点分叉出一条新线程。
+
+    分叉不会改动源线程：`trunk_reuse` 复制检查点（可从中断处继续），
+    `trunk_new` 只留血缘记录。两者都写 thread.forked 事件，线程号也不会撞车。
+    """
+    task = await load_task(db, task_id)
+    if task.status == "running":
+        raise ApiError(
+            code="task_running",
+            message="任务正在运行，请先等待当前步骤结束或暂停后再分叉",
+            status_code=409,
+        )
+    result = await fork_thread(
+        get_session_factory(),
+        task_id,
+        from_thread_id=payload.from_thread_id,
+        strategy=payload.strategy,
+    )
+    await EventRecorder(get_session_factory(), task_id).add(
+        FORK_EVENT, "fork", {**result.as_dict(), "status": task.status}
+    )
+    return {
+        "task_id": task_id,
+        "thread_id": result.thread_id,
+        "forked_from_thread_id": result.forked_from_thread_id,
+        "strategy": result.strategy,
+        "checkpoints_copied": result.checkpoints_copied,
+        "writes_copied": result.writes_copied,
+    }
+
+
+@router.post("/tasks/{task_id}/steer")
+async def steer_task(task_id: str, payload: TaskSteerIn, db: DbSession) -> dict:
+    """运行中插话：立刻入队，从下一次模型调用开始生效。
+
+    这里只负责排队与审计，不假装能撤回已经执行的动作——插话的语义是
+    "改变接下来的方向"，不是"撤销刚才的结果"。
+    """
+    task = await load_task(db, task_id)
+    if task.status not in ("running", "waiting_approval", "paused", "queued"):
+        raise ApiError(
+            code="task_not_steerable",
+            message=f"任务已结束，无法插话（当前状态：{task.status}）",
+            status_code=409,
+        )
+    queued_at = int(time.time() * 1000)
+    await EventRecorder(get_session_factory(), task_id).add(
+        "steer.queued",
+        "user",
+        {"message": payload.message.strip(), "queued_at": queued_at, "step": int(task.steps_used or 0)},
+    )
+    return {
+        "task_id": task_id,
+        "queued": True,
+        "queued_at": queued_at,
+        "status": task.status,
+        "applies": "下一次模型调用生效",
+    }
 
 
 @router.post("/tasks/{task_id}/cancel", response_model=TaskOut)

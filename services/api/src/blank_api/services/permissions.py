@@ -45,7 +45,20 @@ SCOPE_TOOL = "tool"
 SCOPES = (SCOPE_ONCE, SCOPE_PREFIX, SCOPE_TOOL)
 
 # 计划模式唯一允许的一类工具：只看不写。
-READ_ONLY_TOOLS = frozenset({"list_files", "read_file", "search_code", "update_plan", "git"})
+READ_ONLY_TOOLS = frozenset(
+    {
+        "list_files",
+        "read_file",
+        "search_code",
+        "update_plan",
+        "git",
+        "request_user_input",
+        "web_search",
+        "web_fetch",
+        "read_notes",
+        "memory_search",
+    }
+)
 # "接受编辑"模式自动放行的工具：只含工作区内的文件写入（可回滚）。
 EDIT_TOOLS = frozenset({"apply_patch"})
 
@@ -321,7 +334,8 @@ def parse_decision(raw: object) -> tuple[bool, str]:
         if "approve" in raw:
             return bool(raw["approve"]), scope
         verdict = str(raw.get("decision") or "").strip().lower()
-        return verdict not in ("", "deny", "reject", "no", "false", "0"), scope
+        # 空值或无法识别的措辞一律视为未批准：静默批准比多问一次危险得多。
+        return verdict in ("approve", "allow", "yes", "true", "1", "ok"), scope
     if isinstance(raw, str):
         return raw.strip().lower() not in ("", "deny", "reject", "no", "false", "0"), SCOPE_ONCE
     if raw is None:
