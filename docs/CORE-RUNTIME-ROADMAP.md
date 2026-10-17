@@ -209,14 +209,72 @@ Model Runtime / Observability
   - 插话入事件日志（跨进程、跨审批恢复都不丢），在下一次模型调用前注入并写 `steer.applied`
     （含步号、字数、排队到生效的延迟）；任务收尾的 `steer.count` / `steer.steps` 即 `steer_count`。
 
-### 待做（按拆解结果排序）
+## 0.4.0：四个收尾口子（2026-10-17）
 
-| 优先级 | 差距 | 他们的做法 | 备注 |
-|---|---|---|---|
-| **P1** | 工具检索缺失 | Codex `tool_search`：工具多到让模型自己检索 | 我们现在 20+ 个工具还没到需要检索的规模 |
-| **P2** | 分叉缺 `ephemeral` 与并行调度 | 两家都能并行跑多个 worktree 代理 | 隔离已具备，缺并发编排与配额 |
-| **P2** | 压缩触发缓冲未对齐 | Codex `auto_compact_fallback_buffer_tokens`（16k 缓冲） | 我们按字符预算触发，未做剩余 token 水位 |
-| **P2** | guardian 无 UI 配置面 | Codex 可配 `guardian_model` / `reasoning_effort` / `review_timeout_ms` | 后端已支持环境变量，缺设置页 |
+上一版把 P1/P2 的主体做完了，剩下四条"用得着但不影响跑通"的缺口。这一版全部补齐，
+每一条都按"改了什么行为"而不是"加了什么文件"记录。
+
+### 1. 工具按需加载（`tool_search`）
+
+对标 Codex 的 `tool_search` 与 Claude 的 deferred tool loading。默认只下发 11 个核心工具
+（看、改、跑、问、记计划、写笔记），把 git / 联网 / 记忆检索 / 子代理收进待加载集合。
+
+- `services/tools/registry.py`：`ToolRegistry` 是**会话级**视图，`CORE_TOOLS` 与
+  `DEFERRED_TOOLS` 两张开在一处，新增工具不登记就默认常驻（不会变成隐形能力）。
+- `services/tools/search.py`：确定性打分（工具名 / 别名 / 描述），**空查询**列出还能加载的，
+  **无命中**就明说没命中，绝不甩一份目录让模型自己猜；命中即激活，下一轮可直呼其名。
+- 三道自加约束：**deferral 只是展示策略**，权限判定与加载与否无关（有专门测试）；
+  检索工具自己不参与检索；同一文件里 `MIN_SCORE` 挡住"只是描述里蹭到同一个词"的噪音。
+- 设置页可关掉按需加载（`tools.search=false`），关掉后所有工具每轮直接下发、`tool_search` 一并移除。
+
+### 2. 多副本并行编排（`spawn_agents`）
+
+对标两家都能"并行跑多个 worktree 代理"，我们之前只有串行单发。
+
+- `SubAgentRunner.fan_out()`：`asyncio.Semaphore` 控并发（默认 3，上限 4 个代理），
+  每个子代理独立副本、独立上下文、独立 `agent_path`（`root/par-<group>-<n>`），
+  事件带 `parallel_group` 与 `index`，前端能把同一批的结论串起来。
+- **合并刻意保守**（`worktree.apply_changes`）：同一文件被两个子代理改过 → 冲突，谁的都不写；
+  主工作区该文件已有未提交改动 → 跳过；删除类改动 → 一律交回人工。
+  并行是为了分头探索，落盘的决定权留给主代理。
+- `BLANK_WORKTREE_ROOT` 可指定副本落哪个卷（默认系统临时目录），跑完统一清理。
+
+### 3. 压缩按 token 水位触发
+
+之前按字符预算判定，窗口大小完全没参与计算。现在：
+
+- `ContextCompactor` 增加 `context_window` / `trigger_ratio` / `reserve_tokens`；
+  水位 = `min(窗口×比例, 窗口−预留)`，与 Codex 的 `auto_compact_fallback_buffer_tokens` 同义。
+- **用真实用量校准估算**：每次模型调用后把 `prompt_tokens` 与估算值做滑动平均
+  （`observe()`），区间夹在 0.2–5.0 之外一律丢弃，免得一次缓存命中把水位永久带偏。
+- 窗口未知（`context_window=0`）时**完整退回字符预算**，老部署行为一字不变（有回归测试）。
+- 事件 `context.measured` 现在带 `context_window` / `trigger_at` / `water_ratio` /
+  `calibration` / `triggered_by`，前端能直接说"水位 78%"。
+
+### 4. guardian 设置页
+
+后端早就能审查，但只能靠环境变量配。这一版把它变成一等设置：
+
+- `services/settings.py`：`data/settings.json` 落盘，四段（guardian / compaction /
+  permissions / tools），**归一化即夹取**——越界值返回边界值，界面显示的永远是生效值。
+- `GET|PUT /settings/agent`、`POST /settings/agent/reset`；设置文件缺失或损坏回落默认。
+- `Guardian.from_settings()` 的优先级：**有设置文件时以设置页为准**，
+  没有设置文件才看 `BLANK_GUARDIAN`（CI / 无头环境行为不变）。
+- **默认仍是 off**：开审查意味着每个高风险动作多一次模型调用，这件事必须由用户显式选择，
+  不能在升级后悄悄加延迟与"被拒绝"的意外。设置页把 veto 标为推荐。
+- 顺带把「新任务默认权限档位」也搬进设置，避免前后端各有一套默认值。
+
+### 验证
+
+- 后端全量：**263 passed / 14 skipped**（上一版 198，新增 65 例，零回归）。
+- 新增测试：`test_tool_search_v13.py`（19）、`test_context_watermark_v13.py`（14）、
+  `test_worktree_parallel_v13.py`（14）、`test_settings_v13.py`（18）、
+  `test_agent_e2e_v13.py`（2，端到端验证"模型自己加载 git 然后真的用上"）。
+- 前端：`tsc --noEmit` 干净；设置页新增「执行与智能体」四张卡。
+
+### 剩余（非内核缺口）
+
+代码签名证书采购、托盘 / 全局快捷键 / 单实例 / 自动更新——都属于壳层工程，不影响内核能力。
 
 ### 另外两条可直接沿用的工程选择
 
