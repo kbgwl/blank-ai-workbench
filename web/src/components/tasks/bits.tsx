@@ -110,6 +110,13 @@ const blockIcons: Record<string, ReactNode> = {
       <path d="m9 12 2 2 4-4" />
     </svg>
   ),
+  question: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3.5">
+      <path d="M21 11.5a8 8 0 0 1-11.6 7.1L4 20l1.4-4.4A8 8 0 1 1 21 11.5z" />
+      <path d="M9.6 9a2.4 2.4 0 1 1 3.2 2.3c-.5.2-.8.7-.8 1.2v.3" />
+      <path d="M12 16h.01" />
+    </svg>
+  ),
   result: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3.5">
       <circle cx="12" cy="12" r="8" />

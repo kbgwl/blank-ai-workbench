@@ -288,6 +288,16 @@ export type ToolRecord = {
   output: string;
 };
 
+/** Agent 主动提问：与审批共用同一条中断通道，答案回填后任务继续。 */
+export type PendingQuestion = {
+  id: string;
+  question: string;
+  header: string;
+  options: { label: string; description: string }[];
+  multiSelect: boolean;
+  allowFreeText: boolean;
+};
+
 export type Evidence = {
   status: string;
   acceptance: AcceptanceItem[];
@@ -295,6 +305,7 @@ export type Evidence = {
   test: TestInfo | null;
   usage: UsageInfo;
   pendingApprovals: PendingApproval[];
+  pendingQuestions: PendingQuestion[];
   tools: ToolRecord[];
   timeline: AgentEvent[];
   unverified: string[];
@@ -315,6 +326,7 @@ const EMPTY_EVIDENCE: Evidence = {
     models: [],
   },
   pendingApprovals: [],
+  pendingQuestions: [],
   tools: [],
   timeline: [],
   unverified: [],
@@ -423,6 +435,28 @@ function normalizeApprovalScopes(source: unknown): { scope: ApprovalScope; label
     .filter((item) => item.label !== "" || item.scope !== "once");
 }
 
+export function normalizeQuestions(container: unknown): PendingQuestion[] {
+  return arrayOf(container, "pending_questions", "questions")
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .map((item, index) => ({
+      id: textOf(item, "id", "question_id", "key") || `q${index + 1}`,
+      question: textOf(item, "question", "text", "prompt") || "需要你确认一件事",
+      header: textOf(item, "header", "title"),
+      options: arrayOf(item, "options", "choices")
+        .map((option) => {
+          if (typeof option === "string") return { label: option, description: "" };
+          return {
+            label: textOf(option, "label", "value", "title"),
+            description: textOf(option, "description", "detail", "note"),
+          };
+        })
+        .filter((option) => option.label !== ""),
+      multiSelect: boolOf(item, "multiSelect", "multi_select") === true,
+      // 后端不写这个字段时按"允许自由输入"处理：反问本来就是为了拿到模型猜不到的信息
+      allowFreeText: boolOf(item, "allow_free_text", "allowFreeText") !== false,
+    }));
+}
+
 function normalizeApprovals(container: unknown): PendingApproval[] {
   const rows = arrayOf(container, "pending_approvals", "approvals", "awaiting_approval");
   return rows
@@ -468,6 +502,7 @@ export function normalizeEvidence(source: unknown): Evidence {
     test: normalizeTest(container),
     usage: normalizeUsage(container),
     pendingApprovals: normalizeApprovals(container),
+    pendingQuestions: normalizeQuestions(container),
     tools: normalizeToolRecords(container),
     timeline: normalizeEvents(pick(container, "timeline", "events")),
     unverified: arrayOf(container, "unverified_risks", "unverified", "warnings").map((item) =>
@@ -626,6 +661,18 @@ export function decideApproval(
     ...jsonInit,
     body: JSON.stringify(body),
   }).then(() => ({ used: `${api}/tasks/${taskId}/approval` }));
+}
+
+/** POST /tasks/{id}/answer：回答 Agent 的提问，答案回填后从断点继续。 */
+export function answerTask(
+  taskId: string,
+  answers: Record<string, string>,
+): Promise<{ used: string }> {
+  return request<unknown>(`${api}/tasks/${taskId}/answer`, {
+    method: "POST",
+    ...jsonInit,
+    body: JSON.stringify({ answers }),
+  }).then(() => ({ used: `${api}/tasks/${taskId}/answer` }));
 }
 
 export function fetchEvents(taskId: string, since?: number): Promise<AgentEvent[]> {

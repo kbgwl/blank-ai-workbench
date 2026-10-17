@@ -26,6 +26,11 @@ type Props = {
     block?: Extract<Block, { kind: "approval" }>,
     scope?: ApprovalScope,
   ) => void;
+  /** 回答 Agent 的提问：与审批同一条中断通道，只是恢复值换成答案。 */
+  onAnswer: (
+    answers: Record<string, string>,
+    block: Extract<Block, { kind: "question" }>,
+  ) => void;
   onReload: () => void;
 };
 
@@ -34,6 +39,7 @@ const FILTERS: { key: Block["kind"] | "all"; label: string }[] = [
   { key: "plan", label: "计划" },
   { key: "tool", label: "工具调用" },
   { key: "terminal", label: "终端" },
+  { key: "question", label: "提问" },
   { key: "approval", label: "审批" },
   { key: "result", label: "结果" },
 ];
@@ -49,6 +55,7 @@ export function TaskConsole({
   approvalKey,
   onHighlight,
   onAction,
+  onAnswer,
   onReload,
 }: Props) {
   const [filter, setFilter] = useState<Block["kind"] | "all">("all");
@@ -224,6 +231,7 @@ export function TaskConsole({
                 busyApprovalKey={approvalKey}
                 onHighlight={onHighlight}
                 onDecide={(decision, target) => onDecideAction(onAction, decision, target)}
+                onAnswer={(answers, target) => onAnswer(answers, target)}
               />
             ))}
           </div>

@@ -5,6 +5,7 @@ import { Notice } from "@/components/projects/ui";
 import {
   cancelTask,
   createTask,
+  answerTask,
   decideApproval,
   errorMessage,
   isMissingEndpoint,
@@ -195,6 +196,36 @@ export function TasksView({ initialTaskId = null }: Props) {
     [loadDetail, notify, reload, selectedId],
   );
 
+  /** 回答 Agent 的提问：POST /tasks/{id}/answer，答案回填后从断点继续。 */
+  const answer = useCallback(
+    async (
+      answers: Record<string, string>,
+      block?: Extract<Block, { kind: "question" }>,
+    ) => {
+      if (!selectedId) return;
+      setBusyAction("approve");
+      setActionError(null);
+      if (block) setApprovalKey(block.key);
+      try {
+        await answerTask(selectedId, answers);
+        await loadDetail(selectedId);
+        reload();
+        notify("已提交回答，任务继续执行");
+      } catch (error: unknown) {
+        setActionError(errorMessage(error));
+        notify(
+          isMissingEndpoint(error)
+            ? "后端未提供回答端点（POST /tasks/{id}/answer）"
+            : errorMessage(error),
+        );
+      } finally {
+        setBusyAction(null);
+        setApprovalKey(null);
+      }
+    },
+    [loadDetail, notify, reload, selectedId],
+  );
+
   const onCreate = useCallback(
     async (draft: TaskDraft, autoRun: boolean): Promise<Task | null> => {
       setActionError(null);
@@ -294,6 +325,7 @@ export function TasksView({ initialTaskId = null }: Props) {
           approvalKey={approvalKey}
           onHighlight={highlightChange}
           onAction={(action, block, scope) => void onAction(action, block, scope)}
+          onAnswer={(answers, block) => void answer(answers, block)}
           onReload={() => {
             reload();
             void loadDetail(selectedId);
@@ -315,7 +347,7 @@ export function TasksView({ initialTaskId = null }: Props) {
           {rightTab === "diff" && <div id="tasks-diff-panel">{evidenceError ? <Notice>{evidenceError}</Notice> : <DiffPanel changes={evidence?.changes ?? []} focusPath={focusPath} />}</div>}
           {rightTab === "evidence" && <EvidencePanel taskId={selectedId ?? ""} evidence={evidence} error={evidenceError} />}
           {rightTab === "terminal" && <div className="flex flex-col gap-2">
-            {rightBlocks.filter((block) => block.kind === "terminal").map((block) => <TimelineBlock key={block.key} block={block} busyApprovalKey={null} onHighlight={() => undefined} onDecide={() => undefined} />)}
+            {rightBlocks.filter((block) => block.kind === "terminal").map((block) => <TimelineBlock key={block.key} block={block} busyApprovalKey={null} onHighlight={() => undefined} onDecide={() => undefined} onAnswer={() => undefined} />)}
             {rightBlocks.every((block) => block.kind !== "terminal") && <div className="py-8 text-center font-mono text-[11px] text-faint">还没有终端输出</div>}
           </div>}
         </div>

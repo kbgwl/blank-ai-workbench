@@ -213,6 +213,93 @@ function TerminalBlockView({ block }: { block: Extract<Block, { kind: "terminal"
   );
 }
 
+function QuestionCard({
+  block,
+  busy,
+  onAnswer,
+}: {
+  block: Extract<Block, { kind: "question" }>;
+  busy: boolean;
+  onAnswer: (
+    answers: Record<string, string>,
+    block: Extract<Block, { kind: "question" }>,
+  ) => void;
+}) {
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const answered = block.state === "answered";
+  const complete = block.questions.every((item) => (draft[item.id] ?? "").trim().length > 0);
+
+  return (
+    <CardShell
+      block={block}
+      accent={answered ? "border-line bg-surface/60" : "border-brand/35 bg-brand/[0.05]"}
+      icon={
+        <span className={answered ? "text-faint" : "text-brand"}>
+          <BlockIcon kind="question" />
+        </span>
+      }
+      title={block.questions.length > 1 ? `需要你确认 ${block.questions.length} 件事` : "需要你确认"}
+      trailing={
+        <span className="shrink-0 rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-muted">
+          {answered ? "已回答" : "等待回答"}
+        </span>
+      }
+    >
+      {block.questions.map((item) => (
+        <div key={item.id} className="space-y-2">
+          {item.header && <p className="font-mono text-[10px] uppercase tracking-wide text-faint">{item.header}</p>}
+          <p className="text-[13px] leading-relaxed text-text">{item.question}</p>
+          {!answered && item.options.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {item.options.map((option) => {
+                const active = draft[item.id] === option.label;
+                return (
+                  <button
+                    key={option.label}
+                    type="button"
+                    title={option.description || undefined}
+                    disabled={busy}
+                    onClick={() => setDraft((prev) => ({ ...prev, [item.id]: option.label }))}
+                    className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${
+                      active
+                        ? "border-brand/50 bg-brand/15 text-text"
+                        : "border-line text-muted hover:border-line/80 hover:text-text"
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {!answered && item.allowFreeText && (
+            <input
+              value={draft[item.id] ?? ""}
+              onChange={(event) => setDraft((prev) => ({ ...prev, [item.id]: event.target.value }))}
+              placeholder={item.options.length ? "或者直接写你的答案" : "写下你的答案"}
+              className="w-full rounded border border-line bg-transparent px-2 py-1.5 text-[12px] text-text outline-none focus:border-brand/60 placeholder:text-faint"
+            />
+          )}
+        </div>
+      ))}
+      {answered ? (
+        <p className="text-[12px] text-muted">已按你的回答继续执行{block.answers ? `：${clip(block.answers, 120)}` : ""}</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="primary"
+            disabled={busy || !complete}
+            onClick={() => onAnswer(draft, block)}
+          >
+            {busy ? "提交中" : "提交并继续"}
+          </Button>
+          <span className="text-[11px] text-faint">回答后任务从断点继续，不需要重新运行。</span>
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
 function ApprovalCard({
   block,
   busy,
@@ -357,6 +444,7 @@ export function TimelineBlock({
   busyApprovalKey,
   onHighlight,
   onDecide,
+  onAnswer,
 }: {
   block: Block;
   busyApprovalKey: string | null;
@@ -366,6 +454,10 @@ export function TimelineBlock({
     block: Extract<Block, { kind: "approval" }>,
     scope?: ApprovalScope,
   ) => void;
+  onAnswer: (
+    answers: Record<string, string>,
+    block: Extract<Block, { kind: "question" }>,
+  ) => void;
 }) {
   switch (block.kind) {
     case "plan":
@@ -374,6 +466,14 @@ export function TimelineBlock({
       return <ToolCard block={block} />;
     case "terminal":
       return <TerminalBlockView block={block} />;
+    case "question":
+      return (
+        <QuestionCard
+          block={block}
+          busy={busyApprovalKey === block.key}
+          onAnswer={(answers, target) => onAnswer(answers, target)}
+        />
+      );
     case "approval":
       return (
         <ApprovalCard

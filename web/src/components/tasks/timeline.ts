@@ -5,11 +5,13 @@ import {
   eventToolName,
   eventToolOutput,
   numOf,
+  normalizeQuestions,
   normalizeStatus,
   pick,
   textOf,
   type AgentEvent,
   type ApprovalScope,
+  type PendingQuestion,
 } from "./api";
 import { clip } from "./format";
 
@@ -46,6 +48,15 @@ export type Block =
       at: string;
       title: string;
       lines: TermLine[];
+    }
+  | {
+      kind: "question";
+      key: string;
+      seq: number;
+      at: string;
+      questions: PendingQuestion[];
+      state: "pending" | "answered";
+      answers: string;
     }
   | {
       kind: "approval";
@@ -112,6 +123,15 @@ function shellLine(event: AgentEvent): TermLine | null {
   if (failed || looksError) return { text: body, tone: "err" };
   if (looksWarn) return { text: body, tone: "warn" };
   return { text: body, tone: "out" };
+}
+
+function answersSummary(source: Record<string, unknown>): string {
+  const rows = source.answers;
+  if (!rows || typeof rows !== "object") return "";
+  return Object.values(rows as Record<string, unknown>)
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .join("；");
 }
 
 function planItems(event: AgentEvent): { items: string[]; text: string } {
@@ -213,6 +233,37 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
     if (rawType.startsWith("plan")) {
       const { items } = planItems(event);
       push({ kind: "plan", key, seq: event.seq, node: event.node, at: event.createdAt, items, text: textOf(event.payload, "text", "summary") });
+      return;
+    }
+
+    if (rawType.startsWith("question")) {
+      const interrupt = (event.payload as { interrupt?: Record<string, unknown> } | null)?.interrupt;
+      const source = interrupt ? { ...event.payload, ...interrupt } : event.payload;
+      if (rawType.includes("answered") || rawType.includes("decided")) {
+        const last = blocks[blocks.length - 1];
+        if (last?.kind === "question") {
+          blocks[blocks.length - 1] = {
+            ...last,
+            state: "answered",
+            answers: textOf(source, "answer", "text") || answersSummary(source),
+          };
+        }
+        return;
+      }
+      // question.asked 与 question.required 是同一次中断的两条记录，只留一张卡
+      const last = blocks[blocks.length - 1];
+      if (last?.kind === "question" && last.state === "pending") return;
+      const questions = normalizeQuestions({ questions: source.questions ?? source.items ?? [] });
+      if (questions.length === 0) return;
+      push({
+        kind: "question",
+        key,
+        seq: event.seq,
+        at: event.createdAt,
+        questions,
+        state: "pending",
+        answers: "",
+      });
       return;
     }
 
