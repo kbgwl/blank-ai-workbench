@@ -25,21 +25,7 @@ from sqlalchemy import select
 
 from blank_api.api.errors import ApiError
 from blank_api.models.checkpoint import AgentCheckpoint, AgentCheckpointWrite
-
-# 注意：services.agent 包的 __init__ 会导入 runtime，而 runtime 又要用本模块的
-# allocate_thread。这里在函数内部延迟导入线程号工具，避免模块级循环。
-
-
-def _thread_id_for(task_id: str, attempt: int = 1) -> str:
-    from blank_api.services.agent.checkpoints import thread_id_for
-
-    return thread_id_for(task_id, attempt)
-
-
-def _task_id_from_thread(thread_id: str) -> str:
-    from blank_api.services.agent.checkpoints import task_id_from_thread
-
-    return task_id_from_thread(thread_id)
+from blank_api.services.agent.checkpoints import task_id_from_thread, thread_id_for
 
 TRUNK_REUSE = "trunk_reuse"
 TRUNK_NEW = "trunk_new"
@@ -77,7 +63,7 @@ async def _checkpoint_threads(session, task_id: str) -> list[str]:
         .scalars()
         .all()
     )
-    return [thread for thread in set(rows) if _task_id_from_thread(thread) == task_id]
+    return [thread for thread in set(rows) if task_id_from_thread(thread) == task_id]
 
 
 async def fork_threads(session, task_id: str) -> list[str]:
@@ -98,7 +84,7 @@ async def fork_threads(session, task_id: str) -> list[str]:
     found: list[str] = []
     for payload in rows or []:
         thread = str((payload or {}).get("thread_id") or "")
-        if thread and _task_id_from_thread(thread) == task_id:
+        if thread and task_id_from_thread(thread) == task_id:
             found.append(thread)
     return found
 
@@ -114,7 +100,7 @@ async def allocate_thread(session, task_id: str) -> str:
     """Next free attempt number, counting both checkpoints and recorded forks."""
     threads = [*await _checkpoint_threads(session, task_id), *await fork_threads(session, task_id)]
     attempts = [_attempt(thread) for thread in threads]
-    return _thread_id_for(task_id, max(attempts or {0}) + 1)
+    return thread_id_for(task_id, max(attempts or {0}) + 1)
 
 
 async def fork_thread(
