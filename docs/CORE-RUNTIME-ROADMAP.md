@@ -129,3 +129,42 @@ Model Runtime / Observability
 
 页面只消费这些内核资源，不在前端自行模拟任务状态、模型状态或记忆状态。
 
+## 2026-10-17 REA 对照后新增的差距
+
+对**本机安装的正式版**做了静态逆向拆解（Codex 0.154.0 的 285MB Rust 二进制、Claude Code
+2.1.271 的 229MB Bun 二进制 + `sdk-tools.d.ts`），证据与结论见
+[`REA-CODEX-CLAUDE.md`](REA-CODEX-CLAUDE.md)。两家撞在一起的能力就是"内核该有的样子"。
+
+### 已落地（本轮）
+
+- ✅ **`update_plan` 工具** —— 计划从一次性输出变成**可更新对象**（对标 Codex `update_plan` /
+  Claude `EnterPlanMode`+`ExitPlanMode`）：步骤可勾选、可按用户插话追加；新增 `plan.updated` 事件。
+- ✅ **hooks 生命周期** —— 落地 `session_start` / `session_end` / `user_prompt_submit` /
+  `pre_tool_use` / `post_tool_use` / `post_compact`。配置走 `BLANK_HOOKS`（JSON），
+  **默认关闭**；`pre_tool_use` 可拦截工具调用，其余为通知；**钩子失败一律 fail-open**，
+  且每次执行都写 `hook.completed` 审计事件。
+
+### 待做（按拆解结果排序）
+
+| 优先级 | 差距 | 他们的做法 | 备注 |
+|---|---|---|---|
+| **P1** | 审批粒度过粗 | 命令前缀放行（`approved_command_prefixes` / `prefix_rule`）+ **会话内记住批准**（`user_approved_for_session`）+ 4 档权限模式 | 需同时动 API 与前端，支撑设计里的"审批三档" |
+| **P1** | 上下文只有一层压缩 | **两层**：`microcompact`（细粒度裁剪）+ `auto-compact`（整体压缩）+ 压缩边界 + 压缩前后 token 记账（`active_context_tokens_before/after`） | 现有 `ContextCompactor` 是第二层，缺第一层 |
+| **P1** | Agent 不能主动提问 | Codex `request_user_input` / Claude `AskUserQuestion`（`AskUserQuestionInput` 已确认存在） | 事件流已具备，缺工具与前端交互 |
+| **P1** | 没有子代理 | Codex `thread_spawn` + `parent_thread_id` / `depth` / `agent_path` / `nickname` / `role`；Claude `Task` + **`EnterWorktree`/`ExitWorktree`**（并行代理各占独立 worktree） | worktree 隔离是关键，不然并行会互相踩 |
+| **P1** | 工具面窄（7 个） | Codex 有 `tool_search`（工具多到让模型自己检索）；两家都有 `web_search`/`web_fetch` | 先补联网，再考虑检索 |
+| **P1** | 没有自动审查 | Codex **`guardian`**：独立线程 + 可配模型/推理强度/超时（`guardian_model` / `guardian_reasoning_effort` / `review_timeout_ms`），审批结果枚举里有 `guardian_approved/denied/aborted` | 这是"两级审批"的上层 |
+| **P2** | 没有项目约定文件 | Codex `AGENTS.md`；Claude `CLAUDE.md`；且 Codex 的指令是**分层拼装**（`include_permissions_instructions` / `include_apps_instructions` / `include_collaboration_mode_instructions` / `include_environment_context` 分别可开关） | |
+| **P2** | 没有跨窗口交接 | Codex：`auto_compact_fallback_buffer_tokens`（16k 触发缓冲）+ 耗尽时要求模型把检查点写进 **`notes`** 工具，并记录窗口 ID / 条目 ID | 压缩不是丢历史，是**有交接的换窗口** |
+| **P2** | 没有记忆固化 | Codex `memory_consolidation` 事件 | |
+| **P2** | 没有线程分叉 | `forked_from_thread_id` / `ephemeral` / `trunk_new` / `trunk_reuse` | |
+| **P2** | shell 状态不跨调用 | Codex `shell_snapshot.thread_id` + `shell_environment_policy` | |
+| **P2** | 没有中途改方向计数 | Codex `steer_count` | 能力已有（执行中插话），缺度量 |
+
+### 另外两条可直接沿用的工程选择
+
+- 两家都已从"npm 里的 JS"改成**编译型单文件二进制**，并且**都自带 ripgrep**（Codex 的
+  `codex-path/rg.exe`）。我们的桌面壳已按同样思路自带 Python 运行时，方向一致。
+- Codex 另有 `codex-code-mode-host.exe`：把代码执行放进独立宿主进程 —— 与我们沙箱的思路同源。
+
+

@@ -23,6 +23,7 @@ from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.evidence import build_evidence
 from blank_api.services.agent.graph import AgentSession, build_agent_graph, initial_messages
 from blank_api.services.agent.store import SerializedSessionFactory
+from blank_api.services.hooks import HookRunner
 from blank_api.services.models.base import ModelAdapter, ModelError
 from blank_api.services.tools import build_default_tools
 from blank_api.services.tools.base import ToolContext, approval_key
@@ -152,6 +153,7 @@ class AgentRuntime:
             role_adapters=request.role_adapters or {},
             role_provider_ids=request.role_provider_ids or {},
             is_cancelled=_CancelledLookup(store, request.task_id),
+            hooks=HookRunner.from_env(),
         )
         graph = build_agent_graph(session, SqlAlchemyCheckpointSaver(store))
         config = {
@@ -167,6 +169,16 @@ class AgentRuntime:
             config=config,
             thread_id=thread_id,
         )
+
+    async def _fire_hooks(self, scope: _RunScope, event: str, payload: dict) -> None:
+        """钩子是可选扩展（BLANK_HOOKS 配置）：失败绝不影响任务，但每次都要留审计记录。"""
+        results = await scope.session.hooks.run(event, "", payload)
+        if results:
+            await scope.recorder.add(
+                "hook.completed",
+                "receive_task",
+                {"event": event, "results": [item.as_dict() for item in results]},
+            )
 
     async def run(self, request: RunRequest) -> dict[str, Any]:
         thread_id = await next_thread_id(self.session_factory, request.task_id)
@@ -201,6 +213,18 @@ class AgentRuntime:
                 "snapshot_id": snapshot["id"],
             },
         )
+        # 会话生命周期钩子：对标 Codex 的 session_start/user_prompt_submit
+        await self._fire_hooks(
+            scope,
+            "session_start",
+            {"task_id": request.task_id, "thread_id": thread_id, "workspace": mask_path(session.context.root)},
+        )
+        await self._fire_hooks(
+            scope,
+            "user_prompt_submit",
+            {"goal": session.goal, "acceptance_criteria": session.acceptance_criteria},
+        )
+
         state: dict[str, Any] = {
             "task_id": request.task_id,
             "messages": initial_messages(
@@ -232,6 +256,12 @@ class AgentRuntime:
             result, interrupts = {}, list(exc.args or [])
         else:
             interrupts = list(result.get("__interrupt__") or [])
+        # 会话收尾钩子：run 与 resume 两条路径都要发
+        await self._fire_hooks(
+            scope,
+            "session_end",
+            {"task_id": request.task_id, "thread_id": scope.thread_id, "interrupts": len(interrupts)},
+        )
         return await self._finalize(request, scope, result, interrupts)
 
     async def resume(self, request: RunRequest, decision: bool = True) -> dict[str, Any]:
@@ -258,6 +288,12 @@ class AgentRuntime:
             result, interrupts = {}, list(exc.args or [])
         else:
             interrupts = list(result.get("__interrupt__") or [])
+        # 会话收尾钩子：run 与 resume 两条路径都要发
+        await self._fire_hooks(
+            scope,
+            "session_end",
+            {"task_id": request.task_id, "thread_id": scope.thread_id, "interrupts": len(interrupts)},
+        )
         return await self._finalize(request, scope, result, interrupts)
 
     async def _finalize(

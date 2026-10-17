@@ -25,6 +25,7 @@ from blank_api.services.agent.context import (
     load_summary_json,
     render_summary,
 )
+from blank_api.services.hooks import HookRunner, blocking_denial
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.tools.base import ToolContext, ToolDefinition, approval_key
 from blank_api.services.tools.gateway import ToolGateway
@@ -58,6 +59,8 @@ class AgentState(TypedDict, total=False):
     error: dict
     # 步数预算已耗尽：此后只能取证与总结，不能再进入修复回路，否则图会空转到递归上限。
     budget_exhausted: bool
+    # update_plan 写回的结构化计划（plan 保留为步骤文本，向后兼容）。
+    plan_steps: list[dict]
 
 
 async def _never_cancelled() -> bool:
@@ -84,6 +87,7 @@ class AgentSession:
     approved_actions: set[str] = field(default_factory=set)
     is_cancelled: Callable[[], Awaitable[bool]] = _never_cancelled
     compactor: ContextCompactor = field(default_factory=ContextCompactor)
+    hooks: HookRunner = field(default_factory=HookRunner)
 
     def approval_policy(self, tool: ToolDefinition, arguments: dict) -> bool:
         return approval_key(tool.name, arguments) in self.approved_actions or tool.name in self.approved_tools
@@ -133,15 +137,32 @@ class AgentSession:
         covered_before = self.compactor.covered
         compacted = await self.compactor.build(messages, self.summarize_history)
         if self.compactor.covered > covered_before:
+            folded = self.compactor.covered - covered_before
             await self.recorder.add(
                 "context.compacted",
                 node,
                 {
-                    "folded": self.compactor.covered - covered_before,
+                    "folded": folded,
                     "covered": self.compactor.covered,
                     "summary_chars": len(self.compactor.summary),
                 },
             )
+            # post_compact 钩子：两家都有同名事件，压缩后是最需要外部记账/上报的时刻
+            hook_results = await self.hooks.run(
+                "post_compact",
+                "",
+                {
+                    "folded": folded,
+                    "covered": self.compactor.covered,
+                    "summary_chars": len(self.compactor.summary),
+                },
+            )
+            if hook_results:
+                await self.recorder.add(
+                    "hook.completed",
+                    node,
+                    {"event": "post_compact", "results": [item.as_dict() for item in hook_results]},
+                )
         chat = [
             ChatMessage(
                 role=item["role"],
@@ -350,14 +371,60 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     pending = list(state.get("pending") or [])
     denied = await _approval_gate(session, node, pending)
 
+    plan_update: list[dict] | None = None
     for call in pending:
         name = tool_call_name(call)
         arguments = tool_call_args(call)
         await session.recorder.add("tool.requested", node, {"tool": name, "arguments": arguments})
-        if name in denied:
+
+        # pre_tool_use 钩子：可以拦下一次工具调用（对标 Codex / Claude Code 的同名事件）
+        hook_results = await session.hooks.run(
+            "pre_tool_use", name, {"tool": name, "arguments": arguments}
+        )
+        if hook_results:
+            await session.recorder.add(
+                "hook.completed",
+                node,
+                {"event": "pre_tool_use", "results": [item.as_dict() for item in hook_results]},
+            )
+        blocked = blocking_denial(hook_results)
+
+        if blocked is not None:
+            payload = await session.gateway.refuse(
+                name,
+                arguments,
+                session.context,
+                node,
+                reason=f"钩子拒绝执行 {name}：{blocked.reason or '未给出原因'}",
+            )
+        elif name in denied:
             payload = await session.gateway.refuse(name, arguments, session.context, node)
         else:
             payload = await session.gateway.execute(name, arguments, session.context, node)
+
+        if blocked is None:
+            post_results = await session.hooks.run(
+                "post_tool_use",
+                name,
+                {
+                    "tool": name,
+                    "arguments": arguments,
+                    "ok": bool(payload.get("ok")),
+                    "status": payload.get("status"),
+                },
+            )
+            if post_results:
+                await session.recorder.add(
+                    "hook.completed",
+                    node,
+                    {"event": "post_tool_use", "results": [item.as_dict() for item in post_results]},
+                )
+
+        # update_plan：计划是可更新对象，工具结果直接落回图状态
+        if name == "update_plan" and payload.get("ok"):
+            steps = (payload.get("data") or {}).get("steps")
+            if isinstance(steps, list) and steps:
+                plan_update = steps
         await session.recorder.add(
             "tool.completed",
             node,
@@ -389,6 +456,18 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         )
         messages = _append_tool_response(messages, call, payload)
 
+    plan_patch: dict = {}
+    if plan_update:
+        await session.recorder.add(
+            "plan.updated",
+            node,
+            {"steps": plan_update, "total": len(plan_update)},
+        )
+        plan_patch = {
+            "plan": [str(step.get("step") or "") for step in plan_update],
+            "plan_steps": plan_update,
+        }
+
     if denied:
         reason = f"已驳回高风险操作：{', '.join(sorted(denied))}，该步骤未执行"
         await session.recorder.add("task.paused", node, {"reason": reason})
@@ -399,6 +478,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
             "tool_results": results,
             "pending": [],
             "status": "paused",
+            **plan_patch,
         }
 
     # 预算处理：循环本身靠"模型不再返回工具调用"自终止，预算只是安全网。
@@ -441,6 +521,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         "tool_results": results,
         "pending": pending_calls,
         "budget_exhausted": remaining <= 0,
+        **plan_patch,
     }
 
 

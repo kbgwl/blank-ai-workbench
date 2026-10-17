@@ -44,13 +44,15 @@ class ToolGateway:
         return self.tools.get(name)
 
     async def refuse(
-        self, name: str, arguments: dict, context: ToolContext, node: str = ""
+        self, name: str, arguments: dict, context: ToolContext, node: str = "", reason: str = ""
     ) -> dict:
-        """审批驳回的高风险调用：不执行，但必须留下可审计的拒绝记录。"""
+        """审批驳回或钩子拦截的调用：不执行，但必须留下可审计的拒绝记录。"""
         tool = self.tools.get(name)
         risk = tool.resolve_risk(arguments) if tool else "high"
         outcome = ToolOutcome(
-            ok=False, status="denied", message=f"高风险操作未获批准，已拒绝执行：{name}"
+            ok=False,
+            status="denied",
+            message=reason.strip() or f"高风险操作未获批准，已拒绝执行：{name}",
         )
         return await self._finish(name, arguments, outcome, context, node, risk, time.perf_counter())
 
