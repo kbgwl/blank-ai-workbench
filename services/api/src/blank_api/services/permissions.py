@@ -411,11 +411,11 @@ class PermissionPolicy:
             )
 
         # 不可逆操作：任何模式、任何前缀规则都不放行，必须逐个确认。
-        overwritten = self.mode == MODE_BYPASS or self.approve_high_risk
+        blanket_allow = self.mode == MODE_BYPASS or self.approve_high_risk
         if is_irreversible(command):
             return ask(risk, "irreversible", command_prefix(command))
 
-        if overwritten:
+        if blanket_allow:
             return approve(risk, "mode:bypass", command_prefix(command))
 
         key = approval_key(name, arguments)
@@ -457,6 +457,7 @@ __all__ = [
     "DENY",
     "Decision",
     "IRREVERSIBLE",
+    "MEMOIZABLE_EXES",
     "MODE_ACCEPT_EDITS",
     "MODE_BYPASS",
     "MODE_DEFAULT",
@@ -475,6 +476,7 @@ __all__ = [
     "covered_by_rules",
     "deny",
     "is_irreversible",
+    "memoizable_prefix",
     "parse_decision",
     "prefix_rule",
     "render_rule",
