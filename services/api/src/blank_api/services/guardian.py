@@ -121,6 +121,35 @@ class Guardian:
             timeout = DEFAULT_TIMEOUT
         return cls(adapter, mode=mode, timeout=timeout)
 
+    @classmethod
+    def from_settings(
+        cls,
+        adapter: ModelAdapter | None,
+        *,
+        settings: dict | None = None,
+        store=None,
+    ) -> "Guardian":
+        """设置页是唯一真源；没有设置文件时才回落到环境变量。
+
+        桌面版用户改的是设置页，不该被一个残留的 BLANK_GUARDIAN 环境变量悄悄覆盖；
+        反过来，无设置文件的 CI / 无头环境仍然沿用环境变量，行为不变。
+        """
+        from blank_api.services.settings import SettingsStore, guardian_settings
+
+        store = store or SettingsStore()
+        try:
+            exists = store.path.exists()
+        except OSError:
+            exists = False
+        if not exists and os.getenv("BLANK_GUARDIAN") is not None:
+            return cls.from_env(adapter)
+        config = guardian_settings(settings)
+        mode = str(config.get("mode") or "veto")
+        timeout = float(config.get("timeout_seconds") or DEFAULT_TIMEOUT)
+        if mode == "off":
+            return cls(None, mode="off", timeout=timeout)
+        return cls(adapter, mode=mode, timeout=timeout)
+
     @property
     def enabled(self) -> bool:
         return self.adapter is not None and self.mode != "off"

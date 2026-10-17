@@ -37,6 +37,7 @@ def build_adapter(
             model=provider.default_model,
             temperature=provider.temperature,
             max_tokens=provider.max_tokens,
+            context_window=int(getattr(provider, "context_window", 0) or 0),
             supports_tools=provider.supports_tools,
             supports_vision=provider.supports_vision,
             client_factory=client_factory or httpx.AsyncClient,

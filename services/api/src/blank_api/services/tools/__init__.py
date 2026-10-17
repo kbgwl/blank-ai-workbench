@@ -13,6 +13,7 @@ from blank_api.services.tools.delegate import delegate_tools
 from blank_api.services.tools.memory_tools import memory_tools
 from blank_api.services.tools.patch import patch_tools
 from blank_api.services.tools.plan import plan_tools
+from blank_api.services.tools.search import search_tools
 from blank_api.services.tools.shell import shell_tools
 from blank_api.services.tools.testing import test_tools
 from blank_api.services.tools.web import web_tools
@@ -20,6 +21,7 @@ from blank_api.services.tools.web import web_tools
 
 def build_default_tools() -> list[ToolDefinition]:
     return [
+        *search_tools(),
         *plan_tools(),
         *ask_tools(),
         *delegate_tools(),

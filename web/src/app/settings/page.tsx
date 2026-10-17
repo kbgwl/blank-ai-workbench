@@ -1,4 +1,5 @@
 import { Panel } from "@/components/panel";
+import { AgentRuntimePanel } from "@/components/settings/agent-runtime-panel";
 import { ProvidersView } from "@/components/settings/providers-view";
 import { RoleModelSettings } from "@/components/settings/role-model-settings";
 
@@ -9,18 +10,26 @@ export default function SettingsPage() {
         <div className="min-w-0">
           <h1 className="text-[19px] font-semibold tracking-tight">设置</h1>
           <p className="mt-1 text-[13px] leading-relaxed text-muted">
-            模型供应商、API Key 加密存储、流式与工具能力检测、Token 用量。
+            模型供应商、API Key 加密存储、独立审查与上下文水位、Token 用量。
           </p>
         </div>
         <span className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1 font-mono text-[11px] whitespace-nowrap text-faint">
-          真实数据 · /api/v1/providers
+          真实数据 · /api/v1/providers · /api/v1/settings
         </span>
       </div>
 
       <ProvidersView />
 
+      <div>
+        <h2 className="mb-2 text-[13px] font-medium tracking-tight">执行与智能体</h2>
+        <p className="mb-3 text-[12px] leading-relaxed text-faint">
+          这些开关直接改变内核行为：审查档位、上下文水位、新任务的默认权限，以及工具是否按需加载。
+        </p>
+        <AgentRuntimePanel />
+      </div>
+
       <div className="grid gap-4 md:grid-cols-2">
-        <Panel title="执行与安全" hint="v0.6 接入">
+        <Panel title="沙箱与工作区" hint="v0.6 接入">
           <p className="text-[13px] leading-relaxed text-faint">
             工作区路径白名单、Shell 超时、Docker 沙箱、本地执行显式授权和参数级风险审批已由运行时执行。
           </p>

@@ -23,6 +23,7 @@ from blank_api.services.permissions import (
     memoizable_prefix,
 )
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key, validate_arguments
+from blank_api.services.tools.registry import ToolRegistry
 
 MAX_LOGGED_CHARS = 4000
 MAX_RESULT_CHARS = 8000
@@ -44,11 +45,14 @@ def _redact_value(value, secrets: Sequence[str], limit: int = MAX_RESULT_CHARS):
 
 
 class ToolGateway:
-    def __init__(self, tools: Sequence[ToolDefinition]) -> None:
+    def __init__(self, tools: Sequence[ToolDefinition], *, defer: bool = True) -> None:
         self.tools: dict[str, ToolDefinition] = {tool.name: tool for tool in tools}
+        # 注册表决定"模型这一轮看得见哪些工具"。defer=False 给子代理用：
+        # 它拿到的本来就是一小组白名单工具，再藏一层只会让它无从下手。
+        self.registry = ToolRegistry(tools, activate_all=not defer)
 
     def specs(self) -> list[ToolSpecLite]:
-        return [tool.spec() for tool in self.tools.values()]
+        return [tool.spec() for tool in self.registry.visible()]
 
     def get(self, name: str) -> ToolDefinition | None:
         return self.tools.get(name)

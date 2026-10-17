@@ -61,6 +61,8 @@ class AdapterConfig:
     model: str
     temperature: float = 0.2
     max_tokens: int = 2048
+    # 模型上下文窗口（tokens）。0 表示未知：此时上下文压缩退回字符预算。
+    context_window: int = 0
     supports_tools: bool = False
     supports_vision: bool = False
     timeout_seconds: float = 60.0

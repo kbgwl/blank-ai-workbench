@@ -48,7 +48,9 @@ SYSTEM_PROMPT = (
     "1. 只能通过工具读写工作区，路径一律使用工作区相对路径，禁止绝对路径与 ..。\n"
     "2. 先给出简短执行计划，再调用工具逐步执行；每次工具返回后观察结果再决定下一步。\n"
     "3. 修改文件必须使用 apply_patch，验证必须使用 run_tests。\n"
-    "4. 不要重复调用已经执行过的工具，全部完成后用一段中文总结。"
+    "4. 工具按需加载：git、联网、记忆检索、子代理这些能力不在默认列表里，"
+    "需要时先用 tool_search 检索（例如「提交」「查资料」「并行」），命中后本轮即可直接调用。\n"
+    "5. 不要重复调用已经执行过的工具，全部完成后用一段中文总结。"
 )
 
 
@@ -181,6 +183,10 @@ class AgentSession:
         adapter = self.role_adapters.get(role, self.adapter)
         if not adapter.config.supports_tools:
             adapter = self.adapter
+        # 每个角色可能挂着不同的模型，窗口大小不同；水位必须按"这次要用的窗口"算。
+        window = int(getattr(adapter.config, "context_window", 0) or 0)
+        if window and window != self.compactor.context_window:
+            self.compactor.context_window = window
         covered_before = self.compactor.covered
         compacted = await self.compactor.build(messages, self.summarize_history)
         report = self.compactor.last_report
@@ -225,6 +231,8 @@ class AgentSession:
             await self._record_usage(node, "", Usage(), 0, "error", role=role)
             raise
         usage = response.usage
+        # 用真实 prompt_tokens 校准估算器：水位要按模型的说法算，不能只信字符启发式
+        self.compactor.observe(usage.prompt_tokens, report.tokens_after)
         selected_provider = str(getattr(adapter, "last_provider", adapter.config.name))
         if selected_provider != adapter.config.name:
             await self.recorder.add(

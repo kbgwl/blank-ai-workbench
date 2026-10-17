@@ -94,6 +94,29 @@ export type ObservabilitySummary = {
   tools: Record<string, number>;
 };
 
+export type AgentSettings = {
+  guardian: { mode: string; timeout_seconds: number };
+  compaction: { trigger_ratio: number; reserve_tokens: number };
+  permissions: { default_mode: string };
+  tools: { search: boolean };
+  path: string;
+  limits: {
+    guardian_modes?: string[];
+    guardian_timeout?: { min: number; max: number; default: number };
+    permission_modes?: string[];
+    permission_mode_labels?: Record<string, string>;
+    trigger_ratio?: { min: number; max: number; default: number };
+    reserve_tokens?: { min: number; max: number; default: number };
+  };
+};
+
+export type AgentSettingsPatch = {
+  guardian?: { mode?: string; timeout_seconds?: number };
+  compaction?: { trigger_ratio?: number; reserve_tokens?: number };
+  permissions?: { default_mode?: string };
+  tools?: { search?: boolean };
+};
+
 const api = API_V1;
 
 export function fetchPresets(): Promise<PresetsResponse> {
@@ -134,6 +157,22 @@ export function fetchUsage(): Promise<UsageSummary> {
 
 export function fetchObservability(): Promise<ObservabilitySummary> {
   return request<ObservabilitySummary>(`${api}/observability/summary`, { cache: "no-store" });
+}
+
+export function fetchAgentSettings(): Promise<AgentSettings> {
+  return request<AgentSettings>(`${api}/settings/agent`, { cache: "no-store" });
+}
+
+export function updateAgentSettings(patch: AgentSettingsPatch): Promise<AgentSettings> {
+  return request<AgentSettings>(`${api}/settings/agent`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export function resetAgentSettings(): Promise<AgentSettings> {
+  return request<AgentSettings>(`${api}/settings/agent/reset`, { method: "POST" });
 }
 
 export function chatProvider(providerId: string, message: string): Promise<{ text: string; model?: string }> {

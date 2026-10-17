@@ -18,6 +18,7 @@ from blank_api.services.agent.checkpoints import (
     SqlAlchemyCheckpointSaver,
     task_id_from_thread,
 )
+from blank_api.services.agent.context import ContextCompactor
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.evidence import build_evidence
 from blank_api.services.agent.graph import AgentSession, build_agent_graph, initial_messages
@@ -28,6 +29,7 @@ from blank_api.services.hooks import HookRunner
 from blank_api.services.instructions import load_layers, provenance
 from blank_api.services.memory import MemoryStore
 from blank_api.services.notes import NoteStore
+from blank_api.services.settings import SettingsStore
 from blank_api.services.shell_env import capture as capture_shell
 from blank_api.services.subagent import SubAgentRunner
 from blank_api.services.models.base import ModelAdapter, ModelError
@@ -175,20 +177,36 @@ class AgentRuntime:
     def _prepare(self, request: RunRequest, thread_id: str) -> _RunScope:
         store = SerializedSessionFactory(self.session_factory)
         recorder = EventRecorder(store, request.task_id, trace_id=thread_id, run_id=request.run_id)
-        gateway = ToolGateway(build_default_tools())
+        settings = SettingsStore().read()
+        # 设置页可以关掉按需加载：关掉后所有工具每轮都下发，tool_search 也就没有意义了
+        tool_search_enabled = bool((settings.get("tools") or {}).get("search", True))
+        tools = build_default_tools()
+        if not tool_search_enabled:
+            tools = [tool for tool in tools if tool.name != "tool_search"]
+        gateway = ToolGateway(tools, defer=tool_search_enabled)
         allowed = set(request.approved_tools or set())
         approved_actions = set(request.approved_actions or set())
         if request.approve_high_risk:
             allowed.update(tool.name for tool in gateway.tools.values() if tool.requires_approval)
+        # 请求没带模式时用设置页的默认模式：桌面端用户改的就是那一处，不该有两套默认值
+        mode = request.permission_mode or (settings.get("permissions") or {}).get("default_mode") or MODE_DEFAULT
         permissions = PermissionPolicy.build(
-            request.permission_mode or MODE_DEFAULT,
+            mode,
             approve_high_risk=request.approve_high_risk,
             approved_tools=allowed,
             approved_actions=approved_actions,
             approved_prefixes=request.approved_command_prefixes or (),
         )
         adapters = [request.adapter, *(request.role_adapters or {}).values()]
-        guardian = Guardian.from_env((request.role_adapters or {}).get("guardian") or request.adapter)
+        guardian = Guardian.from_settings(
+            (request.role_adapters or {}).get("guardian") or request.adapter, settings=settings
+        )
+        compaction = settings.get("compaction") or {}
+        compactor = ContextCompactor(
+            context_window=int(getattr(request.adapter.config, "context_window", 0) or 0),
+            trigger_ratio=float(compaction.get("trigger_ratio") or 0.82),
+            reserve_tokens=int(compaction.get("reserve_tokens") or 16_384),
+        )
         subagents = SubAgentRunner()
         notes = NoteStore()
         memory = MemoryStore()
@@ -209,6 +227,7 @@ class AgentRuntime:
             notes=notes,
             memory=memory,
             shell=shell,
+            tool_registry=gateway.registry,
         )
         session = AgentSession(
             adapter=request.adapter,
@@ -229,6 +248,7 @@ class AgentRuntime:
             is_cancelled=_CancelledLookup(store, request.task_id),
             hooks=HookRunner.from_env(),
             guardian=guardian,
+            compactor=compactor,
             notes=notes,
             memory=memory,
             shell=shell,
@@ -291,7 +311,15 @@ class AgentRuntime:
                 "max_steps": session.max_steps,
                 "permission_mode": session.permission_mode,
                 "permissions": session.permissions.snapshot(),
-                "tools": [tool.name for tool in session.gateway.specs()],
+                "tools": session.gateway.registry.visible_names(),
+                "tools_deferred": session.gateway.registry.deferred_names(),
+                "compaction": {
+                    "context_window": session.compactor.context_window,
+                    "trigger_ratio": session.compactor.trigger_ratio,
+                    "reserve_tokens": session.compactor.reserve_tokens,
+                    "trigger_at": session.compactor.trigger_tokens(),
+                },
+                "guardian_mode": session.guardian.mode,
                 "thread_id": thread_id,
                 "snapshot_id": snapshot["id"],
             },

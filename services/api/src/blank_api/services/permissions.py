@@ -57,6 +57,8 @@ READ_ONLY_TOOLS = frozenset(
         "web_fetch",
         "read_notes",
         "memory_search",
+        # 检索本身只读：计划模式要靠它把 git / 联网这些能力加载进来做只读取证
+        "tool_search",
     }
 )
 # "接受编辑"模式自动放行的工具：只含工作区内的文件写入（可回滚）。

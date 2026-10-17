@@ -48,6 +48,8 @@ class ToolContext:
     memory: Any = None
     # 本线程的 shell 快照：run_shell 用它决定子进程环境
     shell: Any = None
+    # 工具注册表：tool_search 靠它判断"哪些工具还没加载"，激活状态按会话隔离
+    tool_registry: Any = None
 
 
 @dataclass

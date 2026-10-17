@@ -7,6 +7,10 @@ os.environ.setdefault("BLANK_SANDBOX_ENABLED", "0")
 # 交接笔记与长期记忆落到临时目录：跑测试不该在仓库里留 data/notes、data/memory
 os.environ.setdefault("BLANK_NOTES_DIR", tempfile.mkdtemp(prefix="blank-notes-"))
 os.environ.setdefault("BLANK_MEMORY_DIR", tempfile.mkdtemp(prefix="blank-memory-"))
+# 运行时设置也落临时目录：测试绝不能读到或写进仓库里的 data/settings.json
+os.environ.setdefault("BLANK_SETTINGS_FILE", f"{tempfile.mkdtemp(prefix='blank-settings-')}/settings.json")
+# 子代理的隔离副本也放测试自己的目录：不往系统临时目录里堆，跑完自动随 basetemp 清理
+os.environ.setdefault("BLANK_WORKTREE_ROOT", tempfile.mkdtemp(prefix="blank-worktrees-"))
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402

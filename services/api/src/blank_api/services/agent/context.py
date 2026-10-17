@@ -16,6 +16,13 @@ Three layers, deliberately separated by cost:
 
 Every pass reports token accounting and the compaction boundary, so cost is
 explainable instead of magic.
+
+**Water level.** Compaction is triggered by a *token* level, not by a character
+count, whenever the provider tells us the model's context window (Codex does the
+same with ``auto_compact_fallback_buffer_tokens``). The estimate is calibrated
+against the real ``prompt_tokens`` the provider reports for the same prompt, so
+the water line means the same thing for a 32k model and a 200k one. Without a
+known window the character budget is used, exactly as before.
 """
 
 from __future__ import annotations
@@ -37,6 +44,15 @@ BASE64_PATTERN = re.compile(r"data:[^;,\s]{0,60};base64,[A-Za-z0-9+/=\s]{200,}")
 
 SUMMARY_TRANSCRIPT_CHARS = 1_200
 SUMMARY_TOTAL_CHARS = 24_000
+
+# 水位默认值：到窗口的 82% 开始压缩，给模型回复预留 16k tokens。
+# 与设置页 data/settings.json 的 compaction 段一一对应，这里是缺省兜底。
+DEFAULT_TRIGGER_RATIO = 0.82
+DEFAULT_RESERVE_TOKENS = 16_384
+# 校准系数的合理区间：超出这个范围说明测到的不是同一件事（例如缓存命中），
+# 不要拿它去缩放水位，否则一次异常读数就能把压缩永久推到错误位置。
+CALIBRATION_MIN = 0.2
+CALIBRATION_MAX = 5.0
 
 FIVE_SECTION_SCHEMA = {
     "type": "object",
@@ -130,6 +146,19 @@ class CompactionReport:
     boundary: int = 0
     summary_chars: int = 0
     covered: int = 0
+    # 水位相关：窗口未知时 trigger_at 为 0，表示这次是按字符预算判定的
+    context_window: int = 0
+    trigger_at: int = 0
+    calibration: float = 1.0
+    observed_tokens: int = 0
+    triggered_by: str = ""
+
+    @property
+    def water_ratio(self) -> float:
+        if not self.trigger_at or not self.context_window:
+            return 0.0
+        denom = max(1, self.context_window)
+        return round(self.tokens_before / denom, 4)
 
     def as_dict(self) -> dict:
         return {
@@ -141,7 +170,14 @@ class CompactionReport:
             "boundary": self.boundary,
             "summary_chars": self.summary_chars,
             "covered": self.covered,
+            "context_window": self.context_window,
+            "trigger_at": self.trigger_at,
+            "water_ratio": self.water_ratio,
+            "calibration": self.calibration,
+            "observed_tokens": self.observed_tokens,
+            "triggered_by": self.triggered_by,
         }
+
 
 
 def _microcompact(
@@ -302,6 +338,11 @@ class ContextCompactor:
     Layer one (`microcompact`) always runs first: it is free, and it often
     removes enough noise that the expensive model-backed fold is not needed.
     `last_report` carries the token accounting of the most recent assembly.
+
+    ``context_window`` (0 = unknown) switches the trigger from characters to
+    tokens: the water line sits at ``context_window * trigger_ratio`` and the
+    fold happens before the window minus ``reserve_tokens`` is exhausted, which
+    is the last point where a summary can still be written.
     """
 
     max_chars: int = DEFAULT_CONTEXT_CHARS
@@ -309,6 +350,76 @@ class ContextCompactor:
     covered: int = 0
     fold_failures: int = field(default=0)
     last_report: CompactionReport = field(default_factory=CompactionReport)
+    # 模型窗口：0 表示未知，退回字符预算（旧行为）
+    context_window: int = 0
+    trigger_ratio: float = DEFAULT_TRIGGER_RATIO
+    reserve_tokens: int = DEFAULT_RESERVE_TOKENS
+    # 估算校准：真实 prompt_tokens / 估算值，用滑动平均收敛
+    calibration: float = 1.0
+    calibration_samples: int = field(default=0)
+    observed_tokens: int = 0
+
+    # -- 水位 ---------------------------------------------------------------
+    def trigger_tokens(self) -> int:
+        """水位线：窗口比例与"窗口减预留"取更小的那个。
+
+        预留大于窗口（小窗口配大预留）时不能把水位压到 1 ——那等于每一轮都压缩。
+        这种配置下比例值才是可用的那个，宁可少留余量也不要把上下文打成筛子。
+        """
+        if self.context_window <= 0:
+            return 0
+        by_ratio = max(1, int(self.context_window * self.trigger_ratio))
+        by_reserve = self.context_window - self.reserve_tokens
+        if by_reserve <= 0:
+            return by_ratio
+        return max(1, min(by_ratio, by_reserve))
+
+    def measure(self, messages: Sequence[dict]) -> int:
+        return max(0, int(round(message_tokens(messages) * self.calibration)))
+
+    def observe(self, prompt_tokens: int, estimated_tokens: int) -> None:
+        """用供应商回报的真实 prompt_tokens 校准估算器。
+
+        同一个提示词，模型说的 token 数才是准的；我们的估算只用来决定"什么时候压"。
+        第一次直接采用，之后按 0.5 滑动平均，避免单次异常把水位带偏。
+        """
+        if prompt_tokens <= 0 or estimated_tokens <= 0:
+            return
+        ratio = prompt_tokens / estimated_tokens
+        if not (CALIBRATION_MIN <= ratio <= CALIBRATION_MAX):
+            return
+        if self.calibration_samples <= 0:
+            self.calibration = round(ratio, 4)
+        else:
+            self.calibration = round(self.calibration * 0.5 + ratio * 0.5, 4)
+        self.calibration_samples += 1
+        self.observed_tokens = int(prompt_tokens)
+
+    def level(self, messages: Sequence[dict]) -> dict:
+        """当前水位，供事件日志与前端"上下文 12.3k / 32k"展示。"""
+        tokens = self.measure(messages)
+        trigger = self.trigger_tokens()
+        return {
+            "tokens": tokens,
+            "trigger_at": trigger,
+            "context_window": self.context_window,
+            "ratio": round(tokens / self.context_window, 4) if self.context_window else 0.0,
+            "trigger_ratio": self.trigger_ratio,
+            "reserve_tokens": self.reserve_tokens,
+            "calibration": self.calibration,
+        }
+
+    def _chars_per_token(self, messages: Sequence[dict]) -> float:
+        chars = _total_chars(messages)
+        estimate = message_tokens(messages)
+        if estimate <= 0 or chars <= 0:
+            return 4.0
+        # 校准后一个"真实 token"大约对应多少字符
+        return max(0.2, (chars / estimate) / max(self.calibration, 0.01))
+
+    def _budget_chars(self, messages: Sequence[dict], trigger: int) -> int:
+        """把 token 水位换算成这一轮的消息字符预算。"""
+        return max(2_000, int(trigger * self._chars_per_token(messages)))
 
     async def build(self, messages: Sequence[dict], summarize: SummarizeFn | None = None) -> list[dict]:
         normalized = _normalize(messages)
@@ -316,31 +427,59 @@ class ContextCompactor:
             self.last_report = CompactionReport()
             return []
 
-        tokens_before = message_tokens(normalized)
-        trimmed, micro = microcompact(normalized, self.max_chars)
-        if _total_chars(trimmed) <= self.max_chars:
+        tokens_before = self.measure(normalized)
+        token_mode = self.context_window > 0
+        trigger = self.trigger_tokens()
+        # token 模式按水位判定；窗口未知时退回字符预算，行为与旧版一致
+        char_budget = self._budget_chars(normalized, trigger) if token_mode else self.max_chars
+        triggered_by = "tokens" if token_mode else "chars"
+        base_report = {
+            "tokens_before": tokens_before,
+            "context_window": self.context_window,
+            "trigger_at": trigger,
+            "calibration": self.calibration,
+            "observed_tokens": self.observed_tokens,
+        }
+        over_trigger = tokens_before > trigger if token_mode else _total_chars(normalized) > char_budget
+        if not over_trigger:
             self.last_report = CompactionReport(
-                tokens_before=tokens_before,
-                tokens_after=message_tokens(trimmed),
+                **base_report,
+                tokens_after=tokens_before,
+                boundary=0,
+                covered=self.covered,
+                summary_chars=len(self.summary),
+            )
+            return normalized
+
+        trimmed, micro = _microcompact(normalized) if token_mode else microcompact(normalized, self.max_chars)
+        after_micro_chars = _total_chars(trimmed)
+        after_micro_tokens = self.measure(trimmed)
+        still_over = after_micro_tokens > trigger if token_mode else after_micro_chars > char_budget
+        if not still_over:
+            self.last_report = CompactionReport(
+                **base_report,
+                tokens_after=after_micro_tokens,
                 micro=micro,
                 boundary=0,
                 covered=self.covered,
                 summary_chars=len(self.summary),
+                triggered_by=f"{triggered_by}:micro",
             )
             return trimmed
 
         prefix, history = _split_prefix(trimmed)
         if not history:
             self.last_report = CompactionReport(
-                tokens_before=tokens_before,
-                tokens_after=message_tokens(trimmed),
+                **base_report,
+                tokens_after=after_micro_tokens,
                 micro=micro,
                 covered=self.covered,
                 summary_chars=len(self.summary),
+                triggered_by=f"{triggered_by}:micro",
             )
             return trimmed
 
-        budget = max(1000, self.max_chars - _total_chars(prefix) - len(self.summary))
+        budget = max(1000, char_budget - _total_chars(prefix) - len(self.summary))
         tail: list[dict] = []
         used = 0
         for item in reversed(history):
@@ -372,12 +511,14 @@ class ContextCompactor:
             }
         result = [*prefix, head, *tail]
         self.last_report = CompactionReport(
-            tokens_before=tokens_before,
-            tokens_after=message_tokens(result),
+            **base_report,
+            tokens_after=self.measure(result),
             micro=micro,
             folded=folded_now,
             boundary=cut,
             summary_chars=len(self.summary),
             covered=self.covered,
+            triggered_by=f"{triggered_by}:fold",
         )
         return result
+

@@ -199,6 +199,76 @@ function describeSystem(event: AgentEvent): { title: string; detail: string; ton
       tone: "warn",
     };
   }
+  if (type === "subagents.planned") {
+    const count = numOf(payload, "count");
+    const concurrency = numOf(payload, "concurrency");
+    return {
+      title: `并行分派 ${count ?? "多个"} 个子代理`,
+      detail: [
+        concurrency !== null ? `并发 ${concurrency}` : "",
+        boolOf(payload, "merge") ? "跑完自动合并不冲突的改动" : "只交回 diff，不改主工作区",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      tone: "accent",
+    };
+  }
+  if (type === "subagent.started") {
+    return {
+      title: "子代理开始工作",
+      detail: clip(
+        [
+          boolOf(payload, "isolate") ? "隔离副本" : "只读",
+          textOf(payload, "goal"),
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        160,
+      ),
+      tone: "muted",
+    };
+  }
+  if (type === "subagent.completed") {
+    const ok = boolOf(payload, "ok");
+    const steps = numOf(payload, "steps");
+    return {
+      title: ok === false ? "子代理未完成" : "子代理完成",
+      detail: clip(
+        [steps !== null ? `${steps} 步` : "", textOf(payload, "error") || textOf(payload, "summary")]
+          .filter(Boolean)
+          .join(" · "),
+        180,
+      ),
+      tone: ok === false ? "warn" : "muted",
+    };
+  }
+  if (type === "worktree.merged") {
+    const applied = arrayOf(payload, "applied").length;
+    const conflicts = arrayOf(payload, "conflicts").length;
+    return {
+      title: conflicts > 0 ? "副本合并有冲突" : "副本改动已合并",
+      detail: `写入 ${applied} 个文件${conflicts > 0 ? ` · 冲突 ${conflicts} 个未写入` : ""}`,
+      tone: conflicts > 0 ? "warn" : "accent",
+    };
+  }
+  if (type === "context.compacted" || type === "context.microcompacted") {
+    const before = numOf(payload, "active_context_tokens_before");
+    const after = numOf(payload, "active_context_tokens_after");
+    const ratio = numOf(payload, "water_ratio");
+    return {
+      title: type === "context.compacted" ? "上下文已压缩" : "上下文已裁剪",
+      detail: clip(
+        [
+          before !== null && after !== null ? `${before} → ${after} tokens` : "",
+          ratio !== null && ratio > 0 ? `水位 ${Math.round(ratio * 100)}%` : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        160,
+      ),
+      tone: "muted",
+    };
+  }
   if (type.startsWith("error")) {
     return { title: "运行出错", detail: clip(eventToolOutput(event), 200), tone: "danger" };
   }

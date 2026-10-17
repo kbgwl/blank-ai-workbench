@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,7 +27,14 @@ from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError
 from blank_api.services.permissions import MODE_ACCEPT_EDITS, MODE_DEFAULT, PermissionPolicy
 from blank_api.services.tools.base import ToolContext
 from blank_api.services.tools.gateway import ToolGateway
-from blank_api.services.worktree import Worktree, create_worktree, remove_worktree, render_diff
+from blank_api.services.worktree import (
+    Worktree,
+    apply_changes,
+    changed_files,
+    create_worktree,
+    remove_worktree,
+    render_diff,
+)
 
 READ_ONLY_TOOLS = (
     "read_file",
@@ -47,6 +55,9 @@ MAX_STEPS = 8
 DEFAULT_STEPS = 4
 MAX_TIMEOUT = 300.0
 MIN_TIMEOUT = 20.0
+# 并行编排上限：四个副本已经是"分头探索"的合理规模，再多就是烧钱而不是加速
+MAX_PARALLEL_AGENTS = 4
+DEFAULT_CONCURRENCY = 3
 
 SUBAGENT_SYSTEM = (
     "你是一个受限的子代理，只负责完成交给你的单个子任务。\n"
@@ -64,6 +75,9 @@ class SubAgentRequest:
     max_steps: int = DEFAULT_STEPS
     timeout_seconds: float = 120.0
     label: str = ""
+    # 并行编排：保留副本直到主代理决定是否合并（默认跑完即删，与单发行为一致）
+    keep_worktree: bool = False
+    parallel_group: str = ""
 
     def normalized(self) -> "SubAgentRequest":
         return SubAgentRequest(
@@ -72,6 +86,8 @@ class SubAgentRequest:
             max_steps=max(1, min(MAX_STEPS, int(self.max_steps or DEFAULT_STEPS))),
             timeout_seconds=max(MIN_TIMEOUT, min(MAX_TIMEOUT, float(self.timeout_seconds or 120.0))),
             label=self.label,
+            keep_worktree=bool(self.keep_worktree),
+            parallel_group=self.parallel_group,
         )
 
 
@@ -86,6 +102,9 @@ class SubAgentResult:
     diff: str = ""
     error: str = ""
     usage: dict = field(default_factory=dict)
+    # 实际创建的副本：只在本进程内用于合并，不进事件日志（内容是整份文件）
+    tree: Worktree | None = field(default=None, repr=False)
+    merge: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         payload = {
@@ -100,6 +119,8 @@ class SubAgentResult:
             payload["worktree"] = self.worktree
         if self.diff:
             payload["diff"] = self.diff
+        if self.merge:
+            payload["merge"] = self.merge
         if self.error:
             payload["error"] = self.error
         return payload
@@ -108,9 +129,26 @@ class SubAgentResult:
         parts = [self.summary.strip() or "子代理未给出结论"]
         if self.diff:
             parts.append("【隔离副本中的改动】\n" + self.diff)
+        if self.merge:
+            parts.append("【合并结果】" + render_merge(self.merge))
         if self.error:
             parts.append(f"【异常】{self.error}")
         return "\n\n".join(parts)
+
+
+def render_merge(payload: dict) -> str:
+    parts: list[str] = []
+    applied = payload.get("applied") or []
+    conflicts = payload.get("conflicts") or []
+    skipped = payload.get("skipped") or []
+    if applied:
+        parts.append("已写入主工作区：" + "、".join(map(str, applied)))
+    if conflicts:
+        parts.append("冲突未合并：" + "、".join(map(str, conflicts)))
+    for item in skipped:
+        if isinstance(item, dict):
+            parts.append(f"跳过 {item.get('path')}：{item.get('reason')}")
+    return "；".join(parts) or "无改动"
 
 
 class _Recorder:
@@ -182,7 +220,7 @@ async def run_subagent(
             "worktree.created", "subagent", tree.as_dict()
         )
 
-    gateway = ToolGateway(tools)
+    gateway = ToolGateway(tools, defer=False)
     permissions = PermissionPolicy.build(
         MODE_ACCEPT_EDITS if isolated else MODE_DEFAULT,
         approved_tools=set(),
@@ -195,6 +233,7 @@ async def run_subagent(
         approval_policy=permissions.decide,
         trace_id=parent_thread_id,
         permissions=permissions,
+        tool_registry=gateway.registry,
     )
     log = _Recorder(recorder, agent_path=agent_path, depth=depth, parent_thread_id=parent_thread_id)
     compactor = ContextCompactor()
@@ -283,8 +322,14 @@ async def run_subagent(
             diff = render_diff(tree)
         except Exception:
             diff = ""
-        await log.add("worktree.removed", "subagent", {"path": str(tree.path), "mode": tree.mode})
-        remove_worktree(tree)
+        if request.keep_worktree:
+            # 并行编排：副本先留着，等主代理决定要不要合并，再由 fan_out 统一清理
+            await log.add(
+                "worktree.kept", "subagent", {"path": str(tree.path), "mode": tree.mode}
+            )
+        else:
+            await log.add("worktree.removed", "subagent", {"path": str(tree.path), "mode": tree.mode})
+            remove_worktree(tree)
 
     result = SubAgentResult(
         ok=not error,
@@ -296,6 +341,7 @@ async def run_subagent(
         diff=diff,
         error=error,
         usage={**usage, "latency_ms": int((time.perf_counter() - started) * 1000)},
+        tree=tree if request.keep_worktree else None,
     )
     await log.add(
         "subagent.completed",
@@ -357,6 +403,121 @@ class SubAgentRunner:
             depth=depth,
             parent_thread_id=session.trace_id,
         )
+
+    async def fan_out(
+        self,
+        requests: list[SubAgentRequest],
+        *,
+        concurrency: int = DEFAULT_CONCURRENCY,
+        merge: bool = False,
+    ) -> list[SubAgentResult]:
+        """并行跑一组子代理，各自一个副本，然后按需做保守合并。
+
+        并行编排真正的价值在"同时分头探索"，所以这里不做模型级调度：
+        每个子代理拿到独立目标、独立上下文、独立副本，最后只把结论和 diff 汇总。
+        合并默认关闭——探索的产物应当由主代理决定怎么落，而不是自动写进主工作区。
+        """
+        session = self.session
+        if session is None:
+            return [SubAgentResult(ok=False, error="子代理运行器尚未绑定会话")]
+        depth = int(getattr(session, "depth", 0)) + 1
+        if depth > MAX_DEPTH:
+            return [SubAgentResult(ok=False, error="子代理不允许再嵌套子代理", depth=depth)]
+        bounded = list(requests)[:MAX_PARALLEL_AGENTS]
+        if not bounded:
+            return []
+        group = uuid.uuid4().hex[:6]
+        keep = bool(merge)
+        limit = max(1, min(MAX_PARALLEL_AGENTS, int(concurrency or DEFAULT_CONCURRENCY)))
+        await session.recorder.add(
+            "subagents.planned",
+            "subagent",
+            {
+                "group": group,
+                "count": len(bounded),
+                "concurrency": limit,
+                "merge": merge,
+                "goals": [item.goal[:200] for item in bounded],
+                "depth": depth,
+            },
+        )
+
+        semaphore = asyncio.Semaphore(limit)
+        allowed = ISOLATED_TOOLS
+        tools = [tool for tool in _all_tools() if tool.name in allowed]
+
+        async def one(index: int, item: SubAgentRequest) -> SubAgentResult:
+            async with semaphore:
+                self.spawned += 1
+                agent_path = f"{getattr(session, 'agent_path', 'root')}/par-{group}-{index + 1}"
+                request = item.normalized()
+                request.keep_worktree = keep
+                request.parallel_group = group
+                await session.recorder.add(
+                    "subagent.started",
+                    "subagent",
+                    {
+                        "goal": request.goal[:500],
+                        "isolate": request.isolate,
+                        "max_steps": request.max_steps,
+                        "agent_path": agent_path,
+                        "depth": depth,
+                        "parent_thread_id": session.trace_id,
+                        "parallel_group": group,
+                        "index": index + 1,
+                    },
+                )
+                return await run_subagent(
+                    adapter=session.adapter,
+                    tools=tools,
+                    root=Path(session.context.root),
+                    task_id=session.context.task_id,
+                    session_factory=session.session_factory,
+                    recorder=session.recorder,
+                    request=request,
+                    agent_path=agent_path,
+                    depth=depth,
+                    parent_thread_id=session.trace_id,
+                )
+
+        results = await asyncio.gather(
+            *(one(index, item) for index, item in enumerate(bounded)), return_exceptions=False
+        )
+        if merge:
+            await self._merge(results, group)
+        for result in results:
+            if result.tree is not None:
+                remove_worktree(result.tree)
+                result.tree = None
+        return list(results)
+
+    async def _merge(self, results: list[SubAgentResult], group: str) -> None:
+        """把各副本的改动按"无冲突才写入"的规则落回主工作区。"""
+        session = self.session
+        owners: dict[str, list[int]] = {}
+        for index, result in enumerate(results):
+            if result.tree is None:
+                continue
+            for entry in changed_files(result.tree):
+                owners.setdefault(entry["path"], []).append(index)
+        conflicts = {path for path, indexes in owners.items() if len(indexes) > 1}
+        for index, result in enumerate(results):
+            if result.tree is None:
+                continue
+            # 同一文件被多个子代理改过：谁的都不写，交回 diff
+            shared = {path for path in conflicts if index in owners.get(path, [])}
+            report = apply_changes(result.tree, blocked=shared)
+            result.merge = report.as_dict()
+            if session is not None:
+                await session.recorder.add(
+                    "worktree.merged",
+                    "subagent",
+                    {
+                        "group": group,
+                        "agent_path": result.agent_path,
+                        **report.as_dict(),
+                    },
+                )
 
 
 def _all_tools() -> list:
