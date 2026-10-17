@@ -168,6 +168,8 @@ Model Runtime / Observability
 - ✅ **Agent 主动提问**（`tools/ask.py`，工具名 `request_user_input`）
   - 与审批共用同一条中断通道：`kind=question` 的中断 → `question.required` 事件 →
     `POST /tasks/{id}/answer` 恢复；支持多问题、选项、自由文本，答案回填为工具结果。
+  - 前端在同一对话流里渲染**提问卡**（选项 chip + 自由输入，答完才能提交），
+    `question.asked` 与 `question.required` 两条记录合并成一张卡，不会出现双重提问。
 - ✅ **子代理 + worktree 隔离**（`services/subagent.py` / `services/worktree.py` / `tools/delegate.py`）
   - `spawn_agent` 起一个受限步数、受限工具集的嵌套代理，事件带 `parent_thread_id` /
     `depth` / `agent_path`，能还原"谁在哪个分支上干活"。
