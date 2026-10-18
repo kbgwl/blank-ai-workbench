@@ -653,6 +653,12 @@ export function cancelTask(taskId: string): Promise<unknown> {
   return request<unknown>(`${api}/tasks/${taskId}/cancel`, { method: "POST" });
 }
 
+/** DELETE /tasks/{id}：连事件、运行记录、检查点、改动记录一起删，不可恢复。
+ *  运行中的任务后端会拒绝（409），前端先取消再删。 */
+export function deleteTask(taskId: string): Promise<void> {
+  return request<void>(`${api}/tasks/${taskId}`, { method: "DELETE" });
+}
+
 /** POST /tasks/{id}/steer：运行中插话，入队后从下一次模型调用开始生效。
  *  只改方向，不撤回已经执行的动作——所以这里只返回排队结果，不假装任务已改变。 */
 export function steerTask(taskId: string, message: string): Promise<{ queued: boolean; queuedAt: number | null }> {

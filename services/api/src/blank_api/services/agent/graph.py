@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -50,7 +51,12 @@ SYSTEM_PROMPT = (
     "3. 修改文件必须使用 apply_patch，验证必须使用 run_tests。\n"
     "4. 工具按需加载：git、联网、记忆检索、子代理这些能力不在默认列表里，"
     "需要时先用 tool_search 检索（例如「提交」「查资料」「并行」），命中后本轮即可直接调用。\n"
-    "5. 不要重复调用已经执行过的工具，全部完成后用一段中文总结。"
+    "5. 不要重复调用已经执行过的工具，全部完成后用一段中文总结。\n"
+    # 少了这条，用户打一句「你好」也会被当成开发任务去勘察整个仓库，
+    # 最后停在审批或提问上，看起来就像「输入之后没有反应」。
+    "6. 先判断这件事需不需要动工作区：闲聊、打招呼、概念提问、解释某段代码这类，"
+    "直接用中文回答即可，不要调用任何工具，也不要给出执行计划；"
+    "只有确实要读文件、改文件或跑命令时才进入工具流程。"
 )
 
 
@@ -74,6 +80,8 @@ class AgentState(TypedDict, total=False):
     budget_exhausted: bool
     # update_plan 写回的结构化计划（plan 保留为步骤文本，向后兼容）。
     plan_steps: list[dict]
+    # 模型判定这次不用动工作区，直接回答了（闲聊/概念提问），执行回合整段跳过。
+    direct_answer: bool
 
 
 async def _never_cancelled() -> bool:
@@ -336,23 +344,60 @@ def _insert_handoff(messages: list[dict], block: str) -> list[dict]:
     return [entry, *messages]
 
 
+# 计划行必须真的带编号或项目符号。原来的写法只要一行超过 3 个字就算一步，
+# 于是模型回一句「你好！我是…可以帮你做这些事：」也会被判成"有执行计划"，
+# 白白多跑一轮执行，最后交出来的是元描述而不是答案。
+_PLAN_MARKER = re.compile(r"^\s*(?:[-*•]|\d+[.、)])\s*")
+
+
 def _parse_plan(text: str) -> list[str]:
     steps: list[str] = []
     for line in (text or "").splitlines():
-        cleaned = line.strip(" \t-*•0123456789.").strip()
+        stripped = line.strip()
+        marker = _PLAN_MARKER.match(stripped)
+        if not marker:
+            continue
+        cleaned = stripped[marker.end() :].strip()
         if len(cleaned) > 3:
             steps.append(cleaned[:200])
     return steps[:12]
 
 
 def _extract_json(text: str) -> dict:
-    start, end = (text or "").find("{"), (text or "").rfind("}")
-    if start == -1 or end <= start:
+    """从模型输出里捞出第一个能解析的 JSON 对象。
+
+    不能直接 find("{")..rfind("}")：模型常把 JSON 混在解释文字或 ```json 围栏里，
+    中间夹着别的花括号时整段 json.loads 会失败，于是被判成"模型未返回 JSON"。
+    """
+    body = (text or "").strip()
+    if not body:
         raise ValueError("模型未返回 JSON")
-    parsed = json.loads(text[start : end + 1])
-    if not isinstance(parsed, dict):
-        raise ValueError("模型返回的 JSON 不是对象")
-    return parsed
+    try:
+        parsed = json.loads(body)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    depth, start = 0, -1
+    for index, char in enumerate(body):
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}":
+            if depth == 0:
+                continue
+            depth -= 1
+            if depth == 0 and start >= 0:
+                try:
+                    parsed = json.loads(body[start : index + 1])
+                except json.JSONDecodeError:
+                    start = -1
+                    continue
+                if isinstance(parsed, dict):
+                    return parsed
+                start = -1
+    raise ValueError("模型未返回 JSON")
 
 
 def tool_call_name(call: dict) -> str:
@@ -387,7 +432,9 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
     await session.recorder.add("node.started", node, {"task_id": state.get("task_id", "")})
     result = await session.ask(
         state,
-        "请先了解项目与目标，输出编号执行计划（3-6 步）。需要查看文件时直接调用工具。",
+        "请先判断这个请求要不要动工作区：\n"
+        "- 不需要（闲聊、打招呼、概念提问、解释已有代码）：不要给计划、不要调用工具，直接输出中文回答。\n"
+        "- 需要：先了解项目与目标，输出编号执行计划（3-6 步）。需要查看文件时直接调用工具。",
         node,
     )
     plan = _parse_plan(result["text"])
@@ -398,6 +445,8 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
         "usage": merge_usage(state.get("usage") or {}, result["usage"]),
         "pending": result["tool_calls"],
         "status": "running",
+        # 既没计划也没工具调用 = 模型选择了直接回答，别再拉它进执行回合
+        "direct_answer": not plan and not result["tool_calls"],
     }
 
 
@@ -745,10 +794,11 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 )
 
         # update_plan：计划是可更新对象，工具结果直接落回图状态
+        # 注意别把外层计数器 steps（int）覆盖掉，否则后面算预算时 int - list 直接崩
         if name == "update_plan" and payload.get("ok"):
-            steps = (payload.get("data") or {}).get("steps")
-            if isinstance(steps, list) and steps:
-                plan_update = steps
+            plan_steps = (payload.get("data") or {}).get("steps")
+            if isinstance(plan_steps, list) and plan_steps:
+                plan_update = plan_steps
         await session.recorder.add(
             "tool.completed",
             node,
@@ -850,10 +900,43 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     }
 
 
+# 会改动工作区的工具。校验只对「改过东西」的任务有意义，
+# 问一句「你好」也去跑 pytest 的话，沙箱不可用时任务会被判成失败——
+# 用户看到的就是「输入了没反应 / 执行失败」，而实际上模型已经正常回复了。
+MUTATING_TOOLS = frozenset({"apply_patch", "write_file", "create_file", "delete_file", "move_file"})
+
+
+def _changed_paths(results: list[dict]) -> list[str]:
+    paths: list[str] = []
+    for item in results:
+        if not item.get("ok"):
+            continue
+        data = item.get("data") or {}
+        path = data.get("path")
+        if path and (data.get("change_type") or item.get("tool") in MUTATING_TOOLS):
+            paths.append(str(path))
+    return paths
+
+
 async def run_validation_node(state: AgentState, session: AgentSession) -> AgentState:
     node = "run_validation"
     await session.recorder.add("node.started", node, {})
-    executed = [item for item in state.get("tool_results") or [] if item.get("tool") == "run_tests"]
+    results = state.get("tool_results") or []
+    executed = [item for item in results if item.get("tool") == "run_tests"]
+    changed = _changed_paths(results)
+    if not executed and not changed:
+        # 纯问答/纯排查：没有可校验的产物，直接放行，不要凭空造一条失败
+        validation = {
+            "command": "",
+            "passed": True,
+            "status": "skipped",
+            "exit_code": None,
+            "summary": {},
+            "output_tail": "",
+            "skipped_reason": "本次没有改动任何文件，无需执行测试",
+        }
+        await session.recorder.add("validation.completed", node, validation)
+        return {"validation": validation}
     if executed:
         last = executed[-1]
         payload = {
@@ -925,11 +1008,41 @@ async def review_result_node(state: AgentState, session: AgentSession) -> AgentS
         return {"review": {"approved": False, "findings": ["审查模型未返回可解析结果"], "summary": ""}, "status": "running"}
 
 
+def _last_assistant_text(messages: list[dict]) -> str:
+    """取最后一条模型回复的正文。没有验收条件时这就是任务交付内容本身，
+    否则界面上只会剩一句「任务执行完成」，看起来跟没回复一样。"""
+    for item in reversed(messages or []):
+        if item.get("role") != "assistant":
+            continue
+        content = item.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        if isinstance(content, list):
+            text = "".join(
+                str(part.get("text") or "")
+                for part in content
+                if isinstance(part, dict) and part.get("type") in (None, "text")
+            ).strip()
+            if text:
+                return text
+    return ""
+
+
 async def summarize_result_node(state: AgentState, session: AgentSession) -> AgentState:
     node = "summarize_result"
     await session.recorder.add("node.started", node, {})
     results: list[dict] = []
-    summary = ""
+    summary = _last_assistant_text(state.get("messages") or [])
+    if state.get("direct_answer"):
+        # 模型已经直接答完了。再拉它去"评估验收条件"，它只会把答案改写成一段
+        # 「我做了哪些判断」的元描述，用户看到的就不再是答案本身。
+        return {
+            "summary": summary or "任务执行完成",
+            "acceptance_results": [
+                {"criterion": item, "covered": False, "evidence": "纯问答任务，未涉及工作区操作"}
+                for item in session.acceptance_criteria
+            ],
+        }
     if session.acceptance_criteria:
         prompt = (
             "请逐项判断验收条件是否已由本次工具执行结果验证，只输出 JSON："
@@ -970,6 +1083,12 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
     return {"summary": summary or "任务执行完成", "acceptance_results": results}
 
 
+def route_after_plan(state: AgentState, session: AgentSession) -> str:
+    if state.get("direct_answer"):
+        return "summarize_result"
+    return "execute_action"
+
+
 def route_after_act(state: AgentState, session: AgentSession) -> str:
     if state.get("status") in ("cancelled", "paused") or state.get("error"):
         return "finish"
@@ -983,6 +1102,10 @@ def route_after_validation(state: AgentState, session: AgentSession) -> str:
     # 预算耗尽后不可能再修复，必须直接进审查，否则会在 validation ↔ execute 之间空转到递归上限。
     if state.get("budget_exhausted"):
         return "review_result"
+    # 只读任务（问答、排查、看代码）没有交付物可审，直接总结；
+    # 硬拉模型去"审查"只会拿到一段散文，被判成不可解析，然后白白修复三轮。
+    if validation.get("status") == "skipped":
+        return "summarize_result"
     if validation.get("status") in ("failed", "timeout") and int(
         state.get("repair_rounds") or 0
     ) <= MAX_REPAIR_ROUNDS:
@@ -1008,7 +1131,11 @@ def build_agent_graph(session: AgentSession, checkpointer: BaseCheckpointSaver |
     builder.add_node("review_result", partial(review_result_node, session=session))
     builder.add_node("summarize_result", partial(summarize_result_node, session=session))
     builder.add_edge(START, "create_plan")
-    builder.add_edge("create_plan", "execute_action")
+    builder.add_conditional_edges(
+        "create_plan",
+        lambda state: route_after_plan(state, session),
+        {"execute_action": "execute_action", "summarize_result": "summarize_result"},
+    )
     builder.add_conditional_edges(
         "execute_action",
         lambda state: route_after_act(state, session),
@@ -1021,7 +1148,11 @@ def build_agent_graph(session: AgentSession, checkpointer: BaseCheckpointSaver |
     builder.add_conditional_edges(
         "run_validation",
         lambda state: route_after_validation(state, session),
-        {"execute_action": "execute_action", "review_result": "review_result"},
+        {
+            "execute_action": "execute_action",
+            "review_result": "review_result",
+            "summarize_result": "summarize_result",
+        },
     )
     builder.add_conditional_edges(
         "review_result",

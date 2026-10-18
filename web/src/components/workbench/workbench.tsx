@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   answerTask,
   cancelTask,
+  deleteTask,
   createTask,
   decideApproval,
   errorMessage,
@@ -71,6 +72,7 @@ export function Workbench() {
   const [notice, setNotice] = useState<string | null>(null);
   const [focusPath, setFocusPath] = useState<string | null>(null);
   const [approvalKey, setApprovalKey] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const composer = useRef<HTMLTextAreaElement | null>(null);
   const detailSeq = useRef(0);
 
@@ -144,6 +146,11 @@ export function Workbench() {
   }, [providers, task]);
 
   const blocks = useMemo(() => buildBlocks(events), [events]);
+  // 结果块本身就会展示 summary；再补一张卡就重复了，所以只在没展示过时才兜底。
+  const summaryShown = useMemo(
+    () => blocks.some((block) => block.kind === "result" && Boolean(block.summary)),
+    [blocks],
+  );
   const filteredTasks = useMemo(() => {
     const list = tasks ?? [];
     const keyword = query.trim().toLowerCase();
@@ -275,6 +282,33 @@ export function Workbench() {
     composer.current?.focus();
   }, []);
 
+  /** 删除会话：事件、改动、检查点一起删，不可恢复，所以先确认一次。 */
+  const onDelete = useCallback(
+    async (item: Task) => {
+      if (!window.confirm(`删除「${item.title}」？\n这条会话的事件、改动记录和检查点会一起删掉，不能恢复。`)) return;
+      setDeleting(item.id);
+      setNotice(null);
+      try {
+        await deleteTask(item.id);
+        const rest = (tasks ?? []).filter((row) => row.id !== item.id);
+        setTasks(rest);
+        if (selectedId === item.id) {
+          const next = rest[0]?.id ?? null;
+          setSelectedId(next);
+          if (!next) {
+            setTask(null);
+            setEvidence(null);
+          }
+        }
+      } catch (error: unknown) {
+        setNotice(errorMessage(error));
+      } finally {
+        setDeleting(null);
+      }
+    },
+    [selectedId, tasks],
+  );
+
   const hasNoWorkspace = projects.length === 0;
 
   return (
@@ -330,16 +364,32 @@ export function Workbench() {
           {filteredTasks.map((item) => {
             const active = item.id === selectedId;
             return (
-              <button
+              <div
                 key={item.id}
-                type="button"
-                onClick={() => setSelectedId(item.id)}
-                title={item.title}
-                className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] ${active ? "bg-surface-3 font-semibold text-text" : "text-muted hover:bg-surface-3 hover:text-text"}`}
+                className={`group flex w-full items-center gap-1 rounded-md pr-1 ${active ? "bg-surface-3" : "hover:bg-surface-3"}`}
               >
-                <span className="min-w-0 flex-1 truncate">{item.title}</span>
-                <Dot status={item.status} />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(item.id)}
+                  title={item.title}
+                  className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] ${active ? "font-semibold text-text" : "text-muted group-hover:text-text"}`}
+                >
+                  <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                  <Dot status={item.status} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onDelete(item)}
+                  disabled={deleting === item.id}
+                  title="删除这条会话"
+                  aria-label={`删除 ${item.title}`}
+                  className={`grid size-5 shrink-0 place-items-center rounded text-faint transition-opacity hover:bg-danger/10 hover:text-danger ${active ? "opacity-70" : "opacity-0 group-hover:opacity-100"}`}
+                >
+                  <svg viewBox="0 0 24 24" className="size-3" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13M10 11v6M14 11v6" />
+                  </svg>
+                </button>
+              </div>
             );
           })}
         </div>
@@ -390,6 +440,13 @@ export function Workbench() {
               </div>
             )}
 
+            {task?.status === "failed" && task.failureReason && (
+              <div className="mb-4 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-[12px] leading-relaxed text-danger">
+                <span className="font-semibold">执行失败</span>
+                <span className="ml-1.5">{task.failureReason}</span>
+              </div>
+            )}
+
             {!task ? (
               <div className="flex min-h-[44vh] flex-col items-center justify-center text-center">
                 <div className="grid size-10 place-items-center rounded-xl bg-brand/10">
@@ -426,6 +483,13 @@ export function Workbench() {
                           onAnswer={(answers, target) => void onAnswer(answers, target)}
                         />
                       ))}
+                    </div>
+                  )}
+                  {/* 最终回复兜底。事件流里没有结果块时，不渲染的话任务跑完只剩一串事件，
+                      看着就像没回应。 */}
+                  {task.resultSummary && !summaryShown && (
+                    <div className="mt-3 rounded-[10px] border border-line bg-surface px-3.5 py-3 text-[13.5px] leading-relaxed whitespace-pre-wrap">
+                      {task.resultSummary}
                     </div>
                   )}
                 </Message>

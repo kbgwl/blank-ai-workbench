@@ -50,7 +50,7 @@ export function DiffPanel({ changes, focusPath }: { changes: ChangeItem[]; focus
   }, [focusPath, files]);
 
   if (files.length === 0) {
-    return <StateLine>后端未返回 changes（任务尚未修改文件，或证据包缺字段）</StateLine>;
+    return <StateLine>这次没有文件改动</StateLine>;
   }
 
   const allOpen = files.every((file) => expanded.includes(file.path));

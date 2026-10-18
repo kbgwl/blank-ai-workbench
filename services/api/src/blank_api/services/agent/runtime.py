@@ -285,13 +285,26 @@ class AgentRuntime:
         scope = self._prepare(request, thread_id)
         await self._rehydrate(request.task_id, scope.session.permissions)
         recorder, session = scope.recorder, scope.session
-        snapshot = SnapshotStore().capture(
-            str(session.context.root), reason="任务执行前快照", task_id=request.task_id
-        )
+        # 快照是安全网，不是前置条件：大仓库复制不动时记一条事件继续跑，
+        # 不能让「拍不了快照」把整个任务判死（单文件回滚另有写入前备份兜底）。
+        try:
+            snapshot = SnapshotStore().capture(
+                str(session.context.root), reason="任务执行前快照", task_id=request.task_id
+            )
+        except Exception as error:  # noqa: BLE001 - 任何快照问题都不该中断任务
+            snapshot = {"id": "", "files": [], "copied": False, "skipped_reason": str(error)}
+            await recorder.add("snapshot.failed", "receive_task", {"reason": str(error)})
         await recorder.add(
             "snapshot.created",
             "receive_task",
-            {"snapshot_id": snapshot["id"], "files": snapshot["files"]},
+            {
+                "snapshot_id": snapshot["id"],
+                # 大仓库有上万条，事件里只放个摘要，完整清单在 meta.json
+                "files": snapshot["files"][:200],
+                "file_count": len(snapshot["files"]),
+                "copied": snapshot.get("copied", True),
+                "skipped_reason": snapshot.get("skipped_reason", ""),
+            },
         )
         if await session.is_cancelled():
             await recorder.add("task.cancelled", "receive_task", {"reason": "任务已取消，未执行任何工具"})
@@ -579,7 +592,8 @@ def resolve_status(result: dict) -> str:
     if result.get("status") in ("cancelled", "paused", "failed"):
         return str(result["status"])
     validation = result.get("validation") or {}
-    if validation and validation.get("status") != "ok":
+    # skipped = 本次没改文件，校验本就不适用（纯问答），不算失败
+    if validation and validation.get("status") not in ("ok", "skipped"):
         return "failed"
     if validation.get("exit_code") not in (None, 0):
         return "failed"

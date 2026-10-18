@@ -36,3 +36,13 @@ desktop/build/runtime/
 
 # electron-builder 产物（含改名隔离用的 dist-prev 等）
 desktop/dist*/
+
+# 构建时因 safe-delete 拦截而改名隔离的中间产物
+web/.next-old*/
+web/out-old*/
+
+# 运行时写入前备份（与工作区绑定，不入库）
+.blank_backups/
+
+# 打包时从 site-packages 剔出来的空白副本（safe-delete 规避）
+desktop/build/_removed/

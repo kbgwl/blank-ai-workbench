@@ -145,10 +145,16 @@ function planItems(event: AgentEvent): { items: string[]; text: string } {
     })
     .filter((item) => item.trim())
     .map((item) => item.replace(/^\d+[.、)]\s*/, "").trim());
-  const fallback = textOf(event.payload, "text", "summary", "message", "content")
-    .split("\n")
-    .map((line) => line.replace(/^\s*[-*\d.、)]+\s*/, "").trim())
-    .filter((line) => line.length > 2);
+  // 只有字段整个缺失（老事件）才拿正文兜底。
+  // 后端明确给了空计划就代表「这次不需要计划」——再拿正文去拆，
+  // 一句「你好！我可以帮你…」会被渲染成一张假的执行计划。
+  const declared = ["plan", "plan_steps", "steps", "items", "tasks"].some((key) => key in (event.payload ?? {}));
+  const fallback = declared
+    ? []
+    : textOf(event.payload, "text", "summary", "message", "content")
+        .split("\n")
+        .map((line) => line.replace(/^\s*[-*\d.、)]+\s*/, "").trim())
+        .filter((line) => line.length > 2);
   return { items: items.length ? items : fallback, text: textOf(event.payload, "text", "summary") };
 }
 
@@ -301,8 +307,11 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
       rawType.startsWith("result") || rawType.startsWith("task.completed") || rawType.startsWith("task.failed") || rawType.startsWith("task.cancelled") || rawType.startsWith("task.canceled") || rawType.startsWith("error");
 
     if (rawType.startsWith("plan")) {
-      const { items } = planItems(event);
-      push({ kind: "plan", key, seq: event.seq, node: event.node, at: event.createdAt, items, text: textOf(event.payload, "text", "summary") });
+      const { items, text } = planItems(event);
+      // 这次没有计划（直接回答）：不建卡，答案由最终结果块呈现。
+      // 空卡片会渲染成「暂无计划条目」，纯噪音。
+      if (items.length === 0) return;
+      push({ kind: "plan", key, seq: event.seq, node: event.node, at: event.createdAt, items, text });
       return;
     }
 

@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     expose_workspace_paths: bool = False
     # Fernet 主密钥（urlsafe base64）。留空则自动写入 data/.blank_secret.key
     secret_key: str = ""
+    # 主密钥落盘位置。桌面壳会指到用户数据目录（与数据库同一处），
+    # 避免升级换包后主密钥跟着换、已存的供应商 Key 全部解不开。
+    secret_key_file: str = ""
     model_timeout_seconds: float = 60.0
 
 

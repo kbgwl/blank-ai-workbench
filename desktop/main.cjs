@@ -248,6 +248,9 @@ function resolveBackendCommand() {
   if (app.isPackaged) {
     mkdirSync(DATA_DIR, { recursive: true });
     env.BLANK_DATABASE_URL ??= `sqlite+aiosqlite:///${path.join(DATA_DIR, "blank.db").replace(/\\/g, "/")}`;
+    // 主密钥必须跟数据库同寿。留在包内 data/ 的话，升级换包就换了一把钥匙，
+    // 之前存进库里的供应商 Key 全部解不开（secret_undecryptable）。
+    env.BLANK_SECRET_KEY_FILE ??= path.join(DATA_DIR, ".blank_secret.key");
   }
 
   const uvicornArgs = ["-m", "uvicorn", "blank_api.app:app", "--host", "127.0.0.1", "--port", PORT];

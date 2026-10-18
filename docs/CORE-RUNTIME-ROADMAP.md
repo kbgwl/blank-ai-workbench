@@ -366,3 +366,74 @@ Electron 在 Windows 是 GUI 子系统程序，由父进程拉起时没有控制
 
 - `next build` 12 页通过，`tsc --noEmit` 干净。
 - 包内实测：三栏工作台、可展开工具卡、Diff、审批卡、设置页四张卡都在浅色下正常。
+
+## 0.4.4 · 「输入以后没有任何返回」的五层原因（2026-10-18）
+
+用户反馈：会话删不掉；模型健康检查正常，但输入一句话之后界面没有任何返回。
+「没有返回」不是单一 bug，是五处问题叠在一起，任何一处都足以让界面看起来死掉。
+按发现顺序记下来，因为它们分别属于不同的层，以后不会同时再犯。
+
+### 1. 静默失败：异常只改了状态，没写事件
+
+`_execute_claimed_run()` 的 `except Exception:` 只把 `agent_runs.status` 置 `failed`，
+既不写事件也不动 `tasks.status`。于是任务在库里是 failed，界面上永远停在「排队中」。
+改为 `_record_run_failure()`：写 `task.failed`（含 `error / reason / error_type / traceback`），
+同时把任务状态一起落下来。同一个 `task_id + run_id` 已有 `task.failed` 就不重复写
+（runtime 正常收尾时自己会写一条）。
+
+### 2. 快照把任务判死
+
+第一层修好后终于能看见原因了：`task.failed` 的 payload 是 `shutil.Error`。
+工作区指到本仓库，`desktop/dist-*` 里躺着整份 Python 运行时，几万个文件撞上 Windows
+`MAX_PATH`，`SnapshotStore.capture()` 的 `copytree` 抛错，任务就被判死。
+整树复制本来就不该是启动任务的前置条件：加 `MAX_SNAPSHOT_FILES/MAX_SNAPSHOT_BYTES`
+阈值与 `dist-*/build-*` 前缀忽略，超限或复制失败返回 `copied:false + skipped_reason`，
+`runtime.run()` 也整段 try/except。单文件的回滚另由写入前备份保证。
+
+顺带修掉：跳过快照复制时 `<id>/` 目录压根没建，写 `meta.json` 直接 `ENOENT`，
+于是每次任务都多一条假的 `snapshot.failed`。
+
+### 3. 真正的崩溃：`steps` 被覆盖成列表
+
+`TypeError: unsupported operand type(s) for -: 'int' and 'list'`。
+`execute_action_node` 里 `steps` 是步数计数器（int），而 `update_plan` 工具的结果分支
+又写了一次 `steps = payload["data"]["steps"]`（列表）—— 变量遮蔽。
+于是模型只要调用一次 `update_plan`，后面算预算 `session.max_steps - steps` 立刻崩，
+整个 run 死掉。改名为 `plan_steps`。
+
+### 4. 纯问答也被拉去跑测试
+
+校验节点无条件执行 `run_tests`，而桌面壳默认 `BLANK_SANDBOX_ENABLED=false`，
+`run_tests` 返回 `SandboxUnavailable`，任务被判 `failed`，理由写着「测试未能执行」——
+用户只是打了句「你好」。改成：本次没有改动任何文件就不校验（`status: "skipped"`），
+`resolve_status()` 把 `skipped` 与 `ok` 同等对待，审查节点也一并跳过
+（只读任务没有交付物可审，硬审只会拿到一段散文，然后白修三轮）。
+
+### 5. 答案根本没送到界面上
+
+两层：
+- 后端 `summarize_result_node` 在没有验收条件时，`summary` 固定成「任务执行完成」，
+  模型真正的回答被丢掉；`_extract_json` 又是 `find("{")..rfind("}")`，
+  模型把 JSON 混在解释文字里就解析失败。改成先取最后一条 assistant 正文兜底，
+  JSON 提取改成逐个平衡括号尝试。
+- 前端 `workbench.tsx` 引用了 `task.resultSummary`，却从来没有渲染它 ——
+  所以哪怕后端算出了答复，中间那栏也只剩一串事件。
+
+### 另外两处顺手改的
+
+- **系统提示不分流**：不管输入是什么都按「在仓库里干活」处理。补一条规则：
+  闲聊/概念提问直接回答、不给计划、不调用工具。
+- **`_parse_plan` 太宽**：只要一行超过 3 个字就算一步，于是「你好！我是…可以帮你做这些事：」
+  也被判成执行计划。改成只认编号或项目符号。
+- **主密钥跟着包走**：数据库在用户数据目录、`.blank_secret.key` 却在包内 `data/`，
+  换包就换钥匙，已存的供应商 Key 全部 `secret_undecryptable`。
+  新增 `BLANK_SECRET_KEY_FILE`，桌面壳指到 `%APPDATA%/blank-ai-workbench-desktop/`，
+  并做一次从老位置的搬迁（老用户重装后不用重录 Key）。
+
+### 验证
+
+- 纯问答「你好」：`task.created → snapshot.created → task.started → plan.created → task.completed`，
+  0 步工具调用，`succeeded`，`result_summary` 是模型真实回答。
+- 带验收条件的任务：`task.failed` 只有一条，失败原因可读。
+- `DELETE /tasks/{id}` 返回 204，列表同步清空。
+- 后端 `pytest` 全绿（见提交记录），前端 `tsc --noEmit` 干净。

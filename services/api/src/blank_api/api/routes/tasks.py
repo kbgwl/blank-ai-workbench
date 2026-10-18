@@ -1,13 +1,15 @@
 import asyncio
 import json
+import logging
 import os
 import time
+import traceback
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from blank_api.api.auth import require_token
 from blank_api.api.errors import ApiError
@@ -15,7 +17,9 @@ from blank_api.api.routes.projects import load_project
 from blank_api.db import get_session_factory
 from blank_api.deps import DbSession
 from blank_api.models.model_provider import ModelProvider
-from blank_api.models.task import AgentEvent, Task, ToolCall
+from blank_api.models.checkpoint import AgentCheckpoint, AgentCheckpointWrite
+from blank_api.models.model_provider import ModelUsage
+from blank_api.models.task import AgentEvent, FileChange, Task, ToolCall
 from blank_api.models.run import AgentRun
 from blank_api.models.skill import Skill
 from blank_api.schemas.task import (
@@ -40,6 +44,7 @@ from blank_api.services.models.routing import FallbackAdapter
 from blank_api.services.sandbox import SnapshotStore
 
 router = APIRouter(tags=["tasks"], dependencies=[Depends(require_token)])
+log = logging.getLogger(__name__)
 
 
 def _factory_from(request: Request | None):
@@ -113,6 +118,35 @@ async def list_tasks(
 @router.get("/tasks/{task_id}", response_model=TaskOut)
 async def get_task(task_id: str, db: DbSession) -> TaskOut:
     return TaskOut.model_validate(await load_task(db, task_id))
+
+
+@router.delete("/tasks/{task_id}", status_code=204)
+async def delete_task(task_id: str, db: DbSession) -> Response:
+    """删除一条会话（任务）及其事件、运行记录、检查点、工具调用与改动记录。
+
+    运行中的会话不直接删：先取消，避免后台还在往已删除的任务上写事件。
+    """
+    task = await load_task(db, task_id)
+    # 只拦真正在跑的：历史遗留的 queued（比如旧版崩在启动阶段）要允许删掉，
+    # 否则列表里永远留着删不掉的僵尸会话。
+    if task.status == "running":
+        raise ApiError(
+            code="task_running", message="任务正在执行中，先取消再删除", status_code=409
+        )
+    threads = (
+        await db.execute(select(AgentCheckpoint.thread_id).where(AgentCheckpoint.task_id == task_id))
+    ).scalars().all()
+    if threads:
+        await db.execute(delete(AgentCheckpointWrite).where(AgentCheckpointWrite.thread_id.in_(threads)))
+    await db.execute(delete(AgentCheckpoint).where(AgentCheckpoint.task_id == task_id))
+    await db.execute(delete(AgentEvent).where(AgentEvent.task_id == task_id))
+    await db.execute(delete(ToolCall).where(ToolCall.task_id == task_id))
+    await db.execute(delete(FileChange).where(FileChange.task_id == task_id))
+    await db.execute(delete(AgentRun).where(AgentRun.task_id == task_id))
+    await db.execute(delete(ModelUsage).where(ModelUsage.task_id == task_id))
+    await db.delete(task)
+    await db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/tasks/{task_id}/run")
@@ -247,6 +281,51 @@ async def run_task(task_id: str, payload: TaskRunIn, request: Request, db: DbSes
         return {"task": TaskOut.model_validate(finished).model_dump(), "evidence": evidence}
 
 
+async def _record_run_failure(task_id: str, run_id: str, error: BaseException) -> None:
+    """把「跑不起来」写进事件流和任务状态。
+
+    之前这里只把 agent_runs 标成 failed，任务自己停在 queued、事件流里一条都没有——
+    界面上就是「输入之后没有任何返回」，用户既看不到原因也点不动。凡是异常都必须
+    变成一条 task.failed 事件 + failed 状态。
+    """
+    message = str(error) or error.__class__.__name__
+    detail = "".join(traceback.format_exception(type(error), error, error.__traceback__))[-4000:]
+    try:
+        # runtime 正常收尾时自己就会写 task.failed（带 reason），别写第二条。
+        async with get_session_factory()() as session:
+            already = (
+                await session.execute(
+                    select(AgentEvent.id).where(
+                        AgentEvent.task_id == task_id,
+                        AgentEvent.run_id == run_id,
+                        AgentEvent.type == "task.failed",
+                    )
+                )
+            ).first()
+        if already is None:
+            await EventRecorder(get_session_factory(), task_id, run_id=run_id).add(
+                "task.failed",
+                "error",
+                {
+                    "error": message,
+                    "reason": message,
+                    "error_type": error.__class__.__name__,
+                    "traceback": detail,
+                },
+            )
+    except Exception:  # 记事件本身失败也不能把进程带崩
+        log.exception("写入 task.failed 事件失败 task=%s", task_id)
+    try:
+        async with get_session_factory()() as session:
+            task = await session.get(Task, task_id)
+            if task is not None and task.status not in ("cancelled", "succeeded"):
+                task.status = "failed"
+                task.failure_reason = message[:2000]
+                await session.commit()
+    except Exception:
+        log.exception("更新任务失败状态出错 task=%s", task_id)
+
+
 async def _execute_claimed_run(run_id: str, worker_id: str, run_request: RunRequest) -> None:
     """Run one claimed job and keep its database lease alive while it works."""
     async def heartbeat() -> None:
@@ -263,8 +342,10 @@ async def _execute_claimed_run(run_id: str, worker_id: str, run_request: RunRequ
     except asyncio.CancelledError:
         # Keep the row running so startup recovery can safely reclaim it.
         raise
-    except Exception:
+    except Exception as error:
         status = "failed"
+        log.exception("任务执行失败 task=%s run=%s", run_request.task_id, run_id)
+        await _record_run_failure(run_request.task_id, run_id, error)
     finally:
         lease_task.cancel()
         await asyncio.gather(lease_task, return_exceptions=True)
