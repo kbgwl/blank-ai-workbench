@@ -114,7 +114,7 @@ export function StreamDemo({ providers, onFinished }: Props) {
         placeholder="输入一段发给模型的文本"
       />
 
-      <div className="min-h-[9rem] rounded-lg border border-line bg-black/30 p-3">
+      <div className="min-h-[9rem] rounded-lg border border-line bg-surface-2 p-3">
         {status === "idle" && !text && !notice ? (
           <div className="flex items-center gap-2 font-mono text-[11px] text-faint">
             <span className="text-accent">$</span>

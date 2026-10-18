@@ -22,7 +22,7 @@ function JsonBlock({ value }: { value: Record<string, unknown> }) {
   }
   const text = JSON.stringify(value, null, 2);
   return (
-    <pre className="max-h-40 overflow-auto rounded-md border border-line bg-black/30 px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre text-muted">
+    <pre className="max-h-40 overflow-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre text-text/80">
       {text}
     </pre>
   );
@@ -31,7 +31,7 @@ function JsonBlock({ value }: { value: Record<string, unknown> }) {
 function OutputBlock({ text }: { text: string }) {
   if (!text) return <p className="font-mono text-[11px] text-faint">暂无输出</p>;
   return (
-    <pre className="max-h-44 overflow-auto rounded-md border border-line bg-black/30 px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-muted">
+    <pre className="max-h-44 overflow-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-text/80">
       {text}
     </pre>
   );
@@ -122,7 +122,7 @@ function ToolCard({ block }: { block: Extract<Block, { kind: "tool" }> }) {
       trailing={
         <span className="flex shrink-0 items-center gap-2">
           {block.risk && (
-            <span className="rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-muted">
+            <span className="rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-text/80">
               {riskLabel(block.risk)}
             </span>
           )}
@@ -147,7 +147,7 @@ function ToolCard({ block }: { block: Extract<Block, { kind: "tool" }> }) {
         </button>
       </div>
       {open ? <JsonBlock value={block.args} /> : (
-        <p className="truncate font-mono text-[11px] text-muted">
+        <p className="truncate font-mono text-[11px] text-text/80">
           {Object.keys(block.args).length === 0
             ? "无参数"
             : clip(JSON.stringify(block.args).replace(/[{}"]/g, "").slice(0, 120), 120)}
@@ -172,7 +172,7 @@ function TerminalBlockView({ block }: { block: Extract<Block, { kind: "terminal"
   return (
     <CardShell
       block={block}
-      accent="border-line-strong bg-black/45"
+      accent="border-line-strong bg-surface-2"
       icon={
         <span className="text-accent">
           <BlockIcon kind="terminal" />
@@ -240,7 +240,7 @@ function QuestionCard({
       }
       title={block.questions.length > 1 ? `需要你确认 ${block.questions.length} 件事` : "需要你确认"}
       trailing={
-        <span className="shrink-0 rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-muted">
+        <span className="shrink-0 rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-text/80">
           {answered ? "已回答" : "等待回答"}
         </span>
       }
@@ -283,7 +283,7 @@ function QuestionCard({
         </div>
       ))}
       {answered ? (
-        <p className="text-[12px] text-muted">已按你的回答继续执行{block.answers ? `：${clip(block.answers, 120)}` : ""}</p>
+        <p className="text-[12px] text-text/80">已按你的回答继续执行{block.answers ? `：${clip(block.answers, 120)}` : ""}</p>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -331,13 +331,13 @@ function ApprovalCard({
       }
       title={`审批请求 · ${block.tool}`}
       trailing={
-        <span className="shrink-0 rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-muted">
+        <span className="shrink-0 rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-text/80">
           {block.state === "pending" ? "待审批" : block.state === "granted" ? "已批准" : "已拒绝"}
         </span>
       }
     >
       {block.risk && <p className="text-[12px] text-warn">{riskLabel(block.risk)}操作，需人工确认后才继续执行</p>}
-      {block.message && <p className="text-[12px] leading-relaxed text-muted">{block.message}</p>}
+      {block.message && <p className="text-[12px] leading-relaxed text-text/80">{block.message}</p>}
       <JsonBlock value={block.args} />
       {decided ? (
         <p className="font-mono text-[11px] text-faint">该请求已处理，不会重复执行。</p>
@@ -397,14 +397,14 @@ function ResultCard({ block }: { block: Extract<Block, { kind: "result" }> }) {
 function ChangeCard({ block, onHighlight }: { block: Extract<Block, { kind: "change" }>; onHighlight: (path: string) => void }) {
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface/50 px-3 py-2">
-      <span className="text-muted">
+      <span className="text-text/80">
         <BlockIcon kind="change" />
       </span>
       <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text/90" title={block.path}>
         {block.path}
       </span>
       {block.changeType && (
-        <span className="shrink-0 rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-muted">
+        <span className="shrink-0 rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-text/80">
           {block.changeType}
         </span>
       )}

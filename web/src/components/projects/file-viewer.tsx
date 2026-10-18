@@ -57,7 +57,7 @@ export function FileViewer({ projectId, workspaceId, entry }: Props) {
 
   const { data } = settled;
   return (
-    <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-black/30">
+    <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-surface-2">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-3 py-2">
         <span className="min-w-0 truncate font-mono text-[11px] text-brand" title={data.path}>
           {clipMiddle(data.path)}

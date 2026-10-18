@@ -351,7 +351,7 @@ function normalizeChanges(container: unknown): ChangeItem[] {
   const nested = (container as Record<string, unknown>)?.changes;
   const scope =
     nested && typeof nested === "object" && !Array.isArray(nested) ? (nested as Record<string, unknown>) : container;
-  const list = arrayOf(scope, "changes", "files", "diffs", "items", "file_changes");
+  const list = arrayOf(scope, "changes", "diffs", "items", "file_changes", "files");
   const result: ChangeItem[] = list
     .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
     .map((item) => ({
@@ -360,6 +360,10 @@ function normalizeChanges(container: unknown): ChangeItem[] {
       changeType: textOf(item, "change_type", "type", "status", "kind"),
     }));
   const merged = textOf(scope, "diff", "full_diff", "patch") || textOf(container, "diff", "full_diff", "patch");
+  // 后端只在 changes 层给整段 diff，items 里只有路径：单文件时直接挂到那一条上。
+  if (merged && result.length === 1 && !result[0].diff) {
+    return [{ ...result[0], diff: merged }];
+  }
   if (merged && result.every((item) => !item.diff)) {
     const parsed = splitUnifiedDiff(merged);
     if (parsed.length > 0) return parsed;
@@ -647,6 +651,16 @@ export function runTask(taskId: string, input: { approveHigh?: boolean } = {}): 
 
 export function cancelTask(taskId: string): Promise<unknown> {
   return request<unknown>(`${api}/tasks/${taskId}/cancel`, { method: "POST" });
+}
+
+/** POST /tasks/{id}/steer：运行中插话，入队后从下一次模型调用开始生效。
+ *  只改方向，不撤回已经执行的动作——所以这里只返回排队结果，不假装任务已改变。 */
+export function steerTask(taskId: string, message: string): Promise<{ queued: boolean; queuedAt: number | null }> {
+  return request<{ queued?: boolean; queued_at?: number }>(`${api}/tasks/${taskId}/steer`, {
+    method: "POST",
+    ...jsonInit,
+    body: JSON.stringify({ message }),
+  }).then((body) => ({ queued: body?.queued !== false, queuedAt: body?.queued_at ?? null }));
 }
 
 /** POST /tasks/{id}/approval：批准或驳回待审批的高风险操作，返回 {task, evidence}。 */

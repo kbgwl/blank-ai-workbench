@@ -216,7 +216,7 @@ export function FilePanel({ project }: { project: Project | null }) {
         ) : "failure" in settled ? (
           <Notice>{settled.failure}</Notice>
         ) : (
-          <div className="overflow-hidden rounded-lg border border-line bg-black/30">
+          <div className="overflow-hidden rounded-lg border border-line bg-surface-2">
             <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
               <span className="min-w-0 truncate font-mono text-[11px] text-brand" title={settled.data.path}>
                 {clip(settled.data.path, 40)}

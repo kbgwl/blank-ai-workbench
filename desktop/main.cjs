@@ -10,7 +10,7 @@
  * 导出，且 sandbox 模式下 preload 只支持 CommonJS。CJS 是这两处都稳的选择。
  */
 const { app, BrowserWindow, dialog, protocol, shell } = require("electron");
-const { appendFileSync, existsSync, mkdirSync } = require("node:fs");
+const { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { readFile, writeFile } = require("node:fs/promises");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
@@ -66,9 +66,36 @@ const DATA_DIR = app.getPath("userData");
 /**
  * 无 GPU 的环境（CI、远程会话、部分虚拟化）里 GPU 进程会反复崩溃，
  * 最终 `GPU process isn't usable. Goodbye.` 直接终止应用。此时改用软件渲染。
- * 正常桌面环境不要开这个开关。
+ *
+ * 默认仍然优先用硬件加速（画 diff / 长列表明显更顺），但会记住上一次启动是否真的
+ * 走到了「窗口就绪」：启动前先写一个 attempt 标记，等窗口 ready-to-show 再改写成 ok。
+ * 如果上一次 attempt 之后没有 ok，说明那次启动是崩在启动阶段的（这类崩溃连日志都
+ * 来不及打），下次自动退到软件渲染。成功一次就复位，不会永久降级。
  */
-if (process.env.BLANK_DISABLE_GPU === "1") {
+const GPU_STATE_FILE = path.join(DATA_DIR, "gpu-state.json");
+
+function readGpuState() {
+  try {
+    return JSON.parse(readFileSync(GPU_STATE_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeGpuState(state) {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(GPU_STATE_FILE, JSON.stringify(state));
+  } catch {
+    /* 状态文件写不了就退回默认行为 */
+  }
+}
+
+const previousGpuState = readGpuState();
+// BLANK_FORCE_GPU=1 可以忽略降级记录、重新试一次硬件加速（换了机器或驱动更新后用）。
+const gpuUnstable = Boolean(previousGpuState && previousGpuState.ok === false) && process.env.BLANK_FORCE_GPU !== "1";
+
+if (process.env.BLANK_DISABLE_GPU === "1" || gpuUnstable) {
   app.disableHardwareAcceleration();
   for (const flag of [
     "disable-gpu",
@@ -79,9 +106,19 @@ if (process.env.BLANK_DISABLE_GPU === "1") {
   ]) {
     app.commandLine.appendSwitch(flag);
   }
-  if (process.env.BLANK_NO_SANDBOX === "1") {
+  if (process.env.BLANK_NO_SANDBOX === "1" || gpuUnstable) {
+    // 实测：这类虚拟化/远程环境里，即使关了 GPU，Chromium 的渲染进程沙箱仍会卡住
+    // （窗口永远不 ready-to-show），必须一起关掉沙箱。
     app.commandLine.appendSwitch("no-sandbox");
   }
+  if (gpuUnstable) {
+    console.log("[desktop] 上次启动没走到窗口就绪，这次改用软件渲染（GPU 自动降级）");
+  }
+}
+
+// 启动前先记「这次要试 GPU」，成功打开窗口后才改写成 ok。
+if (!process.env.BLANK_DISABLE_GPU && !gpuUnstable) {
+  writeGpuState({ ok: false, at: new Date().toISOString(), reason: "starting" });
 }
 
 /**
@@ -341,6 +378,10 @@ function createWindow() {
 
   win.once("ready-to-show", () => {
     console.log("[desktop] 窗口就绪并显示");
+    // 真正走到这里才说明这次启动没崩在 GPU 上，清掉 attempt 标记（下次仍优先硬件加速）。
+    if (process.env.BLANK_DISABLE_GPU !== "1" && !gpuUnstable) {
+      writeGpuState({ ok: true, at: new Date().toISOString(), reason: "ready" });
+    }
     win.show();
   });
   win.on("closed", () => console.log("[desktop] 窗口被关闭"));

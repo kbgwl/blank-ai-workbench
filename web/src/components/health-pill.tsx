@@ -13,7 +13,7 @@ type Health = { status: string; database: string };
  * 下一次轮询就正常）。如果用固定 15 秒间隔，用户每次开应用都会先看到 15 秒的
  * 「后端不可达」——明明一切正常。所以失败后做退避重试，恢复后再回到低频轮询。
  */
-export function HealthPill() {
+export function HealthPill({ compact = false }: { compact?: boolean }) {
   const [health, setHealth] = useState<Health | null>(null);
   const [error, setError] = useState(false);
 
@@ -54,6 +54,15 @@ export function HealthPill() {
       : state === "degraded"
         ? `数据库${health?.database ?? "异常"}`
         : "后端不可达";
+
+  if (compact) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-[10.5px] text-faint">
+        <span className={`size-1.5 rounded-full ${dot}`} />
+        {state === "up" ? "服务正常" : label}
+      </span>
+    );
+  }
 
   return (
     <div className="flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-muted">

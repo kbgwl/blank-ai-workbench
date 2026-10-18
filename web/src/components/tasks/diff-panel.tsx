@@ -109,7 +109,7 @@ export function DiffPanel({ changes, focusPath }: { changes: ChangeItem[]; focus
                   <Notice tone="muted">后端只返回了文件路径，没有 diff 内容</Notice>
                 </div>
               ) : (
-                <div className="max-h-72 overflow-auto border-t border-line bg-black/35 px-2.5 py-2 font-mono text-[11px] leading-relaxed">
+                <div className="max-h-72 overflow-auto border-t border-line bg-surface-2 px-2.5 py-2 font-mono text-[11px] leading-relaxed">
                   {file.lines.map((line, index) => (
                     <div key={index} className={`whitespace-pre-wrap break-words px-1 ${lineTone[line.tone] ?? "text-muted"}`}>
                       {line.text || " "}

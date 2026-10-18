@@ -124,7 +124,7 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
               tone={test.passed === true ? "accent" : test.passed === false ? "danger" : undefined}
             />
             {test.output ? (
-              <details className="group rounded-md border border-line bg-black/30">
+              <details className="group rounded-md border border-line bg-surface-2">
                 <summary className="cursor-pointer list-none px-2.5 py-1.5 font-mono text-[10px] text-faint hover:text-muted">
                   输出片段（{test.output.split("\n").length} 行）
                 </summary>
@@ -153,7 +153,7 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
         <section className="flex flex-col gap-1.5 border-t border-line pt-3">
           <h4 className="font-mono text-[10px] tracking-wide text-faint uppercase">回滚点</h4>
           {snapshots.map((snapshot) => (
-            <div key={snapshot.id} className="flex items-center justify-between gap-2 rounded-md border border-line bg-black/20 px-2.5 py-2">
+            <div key={snapshot.id} className="flex items-center justify-between gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-2">
               <span className="min-w-0 truncate text-[11px] text-muted" title={snapshot.reason}>{snapshot.reason}</span>
               <button type="button" disabled={restoring !== null} onClick={() => void restore(snapshot)} className="shrink-0 rounded border border-line px-2 py-1 text-[10px] text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50">
                 {restoring === snapshot.id ? "恢复中" : "恢复"}
