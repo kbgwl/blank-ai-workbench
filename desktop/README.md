@@ -134,6 +134,12 @@ printf '../../../api/src\n' > desktop/build/runtime/Lib/site-packages/blank_api.
 | `BLANK_PROBE=1` | 自检：从渲染进程直连一次后端并打日志；截图前后各读一次健康徽标文字 |
 | `BLANK_DISABLE_GPU=1` | 无 GPU 环境（CI / 远程会话 / 部分虚拟化）改用软件渲染 |
 | `BLANK_NO_SANDBOX=1` | 配合上一个；受限环境里 GPU 进程会反复崩溃 |
+| `BLANK_FORCE_GPU=1` | 忽略「上次没起来」的降级记录，重新试一次硬件加速（换了机器/驱动更新后用） |
+
+> **GPU 自动降级**：应用启动前会在用户数据目录写 `gpu-state.json`（`ok:false`），
+> 真正打开窗口后才改写成 `ok:true`。如果上一次启动崩在显卡初始化（没有窗口、也没有日志），
+> 下次启动会自动退到软件渲染并加 `--no-sandbox`——这台虚拟机就属于这种情况，
+> 所以双击第一次可能失败一次，第二次起就正常了。日志里会有一行「GPU 自动降级」。
 | `BLANK_BACKEND_CMD` | 覆盖后端可执行文件（配 `-m uvicorn ...` 参数使用） |
 | `BLANK_BACKEND_PORT` | 后端端口，默认 8000 |
 | `BLANK_BACKEND_HEALTH` | 覆盖健康检查地址 |
