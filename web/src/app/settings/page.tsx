@@ -18,15 +18,35 @@ export default function SettingsPage() {
         </span>
       </div>
 
-      <ProvidersView />
-
-      <div>
-        <h2 className="mb-2 text-[13px] font-medium tracking-tight">执行与智能体</h2>
-        <p className="mb-3 text-[12px] leading-relaxed text-faint">
-          这些开关直接改变内核行为：审查档位、上下文水位、新任务的默认权限，以及工具是否按需加载。
-        </p>
+      {/*
+        顺序是有讲究的：先放会改变内核行为的开关，再放模型供应商。
+        上一版把「执行与智能体」放在供应商三张大卡之后，打开设置页首屏看到的仍是老内容，
+        新能力等于不存在 —— 设置页的排布必须按「用户打开就要看的东西」来，而不是按模块归属。
+      */}
+      <section>
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="text-[14px] font-medium tracking-tight">执行与智能体</h2>
+            <p className="mt-1 text-[12px] leading-relaxed text-faint">
+              这四个开关直接改变内核行为：审查档位、上下文水位、新任务默认权限、工具是否按需加载。改完对下一个任务生效。
+            </p>
+          </div>
+          <span className="shrink-0 rounded-md border border-brand/40 bg-brand/10 px-2 py-0.5 font-mono text-[10px] text-brand">
+            0.4.0 新增
+          </span>
+        </div>
         <AgentRuntimePanel />
-      </div>
+      </section>
+
+      <section>
+        <div className="mb-3">
+          <h2 className="text-[14px] font-medium tracking-tight">模型供应商</h2>
+          <p className="mt-1 text-[12px] leading-relaxed text-faint">
+            没有可用供应商时任务跑不起来。API Key 加密存储，只在本机使用。
+          </p>
+        </div>
+        <ProvidersView />
+      </section>
 
       <div className="grid gap-4 md:grid-cols-2">
         <Panel title="沙箱与工作区" hint="v0.6 接入">

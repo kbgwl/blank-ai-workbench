@@ -10,11 +10,38 @@
  * 导出，且 sandbox 模式下 preload 只支持 CommonJS。CJS 是这两处都稳的选择。
  */
 const { app, BrowserWindow, dialog, protocol, shell } = require("electron");
-const { existsSync, mkdirSync } = require("node:fs");
+const { appendFileSync, existsSync, mkdirSync } = require("node:fs");
 const { readFile, writeFile } = require("node:fs/promises");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const process = require("node:process");
+
+/**
+ * 主进程日志落文件。
+ *
+ * Electron 在 Windows 是 GUI 子系统程序：由父进程拉起（脚本、快捷方式、双击）时
+ * 没有可写的控制台，`console.log` 直接消失。启动失败在这种情况下等于「双击没反应」，
+ * 一句日志都拿不到。设置 BLANK_LOG_FILE 后把主进程输出同时写进文件，
+ * 是这类问题唯一可靠的观测手段。
+ */
+const LOG_FILE = process.env.BLANK_LOG_FILE;
+if (LOG_FILE) {
+  try {
+    mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+    appendFileSync(LOG_FILE, `\n===== ${new Date().toISOString()} 启动 =====\n`);
+  } catch {
+    /* 日志目录不可写不该拦住应用启动 */
+  }
+  const tee = (level) => (chunk) => {
+    try {
+      appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${level} ${String(chunk)}\n`);
+    } catch {
+      /* 同上：日志失败不影响主流程 */
+    }
+  };
+  console.log = tee("info");
+  console.error = tee("error");
+}
 
 const PORT = process.env.BLANK_BACKEND_PORT ?? "8000";
 const HEALTH_URL = process.env.BLANK_BACKEND_HEALTH ?? `http://127.0.0.1:${PORT}/api/v1/health`;
@@ -326,7 +353,9 @@ function createWindow() {
     return { action: "deny" };
   });
 
-  void win.loadURL(`${APP_ORIGIN}/index.html`);
+  // BLANK_START_PATH 让自检能直接落在某一页（如 settings.html），不必先点导航。
+  const startPath = String(process.env.BLANK_START_PATH ?? "").replace(/^\/+/, "") || "index.html";
+  void win.loadURL(`${APP_ORIGIN}/${startPath}`);
   return win;
 }
 

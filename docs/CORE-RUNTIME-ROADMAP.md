@@ -283,3 +283,57 @@ Model Runtime / Observability
 - Codex 另有 `codex-code-mode-host.exe`：把代码执行放进独立宿主进程 —— 与我们沙箱的思路同源。
 
 
+
+---
+
+## 0.4.1：修两个「功能明明做了却看不见」的问题（2026-10-18）
+
+0.4.0 交付后用户打开设置页，结论是「页面没有改」。排查下来是两个叠在一起的问题，
+两种都让新能力等于不存在，而打包日志一切正常。
+
+### 1. 新设置被排到折叠线以下
+
+`ProvidersView` 那三张大卡（模型供应商 / 供应商配置 / 流式输出）把「执行与智能体」四张卡
+推到了首屏之外。用户打开设置页，看到的东西和上一版一模一样。
+
+- 顺序改为：**执行与智能体 → 模型供应商 → 沙箱与角色模型**，并各加分组标题与说明。
+- 新分组打「0.4.0 新增」标签，一眼能看出变化在哪。
+- 原则：**设置页按「用户打开就要看的东西」排，不按模块归属排**。
+
+### 2. 包内 Python 运行时带着一份旧的 `blank_api` 副本
+
+这是更严重的一个，也是「页面没改」的真正主角：
+
+- 桌面版运行时 `site-packages/blank_api` 里有一份旧代码（没有 settings 路由）。
+- uvicorn 从 `backend/api` 目录启动，而源码在 `backend/api/src/blank_api`，
+  所以 `import blank_api` 落到 site-packages 的旧副本上。
+- 结果：**前端是新的、后端是旧的**。设置页渲染出新卡片，但 `GET /settings/agent` 返回 404，
+  界面上是一片 "Not Found"。
+- 之前的验证方式（`sys.path.insert(0, "api/src")`）恰好强行指向源码，把这个问题完全盖住，
+  所以 0.4.0 的包其实已经坏了一版却通过了自检。
+
+修法：删掉 `site-packages` 里的副本，改用 `blank_api.pth`（内容 `../../../api/src`）
+指向源码，**单一真源**，以后更新后端不必同步两份。
+
+### 3. 新增打包后自检 `desktop/verify-package.cjs`（`npm run verify`）
+
+针对上面第 2 条加的护栏，核心是**复刻应用真实的启动方式，不许改 sys.path**：
+
+- 包内 Python / 后端源码 / 前端静态站是否存在；
+- `site-packages` 里不许有 `blank_api` 副本，`.pth` 内容正确；
+- 用包内解释器在 `cwd=api` 下真实 `import blank_api`，断言落点在 `api/src`；
+- `settings` 路由已注册、前端 `settings.html` 含新分组标记。
+
+任一项不过就 `exit 1`，打包后跑一次即可。这条能防住「前端新、后端旧」这一类静默错配。
+
+### 4. 主进程日志落文件（`BLANK_LOG_FILE`）
+
+Electron 在 Windows 是 GUI 子系统程序，由父进程拉起时没有控制台，`console.log` 直接消失，
+启动失败等于「双击没反应」且一句日志都拿不到。加 `BLANK_LOG_FILE` 把主进程输出写进文件。
+另有 `BLANK_START_PATH` 可直接把自检落在指定页（如 `settings.html`），不必先点导航。
+
+### 验证
+
+- `npm run verify` 全绿：import 落点 `backend/api/src/blank_api`，settings 路由已注册。
+- 包内实测 `GET /api/v1/settings/agent → 200`，设置页四张卡完整渲染，无 Not Found。
+- 前端 `tsc --noEmit` 干净，`next build` 12 页。

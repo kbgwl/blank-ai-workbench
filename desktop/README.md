@@ -54,6 +54,19 @@ npm run dist:portable   # 只要便携版
 进包内容：`resources/web`（前端静态站）、`resources/backend/api`（后端源码，
 已排除 `.venv` / `data` / `tests`）、`resources/backend/runtime`（**自带的 Python 运行时**）。
 
+出包后必须跑一次自检，它会按**应用真实启动方式**验证包内跑的是不是刚打的代码：
+
+```bash
+npm run verify
+```
+
+检查项：包内 Python / 后端源码 / 前端静态站齐不齐、`site-packages` 里有没有
+`blank_api` 旧副本、`.pth` 指向对不对、用包内解释器真实 import 的落点、
+`settings` 路由是否注册、前端是不是最新版。任一项不过即 `exit 1`。
+
+> 为什么单独做这个脚本：用 `sys.path.insert(0, "api/src")` 去验证会强行指向源码，
+> 恰好盖住「包内实际加载旧副本」的问题 —— 0.4.0 就是这么带着 404 通过自检的。
+
 > ⚠️ **出包前必须清掉 `NODE_OPTIONS`**：本机 WorkBuddy 会注入
 > `NODE_OPTIONS=--require=...node-language-shim.cjs`，它挂钩了文件删除，会让
 > electron-builder 清理旧产物时失败（报 `node-safe-delete-shim.cjs` 的栈）。
@@ -93,7 +106,19 @@ uv pip install \
 
 # 4) 拷进 build/ 供 electron-builder 打包
 cp -r E:/env/kbgai-runtime/cpython-3.12.14-windows-x86_64-none desktop/build/runtime
+
+# 5) 【必做】让运行时用源码，而不是 site-packages 里的副本
+#    第 3 步的 `uv pip install services/api` 会往 site-packages 里装一份 blank_api。
+#    壳从 `backend/api` 目录启动 uvicorn，而源码在 `backend/api/src/blank_api`，
+#    于是 `import blank_api` 会落到那份副本上 —— 结果是「前端是新的、后端是旧的」，
+#    新接口全部 404，界面上显示 Not Found，而打包日志毫无异常。
+#    改成 .pth 指向源码，保持单一真源，以后更新后端不必同步两份。
+rm -rf desktop/build/runtime/Lib/site-packages/blank_api \
+       desktop/build/runtime/Lib/site-packages/blank_api-*.dist-info
+printf '../../../api/src\n' > desktop/build/runtime/Lib/site-packages/blank_api.pth
 ```
+
+验证是否修对：`npm run verify`（见下），它会用包内解释器按真实方式 import 一次。
 
 注意版本号（`3.12.14`）会随 uv 更新变化，按实际目录名替换。
 后端 `requires-python` 是 `>=3.12`，升到 3.13 也可以。
@@ -104,6 +129,8 @@ cp -r E:/env/kbgai-runtime/cpython-3.12.14-windows-x86_64-none desktop/build/run
 |---|---|
 | `BLANK_SHOT=<png 路径>` | 自检：等界面渲染出内容后截图并退出 |
 | `BLANK_SHOT_DELAY=<ms>` | 截图前再等一会，用于观察需要时间恢复的状态（默认 800） |
+| `BLANK_START_PATH=<相对路径>` | 自检：直接落在某一页，如 `settings.html`，不必先点导航 |
+| `BLANK_LOG_FILE=<路径>` | 把主进程日志追加到文件。Electron 是 GUI 子系统程序，由父进程拉起时 `console.log` 没有落点，排查启动问题必须靠它 |
 | `BLANK_PROBE=1` | 自检：从渲染进程直连一次后端并打日志；截图前后各读一次健康徽标文字 |
 | `BLANK_DISABLE_GPU=1` | 无 GPU 环境（CI / 远程会话 / 部分虚拟化）改用软件渲染 |
 | `BLANK_NO_SANDBOX=1` | 配合上一个；受限环境里 GPU 进程会反复崩溃 |
