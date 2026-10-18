@@ -1,16 +1,51 @@
 "use client";
 
-import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, type ReactNode } from "react";
 import { HealthPill } from "@/components/health-pill";
 import { ModelSwitcher, SceneSwitcher } from "@/components/scenes/scenes";
 
-/** 首页是满幅工作台（左栏自带品牌与导航），其余页面共用一条顶栏。 */
+const TITLES: Record<string, string> = {
+  "/settings": "设置",
+  "/projects": "项目与工作区",
+  "/tasks/detail": "任务详情",
+  "/brainstorm": "头脑风暴",
+  "/daily": "日常",
+  "/features": "能力",
+  "/reverse-lab": "逆向实验室",
+};
+
+const NAV = [
+  { href: "/", label: "工作台" },
+  { href: "/tasks", label: "任务" },
+  { href: "/projects", label: "项目" },
+  { href: "/settings", label: "设置" },
+];
+
+/** 首页与任务页是满幅工作台（左栏自带品牌与导航），其余页面共用一条带返回的顶栏。 */
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   // 静态导出后首屏 URL 是 /index.html（或 /index），开发态是 /，都要认成首页。
   const clean = (pathname ?? "").replace(/\.html$/, "").replace(/\/index$/, "");
   const bare = clean === "" || clean === "/" || clean === "/tasks";
+  const title = TITLES[clean] ?? "";
+
+  // Esc 回工作台；在输入框/对话框里按 Esc 不抢事件（那通常是取消编辑）。
+  useEffect(() => {
+    if (bare) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable) return;
+      if (document.querySelector("dialog[open]")) return;
+      router.push("/");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [bare, router]);
 
   if (bare) {
     return <div className="h-dvh overflow-hidden">{children}</div>;
@@ -18,14 +53,48 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
-      <header className="flex h-11 shrink-0 items-center justify-between border-b border-line bg-bg px-4">
-        <div className="flex items-center gap-3">
-          <div className="grid size-6 place-items-center rounded-md bg-[#1b2a4a]">
-            <span className="size-2 rounded-[2px] bg-[#5eead4]" />
-          </div>
-          <div className="text-[13px] font-semibold tracking-tight">空白格</div>
+      <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-bg px-3">
+        <Link
+          href="/"
+          title="返回工作台（Esc）"
+          className="flex shrink-0 items-center gap-1.5 rounded-md border border-line-strong bg-surface px-2 py-1 text-[12px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-text"
+        >
+          <svg viewBox="0 0 24 24" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <path d="m14 6-6 6 6 6" />
+          </svg>
+          返回
+        </Link>
+
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="grid size-5 shrink-0 place-items-center rounded-md bg-[#1b2a4a]">
+            <span className="size-1.5 rounded-[2px] bg-[#5eead4]" />
+          </span>
+          <span className="shrink-0 text-[13px] font-semibold tracking-tight">空白格</span>
+          {title && (
+            <>
+              <span className="shrink-0 text-line-strong">/</span>
+              <span className="min-w-0 truncate text-[13px] text-muted">{title}</span>
+            </>
+          )}
         </div>
-        <div className="flex items-center gap-3">
+
+        <nav className="ml-3 hidden items-center gap-0.5 md:flex">
+          {NAV.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`rounded-md px-2 py-1 text-[12px] transition-colors ${
+                clean === item.href.replace(/\/$/, "")
+                  ? "bg-surface-3 font-medium text-text"
+                  : "text-muted hover:bg-surface-2 hover:text-text"
+              }`}
+            >
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+
+        <div className="ml-auto flex shrink-0 items-center gap-2.5">
           <SceneSwitcher />
           <ModelSwitcher />
           <HealthPill />
