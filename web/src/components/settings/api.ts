@@ -94,11 +94,22 @@ export type ObservabilitySummary = {
   tools: Record<string, number>;
 };
 
+export type SafetySettings = {
+  shell_enabled: boolean;
+  network_enabled: boolean;
+  confirm_all_commands: boolean;
+  restrict_to_workspace: boolean;
+  timeout_seconds: number;
+  allowed_roots: string[];
+  denied_commands: string[];
+};
+
 export type AgentSettings = {
   guardian: { mode: string; timeout_seconds: number };
   compaction: { trigger_ratio: number; reserve_tokens: number };
   permissions: { default_mode: string };
   tools: { search: boolean };
+  safety: SafetySettings;
   path: string;
   limits: {
     guardian_modes?: string[];
@@ -107,6 +118,8 @@ export type AgentSettings = {
     permission_mode_labels?: Record<string, string>;
     trigger_ratio?: { min: number; max: number; default: number };
     reserve_tokens?: { min: number; max: number; default: number };
+    safety_timeout?: { min: number; max: number; default: number };
+    safety_max_entries?: number;
   };
 };
 
@@ -115,6 +128,22 @@ export type AgentSettingsPatch = {
   compaction?: { trigger_ratio?: number; reserve_tokens?: number };
   permissions?: { default_mode?: string };
   tools?: { search?: boolean };
+  safety?: Partial<SafetySettings>;
+};
+
+/** 这台机器此刻到底怎么隔离的：容器 / 本机受限执行。 */
+export type SafetyRuntime = {
+  backend: {
+    backend: string;
+    isolation: string;
+    label: string;
+    detail: string;
+    platform: string;
+    docker_available: boolean;
+  };
+  policy: SafetySettings;
+  default_mode: string;
+  settings_path: string;
 };
 
 const api = API_V1;
@@ -173,6 +202,10 @@ export function updateAgentSettings(patch: AgentSettingsPatch): Promise<AgentSet
 
 export function resetAgentSettings(): Promise<AgentSettings> {
   return request<AgentSettings>(`${api}/settings/agent/reset`, { method: "POST" });
+}
+
+export function fetchSafetyRuntime(): Promise<SafetyRuntime> {
+  return request<SafetyRuntime>(`${api}/settings/safety/runtime`, { cache: "no-store" });
 }
 
 export function chatProvider(providerId: string, message: string): Promise<{ text: string; model?: string }> {

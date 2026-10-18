@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # 主密钥落盘位置。桌面壳会指到用户数据目录（与数据库同一处），
     # 避免升级换包后主密钥跟着换、已存的供应商 Key 全部解不开。
     secret_key_file: str = ""
+    # 运行时设置（含安全与权限）落盘位置。同理：留在包内会在升级后重置成默认值，
+    # 客户配好的权限边界会悄悄漂回默认——对"权限可控"来说是致命的。
+    settings_file: str = ""
     model_timeout_seconds: float = 60.0
 
 

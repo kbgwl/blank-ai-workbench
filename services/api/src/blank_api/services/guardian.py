@@ -141,7 +141,10 @@ class Guardian:
             exists = store.path.exists()
         except OSError:
             exists = False
-        if not exists and os.getenv("BLANK_GUARDIAN") is not None:
+        # 文件存在但里面没有 guardian 段（例如只配了安全策略）时，这一段仍然算"没配过"：
+        # 此时环境变量还是那个显式开关，不该被 normalize 出来的默认 "off" 顶掉。
+        configured = exists and store.has_section("guardian")
+        if not configured and os.getenv("BLANK_GUARDIAN") is not None:
             return cls.from_env(adapter)
         config = guardian_settings(settings)
         mode = str(config.get("mode") or "veto")

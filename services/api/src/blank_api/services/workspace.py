@@ -11,6 +11,28 @@ from blank_api.config import get_settings
 MAX_READ_BYTES = 512 * 1024
 TREE_IGNORE = {".git", "node_modules", "__pycache__", ".venv", ".next", "dist", "build", ".pytest_cache"}
 
+# 构建/打包残留会带后缀（dist-prev-0.4.3、out-old6、.next-old5），精确名盖不住。
+# 这些目录里常常躺着整份 Python 运行时，几万个文件——一旦被遍历，搜索与快照都会拖到
+# 分钟级，而搜索是同步跑在事件循环里的，表现就是「后端连 /health 都不回」。
+# 规则只此一份：快照、搜索、目录列举都调这里，避免各处口径漂移。
+IGNORED_PREFIXES = (
+    "dist-",
+    "dist.",
+    "build-",
+    "out-old",
+    "out-0",
+    ".next-old",
+    ".next-0",
+    "node_modules-",
+    "venv-",
+    ".venv-",
+)
+
+
+def ignored_name(name: str) -> bool:
+    """目录名是否应当跳过（精确名 + 构建产物前缀）。"""
+    return name in TREE_IGNORE or name.startswith(IGNORED_PREFIXES)
+
 
 @dataclass(frozen=True)
 class FileEntry:
@@ -76,7 +98,7 @@ def list_tree(root: Path | str, relative: str = "", max_depth: int = 2, limit: i
 
     def walk(directory: Path, depth: int) -> None:
         for child in sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
-            if child.name in TREE_IGNORE:
+            if ignored_name(child.name):
                 continue
             if len(entries) >= limit:
                 return

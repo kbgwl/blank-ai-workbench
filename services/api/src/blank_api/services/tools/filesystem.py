@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 
@@ -48,19 +49,9 @@ async def _search_code(context: ToolContext, arguments: dict) -> ToolOutcome:
             regex = re.compile(pattern)
         except re.error as exc:
             raise ValueError(f"正则表达式无效：{exc}") from exc
-    matches: list[dict] = []
-    for relative, path in iter_text_files(context.root, prefix):
-        if regex is None and pattern not in path.name and not _file_contains(path, pattern):
-            continue
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            hit = regex.search(line) if regex else pattern in line
-            if not hit:
-                continue
-            matches.append({"path": relative, "line": lineno, "text": line.strip()[:200]})
-            if len(matches) >= limit:
-                break
-        if len(matches) >= limit:
-            break
+    # 搜索是纯同步的文件遍历，必须下放线程：留在事件循环里时，一次全库搜索
+    # 就能让后端的 /health 也不回包，界面看起来是"应用卡死"。
+    matches = await asyncio.to_thread(_search_blocking, context.root, pattern, regex, prefix, limit)
     rendered = "\n".join(f"{m['path']}:{m['line']}: {m['text']}" for m in matches)
     return ok(
         rendered or "未找到匹配结果",
@@ -70,11 +61,24 @@ async def _search_code(context: ToolContext, arguments: dict) -> ToolOutcome:
     )
 
 
-def _file_contains(path, needle: str) -> bool:
-    try:
-        return needle in path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return False
+def _search_blocking(root, pattern: str | None, regex, prefix: str, limit: int) -> list[dict]:
+    """一次读取同时用于预过滤与逐行匹配；解码失败的文件直接跳过。"""
+    matches: list[dict] = []
+    for relative, path in iter_text_files(root, prefix):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if regex is None and pattern not in path.name and pattern not in text:
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            hit = regex.search(line) if regex else pattern in line
+            if not hit:
+                continue
+            matches.append({"path": relative, "line": lineno, "text": line.strip()[:200]})
+            if len(matches) >= limit:
+                return matches
+    return matches
 
 
 def filesystem_tools() -> list[ToolDefinition]:

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 import uuid
 from pathlib import Path
 
-from blank_api.services.workspace import TREE_IGNORE
+from blank_api.services.workspace import TREE_IGNORE, ignored_name
 
 DEFAULT_SNAPSHOT_ROOT = Path("data/snapshots")
 
@@ -18,13 +19,34 @@ DEFAULT_SNAPSHOT_ROOT = Path("data/snapshots")
 # 表现就是「输入之后没有任何返回」。整树复制本来也不该是启动任务的前置条件。
 MAX_SNAPSHOT_FILES = 5000
 MAX_SNAPSHOT_BYTES = 200 * 1024 * 1024
+# 扫描预算：再大的仓库也不能让"拍快照"把任务启动拖成几分钟。
+# 这个函数是同步的，调用方必须放进线程（见 runtime），否则会卡住整个后端的事件循环。
+SCAN_BUDGET_SECONDS = 3.0
 
 
 def _ignored(part: str) -> bool:
-    """忽略规则：精确名之外，还要盖住 dist-0.4.2 / build-old 这类带后缀的产物目录。"""
-    if part in TREE_IGNORE or part == ".git":
-        return True
-    return part.startswith(("dist-", "dist.", "build-", ".next-", "node_modules-", "venv-", ".venv-"))
+    """忽略口径与搜索共用一份（workspace.ignored_name），否则两处会各漏一半。"""
+    return ignored_name(part) or part == ".git"
+
+
+def _prune(directory: str, names: list[str]) -> set[str]:
+    """copytree 的 ignore 回调：目录按前缀剪枝，文件只认精确名。
+
+    不能对文件名也套前缀规则——``build-all.sh`` 这类脚本不是产物目录，
+    照抄前缀规则会把它悄悄漏掉，回滚时就少了一个文件。
+    """
+    dropped: set[str] = set()
+    for name in names:
+        if name in TREE_IGNORE or name == ".git":
+            dropped.add(name)
+            continue
+        try:
+            is_dir = os.path.isdir(os.path.join(directory, name))
+        except OSError:
+            is_dir = False
+        if is_dir and _ignored(name):
+            dropped.add(name)
+    return dropped
 
 
 class SnapshotStore:
@@ -38,23 +60,25 @@ class SnapshotStore:
         target = self.root / snapshot_id / "tree"
         self.root.mkdir(parents=True, exist_ok=True)
 
-        files, total_bytes = self._scan(source)
-        too_big = len(files) > MAX_SNAPSHOT_FILES or total_bytes > MAX_SNAPSHOT_BYTES
+        files, total_bytes, truncated = self._scan(source)
+        too_big = truncated or len(files) > MAX_SNAPSHOT_FILES or total_bytes > MAX_SNAPSHOT_BYTES
         copied = False
         reason_skipped = ""
         if too_big:
-            reason_skipped = (
-                f"工作区过大（{len(files)} 个文件 / {total_bytes // (1024 * 1024)} MB），"
-                "本次只记录文件清单、不做整树复制；单个文件的回滚仍由写入前备份保证"
-            )
+            if truncated and len(files) <= MAX_SNAPSHOT_FILES and total_bytes <= MAX_SNAPSHOT_BYTES:
+                reason_skipped = (
+                    f"扫描超过 {SCAN_BUDGET_SECONDS:g}s 预算（已见到 {len(files)} 个文件 / "
+                    f"{total_bytes // (1024 * 1024)} MB），本次只记录已扫到的清单、不做整树复制；"
+                    "单个文件的回滚仍由写入前备份保证"
+                )
+            else:
+                reason_skipped = (
+                    f"工作区过大（{len(files)} 个文件 / {total_bytes // (1024 * 1024)} MB），"
+                    "本次只记录文件清单、不做整树复制；单个文件的回滚仍由写入前备份保证"
+                )
         else:
             try:
-                shutil.copytree(
-                    source,
-                    target,
-                    ignore=shutil.ignore_patterns(*TREE_IGNORE, ".git"),
-                    dirs_exist_ok=True,
-                )
+                shutil.copytree(source, target, ignore=_prune, dirs_exist_ok=True)
                 copied = True
             except (OSError, shutil.Error) as error:
                 # 路径过长、权限不足、磁盘满都不该让任务直接失败
@@ -80,26 +104,34 @@ class SnapshotStore:
         return record
 
     @staticmethod
-    def _scan(source: Path) -> tuple[list[str], int]:
+    def _scan(source: Path) -> tuple[list[str], int, bool]:
+        """列出工作区文件清单。返回 (清单, 总字节, 是否被截断)。
+
+        用 `os.walk` 而不是 `rglob`：后者会先遍历再过滤，`dist-*` 里几万个文件一个都跳不掉，
+        在 Windows 上足够把任务启动拖到几十秒。这里直接剪枝，被忽略的目录根本不进入。
+
+        时间与数量都有上限，超了就带着已有清单返回 —— 调用方据此降级为"只记录清单"。
+        """
         files: list[str] = []
         total = 0
-        for path in source.rglob("*"):
-            try:
-                relative = path.relative_to(source)
-            except ValueError:
-                continue
-            if any(_ignored(part) for part in relative.parts):
-                continue
-            if not path.is_file():
-                continue
-            files.append(str(relative).replace("\\", "/"))
-            try:
-                total += path.stat().st_size
-            except OSError:
-                pass
-            if len(files) > MAX_SNAPSHOT_FILES and total > MAX_SNAPSHOT_BYTES:
-                break
-        return files, total
+        deadline = time.monotonic() + SCAN_BUDGET_SECONDS
+        for directory, dirnames, filenames in os.walk(source):
+            dirnames[:] = sorted(name for name in dirnames if not _ignored(name))
+            for name in filenames:
+                if name in TREE_IGNORE:
+                    continue
+                path = Path(directory) / name
+                try:
+                    total += path.stat().st_size
+                    relative = path.relative_to(source)
+                except (OSError, ValueError):
+                    continue
+                files.append(str(relative).replace("\\", "/"))
+                if len(files) > MAX_SNAPSHOT_FILES or total > MAX_SNAPSHOT_BYTES:
+                    return files, total, True
+            if time.monotonic() > deadline:
+                return files, total, True
+        return files, total, False
 
     def meta(self, snapshot_id: str) -> dict:
         path = self.root / snapshot_id / "meta.json"

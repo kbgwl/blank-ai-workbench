@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,7 @@ from blank_api.services.hooks import HookRunner
 from blank_api.services.instructions import load_layers, provenance
 from blank_api.services.memory import MemoryStore
 from blank_api.services.notes import NoteStore
+from blank_api.services.safety import SafetyPolicy
 from blank_api.services.settings import SettingsStore
 from blank_api.services.shell_env import capture as capture_shell
 from blank_api.services.subagent import SubAgentRunner
@@ -211,6 +213,9 @@ class AgentRuntime:
         notes = NoteStore()
         memory = MemoryStore()
         shell = capture_shell(request.root)
+        # 能力边界跟着设置页走：没开就是没开，请求里带什么都不放宽。
+        # 放在这里读一次，同一任务的网关、工具处理、子代理拿到的是同一份策略。
+        safety = SafetyPolicy.load()
         # 用户级 → 项目 AGENTS.md（+ 可选外部指令文件）；任务级偏好走 skill_instructions
         layers = load_layers(request.root)
         context = ToolContext(
@@ -223,6 +228,7 @@ class AgentRuntime:
             approved_actions=frozenset(approved_actions),
             trace_id=thread_id,
             permissions=permissions,
+            safety=safety,
             subagent_runner=subagents,
             notes=notes,
             memory=memory,
@@ -287,9 +293,15 @@ class AgentRuntime:
         recorder, session = scope.recorder, scope.session
         # 快照是安全网，不是前置条件：大仓库复制不动时记一条事件继续跑，
         # 不能让「拍不了快照」把整个任务判死（单文件回滚另有写入前备份兜底）。
+        #
+        # 必须放进线程：capture() 是同步的文件遍历，工作区指到大仓库时会把事件循环
+        # 占住几十秒——表现就是任务启动之后后端连 /health 都不回，界面上看起来彻底卡死。
         try:
-            snapshot = SnapshotStore().capture(
-                str(session.context.root), reason="任务执行前快照", task_id=request.task_id
+            snapshot = await asyncio.to_thread(
+                SnapshotStore().capture,
+                str(session.context.root),
+                reason="任务执行前快照",
+                task_id=request.task_id,
             )
         except Exception as error:  # noqa: BLE001 - 任何快照问题都不该中断任务
             snapshot = {"id": "", "files": [], "copied": False, "skipped_reason": str(error)}

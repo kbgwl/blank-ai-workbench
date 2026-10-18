@@ -138,14 +138,23 @@ async def execute_command(
     timeout: float,
     shell: bool = True,
     env: dict[str, str] | None = None,
+    safety=None,
 ) -> dict:
-    """BLANK_SANDBOX_ENABLED 时经沙箱执行（容器隔离 + 密钥过滤），否则退回本地进程。"""
+    """BLANK_SANDBOX_ENABLED 时经沙箱执行（容器隔离 + 密钥过滤），否则退回本地进程。
+
+    ``safety`` 是能力边界；这里只用它的超时上限，允许/拒绝由网关与工具入口判定。
+    把上限放在这一层，是因为它必须对 run_shell 与 run_tests 同时生效 ——
+    只在其中一个工具里限时，另一个就是旁路。
+    """
     from blank_api.services.sandbox import SandboxPolicy, get_sandbox
 
     policy = SandboxPolicy()
+    budget = float(timeout)
+    if safety is not None:
+        budget = min(budget, float(getattr(safety, "timeout_seconds", budget) or budget))
     if policy.enabled:
         script = command if isinstance(command, str) else shlex.join(command)
-        result = await get_sandbox(policy).run(script, workspace=str(root), timeout_seconds=timeout)
+        result = await get_sandbox(policy).run(script, workspace=str(root), timeout_seconds=budget)
         return {
             "exit_code": result.exit_code,
             "stdout": result.stdout,
@@ -153,11 +162,39 @@ async def execute_command(
             "timed_out": result.timed_out,
             "sandbox": result.backend,
             "notes": list(result.notes),
+            "timeout_budget": budget,
         }
-    result = await run_process(command, root, timeout, shell=shell, env=env)
+    result = await run_process(command, root, budget, shell=shell, env=env)
     result["sandbox"] = None
     result["notes"] = []
+    result["timeout_budget"] = budget
     return result
+
+
+def policy_gate(context: ToolContext, tool_name: str, arguments: dict):
+    """工具入口的第二道闸：即使有人绕过网关直接调 handler，能力边界依然生效。
+
+    返回 ToolOutcome 表示要拒绝；返回 None 表示放行（要不要再问一遍由网关决定）。
+    """
+    from blank_api.services.safety import SafetyPolicy
+
+    policy = getattr(context, "safety", None) or SafetyPolicy.load()
+    permissions = getattr(context, "permissions", None)
+    mode = getattr(permissions, "mode", "default") if permissions is not None else "default"
+    verdict = policy.gate(tool_name, arguments, context.root, mode=mode)
+    if not verdict.denied:
+        return None
+    return ToolOutcome(
+        ok=False,
+        status="denied",
+        message=verdict.reason,
+        data={
+            "policy": "safety",
+            "rule": verdict.rule,
+            "command_prefix": verdict.prefix,
+            "hint": "security_settings",
+        },
+    )
 
 
 def runs_in_docker() -> bool:
@@ -168,12 +205,17 @@ def runs_in_docker() -> bool:
 
 
 async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
+    blocked = policy_gate(context, "run_shell", arguments)
+    if blocked is not None:
+        return blocked
     command = str(arguments["command"]).strip()
     timeout = float(arguments.get("timeout_seconds", 30))
     # 有 shell 快照就用快照里的环境（含被前置的项目 venv），保证多步命令解析到同一个解释器
     snapshot = getattr(context, "shell", None)
     env = snapshot.env_for() if hasattr(snapshot, "env_for") else None
-    result = await execute_command(command, context.root, timeout, env=env)
+    safety = getattr(context, "safety", None)
+    result = await execute_command(command, context.root, timeout, env=env, safety=safety)
+    timeout = result.get("timeout_budget", timeout)
     stdout = truncate(mask_output(result["stdout"], context.root))[0]
     stderr = truncate(mask_output(result["stderr"], context.root))[0]
     if result["timed_out"]:
@@ -182,7 +224,12 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
             status="timeout",
             output=stdout,
             message=f"命令超时（{timeout:.0f}s），进程已终止：{command}",
-            data={"exit_code": result["exit_code"], "timed_out": True, "sandbox": result["sandbox"]},
+            data={
+                "exit_code": result["exit_code"],
+                "timed_out": True,
+                "sandbox": result["sandbox"],
+                "isolation": result["sandbox"] or "local",
+            },
         )
     combined = stdout if not stderr else f"{stdout}\n[stderr]\n{stderr}".strip()
     if result["exit_code"] != 0:
@@ -191,7 +238,12 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
             status="failed",
             output=combined,
             message=f"命令返回非零退出码：{result['exit_code']}",
-            data={"exit_code": result["exit_code"], "command": command, "sandbox": result["sandbox"]},
+            data={
+                "exit_code": result["exit_code"],
+                "command": command,
+                "sandbox": result["sandbox"],
+                "isolation": result["sandbox"] or "local",
+            },
         )
     return ok(
         combined or "命令执行完成，无输出",
@@ -200,6 +252,7 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
         stdout=stdout,
         stderr=stderr,
         sandbox=result["sandbox"],
+        isolation=result["sandbox"] or "local",
         isolation_notes=result["notes"],
     )
 

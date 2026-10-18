@@ -437,3 +437,112 @@ Electron 在 Windows 是 GUI 子系统程序，由父进程拉起时没有控制
 - 带验收条件的任务：`task.failed` 只有一条，失败原因可读。
 - `DELETE /tasks/{id}` 返回 204，列表同步清空。
 - 后端 `pytest` 全绿（见提交记录），前端 `tsc --noEmit` 干净。
+
+## 0.5.0 · 把「权限」交给客户（2026-10-18）
+
+原话：「我们要客户必须要可控制权限的」。
+
+上一版沙箱只在有 Docker 时才存在，客户端装机不带容器运行时，于是"安全"等于没有。
+这一版把安全拆成两层，顺序不能反：
+
+| 层 | 模块 | 回答的问题 | 命中后的结果 |
+|---|---|---|---|
+| 能力边界 | `services/safety.py` | **能不能做** | 拒绝，人工审批也放不过去；要放行只能改设置 |
+| 审批节奏 | `services/permissions.py` | **要不要先问** | 生成审批请求，批准后执行并记住 |
+
+### 为什么必须先判「能不能做」
+
+反过来会出现最难受的一种体验：审批卡上点了「允许」，工具还是失败。用户会认为
+产品坏了，而不是意识到"管理员在设置里禁了这条"。所以 `ToolGateway.decide()`
+在最前面过一遍 safety，`deny` 直接返回，连问句都不生成。
+
+### 「每条命令都确认」不另造状态机
+
+safety 的 `confirm_all_commands` 只是把这次调用的风险等级抬到 `high`，
+后面全部复用既有逻辑：审批卡、`approve_actions` 记忆、「总是允许这个前缀」白名单。
+再造一套"确认状态"会导致同一个动作被两层各记一次账。
+
+`bypass` 档是用户显式选择的"我全权负责"，此时不抬风险；`plan` 档直接放行到
+permissions 层，由它统一拒绝 —— 否则计划模式下会出现两条互相矛盾的拒绝理由。
+
+### 默认值全部取最保守的一档
+
+- `shell_enabled = false`：装好就能跑命令的产品，第一次误删就没人敢用了。
+- `network_enabled = false`：`curl` / `git clone` / `pip install` / `npm install` 都算出网。
+- `confirm_all_commands = true`：改这一项是最省事的"放宽"，放在最显眼的位置。
+- `restrict_to_workspace = true`：工作区 + 用户显式加的目录之外，真实路径一律拒绝。
+
+### 三个实现取舍
+
+1. **只拦"真实存在"的越界路径**。`echo "C:/no/such"` 是很常见的字面量，把它判成
+   越界会让人直接把整条策略关掉 —— 误杀的代价比漏判高。
+2. **跳过每段命令的第一个 token**。那是程序本身（`C:/.../.venv/python.exe`、`npm`），
+   不是被读写的文件；否则"跑自己的测试"都会被判越界。
+3. **内置禁止清单不受配置影响**：格式化磁盘、关机、改系统注册表、接管文件所有权
+   这类操作，问了也没意义。它们不是"高风险所以要确认"，而是"任何设置都不该放行"。
+
+### 客户端没有 Docker 是常态，界面必须说实话
+
+`GET /settings/safety/runtime` 返回 `backend_info()`：容器隔离还是本机受限执行，
+Docker 装没装。桌面版老老实实写「本机受限执行：策略级隔离，不是内核级隔离」——
+含糊地写一句"已开启沙箱"，客户会以为跑不可信代码是安全的。
+
+### 顺手修的三处
+
+- **设置文件跟着包走**：`data/settings.json` 落在 cwd（桌面版即包内），升级一次
+  客户的权限边界就悄悄变回默认。新增 `BLANK_SETTINGS_FILE`（桌面壳指到用户数据目录）
+  并做老位置搬迁。
+- **`guardian` 被"存在但没配"的文件顶掉**：只写了 safety 段的设置文件会让
+  `Guardian.from_settings` 认为 guardian 也配过了（normalize 出默认 `off`），
+  于是 `BLANK_GUARDIAN=veto` 失效。加 `SettingsStore.has_section()`，
+  按"显式配置过"判断而不是"文件存在"。
+- **命令被策略拦下时不再判任务失败**：`run_validation_node` 原来把 `denied` 当成
+  "测试未通过"，任务被判 failed，用户去翻代码——而真正该做的是改设置。
+  现在记成 `skipped` 并写明「命令执行未获授权，本次未做自动化校验」。
+
+### 验证时抓到的第四个问题：`search_code` 会把整个后端占死
+
+现象：`POST /tasks/{id}/start` 返回 202 之后，后端连 `GET /health` 都不回包，
+界面看起来是「应用卡死」。这一次不是"任务失败"，是进程根本没在服务。
+
+用 `faulthandler.dump_traceback_later()` 抓栈，一眼看到：
+
+```
+graph.execute_action_node → gateway._run → filesystem._search_code
+  → paths.iter_text_files → pathlib.read_text   ← 同步阻塞在事件循环里
+```
+
+两个原因叠在一起：
+
+1. `TREE_IGNORE` 只有精确名（`dist`、`build`、`.next`），而构建残留是带后缀的
+   （`dist-prev-0.4.3`、`out-old6`、`.next-old5`），一个都没被忽略。工作区指到本仓库时，
+   搜索会去读 `dist-prev-*/resources/backend/runtime/Lib/site-packages` 里几万个文件。
+2. `iter_text_files` 是同步生成器，`_search_code` 直接在协程里 `for` 它 ——
+   整个搜索期间事件循环被独占。
+
+修法不是加一个 `if`：
+
+- `workspace.ignored_name()` 成为忽略口径的**唯一来源**（精确名 + 构建产物前缀），
+  搜索、目录列举、快照三处共用，避免各写一套又各漏一半。
+- `iter_text_files` 加文件数与时间预算（2 万文件 / 8 秒），并去掉"预读一次验可解码、
+  搜索时再读一次"的双重 IO —— 解码失败交给读取处跳过。
+- `_search_code` 用 `asyncio.to_thread` 下放线程，并一次读取同时用于预过滤与逐行匹配。
+- 快照同理：`_scan` 改 `os.walk` 剪枝（`rglob` 先遍历再过滤，几万个文件一个都跳不掉），
+  加 3 秒扫描预算，`capture()` 在 `runtime` 里用 `asyncio.to_thread` 调用。
+
+修完实测：任务执行期间 `/health` 每 10 秒回 200，`confirm_all_commands` 正常产出
+`waiting_approval` + 待审批请求（`run_shell` / `risk:ask`）。
+
+### 界面
+
+设置页第一屏换成「安全与权限」：顶部一条执行后端横幅（容器 / 本机受限 + Docker 状态），
+下面两个面板——能力开关（4 个 toggle + 单条命令上限）、路径与命令边界
+（允许目录、禁止前缀，两个可增删的列表）。
+
+### 验证
+
+- 新增 `tests/test_safety_policy_v050.py`（28 条）：默认关、内置禁止、网络开关、
+  路径越界与允许列表、`confirm_all` 抬风险、网关先 deny 后 ask、设置 clamp 与部分更新。
+- `tests/conftest.py` 给夹具写入宽松档（只放宽 `shell_enabled` 与 `confirm_all`），
+  路径边界与内置禁止保持原语义；策略默认值本身由上面那 28 条断言。
+- 后端 pytest 301 passed / 14 skipped / 0 failed；前端 `tsc --noEmit` 干净。

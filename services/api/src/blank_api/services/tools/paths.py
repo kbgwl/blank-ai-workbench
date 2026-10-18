@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
 from blank_api.api.errors import ApiError
-from blank_api.services.workspace import TREE_IGNORE, resolve_inside
+from blank_api.services.workspace import ignored_name, resolve_inside
 
 BACKUP_DIRNAME = ".blank_backups"
-IGNORED_DIRS = TREE_IGNORE | {BACKUP_DIRNAME}
 MAX_SEARCH_BYTES = 1024 * 1024
+# 搜索预算：这个函数是同步的，跑在事件循环里（调用方负责下放线程）。
+# 没有预算的话，一次 search_code 就能把整个后端占到不响应 /health。
+MAX_SCAN_FILES = 20000
+MAX_SCAN_SECONDS = 8.0
+
+
+def _skipped_dir(name: str) -> bool:
+    return ignored_name(name) or name == BACKUP_DIRNAME
 
 
 def resolve_existing(root: Path, relative: str) -> Path:
@@ -37,17 +45,28 @@ def resolve_for_write(root: Path, relative: str) -> Path:
 
 
 def iter_text_files(root: Path, prefix: str = "") -> Iterator[tuple[str, Path]]:
-    """Yield workspace-relative text files, honouring the tree ignore list."""
+    """Yield workspace-relative text files, honouring the tree ignore list.
+
+    只做遍历与粗筛（大小、目录忽略），不预读文件内容——预读一次、搜索时再读一次，
+    等于把 IO 翻倍。解码失败由调用方在读取时跳过。
+
+    文件数与时间都有上限：搜索是同步的，无上限会把事件循环占死。上限按"够用"设计，
+    命中通常是前几百个文件的事，扫完两万个还没找到也不值得继续。
+    """
     root_path = Path(root).resolve()
     base = resolve_inside(root_path, prefix)
+    scanned = 0
+    deadline = time.monotonic() + MAX_SCAN_SECONDS
     for directory, dirnames, filenames in os.walk(base):
-        dirnames[:] = sorted(d for d in dirnames if d not in IGNORED_DIRS)
+        dirnames[:] = sorted(d for d in dirnames if not _skipped_dir(d))
         for filename in sorted(filenames):
             path = Path(directory) / filename
             try:
                 if not path.is_file() or path.stat().st_size > MAX_SEARCH_BYTES:
                     continue
-                path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
+            except OSError:
                 continue
+            scanned += 1
             yield path.relative_to(root_path).as_posix(), path
+            if scanned >= MAX_SCAN_FILES or time.monotonic() > deadline:
+                return

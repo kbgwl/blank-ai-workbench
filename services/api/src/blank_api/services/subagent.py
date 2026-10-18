@@ -25,6 +25,7 @@ from pathlib import Path
 from blank_api.services.agent.context import ContextCompactor
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.permissions import MODE_ACCEPT_EDITS, MODE_DEFAULT, PermissionPolicy
+from blank_api.services.safety import SafetyPolicy
 from blank_api.services.tools.base import ToolContext
 from blank_api.services.tools.gateway import ToolGateway
 from blank_api.services.worktree import (
@@ -233,6 +234,8 @@ async def run_subagent(
         approval_policy=permissions.decide,
         trace_id=parent_thread_id,
         permissions=permissions,
+        # 子代理不能成为绕过客户安全设置的侧门：同一台机器、同一份策略。
+        safety=SafetyPolicy.load(),
         tool_registry=gateway.registry,
     )
     log = _Recorder(recorder, agent_path=agent_path, depth=depth, parent_thread_id=parent_thread_id)

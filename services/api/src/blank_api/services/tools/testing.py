@@ -10,6 +10,7 @@ from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutco
 from blank_api.services.tools.shell import (
     execute_command,
     mask_output,
+    policy_gate,
     python_test_command,
     runs_in_docker,
     truncate,
@@ -48,6 +49,9 @@ def summarize_exit_codes(output: str) -> dict:
 
 
 async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
+    blocked = policy_gate(context, "run_tests", arguments)
+    if blocked is not None:
+        return blocked
     timeout = float(arguments.get("timeout_seconds", 180))
     override = arguments.get("command")
     if override:
@@ -67,7 +71,10 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
             argv = [CONTAINER_PYTHON, *argv[1:]]
         if shell:
             argv = " ".join(argv)
-    result = await execute_command(argv, context.root, timeout, shell=shell)
+    result = await execute_command(
+        argv, context.root, timeout, shell=shell, safety=getattr(context, "safety", None)
+    )
+    timeout = result.get("timeout_budget", timeout)
     stdout = truncate(mask_output(result["stdout"], context.root))[0]
     stderr = truncate(mask_output(result["stderr"], context.root))[0]
     combined = stdout if not stderr else f"{stdout}\n[stderr]\n{stderr}".strip()

@@ -105,7 +105,10 @@ class ToolGateway:
                 outcome = self._awaiting_approval(tool, arguments, risk, decision)
             else:
                 outcome = await self._run(tool, arguments, context)
-        return await self._finish(name, arguments, outcome, context, node, risk, started, decision)
+        # decision.risk 可能被安全策略抬高（"每条命令都要确认"），台账要按最终口径记
+        return await self._finish(
+            name, arguments, outcome, context, node, decision.risk or risk, started, decision
+        )
 
     def decide(
         self,
@@ -116,6 +119,17 @@ class ToolGateway:
     ) -> Decision:
         """统一的权限判定入口：图里的审批门与网关必须拿到同一个答案。"""
         risk = tool.resolve_risk(arguments) if risk is None else risk
+        # 先过能力边界。这里拒绝的动作，就算用户在审批卡上点了「允许」也不执行，
+        # 所以必须在生成问句之前拦掉 —— 否则会变成"点了允许还是失败"。
+        mode = context.permissions.mode if context.permissions is not None else "default"
+        if context.safety is not None:
+            verdict = context.safety.gate(tool.name, arguments, context.root, mode=mode)
+            if verdict.denied:
+                return deny(risk, verdict.rule, verdict.reason, verdict.prefix)
+            # 「每条命令都要确认」不单独造一套状态机：抬高风险等级即可，
+            # 审批、会话记忆、前缀白名单全都复用同一套既有逻辑。
+            if verdict.asks and risk not in ("high", "critical"):
+                risk = "high"
         if context.permissions is not None:
             return context.permissions.decide(tool, arguments, risk)
         if context.approval_policy is not None and self._approved(tool, arguments, context):

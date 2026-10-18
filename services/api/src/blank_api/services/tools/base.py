@@ -14,6 +14,7 @@ from blank_api.services.models.base import ToolSpecLite
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型检查时导入，运行时无依赖
     from blank_api.services.permissions import PermissionPolicy
+    from blank_api.services.safety import SafetyPolicy
 
 ApprovalPolicy = Callable[["ToolDefinition", dict], Any]
 
@@ -41,6 +42,8 @@ class ToolContext:
     trace_id: str = ""
     # PermissionPolicy（延迟注解，避免与 permissions 模块循环导入）
     permissions: "PermissionPolicy | None" = None
+    # 能力边界（能不能做），与 permissions（要不要问）是两回事，判定时先过后者
+    safety: "SafetyPolicy | None" = None
     # 子代理运行器（延迟注入：它要引用创建它的 AgentSession）
     subagent_runner: Any = None
     # 本任务的交接笔记 / 项目长期记忆：工具层只读路径约定，不关心实现

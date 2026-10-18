@@ -2,6 +2,7 @@ import { Panel } from "@/components/panel";
 import { AgentRuntimePanel } from "@/components/settings/agent-runtime-panel";
 import { ProvidersView } from "@/components/settings/providers-view";
 import { RoleModelSettings } from "@/components/settings/role-model-settings";
+import { SafetyPanel } from "@/components/settings/safety-panel";
 
 export default function SettingsPage() {
   return (
@@ -10,7 +11,7 @@ export default function SettingsPage() {
         <div className="min-w-0">
           <h1 className="text-[19px] font-semibold tracking-tight">设置</h1>
           <p className="mt-1 text-[13px] leading-relaxed text-muted">
-            模型供应商、API Key 加密存储、独立审查与上下文水位、Token 用量。
+            安全与权限、模型供应商、API Key 加密存储、独立审查与上下文水位、Token 用量。
           </p>
         </div>
         <span className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1 font-mono text-[11px] whitespace-nowrap text-faint">
@@ -20,9 +21,26 @@ export default function SettingsPage() {
 
       {/*
         顺序是有讲究的：先放会改变内核行为的开关，再放模型供应商。
-        上一版把「执行与智能体」放在供应商三张大卡之后，打开设置页首屏看到的仍是老内容，
-        新能力等于不存在 —— 设置页的排布必须按「用户打开就要看的东西」来，而不是按模块归属。
+        上一个版本把「执行与智能体」放最前，是因为那一版加的是审查与水位；
+        现在客户最先问的是"它到底能在这台机器上做什么"，所以安全与权限排第一 ——
+        权限不是高级选项，是安装完第一件要确认的事。
       */}
+      <section>
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="text-[14px] font-medium tracking-tight">安全与权限</h2>
+            <p className="mt-1 text-[12px] leading-relaxed text-faint">
+              决定 Agent 在这台机器上「能做什么」：执行命令、联网、可触达的目录、禁止的命令前缀。
+              这一层是硬边界，审批也放不过去。
+            </p>
+          </div>
+          <span className="shrink-0 rounded-md border border-brand/40 bg-brand/10 px-2 py-0.5 font-mono text-[10px] text-brand">
+            0.5.0 新增
+          </span>
+        </div>
+        <SafetyPanel />
+      </section>
+
       <section>
         <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
           <div>
@@ -49,16 +67,17 @@ export default function SettingsPage() {
       </section>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <Panel title="沙箱与工作区" hint="v0.6 接入">
-          <p className="text-[13px] leading-relaxed text-faint">
-            工作区路径白名单、Shell 超时、Docker 沙箱、本地执行显式授权和参数级风险审批已由运行时执行。
-          </p>
-        </Panel>
         <Panel title="默认模型与任务级选择" hint="v0.4 接入">
           <p className="text-[13px] leading-relaxed text-faint">
             顶部可切换当前模型；任务接口支持备用模型，在可重试故障时自动切换。
           </p>
           <RoleModelSettings />
+        </Panel>
+        <Panel title="审计与回滚" hint="v0.4 接入">
+          <p className="text-[13px] leading-relaxed text-faint">
+            每次工具调用都落在 tool_calls 与任务事件里，含风险等级、权限判定与耗时；
+            写文件前留备份，任务执行前留整树快照，可以按检查点回滚。
+          </p>
         </Panel>
       </div>
     </div>

@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 
@@ -11,6 +12,26 @@ os.environ.setdefault("BLANK_MEMORY_DIR", tempfile.mkdtemp(prefix="blank-memory-
 os.environ.setdefault("BLANK_SETTINGS_FILE", f"{tempfile.mkdtemp(prefix='blank-settings-')}/settings.json")
 # 子代理的隔离副本也放测试自己的目录：不往系统临时目录里堆，跑完自动随 basetemp 清理
 os.environ.setdefault("BLANK_WORKTREE_ROOT", tempfile.mkdtemp(prefix="blank-worktrees-"))
+
+# 安全策略的产品默认是「禁止执行命令 + 每条命令都要确认」，那是给客户装机用的。
+# 测试要验证的恰恰是命令能跑通、审批能流转，所以这里把夹具调成宽松档 ——
+# 但只放宽这两项：内置禁止、路径边界、联网开关都保留原语义，
+# 否则一堆测试会绕过真正要守的边界。策略本身的默认值由 test_safety_policy_v050.py 断言。
+_SETTINGS_FIXTURE = os.environ["BLANK_SETTINGS_FILE"]
+if not os.path.exists(_SETTINGS_FIXTURE):
+    os.makedirs(os.path.dirname(_SETTINGS_FIXTURE), exist_ok=True)
+    with open(_SETTINGS_FIXTURE, "w", encoding="utf-8") as handle:
+        json.dump(
+            {
+                "safety": {
+                    "shell_enabled": True,
+                    "network_enabled": True,
+                    "confirm_all_commands": False,
+                    "restrict_to_workspace": True,
+                }
+            },
+            handle,
+        )
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402

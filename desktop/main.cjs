@@ -251,6 +251,9 @@ function resolveBackendCommand() {
     // 主密钥必须跟数据库同寿。留在包内 data/ 的话，升级换包就换了一把钥匙，
     // 之前存进库里的供应商 Key 全部解不开（secret_undecryptable）。
     env.BLANK_SECRET_KEY_FILE ??= path.join(DATA_DIR, ".blank_secret.key");
+    // 安全与权限也在这里。留在包内的话，升级一次客户的权限边界就悄悄变回默认值 ——
+    // 对"权限可控"来说这比丢个偏好严重得多，所以必须跟数据库同寿。
+    env.BLANK_SETTINGS_FILE ??= path.join(DATA_DIR, "settings.json");
   }
 
   const uvicornArgs = ["-m", "uvicorn", "blank_api.app:app", "--host", "127.0.0.1", "--port", PORT];
@@ -479,6 +482,29 @@ async function maybeScreenshot(win) {
   const delay = Number(process.env.BLANK_SHOT_DELAY ?? 800);
   if (delay > 0) await sleep(delay);
   console.log(`[desktop] 徽标状态(${delay}ms 后) ${await readPill()}`);
+
+  // 长页面自检：截到下面几屏的内容，否则"面板存在但截不到"和"没做"看起来一样。
+  // 不能只调 window.scrollTo —— 设置页的滚动容器是内层 main（外壳是 h-dvh overflow-hidden），
+  // 所以这里先找第一个真正可滚的元素，找不到再退回 window。
+  const scrollY = Number(process.env.BLANK_SHOT_SCROLL ?? 0);
+  if (scrollY > 0) {
+    const script = `(() => {
+      const y = ${Math.round(scrollY)};
+      const scrollable = [document.scrollingElement, ...document.querySelectorAll("main, div")]
+        .filter(Boolean)
+        .find((node) => {
+          if (node.scrollHeight <= node.clientHeight + 20) return false;
+          const overflow = getComputedStyle(node).overflowY;
+          return overflow === "auto" || overflow === "scroll";
+        });
+      if (scrollable) { scrollable.scrollTop = y; return scrollable.scrollTop; }
+      window.scrollTo(0, y);
+      return window.scrollY;
+    })()`;
+    const moved = await win.webContents.executeJavaScript(script).catch(() => 0);
+    console.log(`[desktop] 截图前滚动到 ${moved}px`);
+    await sleep(350);
+  }
 
   const image = await win.webContents.capturePage();
   await writeFile(target, image.toPNG());
