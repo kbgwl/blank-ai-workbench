@@ -358,3 +358,58 @@ lean 里留下的是**一条完整的最小回路**，不是随便砍：
 **顺手修的回归**：`#46`（纯问答不拍快照）落地时只跑了 `-k` 子集，`test_intent_and_reply.py`
 的 `_Session` 桩少了 `ensure_snapshot`，两个用例失败——补上桩并加了断言：动作类任务
 `snapshot_calls == ["create_plan"]`，问答类 `== []`。这是"改完只跑相关子集"的典型代价。
+
+### 7.6 主循环接模型流式输出（`stream_output`）
+
+在这之前，界面要等模型把整条回复写完才动一下——最长的那次等待恰好也是最贵的那次调用。
+链路是四段：适配器 `bind_tools_stream` → `OutputRelay` → `LiveFeed` → SSE `event: delta` → 前端实时行。
+
+**第一条边界：流式只影响"什么时候能看到文字"，不影响"什么时候能动工具"。**
+`tool_calls` 的分片到达时，`name` 只在第一片、`arguments` 逐段拼，少一个引号 `apply_patch`
+就会改错文件——而错误会以"改错地方"的形式出现在几十行之后。所以 `bind_tools_stream`
+只在流结束后才返回，调用方拿到的必然是一条可直接执行的完整响应。
+
+**第二条：`usage` 必须显式要。** OpenAI 侧不给 `stream_options.include_usage` 就一个 token
+数都不回，用量记账全是 0，而 0 会被当成"这次调用免费"。Anthropic 的 usage 分两次到
+（`message_start` 给输入、`message_delta` 给输出），没给到的字段沿用上一次——把缺失当 0
+会让成本凭空减半。
+
+**第三条：空流是失败，不是空回复。** 但不认 `stream` 的网关把整包 JSON 一次返回时，
+这坨"不是 SSE 的行"恰好就是完整响应——就地认掉，不再发第二次请求。重发的代价不只是钱：
+配额、延迟、以及"同一步被记成两步"的记账全跟着错（这一条是被 6 个 e2e 用例逼出来的，
+它们的 mock 网关正是这么回的）。认形状要严：只认 `choices[].message`，
+放宽成"能解析就算"会把一次流式回包误当成整包，结果是静默空回复。
+
+**第四条：退路的边界只有一条——已经收到文字之后不再退。** 重跑会让用户看到两遍输出，
+而且流里的错（内容审核、上下文超长）重跑还是错。零文字时出错照退。
+
+**实时通道允许丢。** `OutputRelay` 发的是"到目前为止的尾巴"（尾窗 800 字）而不是增量：
+订阅方直接替换、不用拼接，丢一帧也不会拼错。按时间（0.25s）或字数（160 字）攒批，
+一次正常回复只产生个位数帧。`LiveFeed` 的队列满了丢**旧**帧、永不阻塞——
+实时预览绝不能拖慢模型调用。
+
+**不写事件表。** 一次 800 token 的回复会变成几十行 `model.delta`，把时间线淹掉且让
+`after_seq` 失去可跳读性。只有"此刻在看这个任务的人"关心增量；刷新后应该看到完整回复，
+而不是最后 800 个字符。所以 `delta` 走独立事件名，前端不进时间线，只在活动列表末尾
+挂一行带脉冲光标的实时文本。
+
+**可观测**（都写事件表，因为它们是"发生过的事"）：
+
+```json
+{"node": "execute_action", "chunks": 37, "chars": 812, "first_delta_ms": 143,
+ "model": "deepseek-chat", "role": "coder"}
+```
+
+```json
+{"node": "execute_action", "reason": "模型 x 的流式响应为空",
+ "code": "model_stream_empty", "role": "coder"}
+```
+
+**开关**：`stream_output`（stable，默认开，`BLANK_FEATURE_STREAM_OUTPUT=0` 关）。
+
+**验收**：`tests/test_stream_output.py`（19 例）：聚合器（按 index 拼、两条调用各持参数、
+缺 id 补稳定 id、无名字丢弃）、四家方言（OpenAI 文本+工具+usage、显式要 include_usage、
+空流抛错、整包就地认掉、错形状仍抛错、Anthropic usage 分两事件、Ollama NDJSON、
+Responses 的 `item_id` 映射）、继电器（发尾巴不发全文、每帧不超尾窗、满了丢旧帧、
+退订后不再投递）、接进 `_call_adapter`（关着不流、开着推帧并记 metrics、
+流不出来退回一次性、已有文字后不重试、零文字时仍可退）。

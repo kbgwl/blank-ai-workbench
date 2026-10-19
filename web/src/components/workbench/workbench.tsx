@@ -161,7 +161,7 @@ export function Workbench() {
   const composer = useRef<HTMLTextAreaElement | null>(null);
   const detailSeq = useRef(0);
 
-  const { events, mode, notice: liveNotice, revision, reload } = useTaskEvents(selectedId, task?.status ?? null);
+  const { events, mode, notice: liveNotice, revision, streaming, reload } = useTaskEvents(selectedId, task?.status ?? null);
 
   const loadTasks = useCallback(() => {
     return fetchTasks()
@@ -803,6 +803,16 @@ export function Workbench() {
                   </div>
                 );
               })}
+              {/* 模型正在说的话：不落库，所以只在这里出现，也不带序号。 */}
+              {streaming && (
+                <div className="flex items-start gap-2 border-b border-dashed border-line px-1 py-1.5 text-[11.5px]">
+                  <span className="w-9 shrink-0 font-mono text-[10.5px] text-faint">···</span>
+                  <span className="min-w-0 flex-1 whitespace-pre-wrap text-text">
+                    {streaming}
+                    <span className="ml-0.5 inline-block size-1.5 animate-pulse rounded-full bg-brand align-middle" />
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>

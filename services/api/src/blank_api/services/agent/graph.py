@@ -18,9 +18,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import httpx
+
 from blank_api.limits import DEFAULT_MAX_STEPS, WRAP_UP_STEPS
 from blank_api.models.model_provider import ModelUsage
 from blank_api.services.agent.events import EventRecorder
+from blank_api.services.agent.live import OutputRelay
 from blank_api.services.agent.intent import (
     INTENT_ACT,
     INTENT_ANSWER,
@@ -136,6 +139,9 @@ class AgentSession:
     # 绝不会把任务发给用户没为这个任务选过的供应商。
     router: Router | None = None
     routing_adapters: dict[str, ModelAdapter] = field(default_factory=dict)
+    # 流式输出（特性开关 stream_output）。关着时 call_model 直接 bind_tools，
+    # 与引入流式之前逐字节一致；开着时文字边到边推给实时通道。
+    stream_output: bool = False
     # 工具表按档位裁剪（特性开关 tiered_tools）。默认 False —— 关着时 registry
     # 恒为 full 档，与裁剪功能上线前逐字节一致。
     tiered_tools: bool = False
@@ -409,8 +415,9 @@ class AgentSession:
         # 工具表跟着档位走。这里放在压缩之后、真正发请求之前：可见工具数会改变
         # 上下文体积，但改的是"下发的 schema"，不是已经算好的对话 token。
         await self._scope_tools(node, tier)
+        specs = self.gateway.specs()
         try:
-            response = await adapter.bind_tools(self.gateway.specs(), chat)
+            response = await self._call_adapter(adapter, specs, chat, node, role)
         except ModelError:
             await self._record_usage(node, "", Usage(), 0, "error", role=role)
             raise
@@ -426,6 +433,57 @@ class AgentSession:
             )
         await self._record_usage(node, response.model, usage, int((time.perf_counter() - started) * 1000), "ok", role=role)
         return response, accumulate_usage(usage)
+
+    async def _call_adapter(
+        self,
+        adapter: ModelAdapter,
+        specs: list,
+        chat: list[ChatMessage],
+        node: str,
+        role: str,
+    ) -> Any:
+        """一次模型调用。开关打开时走流式，流式不可用时自动退回非流式。
+
+        退路的边界只有一条：**已经收到文字之后不再退**。那时再跑一次会让用户看到
+        两遍输出，而且流里报的错（内容审核、上下文超长）重跑一次还是同样的错。
+        """
+        if not self.stream_output:
+            return await adapter.bind_tools(specs, chat)
+
+        relay = OutputRelay(self.context.task_id, node)
+        try:
+            response = await adapter.bind_tools_stream(specs, chat, on_delta=relay)
+        except ModelError as error:
+            if relay.chunks:
+                relay.close()
+                raise
+            # 有的网关不认 stream、有的中间层会吃掉 event-stream：这时一行都解析不出来。
+            # 退回一次性调用——慢一点，但结果是可信的。
+            await self.recorder.add(
+                "model.stream_fallback",
+                node,
+                {"reason": error.message, "code": error.code, "role": role},
+            )
+            return await adapter.bind_tools(specs, chat)
+        except httpx.HTTPError as error:
+            if relay.chunks:
+                relay.close()
+                raise
+            await self.recorder.add(
+                "model.stream_fallback",
+                node,
+                {"reason": f"{error.__class__.__name__}：{error}", "code": "stream_transport", "role": role},
+            )
+            return await adapter.bind_tools(specs, chat)
+        relay.close()
+        if relay.chunks:
+            # 一条持久事件记清楚"这次确实流了、首字多久"。stream_output 要不要留着，
+            # 判断依据就是这些数字，而不是感觉。
+            await self.recorder.add(
+                "model.streamed", node, {**relay.metrics(), "model": response.model, "role": role}
+            )
+        return response
+
     async def record_usage(
         self, node: str, model: str, usage: Usage, latency_ms: int, status: str, *, role: str = "coder"
     ) -> None:

@@ -120,6 +120,16 @@ _REGISTRY: tuple[FeatureFlag, ...] = (
             "默认关闭——关着时工具表恒为全量，与不裁剪完全一致。"
         ),
     ),
+    FeatureFlag(
+        name="stream_output",
+        stage=STABLE,
+        default=True,
+        summary=(
+            "流式输出：模型的文字边到边推给界面，不用等整条回复。"
+            "工具调用参数仍然聚合完整后才执行；网关不支持流式时自动退回非流式，"
+            "已在流中收到内容出错则直接报错（重跑只会让用户看到两遍）。"
+        ),
+    ),
 )
 
 FEATURES: dict[str, FeatureFlag] = {flag.name: flag for flag in _REGISTRY}

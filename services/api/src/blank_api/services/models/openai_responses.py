@@ -29,6 +29,7 @@ from blank_api.services.models.base import (
     Usage,
     data_payload,
 )
+from blank_api.services.models.streaming import ToolCallAccumulator
 
 # 只有这两档的模型接受 reasoning 参数；其余模型带上去会 400。
 _REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
@@ -225,3 +226,86 @@ class OpenAIResponsesAdapter(ModelAdapter):
                     elif kind == "error":
                         error = event.get("error") or {}
                         raise ModelError("model_stream_error", str(error.get("message") or error))
+
+    async def bind_tools_stream(self, tools, messages, *, on_delta=None, **kwargs) -> ModelResponse:
+        """Responses 的流式：文本 delta 与函数调用 delta 是两套事件。
+
+        函数调用的参数按 ``item_id`` 聚合（不是 OpenAI Chat 那种 index），
+        名字只在 ``output_item.added`` 里出现一次。收尾优先用 ``response.completed``
+        里的完整响应——那是唯一能同时拿到 usage 和全部 output 的地方。
+        """
+        self.require_tools(tools or [])
+        text: list[str] = []
+        calls = ToolCallAccumulator()
+        usage = Usage()
+        model = self.config.model
+        finished: ModelResponse | None = None
+        # item_id → 累积器里的 index，两套编号需要一个映射
+        item_index: dict[str, int] = {}
+
+        async with self._client() as client:
+            async with client.stream(
+                "POST",
+                f"{self.base}/responses",
+                headers=self._headers(),
+                json=self._payload(messages, tools, True),
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = (await resp.aread()).decode(errors="ignore")
+                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}")
+                async for raw in resp.aiter_lines():
+                    piece = data_payload(raw)
+                    if not piece:
+                        continue
+                    try:
+                        event = json.loads(piece)
+                    except json.JSONDecodeError:
+                        continue
+                    kind = event.get("type") or ""
+                    if kind == "response.output_text.delta":
+                        if delta := event.get("delta"):
+                            text.append(delta)
+                            if on_delta is not None:
+                                await on_delta(delta)
+                    elif kind == "response.output_item.added":
+                        item = event.get("item") or {}
+                        if item.get("type") == "function_call":
+                            key = str(item.get("id") or item.get("call_id") or len(item_index))
+                            item_index[key] = len(item_index)
+                            calls.add(
+                                item_index[key],
+                                call_id=str(item.get("call_id") or item.get("id") or ""),
+                                name=str(item.get("name") or ""),
+                                arguments=str(item.get("arguments") or ""),
+                            )
+                    elif kind == "response.function_call_arguments.delta":
+                        key = str(event.get("item_id") or "")
+                        if key in item_index and (delta := event.get("delta")):
+                            calls.add(item_index[key], arguments=delta)
+                    elif kind == "response.completed":
+                        data = event.get("response") or {}
+                        done_text, done_calls, status = self._parse_output(data)
+                        finished = ModelResponse(
+                            text=done_text or "".join(text),
+                            usage=self._parse_usage(data),
+                            model=data.get("model") or model,
+                            tool_calls=done_calls,
+                            finish_reason=status,
+                        )
+                    elif kind == "error":
+                        error = event.get("error") or {}
+                        raise ModelError("model_stream_error", str(error.get("message") or error))
+
+        if finished is not None:
+            return finished
+        if not text and not len(calls):
+            raise ModelError("model_stream_empty", f"模型 {self.config.model} 的流式响应为空")
+        # 没等到 response.completed（连接提前结束）：用累积到的碎片拼一条出来，
+        # 但 usage 必然是空的——记账会显示 0，这是真实情况，不要伪造。
+        return ModelResponse(
+            text="".join(text),
+            usage=usage,
+            model=model,
+            tool_calls=calls.as_list(),
+            finish_reason="incomplete",
+        )

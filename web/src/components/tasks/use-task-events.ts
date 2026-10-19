@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage, fetchEvents, isTerminalStatus, streamTaskEvents, type AgentEvent } from "./api";
-
 export type LiveKind = "sse" | "polling";
 export type LiveMode = "off" | "snapshot" | "connecting" | "sse" | "polling";
 
@@ -11,6 +10,8 @@ export type TaskEventsState = {
   mode: LiveMode;
   notice: string | null;
   revision: number;
+  /** 模型正在说的最后一屏文字。空串表示当前没有输出在进行。 */
+  streaming: string;
   reload: () => void;
 };
 
@@ -51,6 +52,8 @@ type Store = { taskId: string; events: AgentEvent[]; notice: string | null; revi
 export function useTaskEvents(taskId: string | null, status: string | null): TaskEventsState {
   const [store, setStore] = useState<Store | null>(null);
   const [live, setLive] = useState<{ taskId: string; kind: LiveKind } | null>(null);
+  // 实时文字单独放一个 state：它每秒变好几次，混进 events 会把整条时间线重排。
+  const [streaming, setStreaming] = useState<{ taskId: string; text: string } | null>(null);
   const [nonce, setNonce] = useState(0);
   const seenRef = useRef<{ taskId: string; keys: Set<string> }>({ taskId: "", keys: new Set() });
 
@@ -142,6 +145,12 @@ export function useTaskEvents(taskId: string | null, status: string | null): Tas
         setLive({ taskId: target, kind: "sse" });
         merge(target, [event]);
       },
+      onDelta: (delta) => {
+        if (stopped) return;
+        // 每帧都是"到目前为止的尾巴"，直接替换即可——不拼接，所以丢帧也不会拼错。
+        // done 表示这一屏说完了：清空，让位给紧随其后的持久事件。
+        setStreaming({ taskId: target, text: delta.done ? "" : delta.text });
+      },
     })
       .then(() => {
         if (!stopped) startPolling(null);
@@ -171,6 +180,7 @@ export function useTaskEvents(taskId: string | null, status: string | null): Tas
     mode,
     notice: scoped?.notice ?? null,
     revision: scoped?.revision ?? 0,
+    streaming: streaming && streaming.taskId === taskId && !finished ? streaming.text : "",
     reload,
   };
 }

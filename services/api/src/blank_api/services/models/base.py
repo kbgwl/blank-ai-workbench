@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
 import httpx
@@ -16,6 +16,11 @@ class ModelError(Exception):
         self.code = code
         self.message = message
         self.retryable = retryable
+
+
+# 增量文本回调：await 它是为了背压——模型在流式输出时，消费方（记日志、广播给界面）
+# 也应当是同一节奏，而不是把模型读得快、把回调堆在后台队列里。
+DeltaHandler = Callable[[str], Awaitable[None]]
 
 
 @dataclass
@@ -156,6 +161,28 @@ class ModelAdapter(ABC):
     async def bind_tools(self, tools: Sequence[ToolSpecLite], messages: Sequence[ChatMessage], **kwargs) -> ModelResponse:
         self.require_tools(tools)
         return await self.invoke(messages, tools=tools, **kwargs)
+
+    async def bind_tools_stream(
+        self,
+        tools: Sequence[ToolSpecLite],
+        messages: Sequence[ChatMessage],
+        *,
+        on_delta: DeltaHandler | None = None,
+        **kwargs,
+    ) -> ModelResponse:
+        """流式版 bind_tools：文字边到边回调，返回聚合后的完整响应。
+
+        这里是**退路**，不是空实现：没有专门实现流式的适配器一次性拿完，然后把全文
+        回调一次。语义与 ``bind_tools`` 完全一致，只是没有增量体验。
+
+        一条退路比四处各写一份安全——把"要不要流式"变成每个适配器都要自己答的问题，
+        迟早会有一家答错，而错法是静默的（文字一直在，只是界面不动）。
+        """
+        self.require_tools(tools)
+        response = await self.invoke(messages, tools=tools, **kwargs)
+        if on_delta is not None and response.text:
+            await on_delta(response.text)
+        return response
 
 
 def _parse_json_object(text: str) -> dict:

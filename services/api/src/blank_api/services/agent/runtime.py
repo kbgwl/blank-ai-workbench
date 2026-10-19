@@ -268,6 +268,7 @@ class AgentRuntime:
             # 工具裁剪只在真按档位路由时才有意义：没有 router 就没有 tier，
             # 硬开着它只会让每一步都拿去和 full 比一次，然后什么也没变。
             tiered_tools=bool(router is not None and is_enabled("tiered_tools", settings)),
+            stream_output=is_enabled("stream_output", settings),
             is_cancelled=_CancelledLookup(store, request.task_id),
             hooks=HookRunner.from_env(),
             guardian=guardian,

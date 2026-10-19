@@ -36,6 +36,7 @@ from blank_api.schemas.task import (
 from blank_api.services.agent.evidence import build_evidence, load_task
 from blank_api.services.agent.artifacts import ArtifactStore
 from blank_api.services.agent.events import EventRecorder
+from blank_api.services.agent.live import LiveFeed
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.fork import FORK_EVENT, fork_thread
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
@@ -50,6 +51,10 @@ log = logging.getLogger(__name__)
 
 # 自动重排队的上限：超过就不再无限重试，避免一条坏 run 在后台反复空转。
 MAX_RECOVERY_ATTEMPTS = 3
+
+# 事件流在没有持久事件时等多久去数据库补一次。实时增量会提前唤醒，所以这个值
+# 只影响"没有一场模型调用正在进行时"的延迟。
+DELTA_WAIT_SECONDS = 0.5
 
 
 def _factory_from(request: Request | None):
@@ -524,40 +529,63 @@ async def task_event_stream(
     db: DbSession,
     after_seq: int = Query(default=0, ge=0),
 ) -> StreamingResponse:
-    """Replay persisted events and wait for new ones from a sequence cursor."""
+    """Replay persisted events and wait for new ones from a sequence cursor.
+
+    同一个连接上也带实时增量（``event: delta``）：持久事件是「发生了什么」，
+    增量是「模型正在说什么」。两者分开是因为前者要能跳读、要能重放，后者允许丢。
+    """
     await load_task(db, task_id)
 
     async def events():
         cursor = after_seq
         idle_rounds = 0
         terminal = {"succeeded", "failed", "cancelled", "paused", "waiting_approval"}
-        while idle_rounds < 600:
-            # 断流会取消这个生成器：如果取消正好落在连接 close 上，池子里会留下一条
-            # 半关闭连接，后面所有请求都可能撞上 no active connection。每次读取都
-            # 屏蔽取消，等这一小段数据库操作跑完再说。
-            with anyio.CancelScope(shield=True):
-                async with get_session_factory()() as session:
-                    rows = (
-                        await session.execute(
-                            select(AgentEvent)
-                            .where(AgentEvent.task_id == task_id, AgentEvent.seq > cursor)
-                            .order_by(AgentEvent.seq)
-                        )
-                    ).scalars().all()
-                    status = (await session.execute(select(Task.status).where(Task.id == task_id))).scalar_one_or_none()
-            if rows:
-                for row in rows:
-                    cursor = row.seq
-                    yield f"id: {row.seq}\ndata: {json.dumps(EventOut.model_validate(row).model_dump(), ensure_ascii=False)}\n\n"
-                idle_rounds = 0
-            else:
-                idle_rounds += 1
-                if status in terminal:
-                    break
-                yield ": keep-alive\n\n"
-                await asyncio.sleep(0.5)
+        queue = LiveFeed.subscribe(task_id)
+        try:
+            while idle_rounds < 600:
+                # 断流会取消这个生成器：如果取消正好落在连接 close 上，池子里会留下一条
+                # 半关闭连接，后面所有请求都可能撞上 no active connection。每次读取都
+                # 屏蔽取消，等这一小段数据库操作跑完再说。
+                with anyio.CancelScope(shield=True):
+                    async with get_session_factory()() as session:
+                        rows = (
+                            await session.execute(
+                                select(AgentEvent)
+                                .where(AgentEvent.task_id == task_id, AgentEvent.seq > cursor)
+                                .order_by(AgentEvent.seq)
+                            )
+                        ).scalars().all()
+                        status = (await session.execute(select(Task.status).where(Task.id == task_id))).scalar_one_or_none()
+                if rows:
+                    for row in rows:
+                        cursor = row.seq
+                        yield f"id: {row.seq}\ndata: {json.dumps(EventOut.model_validate(row).model_dump(), ensure_ascii=False)}\n\n"
+                    idle_rounds = 0
+                else:
+                    idle_rounds += 1
+                    if status in terminal:
+                        break
+                # 有增量就立刻醒，没有就等半秒再去数据库补一次。
+                # 用 wait_for 而不是 sleep：sleep 会让文字比模型慢半拍，
+                # 而实时预览的全部价值就在这半拍上。
+                try:
+                    frame = await asyncio.wait_for(queue.get(), timeout=DELTA_WAIT_SECONDS)
+                except asyncio.TimeoutError:
+                    if not rows:
+                        yield ": keep-alive\n\n"
+                    continue
+                yield _delta_frame(frame)
+                while not queue.empty():
+                    yield _delta_frame(queue.get_nowait())
+        finally:
+            LiveFeed.unsubscribe(task_id, queue)
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def _delta_frame(payload: dict) -> str:
+    """实时增量帧。用独立的事件名：前端不必把它当成"发生过的事"塞进时间线。"""
+    return f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 @router.get("/tasks/{task_id}/evidence")

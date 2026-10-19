@@ -12,6 +12,7 @@ from blank_api.services.models.base import (
     ModelResponse,
     Usage,
 )
+from blank_api.services.models.streaming import ToolCallAccumulator
 
 
 class OllamaAdapter(ModelAdapter):
@@ -66,3 +67,62 @@ class OllamaAdapter(ModelAdapter):
                         yield content
                     if chunk.get("done"):
                         return
+
+    async def bind_tools_stream(self, tools, messages, *, on_delta=None, **kwargs) -> ModelResponse:
+        """Ollama 是 NDJSON（每行一个完整 JSON），不是 SSE——所以这里不认 ``data:`` 前缀。
+
+        工具调用一次性出现在某一行里（不是碎片），但仍然走同一个聚合器：
+        供应商之间的差异不该渗进调用链，调用链只认"流结束时参数必须是完整的"。
+        """
+        self.require_tools(tools or [])
+        text: list[str] = []
+        calls = ToolCallAccumulator()
+        usage = Usage()
+        model = self.config.model
+        done = False
+
+        async with self._client() as client:
+            async with client.stream(
+                "POST", f"{self.base}/api/chat", json=self._payload(messages, tools, True)
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = (await resp.aread()).decode(errors="ignore")
+                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}")
+                async for raw in resp.aiter_lines():
+                    if not raw.strip():
+                        continue
+                    try:
+                        chunk = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    model = chunk.get("model") or model
+                    message = chunk.get("message") or {}
+                    if content := message.get("content"):
+                        text.append(content)
+                        if on_delta is not None:
+                            await on_delta(content)
+                    for index, item in enumerate(message.get("tool_calls") or []):
+                        function = item.get("function") or {}
+                        calls.add(
+                            index,
+                            call_id=str(item.get("id") or ""),
+                            name=str(function.get("name") or ""),
+                            # Ollama 给的是对象而不是字符串，这里统一成 JSON 文本
+                            arguments=json.dumps(function.get("arguments") or {}, ensure_ascii=False),
+                        )
+                    if chunk.get("done"):
+                        usage = Usage(
+                            prompt_tokens=int(chunk.get("prompt_eval_count") or 0),
+                            completion_tokens=int(chunk.get("eval_count") or 0),
+                        )
+                        done = True
+
+        if not done and not text and not len(calls):
+            raise ModelError("model_stream_empty", f"模型 {self.config.model} 的流式响应为空")
+        return ModelResponse(
+            text="".join(text),
+            usage=usage,
+            model=model,
+            tool_calls=calls.as_list(),
+            finish_reason="stop" if done else None,
+        )

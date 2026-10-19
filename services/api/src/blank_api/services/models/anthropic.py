@@ -13,6 +13,7 @@ from blank_api.services.models.base import (
     Usage,
     data_payload,
 )
+from blank_api.services.models.streaming import ToolCallAccumulator
 
 
 class AnthropicAdapter(ModelAdapter):
@@ -123,3 +124,99 @@ class AnthropicAdapter(ModelAdapter):
                         delta = event.get("delta") or {}
                         if text := delta.get("text"):
                             yield text
+
+    async def bind_tools_stream(self, tools, messages, *, on_delta=None, **kwargs) -> ModelResponse:
+        """带工具调用的流式调用。
+
+        Anthropic 的工具参数是 ``input_json_delta.partial_json`` 逐段下发的，而且
+        **没有** OpenAI 那种 index 里的 name —— 名字在 ``content_block_start`` 里，
+        拼块的键是内容块的 index。两边形状不同，但聚合规则一样：流结束前不放手。
+        """
+        self.require_tools(tools or [])
+        text: list[str] = []
+        calls = ToolCallAccumulator()
+        usage = Usage()
+        model = self.config.model
+        stop_reason: str | None = None
+
+        async with self._client() as client:
+            async with client.stream(
+                "POST",
+                f"{self.base}/v1/messages",
+                headers=self._headers(),
+                json=self._payload(messages, tools, True),
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = (await resp.aread()).decode(errors="ignore")
+                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}")
+                async for raw in resp.aiter_lines():
+                    piece = data_payload(raw)
+                    if not piece:
+                        continue
+                    try:
+                        event = json.loads(piece)
+                    except json.JSONDecodeError:
+                        continue
+                    kind = event.get("type") or ""
+                    if kind == "message_start":
+                        message = event.get("message") or {}
+                        model = message.get("model") or model
+                        usage = self._usage(message.get("usage") or {}, usage)
+                    elif kind == "content_block_start":
+                        block = event.get("content_block") or {}
+                        if block.get("type") == "tool_use":
+                            calls.add(
+                                int(event.get("index") or 0),
+                                call_id=str(block.get("id") or ""),
+                                name=str(block.get("name") or ""),
+                            )
+                    elif kind == "content_block_delta":
+                        delta = event.get("delta") or {}
+                        if text_piece := delta.get("text"):
+                            text.append(text_piece)
+                            if on_delta is not None:
+                                await on_delta(text_piece)
+                        if partial := delta.get("partial_json"):
+                            calls.add(int(event.get("index") or 0), arguments=partial)
+                    elif kind == "message_delta":
+                        # 输出 token 与 stop_reason 只在这个事件里是终值
+                        usage = self._usage(event.get("usage") or {}, usage)
+                        stop_reason = (event.get("delta") or {}).get("stop_reason") or stop_reason
+                    elif kind == "error":
+                        error = event.get("error") or {}
+                        raise ModelError("model_stream_error", str(error.get("message") or error))
+
+        if not text and not len(calls):
+            raise ModelError("model_stream_empty", f"模型 {self.config.model} 的流式响应为空")
+        return ModelResponse(
+            text="".join(text),
+            usage=usage,
+            model=model,
+            tool_calls=calls.as_list(),
+            finish_reason=stop_reason,
+        )
+
+    @staticmethod
+    def _usage(raw: dict, base: Usage) -> Usage:
+        """流式里 usage 分两次到：message_start 给输入，message_delta 给输出。
+
+        没给到的字段沿用上一次的值——把缺失当成 0 会让成本记账凭空减半。
+        """
+        cache_read = raw.get("cache_read_input_tokens")
+        cache_write = raw.get("cache_creation_input_tokens")
+        inputs = raw.get("input_tokens")
+        outputs = raw.get("output_tokens")
+        cached = base.cached_tokens if cache_read is None else int(cache_read)
+        written = base.cache_write_tokens if cache_write is None else int(cache_write)
+        if inputs is None:
+            prompt = base.prompt_tokens
+        else:
+            # input_tokens 不含缓存部分，三块加起来才是真实输入总量
+            prompt = int(inputs) + cached + written
+        return Usage(
+            prompt_tokens=prompt,
+            completion_tokens=base.completion_tokens if outputs is None else int(outputs),
+            cached_tokens=cached,
+            cache_write_tokens=written,
+            reasoning_tokens=base.reasoning_tokens,
+        )

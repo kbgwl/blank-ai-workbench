@@ -755,11 +755,35 @@ export function fetchFile(projectId: string, path: string): Promise<FileContent>
 // SSE 事件流
 // ---------------------------------------------------------------------------
 
+export type LiveDelta = {
+  node: string;
+  text: string;
+  chars: number;
+  truncated: boolean;
+  done: boolean;
+};
+
 export type StreamHandlers = {
   onEvent: (event: AgentEvent) => void;
+  /** 实时增量：模型正在说的话，允许丢，不进时间线。 */
+  onDelta?: (delta: LiveDelta) => void;
   onDone?: () => void;
   signal: AbortSignal;
 };
+
+function parseDelta(data: string): LiveDelta | null {
+  const parsed = parseJson(data);
+  if (!parsed || typeof parsed !== "object") return null;
+  const row = parsed as Record<string, unknown>;
+  if (typeof row.text !== "string") return null;
+  return {
+    node: typeof row.node === "string" ? row.node : "",
+    text: row.text,
+    chars: typeof row.chars === "number" ? row.chars : row.text.length,
+    truncated: row.truncated === true,
+    done: row.done === true,
+  };
+}
 
 function emitFrame(data: string, onEvent: StreamHandlers["onEvent"]): void {
   if (!data.trim()) return;
@@ -768,6 +792,17 @@ function emitFrame(data: string, onEvent: StreamHandlers["onEvent"]): void {
     return;
   }
   for (const event of normalizeEvents(parsed)) onEvent(event);
+}
+
+/** 一帧 SSE：增量走 onDelta，其余当持久事件处理。 */
+function emitChunk(frame: { event: string; data: string }, handlers: StreamHandlers): void {
+  if (frame.event === "done" || frame.event === "keepalive" || frame.event === "ping") return;
+  if (frame.event === "delta") {
+    const delta = parseDelta(frame.data);
+    if (delta) handlers.onDelta?.(delta);
+    return;
+  }
+  emitFrame(frame.data, handlers.onEvent);
 }
 
 /**
@@ -807,16 +842,10 @@ export async function streamTaskEvents(taskId: string, handlers: StreamHandlers)
       buffer += decoder.decode(value, { stream: true }).replace(/\r/g, "");
       const drained = drainSse(buffer);
       buffer = drained.rest;
-      for (const frame of drained.events) {
-        if (frame.event === "done" || frame.event === "keepalive" || frame.event === "ping") continue;
-        emitFrame(frame.data, handlers.onEvent);
-      }
+      for (const frame of drained.events) emitChunk(frame, handlers);
     }
     buffer += decoder.decode().replace(/\r/g, "");
-    for (const frame of drainSse(`${buffer}\n\n`).events) {
-      if (frame.event === "done" || frame.event === "keepalive" || frame.event === "ping") continue;
-      emitFrame(frame.data, handlers.onEvent);
-    }
+    for (const frame of drainSse(`${buffer}\n\n`).events) emitChunk(frame, handlers);
   } catch (error) {
     if ((error as Error).name === "AbortError") return;
     throw error;
