@@ -57,7 +57,7 @@ export function TasksView({ initialTaskId = null }: Props) {
   const [rightTab, setRightTab] = useState<RightTab>("files");
   const detailSeq = useRef(0);
 
-  const { events, mode, notice, revision, reload } = useTaskEvents(selectedId, task?.status ?? null);
+  const { events, mode, notice, revision, streaming, reload } = useTaskEvents(selectedId, task?.status ?? null);
 
   const loadTasks = useCallback(() => {
     return fetchTasks()
@@ -323,6 +323,7 @@ export function TasksView({ initialTaskId = null }: Props) {
           actionError={null}
           busyAction={busyAction}
           approvalKey={approvalKey}
+          streaming={streaming}
           onHighlight={highlightChange}
           onAction={(action, block, scope) => void onAction(action, block, scope)}
           onAnswer={(answers, block) => void answer(answers, block)}

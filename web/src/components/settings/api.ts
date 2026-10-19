@@ -251,6 +251,29 @@ export function fetchSafetyRuntime(): Promise<SafetyRuntime> {
   return request<SafetyRuntime>(`${api}/settings/safety/runtime`, { cache: "no-store" });
 }
 
+/** 一个外部工具服务端此刻的状态。state：ready / failed / skipped。 */
+export type McpServerStatus = {
+  name: string;
+  transport: string;
+  state: string;
+  tools: number;
+  /** 失败或跳过时后端给的中文原因，成功时为空 */
+  error?: string;
+  server?: string;
+};
+
+export type McpResponse = {
+  /** 配置文件的绝对路径：用户要改的就是这个文件 */
+  config: string;
+  /** 所有服务端提供的工具总数 */
+  tools: number;
+  servers: McpServerStatus[];
+};
+
+export function fetchMcp(): Promise<McpResponse> {
+  return request<McpResponse>(`${api}/settings/mcp`, { cache: "no-store" });
+}
+
 export function chatProvider(providerId: string, message: string): Promise<{ text: string; model?: string }> {
   return request<{ text: string; model?: string }>(`${api}/providers/${providerId}/chat`, {
     method: "POST",

@@ -1,6 +1,7 @@
 import { Panel } from "@/components/panel";
 import { AgentRuntimePanel } from "@/components/settings/agent-runtime-panel";
 import { FeatureFlagsPanel } from "@/components/settings/feature-flags-panel";
+import { McpPanel } from "@/components/settings/mcp-panel";
 import { ProvidersView } from "@/components/settings/providers-view";
 import { RoleModelSettings } from "@/components/settings/role-model-settings";
 import { SafetyPanel } from "@/components/settings/safety-panel";
@@ -71,6 +72,22 @@ export default function SettingsPage() {
           </span>
         </div>
         <FeatureFlagsPanel />
+      </section>
+
+      <section>
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="text-[14px] font-medium tracking-tight">外部工具（MCP）</h2>
+            <p className="mt-1 text-[12px] leading-relaxed text-faint">
+              接进来的外部服务端，工具会和内置工具一样走审批与审计。这里能看到每个服务端
+              连没连上、为什么没连上——配置写错时界面上的症状只有「工具变少了」。
+            </p>
+          </div>
+          <span className="shrink-0 rounded-md border border-brand/40 bg-brand/10 px-2 py-0.5 font-mono text-[10px] text-brand">
+            0.6.0 新增
+          </span>
+        </div>
+        <McpPanel />
       </section>
 
       <section>

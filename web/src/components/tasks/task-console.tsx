@@ -20,6 +20,8 @@ type Props = {
   actionError: string | null;
   busyAction: string | null;
   approvalKey: string | null;
+  /** 模型正在说的话（尾窗）。空串表示此刻没有实时内容。 */
+  streaming?: string;
   onHighlight: (path: string) => void;
   onAction: (
     action: "run" | "cancel" | "approve" | "deny",
@@ -53,6 +55,7 @@ export function TaskConsole({
   actionError,
   busyAction,
   approvalKey,
+  streaming = "",
   onHighlight,
   onAction,
   onAnswer,
@@ -234,6 +237,20 @@ export function TaskConsole({
                 onAnswer={(answers, target) => onAnswer(answers, target)}
               />
             ))}
+          </div>
+        )}
+
+        {/* 实时预览：这条不是事件，落下就没了——它是"模型此刻在说什么"，
+            任务结束后由真正的总结块取代。 */}
+        {streaming && (
+          <div className="mt-2.5 rounded-lg border border-dashed border-line bg-surface-2/30 p-3">
+            <div className="mb-1.5 flex items-center gap-1.5 text-[10.5px] text-faint">
+              <span className="inline-block size-1.5 animate-pulse rounded-full bg-brand" />
+              模型正在输出
+            </div>
+            <p className="max-h-56 overflow-y-auto text-[12.5px] leading-relaxed whitespace-pre-wrap text-text">
+              {streaming}
+            </p>
           </div>
         )}
       </div>
