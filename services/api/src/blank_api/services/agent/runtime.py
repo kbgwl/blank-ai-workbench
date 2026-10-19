@@ -38,6 +38,7 @@ from blank_api.services.safety import SafetyPolicy
 from blank_api.services.settings import SettingsStore
 from blank_api.services.shell_env import capture as capture_shell
 from blank_api.services.subagent import SubAgentRunner
+from blank_api.services.threads import history_for, summarize_history
 from blank_api.services.models.base import ModelAdapter, ModelError
 from blank_api.services.permissions import MODE_DEFAULT, PermissionPolicy
 from blank_api.services.tools import build_default_tools
@@ -118,6 +119,8 @@ class RunRequest:
     # 按需选模型的候选池：只能从「本次任务已经选定的供应商」里取，不含用户没选过的。
     routing_pool: Sequence[Candidate] | None = None
     routing_adapters: dict[str, ModelAdapter] | None = None
+    # 所属会话（多轮对话）。空串表示这是独立任务，行为与没有会话时完全一致。
+    thread_ref: str = ""
 
 
 @dataclass
@@ -382,6 +385,17 @@ class AgentRuntime:
                 {"layers": provenance(session.instruction_layers)},
             )
 
+        # 会话上下文：只带"前几轮要了什么、交付了什么"，不是全部消息（见 services/threads.py）。
+        # thread_ref 为空时 history_for 直接返回 []，独立任务连一次查询都不多发。
+        history = await history_for(
+            self.session_factory, request.thread_ref, exclude_task_id=request.task_id
+        )
+        if history:
+            await recorder.add(
+                "thread.history",
+                "receive_task",
+                {"thread": request.thread_ref, **summarize_history(history)},
+            )
         state: dict[str, Any] = {
             "task_id": request.task_id,
             "messages": initial_messages(
@@ -389,6 +403,7 @@ class AgentRuntime:
                 session.acceptance_criteria,
                 session.skill_instructions,
                 session.instruction_layers,
+                history,
             ),
             "plan": [],
             "steps": 0,

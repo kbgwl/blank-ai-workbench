@@ -12,6 +12,7 @@ from blank_api.models.checkpoint import AgentCheckpoint
 from blank_api.models.model_provider import ModelUsage
 from blank_api.models.project import Project, Workspace
 from blank_api.models.task import AgentEvent, Task, ToolCall
+from blank_api.models.thread import Thread
 from blank_api.schemas.project import (
     ProjectCreate,
     ProjectOut,
@@ -99,6 +100,9 @@ async def delete_project(project_id: str, db: DbSession) -> None:
         for model in (AgentEvent, ToolCall, ModelUsage, AgentCheckpoint):
             await db.execute(delete(model).where(model.task_id.in_(task_ids)))
         await db.execute(delete(Task).where(Task.project_id == project.id))
+    # 会话排在任务之后：tasks.thread_id 是指向它的外键，反过来删会先撞上引用。
+    # 分叉出来的会话同属一个项目，也一并清掉，不留孤儿行。
+    await db.execute(delete(Thread).where(Thread.project_id == project.id))
     await db.delete(project)
     await db.commit()
 

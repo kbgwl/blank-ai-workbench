@@ -83,12 +83,23 @@ async def _resolve_provider(db: DbSession, task: Task, requested: str | None) ->
     return provider
 
 
-@router.post("/projects/{project_id}/tasks", response_model=TaskOut, status_code=201)
-async def create_task(project_id: str, payload: TaskCreate, db: DbSession) -> TaskOut:
-    project = await load_project(db, project_id)
+async def persist_task(
+    db: DbSession,
+    project_id: str,
+    payload: TaskCreate,
+    *,
+    thread_id: str | None = None,
+    turn_index: int = 0,
+) -> Task:
+    """把一条任务写进库并发一条 task.created。
+
+    独立任务和"会话里的一轮"共用它：``thread_id`` / ``turn_index`` 在建行时就带上，
+    而不是建完再 UPDATE 一次——那次 UPDATE 会把服务端生成的 ``updated_at`` 置为过期，
+    紧接着序列化它就会在异步会话里触发一次同步懒加载（MissingGreenlet）。
+    """
     task = Task(
         id=str(uuid.uuid4()),
-        project_id=project.id,
+        project_id=project_id,
         provider_id=payload.provider_id,
         title=payload.title,
         goal=payload.goal or payload.title,
@@ -96,6 +107,8 @@ async def create_task(project_id: str, payload: TaskCreate, db: DbSession) -> Ta
         acceptance_criteria=payload.acceptance_criteria,
         acceptance_results=[],
         max_steps=payload.max_steps,
+        thread_id=thread_id,
+        turn_index=turn_index,
     )
     db.add(task)
     await db.commit()
@@ -107,6 +120,13 @@ async def create_task(project_id: str, payload: TaskCreate, db: DbSession) -> Ta
             "acceptance_criteria": list(task.acceptance_criteria or []),
         },
     )
+    return task
+
+
+@router.post("/projects/{project_id}/tasks", response_model=TaskOut, status_code=201)
+async def create_task(project_id: str, payload: TaskCreate, db: DbSession) -> TaskOut:
+    project = await load_project(db, project_id)
+    task = await persist_task(db, project.id, payload)
     return TaskOut.model_validate(task)
 
 
@@ -271,6 +291,8 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         "acceptance_criteria": list(task.acceptance_criteria or []),
         "max_steps": int(task.max_steps),
         "skill_instructions": [str(item) for item in active_skills],
+        # 会话上下文由运行时自己读：这里只告诉它"这一轮属于哪条会话"。
+        "thread_ref": task.thread_id or "",
     }
     # 候选必须在这里算：下面 rollback 会让 ORM 实例过期，之后读 api_key_encrypted
     # 会触发同步懒加载，在异步会话里直接抛 MissingGreenlet。

@@ -20,6 +20,8 @@ class TaskOut(BaseModel):
     id: str
     project_id: str
     provider_id: str | None
+    # 所属会话（多轮对话）。独立任务为 None。
+    thread_id: str | None = None
     title: str
     goal: str
     status: str

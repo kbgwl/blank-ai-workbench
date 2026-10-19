@@ -552,6 +552,7 @@ def initial_messages(
     criteria: list[str],
     skills: list[str] | None = None,
     instruction_layers: list | tuple = (),
+    history: list[dict] | tuple = (),
 ) -> list[dict]:
     from blank_api.services.instructions import compose
 
@@ -569,8 +570,13 @@ def initial_messages(
     prompt = f"任务目标：{goal}"
     if criteria:
         prompt += "\n验收条件：\n" + "\n".join(f"- {item}" for item in criteria)
+    # 会话历史放在当前这一问之前、系统提示之后。位置是刻意的：系统提示必须
+    # 仍然是第一段（前缀缓存靠它），而历史是"背景对话"，它不能被当成
+    # 新的任务目标——把用户的旧要求塞到当前目标后面，模型会以为那还是它要做的事。
+    carried = [dict(item) for item in history or () if item.get("content")]
     return [
         {"role": "system", "content": system},
+        *carried,
         {"role": "user", "content": prompt},
     ]
 

@@ -37,6 +37,17 @@ class Task(Base):
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
     provider_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # 所属会话（多轮对话）。为空表示这是一次独立任务，行为与没有会话时完全一致。
+    # ON DELETE SET NULL：删会话不该连任务一起删——那些任务的执行记录是审计材料。
+    thread_id: Mapped[str | None] = mapped_column(
+        ForeignKey("threads.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # 会话内第几轮，从 1 开始；独立任务恒为 0。
+    # 不靠 created_at 排序：SQLite 的 CURRENT_TIMESTAMP 只到秒，同一秒里连开两轮时
+    # 顺序是随机的，而"第几轮"决定了历史里谁在前——顺序错了，模型读到的对话是乱的。
+    turn_index: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     goal: Mapped[str] = mapped_column(Text, nullable=False, default="")
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="draft")
