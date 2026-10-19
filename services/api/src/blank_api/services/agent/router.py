@@ -235,6 +235,8 @@ class Decision:
     # 池子里最强的也不够这一步用。此时仍然选了它，但要在事件里说清楚，
     # 否则出了错会有人以为是路由判错，其实是池子里没有更强的模型。
     shortfall: bool = False
+    # 选中模型的成本当量。和 rejected 里的数字用同一把尺子，才看得出「省了多少」。
+    cost: float = 0.0
 
     @property
     def routed(self) -> bool:
@@ -245,6 +247,7 @@ class Decision:
             "provider_id": self.provider_id,
             "name": self.name,
             "tier": self.tier,
+            "cost": self.cost,
             "reason": self.reason,
             "shortfall": self.shortfall,
             "rejected": [{"name": name, "why": why} for name, why in self.rejected],
@@ -300,6 +303,7 @@ def pick(demand: Demand, candidates: Iterable[Candidate]) -> Decision:
             reason=f"池子里没有达到{TIER_LABELS.get(demand.tier, demand.tier)}档的模型，只能用它",
             rejected=tuple(rejected),
             shortfall=True,
+            cost=fallback.cost,
         )
 
     usable.sort(key=lambda c: (TIER_ORDER.get(c.tier, TIER_ORDER[STANDARD]), c.cost, c.name))
@@ -320,6 +324,7 @@ def pick(demand: Demand, candidates: Iterable[Candidate]) -> Decision:
         demand=demand,
         reason=f"需要的{TIER_LABELS.get(demand.tier, demand.tier)}档里最便宜（成本当量 {chosen.cost:g}）",
         rejected=tuple(rejected),
+        cost=chosen.cost,
     )
 
 
@@ -330,11 +335,43 @@ class Router:
     pool: tuple[Candidate, ...] = ()
     failures: dict[str, int] = field(default_factory=dict)
     history: list[dict] = field(default_factory=list)
+    # 成本记账。单位是「激活参数当量」，不是钱——各家单价随时会变，
+    # 但同一把尺子量出来的相对值能说明「这次比全用最强省了多少」。
+    stats: dict[str, float] = field(
+        default_factory=lambda: {"calls": 0.0, "switched": 0.0, "cost_units": 0.0, "baseline_units": 0.0}
+    )
 
     @property
     def active(self) -> bool:
         # 只有一个候选时没有"选"可言，直接走原路径，行为和没开路由完全一致。
         return len([item for item in self.pool if item.provider_id]) > 1
+
+    def note_decision(self, decision: Decision, *, switched: bool) -> None:
+        """记一次决策的成本。baseline 用池子里最贵的那个当对照，
+        这样「省了多少」不需要知道任何一家的真实单价就能算出来。"""
+        self.stats["calls"] += 1
+        if switched:
+            self.stats["switched"] += 1
+        self.stats["cost_units"] += float(decision.cost or 0)
+        strongest = max((item.cost for item in self.pool if item.provider_id), default=0.0)
+        self.stats["baseline_units"] += float(strongest)
+
+    def summary(self) -> dict:
+        calls = int(self.stats["calls"])
+        if not calls:
+            return {}
+        spent = float(self.stats["cost_units"])
+        baseline = float(self.stats["baseline_units"])
+        return {
+            "calls": calls,
+            "switched": int(self.stats["switched"]),
+            "escalations": sum(self.failures.values()),
+            "cost_units": round(spent, 2),
+            "baseline_units": round(baseline, 2),
+            # 分母是「每步都用池子里最强」的花费。这个比值是开不开这个特性的唯一依据：
+            # 省 3% 还要多一个可能判错的环节，那就不值得开。
+            "saved_ratio": round((baseline - spent) / baseline, 3) if baseline else 0.0,
+        }
 
     def note_failure(self, node: str) -> int:
         """同一个节点失败了就把它的需求档位往上提一档。

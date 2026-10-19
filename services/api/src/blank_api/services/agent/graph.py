@@ -225,6 +225,10 @@ class AgentSession:
         picked = self.routing_adapters.get(decision.provider_id)
         if picked is None:
             return default
+        switched = picked.config.name != default.config.name
+        # 记账在返回之前做：这条事件发出去之后，用户就能在收尾里看到省了多少，
+        # 而那个比值是这个 beta 特性该不该转正的唯一依据。
+        self.router.note_decision(decision, switched=switched)
         # 事件里同时给「为什么选它」和「为什么没选别人」，否则路由就是个黑盒：
         # 出了问题只能猜，而猜错的代价是换个模型再跑一次。
         await self.recorder.add(
@@ -233,7 +237,7 @@ class AgentSession:
             {
                 **decision.as_dict(),
                 "default": default.config.name,
-                "switched": picked.config.name != default.config.name,
+                "switched": switched,
                 "tier_label": TIER_LABELS.get(decision.tier, decision.tier),
             },
         )

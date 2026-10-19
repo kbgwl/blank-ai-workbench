@@ -607,11 +607,23 @@ class AgentRuntime:
             "paused": "task.paused",
             "waiting_approval": "task.waiting_approval",
         }.get(status, "task.failed")
-        await scope.recorder.add(
-            event_type,
-            "complete",
-            {"status": status, "reason": reason, "summary": summary, **(extra or {})},
-        )
+        # 路由记账跟着收尾一起落：没有这个数，就没人知道这个 beta 到底省没省钱，
+        # 也就永远不敢把它转正。
+        payload = {"status": status, "reason": reason, "summary": summary, **(extra or {})}
+        routing = _routing_summary(scope.session)
+        if routing:
+            payload["routing"] = routing
+        await scope.recorder.add(event_type, "complete", payload)
+
+
+def _routing_summary(session: AgentSession) -> dict:
+    router = getattr(session, "router", None)
+    if router is None:
+        return {}
+    try:
+        return router.summary()
+    except Exception:  # 记账失败绝不能影响任务收尾
+        return {}
 
 
 def resolve_status(result: dict) -> str:

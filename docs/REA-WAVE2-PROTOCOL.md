@@ -261,6 +261,17 @@ pick(Demand, 候选池)                                → Decision(选中谁, �
 **默认关（beta）**，打开：`BLANK_FEATURE_MODEL_ROUTING=1` 或设置页「特性开关」。
 关着时 `router=None`，`call_model` 走原路径，一行都不碰。
 
+**可观测**：任务收尾的 `task.completed` 里带一块 `routing`：
+
+```json
+{"calls": 8, "switched": 3, "escalations": 1,
+ "cost_units": 62, "baseline_units": 405, "saved_ratio": 0.847}
+```
+
+单位是「激活参数当量」而不是钱——各家单价随时会变，但同一把尺子量出来的相对值
+能回答唯一要紧的问题：**这个开关值不值得开**。省 3% 还要多一个可能判错的环节，
+就不值得；省 80% 就值得观察一轮然后转 stable。
+
 ### 7.3 刻意不做
 
 - **不让模型自己选模型**。多一次调用、多一层不可复现，而且模型对自己能力的判断并不准。
@@ -271,14 +282,16 @@ pick(Demand, 候选池)                                → Decision(选中谁, �
 
 ### 7.4 验收
 
-- `tests/test_model_router.py`（31 例）：打分确定性与可解释、档位边界、`0` 不当便宜、
+- `tests/test_model_router.py`（33 例）：打分确定性与可解释、档位边界、`0` 不当便宜、
   激活参数优先、够用优先、淘汰原因、`shortfall`、同价定序可复现、升级粘性与封顶、
-  按节点隔离、历史有界、老库字段缺失、真事件验证（切换 / 无适配器退回 / 失败提档 /
-  被拦不提档 / 关掉无痕迹）。
-- 全量回归：**394 passed / 14 skipped**（上一版 363，新增 31）。
+  按节点隔离、历史有界、成本记账与 `saved_ratio`、老库字段缺失、真事件验证（切换 /
+  无适配器退回 / 失败提档 / 被拦不提档 / 关掉无痕迹）。
+- 全量回归：**396 passed / 14 skipped**（上一版 363，新增 33）。
 - 迁移链：`0012_provider_output_knobs → 0013_provider_params`。
-- 前端：`tsc --noEmit` 无报错；`eslint src/components/settings` 零报错（顺手修掉了
-  `safety-panel` / `agent-runtime-panel` 里两处 effect 内同步 setState 的既有报错）。
+- 前端：`tsc --noEmit` 无报错；`eslint src/components/workbench src/components/settings`
+  零报错（顺手修掉了四处既有报错：`safety-panel` / `agent-runtime-panel` 里 effect 内
+  同步 setState，`workbench` 里同类问题与 `goalNote` 的 memo 无法保留）。
+- 活动面板：`选择模型 → 云端 671/37（标准档）` 一行摘要，悬浮显示难度打分与
+  「为什么不是另一个」；任务收尾行显示 `路由 8 次 · 换模型 3 次 · 省 85%`。
 
-**未做**：`model_routing` 仍为 beta 默认关；负载均衡；前端还没把 `rejected` 渲染成
-可展开的明细（事件已经带全，UI 只显示标题）。
+**未做**：`model_routing` 仍为 beta 默认关；负载均衡；工具表还没按档位裁剪。

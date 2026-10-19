@@ -73,6 +73,16 @@ function eventDetail(event: AgentEvent): string {
     const to = typeof payload.to === "string" ? payload.to : "";
     return from && to ? `${from} → ${to}` : "";
   }
+  if (event.type === "task.completed" || event.type === "task.failed") {
+    const routing = payload.routing;
+    if (!routing || typeof routing !== "object") return "";
+    const row = routing as Record<string, unknown>;
+    const calls = typeof row.calls === "number" ? row.calls : 0;
+    const switched = typeof row.switched === "number" ? row.switched : 0;
+    const saved = typeof row.saved_ratio === "number" ? Math.round(row.saved_ratio * 100) : null;
+    if (!calls) return "";
+    return `路由 ${calls} 次 · 换模型 ${switched} 次${saved === null ? "" : ` · 省 ${saved}%`}`;
+  }
   return "";
 }
 
@@ -91,6 +101,29 @@ function userText(prompt: string): string {
 function Dot({ status }: { status: string }) {
   const tone = statusMeta(status);
   return <span className={`size-1.5 shrink-0 rounded-full ${tone.dot.replace("animate-pulse", "")}`} />;
+}
+
+/**
+ * 悬浮提示：一次路由决定的完整来历。
+ * 列表里只放得下一行，但「为什么不是另一个」正是这个特性唯一的可解释入口，
+ * 藏起来就等于没写——放进 title，想看的人随时能看。
+ */
+function eventHint(event: AgentEvent): string {
+  if (event.type !== "model.routed") return "";
+  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  const lines: string[] = [];
+  const complexity = typeof payload.complexity === "number" ? payload.complexity : null;
+  const notes = Array.isArray(payload.notes) ? payload.notes.filter((item): item is string => typeof item === "string") : [];
+  if (complexity !== null) {
+    lines.push(`难度 ${complexity}/100${notes.length ? `：${notes.join("；")}` : ""}`);
+  }
+  const rejected = Array.isArray(payload.rejected) ? payload.rejected : [];
+  for (const item of rejected) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    if (typeof row.name === "string" && typeof row.why === "string") lines.push(`${row.name}：${row.why}`);
+  }
+  return lines.join("\n");
 }
 
 export function Workbench() {
@@ -743,10 +776,11 @@ export function Workbench() {
               {visibleEvents.length === 0 && <p className="px-1 py-4 text-[11.5px] text-faint">还没有事件</p>}
               {visibleEvents.map((event) => {
                 const detail = eventDetail(event);
+                const hint = eventHint(event);
                 return (
                   <div key={`${event.seq}-${event.type}`} className="flex items-start gap-2 border-b border-dashed border-line px-1 py-1.5 text-[11.5px] last:border-0">
                     <span className="w-9 shrink-0 font-mono text-[10.5px] text-faint">#{event.seq}</span>
-                    <span className="min-w-0 flex-1 truncate text-muted">
+                    <span className="min-w-0 flex-1 truncate text-muted" title={hint || undefined}>
                       {EVENT_LABELS[event.type] ?? event.type}
                       {detail && <span className="ml-1.5 text-faint">{detail}</span>}
                     </span>

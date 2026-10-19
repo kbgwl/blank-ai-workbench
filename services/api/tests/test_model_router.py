@@ -222,6 +222,8 @@ def test_decision_serializes_for_the_event_stream():
     assert payload["rejected"]
     assert {"name", "why"} <= set(payload["rejected"][0])
     assert payload["shortfall"] is False
+    # 成本当量要和 rejected 里那些数字用同一把尺子，否则"省了多少"根本没法比较
+    assert payload["cost"] == 7
 
 
 # --------------------------------------------------------------------- 路由器状态
@@ -274,6 +276,27 @@ def test_history_is_bounded():
 
     # 长任务跑几百步不该把内存吃掉
     assert len(router.history) == 50
+
+
+def test_summary_measures_what_routing_saved():
+    router = Router(pool=tuple(_pool()))
+    decision = router.choose(node="execute_action", step=1)
+    router.note_decision(decision, switched=True)
+
+    summary = router.summary()
+
+    assert summary["calls"] == 1
+    assert summary["switched"] == 1
+    # 对照值是池子里最贵的那个（405），实际花了 7 —— 不比这一个数，
+    # 「省了多少」就只能靠嘴说
+    assert summary["cost_units"] == 7
+    assert summary["baseline_units"] == 405
+    assert 0.9 < summary["saved_ratio"] < 1.0
+
+
+def test_summary_is_empty_without_decisions():
+    # 一次都没路由过就返回空：收尾里多一个全是 0 的字段只会让人以为路由跑过了
+    assert Router(pool=tuple(_pool())).summary() == {}
 
 
 def test_candidate_from_provider_tolerates_old_rows():
@@ -432,6 +455,8 @@ async def test_routing_switches_the_adapter_and_says_why(seeded, tmp_path):
     assert len(payloads) == 1
     assert payloads[0]["switched"] is True
     assert payloads[0]["tier"] == LIGHT
+    # 成本当量要落到事件里：用户看到"换了模型"，也得能看出便宜了多少
+    assert payloads[0]["cost"] == 7
     # 淘汰原因必须落到事件里，否则用户只能看到一个黑盒换模型
     assert payloads[0]["rejected"]
 
