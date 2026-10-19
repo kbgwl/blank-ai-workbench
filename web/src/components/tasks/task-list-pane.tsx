@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Button, Field, Input, Notice, StateLine } from "@/components/projects/ui";
 import { Panel } from "@/components/panel";
-import { errorMessage, type Project, type Provider, type Task, type TaskDraft } from "./api";
+import { errorMessage, fetchThreads, type Project, type Provider, type Task, type TaskDraft, type Thread } from "./api";
 import { StatusBadge } from "./bits";
 import { formatDateTime } from "./format";
 import { QUIET_RULE, useScene } from "@/components/scenes/scenes";
@@ -20,9 +20,12 @@ type Props = {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onCreate: (draft: TaskDraft, autoRun: boolean) => Promise<Task | null>;
+  /** 会话列表的刷新信号：开完新会话或新的一轮后加一，选择器里就能看见它。 */
+  threadsRevision?: number;
 };
 
 const PROJECT_PLACEHOLDER = "__none__";
+const NEW_THREAD = "__new__";
 
 export function TaskListPane({
   projects,
@@ -34,12 +37,16 @@ export function TaskListPane({
   selectedId,
   onSelect,
   onCreate,
+  threadsRevision = 0,
 }: Props) {
   const [projectId, setProjectId] = useState("");
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
   const [criteria, setCriteria] = useState("");
   const [providerId, setProviderId] = useState("");
+  const [threadChoice, setThreadChoice] = useState("");
+  const [threads, setThreads] = useState<Thread[] | null>(null);
+  const [threadsError, setThreadsError] = useState<string | null>(null);
   const [showComposer, setShowComposer] = useState(false);
   const [submitting, setSubmitting] = useState<"idle" | "create" | "create-run">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +55,26 @@ export function TaskListPane({
   const usableProjects = projects ?? [];
   const chosenProject = projectId || usableProjects[0]?.id || "";
   const projectReady = usableProjects.length > 0;
+
+  // 会话属于项目，切换项目时那一串 id 就失效了，必须重新取。
+  useEffect(() => {
+    if (!chosenProject) return;
+    let alive = true;
+    fetchThreads(chosenProject)
+      .then((rows) => {
+        if (!alive) return;
+        setThreads(rows);
+        setThreadsError(null);
+      })
+      .catch((caught: unknown) => {
+        if (!alive) return;
+        setThreads([]);
+        setThreadsError(errorMessage(caught));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [chosenProject, threadsRevision]);
 
   async function submit(run: boolean, event?: FormEvent) {
     event?.preventDefault();
@@ -73,12 +100,14 @@ export function TaskListPane({
         .map((line) => line.replace(/^\s*[-*\d.、)]+\s*/, "").trim())
         .filter(Boolean).concat(scene.defaultCriteria.filter(() => !criteria.trim())),
       providerId,
+      thread: threadChoice || undefined,
     };
     try {
       await onCreate(draft, run);
       setTitle("");
       setPrompt("");
       setCriteria("");
+      setThreadChoice("");
       setShowComposer(false);
     } catch (caught: unknown) {
       setError(errorMessage(caught));
@@ -101,7 +130,11 @@ export function TaskListPane({
             {projectReady ? (
               <select
                 value={chosenProject}
-                onChange={(event) => setProjectId(event.target.value)}
+                onChange={(event) => {
+                  setProjectId(event.target.value);
+                  // 会话 id 属于上一个项目，切换后继续带着它只会在后端撞 404。
+                  setThreadChoice("");
+                }}
                 aria-label="选择项目"
                 className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13px] text-text focus:border-brand/60 focus:outline-none"
               >
@@ -115,6 +148,32 @@ export function TaskListPane({
             ) : (
               <Input value={PROJECT_PLACEHOLDER} readOnly disabled placeholder={projectsError ?? "正在读取项目…"} aria-label="选择项目" />
             )}
+          </Field>
+
+          <Field label="会话（多轮对话）">
+            {threadsError ? (
+              <p className="text-[11px] leading-relaxed text-faint">会话列表不可用（{threadsError}），只能建独立任务。</p>
+            ) : (
+              <select
+                value={threadChoice}
+                onChange={(event) => setThreadChoice(event.target.value)}
+                aria-label="选择会话"
+                className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13px] text-text focus:border-brand/60 focus:outline-none"
+              >
+                <option value="">独立任务（不带上下文）</option>
+                <option value={NEW_THREAD}>+ 新会话（这一轮作为第 1 轮）</option>
+                {(threads ?? [])
+                  .filter((thread) => thread.status === "active")
+                  .map((thread) => (
+                    <option key={thread.id} value={thread.id}>
+                      续聊 · {thread.title}（{thread.turnCount} 轮）
+                    </option>
+                  ))}
+              </select>
+            )}
+            <p className="mt-1 text-[10px] leading-relaxed text-faint">
+              续聊会带上这条会话前几轮的结论，不是全部消息；独立任务的开销与以前完全一样。
+            </p>
           </Field>
 
           <Field label="任务标题（可留空，自动取描述首行）">

@@ -141,6 +141,10 @@ export type Task = {
   failureReason: string;
   stepsUsed: number | null;
   maxSteps: number | null;
+  /** 所属会话（多轮对话）；独立任务为空串。空串而不是 null，是为了让调用处少一层判空。 */
+  threadId: string;
+  /** 会话内第几轮，独立任务为 0。 */
+  turnIndex: number;
   createdAt: string;
   updatedAt: string;
   raw: Record<string, unknown>;
@@ -166,6 +170,8 @@ export function normalizeTask(source: unknown): Task | null {
     failureReason: textOf(raw, "failure_reason", "reason", "error"),
     stepsUsed: numOf(raw, "steps_used", "steps"),
     maxSteps: numOf(raw, "max_steps"),
+    threadId: textOf(raw, "thread_id"),
+    turnIndex: numOf(raw, "turn_index") ?? 0,
     createdAt: textOf(raw, "created_at", "createdAt"),
     updatedAt: textOf(raw, "updated_at", "updatedAt"),
     raw,
@@ -178,7 +184,144 @@ export type TaskDraft = {
   prompt: string;
   acceptanceCriteria: string[];
   providerId?: string;
+  /** 目标会话：已有会话 id，或 "__new__" 表示新开一条并把这一轮作为第 1 轮。
+   *  留空 = 独立任务，开销与没有多轮对话时完全一样。 */
+  thread?: string;
 };
+
+// ---------------------------------------------------------------------------
+// 会话（多轮对话）
+//
+// 一轮本身仍然是一条普通任务：它有自己的目标、事件、工具调用和总结。
+// 会话只额外记住"哪几轮、按什么顺序、从哪条分叉过来"——所以这里不需要
+// 一套独立的运行/审批接口，点某一轮就是切换到那个 task。
+// ---------------------------------------------------------------------------
+
+export type Thread = {
+  id: string;
+  projectId: string;
+  title: string;
+  /** active | archived。归档不删任务，只是不许再开新的一轮。 */
+  status: string;
+  forkedFrom: string;
+  turnCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** 一轮的概要。后端刻意给得比 Task 窄：会话列表不需要每轮的目标全文。 */
+export type ThreadTurn = {
+  id: string;
+  title: string;
+  goal: string;
+  status: string;
+  resultSummary: string;
+  createdAt: string;
+};
+
+export type ThreadDetail = Thread & { turns: ThreadTurn[] };
+
+export function normalizeThread(source: unknown): Thread | null {
+  if (!source || typeof source !== "object") return null;
+  const raw = source as Record<string, unknown>;
+  const id = textOf(raw, "id", "thread_id");
+  if (!id) return null;
+  return {
+    id,
+    projectId: textOf(raw, "project_id"),
+    title: textOf(raw, "title") || "未命名会话",
+    status: textOf(raw, "status") || "active",
+    forkedFrom: textOf(raw, "forked_from"),
+    turnCount: numOf(raw, "turn_count") ?? 0,
+    createdAt: textOf(raw, "created_at"),
+    updatedAt: textOf(raw, "updated_at"),
+  };
+}
+
+export function normalizeThreadTurn(source: unknown): ThreadTurn | null {
+  if (!source || typeof source !== "object") return null;
+  const raw = source as Record<string, unknown>;
+  const id = textOf(raw, "id", "task_id");
+  if (!id) return null;
+  return {
+    id,
+    title: textOf(raw, "title") || "未命名轮次",
+    goal: textOf(raw, "goal", "prompt"),
+    status: normalizeStatus(pick(raw, "status", "state")),
+    resultSummary: textOf(raw, "result_summary", "summary"),
+    createdAt: textOf(raw, "created_at"),
+  };
+}
+
+export function normalizeThreadDetail(source: unknown): ThreadDetail | null {
+  const base = normalizeThread(source);
+  if (!base) return null;
+  const turns = arrayOf(source, "turns")
+    .map((item) => normalizeThreadTurn(item))
+    .filter((turn): turn is ThreadTurn => turn !== null);
+  return { ...base, turns };
+}
+
+export function fetchThreads(projectId: string): Promise<Thread[]> {
+  return request<unknown[]>(`${api}/projects/${projectId}/threads`, { cache: "no-store" }).then((rows) =>
+    (Array.isArray(rows) ? rows : []).map((row) => normalizeThread(row)).filter((thread): thread is Thread => thread !== null),
+  );
+}
+
+export function fetchThread(threadId: string): Promise<ThreadDetail | null> {
+  return request<unknown>(`${api}/threads/${threadId}`, { cache: "no-store" }).then((body) => normalizeThreadDetail(body));
+}
+
+export function createThread(projectId: string, input: { title?: string; forkedFrom?: string } = {}): Promise<Thread> {
+  const body: Record<string, unknown> = { title: input.title ?? "" };
+  if (input.forkedFrom) body.forked_from = input.forkedFrom;
+  return request<unknown>(`${api}/projects/${projectId}/threads`, {
+    method: "POST",
+    ...jsonInit,
+    body: JSON.stringify(body),
+  }).then((payload) => {
+    const thread = normalizeThread(payload) ?? normalizeThread(pick(payload, "thread", "data"));
+    if (!thread) throw new ApiError("后端未返回会话信息", "thread_missing_in_response", 502);
+    return thread;
+  });
+}
+
+/** 开新的一轮：创建的是一个普通任务（后端会带上 thread_id / turn_index）。 */
+export function createTurn(threadId: string, draft: TaskDraft): Promise<Task> {
+  const body: Record<string, unknown> = {
+    title: draft.title,
+    goal: draft.prompt,
+    acceptance_criteria: draft.acceptanceCriteria,
+  };
+  if (draft.providerId) body.provider_id = draft.providerId;
+  return request<unknown>(`${api}/threads/${threadId}/turns`, {
+    method: "POST",
+    ...jsonInit,
+    body: JSON.stringify(body),
+  }).then((payload) => {
+    const task = normalizeTask(payload) ?? normalizeTask(pick(payload, "task", "data"));
+    if (!task) throw new ApiError("后端未返回任务信息", "task_missing_in_response", 502);
+    return task;
+  });
+}
+
+/** 分叉：带着上下文另开一条线。不复制任务——上下文沿 forked_from 回溯。 */
+export function forkThread(threadId: string, title = ""): Promise<Thread> {
+  return request<unknown>(`${api}/threads/${threadId}/fork`, {
+    method: "POST",
+    ...jsonInit,
+    body: JSON.stringify({ title }),
+  }).then((payload) => {
+    const thread = normalizeThread(payload) ?? normalizeThread(pick(payload, "thread", "data"));
+    if (!thread) throw new ApiError("后端未返回会话信息", "thread_missing_in_response", 502);
+    return thread;
+  });
+}
+
+/** 归档，不是删除：删会话会把那些轮次任务的 thread_id 置空，它们就再也串不回去了。 */
+export function archiveThread(threadId: string): Promise<void> {
+  return request<void>(`${api}/threads/${threadId}`, { method: "DELETE" });
+}
 
 // ---------------------------------------------------------------------------
 // 事件时间线

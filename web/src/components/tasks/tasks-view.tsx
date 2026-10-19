@@ -3,17 +3,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Notice } from "@/components/projects/ui";
 import {
+  answerTask,
+  archiveThread,
   cancelTask,
   createTask,
-  answerTask,
+  createThread,
+  createTurn,
   decideApproval,
   errorMessage,
-  isMissingEndpoint,
   fetchEvidence,
   fetchProjects,
   fetchProviders,
   fetchTask,
   fetchTasks,
+  fetchThread,
+  forkThread,
+  isMissingEndpoint,
   runTask,
   type ApprovalScope,
   type Evidence,
@@ -21,12 +26,14 @@ import {
   type Provider,
   type Task,
   type TaskDraft,
+  type ThreadDetail,
 } from "./api";
 import { DiffPanel } from "./diff-panel";
 import { EvidencePanel } from "./evidence-panel";
 import { FilePanel } from "./file-panel";
 import { TaskConsole } from "./task-console";
 import { TaskListPane } from "./task-list-pane";
+import { ThreadBar } from "./thread-bar";
 import { buildBlocks, type Block } from "./timeline";
 import { TimelineBlock } from "./timeline-blocks";
 import { useTaskEvents } from "./use-task-events";
@@ -37,6 +44,8 @@ type Props = {
 
 type ActionKind = "run" | "cancel" | "approve" | "deny";
 type RightTab = "files" | "diff" | "terminal" | "evidence";
+/** 新建时选的是「新开一条会话」，不是一个已有会话的 id。 */
+const NEW_THREAD = "__new__";
 
 export function TasksView({ initialTaskId = null }: Props) {
   const [projects, setProjects] = useState<Project[] | null>(null);
@@ -55,6 +64,10 @@ export function TasksView({ initialTaskId = null }: Props) {
   const [approvalKey, setApprovalKey] = useState<string | null>(null);
   const [focusPath, setFocusPath] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>("files");
+  const [thread, setThread] = useState<ThreadDetail | null>(null);
+  const [threadError, setThreadError] = useState<string | null>(null);
+  const [threadBusy, setThreadBusy] = useState<null | "continue" | "fork" | "archive">(null);
+  const [threadsRevision, setThreadsRevision] = useState(0);
   const detailSeq = useRef(0);
 
   const { events, mode, notice, revision, streaming, reload } = useTaskEvents(selectedId, task?.status ?? null);
@@ -109,6 +122,8 @@ export function TasksView({ initialTaskId = null }: Props) {
           setDetailError(null);
           setEvidence(null);
           setEvidenceError(null);
+          // 不清会话：分叉之后就是"还没有选中任务 + 刚分叉出来的会话"这个状态，
+          // 清掉会把用户刚建出来的东西从界面上抹掉。
         });
       }
       const seq = ++detailSeq.current;
@@ -128,6 +143,27 @@ export function TasksView({ initialTaskId = null }: Props) {
           setEvidence(null);
           setEvidenceError(errorMessage(evidenceResult.reason));
         }
+        // 会话跟着任务一起取：一个任务要么属于某条会话、要么不属于，没有第三种。
+        // 放在这里而不是单开一个 effect，是因为"当前任务的上下文"本来就该一起刷新——
+        // 事件推进时轮次状态会跟着更新，不用手动刷新页面。
+        const threadId = taskResult.status === "fulfilled" ? (taskResult.value?.threadId ?? "") : "";
+        if (!threadId) {
+          setThread(null);
+          setThreadError(null);
+          return;
+        }
+        return fetchThread(threadId)
+          .then((detail) => {
+            if (seq !== detailSeq.current) return;
+            setThread(detail);
+            setThreadError(detail ? null : "后端没有返回这条会话");
+          })
+          .catch((error: unknown) => {
+            if (seq !== detailSeq.current) return;
+            // 会话读失败不把已经拿到的会话丢掉：那会把「分叉」「归档」一起藏起来，
+            // 而真正的问题只是这一次读超时。
+            setThreadError(errorMessage(error));
+          });
       });
     },
     [],
@@ -143,6 +179,16 @@ export function TasksView({ initialTaskId = null }: Props) {
     const id = setTimeout(() => void loadDetail(selectedId), 300);
     return () => clearTimeout(id);
   }, [revision, selectedId, loadDetail]);
+
+  /** 只重读一条会话（归档后用：任务没变，变的是会话状态）。 */
+  const loadThread = useCallback((threadId: string): Promise<void> => {
+    return fetchThread(threadId)
+      .then((detail) => {
+        setThread(detail);
+        setThreadError(detail ? null : "后端没有返回这条会话");
+      })
+      .catch((error: unknown) => setThreadError(errorMessage(error)));
+  }, []);
 
   const project = task ? (projects?.find((item) => item.id === task.projectId) ?? null) : (projects?.[0] ?? null);
 
@@ -229,7 +275,14 @@ export function TasksView({ initialTaskId = null }: Props) {
   const onCreate = useCallback(
     async (draft: TaskDraft, autoRun: boolean): Promise<Task | null> => {
       setActionError(null);
-      const created = await createTask(draft.projectId, draft);
+      // 会话里的一轮走 POST /threads/{id}/turns：后端与独立任务共用同一套建行逻辑，
+      // 只是顺手带上 thread_id / turn_index。选「新会话」时先开一条空会话，再落第一轮。
+      const threadId =
+        draft.thread === NEW_THREAD
+          ? (await createThread(draft.projectId, { title: draft.title })).id
+          : draft.thread;
+      const created = threadId ? await createTurn(threadId, draft) : await createTask(draft.projectId, draft);
+      if (threadId) setThreadsRevision((value) => value + 1);
       setTasks((current) => [created, ...(current ?? []).filter((item) => item.id !== created.id)]);
       setSelectedId(created.id);
       setTask(created);
@@ -246,6 +299,78 @@ export function TasksView({ initialTaskId = null }: Props) {
     },
     [loadDetail, notify, reload],
   );
+
+  /** 继续聊：在同一个会话里开新的一轮，并且直接开跑——"接着说"的意思就是要它接着做。 */
+  const onContinue = useCallback(
+    async (prompt: string) => {
+      if (!thread || threadBusy) return;
+      setThreadBusy("continue");
+      setActionError(null);
+      const title = prompt.split("\n")[0]?.trim().slice(0, 60) || `第 ${thread.turnCount + 1} 轮`;
+      try {
+        const created = await createTurn(thread.id, {
+          projectId: thread.projectId,
+          title,
+          prompt,
+          acceptanceCriteria: [],
+        });
+        setTasks((current) => [created, ...(current ?? []).filter((item) => item.id !== created.id)]);
+        setSelectedId(created.id);
+        setTask(created);
+        setThreadsRevision((value) => value + 1);
+        try {
+          await runTask(created.id);
+        } catch (error: unknown) {
+          // 创建成功、启动失败：这一轮还在，用户可以在控制台里手动点运行。
+          notify(`这一轮已创建，但启动失败：${errorMessage(error)}`);
+        }
+        await loadDetail(created.id);
+        reload();
+      } catch (error: unknown) {
+        notify(errorMessage(error));
+      } finally {
+        setThreadBusy(null);
+      }
+    },
+    [loadDetail, notify, reload, thread, threadBusy],
+  );
+
+  /** 分叉：只新建一条会话并记下来源，不复制任何任务——上下文靠 forked_from 回溯。 */
+  const onFork = useCallback(async () => {
+    if (!thread || threadBusy) return;
+    setThreadBusy("fork");
+    setActionError(null);
+    try {
+      const created = await forkThread(thread.id, `${thread.title}（分叉）`);
+      setThread({ ...created, turns: [] });
+      setThreadError(null);
+      // 新会话里还没有轮次，所以清空选中：中间的控制台回到"没有选中任务"，
+      // 而不是继续显示来源会话里的那一轮（那会让人以为它属于新会话）。
+      setSelectedId(null);
+      setThreadsRevision((value) => value + 1);
+      notify("已分叉出新会话，接下来这一轮会带上原会话的上下文");
+    } catch (error: unknown) {
+      notify(errorMessage(error));
+    } finally {
+      setThreadBusy(null);
+    }
+  }, [notify, thread, threadBusy]);
+
+  const onArchive = useCallback(async () => {
+    if (!thread || threadBusy) return;
+    if (!window.confirm(`归档「${thread.title}」？\n归档后不再接受新的一轮，已有轮次全部保留。`)) return;
+    setThreadBusy("archive");
+    setActionError(null);
+    try {
+      await archiveThread(thread.id);
+      await loadThread(thread.id);
+      setThreadsRevision((value) => value + 1);
+    } catch (error: unknown) {
+      notify(errorMessage(error));
+    } finally {
+      setThreadBusy(null);
+    }
+  }, [loadThread, notify, thread, threadBusy]);
 
   const onAction = useCallback(
     async (
@@ -310,10 +435,21 @@ export function TasksView({ initialTaskId = null }: Props) {
         selectedId={selectedId}
         onSelect={setSelectedId}
         onCreate={onCreate}
+        threadsRevision={threadsRevision}
       />
 
       <div className="min-h-0 min-w-0 overflow-y-auto pr-1">
         {actionError && <Notice>{actionError}</Notice>}
+        <ThreadBar
+          thread={thread}
+          error={threadError}
+          currentTaskId={selectedId}
+          busy={threadBusy}
+          onOpenTurn={setSelectedId}
+          onContinue={(prompt) => void onContinue(prompt)}
+          onFork={() => void onFork()}
+          onArchive={() => void onArchive()}
+        />
         <TaskConsole
           task={task}
           detailError={detailError}
