@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,7 @@ from blank_api.services.fork import allocate_thread
 from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import HookRunner
 from blank_api.services.instructions import load_layers, provenance
+from blank_api.services.mcp import manager as mcp_manager
 from blank_api.services.memory import MemoryStore
 from blank_api.services.notes import NoteStore
 from blank_api.services.safety import SafetyPolicy
@@ -127,6 +128,9 @@ class _RunScope:
     graph: Any
     config: dict
     thread_id: str
+    # 外部工具（MCP）这轮的连接结果：写进 task.started，让"我的服务端怎么没生效"
+    # 有一个可以直接看的地方，而不是只剩"工具列表里没有"。
+    mcp: dict = field(default_factory=dict)
 
 
 class AgentRuntime:
@@ -181,7 +185,7 @@ class AgentRuntime:
             ).scalar_one_or_none()
         return str((payload or {}).get("permission_mode") or "")
 
-    def _prepare(self, request: RunRequest, thread_id: str) -> _RunScope:
+    async def _prepare(self, request: RunRequest, thread_id: str) -> _RunScope:
         store = SerializedSessionFactory(self.session_factory)
         recorder = EventRecorder(store, request.task_id, trace_id=thread_id, run_id=request.run_id)
         settings = SettingsStore().read()
@@ -191,6 +195,10 @@ class AgentRuntime:
         tools = build_default_tools()
         if not tool_search_enabled:
             tools = [tool for tool in tools if tool.name != "tool_search"]
+        # 外部工具（MCP）：走同一个网关、同一套审批、同一份审计。连接失败只影响
+        # 那个服务端自己——半份工具表也远好过起不来任务。
+        mcp_bundle = await mcp_manager().bundle()
+        tools = [*tools, *mcp_bundle.tools]
         gateway = ToolGateway(tools, defer=tool_search_enabled)
         allowed = set(request.approved_tools or set())
         approved_actions = set(request.approved_actions or set())
@@ -292,6 +300,7 @@ class AgentRuntime:
             graph=graph,
             config=config,
             thread_id=thread_id,
+            mcp=mcp_bundle.as_dict(),
         )
 
     async def _fire_hooks(self, scope: _RunScope, event: str, payload: dict) -> None:
@@ -306,7 +315,7 @@ class AgentRuntime:
 
     async def run(self, request: RunRequest) -> dict[str, Any]:
         thread_id = await next_thread_id(self.session_factory, request.task_id)
-        scope = self._prepare(request, thread_id)
+        scope = await self._prepare(request, thread_id)
         await self._rehydrate(request.task_id, scope.session.permissions)
         recorder, session = scope.recorder, scope.session
         # 快照不在这里拍。它的意义是「动手之前留一份原样」，所以时机应该在
@@ -333,6 +342,7 @@ class AgentRuntime:
                 "permissions": session.permissions.snapshot(),
                 "tools": session.gateway.registry.visible_names(),
                 "tools_deferred": session.gateway.registry.deferred_names(),
+                "mcp": scope.mcp,
                 "compaction": {
                     "context_window": session.compactor.context_window,
                     "trigger_ratio": session.compactor.trigger_ratio,
@@ -413,7 +423,7 @@ class AgentRuntime:
         thread_id = await latest_thread_id(self.session_factory, request.task_id)
         if not request.permission_mode:
             request.permission_mode = await self._stored_mode(request.task_id) or MODE_DEFAULT
-        scope = self._prepare(request, thread_id)
+        scope = await self._prepare(request, thread_id)
         await self._rehydrate(request.task_id, scope.session.permissions)
         await self._set_status(scope, "running")
         await scope.recorder.add(

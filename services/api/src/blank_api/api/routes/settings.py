@@ -16,6 +16,7 @@ from blank_api.api.errors import ApiError
 from blank_api.schemas.settings import AgentSettings, AgentSettingsPatch
 from blank_api.services import features as feature_registry
 from blank_api.services.guardian import MODES as GUARDIAN_MODES
+from blank_api.services.mcp import manager as mcp_manager
 from blank_api.services.permissions import MODE_LABELS, MODES as PERMISSION_MODES
 from blank_api.services.safety import SafetyPolicy, backend_info
 from blank_api.services.settings import (
@@ -110,6 +111,17 @@ async def patch_features(payload: dict[str, Any] = Body(...)) -> dict:
         raise ApiError("unknown_feature", f"未注册的特性开关：{exc.name}") from exc
     except ValueError as exc:
         raise ApiError("invalid_feature_value", str(exc)) from exc
+
+
+@router.get("/mcp")
+async def read_mcp() -> dict:
+    """外部工具服务端接上没有、每个为什么没接上。
+
+    配置写在 mcp.json 里，用户改错一个字段时界面上唯一的症状是「工具变少了」。
+    这个端点把每一行的判定结果原样吐出来，省得靠猜。
+    """
+    bundle = await mcp_manager().bundle()
+    return {"config": str(mcp_manager().path), **bundle.as_dict()}
 
 
 @router.get("/safety/runtime")

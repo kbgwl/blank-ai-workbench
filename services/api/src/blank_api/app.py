@@ -33,6 +33,10 @@ async def app_lifespan(_: FastAPI) -> AsyncIterator[None]:
         recovery_task.cancel()
         await asyncio.gather(recovery_task, return_exceptions=True)
         await run_manager.shutdown()
+        # 外部工具服务端是我们起的子进程：不在这里收掉，退出后会留下孤儿进程
+        from blank_api.services.mcp import manager as mcp_manager
+
+        await mcp_manager().close()
 
 
 def create_app() -> FastAPI:

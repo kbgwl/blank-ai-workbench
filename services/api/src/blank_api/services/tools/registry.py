@@ -66,6 +66,11 @@ DEFERRED_TOOLS = frozenset(
     }
 )
 
+# 外部工具的命名空间前缀（MCP）。它们数量不固定、schema 由别人的服务端决定，
+# 一律先收着，靠 tool_search 拉——否则接三个服务端就能把每轮的提示词撑爆，
+# 而且下面的"未登记的默认常驻"规则会静默把它们全放进来。
+DEFERRED_PREFIXES = ("mcp__",)
+
 # 搜索别名：模型说"跑测试""提交""查资料"时也要命中，不能只认英文名
 ALIASES: dict[str, tuple[str, ...]] = {
     "git": ("git", "提交", "版本", "分支", "commit", "diff", "log", "stash"),
@@ -175,8 +180,14 @@ class ToolRegistry:
             requested = set(core) if core is not None else set(CORE_TOOLS)
             # 核心集合里可能有本次没有注册的名字（例如子代理只拿到一部分工具）
             self._core = {name for name in requested if name in names}
-            # 未在 DEFERRED_TOOLS 里声明的工具默认常驻，避免"新增工具却忘了登记"变成隐形 bug
-            self._core |= {name for name in names if name not in DEFERRED_TOOLS}
+            # 未在 DEFERRED_TOOLS 里声明的工具默认常驻，避免"新增工具却忘了登记"变成隐形 bug。
+            # 外部工具（mcp__ 前缀）是例外：它们的数量与 schema 都不由我们决定，
+            # 常驻会让提示词随"用户装了几个服务端"一起膨胀。
+            self._core |= {
+                name
+                for name in names
+                if name not in DEFERRED_TOOLS and not name.startswith(DEFERRED_PREFIXES)
+            }
         # 切档时要回到的基准。没有它，从 lean 切回 full 就再也找不回原本的核心集合。
         self._base_core: set[str] = set(self._core)
         # 子代理拿到的本来就是一小撮白名单，再按档位裁一层只是重复劳动，

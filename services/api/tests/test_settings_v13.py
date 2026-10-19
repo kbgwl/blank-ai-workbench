@@ -185,7 +185,7 @@ def test_guardian_falls_back_to_env_without_a_settings_file(tmp_path: Path, monk
 # --------------------------------------------------------------------------- #
 # 5. 运行时就绪检查：设置真的改变内核行为
 # --------------------------------------------------------------------------- #
-def _scope(workspace: Path, store: SettingsStore, settings: dict, monkeypatch):
+async def _scope(workspace: Path, store: SettingsStore, settings: dict, monkeypatch):
     monkeypatch.setenv("BLANK_SETTINGS_FILE", str(store.path))
     store.write(settings)
     runtime = AgentRuntime(session_factory=None)
@@ -198,16 +198,16 @@ def _scope(workspace: Path, store: SettingsStore, settings: dict, monkeypatch):
         goal="检查设置是否生效",
         max_steps=5,
     )
-    return runtime._prepare(request, "task-settings:1")
+    return await runtime._prepare(request, "task-settings:1")
 
 
-def test_default_permission_mode_comes_from_settings(workspace: Path, store: SettingsStore, monkeypatch):
-    scope = _scope(workspace, store, {"permissions": {"default_mode": "accept_edits"}}, monkeypatch)
+async def test_default_permission_mode_comes_from_settings(workspace: Path, store: SettingsStore, monkeypatch):
+    scope = await _scope(workspace, store, {"permissions": {"default_mode": "accept_edits"}}, monkeypatch)
     assert scope.session.permission_mode == "accept_edits"
 
 
-def test_water_line_is_configured_from_settings(workspace: Path, store: SettingsStore, monkeypatch):
-    scope = _scope(
+async def test_water_line_is_configured_from_settings(workspace: Path, store: SettingsStore, monkeypatch):
+    scope = await _scope(
         workspace,
         store,
         {"compaction": {"trigger_ratio": 0.6, "reserve_tokens": 4_096}},
@@ -220,21 +220,21 @@ def test_water_line_is_configured_from_settings(workspace: Path, store: Settings
     assert compactor.trigger_tokens() == 19_200
 
 
-def test_turning_off_tool_search_shows_every_tool(workspace: Path, store: SettingsStore, monkeypatch):
-    scope = _scope(workspace, store, {"tools": {"search": False}}, monkeypatch)
+async def test_turning_off_tool_search_shows_every_tool(workspace: Path, store: SettingsStore, monkeypatch):
+    scope = await _scope(workspace, store, {"tools": {"search": False}}, monkeypatch)
     registry = scope.session.gateway.registry
     assert "tool_search" not in registry.visible_names()
     assert set(registry.visible_names()) == set(scope.session.gateway.tools)
 
 
-def test_tool_search_on_by_default_keeps_git_hidden(workspace: Path, store: SettingsStore, monkeypatch):
-    scope = _scope(workspace, store, {}, monkeypatch)
+async def test_tool_search_on_by_default_keeps_git_hidden(workspace: Path, store: SettingsStore, monkeypatch):
+    scope = await _scope(workspace, store, {}, monkeypatch)
     registry = scope.session.gateway.registry
     assert "tool_search" in registry.visible_names()
     assert "git" not in registry.visible_names()
 
 
-def test_guardian_mode_reaches_the_session(workspace: Path, store: SettingsStore, monkeypatch):
-    scope = _scope(workspace, store, {"guardian": {"mode": "auto"}}, monkeypatch)
+async def test_guardian_mode_reaches_the_session(workspace: Path, store: SettingsStore, monkeypatch):
+    scope = await _scope(workspace, store, {"guardian": {"mode": "auto"}}, monkeypatch)
     assert scope.session.guardian.mode == "auto"
     assert scope.session.guardian.enabled

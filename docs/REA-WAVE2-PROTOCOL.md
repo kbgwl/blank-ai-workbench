@@ -413,3 +413,80 @@ lean 里留下的是**一条完整的最小回路**，不是随便砍：
 Responses 的 `item_id` 映射）、继电器（发尾巴不发全文、每帧不超尾窗、满了丢旧帧、
 退订后不再投递）、接进 `_call_adapter`（关着不流、开着推帧并记 metrics、
 流不出来退回一次性、已有文字后不重试、零文字时仍可退）。
+
+### 7.7 D 档：接 MCP 客户端扩展工具面（`services/mcp`）
+
+内置工具再多也是我们自己写的。MCP 是另一种东西：**别人写的服务端，通过一根我们看得见
+但管不到的管道，向模型提供工具**。接入的全部难点不在协议，而在"怎么不让它变成后门"。
+
+**一句话概括**：`mcp__github__create_issue` 和 `read_file` 在系统里必须是同一种东西——
+同一个 `ToolDefinition`、同一个网关、同一套审批、同一张审计表、同一条 `tool_search` 检索
+路径。模型分不出差别，我们也不给它分。
+
+**协议层（`protocol.py`）三件事：**
+
+- **名字要按模型的规则重写。** function name 只允许 `[a-zA-Z0-9_-]`、上限 64 字符，而服务名
+  与工具名可以有空格、点号、中文。全部磨平成 `mcp__<server>__<tool>`；超长截断后补 8 位
+  稳定哈希——**稳定是硬要求**，否则 `tool_search` 拉回来的名字和下一步要调的名字对不上。
+- **schema 要修。** MCP 允许省掉 `inputSchema`，模型 API 不允许空 schema，补成
+  `{"type":"object","properties":{}}`。
+- **结果里的非文本块不能丢。** 图片、资源、音频降级成一句可读的描述并保留 `data.media`。
+  静默丢块会让模型认为"服务端什么都没返回"，然后重复调用同一条。
+
+**传输层（`client.py`）四个坑，全部表现为"卡住"：**
+
+| 坑 | 现象 | 处理 |
+|---|---|---|
+| stderr 没人读 | 服务端写日志写满 64 KiB 管道，卡在自己的写操作上 | 常驻读协程 + 保留最后 4 KiB |
+| 进程死了但调用还在等 | 30 秒后一句超时，不知道原因 | stdout 关闭即失败全部待决调用，报错带 exit code 与 stderr 尾巴 |
+| Windows 的 `.cmd` | `npx`/`uvx` 直接 spawn 报 FileNotFoundError | `shutil.which` + 套 `cmd /c` |
+| 迟到的回包 | 写进已超时的 future，炸掉读循环 | 找不到 future 就丢弃 |
+
+握手按 `2025-06-18 → 2024-11-05` 依次尝试；`capabilities` 只声明 `{}`——我们不支持
+roots 与 sampling，声明了却不应答，服务端会等一个永远不来的回复。
+
+**桥接层（`bridge.py`）三条规则：**
+
+- **命名空间。** 服务端自带一个 `run_shell` 也顶不掉我们的：它叫 `mcp__<server>__run_shell`。
+  同名磨平冲突（`a.b` 与 `a-b`）按名字排序后先到先得，后到的补哈希——**排序保证结果稳定**，
+  不依赖服务端返回顺序。
+- **默认高风险。** 不给审批就等于给外部服务开了一条不过审的写入通道。用户可以在配置里
+  显式调低（`risk: "low"`），那是他的选择，不是我们的默认。
+- **失败隔离。** 挂掉、超时、说错协议的服务端只损失它自己的工具，任务照常开工；
+  `task.started` 的 `mcp` 字段写清楚每个服务端的状态与原因。
+
+**开关就是那份文件。** 配置在 `data/mcp.json`（跟着 `settings.json` 走，`BLANK_MCP_FILE`
+可覆盖），用所有人都认识的 `mcpServers` 形状：
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "E:\\work"]},
+    "github": {"url": "https://api.example.com/mcp",
+               "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"},
+               "timeout": 60, "risk": "medium"},
+    "legacy": {"type": "sse", "url": "http://localhost:3000/sse"}
+  }
+}
+```
+
+没有这个文件时**一行代码都不跑**（与 `BLANK_HOOKS` 同一个口径）：不 spawn、不改工具表、
+不增加任何启动成本。`"disabled": true` 单独关掉一个，`BLANK_MCP_DISABLE=1` 整体关掉。
+`"type": "sse"` 会被明确拒绝并说明原因——已废弃的旧传输，静默连不上比报错更难查。
+
+**外部工具默认不进提示词。** 新增 `DEFERRED_PREFIXES = ("mcp__",)`：接三个服务端就能多出
+几十个工具，常驻会把提示词撑成"用户装了几个服务端"的函数。它们靠 `tool_search` 按服务名
+拉回来（`github` 命中 `mcp__github__create_issue` 的 `+40` 名字分），lean 档一律不出现。
+
+**排障**：`GET /api/v1/settings/mcp` 返回每个服务端的 `state / tools / error`，以及
+`task.started` 事件里的同一份信息。用户改错一个字段时，界面上唯一的症状是"工具变少了"，
+这两处就是给那种情况准备的。
+
+**验收**：`tests/test_mcp_tools.py`（40 例，含 3 个真起子进程的传输用例）：命名空间与
+截断稳定性、中文段名、schema 修复、媒体块不丢、SSE 解析、横幅行忽略、握手与工具列表、
+stderr 写满 200 KiB 不卡死、进程崩溃报出它自己的 stderr、静默服务端 1 秒超时、
+关闭后子进程真的退出、HTTP 会话 id 回带、SSE 回包、401 变成可读错误、同名工具不顶掉内置、
+默认高风险、可显式调低、描述带服务名、磨平冲突不合并、配置拒绝 sse、`${VAR}` 展开、
+坏服务端不影响好服务端、改配置即重连、`BLANK_MCP_DISABLE` 生效、坏 JSON 只报错不崩、
+注册表里默认收起、`tool_search` 按服务名拉回、lean 档隐藏、高风险必问、批准后走网关并落审计、
+`_prepare` 装配后网关里真有这些工具、状态端点、Windows `.cmd` 启动器真跑一遍。
