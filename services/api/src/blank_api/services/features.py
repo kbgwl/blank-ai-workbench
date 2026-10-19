@@ -110,6 +110,16 @@ _REGISTRY: tuple[FeatureFlag, ...] = (
             "同节点工具失败会自动提档重试。默认关闭，关着时行为与单模型完全一致。"
         ),
     ),
+    FeatureFlag(
+        name="tiered_tools",
+        stage=BETA,
+        default=False,
+        summary=(
+            "工具表跟着档位走：路由判为轻量档的那一步只下发一条最小回路"
+            "（看/改/规划/检索出口），其余工具靠 tool_search 拉；标准与重型仍是全量。"
+            "默认关闭——关着时工具表恒为全量，与不裁剪完全一致。"
+        ),
+    ),
 )
 
 FEATURES: dict[str, FeatureFlag] = {flag.name: flag for flag in _REGISTRY}

@@ -149,6 +149,7 @@ class _Session:
         self.max_steps = 200
         self._reply = reply
         self._tool_calls = tool_calls or []
+        self.snapshot_calls: list[str] = []
 
     async def ask(self, state, prompt, node, **kwargs):  # noqa: ANN001
         return {
@@ -157,6 +158,12 @@ class _Session:
             "usage": {},
             "messages": list(state.get("messages") or []),
         }
+
+    async def ensure_snapshot(self, node: str = "create_plan") -> str:
+        # 真正的实现会去复制整个工作区；这个桩只需要说明"动作类任务确实走到了这一步"。
+        # 问答类任务在 create_plan 里提前 return，永远走不到这里 —— 那正是 #46 要的结果。
+        self.snapshot_calls.append(node)
+        return "snap-1"
 
 
 def _run(session: _Session, goal: str) -> dict:
@@ -173,6 +180,8 @@ def test_chitchat_returns_direct_answer() -> None:
     event_types = [item[0] for item in session.recorder.events]
     assert "intent.classified" in event_types
     assert "plan.created" not in event_types
+    # 纯问答从不写工作区，所以一份快照都不该拍：大仓库里那一下就是几十秒白等
+    assert session.snapshot_calls == []
 
 
 def test_task_request_is_split_into_steps() -> None:
@@ -183,6 +192,8 @@ def test_task_request_is_split_into_steps() -> None:
     assert result["direct_answer"] is False
     assert result["plan"] == ["看日志", "改代码", "跑测试"]
     assert "plan.created" in [item[0] for item in session.recorder.events]
+    # 动作类任务：判完意图、动手之前才拍快照，而且只拍一次
+    assert session.snapshot_calls == ["create_plan"]
 
 
 def test_prose_reply_is_treated_as_answer() -> None:

@@ -12,13 +12,22 @@ The policy lives here, in one table, not spread across fifteen tool modules:
 * ``DEFERRED_TOOLS`` — capabilities that only matter some of the time (version
   control, the network, memory search, sub-agents). Visible after a search hit.
 
-Two invariants:
+* ``PROFILE_LEAN`` — a shorter menu for models the router judged weak. Same
+  principle as the core/deferred split, one level down: fewer near-duplicate
+  entries means fewer wrong picks, and the schema payload shrinks on *every*
+  turn.
+
+Three invariants:
 
 * **Deferral is presentation only.** A deferred tool is still registered, still
   risk-scored and still goes through the same approval path. Hiding a tool must
   never become a way to bypass policy.
 * **Activation is per session.** Loading ``web_search`` in one task does not
   leak into another task's tool list.
+* **Trimming never takes capability away.** Anything the lean profile hides is
+  one ``tool_search`` away, and what was activated stays activated across a
+  profile switch — a model that just pulled ``run_tests`` in must not lose it
+  on the next step.
 """
 
 from __future__ import annotations
@@ -102,6 +111,44 @@ PARALLEL_SAFE_TOOLS = frozenset(
     }
 )
 
+# ---- 档位视图 ---------------------------------------------------------------
+#
+# 路由已经知道「这一步大概多难、该花多少」，工具表却一直是同一份。Codex 三代
+# 协议之间的差异本质上就是这件事：给弱模型的菜单越短，它选错的概率越低；而省下
+# 的 schema token 是每一轮都在付的，不是只付一次。
+#
+# 削减规则不是「随手少给几个」，而是「每类能力留一个代表」：
+#
+#   看    read_file / list_files / search_code
+#   改    apply_patch / run_shell
+#   规划  update_plan / request_user_input
+#   出口  tool_search
+#
+# 被拿掉的都是「已保留工具的专门化」或「长会话便利」：
+#   run_tests、git  —— run_shell 的专门化。模型说"跑测试""提交"时，
+#                      tool_search 的别名表会直接把它们拉回来。
+#   write_notes / read_notes —— 服务于跨窗口交接；撑不到交接那一步的模型，
+#                      写出来的笔记也没有信息量。
+#
+# 新加的工具默认只在 full 档出现，要进 lean 必须显式登记。这是有意的：lean 是
+# 一份白名单，"忘了登记"应该表现为「弱模型看不到」，而不是菜单被悄悄扩写。
+PROFILE_FULL = "full"
+PROFILE_LEAN = "lean"
+PROFILES = (PROFILE_FULL, PROFILE_LEAN)
+
+LEAN_TOOLS = frozenset(
+    {
+        "tool_search",
+        "update_plan",
+        "request_user_input",
+        "read_file",
+        "list_files",
+        "search_code",
+        "apply_patch",
+        "run_shell",
+    }
+)
+
 _TOKEN_SPLIT = re.compile(r"[^0-9A-Za-z_\u4e00-\u9fff]+")
 
 
@@ -130,7 +177,35 @@ class ToolRegistry:
             self._core = {name for name in requested if name in names}
             # 未在 DEFERRED_TOOLS 里声明的工具默认常驻，避免"新增工具却忘了登记"变成隐形 bug
             self._core |= {name for name in names if name not in DEFERRED_TOOLS}
+        # 切档时要回到的基准。没有它，从 lean 切回 full 就再也找不回原本的核心集合。
+        self._base_core: set[str] = set(self._core)
+        # 子代理拿到的本来就是一小撮白名单，再按档位裁一层只是重复劳动，
+        # 而且会把它和主会话的工具视图搞成两个互相矛盾的版本。
+        self._fixed = activate_all
+        self.profile = PROFILE_FULL
         self._active: set[str] = set()
+
+    # -- 档位 ---------------------------------------------------------------
+    def set_profile(self, profile: str) -> bool:
+        """切换工具档位视图，返回「可见集合是否真的变了」。
+
+        只动下发列表，不动 ``_active``：已经用 tool_search 拉进来的工具切档后
+        仍然可见——否则弱模型刚把能力拿回来，下一步又被夺走，表现就像工具丢失。
+
+        返回布尔值是因为调用方要拿它决定发不发事件：每一步都发一条
+        ``tools.scoped`` 只会把活动流刷满，而真正有信息量的只有"变了"的那一次。
+        """
+        if profile not in PROFILES:
+            raise ValueError(f"未知的工具档位：{profile}")
+        if self._fixed or profile == self.profile:
+            return False
+        before = set(self._core)
+        self.profile = profile
+        if profile == PROFILE_LEAN:
+            self._core = {name for name in self._base_core if name in LEAN_TOOLS}
+        else:
+            self._core = set(self._base_core)
+        return self._core != before
 
     # -- 查询 ---------------------------------------------------------------
     def all(self) -> list[ToolDefinition]:
@@ -221,6 +296,7 @@ class ToolRegistry:
 
     def as_dict(self) -> dict:
         return {
+            "profile": self.profile,
             "visible": self.visible_names(),
             "deferred": self.deferred_names(),
             "active": sorted(self._active),

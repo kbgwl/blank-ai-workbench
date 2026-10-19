@@ -265,6 +265,9 @@ class AgentRuntime:
             role_provider_ids=request.role_provider_ids or {},
             router=router,
             routing_adapters=request.routing_adapters or {},
+            # 工具裁剪只在真按档位路由时才有意义：没有 router 就没有 tier，
+            # 硬开着它只会让每一步都拿去和 full 比一次，然后什么也没变。
+            tiered_tools=bool(router is not None and is_enabled("tiered_tools", settings)),
             is_cancelled=_CancelledLookup(store, request.task_id),
             hooks=HookRunner.from_env(),
             guardian=guardian,
@@ -305,33 +308,10 @@ class AgentRuntime:
         scope = self._prepare(request, thread_id)
         await self._rehydrate(request.task_id, scope.session.permissions)
         recorder, session = scope.recorder, scope.session
-        # 快照是安全网，不是前置条件：大仓库复制不动时记一条事件继续跑，
-        # 不能让「拍不了快照」把整个任务判死（单文件回滚另有写入前备份兜底）。
-        #
-        # 必须放进线程：capture() 是同步的文件遍历，工作区指到大仓库时会把事件循环
-        # 占住几十秒——表现就是任务启动之后后端连 /health 都不回，界面上看起来彻底卡死。
-        try:
-            snapshot = await asyncio.to_thread(
-                SnapshotStore().capture,
-                str(session.context.root),
-                reason="任务执行前快照",
-                task_id=request.task_id,
-            )
-        except Exception as error:  # noqa: BLE001 - 任何快照问题都不该中断任务
-            snapshot = {"id": "", "files": [], "copied": False, "skipped_reason": str(error)}
-            await recorder.add("snapshot.failed", "receive_task", {"reason": str(error)})
-        await recorder.add(
-            "snapshot.created",
-            "receive_task",
-            {
-                "snapshot_id": snapshot["id"],
-                # 大仓库有上万条，事件里只放个摘要，完整清单在 meta.json
-                "files": snapshot["files"][:200],
-                "file_count": len(snapshot["files"]),
-                "copied": snapshot.get("copied", True),
-                "skipped_reason": snapshot.get("skipped_reason", ""),
-            },
-        )
+        # 快照不在这里拍。它的意义是「动手之前留一份原样」，所以时机应该在
+        # 意图判定之后、第一个动作之前——纯问答任务从来不写工作区，开场就复制
+        # 一遍整个仓库纯属浪费（大仓库要几十秒，界面看起来像卡死）。
+        # 具体见 AgentSession.ensure_snapshot() 与 create_plan 节点里的调用点。
         if await session.is_cancelled():
             await recorder.add("task.cancelled", "receive_task", {"reason": "任务已取消，未执行任何工具"})
             await self._finish(scope, "cancelled", summary="", reason="任务已取消", steps=0)
@@ -360,7 +340,9 @@ class AgentRuntime:
                 },
                 "guardian_mode": session.guardian.mode,
                 "thread_id": thread_id,
-                "snapshot_id": snapshot["id"],
+                # 快照改为「动手前才拍」，这里必然还是空的；
+                # 真正拍完会另发 snapshot.created，界面按那条事件定位即可。
+                "snapshot_id": session.snapshot_id,
             },
         )
         # 会话生命周期钩子：对标 Codex 的 session_start/user_prompt_submit

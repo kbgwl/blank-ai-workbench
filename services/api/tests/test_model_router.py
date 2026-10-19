@@ -448,9 +448,11 @@ async def test_routing_switches_the_adapter_and_says_why(seeded, tmp_path):
     router = Router(pool=tuple(_pool()))
     session = _session(tmp_path, [], router)
 
-    chosen = await session._routed_adapter("execute_action", 1, session.adapter)
+    chosen, tier = await session._routed_adapter("execute_action", 1, session.adapter)
 
     assert chosen.config.name == "本机 7B"
+    # 档位是这个决定的另一半：同一个判断既选模型，也决定给它看多少个工具
+    assert tier == LIGHT
     payloads = await _events("model.routed")
     assert len(payloads) == 1
     assert payloads[0]["switched"] is True
@@ -468,10 +470,12 @@ async def test_routing_without_an_adapter_falls_back_to_the_default(seeded, tmp_
     session = _session(tmp_path, [], router)
     session.routing_adapters.pop("local", None)
 
-    chosen = await session._routed_adapter("execute_action", 1, session.adapter)
+    chosen, tier = await session._routed_adapter("execute_action", 1, session.adapter)
 
     # 宁可放弃省钱，也不能把任务发给一个没有适配器的供应商
     assert chosen.config.name == "云端 671/37"
+    # 退回默认供应商时也退回"没有档位"：拿一个没被选中的档位去裁默认模型的工具是无据可依
+    assert tier == ""
     assert await _events("model.routed") == []
 
 
@@ -488,8 +492,9 @@ async def test_tool_failure_escalates_the_next_call(seeded, tmp_path):
     payloads = await _events("model.escalation")
     assert payloads and payloads[0]["tools"] == ["read_file"]
 
-    upgraded = await session._routed_adapter("execute_action", 1, session.adapter)
+    upgraded, tier = await session._routed_adapter("execute_action", 1, session.adapter)
     assert upgraded.config.name == "云端 671/37"
+    assert tier == STANDARD
 
 
 async def test_refused_tool_does_not_escalate(seeded, tmp_path):

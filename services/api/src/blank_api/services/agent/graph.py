@@ -37,7 +37,7 @@ from blank_api.services.agent.context import (
     load_summary_json,
     render_summary,
 )
-from blank_api.services.agent.router import TIER_LABELS, Router
+from blank_api.services.agent.router import LIGHT, TIER_LABELS, Router
 from blank_api.services.features import is_enabled as feature_enabled
 from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import HookRunner, blocking_denial
@@ -54,9 +54,23 @@ from blank_api.services.permissions import (
 from blank_api.services.tools.ask import normalize_questions, parse_answers, render_answers
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key
 from blank_api.services.tools.gateway import ToolGateway
-from blank_api.services.tools.registry import PARALLEL_SAFE_TOOLS
+from blank_api.services.tools.registry import PARALLEL_SAFE_TOOLS, PROFILE_FULL, PROFILE_LEAN
 
 MAX_REPAIR_ROUNDS = 3
+
+
+def tool_profile(tier: str) -> str:
+    """模型档位 → 工具表视图。
+
+    只有轻量档收窄，标准和重型都保持全量。反过来的诱惑是"重型给更多"，但那些
+    工具本来就在按需加载里（full 已经是最全的一份），再"多给"只能是把 deferred
+    也全下发——那等于把 schema 成本和选择难度一起抬上去，正好和精简的目的相反。
+
+    tier 为空表示这一步没有路由（开关关着，或池子里只有一个候选）。此时必须
+    返回 full：beta 开关的效果只能是"关掉就完全不变"。
+    """
+    return PROFILE_LEAN if tier == LIGHT else PROFILE_FULL
+
 SYSTEM_PROMPT = (
     "你是空白格 AI 操作台的执行 Agent，工作在受限工作区内。\n"
     "做事规则：\n"
@@ -64,7 +78,8 @@ SYSTEM_PROMPT = (
     "2. 按已确认的步骤调用工具执行，每次拿到结果再决定下一步，不要重复调用同一个工具。\n"
     "3. 修改文件用 apply_patch，验证用 run_tests。\n"
     "4. 工具按需加载：git、联网、记忆检索、子代理不在默认列表里，"
-    "需要时先用 tool_search 检索（例如「提交」「查资料」「并行」），命中后本轮即可直接调用。\n"
+    "需要时先用 tool_search 检索（例如「提交」「查资料」「并行」），命中后本轮即可直接调用。"
+    "列表里看不到某个工具（例如 run_tests）时同理，先检索再调用，不要因此跳过验证。\n"
     # 语气纪律：模型默认会写「好的，让我来分析一下」，在对话流里读起来全是噪音。
     "回复纪律：\n"
     "5. 不写开场白（好的 / 当然 / 让我 / 首先），不复述用户的话，不解释你打算怎么做。\n"
@@ -121,6 +136,9 @@ class AgentSession:
     # 绝不会把任务发给用户没为这个任务选过的供应商。
     router: Router | None = None
     routing_adapters: dict[str, ModelAdapter] = field(default_factory=dict)
+    # 工具表按档位裁剪（特性开关 tiered_tools）。默认 False —— 关着时 registry
+    # 恒为 full 档，与裁剪功能上线前逐字节一致。
+    tiered_tools: bool = False
     acceptance_criteria: list[str] = field(default_factory=list)
     max_steps: int = DEFAULT_MAX_STEPS
     permissions: PermissionPolicy = field(default_factory=PermissionPolicy)
@@ -144,6 +162,10 @@ class AgentSession:
     # 分层指令的来源（只用于审计，不重复进 prompt）
     instruction_layers: list = field(default_factory=list)
     notes_injected: bool = False
+    # 工作区快照只拍一次，时机是「意图判定为动作类、第一个动作之前」。
+    # 纯问答任务不写工作区，也就不拍——大仓库里那一下就是几十秒白等。
+    snapshot_id: str = ""
+    snapshot_ready: bool = False
     # 代理树位置：子代理事件靠这两个字段还原"谁在哪个分支上干活"。
     depth: int = 0
     agent_path: str = "root"
@@ -171,6 +193,58 @@ class AgentSession:
             "usage": usage,
             "messages": [*messages, assistant],
         }
+
+    async def ensure_snapshot(self, node: str = "create_plan") -> str:
+        """动手之前留一份原样。已经拍过就什么都不做。
+
+        快照是安全网，不是前置条件：拍不了也要继续跑（单文件回滚另有写入前备份兜底），
+        但必须在事件里说清楚为什么没拍——静默跳过会让人以为还有一份可以回滚的副本。
+
+        审批恢复会重建 AgentSession，内存标记随之丢失，所以还要回查磁盘上已有的快照，
+        否则每次批准都会再复制一遍整个工作区。
+        """
+        if self.snapshot_ready or self.snapshot_id:
+            return self.snapshot_id
+        from blank_api.services.sandbox import SnapshotStore
+
+        store = SnapshotStore()
+        try:
+            existing = await asyncio.to_thread(store.list, self.context.task_id)
+        except Exception:  # noqa: BLE001 - 查不到就当作没有，重新拍一份更安全
+            existing = []
+        if existing:
+            self.snapshot_id = str((existing[-1] or {}).get("id") or "")
+            self.snapshot_ready = True
+            await self.recorder.add("snapshot.reused", node, {"snapshot_id": self.snapshot_id})
+            return self.snapshot_id
+        try:
+            # capture() 是同步的文件遍历，必须放进线程：工作区指到大仓库时会把事件循环
+            # 占住几十秒——表现就是任务启动之后后端连 /health 都不回，界面上像彻底卡死。
+            snapshot = await asyncio.to_thread(
+                store.capture,
+                str(self.context.root),
+                reason="任务执行前快照",
+                task_id=self.context.task_id,
+            )
+        except Exception as error:  # noqa: BLE001 - 任何快照问题都不该中断任务
+            self.snapshot_ready = True
+            await self.recorder.add("snapshot.failed", node, {"reason": str(error)})
+            return ""
+        self.snapshot_id = str(snapshot.get("id") or "")
+        self.snapshot_ready = True
+        await self.recorder.add(
+            "snapshot.created",
+            node,
+            {
+                "snapshot_id": self.snapshot_id,
+                # 大仓库有上万条，事件里只放个摘要，完整清单在 meta.json
+                "files": snapshot["files"][:200],
+                "file_count": len(snapshot["files"]),
+                "copied": snapshot.get("copied", True),
+                "skipped_reason": snapshot.get("skipped_reason", ""),
+            },
+        )
+        return self.snapshot_id
 
     def notes_handoff(self) -> str:
         """压缩或换窗口时要带回来的交接笔记；没有笔记时返回空串。"""
@@ -205,8 +279,13 @@ class AgentSession:
         )
         return render_summary(load_summary_json(response.text))
 
-    async def _routed_adapter(self, node: str, step: int, default: ModelAdapter) -> ModelAdapter:
+    async def _routed_adapter(
+        self, node: str, step: int, default: ModelAdapter
+    ) -> tuple[ModelAdapter, str]:
         """按需选模型：在本任务的候选里挑「够用且最便宜」的那个。
+
+        返回 (适配器, 档位)。档位是第二步要用的信息——同一个决定既决定了"用哪个
+        模型"，也决定了"给它看多少个工具"，两件事分开发两次判断就会分叉。
 
         三条边界：
         * 打分只看已有状态，不额外调模型——路由自己花一次模型调用，省下的钱就没了。
@@ -224,7 +303,9 @@ class AgentSession:
         )
         picked = self.routing_adapters.get(decision.provider_id)
         if picked is None:
-            return default
+            # 退回默认供应商时也退回全量工具表：这一步没有"按需"可言，
+            # 用一个没被选中的档位去裁默认模型的工具，纯属无据可依。
+            return default, ""
         switched = picked.config.name != default.config.name
         # 记账在返回之前做：这条事件发出去之后，用户就能在收尾里看到省了多少，
         # 而那个比值是这个 beta 特性该不该转正的唯一依据。
@@ -241,15 +322,44 @@ class AgentSession:
                 "tier_label": TIER_LABELS.get(decision.tier, decision.tier),
             },
         )
-        return picked
+        return picked, decision.tier
+
+    async def _scope_tools(self, node: str, tier: str) -> None:
+        """按档位收窄这一轮下发的工具表。
+
+        只在可见集合真的变了时记一条事件：每步都记会把活动流刷成噪音，而人想知道
+        的只有"什么时候菜单变了、变成什么样"。被藏起来的名字也一并放进事件里，
+        否则"工具没了"在界面上永远是个无法解释的现象。
+        """
+        if not self.tiered_tools:
+            # 开关关着时连 set_profile 都不调：它虽然只会把 full 写回 full，
+            # 但"绝对不动"比"动了但结果一样"更容易证明。
+            return
+        profile = tool_profile(tier)
+        if not self.gateway.registry.set_profile(profile):
+            return
+        await self.recorder.add(
+            "tools.scoped",
+            node,
+            {
+                "profile": profile,
+                "tier": tier or "unrouted",
+                "tier_label": TIER_LABELS.get(tier, "") if tier else "",
+                "visible": self.gateway.registry.visible_names(),
+                "hidden": self.gateway.registry.deferred_names(),
+            },
+        )
 
     async def call_model(self, messages: list[dict], node: str, *, step: int = 0) -> tuple[Any, dict]:
         role = role_for_node(node)
         adapter = self.role_adapters.get(role, self.adapter)
+        tier = ""
         if self.router is not None and self.router.active:
-            adapter = await self._routed_adapter(node, step, adapter)
+            adapter, tier = await self._routed_adapter(node, step, adapter)
         if not adapter.config.supports_tools:
-            adapter = self.adapter
+            # 选中的供应商其实不支持工具调用，退回默认模型。档位也要一起退：
+            # 它是「给这个模型看多少工具」的依据，模型换了依据就失效了。
+            adapter, tier = self.adapter, ""
         # 每个角色可能挂着不同的模型，窗口大小不同；水位必须按"这次要用的窗口"算。
         window = int(getattr(adapter.config, "context_window", 0) or 0)
         if window and window != self.compactor.context_window:
@@ -296,6 +406,9 @@ class AgentSession:
             for item in compacted
         ]
         started = time.perf_counter()
+        # 工具表跟着档位走。这里放在压缩之后、真正发请求之前：可见工具数会改变
+        # 上下文体积，但改的是"下发的 schema"，不是已经算好的对话 token。
+        await self._scope_tools(node, tier)
         try:
             response = await adapter.bind_tools(self.gateway.specs(), chat)
         except ModelError:
@@ -605,6 +718,10 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
             "status": "running",
             "direct_answer": True,
         }
+
+    # 动作类任务：动手之前拍快照。放在这里而不是任务启动时，是因为这是
+    # "知道要动工作区"的最早时刻——问答类走到上面那个 return 就结束了，不会拍。
+    await session.ensure_snapshot(node)
 
     if steps:
         await session.recorder.add("plan.created", node, {"plan": steps, "text": result["text"][:2000]})

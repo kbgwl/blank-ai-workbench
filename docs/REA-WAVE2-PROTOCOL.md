@@ -295,3 +295,66 @@ pick(Demand, 候选池)                                → Decision(选中谁, �
   「为什么不是另一个」；任务收尾行显示 `路由 8 次 · 换模型 3 次 · 省 85%`。
 
 **未做**：`model_routing` 仍为 beta 默认关；负载均衡；工具表还没按档位裁剪。
+
+### 7.5 C 档：工具表跟着档位走（`tiered_tools`）
+
+路由算出档位之后，同一个决定还有另一半没被用上：**给这个模型看多少个工具**。
+Codex 三代协议之间的差异本质上就是这件事——菜单越短，弱模型选错的概率越低；而省下的
+schema token 是每一轮都在付的，不是只付一次。
+
+`services/tools/registry.py` 新增两个档位视图，`set_profile()` 在两者之间切：
+
+| 档位 | 下发 | 数量 |
+|---|---|---|
+| `full`（标准 / 重型 / 没路由） | 核心工具全集 | 11 |
+| `lean`（轻量） | 每类能力只留一个代表 | 8 |
+
+lean 里留下的是**一条完整的最小回路**，不是随便砍：
+
+```
+看    read_file / list_files / search_code
+改    apply_patch / run_shell
+规划  update_plan / request_user_input
+出口  tool_search
+```
+
+被拿掉的全是「已保留工具的专门化」或「长会话便利」：`run_tests` / `git` 是 `run_shell`
+的专门化（模型说"跑测试""提交"时，`tool_search` 的别名表直接把它们拉回来）；
+`write_notes` / `read_notes` 服务跨窗口交接，撑不到交接那一步的模型写出来的笔记也没信息量。
+
+**四条约束：**
+
+- **裁剪是展示，不是能力边界。** 被藏起来的工具照样注册、照样做风险评估、照样走审批；
+  按名字调过来仍然会执行。隐藏工具永远不能变成绕过策略的通道。
+- **已激活的跨档保留。** lean 下用 `tool_search` 拉回 `git`，切回 full 再切回 lean，它还在。
+  否则弱模型刚把能力拿回来、下一步又被夺走，表现就是最难查的那类「工具丢失」。
+- **切回来必须完整。** `_base_core` 记住裁剪前的基准，lean → full 恢复原集合且**顺序不变**
+  （顺序进 prompt，变了就是缓存前缀失效）。
+- **子代理不受影响。** 它拿到的本来就是一小撮白名单，再裁一层只会造出两份互相矛盾的
+  「当前能用什么」，所以 `activate_all` 的 registry 对 `set_profile` 直接返回 False。
+
+**开关**：`tiered_tools`（beta，默认关，`BLANK_FEATURE_TIERED_TOOLS=1` 开）。关着时
+`_scope_tools` 直接 return，连 `set_profile` 都不调——"绝对不动"比"动了但结果一样"更容易证明。
+开着但没有 router（池子里只有一个候选）时同样不动：没有档位就没有裁剪依据。
+
+**可观测**：只在可见集合**真的变了**时发一条 `tools.scoped`，每步都发等于噪音。
+
+```json
+{"profile": "lean", "tier": "light", "tier_label": "轻量",
+ "visible": ["tool_search", "update_plan", "request_user_input", "list_files",
+             "read_file", "search_code", "apply_patch", "run_shell"],
+ "hidden": ["spawn_agent", "spawn_agents", "write_notes", "read_notes",
+            "memory_search", "git", "run_tests", "web_search", "web_fetch"]}
+```
+
+活动面板显示 `轻量档 下发 8 个，收起 9 个`，悬浮列出具体收起了哪几个——只说数字，
+用户没法判断是不是收错了。
+
+**验收**：`tests/test_tiered_tools.py`（16 例）：档位映射（只有轻量收窄）、lean 是 full 的
+真子集、切回来顺序一致、`set_profile` 返回值语义、未知档位抛错、检索拉回、跨档保留、
+隐藏工具仍可执行、子代理免疫、`as_dict` 带 profile、真事件验证（轻量下发 8 个 /
+标准恢复全量 / 开关关闭恒全量且零事件 / 无 router 不动 / 提档后菜单同步放宽）。
+
+**顺手修的回归**：`#46`（纯问答不拍快照）落地时只跑了 `-k` 子集，`test_intent_and_reply.py`
+的 `_Session` 桩少了 `ensure_snapshot`，两个用例失败——补上桩并加了断言：动作类任务
+`snapshot_calls == ["create_plan"]`，问答类 `== []`。这是"改完只跑相关子集"的典型代价。

@@ -73,6 +73,14 @@ function eventDetail(event: AgentEvent): string {
     const to = typeof payload.to === "string" ? payload.to : "";
     return from && to ? `${from} → ${to}` : "";
   }
+  if (event.type === "tools.scoped") {
+    const visible = Array.isArray(payload.visible) ? payload.visible.length : 0;
+    const hidden = Array.isArray(payload.hidden) ? payload.hidden.length : 0;
+    const tier = typeof payload.tier_label === "string" ? payload.tier_label : "";
+    if (!visible) return "";
+    // 只报数字不报原因，等于让人猜"工具怎么少了"，所以带上档位
+    return `${tier ? `${tier}档 ` : ""}下发 ${visible} 个，收起 ${hidden} 个`;
+  }
   if (event.type === "task.completed" || event.type === "task.failed") {
     const routing = payload.routing;
     if (!routing || typeof routing !== "object") return "";
@@ -109,6 +117,13 @@ function Dot({ status }: { status: string }) {
  * 藏起来就等于没写——放进 title，想看的人随时能看。
  */
 function eventHint(event: AgentEvent): string {
+  if (event.type === "tools.scoped") {
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    const hidden = Array.isArray(payload.hidden) ? payload.hidden.filter((item): item is string => typeof item === "string") : [];
+    if (!hidden.length) return "";
+    // 具体收起了哪几个必须能查到：只说"收起 9 个"，用户就没法判断是不是收错了
+    return `本轮收起：${hidden.join("、")}`;
+  }
   if (event.type !== "model.routed") return "";
   const payload = (event.payload ?? {}) as Record<string, unknown>;
   const lines: string[] = [];
@@ -834,6 +849,7 @@ const EVENT_LABELS: Record<string, string> = {
   "model.routed": "选择模型",
   "model.escalation": "提档重试",
   "model.fallback": "切换备用",
+  "tools.scoped": "调整工具表",
 };
 
 const CHANGE_LABELS: Record<string, string> = {
