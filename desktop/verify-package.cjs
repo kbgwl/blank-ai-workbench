@@ -11,7 +11,7 @@
  * 用法：node verify-package.cjs
  */
 const { execFileSync } = require("node:child_process");
-const { existsSync, readFileSync } = require("node:fs");
+const { existsSync, readFileSync, readdirSync } = require("node:fs");
 const path = require("node:path");
 
 const ROOT = path.join(__dirname, "dist", "win-unpacked");
@@ -67,6 +67,7 @@ if (existsSync(PYTHON)) {
       "print(json.dumps({",
       "  'file': blank_api.__file__,",
       "  'has_settings': hasattr(routes, 'settings'),",
+      "  'has_threads': hasattr(routes, 'threads'),",
       "}))",
     ].join("\n");
     const raw = execFileSync(PYTHON, ["-c", code], { cwd: API_DIR, encoding: "utf8" });
@@ -74,6 +75,7 @@ if (existsSync(PYTHON)) {
     const fromSource = info.file.replace(/\\/g, "/").includes("/backend/api/src/blank_api/");
     fromSource ? ok("import 落在 api/src", info.file) : bad("import 落点错误", info.file);
     info.has_settings ? ok("settings 路由已注册") : bad("settings 路由缺失");
+    info.has_threads ? ok("threads 路由已注册") : bad("threads 路由缺失");
   } catch (error) {
     bad("包内解释器导入失败", error.message.split("\n")[0]);
   }
@@ -86,6 +88,18 @@ if (existsSync(settingsHtml)) {
   html.includes("0.4.0 新增")
     ? ok("前端含新设置页")
     : bad("前端是旧版本", "settings.html 没有新分组标记");
+}
+
+// 会话条的文案打包后落在 JS chunk 里，页面 HTML 上看不到，只能扫 chunk。
+// 抽样一句只有会话条才有的文案，避免"前端是上一版、界面看起来正常但点不出会话"。
+const chunksDir = path.join(WEB_DIR, "_next", "static", "chunks");
+if (existsSync(chunksDir)) {
+  const hit = readdirSync(chunksDir)
+    .filter((name) => name.endsWith(".js"))
+    .some((name) => readFileSync(path.join(chunksDir, name), "utf8").includes("继续聊"));
+  hit ? ok("前端含会话条") : bad("前端是旧版本", "没有找到会话条文案");
+} else {
+  bad("前端静态资源目录缺失", chunksDir);
 }
 
 console.log("");
