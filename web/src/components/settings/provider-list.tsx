@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Button, IconButton, Notice, Spinner, StateLine, TrashIcon } from "@/components/projects/ui";
 import type { Provider, TestResult } from "./api";
-import { KindBadge } from "./bits";
+import { KindBadge, ParamBadge } from "./bits";
 
 export type TestState =
   | { status: "running" }
@@ -69,6 +69,7 @@ export function ProviderList({ providers, error, selectedId, tests, onSelect, on
                         {provider.name}
                       </span>
                       <KindBadge kind={provider.kind} />
+                      <ParamBadge total={provider.total_params_b ?? 0} active={provider.active_params_b ?? 0} />
                       {!provider.enabled && (
                         <span className="rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-faint">
                           已停用

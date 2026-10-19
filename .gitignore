@@ -46,3 +46,12 @@ web/out-old*/
 
 # 打包时从 site-packages 剔出来的空白副本（safe-delete 规避）
 desktop/build/_removed/
+
+# 运行期数据：密钥、产物、快照都会写进 data/，这些绝不入库
+data/*.key
+data/artifacts/
+data/snapshots/
+data/workspaces/
+
+# 本地验证脚本与截图（不是交付物）
+_verify/

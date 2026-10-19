@@ -48,6 +48,10 @@ def _out(provider: ModelProvider) -> ProviderOut:
         context_window=provider.context_window,
         supports_tools=provider.supports_tools,
         supports_vision=provider.supports_vision,
+        reasoning_effort=getattr(provider, "reasoning_effort", "") or "",
+        verbosity=getattr(provider, "verbosity", "") or "",
+        total_params_b=float(getattr(provider, "total_params_b", 0) or 0),
+        active_params_b=float(getattr(provider, "active_params_b", 0) or 0),
         enabled=provider.enabled,
         api_key_hint=key_hint(_plain_key(provider)),
     )
@@ -110,6 +114,10 @@ async def create_provider(payload: ProviderCreate, db: DbSession) -> ProviderOut
         context_window=payload.context_window,
         supports_tools=payload.supports_tools,
         supports_vision=payload.supports_vision,
+        reasoning_effort=payload.reasoning_effort,
+        verbosity=payload.verbosity,
+        total_params_b=payload.total_params_b,
+        active_params_b=payload.active_params_b,
         enabled=payload.enabled,
     )
     db.add(provider)
@@ -235,29 +243,34 @@ async def usage_summary(db: DbSession) -> dict:
                 ModelUsage.prompt_tokens,
                 ModelUsage.completion_tokens,
                 ModelUsage.latency_ms,
+                ModelUsage.cached_tokens,
             ).join(ModelUsage, ModelUsage.provider_id == ModelProvider.id)
         )
     ).all()
     totals: dict[str, dict] = {}
-    for name, model, status, prompt, completion, latency in rows:
+    for name, model, status, prompt, completion, latency, cached in rows:
         bucket = totals.setdefault(
             f"{name}/{model}",
-            {"provider": name, "model": model, "calls": 0, "failed": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_latency_ms": 0},
+            {"provider": name, "model": model, "calls": 0, "failed": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "total_latency_ms": 0},
         )
         bucket["calls"] += 1
         bucket["failed"] += 1 if status != "ok" else 0
         bucket["prompt_tokens"] += prompt or 0
         bucket["completion_tokens"] += completion or 0
+        bucket["cached_tokens"] += cached or 0
         bucket["total_latency_ms"] += latency or 0
     priced: list[dict] = []
     currency = "USD"
     grand_cost = 0.0
     for bucket in totals.values():
         cost = estimate_cost(
-            bucket["model"], bucket["prompt_tokens"], bucket["completion_tokens"]
+            bucket["model"], bucket["prompt_tokens"], bucket["completion_tokens"], bucket["cached_tokens"]
         )
         currency = cost.currency if cost.priced else currency
         bucket["cost"] = cost.as_dict()
+        bucket["cache_hit_rate"] = (
+            round(bucket["cached_tokens"] / bucket["prompt_tokens"], 3) if bucket["prompt_tokens"] else 0
+        )
         bucket["success_rate"] = round(
             (bucket["calls"] - bucket["failed"]) / bucket["calls"], 3
         ) if bucket["calls"] else 0

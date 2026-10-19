@@ -19,10 +19,17 @@ type Draft = {
   temperature: string;
   max_tokens: string;
   context_window: string;
+  reasoning_effort: string;
+  verbosity: string;
+  total_params_b: string;
+  active_params_b: string;
   supports_tools: boolean;
   supports_vision: boolean;
   enabled: boolean;
 };
+
+const effortOptions = ["", "minimal", "low", "medium", "high"];
+const verbosityOptions = ["", "low", "medium", "high"];
 
 function draftOf(provider: Provider): Draft {
   return {
@@ -33,6 +40,12 @@ function draftOf(provider: Provider): Draft {
     temperature: String(provider.temperature),
     max_tokens: String(provider.max_tokens),
     context_window: String(provider.context_window),
+    // 老库里没有这两列，接口可能返回 undefined，统一收敛成空串
+    reasoning_effort: provider.reasoning_effort ?? "",
+    verbosity: provider.verbosity ?? "",
+    // 0 在语义上是"未填"，显示成空输入框比显示 0 更不容易被误解
+    total_params_b: provider.total_params_b ? String(provider.total_params_b) : "",
+    active_params_b: provider.active_params_b ? String(provider.active_params_b) : "",
     supports_tools: provider.supports_tools,
     supports_vision: provider.supports_vision,
     enabled: provider.enabled,
@@ -68,6 +81,21 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
     !Number.isInteger(numbers.context_window) ||
     numbers.context_window < 1;
 
+  const params = useMemo(
+    () => ({
+      total: draft.total_params_b.trim() === "" ? 0 : Number(draft.total_params_b),
+      active: draft.active_params_b.trim() === "" ? 0 : Number(draft.active_params_b),
+    }),
+    [draft.total_params_b, draft.active_params_b],
+  );
+
+  const invalidParams =
+    !Number.isFinite(params.total) ||
+    params.total < 0 ||
+    !Number.isFinite(params.active) ||
+    params.active < 0 ||
+    (params.total > 0 && params.active > params.total);
+
   const changes = useMemo<ProviderPatch>(() => {
     const next: ProviderPatch = {};
     if (draft.kind !== provider.kind) next.kind = draft.kind.trim();
@@ -82,14 +110,20 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
     if (draft.supports_tools !== provider.supports_tools) next.supports_tools = draft.supports_tools;
     if (draft.supports_vision !== provider.supports_vision) next.supports_vision = draft.supports_vision;
     if (draft.enabled !== provider.enabled) next.enabled = draft.enabled;
+    if (draft.reasoning_effort !== (provider.reasoning_effort ?? "")) next.reasoning_effort = draft.reasoning_effort;
+    if (draft.verbosity !== (provider.verbosity ?? "")) next.verbosity = draft.verbosity;
+    if (!invalidParams) {
+      if (params.total !== (provider.total_params_b ?? 0)) next.total_params_b = params.total;
+      if (params.active !== (provider.active_params_b ?? 0)) next.active_params_b = params.active;
+    }
     return next;
-  }, [draft, invalidNumber, numbers, provider]);
+  }, [draft, invalidNumber, invalidParams, numbers, params, provider]);
 
   const dirty = Object.keys(changes).length > 0;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!dirty || busy || invalidNumber) return;
+    if (!dirty || busy || invalidNumber || invalidParams) return;
     setBusy(true);
     setError(null);
     try {
@@ -190,6 +224,64 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
         </Field>
       </div>
 
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+        <Field label="推理档位 reasoning_effort">
+          <select
+            value={draft.reasoning_effort}
+            onChange={(event) => patch({ reasoning_effort: event.target.value })}
+            aria-label="推理档位"
+            className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] text-text focus:border-brand/60 focus:outline-none"
+          >
+            {effortOptions.map((value) => (
+              <option key={value || "off"} value={value}>
+                {value || "不启用"}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="输出详略 verbosity">
+          <select
+            value={draft.verbosity}
+            onChange={(event) => patch({ verbosity: event.target.value })}
+            aria-label="输出详略"
+            className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] text-text focus:border-brand/60 focus:outline-none"
+          >
+            {verbosityOptions.map((value) => (
+              <option key={value || "off"} value={value}>
+                {value || "不启用"}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      {draft.reasoning_effort !== "" && (
+        <Notice tone="muted">启用推理档位后温度不再下发，请求带上 temperature 会被推理模型直接拒绝。</Notice>
+      )}
+
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+        <Field label="总参数（十亿 B）">
+          <Input
+            value={draft.total_params_b}
+            onChange={(event) => patch({ total_params_b: event.target.value })}
+            placeholder="671，留空表示未填"
+            aria-label="总参数"
+            inputMode="decimal"
+            className="font-mono text-[12px]"
+          />
+        </Field>
+        <Field label="激活参数（十亿 B）">
+          <Input
+            value={draft.active_params_b}
+            onChange={(event) => patch({ active_params_b: event.target.value })}
+            placeholder="37，稠密模型留空"
+            aria-label="激活参数"
+            inputMode="decimal"
+            className="font-mono text-[12px]"
+          />
+        </Field>
+      </div>
+
       <Field label={provider.api_key_hint ? `API KEY（当前 ${provider.api_key_hint}，留空则不修改）` : "API KEY（未设置）"}>
         <Input
           type="password"
@@ -218,10 +310,11 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
       </div>
 
       {invalidNumber && <Notice tone="warn">温度需为 0-2 的数字，tokens 与上下文窗口需为正整数。</Notice>}
+      {invalidParams && <Notice tone="warn">参数量需为非负数字，且激活参数不能大于总参数。</Notice>}
       {error && <Notice>{error}</Notice>}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="submit" variant="primary" disabled={!dirty || busy || invalidNumber}>
+        <Button type="submit" variant="primary" disabled={!dirty || busy || invalidNumber || invalidParams}>
           {busy ? (
             <span className="flex items-center gap-1.5">
               <Spinner />

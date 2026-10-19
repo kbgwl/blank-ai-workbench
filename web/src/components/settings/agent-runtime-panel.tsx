@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
 import {
   errorMessage,
@@ -45,20 +45,24 @@ export function AgentRuntimePanel() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [reloadToken, setReloadToken] = useState(0);
 
-  const load = useCallback(async () => {
-    try {
-      const next = await fetchAgentSettings();
-      setSettings(next);
-      setError("");
-    } catch (err) {
-      setError(errorMessage(err));
-    }
-  }, []);
-
+  // token 触发刷新，避免在 effect 体内同步 setState（与 feature-flags-panel 一致）。
   useEffect(() => {
-    void load();
-  }, [load]);
+    let alive = true;
+    fetchAgentSettings()
+      .then((next) => {
+        if (!alive) return;
+        setSettings(next);
+        setError("");
+      })
+      .catch((err: unknown) => {
+        if (alive) setError(errorMessage(err));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [reloadToken]);
 
   async function apply(patch: Parameters<typeof updateAgentSettings>[0], message: string) {
     setBusy(true);
@@ -92,6 +96,15 @@ export function AgentRuntimePanel() {
     return (
       <Panel title="执行与智能体" hint="GET /settings/agent">
         <p className="text-[12px] text-faint">{error || "加载中…"}</p>
+        {error && (
+          <button
+            type="button"
+            onClick={() => setReloadToken((token) => token + 1)}
+            className="mt-2 self-start rounded-md border border-line bg-surface px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-line-strong hover:text-text"
+          >
+            重试
+          </button>
+        )}
       </Panel>
     );
   }

@@ -7,10 +7,14 @@ never display a value the runtime is not actually using.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from typing import Any
+
+from fastapi import APIRouter, Body, Depends
 
 from blank_api.api.auth import require_token
+from blank_api.api.errors import ApiError
 from blank_api.schemas.settings import AgentSettings, AgentSettingsPatch
+from blank_api.services import features as feature_registry
 from blank_api.services.guardian import MODES as GUARDIAN_MODES
 from blank_api.services.permissions import MODE_LABELS, MODES as PERMISSION_MODES
 from blank_api.services.safety import SafetyPolicy, backend_info
@@ -86,6 +90,26 @@ async def update_agent_settings(payload: AgentSettingsPatch) -> AgentSettings:
 async def reset_agent_settings() -> AgentSettings:
     store = SettingsStore()
     return _render(store.reset(), store)
+
+
+@router.get("/features")
+async def read_features() -> dict:
+    """注册表全量 + 每个开关当前生效的值与来源。
+
+    这个端点存在的意义是「解释」：用户说某个能力没生效时，运维不用去翻进程
+    环境变量和设置文件对比，这里直接说清楚是哪一层把值定成了现在这样。
+    """
+    return feature_registry.describe()
+
+
+@router.patch("/features")
+async def patch_features(payload: dict[str, Any] = Body(...)) -> dict:
+    try:
+        return feature_registry.apply_patch(payload)
+    except feature_registry.UnknownFeature as exc:
+        raise ApiError("unknown_feature", f"未注册的特性开关：{exc.name}") from exc
+    except ValueError as exc:
+        raise ApiError("invalid_feature_value", str(exc)) from exc
 
 
 @router.get("/safety/runtime")

@@ -14,6 +14,10 @@ class ProviderCreate(BaseModel):
     context_window: int = 128000
     supports_tools: bool = False
     supports_vision: bool = False
+    reasoning_effort: str = Field(default="", max_length=20)
+    verbosity: str = Field(default="", max_length=20)
+    total_params_b: float = Field(default=0.0, ge=0.0, le=100_000.0)
+    active_params_b: float = Field(default=0.0, ge=0.0, le=100_000.0)
     enabled: bool = True
 
 
@@ -27,6 +31,10 @@ class ProviderUpdate(BaseModel):
     context_window: int | None = None
     supports_tools: bool | None = None
     supports_vision: bool | None = None
+    reasoning_effort: str | None = Field(default=None, max_length=20)
+    verbosity: str | None = Field(default=None, max_length=20)
+    total_params_b: float | None = Field(default=None, ge=0.0, le=100_000.0)
+    active_params_b: float | None = Field(default=None, ge=0.0, le=100_000.0)
     enabled: bool | None = None
 
 
@@ -41,6 +49,10 @@ class ProviderOut(BaseModel):
     context_window: int
     supports_tools: bool
     supports_vision: bool
+    reasoning_effort: str = ""
+    verbosity: str = ""
+    total_params_b: float = 0.0
+    active_params_b: float = 0.0
     enabled: bool
     api_key_hint: str
 

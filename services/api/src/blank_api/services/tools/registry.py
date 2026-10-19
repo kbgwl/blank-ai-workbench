@@ -81,6 +81,27 @@ MAX_SEARCH_RESULTS = 6
 MIN_SCORE = 24
 # 检索工具自己不参与检索：它本来就在可见列表里，把它当结果返回纯属噪音
 EXCLUDE_FROM_SEARCH = frozenset({"tool_search"})
+
+# 同一轮里可以真正并发执行的工具：无副作用、不写盘、不改会话状态。
+#
+# 为什么单独一张表，而不是复用 permissions.READ_ONLY_TOOLS：那张表的语义是
+# "计划模式允许用什么"，里面含 update_plan（改计划）、tool_search（改可见工具集）、
+# request_user_input（等用户）—— 这三个都不是只读，并发跑会互相踩状态。
+#
+# git 也刻意排除：它的只读子命令确实只读，但同一张表里也挂着 commit / push，
+# 按工具名放行等于把写操作混进了并行批次。
+PARALLEL_SAFE_TOOLS = frozenset(
+    {
+        "read_file",
+        "list_files",
+        "search_code",
+        "read_notes",
+        "memory_search",
+        "web_search",
+        "web_fetch",
+    }
+)
+
 _TOKEN_SPLIT = re.compile(r"[^0-9A-Za-z_\u4e00-\u9fff]+")
 
 

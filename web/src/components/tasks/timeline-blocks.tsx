@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Button, Notice } from "@/components/projects/ui";
 import { clip, formatClock, formatDuration } from "./format";
-import { nodeLabel, riskLabel, toolStatusClass } from "./status";
+import { riskLabel, toolStatusClass } from "./status";
+import { ReplyView } from "./reply";
+import { describeTool, type ToolFact } from "./tool-display";
 import type { Block, TermLine } from "./timeline";
 import type { ApprovalScope } from "./api";
 import { BlockIcon } from "./bits";
@@ -58,10 +60,23 @@ function CardShell({
         <span className="shrink-0">{icon}</span>
         <h3 className="min-w-0 flex-1 text-[13px] font-medium tracking-tight">{title}</h3>
         {trailing}
-        <span className="shrink-0 font-mono text-[10px] text-faint">#{block.seq}</span>
       </header>
       <div className="mt-2 flex flex-col gap-2">{children}</div>
     </article>
+  );
+}
+
+function FactList({ facts }: { facts: ToolFact[] }) {
+  if (facts.length === 0) return null;
+  return (
+    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px] leading-relaxed">
+      {facts.map((fact, index) => (
+        <Fragment key={`${fact.label}-${index}`}>
+          <dt className="whitespace-nowrap text-faint">{fact.label}</dt>
+          <dd className="min-w-0 break-words text-text/85">{fact.value}</dd>
+        </Fragment>
+      ))}
+    </dl>
   );
 }
 
@@ -75,10 +90,10 @@ function PlanCard({ block }: { block: Extract<Block, { kind: "plan" }> }) {
           <BlockIcon kind="plan" />
         </span>
       }
-      title="执行计划"
+      title="拆分步骤"
       trailing={
         <span className="shrink-0 rounded-md border border-brand/30 bg-brand/10 px-1.5 py-0.5 font-mono text-[10px] text-brand">
-          计划
+          {block.items.length} 步
         </span>
       }
     >
@@ -96,7 +111,6 @@ function PlanCard({ block }: { block: Extract<Block, { kind: "plan" }> }) {
           ))}
         </ol>
       )}
-      {block.node && <p className="font-mono text-[10px] text-faint">节点 {nodeLabel(block.node)}</p>}
     </CardShell>
   );
 }
@@ -105,20 +119,20 @@ function ToolCard({ block }: { block: Extract<Block, { kind: "tool" }> }) {
   const [open, setOpen] = useState(false);
   const status = toolStatusClass(block.status);
   const running = block.status === "running";
+  const failed = block.status === "error" || block.status === "failed";
+  // 卡片正面只讲人话：这一步在做什么、对谁做、做出来什么。
+  // 工具名、参数 JSON、原始输出都属于工程细节，收进展开里。
+  const view = describeTool(block.name, block.args, block.output, failed);
   return (
     <CardShell
       block={block}
-      accent={
-        block.status === "error" || block.status === "failed"
-          ? "border-danger/30 bg-danger/[0.05]"
-          : "border-line bg-surface/60"
-      }
+      accent={failed ? "border-danger/30 bg-danger/[0.05]" : "border-line bg-surface/60"}
       icon={
         <span className={running ? "text-brand" : "text-muted"}>
           <BlockIcon kind="tool" />
         </span>
       }
-      title={block.name}
+      title={view.label}
       trailing={
         <span className="flex shrink-0 items-center gap-2">
           {block.risk && (
@@ -136,26 +150,52 @@ function ToolCard({ block }: { block: Extract<Block, { kind: "tool" }> }) {
         </span>
       }
     >
-      <div className="flex items-center gap-2">
-        <span className="font-mono text-[10px] tracking-wide text-faint uppercase">输入</span>
-        <button
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          className="ml-auto font-mono text-[10px] text-brand/80 hover:text-brand"
-        >
-          {open ? "收起参数" : "展开参数"}
-        </button>
-      </div>
-      {open ? <JsonBlock value={block.args} /> : (
-        <p className="truncate font-mono text-[11px] text-text/80">
-          {Object.keys(block.args).length === 0
-            ? "无参数"
-            : clip(JSON.stringify(block.args).replace(/[{}"]/g, "").slice(0, 120), 120)}
-        </p>
+      {/* 默认折叠：一次任务十几次工具调用，每条都摊开输出会把对话流冲垮。 */}
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-start gap-2 text-left"
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block break-words text-[12.5px] leading-relaxed text-text/85">
+            {view.target || "无参数"}
+          </span>
+          {view.result && (
+            <span
+              className={`mt-0.5 block break-words text-[11px] leading-relaxed ${
+                failed ? "text-danger/90" : "text-muted"
+              }`}
+            >
+              {view.result}
+            </span>
+          )}
+        </span>
+        <span className="mt-0.5 shrink-0 font-mono text-[10px] text-brand/80 hover:text-brand">
+          {open ? "收起" : "详情"}
+        </span>
+      </button>
+      {open && (
+        <>
+          <FactList facts={view.facts} />
+          {view.items.length > 0 && (
+            <div className="max-h-56 overflow-auto rounded-md border border-line bg-surface-2 px-2.5 py-2">
+              <pre className="font-mono text-[11px] leading-relaxed whitespace-pre text-text/80">
+                {view.items.join("\n")}
+              </pre>
+            </div>
+          )}
+          <details className="group">
+            <summary className="cursor-pointer list-none font-mono text-[10px] tracking-wide text-faint hover:text-muted">
+              原始数据（{block.name}）
+            </summary>
+            <div className="mt-2 flex flex-col gap-2">
+              <JsonBlock value={block.args} />
+              <span className="font-mono text-[10px] tracking-wide text-faint uppercase">输出</span>
+              <OutputBlock text={block.output} />
+            </div>
+          </details>
+        </>
       )}
-      <span className="font-mono text-[10px] tracking-wide text-faint uppercase">输出</span>
-      <OutputBlock text={block.output} />
-      {block.node && <p className="font-mono text-[10px] text-faint">节点 {nodeLabel(block.node)}</p>}
     </CardShell>
   );
 }
@@ -366,10 +406,10 @@ function ApprovalCard({
 function ResultCard({ block }: { block: Extract<Block, { kind: "result" }> }) {
   const tone =
     block.status === "succeeded"
-      ? { accent: "border-accent/35 bg-accent/[0.06]", text: "text-accent", label: "最终结果 · 成功" }
+      ? { accent: "border-accent/35 bg-accent/[0.06]", text: "text-accent", label: "结果", tag: "成功" }
       : block.status === "failed"
-        ? { accent: "border-danger/35 bg-danger/[0.06]", text: "text-danger", label: "最终结果 · 失败" }
-        : { accent: "border-line bg-surface/60", text: "text-faint", label: "最终结果 · 已取消" };
+        ? { accent: "border-danger/35 bg-danger/[0.06]", text: "text-danger", label: "执行失败", tag: "失败" }
+        : { accent: "border-line bg-surface/60", text: "text-faint", label: "已取消", tag: "取消" };
   return (
     <CardShell
       block={block}
@@ -380,12 +420,12 @@ function ResultCard({ block }: { block: Extract<Block, { kind: "result" }> }) {
         </span>
       }
       title={tone.label}
-      trailing={<span className={`font-mono text-[10px] ${tone.text}`}>{block.title}</span>}
+      trailing={<span className={`font-mono text-[10px] ${tone.text}`}>{tone.tag}</span>}
     >
       {block.summary ? (
-        <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-text/90">{block.summary}</p>
+        <ReplyView text={block.summary} />
       ) : (
-        <p className="text-[12px] text-faint">后端未返回结果摘要</p>
+        <p className="text-[12px] text-faint">没有返回内容</p>
       )}
       {block.reason && (
         <Notice tone={block.status === "failed" ? "error" : "muted"}>{block.reason}</Notice>

@@ -13,6 +13,14 @@ export type Provider = {
   supports_vision: boolean;
   enabled: boolean;
   api_key_hint: string;
+  /** 推理档位，minimal|low|medium|high，空串表示不启用 */
+  reasoning_effort: string;
+  /** 输出详略，low|medium|high，空串表示不启用 */
+  verbosity: string;
+  /** 总参数（十亿）。决定显存，0 表示未填。 */
+  total_params_b: number;
+  /** 激活参数（十亿）。决定算力与单价，稠密模型等于总参数，0 表示未填。 */
+  active_params_b: number;
 };
 
 export type ProviderCreate = {
@@ -27,6 +35,10 @@ export type ProviderCreate = {
   supports_tools: boolean;
   supports_vision: boolean;
   enabled: boolean;
+  reasoning_effort: string;
+  verbosity: string;
+  total_params_b: number;
+  active_params_b: number;
 };
 
 export type ProviderPatch = Partial<Omit<ProviderCreate, "name">>;
@@ -190,6 +202,37 @@ export function fetchObservability(): Promise<ObservabilitySummary> {
 
 export function fetchAgentSettings(): Promise<AgentSettings> {
   return request<AgentSettings>(`${api}/settings/agent`, { cache: "no-store" });
+}
+
+/** 特性注册表里的一条。source 说明当前值是哪一层定的：env / settings / legacy / default。 */
+export type FeatureFlag = {
+  name: string;
+  stage: string;
+  default: boolean;
+  summary: string;
+  legacy: string[];
+  enabled: boolean;
+  source: string;
+};
+
+export type FeaturesResponse = {
+  features: FeatureFlag[];
+  unknown: string[];
+  stages: string[];
+  sources: string[];
+  env_prefix: string;
+};
+
+export function fetchFeatures(): Promise<FeaturesResponse> {
+  return request<FeaturesResponse>(`${api}/settings/features`, { cache: "no-store" });
+}
+
+export function patchFeatures(patch: Record<string, boolean>): Promise<FeaturesResponse> {
+  return request<FeaturesResponse>(`${api}/settings/features`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  });
 }
 
 export function updateAgentSettings(patch: AgentSettingsPatch): Promise<AgentSettings> {

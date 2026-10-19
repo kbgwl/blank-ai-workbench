@@ -1,0 +1,274 @@
+"""意图识别与交付口径。
+
+用户的每一句话先在这里被判一次，只有两类：
+
+- ``answer`` 不需要动手（寒暄、概念、解释、闲聊）——直接出结果，不进工具循环，
+  不拆步骤、不审查、不验收。一次模型调用结束。
+- ``act`` 需要动工作区（读文件、改代码、跑命令）——先拆步骤，再执行，最后交付。
+
+交付文本一律按「已完成 / 未完成 / 下一步」三段写。理由是这三段正好回答
+用户心里的三个问题：干了什么、还差什么、我该做什么。除此之外的内容
+（自我介绍、过程复述、方法论说明）都算噪音，在 ``normalize_answer`` 里被清掉。
+"""
+
+from __future__ import annotations
+
+import json
+import re
+
+INTENT_ANSWER = "answer"
+INTENT_ACT = "act"
+
+# 明显不需要动工作区的开场：打招呼、道谢、确认在不在。
+_CHITCHAT = re.compile(
+    r"^\s*(?:"
+    r"你好|您好|hi|hello|hey|在吗|在不在|哈喽|嗨|"
+    r"谢谢|多谢|感谢|thanks|thank you|ok|okay|好的|收到|明白|懂了|嗯+|"
+    r"再见|拜拜|bye"
+    r")\s*[!！。.~～,，]*\s*$",
+    re.IGNORECASE,
+)
+
+# 明确的动手信号：出现这些词基本都要读文件或跑命令。
+_ACTION = re.compile(
+    r"(改|修改|修复|修一下|重写|重构|实现|新增|添加|加一个|加个|加上|删除|移除|替换|接入|集成|"
+    r"升级|降级|安装|部署|发布|打包|构建|编译|运行|执行|跑一下|跑一遍|测试|验证|"
+    r"排查|调试|定位|优化|加速|清理|整理|拆分|迁移|提交|回滚|生成|创建|新建|"
+    r"写一个|写个|写入|做一个|做个|帮我做|搭一个|搭个|"
+    r"读一下|看一下代码|看看代码|搜一下|找一下|列出|统计|对比|导出|转换|"
+    r"refactor|fix|implement|build|deploy|migrate|test|debug|run|create|generate)",
+    re.IGNORECASE,
+)
+
+# 提问信号：没有动手词、又带这些，基本是问概念。
+_QUESTION = re.compile(
+    r"(是什么|什么是|啥是|什么意思|为什么|怎么回事|区别|哪个好|能不能|可不可以|是否|"
+    r"怎么理解|如何理解|介绍一下|解释一下|讲讲|说说|科普|原理|概念)",
+)
+
+# 短句阈值：超过这个长度即使没有动词，也交给模型判，不在这里拍板。
+_SHORT_GOAL = 30
+
+
+def guess_intent(goal: str) -> str | None:
+    """规则快判，返回 ``answer`` / ``act``，判不准返回 None 交给模型。
+
+    规则只处理边界清晰的两头：纯寒暄、以及带明确动作词的请求。
+    中间地带（"你看这个怎么办"）一律交给模型，宁可多一次调用也不要误判——
+    把改代码当成闲聊、或者把打招呼当成开发任务，这两种都很难看。
+    """
+    text = (goal or "").strip()
+    if not text:
+        return INTENT_ANSWER
+    if _CHITCHAT.match(text):
+        return INTENT_ANSWER
+    if _ACTION.search(text):
+        return INTENT_ACT
+    if len(text) <= _SHORT_GOAL and _QUESTION.search(text):
+        return INTENT_ANSWER
+    return None
+
+
+INTENT_INSTRUCTION = (
+    "先判断这句话要不要动工作区，不要寒暄、不要解释你的判断。只输出一个 JSON 对象：\n"
+    '{"intent": "answer 或 act", "note": "用一句不超过 20 字的话复述用户想要什么",'
+    ' "steps": ["需要动手时列 2-6 步，不需要则为空"], "answer": "intent 为 answer 时写完整答案，否则留空"}\n'
+    "判定规则：\n"
+    "- 寒暄、致谢、闲聊、问概念、问你能做什么、解释已有代码 → answer，直接把答案写进 answer 字段。\n"
+    "- 要读文件、改代码、跑命令、查数据、生成产物 → act，steps 写清先做什么后做什么。\n"
+    "- steps 每条只写「做什么」，一条一句、不超过 18 字，例如「读取 panel.tsx」「修改配色配置」。\n"
+    "  不要写怎么做、不要写理由、不要写「步骤一」「首先」这类前缀，不要重复用户原话。\n"
+    "- answer 时不要给步骤、不要调用任何工具；act 时不要在 answer 里写答案。\n"
+    "长度纪律（很重要）：\n"
+    "- answer 默认不超过 5 行、120 字。只有用户要清单、或明确说「详细说说」时才展开。\n"
+    "- 展开也只用短句逐条列，不写小标题、不举例子、不复述用户的问题。\n"
+    "- 寒暄只回一句，不要顺势介绍自己的能力。\n"
+    "这一次只做判定与拆分，不要调用工具。"
+)
+
+REPORT_INSTRUCTION = (
+    "任务执行完了。现在写交付说明，只写下面三段，不要有开场白、不要复述过程、"
+    "不要解释你的判断依据。\n"
+    "已完成\n- 每条一句、不超过 40 字\n"
+    "未完成\n- 确实没做的写在这里；全部做完就只写「无」\n"
+    "下一步\n- 建议用户接着做什么，最多 2 条；没有就给「无」\n"
+    "硬要求：总长不超过 12 行；不要出现「我」「作为」「本次任务」这类自述。"
+)
+
+ANSWER_INSTRUCTION = (
+    "直接回答用户。要求：不超过 5 行；不要开场白，不要「好的」「当然」「让我」；"
+    "不要复述用户的问题；不要介绍你自己能做什么，除非用户问的就是这个。"
+)
+
+# 模型习惯性加的开场白，逐条剥掉。
+_NOISE_PREFIX = re.compile(
+    r"^\s*(?:"
+    r"好的[，,。！!\s]*|好[，,。！!\s]+|当然[，,。！!\s]*|没问题[，,。！!\s]*|"
+    r"收到[，,。！!\s]*|明白了[，,。！!\s]*|了解[，,。！!\s]*|"
+    r"让我(?:来|先)?[^。\n]{0,20}[。，,\n]|我来(?:帮你)?[^。\n]{0,20}[。，,\n]|"
+    r"首先[，,][^。\n]{0,20}[。，,\n]|"
+    r"作为(?:一个)?(?:AI|人工智能|语言模型)[^。\n]{0,30}[。，,\n]"
+    r")",
+    re.IGNORECASE,
+)
+
+# 结尾客套，用户读完答案不会因为少了这句话而困惑。
+_NOISE_SUFFIX = re.compile(
+    r"(?:如果(?:你)?(?:还)?有(?:其他|别的)?(?:问题|需要|疑问)[^。\n]{0,20}[。！!]?"
+    r"|如需[^。\n]{0,20}[。！!]?"
+    r"|希望(?:对你|这)(?:有|能)[^。\n]{0,20}[。！!]?"
+    r"|随时(?:告诉|找)我[^。\n]{0,10}[。！!]?)\s*$"
+)
+
+# 交付三段的标题，用于把自由文本拆成分区。
+_SECTION = re.compile(r"^\s*(?:#{1,4}\s*)?\*{0,2}(已完成|未完成|下一步|已做|待做|建议)\*{0,2}\s*[:：]?\s*$")
+
+
+def _clean_lines(text: str) -> list[str]:
+    return [line.rstrip() for line in (text or "").replace("\r\n", "\n").split("\n")]
+
+
+def normalize_answer(text: str) -> str:
+    """把模型回答里的废话削掉，保留内容本身。
+
+    只做四件事：剥开场白、剥结尾客套、压空行、去首尾空白。
+    不改变正文措辞——改写内容会引入新的错误，代价远大于收益。
+    """
+    body = (text or "").strip()
+    if not body:
+        return ""
+    # 开场白可能叠好几层（「好的，当然可以」），最多剥 3 层
+    for _ in range(3):
+        stripped = _NOISE_PREFIX.sub("", body, count=1).lstrip()
+        if stripped == body:
+            break
+        body = stripped
+    body = _NOISE_SUFFIX.sub("", body).rstrip()
+    lines = _clean_lines(body)
+    # 连续空行压成一个
+    squeezed: list[str] = []
+    for line in lines:
+        if not line.strip() and squeezed and not squeezed[-1].strip():
+            continue
+        squeezed.append(line)
+    return "\n".join(squeezed).strip()
+
+
+def parse_intent(text: str) -> dict:
+    """从模型输出里解析判定结果；解析不出来时返回空 dict 由调用方兜底。"""
+    body = (text or "").strip()
+    if not body:
+        return {}
+    candidates: list[str] = []
+    if body.startswith("{"):
+        candidates.append(body)
+    depth, start = 0, -1
+    for index, char in enumerate(body):
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                candidates.append(body[start : index + 1])
+                start = -1
+    for chunk in candidates:
+        try:
+            parsed = json.loads(chunk)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        intent = str(parsed.get("intent") or "").strip().lower()
+        if intent not in (INTENT_ANSWER, INTENT_ACT):
+            # 兼容模型写成 "no_action"/"chat"/"direct" 的说法
+            if intent in ("chat", "direct", "none", "no_action", "reply", "answer_direct"):
+                intent = INTENT_ANSWER
+            elif intent in ("task", "action", "do", "execute", "work"):
+                intent = INTENT_ACT
+            else:
+                continue
+        steps = parsed.get("steps") or []
+        if isinstance(steps, str):
+            steps = [steps]
+        clean_steps = []
+        for item in steps:
+            if isinstance(item, dict):
+                item = item.get("text") or item.get("title") or item.get("step") or ""
+            line = str(item).strip()
+            # 模型爱写「步骤一：先读取…」这种带编号和解释的长句。计划卡是给人看的清单，
+            # 只留动作本身：去掉编号/前缀、去掉句末标点、限长。
+            line = re.sub(r"^\s*(?:步骤\s*[一二三四五六七八九十\d]+\s*[、.：:]?|\d+\s*[.、)]|[-*•])\s*", "", line)
+            line = line.strip(" 。；;，,")
+            # 两个字的步骤也常见（"跑测试"是三字，"看日志"三字），门槛只用来滤掉空串
+            if len(line) >= 2:
+                clean_steps.append(line[:60])
+        return {
+            "intent": intent,
+            "note": str(parsed.get("note") or "").strip()[:120],
+            "steps": clean_steps[:8],
+            "answer": str(parsed.get("answer") or "").strip(),
+        }
+    return {}
+
+
+def split_sections(text: str) -> dict[str, list[str]]:
+    """把交付文本按「已完成 / 未完成 / 下一步」拆成三组条目。
+
+    没写这三段（模型没遵守格式）时返回空 dict，调用方决定怎么兜底。
+    """
+    sections: dict[str, list[str]] = {}
+    current = ""
+    aliases = {"已做": "已完成", "待做": "未完成", "建议": "下一步"}
+    for line in _clean_lines(normalize_answer(text)):
+        match = _SECTION.match(line)
+        if match:
+            title = aliases.get(match.group(1), match.group(1))
+            current = title
+            sections.setdefault(current, [])
+            continue
+        if not current:
+            continue
+        cleaned = re.sub(r"^\s*(?:[-*•]|\d+[.、)])\s*", "", line).strip()
+        if cleaned:
+            sections[current].append(cleaned)
+    return {key: value for key, value in sections.items() if value}
+
+
+def format_report(done: str = "", undone: str = "", next_step: str = "") -> str:
+    """按固定三段拼装交付文本；空段写「无」，不省略标题。"""
+
+    def block(title: str, body: str) -> str:
+        lines = [line.strip() for line in (body or "").split("\n") if line.strip()]
+        if not lines:
+            return f"{title}\n- 无"
+        return title + "\n" + "\n".join(
+            line if line.startswith(("-", "*")) else f"- {line}" for line in lines
+        )
+
+    return "\n".join([block("已完成", done), block("未完成", undone), block("下一步", next_step)])
+
+
+def as_report(text: str) -> str:
+    """把任意交付文本规整成三段式。
+
+    - 已经是三段式：只做清理，保持结构。
+    - 只有正文：整段算「已完成」，另外两段写「无」——宁可少说，也不要模型
+      再编两段出来。真需要区分时由调用方传入结构化数据。
+    """
+    body = normalize_answer(text)
+    if not body:
+        return format_report("无", "无", "无")
+    sections = split_sections(body)
+    if len(sections) >= 2 or "已完成" in sections:
+        return "\n".join(
+            [
+                format_report(
+                    "\n".join(sections.get("已完成", [])) or "无",
+                    "\n".join(sections.get("未完成", [])) or "无",
+                    "\n".join(sections.get("下一步", [])) or "无",
+                )
+            ]
+        )
+    return format_report(body, "无", "无")

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
 import { Toggle } from "./bits";
 import {
@@ -147,22 +147,26 @@ export function SafetyPanel() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [timeoutDraft, setTimeoutDraft] = useState("");
+  const [reloadToken, setReloadToken] = useState(0);
 
-  const load = useCallback(async () => {
-    try {
-      const [next, info] = await Promise.all([fetchAgentSettings(), fetchSafetyRuntime()]);
-      setSettings(next);
-      setRuntime(info);
-      setTimeoutDraft(String(next.safety.timeout_seconds));
-      setError("");
-    } catch (err) {
-      setError(errorMessage(err));
-    }
-  }, []);
-
+  // 沿用 feature-flags-panel 的写法：用 token 触发刷新，避免在 effect 体内同步 setState。
   useEffect(() => {
-    void load();
-  }, [load]);
+    let alive = true;
+    Promise.all([fetchAgentSettings(), fetchSafetyRuntime()])
+      .then(([next, info]) => {
+        if (!alive) return;
+        setSettings(next);
+        setRuntime(info);
+        setTimeoutDraft(String(next.safety.timeout_seconds));
+        setError("");
+      })
+      .catch((err: unknown) => {
+        if (alive) setError(errorMessage(err));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [reloadToken]);
 
   async function apply(
     patch: Parameters<typeof updateAgentSettings>[0],
@@ -188,6 +192,15 @@ export function SafetyPanel() {
     return (
       <Panel title="安全与权限" hint="GET /settings/safety/runtime">
         <p className="text-[12px] text-faint">{error || "加载中…"}</p>
+        {error && (
+          <button
+            type="button"
+            onClick={() => setReloadToken((token) => token + 1)}
+            className="mt-2 self-start rounded-md border border-line bg-surface px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-line-strong hover:text-text"
+          >
+            重试
+          </button>
+        )}
       </Panel>
     );
   }

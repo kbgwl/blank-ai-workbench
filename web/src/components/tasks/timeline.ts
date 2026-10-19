@@ -158,19 +158,23 @@ function planItems(event: AgentEvent): { items: string[]; text: string } {
   return { items: items.length ? items : fallback, text: textOf(event.payload, "text", "summary") };
 }
 
-function describeSystem(event: AgentEvent): { title: string; detail: string; tone: "muted" | "warn" | "danger" | "accent" } {
+function describeSystem(event: AgentEvent): { title: string; detail: string; tone: "muted" | "warn" | "danger" | "accent" } | null {
   const type = event.type.toLowerCase();
   const payload = event.payload;
-  if (type === "node.started") {
-    const step = numOf(payload, "step");
-    // 默认预算 200 步，" / 共 N 步" 常驻显示只会变成噪音；只有人为把预算调小过才值得展示分母。
-    const max = numOf(payload, "max_steps");
-    const showMax = max !== null && max <= 50;
-    return {
-      title: event.node || "节点",
-      detail: step !== null ? `第 ${step} 步${showMax ? ` / 共 ${max} 步` : ""}` : "",
-      tone: "muted",
-    };
+  // 内部节点与埋点事件不进对话流。用户要看的是"做到哪了"，不是
+  // "create_plan 节点第 1 步"——这些行曾经占掉事件列表的一大半。
+  if (
+    type.startsWith("node.") ||
+    type.startsWith("context.") ||
+    type.startsWith("hook.") ||
+    type.startsWith("intent.") ||
+    type.startsWith("answer.") ||
+    type === "result.delivered" ||
+    type === "delivery.recorded" ||
+    type === "task.created" ||
+    type === "snapshot.created"
+  ) {
+    return null;
   }
   if (type === "task.started") {
     const parts = [
@@ -178,7 +182,7 @@ function describeSystem(event: AgentEvent): { title: string; detail: string; ton
       textOf(payload, "provider") ? `供应商 ${textOf(payload, "provider")}` : "",
       textOf(payload, "model") ? `模型 ${textOf(payload, "model")}` : "",
     ].filter(Boolean);
-    return { title: "任务开始运行", detail: parts.join(" · "), tone: "muted" };
+    return { title: "开始执行", detail: parts.join(" · "), tone: "muted" };
   }
   if (type === "validation.completed" || type.startsWith("validation")) {
     const command = textOf(payload, "command", "cmd");
@@ -275,10 +279,21 @@ function describeSystem(event: AgentEvent): { title: string; detail: string; ton
       tone: "muted",
     };
   }
+  if (type.startsWith("review")) {
+    const approved = boolOf(payload, "approved");
+    if (type.includes("unavailable")) return null;
+    return {
+      title: approved === false ? "自检不通过" : "自检通过",
+      detail: clip(textOf(payload, "summary"), 140),
+      tone: approved === false ? "warn" : "muted",
+    };
+  }
   if (type.startsWith("error")) {
     return { title: "运行出错", detail: clip(eventToolOutput(event), 200), tone: "danger" };
   }
-  return { title: event.type, detail: clip(eventToolOutput(event), 200), tone: "muted" };
+  // 没显式识别的内部事件一律不显示。对话流里出现 "memory.consolidated"
+  // 这种原始事件名，对用户没有任何信息量。
+  return null;
 }
 
 /**
@@ -520,6 +535,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
     }
 
     const described = describeSystem(event);
+    if (!described) return;
     push({
       kind: "system",
       key,

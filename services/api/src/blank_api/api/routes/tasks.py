@@ -7,6 +7,7 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 
+import anyio
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, select
@@ -14,7 +15,7 @@ from sqlalchemy import delete, select
 from blank_api.api.auth import require_token
 from blank_api.api.errors import ApiError
 from blank_api.api.routes.projects import load_project
-from blank_api.db import get_session_factory
+from blank_api.db import db_retry, get_session_factory
 from blank_api.deps import DbSession
 from blank_api.models.model_provider import ModelProvider
 from blank_api.models.checkpoint import AgentCheckpoint, AgentCheckpointWrite
@@ -39,12 +40,16 @@ from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.fork import FORK_EVENT, fork_thread
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
 from blank_api.services.agent.queue import claim_run, enqueue_run, finish_run, renew_run
+from blank_api.services.agent.router import candidate_from_provider
 from blank_api.services.models.registry import build_adapter
 from blank_api.services.models.routing import FallbackAdapter
 from blank_api.services.sandbox import SnapshotStore
 
 router = APIRouter(tags=["tasks"], dependencies=[Depends(require_token)])
 log = logging.getLogger(__name__)
+
+# 自动重排队的上限：超过就不再无限重试，避免一条坏 run 在后台反复空转。
+MAX_RECOVERY_ATTEMPTS = 3
 
 
 def _factory_from(request: Request | None):
@@ -205,6 +210,11 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
     await db.commit()
     client_factory = _factory_from(request)
     adapters = [build_adapter(provider, client_factory)]
+    # 路由候选：本次任务已经选定的供应商（主用 + 兜底 + 分角色），不会扩到别处。
+    # 只在这几个里面挑，是因为「换更便宜的模型」和「换个供应商跑」是两件事，
+    # 后者必须由用户显式指定过。
+    routing_rows: dict[str, ModelProvider] = {provider.id: provider}
+    routing_adapters: dict = {provider.id: adapters[0]}
     if payload.fallback_provider_ids:
         fallback_rows = (
             await db.execute(
@@ -219,6 +229,8 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
             fallback = by_id.get(fallback_id)
             if fallback is not None and fallback.id != provider.id:
                 adapters.append(build_adapter(fallback, client_factory))
+                routing_rows.setdefault(fallback.id, fallback)
+                routing_adapters.setdefault(fallback.id, adapters[-1])
     adapter = FallbackAdapter(adapters) if len(adapters) > 1 else adapters[0]
     role_adapters = {}
     role_provider_ids = {}
@@ -237,6 +249,8 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
             if role_provider is not None:
                 role_adapters[role] = build_adapter(role_provider, client_factory)
                 role_provider_ids[role] = role_provider.id
+                routing_rows.setdefault(role_provider.id, role_provider)
+                routing_adapters.setdefault(role_provider.id, role_adapters[role])
     active_skills = (
         await db.execute(select(Skill.instructions).where(Skill.status == "active").order_by(Skill.updated_at))
     ).scalars().all()
@@ -253,6 +267,11 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         "max_steps": int(task.max_steps),
         "skill_instructions": [str(item) for item in active_skills],
     }
+    # 候选必须在这里算：下面 rollback 会让 ORM 实例过期，之后读 api_key_encrypted
+    # 会触发同步懒加载，在异步会话里直接抛 MissingGreenlet。
+    routing_pool = [
+        candidate_from_provider(row) for row in routing_rows.values() if _routable(row)
+    ]
     # The runtime owns its own sessions; end this request transaction first so a
     # single-connection SQLite backend never interleaves them mid-run.
     await db.rollback()
@@ -266,7 +285,21 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         permission_mode=payload.permission_mode,
         role_adapters=role_adapters,
         role_provider_ids=role_provider_ids,
+        routing_pool=routing_pool,
+        routing_adapters=routing_adapters,
     )
+
+
+def _routable(provider: ModelProvider) -> bool:
+    """没配 Key 的供应商不参与路由。
+
+    它留在列表里只是占位配置（用户加了还没填密钥），把它选进来等于把任务
+    交给一个必然 401 的端点——而路由失败不会像兜底那样静默降级，是直接报错。
+    Ollama 是本机端点，本来就不需要 Key。
+    """
+    if provider.kind == "ollama":
+        return True
+    return bool(provider.api_key_encrypted)
 
 
 @router.post("/tasks/{task_id}/run")
@@ -315,13 +348,18 @@ async def _record_run_failure(task_id: str, run_id: str, error: BaseException) -
             )
     except Exception:  # 记事件本身失败也不能把进程带崩
         log.exception("写入 task.failed 事件失败 task=%s", task_id)
-    try:
+
+    async def mark_failed() -> None:
         async with get_session_factory()() as session:
             task = await session.get(Task, task_id)
             if task is not None and task.status not in ("cancelled", "succeeded"):
                 task.status = "failed"
                 task.failure_reason = message[:2000]
                 await session.commit()
+
+    try:
+        # 连接池里可能躺着一条被取消打断的旧连接，换新连接重试即可
+        await db_retry(mark_failed)
     except Exception:
         log.exception("更新任务失败状态出错 task=%s", task_id)
 
@@ -331,9 +369,12 @@ async def _execute_claimed_run(run_id: str, worker_id: str, run_request: RunRequ
     async def heartbeat() -> None:
         while True:
             await asyncio.sleep(30)
-            async with get_session_factory()() as session:
-                if not await renew_run(session, run_id, worker_id):
-                    return
+            try:
+                async with get_session_factory()() as session:
+                    if not await renew_run(session, run_id, worker_id):
+                        return
+            except Exception:  # 续租失败不该把执行任务带走，下一轮再试
+                log.warning("续租失败 run=%s", run_id, exc_info=True)
 
     lease_task = asyncio.create_task(heartbeat(), name=f"blank-lease-{run_id}")
     try:
@@ -349,8 +390,17 @@ async def _execute_claimed_run(run_id: str, worker_id: str, run_request: RunRequ
     finally:
         lease_task.cancel()
         await asyncio.gather(lease_task, return_exceptions=True)
-    async with get_session_factory()() as session:
-        await finish_run(session, run_id, status)
+
+    async def finish() -> None:
+        async with get_session_factory()() as session:
+            await finish_run(session, run_id, status)
+
+    try:
+        await db_retry(finish)
+    except Exception as error:
+        # 收尾失败会让任务永远停在 queued（界面一直转圈），必须留下痕迹并强行置终态
+        log.exception("收尾写库失败 run=%s", run_id)
+        await _record_run_failure(run_request.task_id, run_id, error)
 
 
 @router.post("/tasks/{task_id}/start", status_code=202)
@@ -367,10 +417,17 @@ async def start_task(task_id: str, payload: TaskRunIn, request: Request, db: DbS
 
     async def runner() -> None:
         worker_id = f"{os.environ.get('COMPUTERNAME', 'worker')}-{uuid.uuid4().hex[:8]}"
-        async with get_session_factory()() as session:
-            if not await claim_run(session, run.id, worker_id):
-                return
-        await _execute_claimed_run(run.id, worker_id, run_request)
+        try:
+            async with get_session_factory()() as session:
+                if not await claim_run(session, run.id, worker_id):
+                    return
+            await _execute_claimed_run(run.id, worker_id, run_request)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            # 后台任务的异常没人接，不接住就是“任务永远 queued、界面一直转圈”
+            log.exception("启动执行失败 task=%s run=%s", task_id, run.id)
+            await _record_run_failure(task_id, run.id, error)
 
     try:
         await run_manager.start(run.id, runner)
@@ -389,6 +446,20 @@ async def recover_pending_runs() -> int:
             async with get_session_factory()() as session:
                 task = await session.get(Task, run.task_id)
                 if task is None:
+                    continue
+                if run.attempts >= MAX_RECOVERY_ATTEMPTS:
+                    # 反复重排同一个 run 只会无限循环（上次收尾没写成就是这种表现）。
+                    # 到这里就停手，把原因交给用户，让他决定是否重试。
+                    async with get_session_factory()() as failed_session:
+                        await finish_run(failed_session, run.id, "failed")
+                    await _record_run_failure(
+                        run.task_id,
+                        run.id,
+                        RuntimeError(
+                            f"这条任务连续 {run.attempts} 次没能正常启动（上一次执行没有正常收尾），"
+                            "已停止自动重试。请点「重试」重新发起。"
+                        ),
+                    )
                     continue
                 try:
                     request_payload = TaskRunIn.model_validate(run.request_payload or {})
@@ -461,15 +532,19 @@ async def task_event_stream(
         idle_rounds = 0
         terminal = {"succeeded", "failed", "cancelled", "paused", "waiting_approval"}
         while idle_rounds < 600:
-            async with get_session_factory()() as session:
-                rows = (
-                    await session.execute(
-                        select(AgentEvent)
-                        .where(AgentEvent.task_id == task_id, AgentEvent.seq > cursor)
-                        .order_by(AgentEvent.seq)
-                    )
-                ).scalars().all()
-                status = (await session.execute(select(Task.status).where(Task.id == task_id))).scalar_one_or_none()
+            # 断流会取消这个生成器：如果取消正好落在连接 close 上，池子里会留下一条
+            # 半关闭连接，后面所有请求都可能撞上 no active connection。每次读取都
+            # 屏蔽取消，等这一小段数据库操作跑完再说。
+            with anyio.CancelScope(shield=True):
+                async with get_session_factory()() as session:
+                    rows = (
+                        await session.execute(
+                            select(AgentEvent)
+                            .where(AgentEvent.task_id == task_id, AgentEvent.seq > cursor)
+                            .order_by(AgentEvent.seq)
+                        )
+                    ).scalars().all()
+                    status = (await session.execute(select(Task.status).where(Task.id == task_id))).scalar_one_or_none()
             if rows:
                 for row in rows:
                     cursor = row.seq

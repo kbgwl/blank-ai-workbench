@@ -23,7 +23,9 @@ from blank_api.services.agent.context import ContextCompactor
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.evidence import build_evidence
 from blank_api.services.agent.graph import AgentSession, build_agent_graph, initial_messages
+from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agent.store import SerializedSessionFactory
+from blank_api.services.features import is_enabled
 from blank_api.services.fork import allocate_thread
 from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import HookRunner
@@ -111,6 +113,9 @@ class RunRequest:
     skill_instructions: Sequence[str] = ()
     role_adapters: dict[str, ModelAdapter] | None = None
     role_provider_ids: dict[str, str] | None = None
+    # 按需选模型的候选池：只能从「本次任务已经选定的供应商」里取，不含用户没选过的。
+    routing_pool: Sequence[Candidate] | None = None
+    routing_adapters: dict[str, ModelAdapter] | None = None
 
 
 @dataclass
@@ -180,8 +185,9 @@ class AgentRuntime:
         store = SerializedSessionFactory(self.session_factory)
         recorder = EventRecorder(store, request.task_id, trace_id=thread_id, run_id=request.run_id)
         settings = SettingsStore().read()
-        # 设置页可以关掉按需加载：关掉后所有工具每轮都下发，tool_search 也就没有意义了
-        tool_search_enabled = bool((settings.get("tools") or {}).get("search", True))
+        # 设置页可以关掉按需加载：关掉后所有工具每轮都下发，tool_search 也就没有意义了。
+        # 走特性注册表，老字段 tools.search 仍然作为回落值生效。
+        tool_search_enabled = is_enabled("tool_search", settings)
         tools = build_default_tools()
         if not tool_search_enabled:
             tools = [tool for tool in tools if tool.name != "tool_search"]
@@ -200,6 +206,12 @@ class AgentRuntime:
             approved_prefixes=request.approved_command_prefixes or (),
         )
         adapters = [request.adapter, *(request.role_adapters or {}).values()]
+        # 按需选模型：候选不足两个就没有"选"可言，直接不建路由，
+        # 关掉开关时行为与单模型完全一致（router=None 时 call_model 走原路径）。
+        routing_pool = tuple(request.routing_pool or ())
+        router = Router(pool=routing_pool) if routing_pool and is_enabled("model_routing", settings) else None
+        if router is not None and not router.active:
+            router = None
         guardian = Guardian.from_settings(
             (request.role_adapters or {}).get("guardian") or request.adapter, settings=settings
         )
@@ -251,6 +263,8 @@ class AgentRuntime:
             permissions=permissions,
             role_adapters=request.role_adapters or {},
             role_provider_ids=request.role_provider_ids or {},
+            router=router,
+            routing_adapters=request.routing_adapters or {},
             is_cancelled=_CancelledLookup(store, request.task_id),
             hooks=HookRunner.from_env(),
             guardian=guardian,

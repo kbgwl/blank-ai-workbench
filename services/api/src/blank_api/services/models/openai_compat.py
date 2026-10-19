@@ -55,11 +55,16 @@ class OpenAICompatibleAdapter(ModelAdapter):
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         usage = data.get("usage") or {}
+        # OpenAI 的 prompt_tokens 已包含缓存命中部分，这里只把细分项拆出来记账。
+        prompt_details = usage.get("prompt_tokens_details") or {}
+        completion_details = usage.get("completion_tokens_details") or {}
         return ModelResponse(
             text=message.get("content") or "",
             usage=Usage(
                 prompt_tokens=int(usage.get("prompt_tokens") or 0),
                 completion_tokens=int(usage.get("completion_tokens") or 0),
+                cached_tokens=int(prompt_details.get("cached_tokens") or 0),
+                reasoning_tokens=int(completion_details.get("reasoning_tokens") or 0),
             ),
             model=data.get("model") or self.config.model,
             tool_calls=message.get("tool_calls") or [],

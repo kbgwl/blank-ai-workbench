@@ -47,6 +47,11 @@ def _redact_value(value, secrets: Sequence[str], limit: int = MAX_RESULT_CHARS):
 class ToolGateway:
     def __init__(self, tools: Sequence[ToolDefinition], *, defer: bool = True) -> None:
         self.tools: dict[str, ToolDefinition] = {tool.name: tool for tool in tools}
+        # 并发执行只读工具时，多条 _record 会同时落库。SQLite 的连接池本身有 30s
+        # 锁等待兜底，但内存库用 StaticPool 只有一个连接，并发拿同一个连接会直接
+        # 抛错——这类失败偶发且难复现，用一把锁把写库这一段串起来最省心。
+        # 写库是毫秒级，串行化它不影响并行的收益（省下的是 handler 的等待）。
+        self._record_lock = asyncio.Lock()
         # 注册表决定"模型这一轮看得见哪些工具"。defer=False 给子代理用：
         # 它拿到的本来就是一小组白名单工具，再藏一层只会让它无从下手。
         self.registry = ToolRegistry(tools, activate_all=not defer)
@@ -270,21 +275,22 @@ class ToolGateway:
             "data": _redact_value(outcome.data, context.extra_secrets, 10_000_000),
         }
         artifact_path = ArtifactStore().save(context.task_id, tool_call_id, full_payload)
-        async with context.session_factory() as session:
-            session.add(
-                ToolCall(
-                    id=tool_call_id,
-                    task_id=context.task_id,
-                    trace_id=context.trace_id,
-                    node=node,
-                    name=name,
-                    arguments=_redact_value(arguments, context.extra_secrets, MAX_LOGGED_CHARS),
-                    result_summary=summary or outcome.status,
-                    artifact_path=artifact_path,
-                    status=outcome.status,
-                    risk_level=risk,
-                    duration_ms=duration_ms,
+        async with self._record_lock:
+            async with context.session_factory() as session:
+                session.add(
+                    ToolCall(
+                        id=tool_call_id,
+                        task_id=context.task_id,
+                        trace_id=context.trace_id,
+                        node=node,
+                        name=name,
+                        arguments=_redact_value(arguments, context.extra_secrets, MAX_LOGGED_CHARS),
+                        result_summary=summary or outcome.status,
+                        artifact_path=artifact_path,
+                        status=outcome.status,
+                        risk_level=risk,
+                        duration_ms=duration_ms,
+                    )
                 )
-            )
-            await session.commit()
+                await session.commit()
         return tool_call_id, artifact_path

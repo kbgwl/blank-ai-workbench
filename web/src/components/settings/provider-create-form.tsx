@@ -22,6 +22,10 @@ type Draft = {
   temperature: string;
   max_tokens: string;
   context_window: string;
+  reasoning_effort: string;
+  verbosity: string;
+  total_params_b: string;
+  active_params_b: string;
   supports_tools: boolean;
   supports_vision: boolean;
   enabled: boolean;
@@ -29,11 +33,17 @@ type Draft = {
 
 const presetLabels: Record<string, string> = {
   openai: "OpenAI",
+  openai_responses: "OpenAI Responses",
   deepseek: "DeepSeek",
   qwen: "通义千问",
   anthropic: "Claude",
   ollama: "Ollama",
 };
+
+/** 推理档位：空串表示不下发 reasoning 字段，按普通模型走 temperature。 */
+const effortOptions = ["", "minimal", "low", "medium", "high"];
+/** 输出详略：仅 OpenAI Responses 支持，空串表示不下发。 */
+const verbosityOptions = ["", "low", "medium", "high"];
 
 const emptyDraft: Draft = {
   presetKey: "",
@@ -45,6 +55,10 @@ const emptyDraft: Draft = {
   temperature: "0.2",
   max_tokens: "2048",
   context_window: "128000",
+  reasoning_effort: "",
+  verbosity: "",
+  total_params_b: "",
+  active_params_b: "",
   supports_tools: false,
   supports_vision: false,
   enabled: true,
@@ -60,6 +74,8 @@ function toDraft(key: string, preset: Preset): Draft {
     model: preset.model,
     supports_tools: Boolean(preset.supports_tools),
     supports_vision: Boolean(preset.supports_vision),
+    // Responses 端点默认开推理档位，其余保持普通温度采样
+    reasoning_effort: preset.kind === "openai_responses" ? "medium" : "",
   };
 }
 
@@ -83,8 +99,20 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
     numbers.max_tokens < 1 ||
     !Number.isInteger(numbers.context_window) ||
     numbers.context_window < 1;
+  // 参数量可以为空（当成"未填"），但不能是负数；激活参数也不可能大于总参数，
+  // 那条基本能把"把两个输入框填反了"当场抓住。
+  const params = {
+    total: draft.total_params_b.trim() === "" ? 0 : Number(draft.total_params_b),
+    active: draft.active_params_b.trim() === "" ? 0 : Number(draft.active_params_b),
+  };
+  const invalidParams =
+    !Number.isFinite(params.total) ||
+    params.total < 0 ||
+    !Number.isFinite(params.active) ||
+    params.active < 0 ||
+    (params.total > 0 && params.active > params.total);
   const nameTaken = Boolean(draft.name.trim()) && existingNames.includes(draft.name.trim());
-  const canSubmit = !busy && draft.name.trim().length > 0 && draft.base_url.trim().length > 0 && draft.model.trim().length > 0 && !invalidNumber && !nameTaken;
+  const canSubmit = !busy && draft.name.trim().length > 0 && draft.base_url.trim().length > 0 && draft.model.trim().length > 0 && !invalidNumber && !invalidParams && !nameTaken;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -104,6 +132,10 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
         supports_tools: draft.supports_tools,
         supports_vision: draft.supports_vision,
         enabled: draft.enabled,
+        reasoning_effort: draft.reasoning_effort,
+        verbosity: draft.verbosity,
+        total_params_b: params.total,
+        active_params_b: params.active,
       });
       onCreated(created);
     } catch (caught) {
@@ -237,6 +269,72 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
         </Field>
       </div>
 
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+        <Field label="推理档位 reasoning_effort">
+          <select
+            value={draft.reasoning_effort}
+            onChange={(event) => patch({ reasoning_effort: event.target.value })}
+            aria-label="推理档位"
+            className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] text-text focus:border-brand/60 focus:outline-none"
+          >
+            {effortOptions.map((value) => (
+              <option key={value || "off"} value={value}>
+                {value || "不启用"}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="输出详略 verbosity">
+          <select
+            value={draft.verbosity}
+            onChange={(event) => patch({ verbosity: event.target.value })}
+            aria-label="输出详略"
+            className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] text-text focus:border-brand/60 focus:outline-none"
+          >
+            {verbosityOptions.map((value) => (
+              <option key={value || "off"} value={value}>
+                {value || "不启用"}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      {draft.reasoning_effort !== "" && (
+        <Notice tone="muted">
+          已启用推理档位：请求不再下发 temperature（推理模型带温度会直接 400），改为回传推理内容供多轮续推。
+          verbosity 仅 OpenAI Responses 端点生效，其他接入点会忽略。
+        </Notice>
+      )}
+
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+        <Field label="总参数（十亿 B）">
+          <Input
+            value={draft.total_params_b}
+            onChange={(event) => patch({ total_params_b: event.target.value })}
+            placeholder="671，留空表示未填"
+            aria-label="总参数"
+            inputMode="decimal"
+            className="font-mono text-[12px]"
+          />
+        </Field>
+        <Field label="激活参数（十亿 B）">
+          <Input
+            value={draft.active_params_b}
+            onChange={(event) => patch({ active_params_b: event.target.value })}
+            placeholder="37，稠密模型留空"
+            aria-label="激活参数"
+            inputMode="decimal"
+            className="font-mono text-[12px]"
+          />
+        </Field>
+      </div>
+
+      <p className="-mt-1 text-[11px] leading-relaxed text-faint">
+        总参数决定权重占多少显存（能不能塞进这台机器），激活参数决定每个 token 走多少算力（跑多快、多贵）。
+        稀疏模型两者差一个数量级（如 671B / 37B），填对了成本预估才有意义；稠密模型只填总参数即可。
+      </p>
+
       <div className="flex flex-wrap items-center gap-4">
         <Toggle
           checked={draft.supports_tools}
@@ -252,6 +350,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
       </div>
 
       {invalidNumber && <Notice tone="warn">温度需为 0-2 的数字，tokens 与上下文窗口需为正整数。</Notice>}
+      {invalidParams && <Notice tone="warn">参数量需为非负数字，且激活参数不能大于总参数。</Notice>}
       {nameTaken && <Notice tone="warn">名称「{draft.name.trim()}」已存在，供应商名称需唯一。</Notice>}
       {error && <Notice>{error}</Notice>}
 

@@ -27,24 +27,51 @@ class AnthropicAdapter(ModelAdapter):
             "Content-Type": "application/json",
         }
 
+    def _system_blocks(self, messages) -> list[dict] | None:
+        """系统提示打成块，并在末尾打一个缓存断点。
+
+        Anthropic 的缓存是"前缀缓存"：断点之前的全部内容（system → tools → messages）
+        在 5 分钟内重复出现时按 cache_read 计价，比重新计算便宜一个数量级。
+        """
+        text = "\n".join(m.content for m in messages if m.role == "system")
+        if not text:
+            return None
+        block: dict = {"type": "text", "text": text}
+        if self.config.prompt_cache:
+            block["cache_control"] = {"type": "ephemeral"}
+        return [block]
+
+    def _message_payload(self, messages, cache_last: bool) -> list[dict]:
+        converted: list[dict] = []
+        for m in messages:
+            if m.role == "system":
+                continue
+            converted.append(
+                {
+                    "role": "assistant" if m.role == "assistant" else "user",
+                    "content": [{"type": "text", "text": m.content}],
+                }
+            )
+        if cache_last and converted and converted[-1]["content"]:
+            # 断点跟着对话尾部走：下一次调用能命中"上一次的全部前缀"，命中率随轮次上升。
+            converted[-1]["content"][-1]["cache_control"] = {"type": "ephemeral"}
+        return converted
+
     def _payload(self, messages, tools, stream: bool) -> dict:
-        system = "\n".join(m.content for m in messages if m.role == "system")
         payload = {
             "model": self.config.model,
-            "system": system or None,
-            "messages": [
-                {"role": "assistant" if m.role == "assistant" else "user", "content": m.content}
-                for m in messages
-                if m.role != "system"
-            ],
+            "system": self._system_blocks(messages),
+            "messages": self._message_payload(messages, cache_last=bool(self.config.prompt_cache)),
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
             "stream": stream,
         }
         if tools:
-            payload["tools"] = [
-                {"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in tools
-            ]
+            specs = [{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in tools]
+            if self.config.prompt_cache and specs:
+                # 工具表是每轮都一样的稳定前缀，值得单独打一个断点。
+                specs[-1] = {**specs[-1], "cache_control": {"type": "ephemeral"}}
+            payload["tools"] = specs
         return {k: v for k, v in payload.items() if v is not None}
 
     async def invoke(self, messages, tools=None, **kwargs) -> ModelResponse:
@@ -59,11 +86,16 @@ class AnthropicAdapter(ModelAdapter):
             if b.get("type") == "tool_use"
         ]
         usage = data.get("usage") or {}
+        # input_tokens 不含缓存部分，三块加起来才是这次真实的输入总量。
+        cache_read = int(usage.get("cache_read_input_tokens") or 0)
+        cache_write = int(usage.get("cache_creation_input_tokens") or 0)
         return ModelResponse(
             text=text,
             usage=Usage(
-                prompt_tokens=int(usage.get("input_tokens") or 0),
+                prompt_tokens=int(usage.get("input_tokens") or 0) + cache_read + cache_write,
                 completion_tokens=int(usage.get("output_tokens") or 0),
+                cached_tokens=cache_read,
+                cache_write_tokens=cache_write,
             ),
             model=data.get("model") or self.config.model,
             tool_calls=tool_calls,

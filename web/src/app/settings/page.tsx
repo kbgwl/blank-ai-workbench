@@ -1,5 +1,6 @@
 import { Panel } from "@/components/panel";
 import { AgentRuntimePanel } from "@/components/settings/agent-runtime-panel";
+import { FeatureFlagsPanel } from "@/components/settings/feature-flags-panel";
 import { ProvidersView } from "@/components/settings/providers-view";
 import { RoleModelSettings } from "@/components/settings/role-model-settings";
 import { SafetyPanel } from "@/components/settings/safety-panel";
@@ -54,6 +55,22 @@ export default function SettingsPage() {
           </span>
         </div>
         <AgentRuntimePanel />
+      </section>
+
+      <section>
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="text-[14px] font-medium tracking-tight">特性开关</h2>
+            <p className="mt-1 text-[12px] leading-relaxed text-faint">
+              内核里所有「开不开」的判断都在一张注册表里，这里能看见每一项目前是谁说了算：
+              环境变量、设置文件、老字段，还是注册表默认。改完对下一个任务生效。
+            </p>
+          </div>
+          <span className="shrink-0 rounded-md border border-brand/40 bg-brand/10 px-2 py-0.5 font-mono text-[10px] text-brand">
+            0.15 新增
+          </span>
+        </div>
+        <FeatureFlagsPanel />
       </section>
 
       <section>

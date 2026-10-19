@@ -53,6 +53,9 @@ DEFAULTS: dict[str, Any] = {
         # 工具超过一定数量后按需检索加载（tool_search）
         "search": True,
     },
+    # 能力开关的覆盖层：键由 services/features.py 的注册表定义，这里不预先列名，
+    # 否则每加一个开关都要改两处。没写的开关一律按注册表默认值走。
+    "features": {},
     "safety": {
         # 能力边界，与 permissions.default_mode（审批节奏）是两回事：
         # 这里决定"能不能做"，那里决定"要不要问"。默认全部取最保守的一档。
@@ -135,6 +138,28 @@ def _as_bool(value: Any, fallback: bool) -> bool:
     return fallback
 
 
+def flag_value(value: Any) -> bool | None:
+    """三态布尔：True / False / None。
+
+    和 ``_as_bool`` 的区别在 None：特性开关需要区分"明确关掉"与"这一层没配、
+    继续往下找"。用一个 False 兜底会把"没配"和"关掉"混成同一件事，注册表就
+    再也无法解释某个值是从哪一层来的。
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("1", "true", "yes", "on"):
+            return True
+        if text in ("0", "false", "no", "off"):
+            return False
+        return None
+    # 手改 JSON 时常写成 0/1；其它数字（比如 2）不猜，当没配
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    return None
+
+
 def normalize(raw: Any) -> dict[str, Any]:
     """Merge a partial payload over the defaults and clamp every number."""
     data = raw if isinstance(raw, dict) else {}
@@ -143,6 +168,7 @@ def normalize(raw: Any) -> dict[str, Any]:
     permissions = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
     tools = data.get("tools") if isinstance(data.get("tools"), dict) else {}
     safety = data.get("safety") if isinstance(data.get("safety"), dict) else {}
+    features = data.get("features") if isinstance(data.get("features"), dict) else {}
 
     mode = str(guardian.get("mode") or "").strip().lower()
     if mode not in GUARDIAN_MODES:
@@ -185,6 +211,13 @@ def normalize(raw: Any) -> dict[str, Any]:
         },
         "permissions": {"default_mode": default_mode},
         "tools": {"search": _as_bool(tools.get("search"), DEFAULTS["tools"]["search"])},
+        # 只收认得出布尔语义的值：手改文件时写成字符串 "on" 也认，写成一坨
+        # 无法解释的东西就丢掉，让注册表默认值接手，而不是让开关变成随机行为。
+        "features": {
+            str(key).strip(): parsed
+            for key, raw_value in features.items()
+            if str(key).strip() and (parsed := flag_value(raw_value)) is not None
+        },
         "safety": {
             # 能力开关一律按"没写就是关"处理：手改设置文件漏了字段，不能变成放行。
             "shell_enabled": _as_bool(safety.get("shell_enabled"), DEFAULTS["safety"]["shell_enabled"]),
@@ -273,6 +306,11 @@ class SettingsStore:
         merged = deepcopy(current)
         for section, value in (patch or {}).items():
             if not isinstance(value, dict) or section not in merged:
+                continue
+            if section == "features":
+                # 开关名由注册表定义，不在 DEFAULTS 里预置。按"已有键"过滤会让
+                # 新加的开关永远写不进去，而写入看起来是成功的。
+                merged[section].update(value)
                 continue
             merged[section].update({k: v for k, v in value.items() if k in merged[section]})
         return self.write(merged)

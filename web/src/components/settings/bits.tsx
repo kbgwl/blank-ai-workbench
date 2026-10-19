@@ -6,11 +6,13 @@ import type { Capabilities, TestResult } from "./api";
 export function KindBadge({ kind }: { kind: string }) {
   const tone: Record<string, string> = {
     openai_compatible: "border-brand/30 bg-brand/10 text-brand",
+    openai_responses: "border-brand/40 bg-brand/15 text-brand",
     anthropic: "border-warn/30 bg-warn/10 text-warn",
     ollama: "border-accent/30 bg-accent/10 text-accent",
   };
   const label: Record<string, string> = {
     openai_compatible: "OpenAI 兼容",
+    openai_responses: "OpenAI Responses",
     anthropic: "Anthropic",
     ollama: "Ollama 本地",
   };
@@ -19,6 +21,36 @@ export function KindBadge({ kind }: { kind: string }) {
       className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${tone[kind] ?? "border-line bg-surface-2 text-muted"}`}
     >
       {label[kind] ?? kind}
+    </span>
+  );
+}
+
+function formatBillions(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "";
+  return `${Number.isInteger(value) ? value : value.toFixed(1)}B`;
+}
+
+/**
+ * 「671B / 37B」这种写法只在稀疏模型上出现。
+ * 稠密模型两个数相等，写成「37B / 37B」纯属噪音，所以只显示一个数。
+ */
+export function ParamBadge({ total, active }: { total: number; active: number }) {
+  const totalText = formatBillions(total);
+  if (!totalText) return null; // 未填写不占位；显示「0B」会被当成真有个 0B 模型
+  const activeText = formatBillions(active);
+  const sparse = Boolean(activeText) && active < total;
+  return (
+    <span
+      title={
+        sparse
+          ? `稀疏（MoE）模型：总参数 ${totalText} 决定显存占用，激活 ${activeText} 决定每个 token 的算力与单价`
+          : `稠密模型：总参数 ${totalText}`
+      }
+      className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${
+        sparse ? "border-brand/25 bg-brand/[0.08] text-brand" : "border-line bg-surface-2/60 text-muted"
+      }`}
+    >
+      {sparse ? `${totalText} / ${activeText}` : totalText}
     </span>
   );
 }

@@ -17,6 +17,7 @@ import {
   isTerminalStatus,
   runTask,
   steerTask,
+  type AgentEvent,
   type ApprovalScope,
   type Evidence,
   type Project,
@@ -24,9 +25,10 @@ import {
   type Task,
   type TaskDraft,
 } from "@/components/tasks/api";
-import { statusMeta } from "@/components/tasks/status";
+import { nodeLabel, statusMeta } from "@/components/tasks/status";
 import { diffStats, formatDateTime, formatNumber } from "@/components/tasks/format";
 import { buildBlocks, type Block } from "@/components/tasks/timeline";
+import { ReplyView } from "@/components/tasks/reply";
 import { TimelineBlock } from "@/components/tasks/timeline-blocks";
 import { DiffPanel } from "@/components/tasks/diff-panel";
 import { EvidencePanel } from "@/components/tasks/evidence-panel";
@@ -36,8 +38,43 @@ import { HealthPill } from "@/components/health-pill";
 
 type RightTab = "diff" | "evidence" | "activity";
 type Busy = "run" | "cancel" | "decide" | "answer" | "send" | null;
-
 const STEERABLE = new Set(["running", "queued", "waiting_approval", "paused"]);
+
+/** 意图判定给出一句话需求复述。从后往前找最近一条，命中即停。 */
+function lastIntentNote(events: AgentEvent[]): string {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type !== "intent.classified") continue;
+    const note = event.payload?.note;
+    return typeof note === "string" && note.trim() ? note.trim() : "";
+  }
+  return "";
+}
+
+/**
+ * 「活动」面板默认只有事件名，但「换了哪个模型、为什么」正是路由唯一的可解释入口。
+ * 只给这几类事件补一行摘要，其余保持干净——面板是流水账，不是详情页。
+ */
+function eventDetail(event: AgentEvent): string {
+  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  if (event.type === "model.routed") {
+    const name = typeof payload.name === "string" ? payload.name : "";
+    if (!name) return "";
+    const tier = typeof payload.tier_label === "string" ? payload.tier_label : "";
+    const arrow = payload.switched === true ? "→ " : "保持 ";
+    return `${arrow}${name}${tier ? `（${tier}档）` : ""}`;
+  }
+  if (event.type === "model.escalation") {
+    const tools = Array.isArray(payload.tools) ? payload.tools.filter((tool): tool is string => typeof tool === "string") : [];
+    return tools.length ? `失败后提档：${tools.join("、")}` : "失败后提档";
+  }
+  if (event.type === "model.fallback") {
+    const from = typeof payload.from === "string" ? payload.from : "";
+    const to = typeof payload.to === "string" ? payload.to : "";
+    return from && to ? `${from} → ${to}` : "";
+  }
+  return "";
+}
 
 /** 任务提示词里带着执行规则和场景说明，界面上只展示用户真正写的那句。 */
 function userText(prompt: string): string {
@@ -126,7 +163,9 @@ export function Workbench() {
   }, []);
 
   useEffect(() => {
-    void loadDetail(selectedId);
+    // loadDetail 在 selectedId 为空时会同步 setState，直接写在 effect 体内会触发级联渲染。
+    // 放进微任务里，顺带把「切任务」这一批更新合并成一次。
+    void Promise.resolve().then(() => loadDetail(selectedId));
   }, [selectedId, loadDetail]);
 
   useEffect(() => {
@@ -146,6 +185,11 @@ export function Workbench() {
   }, [providers, task]);
 
   const blocks = useMemo(() => buildBlocks(events), [events]);
+  // node.* 是图内部的节点起止、context.measured 是 token 埋点，对用户没有信息量。
+  const visibleEvents = useMemo(
+    () => events.filter((event) => !event.type.startsWith("node.") && event.type !== "context.measured"),
+    [events],
+  );
   // 结果块本身就会展示 summary；再补一张卡就重复了，所以只在没展示过时才兜底。
   const summaryShown = useMemo(
     () => blocks.some((block) => block.kind === "result" && Boolean(block.summary)),
@@ -160,6 +204,45 @@ export function Workbench() {
 
   const terminal = task ? isTerminalStatus(task.status) : true;
   const steerable = Boolean(task && STEERABLE.has(task.status));
+
+  // 意图判定给出一句话需求复述，贴在进度条右侧。
+  // 判错了用户能立刻看出来并补充说明，比事后拿到一份跑偏的交付划算。
+  const goalNote = useMemo(() => lastIntentNote(events), [events]);
+
+  // 四段进度：需求 → 拆分 → 执行 → 交付。用户只要一眼看到"现在卡在哪一段"，
+  // 不需要读节点名和步数。
+  const phases = useMemo(() => {
+    const hasPlan = blocks.some((block) => block.kind === "plan");
+    const hasWork = blocks.some(
+      (block) => block.kind === "tool" || block.kind === "terminal" || block.kind === "change",
+    );
+    const delivered =
+      blocks.some((block) => block.kind === "result" && Boolean(block.summary)) ||
+      Boolean(task?.resultSummary);
+    const running = Boolean(task) && !terminal;
+    return [
+      { key: "need", label: "需求", state: "done" as const },
+      {
+        key: "plan",
+        label: "拆分",
+        state: hasPlan ? ("done" as const) : running ? ("active" as const) : ("idle" as const),
+      },
+      {
+        key: "work",
+        label: "执行",
+        state: hasWork ? ("done" as const) : hasPlan && running ? ("active" as const) : ("idle" as const),
+      },
+      {
+        key: "done",
+        label: "交付",
+        state: delivered || (terminal && Boolean(task?.resultSummary))
+          ? ("done" as const)
+          : running
+            ? ("idle" as const)
+            : ("active" as const),
+      },
+    ];
+  }, [blocks, task, terminal]);
 
   const refresh = useCallback(
     (taskId: string | null) => {
@@ -432,6 +515,37 @@ export function Workbench() {
           </span>
         </header>
 
+        {task && task.status !== "draft" && (
+          <div className="flex shrink-0 items-center gap-1.5 border-b border-line bg-bg px-5 py-1.5">
+            {phases.map((phase, index) => (
+              <span key={phase.key} className="flex items-center gap-1.5">
+                {index > 0 && <span className="text-[10px] text-faint/60">›</span>}
+                <span
+                  className={`flex items-center gap-1 text-[11px] ${
+                    phase.state === "done" ? "text-accent" : phase.state === "active" ? "text-brand" : "text-faint"
+                  }`}
+                >
+                  <span
+                    className={`size-1.5 rounded-full ${
+                      phase.state === "done"
+                        ? "bg-accent"
+                        : phase.state === "active"
+                          ? "animate-pulse bg-brand"
+                          : "bg-line-strong"
+                    }`}
+                  />
+                  {phase.label}
+                </span>
+              </span>
+            ))}
+            {goalNote && (
+              <span className="ml-auto min-w-0 truncate pl-3 text-[11px] text-muted" title={goalNote}>
+                {goalNote}
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="min-h-0 flex-1 overflow-y-auto py-6">
           <div className="mx-auto w-full max-w-[720px] px-6">
             {(liveNotice || notice) && (
@@ -469,7 +583,7 @@ export function Workbench() {
                 <Message who="空白格" agent time={task.createdAt}>
                   {blocks.length === 0 ? (
                     <p className="text-[13px] leading-relaxed text-muted">
-                      {terminal && !task.resultSummary ? "还没有执行记录。" : "已接收，正在准备执行计划…"}
+                      {terminal && !task.resultSummary ? "没有返回内容。" : "处理中…"}
                     </p>
                   ) : (
                     <div className="flex flex-col gap-2.5">
@@ -488,8 +602,8 @@ export function Workbench() {
                   {/* 最终回复兜底。事件流里没有结果块时，不渲染的话任务跑完只剩一串事件，
                       看着就像没回应。 */}
                   {task.resultSummary && !summaryShown && (
-                    <div className="mt-3 rounded-[10px] border border-line bg-surface px-3.5 py-3 text-[13.5px] leading-relaxed whitespace-pre-wrap">
-                      {task.resultSummary}
+                    <div className="mt-3 rounded-[10px] border border-line bg-surface px-3.5 py-3 text-[13.5px] leading-relaxed">
+                      <ReplyView text={task.resultSummary} />
                     </div>
                   )}
                 </Message>
@@ -625,14 +739,21 @@ export function Workbench() {
           ) : (
             <div className="flex flex-col">
               <div className="mb-1.5 text-[11px] font-semibold text-faint">全部活动</div>
-              {events.length === 0 && <p className="px-1 py-4 text-[11.5px] text-faint">还没有事件</p>}
-              {events.map((event) => (
-                <div key={`${event.seq}-${event.type}`} className="flex items-start gap-2 border-b border-dashed border-line px-1 py-1.5 text-[11.5px] last:border-0">
-                  <span className="w-9 shrink-0 font-mono text-[10.5px] text-faint">#{event.seq}</span>
-                  <span className="min-w-0 flex-1 truncate text-muted">{event.type}</span>
-                  <span className="shrink-0 text-[10.5px] text-faint">{event.node}</span>
-                </div>
-              ))}
+              {/* node.* 是图内部的节点起止，对用户没有信息量，跟对话流一样不列。 */}
+              {visibleEvents.length === 0 && <p className="px-1 py-4 text-[11.5px] text-faint">还没有事件</p>}
+              {visibleEvents.map((event) => {
+                const detail = eventDetail(event);
+                return (
+                  <div key={`${event.seq}-${event.type}`} className="flex items-start gap-2 border-b border-dashed border-line px-1 py-1.5 text-[11.5px] last:border-0">
+                    <span className="w-9 shrink-0 font-mono text-[10.5px] text-faint">#{event.seq}</span>
+                    <span className="min-w-0 flex-1 truncate text-muted">
+                      {EVENT_LABELS[event.type] ?? event.type}
+                      {detail && <span className="ml-1.5 text-faint">{detail}</span>}
+                    </span>
+                    <span className="shrink-0 text-[10.5px] text-faint">{nodeLabel(event.node)}</span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -645,6 +766,41 @@ const primaryBtn =
   "rounded-md bg-brand px-2.5 py-1 text-[12px] font-medium text-white transition-colors hover:brightness-110 disabled:opacity-50";
 const ghostBtn =
   "rounded-md border border-line-strong bg-surface px-2.5 py-1 text-[12px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-text disabled:opacity-50";
+
+/** 「活动」面板默认显示事件名，对用户来说太快餐；能翻成中文的都翻。 */
+const EVENT_LABELS: Record<string, string> = {
+  "task.created": "创建任务",
+  "task.started": "开始执行",
+  "task.completed": "任务完成",
+  "task.failed": "任务失败",
+  "task.cancelled": "任务取消",
+  "task.canceled": "任务取消",
+  "task.waiting_approval": "等待审批",
+  "plan.created": "拆分步骤",
+  "plan.updated": "更新步骤",
+  "intent.classified": "识别需求",
+  "tool.requested": "调用工具",
+  "tool.completed": "工具返回",
+  "approval.required": "等待审批",
+  "approval.granted": "已批准",
+  "approval.denied": "已拒绝",
+  "validation.completed": "验证完成",
+  "review.completed": "自检完成",
+  "snapshot.created": "保存快照",
+  "snapshot.restored": "恢复快照",
+  "delivery.recorded": "记录交付",
+  "diff.recorded": "记录改动",
+  "context.measured": "统计上下文",
+  "context.compacted": "压缩上下文",
+  "memory.consolidated": "整理记忆",
+  "shell.snapshot": "终端快照",
+  "subagent.started": "子代理开始",
+  "subagent.completed": "子代理完成",
+  "worktree.merged": "合并改动",
+  "model.routed": "选择模型",
+  "model.escalation": "提档重试",
+  "model.fallback": "切换备用",
+};
 
 const CHANGE_LABELS: Record<string, string> = {
   created: "新增",

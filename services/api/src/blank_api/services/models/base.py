@@ -37,10 +37,23 @@ class ToolSpecLite:
 class Usage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # 命中提示词缓存的输入 token：这部分按折扣价计费，单独记账才能算出真实省了多少。
+    cached_tokens: int = 0
+    # 写入提示词缓存的输入 token：Anthropic 收 1.25 倍，OpenAI 侧自动缓存不计写入费。
+    cache_write_tokens: int = 0
+    # 推理 token：已包含在 completion_tokens 里，单独给出用于解释成本与耗时。
+    reasoning_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """缓存命中率。分母用输入总量，没命中也没写入时返回 0。"""
+        if self.prompt_tokens <= 0:
+            return 0.0
+        return round(self.cached_tokens / self.prompt_tokens, 4)
 
 
 @dataclass
@@ -66,6 +79,12 @@ class AdapterConfig:
     supports_tools: bool = False
     supports_vision: bool = False
     timeout_seconds: float = 60.0
+    # 输出档位：Responses / o 系列用 minimal|low|medium|high 控制"想多久"，留空表示不下发。
+    reasoning_effort: str = ""
+    # 文本冗长档位：low|medium|high，留空表示不下发。
+    verbosity: str = ""
+    # 是否打提示词缓存断点。默认开：同一段系统提示与工具表在连续调用间可以复用。
+    prompt_cache: bool = True
     client_factory: Callable[..., httpx.AsyncClient] = httpx.AsyncClient
 
 

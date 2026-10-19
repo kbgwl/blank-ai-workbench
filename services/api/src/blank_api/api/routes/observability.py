@@ -35,25 +35,28 @@ async def observability_summary(db: DbSession) -> dict:
                 ModelUsage.completion_tokens,
                 ModelUsage.latency_ms,
                 ModelUsage.trace_id,
+                ModelUsage.cached_tokens,
             ).join(ModelProvider, ModelProvider.id == ModelUsage.provider_id)
         )
     ).all()
-    role_totals: dict[str, dict] = defaultdict(lambda: {"calls": 0, "failed": 0, "prompt_tokens": 0, "completion_tokens": 0, "latency_ms": 0})
-    model_totals: dict[str, dict] = defaultdict(lambda: {"calls": 0, "failed": 0, "prompt_tokens": 0, "completion_tokens": 0, "latency_ms": 0})
+    role_totals: dict[str, dict] = defaultdict(lambda: {"calls": 0, "failed": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "latency_ms": 0})
+    model_totals: dict[str, dict] = defaultdict(lambda: {"calls": 0, "failed": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "latency_ms": 0})
     traces: set[str] = set()
-    for provider, model, node, status, prompt, completion, latency, trace_id in model_rows:
+    for provider, model, node, status, prompt, completion, latency, trace_id, cached in model_rows:
         role = _role(node)
         bucket = role_totals[role]
         bucket["calls"] += 1
         bucket["failed"] += status != "ok"
         bucket["prompt_tokens"] += prompt or 0
         bucket["completion_tokens"] += completion or 0
+        bucket["cached_tokens"] += cached or 0
         bucket["latency_ms"] += latency or 0
         model_bucket = model_totals[f"{provider}/{model}"]
         model_bucket["calls"] += 1
         model_bucket["failed"] += status != "ok"
         model_bucket["prompt_tokens"] += prompt or 0
         model_bucket["completion_tokens"] += completion or 0
+        model_bucket["cached_tokens"] += cached or 0
         model_bucket["latency_ms"] += latency or 0
         if trace_id:
             traces.add(trace_id)
@@ -70,7 +73,11 @@ async def observability_summary(db: DbSession) -> dict:
             model_key.split("/", 1)[1] if "/" in model_key else model_key,
             bucket["prompt_tokens"],
             bucket["completion_tokens"],
+            bucket["cached_tokens"],
         ).as_dict()
+        bucket["cache_hit_rate"] = (
+            round(bucket["cached_tokens"] / bucket["prompt_tokens"], 3) if bucket["prompt_tokens"] else 0
+        )
     return {
         "traces": len(traces),
         "model_calls": len(model_rows),
