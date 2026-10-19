@@ -111,6 +111,16 @@ _REGISTRY: tuple[FeatureFlag, ...] = (
         ),
     ),
     FeatureFlag(
+        name="load_balance",
+        stage=BETA,
+        default=False,
+        summary=(
+            "负载均衡：同档同价的候选之间按近 15 分钟的真实表现轮换——失败多的先让开，"
+            "调用少的上。只换「可以互换」的那几个，所以永远改变不了选哪一档、花多少钱。"
+            "默认关闭，关着时并列按名字固定，与不轮换完全一致；需先开 model_routing。"
+        ),
+    ),
+    FeatureFlag(
         name="tiered_tools",
         stage=BETA,
         default=False,

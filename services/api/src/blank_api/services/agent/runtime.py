@@ -23,6 +23,7 @@ from blank_api.services.agent.context import ContextCompactor
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.evidence import build_evidence
 from blank_api.services.agent.graph import AgentSession, build_agent_graph, initial_messages
+from blank_api.services.agent.loadstats import recent_load
 from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agent.store import SerializedSessionFactory
 from blank_api.services.features import is_enabled
@@ -220,6 +221,10 @@ class AgentRuntime:
         router = Router(pool=routing_pool) if routing_pool and is_enabled("model_routing", settings) else None
         if router is not None and not router.active:
             router = None
+        # 负载均衡只在真的会"选"的时候才有意义：候选不足两个时连查库都省掉。
+        # 查不到数据也照开——本次任务内部的轮换不依赖它。
+        if router is not None and is_enabled("load_balance", settings):
+            router.seed_load(await recent_load(self.session_factory))
         guardian = Guardian.from_settings(
             (request.role_adapters or {}).get("guardian") or request.adapter, settings=settings
         )

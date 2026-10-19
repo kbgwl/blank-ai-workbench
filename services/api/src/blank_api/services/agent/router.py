@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Iterable
 
 LIGHT = "light"
@@ -56,6 +56,18 @@ _STANDARD_ACTIVE = 18.0
 
 # 参数量未知时的成本当量：不冒充便宜，按各档的中位水平估。
 _TIER_COST = {LIGHT: 8.0, STANDARD: 50.0, HEAVY: 200.0}
+
+# —— 负载均衡（特性开关 load_balance）。三个数字都在下面的注释里说明由来 ——
+# 窗口取 15 分钟：短于一次典型任务的尾巴就看不到「上一个任务压在谁身上」，
+# 长于一小时又会把早已恢复的故障一直记着。
+LOAD_WINDOW_MINUTES = 15
+# 至少这么多次才谈得上失败率。2 次里失败 1 次就是 50%，按这个把供应商撤掉，
+# 等于让一次偶发超时决定后面十几分钟用哪个模型。
+LOAD_MIN_CALLS = 3
+LOAD_FAILURE_ALERT = 0.34
+# 历史调用量只用来提示偏心，不用来精确配额：不加这个上限，一个「100 次 vs 0 次」的
+# 窗口会让下一个任务连续几十步都补在同一个模型上——那是纠偏过头，不是均衡。
+LOAD_SEED_CAP = 3
 
 
 def _clamp(value: int, low: int = 0, high: int = 100) -> int:
@@ -225,6 +237,43 @@ def candidate_from_provider(row: Any) -> Candidate:
 
 
 @dataclass(frozen=True)
+class LoadStat:
+    """一个供应商近 N 分钟的实际表现。样本不足时一律按「没数据」处理。
+
+    只统计事实，不做判断：``suspect`` 才是判断，且它的阈值是常量而非参数——
+    阈值一旦能从设置页改，同一个供应商在两个人的机器上就会得到两种结论，
+    而事件流里看不出差别。
+    """
+
+    calls: int = 0
+    failures: int = 0
+    tokens: int = 0
+    latency_ms: int = 0
+    window: int = LOAD_WINDOW_MINUTES
+
+    @property
+    def failure_rate(self) -> float:
+        return self.failures / self.calls if self.calls else 0.0
+
+    @property
+    def suspect(self) -> bool:
+        return self.calls >= LOAD_MIN_CALLS and self.failure_rate >= LOAD_FAILURE_ALERT
+
+    def bumped(self) -> "LoadStat":
+        """本次任务里又选了它一次。只加调用数：失败与否要等下一轮才有结论。"""
+        return replace(self, calls=self.calls + 1)
+
+    def as_dict(self) -> dict:
+        return {
+            "calls": self.calls,
+            "failures": self.failures,
+            "tokens": self.tokens,
+            "latency_ms": self.latency_ms,
+            "window": self.window,
+        }
+
+
+@dataclass(frozen=True)
 class Decision:
     provider_id: str
     name: str
@@ -258,11 +307,73 @@ class Decision:
 _EMPTY = Decision("", "", "", assess(node=""), "没有可路由的模型，沿用默认", ())
 
 
-def pick(demand: Demand, candidates: Iterable[Candidate]) -> Decision:
+def _same_grade(left: Candidate, right: Candidate) -> bool:
+    """同档同价 = 可以互换，换谁都不影响「够用」和「花多少钱」。
+
+    这就是负载均衡的唯一地盘。放宽成「差不多便宜」就会在同一个判断里
+    同时改变质量和费用，出错时分不清是轮换的锅还是路由的锅。
+    """
+    return TIER_ORDER.get(left.tier, 0) == TIER_ORDER.get(right.tier, 0) and round(
+        left.cost, 4
+    ) == round(right.cost, 4)
+
+
+def _ranking_reason(other: Candidate, chosen: Candidate) -> str:
+    """同档同价之外的那些为什么没选上。"""
+    if TIER_ORDER.get(other.tier, TIER_ORDER[STANDARD]) > TIER_ORDER.get(chosen.tier, TIER_ORDER[STANDARD]):
+        return f"{TIER_LABELS.get(other.tier, other.tier)}档超出这一步所需，且更贵（{other.cost:g}）"
+    return f"同档但更贵（{other.cost:g} vs {chosen.cost:g}）"
+
+
+def _rotate(
+    group: list[Candidate], loads: dict[str, LoadStat]
+) -> tuple[Candidate, dict[str, str], bool]:
+    """在等价组里挑一个，并给出其余每一个为什么让开。第三项表示「全都不健康」。
+
+    两条规则，顺序不能换：
+    * **近期在失败的先让开。** 一个 3 次里错 2 次的端点，再便宜也是「不够用」，
+      这不违背「够用优先」——它恰恰是这条约束在执行。
+    * **剩下的按近期调用量从少到多。** 同档同价时没有别的信息可用，谁最近被
+      用得少就轮到谁；历史量先截到 ``LOAD_SEED_CAP``，见那个常量的注释。
+    """
+    sidelined: dict[str, str] = {}
+    ranked: list[tuple[int, str, Candidate]] = []
+    for item in group:
+        stat = loads.get(item.provider_id) or LoadStat()
+        if stat.suspect:
+            sidelined[item.provider_id] = (
+                f"近 {stat.window} 分钟 {stat.calls} 次里失败 {stat.failures} 次，先让开"
+            )
+            continue
+        ranked.append((min(stat.calls, LOAD_SEED_CAP), item.name, item))
+
+    if ranked:
+        ranked.sort(key=lambda row: (row[0], row[1]))
+        return ranked[0][2], sidelined, False
+
+    # 全都不健康：仍然要选一个。返回空会退回默认模型，而默认模型可能恰好是
+    # 那个连不上、也没配兜底的端点——比继续用一个时好时坏的端点更容易卡死。
+    for item in group:
+        stat = loads.get(item.provider_id) or LoadStat()
+        ranked.append((min(stat.calls, LOAD_SEED_CAP), item.name, item))
+    ranked.sort(key=lambda row: (row[0], row[1]))
+    return ranked[0][2], {}, True
+
+
+def pick(
+    demand: Demand,
+    candidates: Iterable[Candidate],
+    *,
+    loads: dict[str, LoadStat] | None = None,
+) -> Decision:
     """够用且最便宜的那个。
 
     排序键是 (档位, 成本, 名字)：先按档位从低到高——同等够用下低档更便宜；
     再按成本；最后按名字，保证同价时结果稳定可复现（否则测试会随机飘）。
+
+    ``loads`` 非空时，"最后按名字"这步换成"按近期负载"（特性开关 load_balance）。
+    只有同档同价的候选会换位，所以这个参数永远改变不了"选哪一档"和"花多少钱"；
+    传 None 时整个函数与本特性不存在时逐字节一致。
     """
     pool = [item for item in candidates if item.provider_id]
     if not pool:
@@ -307,22 +418,53 @@ def pick(demand: Demand, candidates: Iterable[Candidate]) -> Decision:
         )
 
     usable.sort(key=lambda c: (TIER_ORDER.get(c.tier, TIER_ORDER[STANDARD]), c.cost, c.name))
-    chosen = usable[0]
-    for other in usable[1:]:
-        rank = TIER_ORDER.get(other.tier, TIER_ORDER[STANDARD])
-        if rank > TIER_ORDER.get(chosen.tier, TIER_ORDER[STANDARD]):
-            rejected.append(
-                (other.name, f"{TIER_LABELS.get(other.tier, other.tier)}档超出这一步所需，且更贵（{other.cost:g}）")
-            )
+
+    if not loads:
+        chosen = usable[0]
+        for other in usable[1:]:
+            rejected.append((other.name, _ranking_reason(other, chosen)))
+        return Decision(
+            provider_id=chosen.provider_id,
+            name=chosen.name,
+            tier=chosen.tier,
+            demand=demand,
+            reason=f"需要的{TIER_LABELS.get(demand.tier, demand.tier)}档里最便宜（成本当量 {chosen.cost:g}）",
+            rejected=tuple(rejected),
+            cost=chosen.cost,
+        )
+
+    head = usable[0]
+    group = [item for item in usable if _same_grade(item, head)]
+    chosen, sidelined, all_bad = _rotate(group, loads)
+    for other in usable:
+        if other.provider_id == chosen.provider_id:
+            continue
+        if other.provider_id in sidelined:
+            rejected.append((other.name, sidelined[other.provider_id]))
+        elif _same_grade(other, head):
+            if all_bad:
+                rejected.append((other.name, "同档同价，但近期都在失败，按名字定序"))
+            else:
+                spent = (loads.get(other.provider_id) or LoadStat()).calls
+                picked_calls = (loads.get(chosen.provider_id) or LoadStat()).calls
+                rejected.append((other.name, f"同档同价，近期调用更多（{spent} 次 vs {picked_calls} 次）"))
         else:
-            rejected.append((other.name, f"同档但更贵（{other.cost:g} vs {chosen.cost:g}）"))
+            rejected.append((other.name, _ranking_reason(other, chosen)))
+
+    if len(group) > 1:
+        reason = (
+            f"需要的{TIER_LABELS.get(demand.tier, demand.tier)}档里最便宜，"
+            f"同档同价下近期调用最少（{(loads.get(chosen.provider_id) or LoadStat()).calls} 次）"
+        )
+    else:
+        reason = f"需要的{TIER_LABELS.get(demand.tier, demand.tier)}档里最便宜（成本当量 {chosen.cost:g}）"
 
     return Decision(
         provider_id=chosen.provider_id,
         name=chosen.name,
         tier=chosen.tier,
         demand=demand,
-        reason=f"需要的{TIER_LABELS.get(demand.tier, demand.tier)}档里最便宜（成本当量 {chosen.cost:g}）",
+        reason=reason,
         rejected=tuple(rejected),
         cost=chosen.cost,
     )
@@ -335,6 +477,10 @@ class Router:
     pool: tuple[Candidate, ...] = ()
     failures: dict[str, int] = field(default_factory=dict)
     history: list[dict] = field(default_factory=list)
+    # 近期负载（特性开关 load_balance）。load_balance 为 False 时 pick 收到 None，
+    # 并列仍按名字固定——「关掉就完全不变」不能只靠"看起来没变"。
+    loads: dict[str, LoadStat] = field(default_factory=dict)
+    load_balance: bool = False
     # 成本记账。单位是「激活参数当量」，不是钱——各家单价随时会变，
     # 但同一把尺子量出来的相对值能说明「这次比全用最强省了多少」。
     stats: dict[str, float] = field(
@@ -346,6 +492,15 @@ class Router:
         # 只有一个候选时没有"选"可言，直接走原路径，行为和没开路由完全一致。
         return len([item for item in self.pool if item.provider_id]) > 1
 
+    def seed_load(self, loads: dict[str, LoadStat]) -> None:
+        """把库里查到的近期负载灌进来，并在这个实例上开启轮换。
+
+        空的 ``loads`` 也要开：轮换的意义不只在于"据历史换人"，还在于
+        "本次任务里连续几步不该都压在同一个模型上"——那个只在本地计数上体现。
+        """
+        self.loads = dict(loads)
+        self.load_balance = True
+
     def note_decision(self, decision: Decision, *, switched: bool) -> None:
         """记一次决策的成本。baseline 用池子里最贵的那个当对照，
         这样「省了多少」不需要知道任何一家的真实单价就能算出来。"""
@@ -355,6 +510,12 @@ class Router:
         self.stats["cost_units"] += float(decision.cost or 0)
         strongest = max((item.cost for item in self.pool if item.provider_id), default=0.0)
         self.stats["baseline_units"] += float(strongest)
+        if self.load_balance and decision.provider_id:
+            # 本地也 +1：不然同一个任务里的轮换要等下一次读库才生效，
+            # 而一个任务通常跑不到第二次读库。
+            self.loads[decision.provider_id] = (
+                self.loads.get(decision.provider_id) or LoadStat()
+            ).bumped()
 
     def summary(self) -> dict:
         calls = int(self.stats["calls"])
@@ -404,7 +565,7 @@ class Router:
             has_criteria=has_criteria,
             escalated=self.escalation(node),
         )
-        decision = pick(demand, self.pool)
+        decision = pick(demand, self.pool, loads=self.loads if self.load_balance else None)
         # 只留最近 50 条，长任务跑几百步也不会把内存吃出问题
         self.history.append(decision.as_dict())
         del self.history[:-50]
