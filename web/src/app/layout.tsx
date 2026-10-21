@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { AppShell } from "@/components/app-shell";
-import { SceneProvider } from "@/components/scenes/scenes";
+import { ModelProvider } from "@/components/model";
 
 export const metadata: Metadata = {
   title: "空白格 bot",
@@ -12,9 +12,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="zh-CN">
       <body className="h-dvh overflow-hidden bg-bg text-text">
-        <SceneProvider>
+        <ModelProvider>
           <AppShell>{children}</AppShell>
-        </SceneProvider>
+        </ModelProvider>
       </body>
     </html>
   );

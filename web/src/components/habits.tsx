@@ -28,7 +28,7 @@ export function readHabits(): Habit[] {
 export function useHabits() {
   const [habits, setHabits] = useState<Habit[]>(readHabits);
   const save = useCallback((next: Habit[]) => { setHabits(next); window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); }, []);
-  const remember = useCallback((text: string, source = "日常场景") => {
+  const remember = useCallback((text: string, source = "日常记录") => {
     const value = text.trim();
     if (!value) return;
     save([{ id: crypto.randomUUID(), text: value, source, createdAt: new Date().toISOString() }, ...habits].slice(0, 50));

@@ -33,7 +33,6 @@ import { TimelineBlock } from "@/components/tasks/timeline-blocks";
 import { DiffPanel } from "@/components/tasks/diff-panel";
 import { EvidencePanel } from "@/components/tasks/evidence-panel";
 import { useTaskEvents } from "@/components/tasks/use-task-events";
-import { QUIET_RULE, useScene } from "@/components/scenes/scenes";
 import { HealthPill } from "@/components/health-pill";
 
 type RightTab = "diff" | "evidence" | "activity";
@@ -94,7 +93,12 @@ function eventDetail(event: AgentEvent): string {
   return "";
 }
 
-/** 任务提示词里带着执行规则和场景说明，界面上只展示用户真正写的那句。 */
+/**
+ * 界面上只展示用户真正写的那句。
+ *
+ * 现在发出去的就是原话，这个函数已经剥不到东西了；留着是因为历史任务里存着
+ * 早先版本拼的「执行规则 / 你处于…场景」前缀，列表点开还看得见，不能凭空显示一段规则。
+ */
 function userText(prompt: string): string {
   if (!prompt) return "";
   const marker = prompt.lastIndexOf("用户任务：");
@@ -142,7 +146,6 @@ function eventHint(event: AgentEvent): string {
 }
 
 export function Workbench() {
-  const { scene } = useScene();
   const [projects, setProjects] = useState<Project[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [tasks, setTasks] = useState<Task[] | null>(null);
@@ -319,13 +322,15 @@ export function Workbench() {
         setNotice("还没有可用的工作区，先到「项目」页绑定一个。");
         return;
       }
-      const promptText = `${QUIET_RULE}\n${scene.instruction}\n\n用户任务：${text}`;
+      const promptText = text;
       const payload: TaskDraft = {
         projectId: targetProject.id,
         providerId: provider?.id,
         title: text.split("\n")[0].slice(0, 60),
         prompt: promptText,
-        acceptanceCriteria: scene.defaultCriteria,
+        // 验收条件交给 Agent 自己按这句话定；场景那套默认条件已经移除，
+        // 替用户预设「补充测试」这类条件，只会让不做测试的任务被判成没做完。
+        acceptanceCriteria: [],
       };
       const created = await createTask(targetProject.id, payload);
       setTasks((current) => [created, ...(current ?? []).filter((item) => item.id !== created.id)]);
@@ -339,7 +344,7 @@ export function Workbench() {
     } finally {
       setBusy(null);
     }
-  }, [busy, draft, project, provider, refresh, scene.defaultCriteria, scene.instruction, steerable, task]);
+  }, [busy, draft, project, provider, refresh, steerable, task]);
 
   const onRun = useCallback(async () => {
     if (!selectedId) return;
@@ -532,7 +537,7 @@ export function Workbench() {
           <div className="my-1.5 h-px bg-line" />
           <RailLink href="/settings" label="设置" d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4 0a1.7 1.7 0 0 0 .3 1.9 2 2 0 1 1-2.8 2.8 1.7 1.7 0 0 0-2.9 1.2 2 2 0 0 1-4 0 1.7 1.7 0 0 0-1.9-1.2 2 2 0 1 1-2.8-2.8A1.7 1.7 0 0 0 4.6 15a2 2 0 0 1 0-4 1.7 1.7 0 0 0 1.2-1.1 1.7 1.7 0 0 0-.3-1.9 2 2 0 1 1 2.8-2.8A1.7 1.7 0 0 0 11 4.6a2 2 0 0 1 4 0 1.7 1.7 0 0 0 2.9 1.2 2 2 0 1 1 2.8 2.8 1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1 2 2 0 0 1 0 4z" />
           <p className="truncate px-2 pt-1 text-[10.5px] text-faint">
-            {scene.name}场景 · {provider?.model || "未配置模型"}
+            {provider?.model || "未配置模型"}
           </p>
           <p className="px-2 pt-0.5">
             <HealthPill compact />
@@ -616,7 +621,7 @@ export function Workbench() {
                 </div>
                 <h2 className="mt-4 text-[17px] font-semibold">今天要做什么？</h2>
                 <p className="mt-2 max-w-md text-[12.5px] leading-relaxed text-muted">
-                  直接说目标，Agent 在{scene.name}场景下执行；下面输入框按 Enter 会创建并立刻跑起来。
+                  直接说目标，Agent 自己判断要不要读代码、改文件；下面输入框按 Enter 会创建并立刻跑起来。
                 </p>
                 {hasNoWorkspace && <p className="mt-3 text-[11.5px] text-faint">还没有工作区，先去「项目」绑定一个目录。</p>}
               </div>

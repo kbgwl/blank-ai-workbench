@@ -7,8 +7,6 @@ import { Panel } from "@/components/panel";
 import { errorMessage, fetchThreads, type Project, type Provider, type Task, type TaskDraft, type Thread } from "./api";
 import { StatusBadge } from "./bits";
 import { formatDateTime } from "./format";
-import { QUIET_RULE, useScene } from "@/components/scenes/scenes";
-import { readHabits } from "@/components/scenes/memory";
 
 type Props = {
   projects: Project[] | null;
@@ -50,7 +48,6 @@ export function TaskListPane({
   const [showComposer, setShowComposer] = useState(false);
   const [submitting, setSubmitting] = useState<"idle" | "create" | "create-run">("idle");
   const [error, setError] = useState<string | null>(null);
-  const { scene } = useScene();
 
   const usableProjects = projects ?? [];
   const chosenProject = projectId || usableProjects[0]?.id || "";
@@ -88,17 +85,14 @@ export function TaskListPane({
     }
     setSubmitting(run ? "create-run" : "create");
     setError(null);
-    const habitContext = scene.id === "daily"
-      ? readHabits().map((habit) => habit.text).join("；") || "无"
-      : "当前场景不使用日常习惯记忆";
     const draft: TaskDraft = {
       projectId: chosenProject,
       title: title.trim() || prompt.trim().split("\n")[0].slice(0, 60),
-      prompt: `${QUIET_RULE}\n${scene.instruction}\n\n场景上下文：${habitContext}\n\n用户任务：${prompt.trim()}`,
+      prompt: prompt.trim(),
       acceptanceCriteria: criteria
         .split("\n")
         .map((line) => line.replace(/^\s*[-*\d.、)]+\s*/, "").trim())
-        .filter(Boolean).concat(scene.defaultCriteria.filter(() => !criteria.trim())),
+        .filter(Boolean),
       providerId,
       thread: threadChoice || undefined,
     };

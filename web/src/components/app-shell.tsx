@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 import { HealthPill } from "@/components/health-pill";
 import { CommandPalette } from "@/components/command-palette";
-import { ModelSwitcher, SceneSwitcher } from "@/components/scenes/scenes";
+import { ModelSwitcher } from "@/components/model";
 import { isEditableTarget, PALETTE_SHORTCUT, shortcutHint, shouldHandleEscape } from "@/lib/shortcuts";
 
 const TITLES: Record<string, string> = {
@@ -113,7 +113,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           <kbd className="hidden items-center gap-1 rounded-md border border-line bg-surface px-2 py-1 font-mono text-[10px] text-faint lg:flex">
             {shortcutHint(PALETTE_SHORTCUT)} 命令
           </kbd>
-          <SceneSwitcher />
           <ModelSwitcher />
           <HealthPill />
         </div>
