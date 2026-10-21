@@ -25,6 +25,20 @@ cd web && E:/env/node/node-v24.20.0-win-x64/node.exe ./node_modules/typescript/b
 两条命令都实测过（43 例单测全过、tsc 无输出即通过）。工具链位置就这些，别再用
 `where` / `dir` / `--version` 逐个试——那是每次几十次调用换不出一条结论。
 
+## 量成本与比质量
+
+```bash
+# token 台账：读本机客户端库（只读打开），按"钱的去处"分类
+python scripts/token_ledger.py
+python scripts/token_ledger.py --compare 2026-10-21T06:00,2026-10-21T12:00
+
+# 同题对标：同一批 fixture、同一套判分，跑我们和别家
+node evals/compare.mjs --only T01,T02,T03 --agents ours,claude
+```
+
+口径分别写在 `docs/COST.md`（成本）与 `docs/QUALITY.md`（质量）。
+两条都不是"感觉好转"，是要出数字的：台账给三笔账，对标给五个分项。
+
 ## 改代码前
 
 - 动某个文件之前先读它，不要凭文件名猜。
