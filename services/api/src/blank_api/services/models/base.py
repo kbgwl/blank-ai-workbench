@@ -29,6 +29,37 @@ class ChatMessage:
     content: str
     tool_call_id: str | None = None
     tool_calls: list[dict] = field(default_factory=list)
+    # 随这条消息一起给模型看的图片，形如 [{"media_type": "image/png", "data": "<base64>"}]。
+    # 只挂在 user 消息上：工具输出里的图片走 artifact，不进上下文。
+    # content 仍然保持字符串，四家供应商的差异在各自的 payload 里消化——业务代码
+    # 不该为了"某家要 list 某家要字段"分成两套写法。
+    images: list[dict] = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        """纯文本部分。压缩、指纹、日志都只该看这个，别把 base64 带进去。"""
+        return self.content
+
+
+def openai_content(message: ChatMessage) -> object:
+    """OpenAI chat/completions 的 content：纯文本给字符串，带图给 part 数组。
+
+    没图时保持字符串而不是给单元素数组：部分网关（尤其国内兼容层）对数组形式
+    的纯文本支持不全，而纯文本是绝大多数请求——不能为了少数情况让多数情况走险路。
+    """
+    if not message.images:
+        return message.content
+    parts: list[dict] = []
+    if message.content:
+        parts.append({"type": "text", "text": message.content})
+    for image in message.images:
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{image.get('media_type', 'image/png')};base64,{image.get('data', '')}"},
+            }
+        )
+    return parts
 
 
 @dataclass

@@ -6,12 +6,21 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer
 from blank_api.limits import DEFAULT_MAX_STEPS, HARD_MAX_STEPS
 
 
+class AttachmentIn(BaseModel):
+    """一条附件引用。文件本体已经通过 /projects/{id}/uploads 上传过了。"""
+
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(default="", max_length=200)
+
+
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     goal: str = ""
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=20)
     provider_id: str | None = None
     max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=HARD_MAX_STEPS)
+    # 这一轮贴进来的图片。上限 8 张：再多模型侧也塞不下，而且每张都要按图计费。
+    attachments: list[AttachmentIn] = Field(default_factory=list, max_length=8)
 
 
 class TaskOut(BaseModel):
@@ -27,6 +36,8 @@ class TaskOut(BaseModel):
     status: str
     acceptance_criteria: list[str]
     acceptance_results: list[dict]
+    # 回放要看得到"当时它看到的图"。形状 {id, name, mime, size}。
+    attachments: list[dict] = Field(default_factory=list)
     max_steps: int
     steps_used: int
     result_summary: str

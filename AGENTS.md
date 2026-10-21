@@ -67,7 +67,8 @@ cd desktop && node install-local.cjs
 ```
 
 装完想让已装客户端立刻用上新代码、但不想重装：`node self-deploy.cjs --api`（只同步后端）
-或 `--web`（只同步前端）。别手改 `resources/` 下的副本——客户端读的是它，不是工作区源码。
+或 `--web`（只同步前端），`--shell` 换掉 app.asar 里的主进程与 preload（客户端须先完全退出）。
+别手改 `resources/` 下的副本——客户端读的是它，不是工作区源码。
 
 ## 工程事实
 

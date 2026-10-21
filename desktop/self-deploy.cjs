@@ -8,13 +8,15 @@
  * 少了它，改完看着没反应，很容易被当成没生效或者改错了。
  *
  * 用法：
- *   node self-deploy.cjs             # 后端 + 前端都同步
+ *   node self-deploy.cjs             # 后端 + 前端 + 壳入口（app.asar）都同步
  *   node self-deploy.cjs --api       # 只同步后端
  *   node self-deploy.cjs --web       # 只重建并同步前端
+ *   node self-deploy.cjs --shell     # 只同步壳入口（main.cjs / preload.cjs / gpu-guard.cjs）
  *   node self-deploy.cjs --dry-run   # 只打印会做什么
  *
- * 边界：主进程（main.cjs / preload.cjs）在 app.asar 里，这个脚本不动它——
- * 那部分改动必须重新打包安装。所以它只适用于界面与后端逻辑。
+ * 壳入口（主进程与 preload）在打包产物 `resources/app.asar` 里，改它们要重新打包——
+ * 一次 electron-builder 十几分钟，而实际改动往往只有那三个 .cjs 文件。所以这里
+ * 解包 → 换文件 → 重新打包，效果等价于重新打包，但不用碰 Electron 与运行时。
  */
 
 const { spawnSync } = require("node:child_process");
@@ -30,8 +32,12 @@ const argv = process.argv.slice(2);
 const dryRun = argv.includes("--dry-run");
 const onlyApi = argv.includes("--api");
 const onlyWeb = argv.includes("--web");
-const doApi = !onlyWeb;
-const doWeb = !onlyApi;
+const onlyShell = argv.includes("--shell");
+const doApi = !onlyWeb && !onlyShell;
+const doWeb = !onlyApi && !onlyShell;
+// 壳入口默认跟着"全量同步"走；只点了 --api / --web 时不动它——
+// 那是在改后端或界面，顺手重打包 app.asar 只会让排查多一个变量。
+const doShell = onlyShell || (!onlyWeb && !onlyApi);
 
 function fail(message) {
   console.error(`✗ ${message}`);
@@ -119,6 +125,75 @@ function buildWeb() {
   return out;
 }
 
+/**
+ * 壳入口：就地替换 app.asar 里那三个 .cjs。
+ *
+ * 前提是客户端没在运行——Windows 下正在被加载的 app.asar 是独占打开的文件，
+ * 重新打包会直接 EPERM。与其让用户对着报错猜，不如提前说清"先完全退出"。
+ */
+function syncShell(dir) {
+  const asarPath = path.join(dir, "resources", "app.asar");
+  if (!fs.existsSync(asarPath)) {
+    console.log("  - 没有 resources/app.asar（可能是解包运行），跳过壳入口");
+    return;
+  }
+
+  const entries = ["main.cjs", "preload.cjs", "gpu-guard.cjs"];
+  const sources = entries.map((name) => path.join(__dirname, name));
+  for (const file of sources) {
+    if (!fs.existsSync(file)) fail(`缺少壳入口源文件：${file}`);
+  }
+
+  const asarBin = path.join(__dirname, "node_modules", "@electron", "asar", "bin", "asar.js");
+  if (!fs.existsSync(asarBin)) fail(`找不到 asar 工具：${asarBin}（先在 desktop 下装依赖）`);
+
+  if (dryRun) {
+    console.log(`  [dry-run] 壳入口: ${entries.join(" / ")} -> ${asarPath}`);
+    return;
+  }
+
+  const work = path.join(os.tmpdir(), `blank-asar-${process.pid}`);
+  const run = (args) => {
+    const result = spawnSync(process.execPath, [asarBin, ...args], { stdio: "inherit" });
+    if (result.status !== 0) fail(`asar ${args[0]} 失败（exit=${result.status}）`);
+  };
+
+  fs.rmSync(work, { recursive: true, force: true });
+  try {
+    run(["extract", asarPath, work]);
+
+    // 先比一遍再决定要不要重打包：壳入口十次改动里有九次跟它无关，
+    // 每次无脑重写 app.asar 会让安装目录的时间戳天天变，看不出到底动了什么。
+    const changed = entries.filter((name) => {
+      const inside = path.join(work, name);
+      if (!fs.existsSync(inside)) return true;
+      return !fs.readFileSync(inside).equals(fs.readFileSync(path.join(__dirname, name)));
+    });
+    if (changed.length === 0) {
+      console.log("  = 壳入口已是最新，无需重打包");
+      return;
+    }
+
+    for (const name of changed) fs.copyFileSync(path.join(__dirname, name), path.join(work, name));
+
+    // 备份放在同级：重打包中途失败时，把 .bak 改回 app.asar 就能恢复可启动状态。
+    const backup = `${asarPath}.bak`;
+    fs.copyFileSync(asarPath, backup);
+    fs.rmSync(asarPath, { force: true });
+    run(["pack", work, asarPath]);
+    console.log(`  ✓ 壳入口: ${changed.join(" / ")} -> ${asarPath}（旧包备份 app.asar.bak）`);
+  } catch (error) {
+    // 独占锁的表现是 EPERM/EBUSY，把它翻译成用户能照做的一句话。
+    const code = error && error.code;
+    if (code === "EPERM" || code === "EBUSY") {
+      fail("app.asar 正被占用：先把客户端完全退出（托盘右键退出，不是关窗口），再重跑这一步");
+    }
+    throw error;
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
 function main() {
   const dir = installDir();
   console.log(`目标客户端：${dir}`);
@@ -137,6 +212,11 @@ function main() {
     }
   }
 
+  if (doShell) {
+    console.log("\n同步壳入口（主进程 / preload）");
+    syncShell(dir);
+  }
+
   if (dryRun) {
     console.log("\n[dry-run] 没有改动任何文件。");
     return;
@@ -148,8 +228,6 @@ function main() {
       "还需要重启客户端才生效：后端是客户端启动时拉起的子进程，前端要重新加载资源。",
       "  - 完全退出客户端（托盘/任务栏右键退出，不是关窗口）后重新打开",
       "  - 只改了前端时，也可以在客户端窗口里按 Ctrl+R 先看一眼",
-      "",
-      "注意：主进程（main.cjs / preload.cjs）在 app.asar 里，本脚本不处理，改动要重新打包。",
     ].join(os.EOL),
   );
 }

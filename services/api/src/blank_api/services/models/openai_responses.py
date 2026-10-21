@@ -102,11 +102,23 @@ class OpenAIResponsesAdapter(ModelAdapter):
                         }
                     )
                 continue
+            content: list[dict] = []
+            # 图片在 Responses 里是 input_image part，且只接受 data URL 或 URL 字符串。
+            for image in message.images or ():
+                content.append(
+                    {
+                        "type": "input_image",
+                        "image_url": (
+                            f"data:{image.get('media_type', 'image/png')};base64,{image.get('data', '')}"
+                        ),
+                    }
+                )
+            content.append({"type": "input_text", "text": message.content})
             items.append(
                 {
                     "type": "message",
                     "role": message.role,
-                    "content": [{"type": "input_text", "text": message.content}],
+                    "content": content,
                 }
             )
         return items

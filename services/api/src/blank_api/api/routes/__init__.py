@@ -10,6 +10,7 @@ from blank_api.api.routes import (
     skills,
     tasks,
     threads,
+    uploads,
 )
 from blank_api.db import get_session_factory
 
@@ -32,6 +33,7 @@ async def health() -> dict:
 
 
 api_router.include_router(projects.router)
+api_router.include_router(uploads.router)
 api_router.include_router(files.router)
 api_router.include_router(providers.router)
 api_router.include_router(tasks.router)

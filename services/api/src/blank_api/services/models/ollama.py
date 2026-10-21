@@ -15,15 +15,26 @@ from blank_api.services.models.base import (
 from blank_api.services.models.streaming import ToolCallAccumulator
 
 
+def _ollama_message(message) -> dict:
+    """Ollama 的图片不是一个 part 数组，而是消息上一个 ``images`` 字段（裸 base64，无前缀）。
+
+    和 OpenAI 系最大的不同也在这里：它没有"图片 part"这个概念，所以顺序无法表达，
+    图与文本的相对位置由它自己拼。
+    """
+    payload: dict = {"role": message.role, "content": message.content}
+    if message.images:
+        payload["images"] = [image.get("data", "") for image in message.images]
+    return payload
+
+
 class OllamaAdapter(ModelAdapter):
     def __init__(self, config: AdapterConfig) -> None:
         super().__init__(config)
         self.base = config.base_url.rstrip("/")
-
     def _payload(self, messages, tools, stream: bool) -> dict:
         payload = {
             "model": self.config.model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [_ollama_message(m) for m in messages],
             "stream": stream,
             "options": {"temperature": self.config.temperature, "num_predict": self.config.max_tokens},
         }

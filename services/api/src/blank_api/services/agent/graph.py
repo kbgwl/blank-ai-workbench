@@ -8,7 +8,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, TypedDict
@@ -192,6 +192,10 @@ class AgentSession:
     tiered_tools: bool = False
     acceptance_criteria: list[str] = field(default_factory=list)
     max_steps: int = DEFAULT_MAX_STEPS
+    # 用户这一轮贴的图片，形如 [{"name", "media_type", "data"(base64)}]。
+    # 刻意不放进 state 的 messages：state 会被写进检查点，一张 8MB 的图 base64 之后
+    # 11MB，每条消息存一遍，一次带图的任务就能把检查点表撑大十几兆。出站前才挂上去。
+    vision_images: list[dict] = field(default_factory=list)
     # 单任务 token 预算。步数管不住成本：每步都重发一遍上下文，50 步可能花掉 4M。
     token_budget: int = DEFAULT_TOKEN_BUDGET
     # 只读调研模式：由意图判定打开，整个执行回合只放行只读工具。
@@ -465,6 +469,8 @@ class AgentSession:
             )
             for item in compacted
         ]
+        # 图片在这一步挂上，不进 state（理由见 AgentSession.vision_images）。
+        attach_vision_images(chat, self.vision_images)
         started = time.perf_counter()
         # 工具表跟着档位走。这里放在压缩之后、真正发请求之前：可见工具数会改变
         # 上下文体积，但改的是"下发的 schema"，不是已经算好的对话 token。
@@ -611,12 +617,31 @@ def _tokens_spent(usage: dict) -> int:
     return int(usage.get("prompt_tokens") or 0) + int(usage.get("completion_tokens") or 0)
 
 
+def attach_vision_images(chat: list[ChatMessage], images: Sequence[dict] | None) -> None:
+    """把这一轮的图片挂到最后一条 user 消息上。
+
+    挂最后一条而不是第一条：历史里也有 user，第一条往往属于上一轮——把今天的图
+    挂到昨天的问题上，模型会拿它去回答一件早就结束的事。
+
+    也不写回 state：state 会进检查点，base64 落库是十几兆的放大。这里改的是
+    这一趟请求用的临时对象，请求发完就没了。
+    """
+    if not images:
+        return
+    for message in reversed(chat):
+        if message.role == "user":
+            message.images = list(images)
+            return
+
+
 def initial_messages(
     goal: str,
     criteria: list[str],
     skills: list[str] | None = None,
     instruction_layers: list | tuple = (),
     history: list[dict] | tuple = (),
+    images: Sequence[dict] | None = None,
+    supports_vision: bool = False,
 ) -> list[dict]:
     from blank_api.services.instructions import compose
 
@@ -634,10 +659,25 @@ def initial_messages(
     prompt = f"任务目标：{goal}"
     if criteria:
         prompt += "\n验收条件：\n" + "\n".join(f"- {item}" for item in criteria)
+    attached = list(images or ())
+    if attached and supports_vision:
+        prompt += (
+            f"\n\n用户附了 {len(attached)} 张图片，已经随这条消息一起给你了。"
+            "先看清图里有什么，再决定读哪些文件；描述问题时指明是哪张图的哪个位置。"
+        )
+    elif attached:
+        # 不支持视觉的模型拿到 image block 会直接 400。降级成一句实话，比"假装没收到"
+        # 和"报错发不出去"都好：用户能立刻知道是模型的问题，而不是自己传错了。
+        prompt += (
+            f"\n\n用户附了 {len(attached)} 张图片，但当前模型不支持看图，图片内容你看不到。"
+            "不要猜测图里是什么，也不要说你看到了；在结论里说明：要看图需要切换到支持视觉的模型。"
+        )
     # 会话历史放在当前这一问之前、系统提示之后。位置是刻意的：系统提示必须
     # 仍然是第一段（前缀缓存靠它），而历史是"背景对话"，它不能被当成
     # 新的任务目标——把用户的旧要求塞到当前目标后面，模型会以为那还是它要做的事。
     carried = [dict(item) for item in history or () if item.get("content")]
+    # 图片本身不写进消息：见 AgentSession.vision_images 的说明。这里只留一句
+    # "它给了几张图"的文本，让 state 里也有据可查（检查点、回放都读得到）。
     return [
         {"role": "system", "content": system},
         *carried,

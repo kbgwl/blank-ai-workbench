@@ -20,12 +20,22 @@ import {
 } from "../tasks/api";
 import { useTaskEvents } from "../tasks/use-task-events";
 import { NEW_CHAT_EVENT } from "@/lib/commands";
+import { canPickDirectory, pickDirectory } from "@/lib/desktop";
+import { activateWorkspace, bindWorkspace } from "../projects/api";
 import { loadBoot, loadConversation, loadConversations, sendMessage, stopTask, type BotTurn, type Conversation } from "./bot-api";
 import { Composer } from "./composer";
 import { TaskPanel } from "./panel";
 import { Sidebar } from "./sidebar";
 import { TurnView } from "./turn";
 import { buildSteps, isTurnRunning, touchedFiles, turnReply } from "./turns";
+import {
+  MAX_IMAGES_PER_TURN,
+  imageRejection,
+  previewUrl,
+  releasePreview,
+  uploadImage,
+  type DraftImage,
+} from "./uploads";
 
 const SUGGESTIONS = [
   "把这个仓库跑起来，缺什么补什么",
@@ -55,6 +65,8 @@ export function BotApp() {
   const [liveTask, setLiveTask] = useState<Task | null>(null);
 
   const [draft, setDraft] = useState("");
+  /** 草稿里已选/已上传的图片。发送成功后清空。 */
+  const [images, setImages] = useState<DraftImage[]>([]);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -65,8 +77,24 @@ export function BotApp() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [evidence, setEvidence] = useState<Evidence | null>(null);
 
+  /**
+   * 清空草稿里的图并释放预览地址。
+   *
+   * 不清 blob 的话，每发一次带图的消息都会漏掉一份图片内存——单张看不出来，
+   * 聊二十轮之后就是几十兆。这个函数定义在 startNew 之前，因为"新对话"要用它。
+   */
+  const clearImages = useCallback(() => {
+    images.forEach((item) => releasePreview(item.preview));
+    setImages([]);
+  }, [images]);
+
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+
+  /** 当前项目与它绑定的目录。工作区是"在哪个目录里干活"，是项目的一个属性。 */
+  const currentProject = boot?.projects.find((project) => project.id === projectId) ?? null;
+  const workspaces = currentProject?.workspaces ?? [];
+  const canPickWorkspace = canPickDirectory();
 
   // ── 启动：项目与供应商 ────────────────────────────────────────────────
   useEffect(() => {
@@ -226,6 +254,8 @@ export function BotApp() {
     setEvidence(null);
     setSendError(null);
     setComposerHint(null);
+    // 换会话/换项目时草稿里的图要一起清：它们属于上一个项目，跨项目带过去后端也认不出 id。
+    clearImages();
     stick.current = true;
     // 清掉地址栏里的会话 id：否则刷新一下又跳回刚才那条。
     try {
@@ -235,7 +265,7 @@ export function BotApp() {
     } catch {
       // 拿不到 URL 不影响清空。
     }
-  }, []);
+  }, [clearImages]);
 
   // 命令面板里的「新对话」是同路由动作，靠事件回来。
   useEffect(() => {
@@ -244,23 +274,153 @@ export function BotApp() {
     return () => window.removeEventListener(NEW_CHAT_EVENT, onNew);
   }, [startNew]);
 
+  // ── 工作区 ───────────────────────────────────────────────────────────
+  /**
+   * 只刷新项目列表。
+   *
+   * 不整个重跑 loadBoot：供应商那条请求没必要重发，而 providerId 是从 localStorage
+   * 里读的，重跑一次 boot 会把用户当前选的模型冲回默认值。
+   */
+  const refreshProjects = useCallback(async () => {
+    try {
+      const next = await loadBoot();
+      setBoot((current) => (current ? { ...current, projects: next.projects } : next));
+    } catch (error: unknown) {
+      setActionError(`项目列表刷新失败：${errorMessage(error)}`);
+    }
+  }, []);
+
+  const activateWorkspaceById = useCallback(
+    async (workspaceId: string) => {
+      if (!projectId) return;
+      setActionError(null);
+      try {
+        await activateWorkspace(projectId, workspaceId);
+        await refreshProjects();
+        // 说清生效时机：正在跑的那一轮已经把根目录读进去了，切换只影响下一次启动。
+        setComposerHint("已切换目录，下一轮在这个目录里执行。");
+      } catch (error: unknown) {
+        setActionError(errorMessage(error));
+      }
+    },
+    [projectId, refreshProjects],
+  );
+
+  const pickWorkspace = useCallback(async () => {
+    if (!projectId) return;
+    setActionError(null);
+    // 用户在系统对话框里点了"取消"会拿到空串——那是正常操作，不该报错。
+    const picked = await pickDirectory();
+    if (!picked) return;
+    try {
+      const bound = await bindWorkspace(projectId, { path: picked });
+      // 刚选的目录就是用户想用的那个：绑完立刻切成活动，否则新绑的在界面上是灰的，
+      // 用户会以为没成功（这也是旧版最难理解的一处）。
+      await activateWorkspace(projectId, bound.id);
+      await refreshProjects();
+      setComposerHint(`已绑定并切到 ${picked}`);
+    } catch (error: unknown) {
+      setActionError(errorMessage(error));
+    }
+  }, [projectId, refreshProjects]);
+
+  // ── 图片 ─────────────────────────────────────────────────────────────
+  /**
+   * 选完就传，不等发送。
+   *
+   * 这样用户写字的十几秒里图已经在路上了，按回车时只剩一个 id 要带过去。
+   * 相反的做法（发送时才传）会让"大图 + 慢网"变成一段按了回车什么都不发生的空白。
+   */
+  const addImages = useCallback(
+    (files: File[]) => {
+      if (!projectId || files.length === 0) return;
+      setSendError(null);
+      const room = Math.max(0, MAX_IMAGES_PER_TURN - images.length);
+      if (room === 0) {
+        setSendError(`一次最多 ${MAX_IMAGES_PER_TURN} 张图`);
+        return;
+      }
+      const picked = files.slice(0, room);
+      if (files.length > room) {
+        setSendError(`一次最多 ${MAX_IMAGES_PER_TURN} 张图，多出来的没有加`);
+      }
+      // 先在本地把条目建出来并显示缩略图，再逐个传：上传失败的图也要能被用户看见、
+      // 能被手动去掉，而不是静默消失。
+      const entries: DraftImage[] = picked.map((file, index) => {
+        const reason = imageRejection(file);
+        return {
+          key: `img-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+          id: "",
+          name: file.name || "粘贴的图片",
+          mime: file.type,
+          size: file.size,
+          preview: previewUrl(file),
+          uploading: !reason,
+          error: reason ?? "",
+        };
+      });
+      setImages((current) => [...current, ...entries]);
+      entries.forEach((entry, index) => {
+        if (entry.error) return;
+        uploadImage(projectId, picked[index])
+          .then((ref) =>
+            setImages((current) =>
+              current.map((item) =>
+                item.key === entry.key ? { ...item, id: ref.id, uploading: false } : item,
+              ),
+            ),
+          )
+          .catch((error: unknown) =>
+            setImages((current) =>
+              current.map((item) =>
+                item.key === entry.key
+                  ? { ...item, uploading: false, error: errorMessage(error) }
+                  : item,
+              ),
+            ),
+          );
+      });
+    },
+    [images.length, projectId],
+  );
+
+  /** 从草稿里去掉一张。预览地址要一起释放，否则那张图会一直留在内存里。 */
+  const removeImage = useCallback(
+    (key: string) => {
+      const target = images.find((item) => item.key === key);
+      if (target) releasePreview(target.preview);
+      setImages((current) => current.filter((item) => item.key !== key));
+    },
+    [images],
+  );
+
   // ── 发送 ─────────────────────────────────────────────────────────────
   const send = useCallback(async () => {
     const text = draft.trim();
-    if (!text || sending || !projectId) return;
+    const ready = images.filter((item) => item.id && !item.uploading && !item.error);
+    // 只有图没有字是合法的；两样都空就不发——否则会建出一条没有目标的空轮次。
+    if ((!text && ready.length === 0) || sending || !projectId) return;
     setSending(true);
     setSendError(null);
     setActionError(null);
     setComposerHint(null);
     try {
-      const result = await sendMessage({ projectId, threadId: conv?.thread.id ?? "", text, providerId });
+      const result = await sendMessage({
+        projectId,
+        threadId: conv?.thread.id ?? "",
+        text,
+        providerId,
+        attachments: ready,
+      });
       const created: BotTurn = {
         id: result.task.id,
         title: result.task.title,
-        goal: text,
+        // 只发图时 bubble 里也得有东西可显示，否则会是一个空白的用户消息。
+        goal: text || `发来 ${ready.length} 张图片`,
         status: result.task.status,
         summary: "",
         createdAt: result.task.createdAt,
+        attachments: ready,
         events: [],
         eventsLoaded: false,
       };
@@ -276,6 +436,7 @@ export function BotApp() {
       setLiveTask(result.task);
       setEvidence(null);
       setDraft("");
+      clearImages();
       stick.current = true;
       // 每次都刷新左侧：不只新会话要出现，老会话也要更新"几轮"和"最近活动时间"，
       // 否则左侧列表停在发消息之前的样子，看起来像没发出去。
@@ -294,7 +455,7 @@ export function BotApp() {
     } finally {
       setSending(false);
     }
-  }, [conv, draft, projectId, providerId, sending]);
+  }, [clearImages, conv, draft, images, projectId, providerId, sending]);
 
   const stop = useCallback(() => {
     if (!activeTaskId) return;
@@ -392,6 +553,7 @@ export function BotApp() {
       return {
         id: turn.id,
         goal: turn.goal,
+        images: turn.attachments,
         steps,
         reply: verdict.text || turn.summary,
         reason: verdict.reason,
@@ -496,6 +658,8 @@ export function BotApp() {
                 <TurnView
                   key={turn.id}
                   goal={turn.goal}
+                  images={turn.images}
+                  projectId={projectId}
                   steps={turn.steps}
                   reply={turn.reply}
                   reason={turn.reason}
@@ -530,6 +694,10 @@ export function BotApp() {
             setThreads(null);
             startNew();
           }}
+          workspaces={workspaces}
+          canPickWorkspace={canPickWorkspace}
+          onActivateWorkspace={(id) => void activateWorkspaceById(id)}
+          onPickWorkspace={() => void pickWorkspace()}
           providerId={providerId}
           onProviderChange={(id) => {
             setProviderId(id);
@@ -541,6 +709,9 @@ export function BotApp() {
           }}
           draft={draft}
           onDraftChange={setDraft}
+          images={images}
+          onAddImages={addImages}
+          onRemoveImage={removeImage}
           onSend={() => void send()}
           onSteer={steer}
           onStop={stop}

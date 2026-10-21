@@ -184,6 +184,8 @@ export type TaskDraft = {
   prompt: string;
   acceptanceCriteria: string[];
   providerId?: string;
+  /** 这一轮随消息一起给的图片。只传 id 与名字：文件本体已经上传过了。 */
+  attachments?: AttachmentRef[];
   /** 目标会话：已有会话 id，或 "__new__" 表示新开一条并把这一轮作为第 1 轮。
    *  留空 = 独立任务，开销与没有多轮对话时完全一样。 */
   thread?: string;
@@ -216,7 +218,17 @@ export type ThreadTurn = {
   goal: string;
   status: string;
   resultSummary: string;
+  /** 这一轮贴了什么图。回放时要看得见，否则用户不知道自己当时发了什么。 */
+  attachments: AttachmentRef[];
   createdAt: string;
+};
+
+/** 一条已上传的附件。库里只存引用，文件本体在 data/uploads 下。 */
+export type AttachmentRef = {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
 };
 
 export type ThreadDetail = Thread & { turns: ThreadTurn[] };
@@ -249,6 +261,18 @@ export function normalizeThreadTurn(source: unknown): ThreadTurn | null {
     goal: textOf(raw, "goal", "prompt"),
     status: normalizeStatus(pick(raw, "status", "state")),
     resultSummary: textOf(raw, "result_summary", "summary"),
+    attachments: arrayOf(raw, "attachments")
+      .map((item) => {
+        const id = textOf(item, "id");
+        if (!id) return null;
+        return {
+          id,
+          name: textOf(item, "name") || "图片",
+          mime: textOf(item, "mime") || "image/png",
+          size: numOf(item, "size") ?? 0,
+        } satisfies AttachmentRef;
+      })
+      .filter((item): item is AttachmentRef => item !== null),
     createdAt: textOf(raw, "created_at"),
   };
 }
@@ -293,6 +317,9 @@ export function createTurn(threadId: string, draft: TaskDraft): Promise<Task> {
     goal: draft.prompt,
     acceptance_criteria: draft.acceptanceCriteria,
   };
+  if (draft.attachments?.length) {
+    body.attachments = draft.attachments.map((item) => ({ id: item.id, name: item.name }));
+  }
   if (draft.providerId) body.provider_id = draft.providerId;
   return request<unknown>(`${api}/threads/${threadId}/turns`, {
     method: "POST",

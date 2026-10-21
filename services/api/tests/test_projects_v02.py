@@ -142,3 +142,59 @@ async def test_delete_project_removes_tasks_and_traces(client, workspace):
             )
             assert count == 0, f"{model.__name__} 仍残留 {count} 条孤儿记录"
     assert (await client.get("/api/v1/tasks")).json() == []
+
+
+async def test_activate_workspace_switches_exactly_one(client, workspace, tmp_path):
+    """切目录是"换一个"，不是"多一个"：任何时候只能有一个活动工作区。
+
+    允许两个同时活动的话，快照回滚就不知道该往哪个根写——这是这套数据结构里
+    唯一不能含糊的地方。
+    """
+    pid = (await _create_project(client))["id"]
+    first = (await client.post(f"/api/v1/projects/{pid}/workspaces", json={"path": str(workspace)})).json()
+    second_root = tmp_path / "repo2"
+    second_root.mkdir()
+    second = (
+        await client.post(f"/api/v1/projects/{pid}/workspaces", json={"path": str(second_root)})
+    ).json()
+    # 第二次绑定不自动抢活动位：用户可能只是想先挂上来看文件。
+    assert first["is_active"] is True
+    assert second["is_active"] is False
+
+    switched = await client.post(f"/api/v1/projects/{pid}/workspaces/{second['id']}/activate")
+    assert switched.status_code == 200
+    flags = {w["id"]: w["is_active"] for w in switched.json()["workspaces"]}
+    assert flags == {first["id"]: False, second["id"]: True}
+
+    # 切过去之后，文件树读的就是新根。
+    tree = await client.get(f"/api/v1/projects/{pid}/tree")
+    assert tree.json()["entries"] == []
+
+
+async def test_unbind_active_workspace_hands_over(client, workspace, tmp_path):
+    """解掉活动目录要补选一个，否则界面上是"0 个活动"、任务却在按第一个兜底跑。"""
+    pid = (await _create_project(client))["id"]
+    first = (await client.post(f"/api/v1/projects/{pid}/workspaces", json={"path": str(workspace)})).json()
+    second_root = tmp_path / "repo2"
+    second_root.mkdir()
+    second = (
+        await client.post(f"/api/v1/projects/{pid}/workspaces", json={"path": str(second_root)})
+    ).json()
+
+    assert (
+        await client.delete(f"/api/v1/projects/{pid}/workspaces/{first['id']}")
+    ).status_code == 204
+    left = (await client.get(f"/api/v1/projects/{pid}")).json()["workspaces"]
+    assert [w["id"] for w in left] == [second["id"]]
+    assert left[0]["is_active"] is True
+
+
+async def test_reveal_path_is_opt_in(client, workspace):
+    """列表接口给打码路径，真路径只在用户主动点开时单独取。"""
+    pid = (await _create_project(client))["id"]
+    bound = (await client.post(f"/api/v1/projects/{pid}/workspaces", json={"path": str(workspace)})).json()
+    assert bound["path"].startswith("<workspace:")  # 默认不外泄主机路径
+
+    revealed = await client.get(f"/api/v1/projects/{pid}/workspaces/{bound['id']}/path")
+    assert revealed.status_code == 200
+    assert revealed.json()["path"] == str(workspace)

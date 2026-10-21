@@ -146,9 +146,10 @@ node install-local.cjs
 看起来最像"没生效"或者"它改错了"，其实只是还没搬过去。
 
 ```bash
-node desktop/self-deploy.cjs           # 后端 + 前端
+node desktop/self-deploy.cjs           # 后端 + 前端 + 壳入口
 node desktop/self-deploy.cjs --api     # 只后端（秒级）
 node desktop/self-deploy.cjs --web     # 只前端（会重建静态站，约 20s）
+node desktop/self-deploy.cjs --shell   # 只壳入口（main.cjs / preload.cjs / gpu-guard.cjs）
 node desktop/self-deploy.cjs --dry-run # 只看会做什么
 ```
 
@@ -160,5 +161,7 @@ node desktop/self-deploy.cjs --dry-run # 只看会做什么
 - **排除 `__pycache__` / `*.pyc`**。带进去的旧字节码会让 import 忽略改过的 `.py`，
   表现为"改了但行为没变"，而且 traceback 里的行号对不上。
 
-边界：主进程 `main.cjs` / `preload.cjs` 打进 `app.asar`，这个脚本不动它们——
-那部分改动必须重新打包安装。
+壳入口（主进程 `main.cjs` / `preload.cjs` / `gpu-guard.cjs`）在 `resources/app.asar` 里。
+`--shell`（以及默认的全量同步）会解包、换掉这三个文件、再打回去——效果等同重新打包，
+但不用跑一遍 electron-builder。两个前提：**客户端必须完全退出**（app.asar 被占用时会直接
+报 EPERM 并给出这句话），以及旧包会备份成 `app.asar.bak`。文件没变时它什么也不做。

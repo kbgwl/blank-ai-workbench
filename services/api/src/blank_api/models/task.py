@@ -53,6 +53,9 @@ class Task(Base):
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="draft")
     acceptance_criteria: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     acceptance_results: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # 用户这一轮贴进来的图片（{id, name, mime, size}）。文件本体在 data/uploads 下，
+    # 这里只存引用：图片进库会让备份和迁移一起变重，而它们从来不需要被 SQL 查询。
+    attachments: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     max_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=DEFAULT_MAX_STEPS)
     steps_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     result_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")

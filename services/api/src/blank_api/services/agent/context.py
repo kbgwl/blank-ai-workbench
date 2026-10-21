@@ -88,6 +88,10 @@ def _chars(item: dict) -> int:
     return len(str(item.get("content") or ""))
 
 
+# 一张图折算的 token 数。见 message_tokens 里的说明。
+IMAGE_TOKEN_ESTIMATE = 900
+
+
 def _total_chars(messages: Sequence[dict]) -> int:
     return sum(_chars(item) for item in messages)
 
@@ -110,7 +114,14 @@ def estimate_tokens(text: str) -> int:
 
 def message_tokens(messages: Sequence[dict]) -> int:
     # 每条消息有固定开销（role / 分隔符），按 4 tokens 计，与主流口径一致。
-    return sum(estimate_tokens(str(item.get("content") or "")) + 4 for item in messages)
+    total = 0
+    for item in messages:
+        total += estimate_tokens(str(item.get("content") or "")) + 4
+        # 图片按张计：base64 不是文本，字符启发式算出来是几十万，会把水位一次性顶爆。
+        # 一张 1024×1024 在主流供应商那里约 700~1200 tokens，取 900：宁可高估。
+        # 低估会让压缩晚一步触发，而晚一步的代价是整轮上下文按原样重发一遍。
+        total += IMAGE_TOKEN_ESTIMATE * len(item.get("images") or ())
+    return total
 
 
 @dataclass

@@ -82,6 +82,27 @@ export function unbindWorkspace(projectId: string, workspaceId: string): Promise
   return request<void>(`${api}/projects/${projectId}/workspaces/${workspaceId}`, { method: "DELETE" });
 }
 
+/** 切换项目当前在哪个目录里干活。返回整个项目：活动标记是"换了一个"，不是"多了一个"。 */
+export function activateWorkspace(projectId: string, workspaceId: string): Promise<Project> {
+  return request<Project>(`${api}/projects/${projectId}/workspaces/${workspaceId}/activate`, {
+    method: "POST",
+    ...jsonInit,
+  });
+}
+
+/**
+ * 取一次未打码的真实路径。
+ *
+ * 列表接口有意只给 `<workspace:目录名>`：投屏或截图时不该顺手暴露主机上装了什么。
+ * 这个函数只在用户点开某一行时才调，属于"我主动要看"。
+ */
+export function revealWorkspacePath(projectId: string, workspaceId: string): Promise<string> {
+  return request<{ id: string; path: string }>(
+    `${api}/projects/${projectId}/workspaces/${workspaceId}/path`,
+    { cache: "no-store" },
+  ).then((row) => row.path);
+}
+
 export function fetchTree(projectId: string, path = "", depth = 1): Promise<TreeResponse> {
   const query = `path=${encodeURIComponent(path)}&depth=${depth}`;
   return request<TreeResponse>(`${api}/projects/${projectId}/tree?${query}`, { cache: "no-store" });

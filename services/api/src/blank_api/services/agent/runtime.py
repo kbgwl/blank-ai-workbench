@@ -136,6 +136,12 @@ class RunRequest:
     routing_adapters: dict[str, ModelAdapter] | None = None
     # 所属会话（多轮对话）。空串表示这是独立任务，行为与没有会话时完全一致。
     thread_ref: str = ""
+    # 用户贴进来的图片，形如 [{"name", "media_type", "data"(base64)}]。
+    # 放在这里而不是读磁盘：路由那层已经把它们读成字节了，运行时不该再碰文件系统。
+    images: Sequence[dict] = ()
+    # 当前模型看不看得懂图。不支持时图片降级成一段文字说明，而不是把 image block
+    # 硬塞过去——那会直接 400，用户看到的是"上传了图片就发不出去"。
+    supports_vision: bool = False
 
 
 @dataclass
@@ -291,6 +297,9 @@ class AgentRuntime:
             skill_instructions=[str(item) for item in request.skill_instructions],
             acceptance_criteria=[str(item) for item in request.acceptance_criteria or ()],
             max_steps=max(1, int(request.max_steps)),
+            # 模型看不懂图时一张都不挂：挂了就是 400，用户看到的是"传了图就发不出去"。
+            # 降级的说法已经写进 initial_messages 的提示里了。
+            vision_images=list(request.images) if request.supports_vision else [],
             token_budget=_token_budget(),
             permissions=permissions,
             role_adapters=request.role_adapters or {},
@@ -420,6 +429,8 @@ class AgentRuntime:
                 session.skill_instructions,
                 session.instruction_layers,
                 history,
+                images=request.images,
+                supports_vision=request.supports_vision,
             ),
             "plan": [],
             "steps": 0,

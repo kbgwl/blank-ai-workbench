@@ -47,10 +47,24 @@ class AnthropicAdapter(ModelAdapter):
         for m in messages:
             if m.role == "system":
                 continue
+            # 图片放在文本之前：Anthropic 官方建议图在前、问题在后，模型看图的
+            # 位置与问题离得近时引用更准。
+            blocks: list[dict] = [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": image.get("media_type", "image/png"),
+                        "data": image.get("data", ""),
+                    },
+                }
+                for image in (m.images or ())
+            ]
+            blocks.append({"type": "text", "text": m.content})
             converted.append(
                 {
                     "role": "assistant" if m.role == "assistant" else "user",
-                    "content": [{"type": "text", "text": m.content}],
+                    "content": blocks,
                 }
             )
         if cache_last and converted and converted[-1]["content"]:

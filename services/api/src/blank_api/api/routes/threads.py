@@ -49,6 +49,7 @@ def _turn_out(task: Task) -> ThreadTurnOut:
         goal=task.goal,
         status=task.status,
         result_summary=task.result_summary,
+        attachments=list(task.attachments or []),
         created_at=task.created_at,
     )
 
@@ -137,6 +138,7 @@ async def create_turn(thread_id: str, payload: ThreadTurnIn, db: DbSession) -> T
             acceptance_criteria=payload.acceptance_criteria,
             provider_id=payload.provider_id,
             max_steps=payload.max_steps,
+            attachments=payload.attachments,
         ),
         thread_id=thread_id,
         turn_index=next_turn,

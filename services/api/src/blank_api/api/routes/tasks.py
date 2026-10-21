@@ -43,6 +43,7 @@ from blank_api.services.agent.manager import RunAlreadyActive, run_manager
 from blank_api.services.agent.queue import claim_run, enqueue_run, finish_run, renew_run
 from blank_api.services.agent.router import candidate_from_provider
 from blank_api.services.models.registry import build_adapter
+from blank_api.services.uploads import UploadStore, load_images_for
 from blank_api.services.models.routing import FallbackAdapter
 from blank_api.services.sandbox import SnapshotStore
 
@@ -97,6 +98,12 @@ async def persist_task(
     而不是建完再 UPDATE 一次——那次 UPDATE 会把服务端生成的 ``updated_at`` 置为过期，
     紧接着序列化它就会在异步会话里触发一次同步懒加载（MissingGreenlet）。
     """
+    # 附件先过一遍存在性检查：前端传来的 id 可能是上一次上传后又被清理掉的，
+    # 那种直接丢掉，不要带着一个指向空气的引用进任务。
+    attachments = [
+        ref.as_dict()
+        for ref in UploadStore().resolve(project_id, [item.model_dump() for item in payload.attachments])
+    ]
     task = Task(
         id=str(uuid.uuid4()),
         project_id=project_id,
@@ -106,6 +113,7 @@ async def persist_task(
         status="draft",
         acceptance_criteria=payload.acceptance_criteria,
         acceptance_results=[],
+        attachments=attachments,
         max_steps=payload.max_steps,
         thread_id=thread_id,
         turn_index=turn_index,
@@ -118,6 +126,7 @@ async def persist_task(
         {
             "title": task.title,
             "acceptance_criteria": list(task.acceptance_criteria or []),
+            "attachments": len(attachments),
         },
     )
     return task
@@ -281,6 +290,9 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
     ).scalars().all()
     # rollback 会让本事务里的 ORM 实例全部过期，之后再读属性会触发同步懒加载，
     # 在异步会话里直接抛 MissingGreenlet。所以先把要用的字段取成普通值。
+    attachment_refs = [dict(item) for item in (task.attachments or [])]
+    # 读图放到线程里：最多 20MB，同步读会把事件循环按住，这期间连 /health 都不回。
+    images = await anyio.to_thread.run_sync(load_images_for, project.id, attachment_refs)
     snapshot = {
         "task_id": task.id,
         "provider_id": provider.id,
@@ -290,6 +302,8 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         "goal": task.goal,
         "acceptance_criteria": list(task.acceptance_criteria or []),
         "max_steps": int(task.max_steps),
+        "images": images,
+        "supports_vision": bool(provider.supports_vision),
         "skill_instructions": [str(item) for item in active_skills],
         # 会话上下文由运行时自己读：这里只告诉它"这一轮属于哪条会话"。
         "thread_ref": task.thread_id or "",

@@ -9,7 +9,7 @@
  * 用 CommonJS 而不是 ESM：Electron 的 ESM 主进程在主进程侧拿不到 `electron` 的具名
  * 导出，且 sandbox 模式下 preload 只支持 CommonJS。CJS 是这两处都稳的选择。
  */
-const { app, BrowserWindow, dialog, protocol, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, protocol, shell } = require("electron");
 const { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { readFile, writeFile } = require("node:fs/promises");
 const { spawn } = require("node:child_process");
@@ -367,6 +367,33 @@ function stopBackend() {
   }
   backend = null;
 }
+
+// ── 选择工作区目录 ──────────────────────────────────────────────────────────
+
+/**
+ * 原生目录对话框。
+ *
+ * 渲染进程在 sandbox 里，碰不到 Node，选目录只能回主进程做。加这个的直接原因：
+ * 后端只认绝对路径，让用户手打在旁边那个输入框里——盘符、反斜杠、中文目录名
+ * 任一处写错就是 422，而且没法在选之前确认那个目录到底在不在。
+ */
+ipcMain.handle("blank:pick-directory", async (event, payload) => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const options = {
+    title: "选择工作区目录",
+    properties: ["openDirectory", "createDirectory"],
+    buttonLabel: "用这个目录",
+  };
+  // 已经填过路径就从那儿打开：用户多半是在改一个已有的绑定，不该每次都从"文档"起跳。
+  // 传进来的可能是打码后的 `<workspace:xxx>`，existsSync 为假，自动忽略即可。
+  const current = typeof payload?.current === "string" ? payload.current.trim() : "";
+  if (current && existsSync(current)) options.defaultPath = current;
+  const result = owner
+    ? await dialog.showOpenDialog(owner, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled || result.filePaths.length === 0) return { path: "" };
+  return { path: result.filePaths[0] };
+});
 
 // ── 窗口 ────────────────────────────────────────────────────────────────────
 

@@ -3,11 +3,12 @@
 import { useState } from "react";
 import { Button } from "@/components/projects/ui";
 import { formatDuration } from "../tasks/format";
-import type { PendingApproval, PendingQuestion } from "../tasks/api";
+import type { AttachmentRef, PendingApproval, PendingQuestion } from "../tasks/api";
 import { MarkdownView } from "./markdown-view";
 import { StepView } from "./steps";
 import type { BotStep, StepFilter } from "./turns";
 import { filterSteps, turnEvidence } from "./turns";
+import { uploadUrl } from "./uploads";
 
 function timeLabel(value: string): string {
   if (!value) return "";
@@ -144,6 +145,10 @@ function QuestionCard({
 
 export type TurnViewProps = {
   goal: string;
+  /** 这一轮贴的图。回放时要看得见，否则用户不知道自己当时发了什么。 */
+  images: AttachmentRef[];
+  /** 拼图片读取地址用。会话属于当前项目，所以直接用当前项目 id。 */
+  projectId: string;
   steps: BotStep[];
   reply: string;
   reason: string;
@@ -185,8 +190,26 @@ export function TurnView(props: TurnViewProps) {
     <div className="group/turn">
       {/* 用户说的话：右侧淡色气泡，与助手的整段正文区分开 */}
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-3.5 py-2 text-[13.5px] leading-relaxed whitespace-pre-wrap text-text">
-          {props.goal}
+        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-3.5 py-2 text-[13.5px] leading-relaxed text-text">
+          {props.images.length > 0 && (
+            <div className="mb-1.5 flex flex-wrap gap-1.5">
+              {props.images.map((image) => (
+                <a
+                  key={image.id}
+                  href={uploadUrl(props.projectId, image.id)}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={image.name}
+                  className="block size-20 overflow-hidden rounded-lg border border-line transition-opacity hover:opacity-85"
+                >
+                  {/* 静态导出没有图片优化器，回放用的就是后端原图，走 img 才对。 */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={uploadUrl(props.projectId, image.id)} alt={image.name} className="size-full object-cover" />
+                </a>
+              ))}
+            </div>
+          )}
+          <div className="whitespace-pre-wrap">{props.goal}</div>
         </div>
       </div>
 

@@ -18,6 +18,7 @@ import {
   fetchThreads,
   runTask,
   type AgentEvent,
+  type AttachmentRef,
   type Project,
   type Provider,
   type Task,
@@ -45,6 +46,8 @@ export type BotTurn = {
   status: string;
   summary: string;
   createdAt: string;
+  /** 这一轮贴的图。发出去之后本地立即显示，重开会话时由后端补回来。 */
+  attachments: AttachmentRef[];
   events: AgentEvent[];
   /** 事件是否真的取回来了。false 表示这一轮只有目标与结论，过程没加载。 */
   eventsLoaded: boolean;
@@ -101,6 +104,7 @@ export async function loadConversation(threadId: string): Promise<Conversation |
         status: turn.status,
         summary: turn.resultSummary,
         createdAt: turn.createdAt,
+        attachments: turn.attachments,
         events: hydrated?.events ?? [],
         eventsLoaded: hydrated?.loaded ?? false,
       };
@@ -122,10 +126,14 @@ export async function sendMessage(input: {
   threadId: string;
   text: string;
   providerId?: string;
+  attachments?: AttachmentRef[];
 }): Promise<SendResult> {
   const text = input.text.trim();
-  if (!text) throw new Error("消息不能为空");
-  const title = threadTitleFrom(text);
+  const attachments = input.attachments ?? [];
+  // 只有图没有字是合法的："照这张图改"里的"这张图"本身就是全部意思。
+  // 但两样都空就不该发出去——后端会建出一条没有目标的空任务。
+  if (!text && attachments.length === 0) throw new Error("消息不能为空");
+  const title = threadTitleFrom(text || `看 ${attachments.length} 张图`);
 
   let thread: Thread;
   let fresh = false;
@@ -144,6 +152,7 @@ export async function sendMessage(input: {
       prompt: text,
       acceptanceCriteria: [],
       providerId: input.providerId,
+      attachments,
     });
   } catch (error) {
     // 刚建的空会话要收掉：否则用户点一次发送失败，左侧就多一条点开没内容的会话。

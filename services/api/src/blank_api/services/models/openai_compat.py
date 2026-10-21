@@ -14,6 +14,7 @@ from blank_api.services.models.base import (
     ToolSpecLite,
     Usage,
     data_payload,
+    openai_content,
 )
 from blank_api.services.models.streaming import ToolCallAccumulator
 
@@ -27,7 +28,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
         return {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"}
 
     def _message_payload(self, message: ChatMessage) -> dict:
-        payload = {"role": message.role, "content": message.content}
+        payload = {"role": message.role, "content": openai_content(message)}
         if message.tool_call_id:
             payload["tool_call_id"] = message.tool_call_id
         if message.tool_calls:

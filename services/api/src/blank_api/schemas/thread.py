@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 from blank_api.limits import DEFAULT_MAX_STEPS, HARD_MAX_STEPS
+from blank_api.schemas.task import AttachmentIn
 
 
 class ThreadCreate(BaseModel):
@@ -19,6 +20,8 @@ class ThreadTurnIn(BaseModel):
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=20)
     provider_id: str | None = None
     max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=HARD_MAX_STEPS)
+    # 这一轮贴的图片。和 TaskCreate 同名同义：一轮任务就是一条消息。
+    attachments: list[AttachmentIn] = Field(default_factory=list, max_length=8)
 
 
 class ThreadOut(BaseModel):
@@ -47,6 +50,8 @@ class ThreadTurnOut(BaseModel):
     goal: str
     status: str
     result_summary: str
+    # 回放时能看到"当时它看到了什么图"。形状 {id, name, mime, size}。
+    attachments: list[dict] = Field(default_factory=list)
     created_at: datetime
 
     @field_serializer("created_at")
