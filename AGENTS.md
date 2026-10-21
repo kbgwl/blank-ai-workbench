@@ -38,8 +38,25 @@ cd web && E:/env/node/node-v24.20.0-win-x64/node.exe ./node_modules/typescript/b
   `permissions.py`、`sandbox/policy.py` 里的限制。
 - 不要在结论里把模型自报的验收覆盖度当成事实；可核对的证据是工具卡片、Diff 和测试输出。
 
+## 打包桌面版
+
+```bash
+# 1. 前端静态导出（必须带这两个变量，否则构建出来的是要在服务器上跑的那份）
+cd web && BLANK_DESKTOP_BUILD=1 NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000 \
+  E:/env/node/node-v24.20.0-win-x64/node.exe ./node_modules/next/dist/bin/next build
+# 2. 打安装包（版本号在 desktop/package.json）
+cd desktop && E:/env/node/node-v24.20.0-win-x64/node.exe ./node_modules/electron-builder/cli.js --win nsis
+# 3. 自检 14 项（含"首页是 bot 对话页"）
+cd desktop && node verify-package.cjs
+# 4. 装到本机（安装目录复用 install-target.local.json）
+cd desktop && node install-local.cjs
+```
+
+装完想让已装客户端立刻用上新代码、但不想重装：`node self-deploy.cjs --api`（只同步后端）
+或 `--web`（只同步前端）。别手改 `resources/` 下的副本——客户端读的是它，不是工作区源码。
+
 ## 工程事实
 
 - 结构：`web/`（Next.js）、`services/api/`（FastAPI，环境变量前缀 `BLANK_`）、`packages/cli/`、`evals/`、`scripts/`。
-- 后端 47 个测试文件、500+ 用例，全量跑一遍约 90 秒。
+- 后端 50 个测试文件、540+ 用例，全量跑一遍约 110 秒。
 - 工作区路径必须命中白名单，返回前端前脱敏成 `<workspace:name>`。
