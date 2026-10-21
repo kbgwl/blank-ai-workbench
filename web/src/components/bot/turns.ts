@@ -247,6 +247,112 @@ export function isTurnRunning(status: string, events: readonly RawEvent[]): bool
   });
 }
 
+/** 一眼就能看出"它在读还是在写"的工具名归类。与 steps.tsx 的图标归类同源，但语义不同：
+ *  那边是为了挑图标，这边是为了统计"先看后改"的比例，别把两个正则合并到一起。 */
+const LOOK_LIKE = /^(read|list|open|view|cat|search|grep|glob|find|query|inspect)/i;
+
+export type TurnEvidence = {
+  /** 工具调用总次数（含失败）。这是"花了多少动作"的直接度量。 */
+  calls: number;
+  /** 其中读/查类调用。为 0 而 files > 0，说明它是直接改的——没看就改。 */
+  looked: number;
+  /** 实际跑过的命令（按出现顺序去重，最多留 8 条给悬浮提示）。 */
+  commands: string[];
+  /** 去重后的命令总条数。commands 会被截断，所以计数单独存——否则跑了 20 条会显示成 8 条。 */
+  commandCount: number;
+  /** 改动过的文件数。 */
+  files: number;
+  /** 失败次数。步骤区留着失败记录，所以这里只做计数，不隐藏。 */
+  failed: number;
+  /** 工具耗时合计（毫秒）。没有一条带耗时则为 0。 */
+  durationMs: number;
+};
+
+/**
+ * 一轮的「依据」：用来替代正文里的过程复述。
+ *
+ * 正文为什么能变短，靠的不是让模型少写，而是**分工**：事实（改了哪个文件、
+ * 跑了什么命令、输出什么、花了多久）全部由这里按事件流算出来，正文只留判断
+ * （为什么这么改、哪条路被否了、还剩什么风险）。同一份事实说两遍不会让人更
+ * 放心，只会让人多读一遍。
+ *
+ * 所以这里的每个数字都要能落到具体的行——它是"溯源"的入口，不是装饰。
+ * 数错了比不显示更糟：用户会据此以为它没验证、或者以为它没读就改。
+ */
+export function turnEvidence(steps: readonly BotStep[]): TurnEvidence {
+  let calls = 0;
+  let looked = 0;
+  let files = 0;
+  let failed = 0;
+  let durationMs = 0;
+  const commands: string[] = [];
+  const seenCommands = new Set<string>();
+  const seenFiles = new Set<string>();
+
+  for (const step of steps) {
+    if (step.kind === "change") {
+      // 同一个文件改三次算一个文件：用户关心的是"动了哪些文件"，不是写了几次。
+      if (!seenFiles.has(step.path)) {
+        seenFiles.add(step.path);
+        files += 1;
+      }
+      continue;
+    }
+    if (step.kind !== "tool") continue;
+
+    calls += 1;
+    if (LOOK_LIKE.test(step.name)) looked += 1;
+    if (step.status === "failed") failed += 1;
+    if (step.durationMs !== null) durationMs += step.durationMs;
+
+    const command = str(step.args, "command", "cmd");
+    // 空命令不入表：run_tests 这类工具本来就没有 command 参数，硬塞一条空串
+    // 会让"跑了 3 条命令"变成"跑了 3 条命令（其中 1 条是空的）"。
+    if (command && !seenCommands.has(command)) {
+      seenCommands.add(command);
+      if (commands.length < 8) commands.push(command);
+    }
+  }
+
+  return { calls, looked, commands, commandCount: seenCommands.size, files, failed, durationMs };
+}
+
+/** 步骤区的三种看法。默认全看，"改动"和"失败"是查到具体某一处时最快的两条路。 */
+export type StepFilter = "all" | "changes" | "failures";
+
+export function filterSteps(steps: readonly BotStep[], filter: StepFilter): BotStep[] {
+  if (filter === "all") return [...steps];
+  if (filter === "changes") return steps.filter((step) => step.kind === "change");
+  return steps.filter((step) => step.kind === "tool" && step.status === "failed");
+}
+
+/**
+ * 正文里提一句文件名，能不能精确落到本轮改过的某个文件上。
+ *
+ * 命中返回完整路径，否则返回空串。**有歧义时一律返回空**——两个同名文件都改过，
+ * 点哪个都可能是错的；给一个点不动的灰字，好过给一个点错地方的链接。
+ *
+ * 按 basename 与尾部路径两档匹配，是因为人话里写的是 `composer.tsx` 或
+ * `bot/composer.tsx`，几乎不会把 `web/src/components/bot/composer.tsx` 写全。
+ * 只做这两档而不做"包含"匹配：包含匹配会让 `test.py` 命中 `contest.py`。
+ */
+export function resolveTouchedPath(text: string, files: readonly string[]): string {
+  const needle = String(text ?? "").trim().replace(/\\/g, "/");
+  if (!needle || needle.includes(" ")) return "";
+  const pool = files.map((path) => String(path).replace(/\\/g, "/"));
+  const exact = pool.find((path) => path === needle);
+  if (exact) return exact;
+
+  const tail = (path: string) => (path.endsWith(`/${needle}`) ? true : path === needle);
+  const byTail = pool.filter(tail);
+  if (byTail.length === 1) return byTail[0];
+  if (byTail.length > 1) return "";
+
+  const name = needle.split("/").pop() ?? needle;
+  const byBase = pool.filter((path) => (path.split("/").pop() ?? path) === name);
+  return byBase.length === 1 ? byBase[0] : "";
+}
+
 /** 一轮里改过哪些文件（用于对话里的"改了 N 个文件"摘要，去重保序）。 */
 export function touchedFiles(steps: readonly BotStep[]): { path: string; changeType: string }[] {
   const seen = new Map<string, string>();

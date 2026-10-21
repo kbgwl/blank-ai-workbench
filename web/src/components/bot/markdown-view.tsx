@@ -2,12 +2,37 @@
 
 import { useState } from "react";
 import { parseInline, parseMarkdown, type Inline } from "./markdown";
+import { resolveTouchedPath } from "./turns";
 
-function InlineView({ spans }: { spans: Inline[] }) {
+type AnchorProps = {
+  /** 本轮改过的文件路径。给了才会把正文里的文件名变成可点的锚点。 */
+  files?: readonly string[];
+  onFileClick?: (path: string) => void;
+};
+
+function InlineView({ spans, files, onFileClick }: { spans: Inline[] } & AnchorProps) {
   return (
     <>
       {spans.map((span, index) => {
         if (span.kind === "code") {
+          // 正文里点了文件名就落到那一处改动上。这是"回复可以只写结论"的前提：
+          // 提到改动时不必把细节铺在正文里，一个可点的名字就够。
+          // 认不出（或同名文件有歧义）时保持普通代码样式，不做半可点的东西。
+          const path = files?.length && onFileClick ? resolveTouchedPath(span.text, files) : "";
+          if (path && onFileClick) {
+            const jump = onFileClick;
+            return (
+              <button
+                key={index}
+                type="button"
+                onClick={() => jump(path)}
+                title={`看 ${path} 这处改动`}
+                className="rounded border border-line bg-surface-2 px-1 py-0.5 font-mono text-[12px] text-brand underline decoration-brand/25 decoration-dotted underline-offset-2 transition-colors hover:border-brand/40 hover:decoration-brand"
+              >
+                {span.text}
+              </button>
+            );
+          }
           return (
             <code
               key={index}
@@ -77,7 +102,7 @@ function CodeBlock({ text, lang }: { text: string; lang: string }) {
 }
 
 /** 模型回复的渲染入口。空串返回 null——不要在对话里留一个空白块。 */
-export function MarkdownView({ text }: { text: string }) {
+export function MarkdownView({ text, files, onFileClick }: { text: string } & AnchorProps) {
   const blocks = parseMarkdown(text);
   if (blocks.length === 0) return null;
   return (
@@ -88,7 +113,7 @@ export function MarkdownView({ text }: { text: string }) {
           const size = block.level <= 2 ? "text-[15px] font-semibold" : "text-[13.5px] font-semibold";
           return (
             <p key={index} className={`mt-4 mb-1.5 first:mt-0 ${size}`}>
-              <InlineView spans={block.spans} />
+              <InlineView spans={block.spans} files={files} onFileClick={onFileClick} />
             </p>
           );
         }
@@ -101,7 +126,7 @@ export function MarkdownView({ text }: { text: string }) {
             >
               {block.items.map((item, itemIndex) => (
                 <li key={itemIndex} className="pl-0.5">
-                  <InlineView spans={item} />
+                  <InlineView spans={item} files={files} onFileClick={onFileClick} />
                 </li>
               ))}
             </Tag>
@@ -110,7 +135,7 @@ export function MarkdownView({ text }: { text: string }) {
         if (block.kind === "quote") {
           return (
             <blockquote key={index} className="my-2 border-l-2 border-line-strong pl-3 text-muted">
-              <InlineView spans={block.spans} />
+              <InlineView spans={block.spans} files={files} onFileClick={onFileClick} />
             </blockquote>
           );
         }
@@ -119,7 +144,7 @@ export function MarkdownView({ text }: { text: string }) {
         }
         return (
           <p key={index} className="my-2 first:mt-0 last:mb-0">
-            <InlineView spans={block.spans} />
+            <InlineView spans={block.spans} files={files} onFileClick={onFileClick} />
           </p>
         );
       })}

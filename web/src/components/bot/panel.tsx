@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { ChangeItem, UsageInfo } from "../tasks/api";
 import { formatDuration } from "../tasks/format";
 import type { BotStep } from "./turns";
+import { turnEvidence } from "./turns";
 
 function DiffText({ diff }: { diff: string }) {
   const lines = diff.split("\n").slice(0, 400);
@@ -54,8 +55,10 @@ export type TaskPanelProps = {
  */
 export function TaskPanel(props: TaskPanelProps) {
   const [openPath, setOpenPath] = useState<string | null>(null);
-  const tools = props.steps.filter((step) => step.kind === "tool");
-  const failed = tools.filter((step) => step.kind === "tool" && step.status === "failed").length;
+  // 和对话里那条依据条用同一个函数算。两处数字必须同源——左边说改了 3 个文件、
+  // 右边说 4 个，用户就没有理由相信任何一个。耗时优先用模型侧统计，缺了回落到
+  // 工具耗时之和（离线跑、老事件里没有 usage 时就是这种情形）。
+  const evidence = turnEvidence(props.steps);
   const files = props.changes.length > 0
     ? props.changes
     : props.steps
@@ -64,6 +67,7 @@ export function TaskPanel(props: TaskPanelProps) {
           if (!rows.some((row) => row.path === step.path)) rows.push({ path: step.path, diff: "", changeType: step.changeType });
           return rows;
         }, []);
+  const latency = props.usage?.latencyMs || evidence.durationMs;
 
   return (
     <aside className="flex w-[320px] shrink-0 flex-col border-l border-line bg-canvas">
@@ -97,19 +101,22 @@ export function TaskPanel(props: TaskPanelProps) {
             <div className="rounded-lg bg-surface px-2.5 py-1.5">
               <dt className="font-mono text-[9.5px] tracking-wide text-faint uppercase">工具调用</dt>
               <dd className="font-mono text-[13px] text-text">
-                {tools.length}
-                {failed > 0 && <span className="ml-1 text-[11px] text-danger">（{failed} 失败）</span>}
+                {evidence.calls}
+                {evidence.failed > 0 && <span className="ml-1 text-[11px] text-danger">（{evidence.failed} 失败）</span>}
               </dd>
             </div>
             <div className="rounded-lg bg-surface px-2.5 py-1.5">
               <dt className="font-mono text-[9.5px] tracking-wide text-faint uppercase">改动文件</dt>
-              <dd className="font-mono text-[13px] text-text">{files.length}</dd>
+              <dd className="font-mono text-[13px] text-text">
+                {files.length}
+                {evidence.commandCount > 0 && (
+                  <span className="ml-1 text-[10.5px] text-faint">/ {evidence.commandCount} 条命令</span>
+                )}
+              </dd>
             </div>
             <div className="rounded-lg bg-surface px-2.5 py-1.5">
               <dt className="font-mono text-[9.5px] tracking-wide text-faint uppercase">耗时</dt>
-              <dd className="font-mono text-[13px] text-text">
-                {props.usage?.latencyMs ? formatDuration(props.usage.latencyMs) : "—"}
-              </dd>
+              <dd className="font-mono text-[13px] text-text">{latency > 0 ? formatDuration(latency) : "—"}</dd>
             </div>
             <div className="rounded-lg bg-surface px-2.5 py-1.5">
               <dt className="font-mono text-[9.5px] tracking-wide text-faint uppercase">Token</dt>

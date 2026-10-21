@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { buildSteps, dayBucket, isTurnRunning, threadTitleFrom, touchedFiles, turnReply, type RawEvent } from "./turns.ts";
+import {
+  buildSteps,
+  dayBucket,
+  filterSteps,
+  isTurnRunning,
+  resolveTouchedPath,
+  threadTitleFrom,
+  touchedFiles,
+  turnEvidence,
+  turnReply,
+  type BotStep,
+  type RawEvent,
+} from "./turns.ts";
 
 const ev = (seq: number, type: string, payload: Record<string, unknown> = {}): RawEvent => ({
   seq,
@@ -147,4 +159,111 @@ test("会话按本地日历日分组，不看「距今几小时」", () => {
   // 解析不出来不炸，归到更早
   assert.equal(dayBucket("", now), "earlier");
   assert.equal(dayBucket("不是时间", now), "earlier");
+});
+
+// ── 依据条：把过程事实从正文里挪出来的那块统计 ──────────────────────
+
+test("依据条数清看了几次、改了哪些、跑了什么、失败几次", () => {
+  const steps = buildSteps([
+    ev(1, "tool.requested", { tool: "read_file", arguments: { path: "a.ts" } }),
+    ev(2, "tool.completed", { tool: "read_file", ok: true, duration_ms: 100 }),
+    ev(3, "tool.requested", { tool: "run_shell", arguments: { command: "pytest -q" } }),
+    ev(4, "tool.failed", { tool: "run_shell", ok: false, duration_ms: 300, summary: "1 failed" }),
+    ev(5, "file.changed", { path: "a.ts", change_type: "modified" }),
+  ]);
+  const evidence = turnEvidence(steps);
+  assert.equal(evidence.calls, 2);
+  assert.equal(evidence.looked, 1);
+  assert.equal(evidence.files, 1);
+  assert.equal(evidence.failed, 1);
+  assert.equal(evidence.durationMs, 400);
+  assert.deepEqual(evidence.commands, ["pytest -q"]);
+  assert.equal(evidence.commandCount, 1);
+});
+
+test("同一个文件改三次算一个文件", () => {
+  // 用户问的是"动了哪些文件"，不是"写了几次"。按事件数算会把 1 个文件说成 3 个。
+  const steps = buildSteps([
+    ev(1, "file.changed", { path: "a.ts" }),
+    ev(2, "file.changed", { path: "a.ts" }),
+    ev(3, "file.changed", { path: "b.ts" }),
+  ]);
+  assert.equal(turnEvidence(steps).files, 2);
+});
+
+test("命令去重，且超过 8 条时总数仍然准", () => {
+  // commands 只留 8 条给悬浮提示，用它的长度当总数会把 20 条说成 8 条。
+  const events: RawEvent[] = [];
+  for (let index = 0; index < 20; index += 1) {
+    events.push(ev(index + 1, "tool.requested", { tool: "run_shell", arguments: { command: `cmd ${index}` } }));
+  }
+  events.push(ev(99, "tool.requested", { tool: "run_shell", arguments: { command: "cmd 0" } }));
+  const evidence = turnEvidence(buildSteps(events));
+  assert.equal(evidence.commands.length, 8);
+  assert.equal(evidence.commandCount, 20);
+});
+
+test("没有 command 参数的工具不占命令数", () => {
+  // run_tests 这类工具本来就没有 command 参数。硬塞一条空串会让
+  // 「跑了 3 条命令」变成「跑了 3 条命令（其中一条是空的）」。
+  const steps = buildSteps([
+    ev(1, "tool.requested", { tool: "run_tests", arguments: {} }),
+    ev(2, "tool.completed", { tool: "run_tests", ok: true }),
+  ]);
+  assert.equal(turnEvidence(steps).calls, 1);
+  assert.equal(turnEvidence(steps).commandCount, 0);
+  assert.deepEqual(turnEvidence(steps).commands, []);
+});
+
+test("只写不读时 looked 为 0，这是「没看就改」的可见信号", () => {
+  const steps = buildSteps([
+    ev(1, "tool.requested", { tool: "apply_patch", arguments: { path: "a.ts" } }),
+    ev(2, "tool.completed", { tool: "apply_patch", ok: true }),
+    ev(3, "file.changed", { path: "a.ts" }),
+  ]);
+  const evidence = turnEvidence(steps);
+  assert.equal(evidence.looked, 0);
+  assert.equal(evidence.files, 1);
+});
+
+test("正文里的文件名能落到本轮改动的那个文件上", () => {
+  const files = ["web/src/components/bot/composer.tsx", "services/intent.py"];
+  assert.equal(resolveTouchedPath("web/src/components/bot/composer.tsx", files), files[0]);
+  assert.equal(resolveTouchedPath("composer.tsx", files), files[0]);
+  assert.equal(resolveTouchedPath("bot/composer.tsx", files), files[0]);
+  assert.equal(resolveTouchedPath("intent.py", files), files[1]);
+});
+
+test("同名文件都改过时不猜，宁可点不动", () => {
+  // 两个 index.ts 都改过，写 `index.ts` 的人心里指的是哪一个从文本里看不出来。
+  // 给一个点不动的代码样式，好过给一个点错地方的链接。
+  const files = ["packages/a/index.ts", "packages/b/index.ts"];
+  assert.equal(resolveTouchedPath("index.ts", files), "");
+  assert.equal(resolveTouchedPath("packages/b/index.ts", files), files[1]);
+});
+
+test("不做包含匹配，避免 test.py 命中 contest.py", () => {
+  const files = ["src/contest.py"];
+  assert.equal(resolveTouchedPath("test.py", files), "");
+});
+
+test("不像路径的代码片段不动它", () => {
+  const files = ["src/a.ts"];
+  assert.equal(resolveTouchedPath("npm test", files), "");
+  assert.equal(resolveTouchedPath("", files), "");
+});
+
+test("筛选：只看改动 / 只看失败", () => {
+  const steps: BotStep[] = buildSteps([
+    ev(1, "tool.requested", { tool: "run_shell", arguments: { command: "x" } }),
+    ev(2, "tool.failed", { tool: "run_shell", ok: false }),
+    ev(3, "file.changed", { path: "a.ts" }),
+    ev(4, "plan.created", { plan: ["第一步", "第二步"] }),
+  ]);
+  assert.equal(filterSteps(steps, "all").length, steps.length);
+  assert.deepEqual(
+    filterSteps(steps, "changes").map((step) => step.kind),
+    ["change"],
+  );
+  assert.equal(filterSteps(steps, "failures").length, 1);
 });

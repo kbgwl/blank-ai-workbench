@@ -6,7 +6,8 @@ import { formatDuration } from "../tasks/format";
 import type { PendingApproval, PendingQuestion } from "../tasks/api";
 import { MarkdownView } from "./markdown-view";
 import { StepView } from "./steps";
-import type { BotStep } from "./turns";
+import type { BotStep, StepFilter } from "./turns";
+import { filterSteps, turnEvidence } from "./turns";
 
 function timeLabel(value: string): string {
   if (!value) return "";
@@ -168,8 +169,18 @@ export function TurnView(props: TurnViewProps) {
   // 跑的时候展开过程（用户想看着它干活），跑完收起（只留结论）。
   const [openSteps, setOpenSteps] = useState<boolean | null>(null);
   const expanded = openSteps ?? running;
-  const totalMs = steps.reduce((sum, step) => (step.kind === "tool" && step.durationMs ? sum + step.durationMs : sum), 0);
+  const [filter, setFilter] = useState<StepFilter>("all");
+  const evidence = turnEvidence(steps);
+  const paths = props.files.map((file) => file.path);
+  const shown = filterSteps(steps, filter);
   const hasBody = props.streaming !== "" || props.reply !== "" || props.reason !== "";
+
+  // 正文里点文件名：就地定位到那一行，而不是另开一个页面去翻。
+  // 收起状态下点也生效——先展开，再切到"改动"，因为用户点的就是改动。
+  const jumpToFile = () => {
+    setOpenSteps(true);
+    setFilter("changes");
+  };
 
   return (
     <div className="group/turn">
@@ -192,33 +203,70 @@ export function TurnView(props: TurnViewProps) {
           )}
         </div>
 
-        {/* 过程：默认在跑的时候摊开，跑完折叠成一行摘要 */}
+        {/* 依据条：一行数字回答"它到底做了什么"，正文因此不必再复述过程。
+            每个数字都能点开落到具体的行，这就是"回复短但不丢溯源"的地方。 */}
         {props.stepCount > 0 && (
           <div className="ml-7">
             <button
               type="button"
               onClick={() => setOpenSteps(!expanded)}
-              className="mb-1 inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] text-faint transition-colors hover:bg-surface-2 hover:text-muted"
+              title={evidence.commands.length ? `跑过的命令：\n${evidence.commands.join("\n")}` : undefined}
+              className="mb-1 flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] text-faint transition-colors hover:bg-surface-2 hover:text-muted"
             >
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
                 strokeWidth={2}
-                className={`size-3 transition-transform ${expanded ? "rotate-90" : ""}`}
+                className={`size-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
                 aria-hidden
               >
                 <path d="m9 6 6 6-6 6" />
               </svg>
-              {running ? "正在做" : `做了 ${props.stepCount} 步`}
-              {totalMs > 0 && <span className="font-mono">· {formatDuration(totalMs)}</span>}
-              {props.files.length > 0 && <span className="font-mono">· 改了 {props.files.length} 个文件</span>}
+              {running && <span className="shrink-0 text-brand">正在做</span>}
+              {evidence.looked > 0 && <span className="shrink-0">看了 {evidence.looked}</span>}
+              {evidence.files > 0 && <span className="shrink-0">· 改了 {evidence.files} 个文件</span>}
+              {evidence.commandCount > 0 && <span className="shrink-0">· 跑了 {evidence.commandCount} 条命令</span>}
+              {evidence.calls === 0 && <span className="shrink-0">{props.stepCount} 步</span>}
+              {evidence.failed > 0 && <span className="shrink-0 font-medium text-danger">· {evidence.failed} 次失败</span>}
+              {evidence.durationMs > 0 && (
+                <span className="ml-1 shrink-0 font-mono">· {formatDuration(evidence.durationMs)}</span>
+              )}
             </button>
+
             {expanded && (
-              <div className="space-y-0.5 pb-1">
-                {steps.map((step) => (
-                  <StepView key={step.key} step={step} />
-                ))}
+              <div className="pb-1">
+                {/* 筛选只在真有内容时出现：一个点了什么都没有的按钮，比没有按钮更让人怀疑。 */}
+                {(props.files.length > 0 || evidence.failed > 0) && (
+                  <div className="mb-1 flex items-center gap-1 pl-0.5">
+                    {(
+                      [
+                        ["all", `全部 ${steps.length}`],
+                        ["changes", `改动 ${props.files.length}`],
+                        ["failures", `失败 ${evidence.failed}`],
+                      ] as [StepFilter, string][]
+                    )
+                      .filter(([key]) => key === "all" || (key === "changes" ? props.files.length > 0 : evidence.failed > 0))
+                      .map(([key, label]) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setFilter(key)}
+                          className={`rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors ${
+                            filter === key ? "bg-surface-3 text-text" : "text-faint hover:bg-surface-2 hover:text-muted"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                  </div>
+                )}
+                <div className="space-y-0.5">
+                  {shown.length === 0 && <p className="px-1.5 py-1 text-[11.5px] text-faint">这一步没有可显示的内容。</p>}
+                  {shown.map((step) => (
+                    <StepView key={step.key} step={step} />
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -227,12 +275,14 @@ export function TurnView(props: TurnViewProps) {
         <div className="ml-7">
           {props.streaming && (
             <div className="relative">
-              <MarkdownView text={props.streaming} />
+              <MarkdownView text={props.streaming} files={paths} onFileClick={jumpToFile} />
               <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-[2px] animate-pulse bg-brand align-middle" />
             </div>
           )}
 
-          {!props.streaming && props.reply && <MarkdownView text={props.reply} />}
+          {!props.streaming && props.reply && (
+            <MarkdownView text={props.reply} files={paths} onFileClick={jumpToFile} />
+          )}
 
           {!props.streaming && !props.reply && running && props.stepCount === 0 && (
             <p className="flex items-center gap-2 py-1 text-[12.5px] text-muted">
