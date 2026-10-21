@@ -99,18 +99,27 @@ export function Composer(props: ComposerProps) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [picking, setPicking] = useState(false);
 
-  // 自适应高度：最多长到 8 行，再多就内部滚动，输入框不能把对话挤没。
+  // 自适应高度：起点就是三行，最多长到九行，再多就内部滚动。
+  // 一行的输入框放在对话区底部，四周全是留白，看着像"没做完"；
+  // 三行既能把常见的一句话摊开，也给了粘贴多行时的余地。
+  //
+  // 空内容时不写内联高度，交给 `rows={3}` 自己撑开：量 scrollHeight 会漏掉
+  // 字体加载前的行高，写死一个偏小的高度会把占位文案截掉半行。
   useEffect(() => {
     const node = textarea.current;
     if (!node) return;
+    if (!props.draft) {
+      node.style.height = "";
+      return;
+    }
     node.style.height = "auto";
-    node.style.height = `${Math.min(node.scrollHeight, 8 * 22 + 20)}px`;
+    node.style.height = `${Math.min(node.scrollHeight, 9 * 26 + 28)}px`;
   }, [props.draft]);
 
   const canSend = props.draft.trim().length > 0 && !props.disabled;
 
   return (
-    <div className="border-t border-line bg-bg/95 px-4 pt-2 pb-3 backdrop-blur">
+    <div className="border-t border-line bg-bg/95 px-4 pt-3 pb-3.5 backdrop-blur">
       <div className="mx-auto w-full max-w-3xl">
         {props.error && (
           <p className="mb-2 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-1.5 text-[11.5px] text-danger">
@@ -138,7 +147,7 @@ export function Composer(props: ComposerProps) {
                 else props.onSend();
               }
             }}
-            rows={1}
+            rows={3}
             placeholder={
               props.disabled
                 ? "先选一个工作区"
@@ -146,17 +155,17 @@ export function Composer(props: ComposerProps) {
                   ? "它正在做，可以插一句话调整方向…（Enter 发送）"
                   : "说点什么，或者直接让它去改代码…（Enter 发送，Shift+Enter 换行）"
             }
-            className="block max-h-[196px] w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-[13.5px] leading-[1.6] text-text placeholder:text-faint focus:outline-none"
+            className="block max-h-[262px] min-h-[88px] w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] leading-[1.75] text-text placeholder:text-faint focus:outline-none"
           />
 
-          <div className="flex items-center gap-1 px-2 pb-2">
+          <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-2.5">
             <button
               type="button"
               onClick={() => setPicking((value) => !value)}
               title="引用工作区里的文件"
-              className="grid size-7 place-items-center rounded-md text-faint transition-colors hover:bg-surface-2 hover:text-text"
+              className="grid size-8 place-items-center rounded-lg text-faint transition-colors hover:bg-surface-2 hover:text-text"
             >
-              <span className="font-mono text-[13px]">@</span>
+              <span className="font-mono text-[14px]">@</span>
             </button>
 
             {props.projects.length > 1 && (
@@ -164,7 +173,7 @@ export function Composer(props: ComposerProps) {
                 value={props.projectId}
                 onChange={(event) => props.onProjectChange(event.target.value)}
                 title="工作区"
-                className="max-w-[150px] truncate rounded-md bg-transparent px-1.5 py-1 text-[11.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
+                className="max-w-[170px] truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
               >
                 {props.projects.map((project) => (
                   <option key={project.id} value={project.id}>
@@ -178,7 +187,7 @@ export function Composer(props: ComposerProps) {
               value={props.providerId}
               onChange={(event) => props.onProviderChange(event.target.value)}
               title="用哪个模型"
-              className="max-w-[200px] truncate rounded-md bg-transparent px-1.5 py-1 text-[11.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
+              className="max-w-[220px] truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
             >
               <option value="">默认模型</option>
               {props.providers.map((provider) => (
@@ -189,12 +198,12 @@ export function Composer(props: ComposerProps) {
               ))}
             </select>
 
-            <div className="ml-auto flex items-center gap-1.5">
+            <div className="ml-auto flex items-center gap-2">
               {props.running && (
                 <button
                   type="button"
                   onClick={props.onStop}
-                  className="grid size-8 place-items-center rounded-full bg-surface-3 text-text transition-colors hover:bg-line-strong"
+                  className="grid size-9 place-items-center rounded-full bg-surface-3 text-text transition-colors hover:bg-line-strong"
                   title="停止这一轮"
                 >
                   <span className="size-2.5 rounded-[2px] bg-current" />
@@ -205,14 +214,14 @@ export function Composer(props: ComposerProps) {
                 onClick={props.running ? props.onSteer : props.onSend}
                 disabled={!canSend}
                 title={props.running ? "插一句话（从下一次模型调用开始生效）" : "发送（Enter）"}
-                className="grid size-8 place-items-center rounded-full bg-text text-bg transition-opacity disabled:opacity-25"
+                className="grid size-9 place-items-center rounded-full bg-text text-bg transition-opacity disabled:opacity-25"
               >
                 {props.running ? (
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="size-4">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="size-[18px]">
                     <path d="M4 12h16M14 6l6 6-6 6" />
                   </svg>
                 ) : (
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round" strokeLinejoin="round" className="size-4">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round" strokeLinejoin="round" className="size-[18px]">
                     <path d="M12 19V5M6 11l6-6 6 6" />
                   </svg>
                 )}
@@ -233,7 +242,7 @@ export function Composer(props: ComposerProps) {
           )}
         </div>
 
-        <p className="mt-1.5 text-center text-[10.5px] text-faint">
+        <p className="mt-2 text-center text-[11px] text-faint">
           它会读你的代码、改文件、跑命令；高风险操作会先问你。
         </p>
       </div>
