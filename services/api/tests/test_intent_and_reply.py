@@ -96,35 +96,71 @@ def test_normalize_collapses_blank_lines() -> None:
     assert normalize_answer("第一行\n\n\n\n第二行") == "第一行\n\n第二行"
 
 
-# ── 4. 交付三段式 ──────────────────────────────────────────────────
+# ── 4. 交付文本：空段省略，不套空壳 ────────────────────────────────
 
 
-def test_format_report_fills_empty_sections() -> None:
-    text = format_report("改完登录校验", "", "")
-    assert "已完成\n- 改完登录校验" in text
-    assert "未完成\n- 无" in text
-    assert "下一步\n- 无" in text
+def test_format_report_omits_empty_sections() -> None:
+    """空段不写「无」。
+
+    这条改的是刻意的取舍：原来空段填「无」，一份只有一句话的交付会变成
+    「已完成 / - 那句话 / 未完成 / - 无 / 下一步 / - 无」六行，其中四行没有
+    任何新信息，读者还得先确认是空还是漏写。而"都做完了"结论段自己会说，
+    界面上「0 次失败」也在说。
+    """
+    text = format_report("登录校验改好了", "", "")
+    assert text == "结论\n- 登录校验改好了"
+    assert "未完成" not in text and "下一步" not in text
 
 
-def test_split_sections_reads_three_blocks() -> None:
-    text = "已完成\n- 补了单测\n未完成\n- 没跑集成测试\n下一步\n- 跑一次全量"
-    sections = split_sections(text)
-    assert sections["已完成"] == ["补了单测"]
+def test_format_report_keeps_non_empty_sections() -> None:
+    text = format_report("登录校验改好了", "没跑集成测试", "")
+    assert "结论\n- 登录校验改好了" in text
+    assert "未完成\n- 没跑集成测试" in text
+    assert "下一步" not in text
+
+
+def test_split_sections_renames_done_to_conclusion() -> None:
+    """旧标题「已完成」仍要认，但归到「结论」下。
+
+    动作清单和结果结论得分开：前者界面上已经有一份事件流，后者才是这段文字
+    存在的理由。旧标题继续识别，是因为模型偶尔还按老格式写，认不出来就白丢
+    一次结构。
+    """
+    sections = split_sections("已完成\n- 补了单测\n未完成\n- 没跑集成测试\n下一步\n- 跑一次全量")
+    assert sections["结论"] == ["补了单测"]
     assert sections["未完成"] == ["没跑集成测试"]
     assert sections["下一步"] == ["跑一次全量"]
+    assert "已完成" not in sections
 
 
-def test_as_report_wraps_plain_text() -> None:
-    text = as_report("答案就是 42。")
-    assert text.startswith("已完成\n- 答案就是 42。")
-    assert "未完成\n- 无" in text
+def test_split_sections_reads_new_titles() -> None:
+    sections = split_sections("结论\n- 令牌改成 30 天\n下一步\n- 你确认下有效期")
+    assert sections["结论"] == ["令牌改成 30 天"]
+    assert sections["下一步"] == ["你确认下有效期"]
+
+
+def test_as_report_returns_plain_text_as_is() -> None:
+    """一句话结论不要被包成三段。
+
+    「答案就是 42。」原样返回。套上「结论 / - 答案就是 42。/ 下一步 / - 无」
+    只是把一行变成四行，没增加一个字的判断。
+    """
+    assert as_report("答案就是 42。") == "答案就是 42。"
 
 
 def test_as_report_keeps_existing_structure() -> None:
     text = as_report("已完成\n- A\n未完成\n- B\n下一步\n- C")
-    assert "A" in text and "B" in text and "C" in text
-    # 结构不能被打乱成单段
-    assert text.count("已完成") == 1
+    assert text == "结论\n- A\n未完成\n- B\n下一步\n- C"
+
+
+def test_as_report_empty_stays_empty() -> None:
+    """没话说就不要造一句话出来。
+
+    原来空输入会产出「已完成 / - 无 / 未完成 / - 无 / 下一步 / - 无」，
+    等于用五行字宣布"什么都没发生"。调用方有兜底文案，这里交白卷更诚实。
+    """
+    assert as_report("") == ""
+    assert as_report("   \n\n ") == ""
 
 
 # ── 5. 节点行为：直答不进工具循环 ──────────────────────────────────

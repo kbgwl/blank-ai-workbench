@@ -87,12 +87,19 @@ INTENT_INSTRUCTION = (
 )
 
 REPORT_INSTRUCTION = (
-    "任务执行完了。现在写交付说明，只写下面三段，不要有开场白、不要复述过程、"
-    "不要解释你的判断依据。\n"
-    "已完成\n- 每条一句、不超过 40 字\n"
-    "未完成\n- 确实没做的写在这里；全部做完就只写「无」\n"
-    "下一步\n- 建议用户接着做什么，最多 2 条；没有就给「无」\n"
-    "硬要求：总长不超过 12 行；不要出现「我」「作为」「本次任务」这类自述。"
+    "任务执行完了。写交付说明。"
+    "过程已经单独记录并展示给用户了——改了哪些文件、跑了哪些命令、输出是什么、花了多久，"
+    "这些下面都会逐条列出来，你在这里再写一遍，用户就要读两遍同样的东西。\n"
+    "只写这两段，能写多少写多少，没有就不写：\n"
+    "结论\n"
+    "- 最多 2 条，每条不超过 40 字。写**结果**，不写动作。\n"
+    "  好：登录令牌改成 30 天有效\n"
+    "  不好：修改 auth.py、更新 config.py、运行测试\n"
+    "下一步\n"
+    "- 只有用户确实需要接着做点什么才写，最多 2 条；不需要就整段不要写。\n"
+    "如果还有没验证的、或者你知道哪儿可能有风险，就并进结论里一句话说完，不要单开一段。\n"
+    "硬要求：总共不超过 6 行；不出现「我」「作为」「本次任务」这类自述；不列文件清单、不复述命令；"
+    "没做完的事不许写成做完了。"
 )
 
 ANSWER_INSTRUCTION = (
@@ -120,8 +127,9 @@ _NOISE_SUFFIX = re.compile(
     r"|随时(?:告诉|找)我[^。\n]{0,10}[。！!]?)\s*$"
 )
 
-# 交付三段的标题，用于把自由文本拆成分区。
-_SECTION = re.compile(r"^\s*(?:#{1,4}\s*)?\*{0,2}(已完成|未完成|下一步|已做|待做|建议)\*{0,2}\s*[:：]?\s*$")
+# 交付两段的标题，用于把自由文本拆成分区。旧标题（已完成 / 未完成）保留识别：
+# 模型偶尔仍按旧格式写，认不出来就会把整段塞进结论，白丢一次结构。
+_SECTION = re.compile(r"^\s*(?:#{1,4}\s*)?\*{0,2}(结论|已完成|未完成|已做|待做|下一步|建议)\*{0,2}\s*[:：]?\s*$")
 
 
 def _clean_lines(text: str) -> list[str]:
@@ -214,13 +222,17 @@ def parse_intent(text: str) -> dict:
 
 
 def split_sections(text: str) -> dict[str, list[str]]:
-    """把交付文本按「已完成 / 未完成 / 下一步」拆成三组条目。
+    """把交付文本按「结论 / 未完成 / 下一步」拆成几组条目。
 
-    没写这三段（模型没遵守格式）时返回空 dict，调用方决定怎么兜底。
+    「已完成」映射成「结论」：动作清单和结果结论要分开，前者界面上已经有了一份
+    （逐条事件流），后者才是这段文字存在的理由。旧标题照样认，不让模型的一次
+    格式偏离把整段结构丢掉。
+
+    没写这些段（模型没遵守格式）时返回空 dict，调用方自己兜底。
     """
     sections: dict[str, list[str]] = {}
     current = ""
-    aliases = {"已做": "已完成", "待做": "未完成", "建议": "下一步"}
+    aliases = {"已完成": "结论", "已做": "结论", "待做": "未完成", "建议": "下一步"}
     for line in _clean_lines(normalize_answer(text)):
         match = _SECTION.match(line)
         if match:
@@ -237,38 +249,44 @@ def split_sections(text: str) -> dict[str, list[str]]:
 
 
 def format_report(done: str = "", undone: str = "", next_step: str = "") -> str:
-    """按固定三段拼装交付文本；空段写「无」，不省略标题。"""
+    """按固定顺序拼装交付文本。
+
+    **空段直接省略，不写「无」。** 原来的做法是空段填「无」，理由是不让人误以为
+    漏写了；但代价是每份交付都白白多出「未完成 / - 无 / 下一步 / - 无」四行，
+    读者还得先确认"这是空的还是漏的"，才回到正题。而"都做完了"这件事，结论段
+    自己会说，界面上「N 次失败」也在说。
+
+    结论段仍然例外：它没有任何内容时不该产生交付文本，返回空串由调用方兜底。
+    """
 
     def block(title: str, body: str) -> str:
         lines = [line.strip() for line in (body or "").split("\n") if line.strip()]
         if not lines:
-            return f"{title}\n- 无"
+            return ""
         return title + "\n" + "\n".join(
             line if line.startswith(("-", "*")) else f"- {line}" for line in lines
         )
 
-    return "\n".join([block("已完成", done), block("未完成", undone), block("下一步", next_step)])
+    return "\n".join(
+        part for part in (block("结论", done), block("未完成", undone), block("下一步", next_step)) if part
+    )
 
 
 def as_report(text: str) -> str:
-    """把任意交付文本规整成三段式。
+    """把任意交付文本规整成可读的一小段。
 
-    - 已经是三段式：只做清理，保持结构。
-    - 只有正文：整段算「已完成」，另外两段写「无」——宁可少说，也不要模型
-      再编两段出来。真需要区分时由调用方传入结构化数据。
+    - 带小标题：按标题重排、清掉空段。
+    - 只有正文（一句话结论）：**原样返回，不套小标题**。套成「结论 / - 那句话 /
+      下一步 / - 无」会把一行字变成四行，且没有一处新信息。
     """
     body = normalize_answer(text)
     if not body:
-        return format_report("无", "无", "无")
+        return ""
     sections = split_sections(body)
-    if len(sections) >= 2 or "已完成" in sections:
-        return "\n".join(
-            [
-                format_report(
-                    "\n".join(sections.get("已完成", [])) or "无",
-                    "\n".join(sections.get("未完成", [])) or "无",
-                    "\n".join(sections.get("下一步", [])) or "无",
-                )
-            ]
+    if sections:
+        return format_report(
+            "\n".join(sections.get("结论", [])),
+            "\n".join(sections.get("未完成", [])),
+            "\n".join(sections.get("下一步", [])),
         )
-    return format_report(body, "无", "无")
+    return body
