@@ -7,6 +7,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test tests/gpu-guard.test.cjs",
+    "install:local": "node install-local.cjs",
     "dist": "electron-builder",
     "dist:portable": "electron-builder --win portable",
     "dist:nsis": "electron-builder --win nsis",
