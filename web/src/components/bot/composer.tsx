@@ -119,7 +119,7 @@ export function Composer(props: ComposerProps) {
   const canSend = props.draft.trim().length > 0 && !props.disabled;
 
   return (
-    <div className="border-t border-line bg-bg/95 px-4 pt-3 pb-3.5 backdrop-blur">
+    <div className="bg-bg/95 px-4 pt-3 pb-3.5 backdrop-blur">
       <div className="mx-auto w-full max-w-3xl">
         {props.error && (
           <p className="mb-2 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-1.5 text-[11.5px] text-danger">
@@ -132,7 +132,9 @@ export function Composer(props: ComposerProps) {
           </p>
         )}
 
-        <div className="relative rounded-2xl border border-line-strong bg-surface shadow-sm transition-colors focus-within:border-brand/50">
+        {/* 没有分隔线，靠边框 + 一点投影把卡片从白底上托起来：页面和白卡同色，
+            只留一条线的话线一去掉盒子就"化"进背景里了。 */}
+        <div className="relative rounded-2xl border border-line-strong bg-surface shadow-[0_2px_6px_rgba(16,24,40,0.04),0_12px_28px_-16px_rgba(16,24,40,0.18)] transition-colors focus-within:border-brand/50 focus-within:shadow-[0_2px_8px_rgba(16,24,40,0.06),0_14px_32px_-16px_rgba(14,116,144,0.28)]">
           <textarea
             ref={textarea}
             value={props.draft}
