@@ -21,6 +21,8 @@ class _StubSession:
     acceptance_criteria: list[str] = []
     max_steps = 200
     steer_metrics: dict = {"count": 0, "steps": []}
+    # 只读调研开关：路由会读它，真实 AgentSession 上是字段，替身也要有。
+    readonly = False
 
 
 # ── 1. 计划解析不能把散文当成执行计划 ──────────────────────────────

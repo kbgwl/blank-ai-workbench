@@ -1,14 +1,20 @@
 """意图识别与交付口径。
 
-用户的每一句话先在这里被判一次，只有两类：
+用户的每一句话先在这里被判一次，分三类：
 
 - ``answer`` 不需要动手（寒暄、概念、解释、闲聊）——直接出结果，不进工具循环，
   不拆步骤、不审查、不验收。一次模型调用结束。
+- ``advise`` 在问判断（「你觉得哪里能优化」）——先只读看几眼再答。**只读**是关键：
+  它需要依据，但用户要的是意见，不是一次改造。看了几个文件、给出结论就结束，
+  不写文件、不跑命令、不进修复回路。
 - ``act`` 需要动工作区（读文件、改代码、跑命令）——先拆步骤，再执行，最后交付。
 
-交付文本一律按「已完成 / 未完成 / 下一步」三段写。理由是这三段正好回答
-用户心里的三个问题：干了什么、还差什么、我该做什么。除此之外的内容
-（自我介绍、过程复述、方法论说明）都算噪音，在 ``normalize_answer`` 里被清掉。
+``advise`` 是补出来的：早先这类请求被判成 ``answer``，一次模型调用直接答，
+听起来很有道理但一行代码都没看，于是只能说些放之四海皆准的废话；判成 ``act``
+又会真的动手改，用户只是问问，回来发现文件被动过了。
+
+交付文本一律按「结论 / 下一步」两段写。其余内容（自我介绍、过程复述、
+方法论说明）都算噪音，在 ``normalize_answer`` 里被清掉。
 """
 
 from __future__ import annotations
@@ -18,6 +24,8 @@ import re
 
 INTENT_ANSWER = "answer"
 INTENT_ACT = "act"
+INTENT_ADVISE = "advise"
+
 
 # 明显不需要动工作区的开场：打招呼、道谢、确认在不在。
 _CHITCHAT = re.compile(
@@ -49,6 +57,9 @@ _QUESTION = re.compile(
 # 在问「你怎么看」，不是在派活。这类句子常常夹着「优化 / 改」这种动作词
 # （「你觉得界面有什么可以优化的」），只看动作词会把它判成改代码任务，
 # 于是它真的去改了一通，最后审查说意图不对齐，几十步全部作废。
+#
+# 判成 advise 而不是 answer：answer 是一次模型调用直接答，一个字都不看，
+# 只能给出「界面要简洁、要留白」这种放之四海皆准的话，等于没答。
 #
 # 这里刻意不放过「要不要」：「先出方案再决定要不要改」是在派活（先产出方案），
 # 按意见类判会让它一句"我觉得应该改"就结束，什么也没产出。宁可多问一次模型。
@@ -100,9 +111,9 @@ def unwrap_goal(goal: str) -> str:
 
 
 def guess_intent(goal: str) -> str | None:
-    """规则快判，返回 ``answer`` / ``act``，判不准返回 None 交给模型。
+    """规则快判，返回 ``answer`` / ``advise`` / ``act``，判不准返回 None 交给模型。
 
-    规则只处理边界清晰的两头：纯寒暄、以及带明确动作词的请求。
+    规则只处理边界清晰的几头：纯寒暄、征求意见、以及带明确动作词的请求。
     中间地带（"你看这个怎么办"）一律交给模型，宁可多一次调用也不要误判——
     把改代码当成闲聊、或者把打招呼当成开发任务，这两种都很难看。
     """
@@ -114,7 +125,7 @@ def guess_intent(goal: str) -> str | None:
     # 先看是不是在问判断。这一步必须排在动作词之前：「有什么可以优化的」
     # 里的「优化」会把一句征求意见判成改代码任务。
     if _OPINION.search(text) and not _IMPERATIVE.search(text):
-        return INTENT_ANSWER
+        return INTENT_ADVISE
     if _ACTION.search(text):
         return INTENT_ACT
     if len(text) <= _SHORT_GOAL and _QUESTION.search(text):
@@ -124,14 +135,18 @@ def guess_intent(goal: str) -> str | None:
 
 INTENT_INSTRUCTION = (
     "先判断这句话要不要动工作区，不要寒暄、不要解释你的判断。只输出一个 JSON 对象：\n"
-    '{"intent": "answer 或 act", "note": "用一句不超过 20 字的话复述用户想要什么",'
-    ' "steps": ["需要动手时列 2-6 步，不需要则为空"], "answer": "intent 为 answer 时写完整答案，否则留空"}\n'
+    '{"intent": "answer / advise / act", "note": "用一句不超过 20 字的话复述用户想要什么",'
+    ' "steps": ["需要看东西或动手时列 2-6 步，不需要则为空"], "answer": "intent 为 answer 时写完整答案，否则留空"}\n'
     "判定规则：\n"
     "- 寒暄、致谢、闲聊、问概念、问你能做什么、解释已有代码 → answer，直接把答案写进 answer 字段。\n"
+    "- 用户问你怎么看、哪里有问题、有什么可以优化、值不值得、该不该 → advise。\n"
+    "  这类照样要给判断，但判断必须有依据：steps 写清要先看哪几处（例如「读取 panel.tsx」），"
+    "不允许在没看过任何东西时给结论。\n"
     "- 要读文件、改代码、跑命令、查数据、生成产物 → act，steps 写清先做什么后做什么。\n"
     "- steps 每条只写「做什么」，一条一句、不超过 18 字，例如「读取 panel.tsx」「修改配色配置」。\n"
     "  不要写怎么做、不要写理由、不要写「步骤一」「首先」这类前缀，不要重复用户原话。\n"
-    "- answer 时不要给步骤、不要调用任何工具；act 时不要在 answer 里写答案。\n"
+    "- answer 时不要给步骤、不要调用任何工具；advise 时只做只读调研，绝不修改文件；"
+    "act 时不要在 answer 里写答案。\n"
     "长度纪律（很重要）：\n"
     "- answer 默认不超过 5 行、120 字。只有用户要清单、或明确说「详细说说」时才展开。\n"
     "- 展开也只用短句逐条列，不写小标题、不举例子、不复述用户的问题。\n"
@@ -158,6 +173,17 @@ REPORT_INSTRUCTION = (
 ANSWER_INSTRUCTION = (
     "直接回答用户。要求：不超过 5 行；不要开场白，不要「好的」「当然」「让我」；"
     "不要复述用户的问题；不要介绍你自己能做什么，除非用户问的就是这个。"
+)
+
+# 只读调研之后的判断。和 answer 的区别是它手里有刚读到的东西，所以可以具体；
+# 和 report 的区别是用户问的是"你怎么看"，不是"你干了啥"，所以不许写成工作汇报。
+ADVISE_INSTRUCTION = (
+    "用户问的是你的判断，不是让你动手。上面这些工具结果是你刚读到的事实。\n"
+    "只写这两部分，能写多少写多少：\n"
+    "1. 先说结论：一句话给出你的判断，具体到文件或位置，不要写「整体不错，还有提升空间」。\n"
+    "2. 再列最多 3 条依据，每条一行，写你看到的事实，不写你打算怎么做。\n"
+    "硬要求：总共不超过 8 行；不写「我读了」「我看了」这类过程句；"
+    "没看到的不要猜，不确定就直说没看到。不要输出「结论」「下一步」这类小标题。"
 )
 
 # 模型习惯性加的开场白，逐条剥掉。
@@ -242,12 +268,14 @@ def parse_intent(text: str) -> dict:
         if not isinstance(parsed, dict):
             continue
         intent = str(parsed.get("intent") or "").strip().lower()
-        if intent not in (INTENT_ANSWER, INTENT_ACT):
+        if intent not in (INTENT_ANSWER, INTENT_ACT, INTENT_ADVISE):
             # 兼容模型写成 "no_action"/"chat"/"direct" 的说法
             if intent in ("chat", "direct", "none", "no_action", "reply", "answer_direct"):
                 intent = INTENT_ANSWER
             elif intent in ("task", "action", "do", "execute", "work"):
                 intent = INTENT_ACT
+            elif intent in ("opinion", "advice", "suggest", "review", "investigate"):
+                intent = INTENT_ADVISE
             else:
                 continue
         steps = parsed.get("steps") or []

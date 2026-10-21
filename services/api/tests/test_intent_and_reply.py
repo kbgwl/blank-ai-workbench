@@ -1,17 +1,19 @@
 """意图识别与交付口径的回归测试。
 
 这一层的职责是把"回复太啰嗦"变成可校验的规则：
-先判这句话要不要动手，不需要就一次答完；需要就拆步骤，
-交付文本固定「已完成 / 未完成 / 下一步」三段。
+先判这句话要不要动手——不需要就一次答完，问判断就只读看几眼再答，需要就拆步骤动手；
+交付文本固定「结论 / 下一步」两段。
 """
 
 from __future__ import annotations
 
 import asyncio
 
+from blank_api.limits import READONLY_MAX_STEPS
 from blank_api.services.agent.graph import create_plan_node
 from blank_api.services.agent.intent import (
     INTENT_ACT,
+    INTENT_ADVISE,
     INTENT_ANSWER,
     as_report,
     format_report,
@@ -299,16 +301,19 @@ def test_wrapper_only_falls_back_to_input() -> None:
 # ── 6. 问判断，不是派活 ────────────────────────────────────────────
 # 「你觉得界面有什么可以优化的」里带「优化」，被动作词一命中就判 act，
 # 于是它真去改了一通，最后审查说意图不对齐——116 次工具调用，全部作废。
+#
+# 但也不能判 answer：一次模型调用直接答，一行代码都没看，只能说「界面要简洁」
+# 这类放之四海皆准的话。判 advise：先只读看几处，再给有依据的判断。
 
 
-def test_asking_for_an_opinion_is_not_an_order() -> None:
+def test_asking_for_an_opinion_is_readonly_research() -> None:
     for text in (
         "你自己看看你的工作环境 你觉得你的界面比codex有什么可以优化的",
         "我们的应用你觉得就只有这些需要改么",
         "你觉得还有哪些可以优化的",
         "值不值得重构一下",
     ):
-        assert guess_intent(text) == INTENT_ANSWER, text
+        assert guess_intent(text) == INTENT_ADVISE, text
 
 
 def test_an_actual_assignment_is_still_act() -> None:
@@ -335,3 +340,45 @@ def test_plan_prompt_points_at_the_real_user_request() -> None:
     sent = session.prompts[0]
     assert "界面附带的固定前缀" in sent
     assert "你觉得界面有什么可以优化的" in sent
+    # 规则已经认出这是问判断：提示里要明说"必须给依据"，否则模型照样能直接口答。
+    assert "intent 必须是 advise" in sent
+
+
+def test_opinion_runs_readonly_instead_of_answering_blind() -> None:
+    """问判断 → 只读调研：不拍快照、不放写工具、步数收紧。"""
+    session = _Session('{"intent":"advise","note":"问界面优化点","steps":["读取 panel.tsx"]}')
+    result = _run(session, "你觉得界面有什么可以优化的")
+
+    assert result["readonly"] is True
+    # 不走 direct_answer：那条路一次调用就结束，等于没看任何东西就下结论。
+    assert result["direct_answer"] is False
+    assert session.readonly is True
+    assert session.max_steps == READONLY_MAX_STEPS
+    assert session.snapshot_calls == []
+    events = [item[0] for item in session.recorder.events]
+    assert "readonly.started" in events
+
+
+def test_readonly_call_from_the_planning_step_is_kept_as_research() -> None:
+    """判定阶段就顺手读了文件：只要全是只读，就还在调研，不该被抬成 act。"""
+    session = _Session(
+        "",
+        tool_calls=[{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+    )
+    result = _run(session, "你觉得界面有什么可以优化的")
+
+    assert result["readonly"] is True
+    assert result["direct_answer"] is False
+    assert len(result["pending"]) == 1
+
+
+def test_a_write_during_research_is_treated_as_act() -> None:
+    """同一句话，模型却抬手要写文件 —— 那就是真要动手，按 act 走，拍照留底。"""
+    session = _Session(
+        "",
+        tool_calls=[{"id": "c1", "type": "function", "function": {"name": "apply_patch", "arguments": "{}"}}],
+    )
+    result = _run(session, "你觉得界面有什么可以优化的")
+
+    assert result.get("readonly") is not True
+    assert session.snapshot_calls == ["create_plan"]

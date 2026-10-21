@@ -20,12 +20,20 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import httpx
 
-from blank_api.limits import DEFAULT_MAX_STEPS, WRAP_UP_STEPS
+from blank_api.limits import (
+    DEFAULT_MAX_STEPS,
+    DEFAULT_TOKEN_BUDGET,
+    READONLY_MAX_STEPS,
+    TOKEN_WRAP_UP_RATIO,
+    WRAP_UP_STEPS,
+)
 from blank_api.models.model_provider import ModelUsage
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.live import OutputRelay
 from blank_api.services.agent.intent import (
+    ADVISE_INSTRUCTION,
     INTENT_ACT,
+    INTENT_ADVISE,
     INTENT_ANSWER,
     INTENT_INSTRUCTION,
     REPORT_INSTRUCTION,
@@ -61,6 +69,24 @@ from blank_api.services.tools.gateway import ToolGateway
 from blank_api.services.tools.registry import PARALLEL_SAFE_TOOLS, PROFILE_FULL, PROFILE_LEAN
 
 MAX_REPAIR_ROUNDS = 3
+
+# 只读调研允许用的工具。用白名单而不是「排除写类」：新增一个会落盘的工具时，
+# 黑名单会自动放它进来，白名单则默认拦住——后者错了只是少看一处，前者错了是
+# 在用户只想听意见的时候动了他的文件。
+READONLY_TOOLS = frozenset(
+    {
+        "read_file",
+        "list_files",
+        "search_code",
+        "memory_search",
+        "read_notes",
+        "web_fetch",
+        "web_search",
+        "tool_search",
+        "update_plan",
+        "request_user_input",
+    }
+)
 
 
 def tool_profile(tier: str) -> str:
@@ -126,6 +152,9 @@ class AgentState(TypedDict, total=False):
     plan_steps: list[dict]
     # 模型判定这次不用动工作区，直接回答了（闲聊/概念提问），执行回合整段跳过。
     direct_answer: bool
+    # 只读调研（征求意见类）：允许看，不允许改。执行节点据此把写类工具全部拒掉，
+    # 交付也走「给判断」而不是「工作汇报」。
+    readonly: bool
 
 
 async def _never_cancelled() -> bool:
@@ -159,6 +188,10 @@ class AgentSession:
     tiered_tools: bool = False
     acceptance_criteria: list[str] = field(default_factory=list)
     max_steps: int = DEFAULT_MAX_STEPS
+    # 单任务 token 预算。步数管不住成本：每步都重发一遍上下文，50 步可能花掉 4M。
+    token_budget: int = DEFAULT_TOKEN_BUDGET
+    # 只读调研模式：由意图判定打开，整个执行回合只放行只读工具。
+    readonly: bool = False
     permissions: PermissionPolicy = field(default_factory=PermissionPolicy)
     is_cancelled: Callable[[], Awaitable[bool]] = _never_cancelled
     compactor: ContextCompactor = field(default_factory=ContextCompactor)
@@ -559,6 +592,16 @@ def merge_usage(base: dict, delta: dict) -> dict:
     return merged
 
 
+def _tokens_spent(usage: dict) -> int:
+    """这个任务到目前为止花掉的 token。
+
+    缓存命中的部分也算在内。它单价低，但仍然是「多跑一步」的代价来源：
+    一次调用把 100k 上下文重发一遍，命中率再高也是 100k 的量。
+    看绝对量而不再折算折扣价，是因为这里要管的是「别再跑了」，不是结账。
+    """
+    return int(usage.get("prompt_tokens") or 0) + int(usage.get("completion_tokens") or 0)
+
+
 def initial_messages(
     goal: str,
     criteria: list[str],
@@ -758,6 +801,11 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
         )
     if quick == INTENT_ANSWER:
         prompt += "\n系统预判：这句话不需要动工作区，intent 必须是 answer。"
+    elif quick == INTENT_ADVISE:
+        prompt += (
+            "\n系统预判：这句话是在问你的判断。intent 必须是 advise，"
+            "并在 steps 里写清要先只读查看哪几处，不要直接给没有依据的结论。"
+        )
     elif quick == INTENT_ACT:
         prompt += "\n系统预判：这句话需要动工作区，intent 必须是 act。"
     result = await session.ask(state, prompt, node)
@@ -766,8 +814,13 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
     steps = parsed.get("steps") or []
     answer = parsed.get("answer") or ""
     if result["tool_calls"]:
-        # 模型跳过了格式直接开干：按 act 处理，工具调用原样带进执行节点
-        intent = INTENT_ACT
+        # 模型跳过了格式直接开干：按 act 处理，工具调用原样带进执行节点。
+        # 例外是征求意见类：只要它调的都是只读工具，就还是在调研，不是动手。
+        only_read = all(tool_call_name(call) in READONLY_TOOLS for call in result["tool_calls"])
+        if only_read and (quick == INTENT_ADVISE or intent == INTENT_ADVISE):
+            intent = INTENT_ADVISE
+        else:
+            intent = INTENT_ACT
         steps = steps or _parse_plan(result["text"])
     if not intent:
         # 模型没给可解析的 JSON：先看规则预判，再按"有没有调工具 / 有没有给出编号步骤"判。
@@ -803,6 +856,35 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
             "pending": [],
             "status": "running",
             "direct_answer": True,
+        }
+
+    if intent == INTENT_ADVISE:
+        # 只读调研。用户问的是「你怎么看」，所以既不能不看就答（那就成了正确的废话），
+        # 也不能真动手改（他只是在问）。三件事一起做：
+        #   - 不拍快照：这一路不会写工作区，大仓库下拍一次就是几十秒白等；
+        #   - 收紧步数：看一眼相关处就该有判断，不该演变成一次勘察；
+        #   - 打开只读开关：执行节点会把写类工具和命令全部拒掉。
+        session.readonly = True
+        session.max_steps = min(session.max_steps, READONLY_MAX_STEPS)
+        if not steps:
+            steps = ["查看相关代码"]
+        await session.recorder.add(
+            "readonly.started",
+            node,
+            {
+                "reason": "用户在问判断，先只读看几处再答",
+                "max_steps": session.max_steps,
+                "steps": steps[:8],
+            },
+        )
+        return {
+            "messages": result["messages"],
+            "plan": steps,
+            "usage": usage,
+            "pending": result["tool_calls"],
+            "readonly": True,
+            "status": "running",
+            "direct_answer": False,
         }
 
     # 动作类任务：动手之前拍快照。放在这里而不是任务启动时，是因为这是
@@ -1149,6 +1231,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     usage = dict(state.get("usage") or {})
     results = list(state.get("tool_results") or [])
     pending = list(state.get("pending") or [])
+    readonly = bool(state.get("readonly")) or session.readonly
     # 先问、再批：问题门在前，恢复时两道门各占一个中断位，恢复值按位置回放不会串味。
     answers = await _question_gate(session, node, pending)
     denied, guardian_blocked = await _approval_gate(session, node, pending)
@@ -1163,6 +1246,21 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         if name == "request_user_input" and answers:
             planned.append(
                 _PlannedCall(call, name, arguments, "question", answers=answers)
+            )
+            continue
+
+        if readonly and name not in READONLY_TOOLS:
+            # 只读调研里的写动作不是错误，是判错了意图。不跑钩子、不问审批，
+            # 直接拒掉并把理由交回模型——它下一轮会改成只读，或者把「要动手」
+            # 这件事写进结论里让用户决定。
+            planned.append(
+                _PlannedCall(
+                    call,
+                    name,
+                    arguments,
+                    "refuse",
+                    reason=f"这次只做调研，不改工作区，未执行 {name}",
+                )
             )
             continue
 
@@ -1334,25 +1432,60 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
 
     # 预算处理：循环本身靠"模型不再返回工具调用"自终止，预算只是安全网。
     # 因此不做生硬截断，而是分三段：正常 / 收尾区 / 耗尽。
+    #
+    # 两道预算并行：步数管「别跑太久」，token 管「别烧太多」。只留步数是不够的——
+    # 每一步都会把整段上下文重发一次，50 步可能花掉 4M，而步数一次都不会报警。
     remaining = session.max_steps - steps
-    if remaining <= 0:
+    spent = _tokens_spent(usage)
+    token_limit = max(1, int(session.token_budget or DEFAULT_TOKEN_BUDGET))
+    steps_out = remaining <= 0
+    tokens_out = spent >= token_limit
+    exhausted = steps_out or tokens_out
+    if exhausted:
         await session.recorder.add(
-            "budget.exceeded", node, {"steps": steps, "max_steps": session.max_steps}
+            "budget.exceeded",
+            node,
+            {
+                "steps": steps,
+                "max_steps": session.max_steps,
+                "tokens": spent,
+                "token_budget": token_limit,
+                "reason": "步数用完" if steps_out else "token 用完",
+            },
         )
-        prompt = (
-            "步数预算已用完。不要再调用任何工具。"
-            "请基于已经完成的动作和已有的工具结果，直接输出一段中文总结："
-            "做了什么、结果如何、还有哪些没做完。"
-        )
-    elif remaining <= WRAP_UP_STEPS:
+        if readonly:
+            prompt = (
+                "调研预算已用完。不要再调用任何工具，"
+                "直接按你已经看到的内容给出判断；没看到的地方直说没看到，不要推测。"
+            )
+        else:
+            prompt = (
+                "预算已用完。不要再调用任何工具。"
+                "请基于已经完成的动作和已有的工具结果，直接输出一段中文总结："
+                "做了什么、结果如何、还有哪些没做完。"
+            )
+    elif remaining <= WRAP_UP_STEPS or spent >= token_limit * TOKEN_WRAP_UP_RATIO:
         await session.recorder.add(
             "budget.warning",
             node,
-            {"steps": steps, "remaining": remaining, "max_steps": session.max_steps},
+            {
+                "steps": steps,
+                "remaining": remaining,
+                "max_steps": session.max_steps,
+                "tokens": spent,
+                "token_budget": token_limit,
+            },
         )
         prompt = (
-            f"步数预算只剩 {remaining} 步，请立即收尾：不要再启动新的探索或大范围改动，"
-            "优先把当前这一步做完并落下结论。"
+            f"预算只剩 {remaining} 步、已用约 {max(0, token_limit - spent) // 1000}k 余量，请立即收尾："
+            "不要再启动新的探索或大范围改动，优先把当前这一步做完并落下结论。"
+        )
+    elif readonly:
+        # 只读调研的继续语必须换一套。默认那句「如未完成请调用工具执行下一步」，
+        # 模型会理解成"去把它改掉"，接着就是一次被拒的工具调用。
+        prompt = (
+            "继续只读查看必要的地方（读文件、搜代码），不要改任何文件、不要跑命令。"
+            "看够了就直接给判断：结论一句话，依据最多 3 条。"
         )
     else:
         prompt = "请继续：如未完成请调用工具执行下一步；如已完成请输出中文总结。"
@@ -1364,14 +1497,15 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     )
     usage = merge_usage(usage, result["usage"])
     # 只有预算真正耗尽时才丢弃工具调用；收尾区仍允许模型完成最后一个动作。
-    pending_calls = [] if remaining <= 0 else result["tool_calls"]
+    pending_calls = [] if exhausted else result["tool_calls"]
     return {
         "messages": result["messages"],
         "steps": steps,
         "usage": usage,
         "tool_results": results,
         "pending": pending_calls,
-        "budget_exhausted": remaining <= 0,
+        "readonly": readonly,
+        "budget_exhausted": exhausted,
         **plan_patch,
     }
 
@@ -1400,6 +1534,20 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
     results = state.get("tool_results") or []
     executed = [item for item in results if item.get("tool") == "run_tests"]
     changed = _changed_paths(results)
+    if state.get("readonly") or session.readonly:
+        # 只读调研里被拒掉的 run_tests 也会出现在 results 里。不在这里提前返回，
+        # 它会走进下面的测试判定，拿一个 refused 当失败，然后把整个任务判成没通过。
+        validation = {
+            "command": "",
+            "passed": True,
+            "status": "skipped",
+            "exit_code": None,
+            "summary": {},
+            "output_tail": "",
+            "skipped_reason": "只读调研，未改动任何文件，无需执行测试",
+        }
+        await session.recorder.add("validation.completed", node, validation)
+        return {"validation": validation}
     if not executed and not changed:
         # 纯问答/纯排查：没有可校验的产物，直接放行，不要凭空造一条失败
         validation = {
@@ -1578,7 +1726,31 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
             ],
         }
 
-    # 执行型任务：交付文本固定三段（已完成 / 未完成 / 下一步）。
+    if state.get("readonly") or session.readonly:
+        # 只读调研交付的是判断，不是工作汇报。套「结论 / 下一步」两段会让它写成
+        # 「已查看 3 个文件」——那正是用户不想读的东西，依据条里已经有这些了。
+        hint = _last_assistant_text(state.get("messages") or [])[:1500]
+        prompt = ADVISE_INSTRUCTION + (f"\n你自己调研时的最后一段话（可以据此收口）：{hint}" if hint else "")
+        try:
+            ask = await session.ask(state, prompt, node)
+            text = normalize_answer(ask["text"])
+            usage = merge_usage(state.get("usage") or {}, ask["usage"])
+            mode = "advice"
+        except ModelError:
+            text = normalize_answer(hint)
+            usage = state.get("usage") or {}
+            mode = "fallback"
+        await session.recorder.add("delivery.recorded", node, {"mode": mode, "chars": len(text)})
+        return {
+            "summary": text or "没看到能支撑判断的东西，需要你指个方向。",
+            "acceptance_results": [
+                {"criterion": item, "covered": False, "evidence": "只做调研，未改动工作区"}
+                for item in session.acceptance_criteria
+            ],
+            "usage": usage,
+        }
+
+    # 执行型任务：交付文本固定两段（结论 / 下一步）。
     # 有验收条件时把验收判断并进同一次调用，省一轮往返也省一次费用。
     hint = raw.strip()[:1200]
     if session.acceptance_criteria:
@@ -1656,6 +1828,10 @@ def route_after_act(state: AgentState, session: AgentSession) -> str:
 
 def route_after_validation(state: AgentState, session: AgentSession) -> str:
     validation = state.get("validation") or {}
+    # 只读调研没有交付物可审，也不该被拉去"审查+修复"——那会白跑一次模型调用，
+    # 而且审查员看到没改文件，很可能要求它去改，正好违背用户"只是问问"的意思。
+    if state.get("readonly") or session.readonly:
+        return "summarize_result"
     # 预算耗尽后不可能再修复，必须直接进审查，否则会在 validation ↔ execute 之间空转到递归上限。
     if state.get("budget_exhausted"):
         return "review_result"

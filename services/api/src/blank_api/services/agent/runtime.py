@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,6 +14,7 @@ from langgraph.types import Command
 from sqlalchemy import select
 
 from blank_api.api.errors import ApiError
+from blank_api.limits import DEFAULT_TOKEN_BUDGET
 from blank_api.models.checkpoint import AgentCheckpoint
 from blank_api.models.task import AgentEvent, Task
 from blank_api.services.agent.checkpoints import (
@@ -66,6 +68,19 @@ def _attempt(thread_id: str) -> int:
         return int(str(thread_id).rsplit(":", 1)[1])
     except (IndexError, ValueError):
         return 0
+
+
+def _token_budget() -> int:
+    """单任务 token 预算。用环境变量覆盖是为了不为一件事加一次数据库迁移：
+    它是个安全网阈值，进程级调一下就够了，不需要按任务持久化。"""
+    raw = (os.environ.get("BLANK_TOKEN_BUDGET") or "").strip()
+    if not raw:
+        return DEFAULT_TOKEN_BUDGET
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_TOKEN_BUDGET
+    return value if value > 0 else DEFAULT_TOKEN_BUDGET
 
 
 async def threads_for_task(session_factory, task_id: str) -> list[str]:
@@ -276,6 +291,7 @@ class AgentRuntime:
             skill_instructions=[str(item) for item in request.skill_instructions],
             acceptance_criteria=[str(item) for item in request.acceptance_criteria or ()],
             max_steps=max(1, int(request.max_steps)),
+            token_budget=_token_budget(),
             permissions=permissions,
             role_adapters=request.role_adapters or {},
             role_provider_ids=request.role_provider_ids or {},

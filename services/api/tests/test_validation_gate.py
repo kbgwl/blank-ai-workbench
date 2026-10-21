@@ -37,6 +37,9 @@ class _Session:
     def __init__(self) -> None:
         self.recorder = _Recorder()
         self.gateway = _Gateway()
+        # 只读调研开关：真实 AgentSession 上是个字段，这里跟着补齐，
+        # 否则验证节点一读它就 AttributeError——那不是被测逻辑的问题。
+        self.readonly = False
 
 
 def _run(state: dict) -> tuple[dict, _Session]:
