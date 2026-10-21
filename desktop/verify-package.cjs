@@ -11,7 +11,7 @@
  * 用法：node verify-package.cjs
  */
 const { execFileSync } = require("node:child_process");
-const { existsSync, readFileSync, readdirSync } = require("node:fs");
+const { closeSync, existsSync, openSync, readFileSync, readdirSync, readSync } = require("node:fs");
 const path = require("node:path");
 
 const ROOT = path.join(__dirname, "dist", "win-unpacked");
@@ -36,6 +36,30 @@ for (const [label, target] of [
   ["前端静态站", path.join(WEB_DIR, "index.html")],
 ]) {
   existsSync(target) ? ok(label) : bad(label, `缺失 ${target}`);
+}
+
+// ── 1b. asar 里的主进程文件（壳 require 的东西漏打，装完就是双击没反应）──────
+// asar 头是 `[8 字节 pickle 头][JSON 头]`，offset 12 是头字符串长度，16 起是 JSON。
+// 只读头，不把整个 asar 读进内存。
+const ASAR = path.join(RESOURCES, "app.asar");
+if (!existsSync(ASAR)) {
+  bad("缺 app.asar");
+} else {
+  try {
+    const fd = openSync(ASAR, "r");
+    const head = Buffer.alloc(16);
+    readSync(fd, head, 0, 16, 0);
+    const headerSize = head.readUInt32LE(12);
+    const headerBuf = Buffer.alloc(headerSize);
+    readSync(fd, headerBuf, 0, headerSize, 16);
+    closeSync(fd);
+    const entries = Object.keys(JSON.parse(headerBuf.toString("utf8")).files ?? {});
+    for (const name of ["main.cjs", "gpu-guard.cjs", "preload.cjs"]) {
+      entries.includes(name) ? ok(`asar 含 ${name}`) : bad(`asar 缺 ${name}`, "壳启动时会 require 失败");
+    }
+  } catch (error) {
+    bad("app.asar 头解析失败", error.message);
+  }
 }
 
 // ── 2. site-packages 里不许有 blank_api 旧副本 ──────────────────────────────

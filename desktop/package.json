@@ -1,11 +1,12 @@
 {
   "name": "blank-ai-workbench-desktop",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "description": "空白格 AI 操作台的桌面壳",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
+    "test": "node --test tests/gpu-guard.test.cjs",
     "dist": "electron-builder",
     "dist:portable": "electron-builder --win portable",
     "dist:nsis": "electron-builder --win nsis",
@@ -25,6 +26,7 @@
     },
     "files": [
       "main.cjs",
+      "gpu-guard.cjs",
       "preload.cjs",
       "package.json"
     ],

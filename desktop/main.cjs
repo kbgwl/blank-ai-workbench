@@ -15,6 +15,7 @@ const { readFile, writeFile } = require("node:fs/promises");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const process = require("node:process");
+const { readAttempts, shouldDowngrade, startingState, readyState } = require("./gpu-guard.cjs");
 
 /**
  * 主进程日志落文件。
@@ -69,8 +70,9 @@ const DATA_DIR = app.getPath("userData");
  *
  * 默认仍然优先用硬件加速（画 diff / 长列表明显更顺），但会记住上一次启动是否真的
  * 走到了「窗口就绪」：启动前先写一个 attempt 标记，等窗口 ready-to-show 再改写成 ok。
- * 如果上一次 attempt 之后没有 ok，说明那次启动是崩在启动阶段的（这类崩溃连日志都
- * 来不及打），下次自动退到软件渲染。成功一次就复位，不会永久降级。
+ * 连续两次都没走到 ok 才退到软件渲染——一次不算，因为强退、断电、装机时并发写文件
+ * 都会留下这种标记，而它们的下一次启动其实完全正常。
+ * 降级那次成功一次即复位，所以降级不是判决。
  */
 const GPU_STATE_FILE = path.join(DATA_DIR, "gpu-state.json");
 
@@ -93,7 +95,9 @@ function writeGpuState(state) {
 
 const previousGpuState = readGpuState();
 // BLANK_FORCE_GPU=1 可以忽略降级记录、重新试一次硬件加速（换了机器或驱动更新后用）。
-const gpuUnstable = Boolean(previousGpuState && previousGpuState.ok === false) && process.env.BLANK_FORCE_GPU !== "1";
+// 判据是「连续几次没走到窗口就绪」，不是「上次有没有成功」——一次强退或断电就会留下
+// 一个没写 ok 的标记，那不该让这台机器此后永远跑软件渲染（详见 gpu-guard.cjs）。
+const gpuUnstable = shouldDowngrade(previousGpuState, process.env.BLANK_FORCE_GPU === "1");
 
 if (process.env.BLANK_DISABLE_GPU === "1" || gpuUnstable) {
   app.disableHardwareAcceleration();
@@ -112,13 +116,15 @@ if (process.env.BLANK_DISABLE_GPU === "1" || gpuUnstable) {
     app.commandLine.appendSwitch("no-sandbox");
   }
   if (gpuUnstable) {
-    console.log("[desktop] 上次启动没走到窗口就绪，这次改用软件渲染（GPU 自动降级）");
+    console.log(
+      `[desktop] 连续 ${readAttempts(previousGpuState)} 次启动没走到窗口就绪，这次改用软件渲染（成功一次即复位）`,
+    );
   }
 }
 
-// 启动前先记「这次要试 GPU」，成功打开窗口后才改写成 ok。
+// 启动前先记「这次要试 GPU」，成功打开窗口后才改写成 ready。
 if (!process.env.BLANK_DISABLE_GPU && !gpuUnstable) {
-  writeGpuState({ ok: false, at: new Date().toISOString(), reason: "starting" });
+  writeGpuState(startingState(previousGpuState));
 }
 
 /**
@@ -384,9 +390,11 @@ function createWindow() {
 
   win.once("ready-to-show", () => {
     console.log("[desktop] 窗口就绪并显示");
-    // 真正走到这里才说明这次启动没崩在 GPU 上，清掉 attempt 标记（下次仍优先硬件加速）。
-    if (process.env.BLANK_DISABLE_GPU !== "1" && !gpuUnstable) {
-      writeGpuState({ ok: true, at: new Date().toISOString(), reason: "ready" });
+    // 真正走到这里才说明这次启动没崩在 GPU 上，计数归零（下次仍优先硬件加速）。
+    // 降级那次成功也要复位：降级是临时措施，不是判决。旧代码在这里排除了 gpuUnstable，
+    // 于是「一旦降级就永远回不到硬件加速」——注释里的承诺并没有兑现。
+    if (process.env.BLANK_DISABLE_GPU !== "1") {
+      writeGpuState(readyState());
     }
     win.show();
   });
