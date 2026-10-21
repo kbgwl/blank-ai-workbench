@@ -33,6 +33,7 @@ from blank_api.services.agent.intent import (
     guess_intent,
     normalize_answer,
     parse_intent,
+    unwrap_goal,
 )
 from blank_api.services.agent.context import (
     ContextCompactor,
@@ -743,8 +744,18 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
     node = "create_plan"
     await session.recorder.add("node.started", node, {"task_id": state.get("task_id", "")})
     goal = _last_user_text(state) or session.goal
-    quick = guess_intent(goal)
+    # 判意图只用用户原话。界面拼进来的「执行规则 / 你处于开发场景」本身就是
+    # 「读取代码、修改文件、跑测试」，拿它判意图等于先设好结论再判。
+    raw_goal = unwrap_goal(goal)
+    quick = guess_intent(raw_goal)
     prompt = INTENT_INSTRUCTION
+    if raw_goal and raw_goal != goal.strip():
+        # 规则能剥掉前缀，但模型看到的是整段消息，同样会被前缀带跑。明说一次。
+        prompt += (
+            "\n注意：上面消息开头的「执行规则 / 你处于…场景」是界面附带的固定前缀，"
+            f"不是用户这次的要求。用户这次的原话是：{raw_goal[:400]}"
+            "\n按这句原话判定 intent。"
+        )
     if quick == INTENT_ANSWER:
         prompt += "\n系统预判：这句话不需要动工作区，intent 必须是 answer。"
     elif quick == INTENT_ACT:
@@ -1419,6 +1430,21 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         )
     data = payload.get("data") or {}
     status = str(payload.get("status") or "ok")
+    if status == "awaiting_approval":
+        # 工具在等你批准，不是失败。判成 failed 的代价是双倍的：模型会去"修复"
+        # 一个不存在的问题——重试同一个需要审批的工具、再等、再判失败，直到步数
+        # 耗尽；最后整个任务还被记成「测试未通过」，前面做过的全部作废。
+        validation = {
+            "command": data.get("command") or "run_tests",
+            "passed": True,
+            "status": "skipped",
+            "exit_code": None,
+            "summary": {},
+            "output_tail": str(payload.get("message") or payload.get("output") or "")[-2000:],
+            "skipped_reason": "测试在等待你批准，本次未执行；批准后重跑即可拿到结论",
+        }
+        await session.recorder.add("validation.completed", node, validation)
+        return {"validation": validation}
     if status == "denied":
         # 安全策略不允许执行命令，或用户驳回了这次审批。这是配置/授权问题，不是代码问题：
         # 记成 failed 会让任务被判「测试未通过」，用户会去翻代码，而真正该做的是改设置。

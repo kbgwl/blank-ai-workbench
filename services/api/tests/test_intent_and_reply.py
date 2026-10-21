@@ -18,6 +18,7 @@ from blank_api.services.agent.intent import (
     guess_intent,
     normalize_answer,
     parse_intent,
+    unwrap_goal,
     split_sections,
 )
 
@@ -186,8 +187,10 @@ class _Session:
         self._reply = reply
         self._tool_calls = tool_calls or []
         self.snapshot_calls: list[str] = []
+        self.prompts: list[str] = []
 
     async def ask(self, state, prompt, node, **kwargs):  # noqa: ANN001
+        self.prompts.append(prompt)
         return {
             "text": self._reply,
             "tool_calls": self._tool_calls,
@@ -245,3 +248,90 @@ def test_tool_calls_force_act_even_without_json() -> None:
     result = _run(session, "看看项目结构")
     assert result["direct_answer"] is False
     assert result["pending"] == [{"id": "c1", "name": "list_files", "arguments": {}}]
+
+
+# ── 5. 判意图前先剥掉界面拼的前缀 ──────────────────────────────────
+# 前缀里写着「实际修改文件并运行相关测试」，拿它判意图等于先设好结论再判：
+# 问一句「你现在的工作目录是哪里」也会被判成 act，然后进工具循环。
+
+_WRAPPED = (
+    "执行规则：不要寒暄、不要夸奖或拍马屁、不要复述用户原话；只输出已执行动作、结果、阻塞和下一步。\n"
+    "你处于开发场景。优先读取现有代码，实际修改文件并运行相关测试；回复只保留动作、结果和阻塞。\n"
+    "\n用户任务：{raw}"
+)
+
+
+def test_unwrap_strips_the_ui_wrapper() -> None:
+    assert unwrap_goal(_WRAPPED.format(raw="把标题改成蓝色")) == "把标题改成蓝色"
+
+
+def test_a_question_is_no_longer_forced_into_act() -> None:
+    # 这是本次要修的缺陷本身：同一句话，带前缀时被判 act，剥掉前缀后不再被强行拉去动手。
+    wrapped = _WRAPPED.format(raw="你现在的工作目录是哪里")
+    assert guess_intent(wrapped) == INTENT_ACT
+    assert guess_intent(unwrap_goal(wrapped)) != INTENT_ACT
+
+
+def test_plain_goal_is_returned_unchanged() -> None:
+    # 独立任务、API 直接调用都没这层包装，不能因为剥前缀把原话改坏。
+    assert unwrap_goal("把输入框改高三行") == "把输入框改高三行"
+
+
+def test_user_quoting_the_marker_keeps_their_whole_sentence() -> None:
+    # 用户原话里自己写了「用户任务：」，剥的必须是界面那个（在用户原话之前），
+    # 不能连用户的话一起切掉。
+    raw = "上次那个「用户任务：把标题改蓝」还没生效"
+    assert unwrap_goal(_WRAPPED.format(raw=raw)) == raw
+
+
+def test_no_wrapper_means_no_marker_surgery() -> None:
+    # 没有包装时，用户自己写的「用户任务：」就是正文的一部分。
+    raw = "说明一下 用户任务：是什么意思"
+    assert unwrap_goal(raw) == raw
+
+
+def test_wrapper_only_falls_back_to_input() -> None:
+    # 剥完是空串会让调用方拿着空串去判意图，这时宁可退回原文。
+    only = "执行规则：不要寒暄、不要夸奖或拍马屁。"
+    assert unwrap_goal(only) == only
+
+
+# ── 6. 问判断，不是派活 ────────────────────────────────────────────
+# 「你觉得界面有什么可以优化的」里带「优化」，被动作词一命中就判 act，
+# 于是它真去改了一通，最后审查说意图不对齐——116 次工具调用，全部作废。
+
+
+def test_asking_for_an_opinion_is_not_an_order() -> None:
+    for text in (
+        "你自己看看你的工作环境 你觉得你的界面比codex有什么可以优化的",
+        "我们的应用你觉得就只有这些需要改么",
+        "你觉得还有哪些可以优化的",
+        "值不值得重构一下",
+    ):
+        assert guess_intent(text) == INTENT_ANSWER, text
+
+
+def test_an_actual_assignment_is_still_act() -> None:
+    # 反向守卫：句子在征求意见、但明确要你动手时，不能被降级成闲聊。
+    for text in (
+        "你觉得哪里有问题，帮我改掉",
+        "先看看代码有什么问题，然后修掉",
+        "把输入框改短一点",
+        "跑一下前端测试",
+        "实现一个会话列表分叉入口",
+        "我给你开启执行命令了 你开始优化吧",
+    ):
+        assert guess_intent(text) == INTENT_ACT, text
+
+
+def test_plan_prompt_points_at_the_real_user_request() -> None:
+    # 前缀不只骗规则，也骗模型：它读到的整段消息里写着「实际修改文件并运行相关测试」。
+    # 所以除了剥前缀，还必须把用户原话明写一次，让模型按原话判。
+    session = _Session('{"intent":"answer","steps":[],"answer":"三处：输入框、依据条、分叉"}')
+    result = _run(session, _WRAPPED.format(raw="你觉得界面有什么可以优化的"))
+    assert result["direct_answer"] is True
+    # 问答类不该拍快照：那是"确定要动工作区"的动作。
+    assert session.snapshot_calls == []
+    sent = session.prompts[0]
+    assert "界面附带的固定前缀" in sent
+    assert "你觉得界面有什么可以优化的" in sent

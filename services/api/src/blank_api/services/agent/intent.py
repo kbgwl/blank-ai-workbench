@@ -46,8 +46,57 @@ _QUESTION = re.compile(
     r"怎么理解|如何理解|介绍一下|解释一下|讲讲|说说|科普|原理|概念)",
 )
 
+# 在问「你怎么看」，不是在派活。这类句子常常夹着「优化 / 改」这种动作词
+# （「你觉得界面有什么可以优化的」），只看动作词会把它判成改代码任务，
+# 于是它真的去改了一通，最后审查说意图不对齐，几十步全部作废。
+#
+# 这里刻意不放过「要不要」：「先出方案再决定要不要改」是在派活（先产出方案），
+# 按意见类判会让它一句"我觉得应该改"就结束，什么也没产出。宁可多问一次模型。
+_OPINION = re.compile(
+    r"(你觉得|你认为|你看|您看|有什么(?:可以|需要|能)?(?:优化|改|改进|问题|提升)|"
+    r"还有(?:哪些|什么)(?:可以|需要)?(?:改|优化|做|补)|需不需要|值不值得|"
+    r"是不是该|该不该)"
+)
+
+# 但一旦句子里还有明确的指派（帮我 / 然后 / 顺便…），就是真派活了，别降级。
+_IMPERATIVE = re.compile(
+    r"(帮我|给我|替我|直接|然后|并且|顺便|同时|马上|立刻|现在就去|按.{0,6}改)"
+)
+
 # 短句阈值：超过这个长度即使没有动词，也交给模型判，不在这里拍板。
 _SHORT_GOAL = 30
+
+# 界面会在用户原话前面拼一段固定前缀：「执行规则：…」「你处于…场景」「场景上下文：…」。
+# 前缀里满是「执行 / 修改 / 测试 / 读取」这类动作词，拿它去判意图，连
+# 「你现在的工作目录是哪里」都会被判成改代码任务——被判成 act 之后就进工具循环，
+# 一步一次全量上下文，几十步下来什么都没交付。判定前必须先把用户原话剥出来。
+_USER_MARKER = "用户任务："
+_WRAPPER_LINE = re.compile(
+    r"^\s*(?:执行规则\s*[:：]|你处于|场景上下文\s*[:：]|日常记忆模式\s*[:：])"
+)
+
+
+def unwrap_goal(goal: str) -> str:
+    """取出用户这次真正写的那句话；没有包装时原样返回。
+
+    只在**开头确实是包装**时才剥。这条限制不是保守，是必需的：用户原话里
+    完全可能自己写「用户任务：」四个字（比如引用上一次的说法），没有包装时
+    去切它就是把用户的话切掉一半。
+    """
+    text = str(goal or "")
+    first_line = text.lstrip().splitlines()[0] if text.strip() else ""
+    if not _WRAPPER_LINE.match(first_line):
+        return text.strip()
+    # 界面拼的前缀在用户原话之前，所以第一个分隔符就是界面那个；
+    # 用户原话里自己写的「用户任务：」只会出现在它后面。
+    marker = text.find(_USER_MARKER)
+    if marker >= 0:
+        text = text[marker + len(_USER_MARKER) :]
+    kept = [line for line in text.splitlines() if not _WRAPPER_LINE.match(line)]
+    cleaned = "\n".join(kept).strip()
+    # 剥完是空的，说明这句话本身就是包装（或拼的时候就没有用户内容），
+    # 这时退回原文，不要让调用方拿到空串去判意图。
+    return cleaned or str(goal or "").strip()
 
 
 def guess_intent(goal: str) -> str | None:
@@ -61,6 +110,10 @@ def guess_intent(goal: str) -> str | None:
     if not text:
         return INTENT_ANSWER
     if _CHITCHAT.match(text):
+        return INTENT_ANSWER
+    # 先看是不是在问判断。这一步必须排在动作词之前：「有什么可以优化的」
+    # 里的「优化」会把一句征求意见判成改代码任务。
+    if _OPINION.search(text) and not _IMPERATIVE.search(text):
         return INTENT_ANSWER
     if _ACTION.search(text):
         return INTENT_ACT
