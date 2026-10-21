@@ -247,6 +247,18 @@ export function isTurnRunning(status: string, events: readonly RawEvent[]): bool
   });
 }
 
+/**
+ * 输入框右边那个圆钮这一刻是干什么的。
+ *
+ * 只有一个按钮：闲着是发送，跑着是停止。「停止」和「发送」共用同一个位置，
+ * 是因为它们本来就是同一个问题的两个答案——"现在要它继续，还是要它别继续"。
+ * 拆成两个按钮之后，停止在对话区还有一个文字按钮，三处都能停，谁也不敢点。
+ */
+export function composerAction(running: boolean, canSend: boolean): "stop" | "send" | "disabled" {
+  if (running) return "stop";
+  return canSend ? "send" : "disabled";
+}
+
 /** 一眼就能看出"它在读还是在写"的工具名归类。与 steps.tsx 的图标归类同源，但语义不同：
  *  那边是为了挑图标，这边是为了统计"先看后改"的比例，别把两个正则合并到一起。 */
 const LOOK_LIKE = /^(read|list|open|view|cat|search|grep|glob|find|query|inspect)/i;

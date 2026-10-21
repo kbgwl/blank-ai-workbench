@@ -37,6 +37,28 @@ const CHANGE_TONE: Record<string, string> = {
 };
 const CHANGE_LABEL: Record<string, string> = { created: "新增", modified: "修改", deleted: "删除" };
 
+/**
+ * 同一个文件改多次只留一行。
+ *
+ * 后端的改动记录按"每次写入"记一条，一个文件被改四轮就有四条。把四条原样铺出来，
+ * 右键面板显示的数是 11，而对话里依据条按去重算是 6——两处数字对不上，用户没有理由
+ * 相信任何一个；更实际的问题是同一个文件名重复四遍，点哪一条都像是点错了。
+ */
+function uniqueChanges(rows: ChangeItem[]): ChangeItem[] {
+  const merged = new Map<string, ChangeItem>();
+  for (const row of rows) {
+    const existing = merged.get(row.path);
+    if (!existing) {
+      merged.set(row.path, row);
+      continue;
+    }
+    // 先建的记录说 created，后面又改过：对用户来说它就是"这一轮动过的文件"。
+    // 差异保留第一次出现的类型（新增仍是新增），diff 取第一个非空的。
+    merged.set(row.path, { ...existing, diff: existing.diff || row.diff });
+  }
+  return [...merged.values()];
+}
+
 export type TaskPanelProps = {
   title: string;
   status: string;
@@ -60,7 +82,7 @@ export function TaskPanel(props: TaskPanelProps) {
   // 工具耗时之和（离线跑、老事件里没有 usage 时就是这种情形）。
   const evidence = turnEvidence(props.steps);
   const files = props.changes.length > 0
-    ? props.changes
+    ? uniqueChanges(props.changes)
     : props.steps
         .filter((step): step is Extract<BotStep, { kind: "change" }> => step.kind === "change")
         .reduce<ChangeItem[]>((rows, step) => {
@@ -135,11 +157,15 @@ export function TaskPanel(props: TaskPanelProps) {
               const open = openPath === file.path;
               return (
                 <div key={file.path} className="overflow-hidden rounded-lg border border-line bg-surface">
+                  {/* 没有 diff 也要能点开：以前这里 disabled，行看着是按钮，
+                      点下去一点反应都没有，用户只会怀疑整个面板坏了。
+                      现在点开至少说明"这一轮没有记录 diff"。 */}
                   <button
                     type="button"
+                    aria-expanded={open}
                     onClick={() => setOpenPath(open ? null : file.path)}
-                    disabled={!file.diff}
-                    className={`flex w-full items-center gap-2 px-2 py-1.5 text-left ${file.diff ? "hover:bg-surface-2" : "cursor-default"}`}
+                    title={file.diff ? "展开看改动" : "这一轮没有记录 diff"}
+                    className="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
                   >
                     <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text" title={file.path}>
                       {file.path}
@@ -148,9 +174,15 @@ export function TaskPanel(props: TaskPanelProps) {
                       {CHANGE_LABEL[file.changeType] ?? file.changeType}
                     </span>
                   </button>
-                  {open && file.diff && (
+                  {open && (
                     <div className="border-t border-line p-1.5">
-                      <DiffText diff={file.diff} />
+                      {file.diff ? (
+                        <DiffText diff={file.diff} />
+                      ) : (
+                        <p className="px-1 py-1 text-[11px] text-faint">
+                          这一轮只记录了文件路径，没有留下 diff（历史轮次或改动未落盘）。
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>

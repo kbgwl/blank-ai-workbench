@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   buildSteps,
+  composerAction,
   dayBucket,
   filterSteps,
   isTurnRunning,
@@ -266,4 +267,13 @@ test("筛选：只看改动 / 只看失败", () => {
     ["change"],
   );
   assert.equal(filterSteps(steps, "failures").length, 1);
+});
+
+test("输入框只有一个按钮：跑着是停止，闲着是发送", () => {
+  // 以前跑着的时候是「停止 + 插话」两个圆钮，对话区还另有一个「停止」文字按钮。
+  // 三处都能停，用户得先分清哪个是哪个；合成一个之后，插话只走 Enter。
+  assert.equal(composerAction(true, true), "stop");
+  assert.equal(composerAction(true, false), "stop");
+  assert.equal(composerAction(false, true), "send");
+  assert.equal(composerAction(false, false), "disabled");
 });

@@ -160,7 +160,6 @@ export type TurnViewProps = {
   actionBusy: boolean;
   onDecide: (approval: PendingApproval, decision: "approve" | "deny", scope: "once" | "prefix" | "tool") => void;
   onAnswer: (questions: PendingQuestion[], answers: Record<string, string>) => void;
-  onStop: () => void;
   onRetry: () => void;
 };
 
@@ -312,12 +311,6 @@ export function TurnView(props: TurnViewProps) {
               busy={props.actionBusy}
               onAnswer={(answers) => props.onAnswer(props.questions, answers)}
             />
-          )}
-
-          {running && (
-            <div className="mt-2 flex items-center gap-2">
-              <Button onClick={props.onStop}>停止</Button>
-            </div>
           )}
 
           {!running && !hasBody && props.stepCount === 0 && (

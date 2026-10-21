@@ -129,6 +129,13 @@ export function BotApp() {
         if (alive && task) setLiveTask(task);
       })
       .catch(() => undefined);
+    // 结束的一轮也把证据取一次：右侧面板的 diff 来自这里，不取的话历史轮次的
+    // 文件行只有路径没有 diff，点开是空的——看起来就是"点了没反应"。
+    fetchEvidence(activeTaskId)
+      .then((next) => {
+        if (alive && next) setEvidence(next);
+      })
+      .catch(() => undefined);
     return () => {
       alive = false;
     };
@@ -396,8 +403,11 @@ export function BotApp() {
         createdAt: turn.createdAt,
         files: touchedFiles(steps),
         stepCount: steps.length,
-        approvals: isLive ? (evidence?.pendingApprovals ?? []) : [],
-        questions: isLive ? (evidence?.pendingQuestions ?? []) : [],
+        // 只在真的跑着的时候挂审批/提问卡。跑完的一轮如果还挂着，用户点"允许这一次"
+        // 后端会回"任务不在等审批"（409），而错误显示在对话顶部——人已经滚到底部，
+        // 看起来就是"点了没反应"。卡片跟着轮次结束一起消失，才不会有这种死按钮。
+        approvals: isLive && running ? (evidence?.pendingApprovals ?? []) : [],
+        questions: isLive && running ? (evidence?.pendingQuestions ?? []) : [],
       };
     });
   }, [conv, activeTaskId, live.events, live.streaming, liveStatus, running, evidence]);
@@ -453,12 +463,6 @@ export function BotApp() {
                 对话读取失败：{convError}
               </p>
             )}
-            {actionError && (
-              <p className="mb-4 rounded-lg border border-warn/30 bg-warn/[0.05] px-3 py-2 text-[12px] text-warn">
-                {actionError}
-              </p>
-            )}
-
             {currentTurnView.length === 0 && !loadingConv && (
               <div className="flex min-h-[56vh] flex-col items-center justify-center text-center">
                 <span className="grid size-12 place-items-center rounded-2xl bg-[#1b2a4a]">
@@ -506,7 +510,6 @@ export function BotApp() {
                   actionBusy={actionBusy}
                   onDecide={decide}
                   onAnswer={answer}
-                  onStop={stop}
                   onRetry={retry}
                 />
               ))}
@@ -542,7 +545,9 @@ export function BotApp() {
           onSteer={steer}
           onStop={stop}
           running={running}
-          error={sendError}
+          // 审批/停止/归档的失败也走这里：错误必须出现在用户刚点过的地方。
+          // 原来它渲染在对话流顶部，滚到当前这一轮的人根本看不到。
+          error={sendError ?? actionError}
           hint={composerHint}
           disabled={(boot !== null && !projectId) || sending}
         />
