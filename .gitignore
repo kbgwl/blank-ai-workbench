@@ -52,6 +52,8 @@ data/*.key
 data/artifacts/
 data/snapshots/
 data/workspaces/
+# 用户贴进来的截图：从仓库根启动后端时会落到这里，属于隐私数据，绝不能进版本库
+data/uploads/
 
 # 本机覆盖安装的目标目录（每台机器不同，不入库）
 desktop/install-target.local.json
