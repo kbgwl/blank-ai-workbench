@@ -137,3 +137,28 @@ node install-local.cjs
 装机前先备份用户库（`%APPDATA%/blank-ai-workbench-desktop/blank.db`）。旧版本残留的
 卸载注册项指向哪，重装就往哪走——装错位置后要先把那条 `Uninstall` 键删掉再装，
 否则安装器会去跑一个路径已经不存在的卸载器然后卡住。
+
+## 让它改自己
+
+工作区指向本仓库，所以它可以读自己的源码、改、跑测试。但**改完不会自动生效**：
+装好的客户端跑的是 `resources/` 里的副本（后端 `resources/backend/api/src/blank_api`、
+前端 `resources/web`），不是工作区里的源码。少了同步这一步，球是进了，计分牌没动。
+看起来最像"没生效"或者"它改错了"，其实只是还没搬过去。
+
+```bash
+node desktop/self-deploy.cjs           # 后端 + 前端
+node desktop/self-deploy.cjs --api     # 只后端（秒级）
+node desktop/self-deploy.cjs --web     # 只前端（会重建静态站，约 20s）
+node desktop/self-deploy.cjs --dry-run # 只看会做什么
+```
+
+同步完要**完全退出客户端**再打开：后端是客户端启动时拉起的子进程，不重启还在跑旧代码。
+只改前端时可以在窗口里按 Ctrl+R 先看。
+
+脚本的两个细节不是可有可无的：
+- **先删目标再拷**。直接覆盖会把源码里已删除的模块留在包内，于是"删掉的代码还在跑"。
+- **排除 `__pycache__` / `*.pyc`**。带进去的旧字节码会让 import 忽略改过的 `.py`，
+  表现为"改了但行为没变"，而且 traceback 里的行号对不上。
+
+边界：主进程 `main.cjs` / `preload.cjs` 打进 `app.asar`，这个脚本不动它们——
+那部分改动必须重新打包安装。
