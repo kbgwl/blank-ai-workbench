@@ -7,6 +7,7 @@
     "dev:web": "pnpm -C web dev",
     "test": "pnpm -C services/api exec uv run pytest -q",
     "test:api": "pnpm -C services/api exec uv run pytest -q",
+    "test:web": "pnpm -C web test",
     "smoke:api": "uv run --project services/api python scripts/smoke_health.py",
     "build:web": "pnpm -C web build",
     "lint:web": "pnpm -C web lint",

@@ -7,6 +7,8 @@
       "esnext"
     ],
     "allowJs": true,
+    // node --test 直接跑 src/lib/*.test.ts，Node 的 ESM 解析要求写全 .ts 后缀。
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,

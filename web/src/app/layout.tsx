@@ -4,8 +4,8 @@ import { AppShell } from "@/components/app-shell";
 import { SceneProvider } from "@/components/scenes/scenes";
 
 export const metadata: Metadata = {
-  title: "空白格 AI 操作台",
-  description: "面向开发者的可审计 AI 工程执行台",
+  title: "空白格 bot",
+  description: "说清楚要什么，它读代码、改代码、跑命令——每一步都留在对话里",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

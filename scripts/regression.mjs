@@ -51,6 +51,7 @@ await step("后端 pytest", "uv", ["run", "pytest", "-q"], apiDir, {
 });
 
 if (!flags.skipWeb) {
+  await step("前端单元测试", "pnpm", ["-C", "web", "test"], root);
   await step("前端类型检查", "pnpm", ["-C", "web", "exec", "tsc", "--noEmit"], root);
   await step("前端生产构建", "pnpm", ["-C", "web", "build"], root);
 }

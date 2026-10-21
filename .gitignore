@@ -58,4 +58,10 @@ _verify/
 _backup/
 
 # 本地验证脚本与截图（不是交付物）
-_verify/
+
+# 构建前移走的旧产物（备份目录，不是交付物）
+web/.next.dev-*/
+web/.next.prev-*/
+web/out.prev-*/
+web/.next-old*/
+web/out-old*/

@@ -1,5 +1,5 @@
-import { Workbench } from "@/components/workbench/workbench";
+import { BotApp } from "@/components/bot/bot-app";
 
 export default function HomePage() {
-  return <Workbench />;
+  return <BotApp />;
 }

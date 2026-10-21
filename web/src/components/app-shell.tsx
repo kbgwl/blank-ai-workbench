@@ -4,7 +4,9 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 import { HealthPill } from "@/components/health-pill";
+import { CommandPalette } from "@/components/command-palette";
 import { ModelSwitcher, SceneSwitcher } from "@/components/scenes/scenes";
+import { isEditableTarget, PALETTE_SHORTCUT, shortcutHint, shouldHandleEscape } from "@/lib/shortcuts";
 
 const TITLES: Record<string, string> = {
   "/settings": "设置",
@@ -16,12 +18,11 @@ const TITLES: Record<string, string> = {
   "/reverse-lab": "逆向实验室",
 };
 
-const NAV = [
-  { href: "/", label: "工作台" },
-  { href: "/tasks", label: "任务" },
-  { href: "/projects", label: "项目" },
-  { href: "/settings", label: "设置" },
-];
+/**
+ * 首页是 bot，它自带会话侧栏和设置入口，所以顶栏上不再挂导航。
+ * 其余页面（设置、以及暂时保留但不再露出的旧页）仍然走带返回的顶栏。
+ */
+const NAV: { href: string; label: string }[] = [];
 
 /** 首页与任务页是满幅工作台（左栏自带品牌与导航），其余页面共用一条带返回的顶栏。 */
 export function AppShell({ children }: { children: ReactNode }) {
@@ -29,18 +30,25 @@ export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   // 静态导出后首屏 URL 是 /index.html（或 /index），开发态是 /，都要认成首页。
   const clean = (pathname ?? "").replace(/\.html$/, "").replace(/\/index$/, "");
-  const bare = clean === "" || clean === "/" || clean === "/tasks";
+  const bare = clean === "" || clean === "/";
   const title = TITLES[clean] ?? "";
 
   // Esc 回工作台；在输入框/对话框里按 Esc 不抢事件（那通常是取消编辑）。
   useEffect(() => {
     if (bare) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName?.toLowerCase();
-      if (tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable) return;
-      if (document.querySelector("dialog[open]")) return;
+      // 判定统一收敛到 shouldHandleEscape：非 Esc、已被内层消费、输入态、
+      // 有浮层（dialog[open] 或带 data-overlay-open 的面板）都不跳回工作台。
+      if (
+        !shouldHandleEscape({
+          key: event.key,
+          defaultPrevented: event.defaultPrevented,
+          inEditable: isEditableTarget(event.target as HTMLElement | null),
+          overlayOpen: Boolean(document.querySelector("dialog[open], [data-overlay-open]")),
+        })
+      ) {
+        return;
+      }
       router.push("/");
     };
     window.addEventListener("keydown", onKey);
@@ -48,7 +56,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [bare, router]);
 
   if (bare) {
-    return <div className="h-dvh overflow-hidden">{children}</div>;
+    return (
+      <div className="h-dvh overflow-hidden">
+        {children}
+        <CommandPalette />
+      </div>
+    );
   }
 
   return (
@@ -78,29 +91,35 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
         </div>
 
-        <nav className="ml-3 hidden items-center gap-0.5 md:flex">
-          {NAV.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`rounded-md px-2 py-1 text-[12px] transition-colors ${
-                clean === item.href.replace(/\/$/, "")
-                  ? "bg-surface-3 font-medium text-text"
-                  : "text-muted hover:bg-surface-2 hover:text-text"
-              }`}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
+        {NAV.length > 0 && (
+          <nav className="ml-3 hidden items-center gap-0.5 md:flex">
+            {NAV.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`rounded-md px-2 py-1 text-[12px] transition-colors ${
+                  clean === item.href.replace(/\/$/, "")
+                    ? "bg-surface-3 font-medium text-text"
+                    : "text-muted hover:bg-surface-2 hover:text-text"
+                }`}
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+        )}
 
         <div className="ml-auto flex shrink-0 items-center gap-2.5">
+          <kbd className="hidden items-center gap-1 rounded-md border border-line bg-surface px-2 py-1 font-mono text-[10px] text-faint lg:flex">
+            {shortcutHint(PALETTE_SHORTCUT)} 命令
+          </kbd>
           <SceneSwitcher />
           <ModelSwitcher />
           <HealthPill />
         </div>
       </header>
       <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</main>
+      <CommandPalette />
     </div>
   );
 }
