@@ -30,7 +30,7 @@ _UNSAFE = re.compile(r"[^0-9A-Za-z_-]+")
 # 老服务器认不出新版本时会直接报错，所以留一个更老的号可以少一轮排查。
 PROTOCOL_VERSIONS = ("2025-06-18", "2024-11-05")
 CLIENT_NAME = "blank-agent"
-CLIENT_VERSION = "0.7.1"
+CLIENT_VERSION = "0.8.0"
 
 MAX_LIST_PAGES = 20
 

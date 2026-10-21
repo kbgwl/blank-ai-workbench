@@ -75,3 +75,31 @@ BLANK_DESKTOP_BUILD=1 NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000 npx next build
 事件折叠的用例刻意覆盖了几种"看起来对但不是"的情况：
 同名工具连续两次不串输出、没有开始事件的结果仍保留、内部观测事件不出现、
 `plan.created` 里塞的是生 JSON 时不显示空计划块、HTML 原样当文字。
+
+## 打包与装机
+
+```bash
+# 1. 静态导出（桌面壳没有服务器，前端直连本机后端）
+cd web
+BLANK_DESKTOP_BUILD=1 NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000 npx next build
+
+# 2. 打包
+cd ../desktop
+NODE_OPTIONS= npx electron-builder --win nsis portable
+
+# 3. 自检（14 项，其中「首页是 bot 对话页」专门防「能打开但还是旧操作台」）
+node verify-package.cjs
+
+# 4. 本机覆盖安装
+node install-local.cjs
+```
+
+安装目标目录写在 `desktop/install-target.local.json`（`{"dir": "D:\\a\\b"}`，不入库）。
+**不要把路径从 shell 传进来**：NSIS 的 `/D=` 只认反斜杠，而 `/D=D:/a/b` 会被它把斜杠
+整个吃掉，装到 `D:ab` 去；反斜杠从 git-bash 传进来又同样会被吃掉。两条路都试过，
+都真的装错地方（还会在磁盘根目录留下 `Softwareskbgblank-...` 这种畸形目录）。
+文件里的转义是给 JSON 解析器的，node 读出来就是真反斜杠，不经过任何 shell。
+
+装机前先备份用户库（`%APPDATA%/blank-ai-workbench-desktop/blank.db`）。旧版本残留的
+卸载注册项指向哪，重装就往哪走——装错位置后要先把那条 `Uninstall` 键删掉再装，
+否则安装器会去跑一个路径已经不存在的卸载器然后卡住。
