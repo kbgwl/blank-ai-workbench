@@ -53,6 +53,9 @@ data/artifacts/
 data/snapshots/
 data/workspaces/
 
+# 本机覆盖安装的目标目录（每台机器不同，不入库）
+desktop/install-target.local.json
+
 # 本机打包实测与数据备份（临时产物，可能含真实数据库，绝不入库）
 _verify/
 _backup/
