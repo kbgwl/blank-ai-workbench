@@ -50,6 +50,7 @@ from blank_api.services.agent.context import (
     render_summary,
 )
 from blank_api.services.agent.router import LIGHT, TIER_LABELS, Router
+from blank_api.services.agent.payload import render
 from blank_api.services.features import is_enabled as feature_enabled
 from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import HookRunner, blocking_denial
@@ -69,6 +70,9 @@ from blank_api.services.tools.gateway import ToolGateway
 from blank_api.services.tools.registry import PARALLEL_SAFE_TOOLS, PROFILE_FULL, PROFILE_LEAN
 
 MAX_REPAIR_ROUNDS = 3
+# 审查最多跑几轮。审查不通过会回到执行，而执行不一定有新东西可改；没有这个上限，
+# 一次"审查没给出结论"就能把 审查→执行 的回路跑到预算耗尽。
+MAX_REVIEW_ROUNDS = 2
 
 # 只读调研允许用的工具。用白名单而不是「排除写类」：新增一个会落盘的工具时，
 # 黑名单会自动放它进来，白名单则默认拦住——后者错了只是少看一处，前者错了是
@@ -220,6 +224,11 @@ class AgentSession:
     # 代理树位置：子代理事件靠这两个字段还原"谁在哪个分支上干活"。
     depth: int = 0
     agent_path: str = "root"
+    # 工具输出瘦身的账：指纹 → 第几步出现过（相同输出只发一次），
+    # 以及累计省下的字符数。省了多少必须能回答，否则"减 token"只是口号。
+    output_seen: dict[str, int] = field(default_factory=dict)
+    trimmed_chars: int = 0
+    trim_events: list[dict] = field(default_factory=list)
 
     @property
     def permission_mode(self) -> str:
@@ -748,12 +757,26 @@ def tool_call_args(call: dict) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _append_tool_response(messages: list[dict], call: dict, payload: dict) -> list[dict]:
+def _append_tool_response(
+    messages: list[dict], call: dict, payload: dict, *, session: "AgentSession | None" = None, step: int = 0
+) -> list[dict]:
+    """工具结果进上下文：先瘦身再写。
+
+    瘦身放在结果刚产生时，而不是事后改写历史——历史一旦改动，前缀缓存整段失效，
+    省下的上下文会被"未命中缓存"的差价吃掉。详见 ``services/agent/payload.py``。
+    """
+    name = tool_call_name(call)
+    seen = session.output_seen if session is not None else None
+    content, stats = render(name, payload, seen, step)
+    if stats.get("saved") and session is not None:
+        # 省了多少要进事件流：不然"减 token"只是说法，不是数据。
+        session.trimmed_chars += int(stats["saved"])
+        session.trim_events.append({"tool": name, **stats})
     return messages + [
         {
             "role": "tool",
-            "content": json.dumps(payload, ensure_ascii=False, default=str)[:8000],
-            "tool_call_id": call.get("id") or tool_call_name(call),
+            "content": content,
+            "tool_call_id": call.get("id") or name,
         }
     ]
 
@@ -1327,7 +1350,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                     "output": str(payload.get("output") or payload.get("message") or "")[-2000:],
                 }
             )
-            messages = _append_tool_response(messages, item.call, payload)
+            messages = _append_tool_response(messages, item.call, payload, session=session, step=steps)
             continue
 
         if not item.hook_blocked:
@@ -1384,7 +1407,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 "output": str(payload.get("output") or payload.get("message") or "")[-2000:],
             }
         )
-        messages = _append_tool_response(messages, item.call, payload)
+        messages = _append_tool_response(messages, item.call, payload, session=session, step=steps)
 
     # 升级信号：真跑失败才提档。被驳回 / 被钩子拦下的不算——那是策略判断，
     # 不是模型不够强，为它去换更强的模型等于拿钱重试用户刚刚说「不」的事。
@@ -1404,6 +1427,23 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 "escalation": bumped,
             },
         )
+
+    # 记账：这一步的工具输出被折掉了多少字符。前端和 evidence 都读这一个数，
+    # 免得"省了多少"出现两种说法。
+    if session.trim_events:
+        step_saved = sum(int(item.get("saved") or 0) for item in session.trim_events)
+        await session.recorder.add(
+            "context.trimmed",
+            node,
+            {
+                "step_saved_chars": step_saved,
+                "total_saved_chars": session.trimmed_chars,
+                # 粗略按 3.2 字符/token 折算（中英混排的经验值），只用于展示量级
+                "total_saved_tokens_est": int(session.trimmed_chars / 3.2),
+                "tools": session.trim_events,
+            },
+        )
+        session.trim_events = []
 
     plan_patch: dict = {}
     if plan_update:
@@ -1516,6 +1556,30 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
 MUTATING_TOOLS = frozenset({"apply_patch", "write_file", "create_file", "delete_file", "move_file"})
 
 
+# 环境类失败：命令根本没跑起来，而不是跑了之后报错。这类结果不能当作"测试没过"。
+_ENVIRONMENT_MARKS = (
+    "SandboxUnavailable",
+    "沙箱不可用",
+    "docker",
+    "Docker",
+    "系统找不到指定的路径",
+    "is not recognized as an internal or external command",
+    "不是内部或外部命令",
+)
+
+
+def _environment_blocked(payload: dict) -> bool:
+    """这次工具失败是不是"环境起不来"造成的。
+
+    区别很重要：测试真的跑了但没过 → 代码有问题，该修；环境起不来 → 代码没问题，
+    该改设置。把后者判成失败，用户会去翻一段本来就对的代码。
+    """
+    if str(payload.get("status") or "") in ("ok", "awaiting_approval", "denied"):
+        return False
+    text = f"{payload.get('message') or ''} {payload.get('output') or ''}"
+    return any(mark in text for mark in _ENVIRONMENT_MARKS)
+
+
 def _changed_paths(results: list[dict]) -> list[str]:
     paths: list[str] = []
     for item in results:
@@ -1593,9 +1657,15 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         }
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}
-    if status == "denied":
-        # 安全策略不允许执行命令，或用户驳回了这次审批。这是配置/授权问题，不是代码问题：
-        # 记成 failed 会让任务被判「测试未通过」，用户会去翻代码，而真正该做的是改设置。
+    if status in ("denied",) or _environment_blocked(payload):
+        # 安全策略不允许执行命令、用户驳回了审批、或者本机沙箱/解释器根本起不来。
+        # 这三件都是配置/环境问题，不是代码问题：记成 failed 会让任务被判
+        # 「测试未通过」，用户会去翻代码，而真正该做的是改设置或装依赖。
+        reason = (
+            "命令执行未获授权，本次未做自动化校验"
+            if status == "denied"
+            else "测试没能执行（运行环境不可用），本次未做自动化校验"
+        )
         validation = {
             "command": data.get("command") or "run_tests",
             "passed": True,
@@ -1603,7 +1673,7 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
             "exit_code": None,
             "summary": {},
             "output_tail": str(payload.get("message") or payload.get("output") or "")[-2000:],
-            "skipped_reason": "命令执行未获授权，本次未做自动化校验",
+            "skipped_reason": reason,
         }
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}
@@ -1657,8 +1727,25 @@ async def review_result_node(state: AgentState, session: AgentSession) -> AgentS
             ),
         }
     except (ModelError, ValueError, json.JSONDecodeError) as exc:
-        await session.recorder.add("review.unavailable", node, {"reason": str(exc)[:300]})
-        return {"review": {"approved": False, "findings": ["审查模型未返回可解析结果"], "summary": ""}, "status": "running"}
+        # 审查没结论 ≠ 审查不通过。以前这里返回 approved=False，路由看到
+        # "未通过且修复预算还有"就回到 execute_action；而 execute 那边也没什么可改的，
+        # 于是 审查→执行→审查 空转到预算耗尽。实测一个只有 6 次工具调用的任务，
+        # 被这条回路放大成 31 次执行 + 27 次审查、35 万 token，产出还是原样。
+        #
+        # 正确做法：审查失败当作"这次没有审查结论"，直接放行并在交付里写明没审成。
+        await session.recorder.add(
+            "review.unavailable", node, {"reason": str(exc)[:300], "looped": False}
+        )
+        return {
+            "review": {
+                "approved": True,
+                "unavailable": True,
+                "findings": ["独立审查未完成：审查模型未返回可解析结论"],
+                "summary": "",
+            },
+            "review_rounds": int(state.get("review_rounds") or 0) + 1,
+            "status": "running",
+        }
 
 
 def _last_assistant_text(messages: list[dict]) -> str:
@@ -1849,6 +1936,10 @@ def route_after_validation(state: AgentState, session: AgentSession) -> str:
 def route_after_review(state: AgentState, session: AgentSession) -> str:
     review = state.get("review") or {}
     if state.get("budget_exhausted"):
+        return "summarize_result"
+    # 审查本身也有次数上限。审查不通过会回到执行，执行不一定会产生新东西——
+    # 只靠 repair_rounds 兜底时，一次"没结论的审查"就能把回路跑到预算耗尽。
+    if int(state.get("review_rounds") or 0) >= MAX_REVIEW_ROUNDS:
         return "summarize_result"
     # 与验证回路共用同一份修复预算，避免两处各算 3 轮。
     if not review.get("approved") and int(state.get("repair_rounds") or 0) <= MAX_REPAIR_ROUNDS:

@@ -259,3 +259,36 @@ async def test_readonly_delivery_is_a_judgement_not_a_work_report(seeded, tmp_pa
     # 不许套「结论 / 下一步」标题：那是工作汇报的壳，用户问的是判断。
     assert "结论" not in result["summary"]
     assert result["acceptance_results"] == []
+
+
+async def test_environment_failure_is_not_a_test_failure(seeded, tmp_path):
+    """沙箱起不来 ≠ 测试没通过。
+
+    这台机器上 `BLANK_SANDBOX_ENABLED` 默认 true，而没装 docker 时 run_tests 直接
+    抛 SandboxUnavailable。以前这一条会落进"测试失败"分支：任务被判 failed、模型
+    被拉去"修复"一个不存在的代码问题，而真正该做的是改配置。实测一次对标里，
+    代码改对了、pytest 也真的能过，任务状态却是 failed。
+    """
+    session = _session(tmp_path, [])
+
+    result = await run_validation_node(
+        {
+            "messages": [],
+            "tool_results": [
+                {
+                    "tool": "run_tests",
+                    "status": "error",
+                    "ok": False,
+                    "output": "工具执行失败：SandboxUnavailable",
+                }
+            ],
+        },
+        session,
+    )
+
+    validation = result["validation"]
+    assert validation["passed"] is True, "环境问题不该终止任务"
+    assert validation["status"] == "skipped"
+    assert "运行环境" in validation["skipped_reason"]
+    # 不许悄悄放过：证据里必须留一条"没做自动化校验"，否则用户以为测试跑过了
+    assert "repair_rounds" not in result

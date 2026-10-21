@@ -14,10 +14,41 @@ from blank_api.services.tools.paths import BACKUP_DIRNAME, resolve_for_write
 
 HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 CONTEXT_TOLERANCE = 40
+# 补丁头里的路径：``--- a/foo.py`` / ``+++ b/foo.py``。git 风格带 a/ b/ 前缀，去掉。
+FILE_HEADER = re.compile(r"^(?:---|\+\+\+)\s+(?:\w/)?(\S+)")
 
 
 class PatchError(ValueError):
-    pass
+    """补丁无法应用。
+
+    ``near`` 是失配位置附近的真实内容（带行号）。没有它，模型只能盲猜着重打一遍，
+    实测一次失败的补丁平均要重试两次以上，这既是延迟也是 token。
+    """
+
+    def __init__(self, message: str, near: str = "") -> None:
+        super().__init__(message)
+        self.near = near
+
+
+def infer_path(patch: str) -> str:
+    """从补丁头里取文件路径，取不到返回空串。
+
+    模型写补丁时几乎总带着 ``--- a/x`` / ``+++ b/x``，却常常忘了另填一个
+    ``path`` 参数。以前这种调用直接被参数校验挡掉（"缺少必填参数：path"），
+    白白烧掉一步。路径明明就在补丁里，就该自己读出来。
+    """
+    preferred = ""
+    for line in (patch or "").replace("\r\n", "\n").split("\n"):
+        match = FILE_HEADER.match(line.strip())
+        if not match:
+            continue
+        candidate = match.group(1).strip()
+        if candidate in ("/dev/null", ""):
+            continue
+        if line.strip().startswith("+++"):
+            return candidate
+        preferred = preferred or candidate
+    return preferred
 
 
 def _split_lines(text: str) -> list[str]:
@@ -70,6 +101,17 @@ def _matches(lines: list[str], index: int, body: list[tuple[str, str]]) -> bool:
     return lines[index : index + len(old_side)] == old_side
 
 
+def _nearby(lines: list[str], index: int, radius: int = 4) -> str:
+    """失配位置附近的真实内容，带行号。
+
+    只给"第 N 行附近不匹配"时，模型唯一的办法是重读整个文件再重打一遍补丁；
+    把附近几行直接回给它，多数情况下一次就能改对。
+    """
+    start = max(0, index - radius)
+    end = min(len(lines), index + radius + 1)
+    return "\n".join(f"{number:>5}| {lines[number - 1]}" for number in range(start + 1, end + 1))
+
+
 def _locate(lines: list[str], hunk: dict, cursor: int) -> int:
     expected = max(hunk["old_start"] - 1, 0)
     candidates = [expected]
@@ -77,7 +119,13 @@ def _locate(lines: list[str], hunk: dict, cursor: int) -> int:
     for index in candidates:
         if _matches(lines, index, hunk["body"]):
             return index
-    raise PatchError(f"补丁无法应用：第 {hunk['old_start']} 行附近上下文不匹配")
+    old_side = [text for op, text in hunk["body"] if op in (" ", "-")]
+    wanted = "\n".join(f"{number:>5}? {text}" for number, text in enumerate(old_side[:6], start=hunk["old_start"]))
+    raise PatchError(
+        f"补丁无法应用：第 {hunk['old_start']} 行附近上下文不匹配。"
+        f"补丁期望的内容（前 6 行）：\n{wanted}",
+        near=_nearby(lines, expected),
+    )
 
 
 def apply_patch_text(original: str, patch: str) -> str:
@@ -93,7 +141,11 @@ def apply_patch_text(original: str, patch: str) -> str:
         for op, text in hunk["body"]:
             if op in (" ", "-"):
                 if lines[position] != text:
-                    raise PatchError(f"补丁无法应用：第 {position + 1} 行内容已被改动")
+                    raise PatchError(
+                        f"补丁无法应用：第 {position + 1} 行内容与补丁不一致"
+                        f"（补丁写的是 {text!r}）",
+                        near=_nearby(lines, position),
+                    )
                 position += 1
             if op in (" ", "+"):
                 out.append(text)
@@ -149,11 +201,33 @@ def risky_patch_path(relative: str) -> bool:
 
 
 async def _apply_patch(context: ToolContext, arguments: dict) -> ToolOutcome:
-    relative = arguments["path"]
+    patch_text = str(arguments.get("patch") or "")
+    # 路径可以省略：补丁头里通常已经写了，读出来比让模型再补一次便宜。
+    relative = str(arguments.get("path") or "").strip() or infer_path(patch_text)
+    if not relative:
+        return ToolOutcome(
+            ok=False,
+            status="error",
+            message=(
+                "没有文件路径：请在 path 参数里给工作区相对路径，"
+                "或在补丁开头加一行 `+++ b/相对路径`。"
+            ),
+        )
     target = resolve_for_write(context.root, relative)
     existed = target.exists()
     original = target.read_text(encoding="utf-8") if existed else ""
-    patched = apply_patch_text(original, arguments["patch"])
+    try:
+        patched = apply_patch_text(original, patch_text)
+    except PatchError as error:
+        # 失败里带上真实上下文，模型下一次就能改对。只给"不匹配"三个字，
+        # 它只能重读整个文件再盲猜一遍——那一步既是延迟也是成本。
+        return ToolOutcome(
+            ok=False,
+            status="error",
+            message=str(error),
+            output=str(error),
+            data={"path": relative, "near": error.near},
+        )
     if existed and patched == original:
         return ToolOutcome(ok=False, status="error", message="补丁未产生任何变更")
     backup_rel = ""
@@ -201,15 +275,18 @@ def patch_tools() -> list[ToolDefinition]:
             ),
             input_schema={
                 "type": "object",
-                "required": ["path", "patch"],
+                "required": ["patch"],
                 "properties": {
-                    "path": {"type": "string", "description": "工作区相对文件路径"},
+                    "path": {
+                        "type": "string",
+                        "description": "工作区相对文件路径；可省略，省略时从补丁的 +++/--- 头推断",
+                    },
                     "patch": {"type": "string", "description": "补丁内容"},
                 },
             },
             risk_level="medium",
             risk_for=lambda arguments: "high"
-            if risky_patch_path(str(arguments.get("path", "")))
+            if risky_patch_path(str(arguments.get("path") or infer_path(str(arguments.get("patch") or ""))))
             or contains_secret(str(arguments.get("patch", "")))
             else "medium",
             handler=_apply_patch,

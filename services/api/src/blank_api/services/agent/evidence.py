@@ -127,6 +127,9 @@ async def build_evidence(
         "micro_trims": 0,
         "tokens_saved": 0,
         "boundary": 0,
+        # 工具输出瘦身省下的字符：不是压缩省下的，是"根本没塞进去"。
+        # 两个口径必须分开报，否则会把"少发一遍"算成"压缩得多"。
+        "tool_chars_saved": 0,
     }
     for event in events:
         payload = event.payload if isinstance(event.payload, dict) else {}
@@ -139,6 +142,9 @@ async def build_evidence(
         elif event.type == "context.microcompacted":
             context_summary["micro_trims"] += 1
             context_summary["tokens_saved"] += int(payload.get("tokens_saved") or 0)
+        elif event.type == "context.trimmed":
+            # 累计值只取最后一个，避免把每一步的累计数再加一遍。
+            context_summary["tool_chars_saved"] = int(payload.get("total_saved_chars") or 0)
     prompt_tokens = sum(row.prompt_tokens for row, _ in usage_rows)
     completion_tokens = sum(row.completion_tokens for row, _ in usage_rows)
     models = sorted({row.model for row, _ in usage_rows if row.model})
@@ -151,6 +157,13 @@ async def build_evidence(
     ]
     if not validation:
         unverified.append("未执行测试验证")
+    elif validation.get("status") == "skipped":
+        # 跳过校验有很多种原因，有的无关紧要（没改文件，校验本就不适用），
+        # 有的很要命（沙箱不可用、命令没授权、还在等审批）。后三类必须说出来：
+        # 用户会以为测试跑过了，而实际上一行都没跑。
+        reason = str(validation.get("skipped_reason") or "")
+        if reason and "无需执行测试" not in reason:
+            unverified.append(f"未做自动化校验：{reason}")
     if pending_approvals:
         unverified.append(
             f"存在待审批的高风险操作：{', '.join(sorted({a['tool'] for a in pending_approvals}))}"

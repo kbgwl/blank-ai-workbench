@@ -233,16 +233,22 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
         )
     combined = stdout if not stderr else f"{stdout}\n[stderr]\n{stderr}".strip()
     if result["exit_code"] != 0:
+        # 用错 shell 方言是最常见的失败原因，且一次提示就能改对，值得单独说清楚。
+        hint = shell_mismatch_hint(command, stderr)
+        message = f"命令返回非零退出码：{result['exit_code']}"
+        if hint:
+            message = f"{message}。{hint}"
         return ToolOutcome(
             ok=False,
             status="failed",
             output=combined,
-            message=f"命令返回非零退出码：{result['exit_code']}",
+            message=message,
             data={
                 "exit_code": result["exit_code"],
                 "command": command,
                 "sandbox": result["sandbox"],
                 "isolation": result["sandbox"] or "local",
+                **({"hint": "windows_cmd_syntax"} if hint else {}),
             },
         )
     return ok(
@@ -257,11 +263,77 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
     )
 
 
+def shell_dialect() -> str:
+    """这台机器上 run_shell 实际用的是哪种 shell。
+
+    Windows 上是 cmd.exe。模型默认按 POSIX 写（pwd / ls / cat / grep），
+    在这台机器上全是"不是内部或外部命令"——实测 83 次 shell 调用里 21 次失败，
+    大头就是这个。错一次就重试一次，既慢又贵，而且完全没必要：让它一开始
+    就知道该用哪套命令即可。
+    """
+    from blank_api.services.sandbox import SandboxPolicy, get_sandbox
+
+    try:
+        if get_sandbox(SandboxPolicy()).name == "docker":
+            return "sh"
+    except Exception:  # noqa: BLE001 - 探测沙箱失败不该影响工具定义
+        pass
+    return "cmd" if os.name == "nt" else "sh"
+
+
+# cmd 认不出 POSIX 命令时的固定说法（中英文两套 Windows）
+_UNKNOWN_COMMAND_MARKS = (
+    "不是内部或外部命令",
+    "is not recognized as an internal or external command",
+    "CommandNotFoundException",
+    "系统找不到指定的路径",
+)
+# 常见的 POSIX 命令 → cmd 等价写法。只在报错时用作提示，不自动改写命令：
+# 自动改写会改变语义（`grep -r` 和 `findstr /s` 并不等价），猜错了更麻烦。
+_POSIX_TO_CMD = {
+    "pwd": "cd",
+    "ls": "dir",
+    "cat": "type",
+    "grep": "findstr",
+    "rm": "del",
+    "cp": "copy",
+    "mv": "move",
+    "touch": "type nul > 文件名",
+    "which": "where",
+    "head": "more",
+}
+
+
+def shell_mismatch_hint(command: str, stderr: str) -> str:
+    """命令失败是因为用错了 shell 方言时，给一句能立刻改对的提示。"""
+    if shell_dialect() != "cmd":
+        return ""
+    if not any(mark in (stderr or "") for mark in _UNKNOWN_COMMAND_MARKS):
+        return ""
+    tokens = re.split(r"[\s;&|]+", command.strip())
+    tip = next((f"{token} → {_POSIX_TO_CMD[token]}" for token in tokens if token in _POSIX_TO_CMD), "")
+    base = (
+        "这条命令用的是 POSIX 写法，本机 shell 是 Windows cmd.exe。"
+        "请改成 cmd 命令（如 dir / type / findstr / where），或者直接改用专用工具"
+        "（list_files 列目录、read_file 读文件、search_code 搜代码），不要再用 ls/cat/grep/pwd。"
+    )
+    return f"{base} 参考：{tip}" if tip else base
+
+
 def shell_tools() -> list[ToolDefinition]:
+    dialect = shell_dialect()
+    syntax = (
+        "当前 shell 是 Windows cmd.exe：用 dir / type / findstr / where / del，"
+        "不要用 ls / cat / grep / pwd / rm。列目录、读文件、搜代码优先用专用工具。"
+        if dialect == "cmd"
+        else "当前 shell 是 sh：可以用 ls / cat / grep / pwd 等标准命令。"
+    )
     return [
         ToolDefinition(
             name="run_shell",
-            description="在工作区根目录执行 Shell 命令，支持超时并回收进程，返回退出码与标准输出/错误",
+            description=(
+                f"在工作区根目录执行 Shell 命令，支持超时并回收进程，返回退出码与标准输出/错误。{syntax}"
+            ),
             input_schema={
                 "type": "object",
                 "required": ["command"],

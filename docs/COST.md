@@ -16,7 +16,7 @@
 
 单个任务最多 116 次工具调用，产生 581 条事件，最后状态是 `failed`。
 
-## 三个根因
+## 四个根因
 
 ### 1. 判意图的输入被界面自己的前缀污染
 
@@ -76,6 +76,28 @@
 修法：等待审批是 `skipped` 且 `passed=True`，不进修复回路，如实写
 「测试在等待你批准，本次未执行」。真失败仍然失败（有用例守着）。
 
+### 4. 审查没给出结论，被当成「审查不通过」
+
+审查节点要求模型回一段 JSON。模型偶尔回自然语言（或干脆跑偏），解析失败走异常分支，
+返回 `approved=False`。而路由看到「未通过、修复预算还有剩」就把任务打回执行——
+执行那边已经没有新东西可改，于是形成 `审查 → 执行 → 审查` 的空转：
+
+```
+T02 实测（加一个函数、6 次工具调用）
+修前：31 次 execute_action + 27 次 review_result = 35 万 token，产出与 6 步时相同
+修后：11 次调用、6.6 万 token，测试照样全过
+```
+
+修法两条，缺一不可：
+
+1. 审查没结论 ≠ 审查不通过。解析失败时记 `review.unavailable`，放行并在交付里写明
+   「独立审查未完成」，而不是打回重做。
+2. 给审查本身加上限（`MAX_REVIEW_ROUNDS = 2`）。只靠修复轮次兜底是不够的——
+   一次"没结论的审查"不消耗修复预算，回路就能一直转。
+
+这件事的教训比数字更值钱：**"失败要重试"这条策略，必须配一个"重试能改变什么"的判断**。
+执行已经无事可做时，重试只是把同一段上下文再发一遍。
+
 ## 附带修掉的探索成本
 
 那次任务有 20 多次调用是在探工具链：`where node pnpm uv`、`dir node_modules\.bin`、
@@ -84,6 +106,60 @@
 
 现在 `AGENTS.md` 给出绝对路径的实测命令（前端单测、类型检查），并明确写
 「别再用 where / dir / --version 逐个试」。
+
+## 量化：把花销拆成三笔账
+
+看总额没有意义。9M token 里可能 7M 出自一个跑废的任务——那时候要改的是那一件事，
+不是所有事。所以先分类，再优化：
+
+```bash
+python scripts/token_ledger.py                     # 读本机客户端库
+python scripts/token_ledger.py --json ledger.json  # 留档，便于和以后比
+python scripts/token_ledger.py --compare 2026-10-21T06:00,2026-10-21T12:00
+```
+
+台账按**钱的去处**分四类：`delivered`（有改动且成功）、`advised`（成功但没改文件，
+产出是判断）、`wasted`（失败/取消/跑飞）、`running`（未结算）。
+
+2026-10-21 15:45 的真实快照（9 个任务，含改造前的历史记录）：
+
+| 去处 | token | 占比 | 任务数 |
+|---|---|---|---|
+| 有改动且成功 | 3.37M | 30.5% | 2 |
+| 成功但无改动 | 373K | 3.4% | 5 |
+| **失败/取消/跑飞** | **7.13M** | **64.5%** | **1** |
+| 进行中 | 184K | 1.7% | 1 |
+
+同一个快照里的四个效率口径：
+
+| 口径 | 数值 | 怎么读 |
+|---|---|---|
+| 单次调用平均上下文 | 34K token | 成本地基：步数不变、上下文翻倍，账单就翻倍 |
+| 缓存命中 | 94.6% | 便宜不是因为少调用，是因为命中了缓存 |
+| 工具失败率 | 18.7% | 失败一次要重试一次，是"多跑几步"的源头 |
+| 每个有效改动文件 | 169K token | 跨模型、跨任务可比的那一个数 |
+| 每任务 token 中位 | 164K | 长尾很重：均值被一个 7.13M 的任务拉高 |
+
+结论一句话：**当时 64.5% 的钱花在一个后来被判失败的任务上**。这比"平均每步省多少
+token"重要得多，也是先修意图判定、再修工具失败、最后才谈裁剪顺序的原因。
+
+## 减 token 的四个动作
+
+前提：缓存命中 94.6%，所以**不能事后改写历史消息**——历史一改，前缀缓存整段失效，
+省下的上下文会被未命中缓存的差价吃回去。四个动作全部发生在"结果刚产生时"。
+
+| 动作 | 位置 | 省什么 |
+|---|---|---|
+| 工具输出分级预算 | `services/agent/payload.py` `TOOL_BUDGETS` | shell/测试保留头尾（失败摘要在最前、结论在最后），读文件保留开头 |
+| 相同输出折叠 | 同上 `render()` 的 `seen` | 同一任务里第二次拿到完全相同的结果，只回一句指回第几步 |
+| 补丁结果不回吐 diff | 同上 `DROP_DIFF_TOOLS` | 补丁是模型自己写的，回吐一遍等于让它读自己的作业 |
+| shell 方言一次说清 | `tools/shell.py` | Windows 上模型写 `pwd/ls/cat` 必失败；在工具描述里写明 cmd，失败时给等价命令 |
+
+前三项每次省多少都进事件流（`context.trimmed`，带 `total_saved_chars`），
+`evidence.context.tool_chars_saved` 与之同源，前端和文档读的是同一个数——不是估的。
+
+第四项直接降"失败率"：实测 83 次 `run_shell` 有 21 次失败，大头是 POSIX 命令
+打在 cmd 上。失败一次 = 重试一步 ≈ 一次完整上下文重发。
 
 ## 现在有两道预算
 
@@ -103,17 +179,30 @@
 ## 还没做的
 
 - **上下文水位偏高**：窗口 128K、水位 0.82（104,960 token），实测单次已经到 114K
-  才触发压缩。而 184 次 `context.measured` 里 `tokens_saved` 全是 0。
+  才触发压缩。而 184 次 `context.measured` 里 `tokens_saved` 全是 0——不是压缩失效，
+  是压根没到水位。压水位能省钱，但会频繁打断思考，暂时留着。
 - **token 预算没进数据库**，是进程级阈值。按任务单独设置要加列 + 迁移，
   目前它还只是个安全网，不值得为它动表结构。
+- **沙箱默认开着（`BLANK_SANDBOX_ENABLED` 缺省 true），而没装 docker 的机器上
+  每个命令都会抛 `SandboxUnavailable`**。桌面壳自己传了 false，命令行/自建部署
+  不会。现在至少不再把它判成"测试失败"（`_environment_blocked`），但更好的做法是
+  启动时探测一次并明说，而不是等每个任务各自撞墙。
 
 ## 怎么复核
 
 ```bash
 # 判定变化（含 advise）
 cd services/api && .venv/Scripts/python.exe -m pytest tests/test_intent_and_reply.py -q
-# 只读拦截与 token 预算
+# 只读拦截与 token 预算、环境失败不判失败
 cd services/api && .venv/Scripts/python.exe -m pytest tests/test_readonly_and_budget.py -q
 # 审批不再判失败
 cd services/api && .venv/Scripts/python.exe -m pytest tests/test_validation_gate.py -q
+# 工具输出瘦身、补丁可修复错误
+cd services/api && .venv/Scripts/python.exe -m pytest tests/test_token_trimming.py -q
+# shell 方言
+cd services/api && .venv/Scripts/python.exe -m pytest tests/test_shell_dialect.py -q
+# 台账（读真实库，不写库）
+python scripts/token_ledger.py
 ```
+
+产出"比别家好"怎么验收，见 `docs/QUALITY.md`（`evals/compare.mjs`）。
