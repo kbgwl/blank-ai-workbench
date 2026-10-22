@@ -7,7 +7,12 @@ import type { NextConfig } from "next";
  */
 const desktopBuild = process.env.BLANK_DESKTOP_BUILD === "1";
 
+// 端到端门禁要同时开第二个前端实例：Next 的 dev 单实例锁与产物都挂在 distDir 上，
+// 换个输出目录即可与日常 `pnpm dev` 并存，也不会覆盖开发者正在用的构建缓存。
+const distDir = process.env.BLANK_WEB_DIST_DIR ?? ".next";
+
 const nextConfig: NextConfig = {
+  distDir,
   // 本机常用 127.0.0.1 打开，不放行会导致 dev 资源被跨源拦截。
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   turbopack: {

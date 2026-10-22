@@ -13,6 +13,7 @@
     "lint:web": "pnpm -C web lint",
     "typecheck:web": "pnpm -C web exec tsc --noEmit",
     "regression": "node scripts/regression.mjs",
-    "evals": "node evals/run_evals.mjs"
+    "evals": "node evals/run_evals.mjs",
+    "e2e:team": "node evals/team_e2e/run.mjs"
   }
 }

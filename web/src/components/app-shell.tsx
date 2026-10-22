@@ -16,6 +16,7 @@ const TITLES: Record<string, string> = {
   "/daily": "日常",
   "/features": "能力",
   "/reverse-lab": "逆向实验室",
+  "/team": "Bot 团队",
 };
 
 /**

@@ -161,7 +161,8 @@ async def test_readonly_validation_is_skipped_even_after_a_refused_test_run(seed
     )
 
     assert validation["validation"]["status"] == "skipped"
-    assert validation["validation"]["passed"] is True
+    # 只读没跑测试，就不能在证据里写成通过：None 是"没验过"，True 是谎报
+    assert validation["validation"]["passed"] is None
 
 
 async def test_token_budget_stops_the_loop(seeded, tmp_path):
@@ -287,8 +288,8 @@ async def test_environment_failure_is_not_a_test_failure(seeded, tmp_path):
     )
 
     validation = result["validation"]
-    assert validation["passed"] is True, "环境问题不该终止任务"
-    assert validation["status"] == "skipped"
+    assert validation["passed"] is None, "没跑成测试就不能算通过"
+    assert validation["status"] == "skipped", "环境问题不该终止任务"
     assert "运行环境" in validation["skipped_reason"]
     # 不许悄悄放过：证据里必须留一条"没做自动化校验"，否则用户以为测试跑过了
     assert "repair_rounds" not in result

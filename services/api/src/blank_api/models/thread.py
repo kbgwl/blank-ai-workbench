@@ -28,6 +28,9 @@ class Thread(Base):
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    # chat = 用户对话；team = 团队群里某个 Bot 自己的隐藏会话。
+    # 隐藏会话不进对话列表，否则用户每建一个 Bot 就会多出一条点开没内容的"对话"。
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="chat")
     forked_from: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     # 轮次计数单独存一份：列表页要显示"共几轮"，每次去 count 一遍 tasks
     # 在一个有几百轮的会话上会变成列表接口的主要开销。

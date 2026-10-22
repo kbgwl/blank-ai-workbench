@@ -1,8 +1,13 @@
 import json
 import os
 import tempfile
+from pathlib import Path
 
-os.environ.setdefault("BLANK_DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+# 用临时文件而不是 :memory:：内存库只能靠 StaticPool 共用一条连接，后台任务
+# （团队编排、子代理）与请求处理并发时事务会互相踩。文件库每条会话拿独立连接，
+# 与生产同构；路径随测试临时目录清理。
+_TEST_DB = (Path(tempfile.mkdtemp(prefix="blank-db-")) / "test.db").as_posix()
+os.environ.setdefault("BLANK_DATABASE_URL", f"sqlite+aiosqlite:///{_TEST_DB}")
 # 默认让命令在宿主机跑，保持测试夹具与 Docker 无关；沙箱路由由 tests/test_sandbox_v07.py 用真实镜像验证。
 os.environ.setdefault("BLANK_SANDBOX_ENABLED", "0")
 # 交接笔记与长期记忆落到临时目录：跑测试不该在仓库里留 data/notes、data/memory

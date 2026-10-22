@@ -14,6 +14,7 @@ import {
   type PendingQuestion,
 } from "./api";
 import { clip } from "./format";
+import { verdictOf } from "./verdict";
 
 export type TermLine = { text: string; tone: "cmd" | "out" | "err" | "warn" };
 
@@ -187,11 +188,26 @@ function describeSystem(event: AgentEvent): { title: string; detail: string; ton
   if (type === "validation.completed" || type.startsWith("validation")) {
     const command = textOf(payload, "command", "cmd");
     const exitCode = numOf(payload, "exit_code");
-    const passed = boolOf(payload, "passed", "ok");
+    const verdict = verdictOf(boolOf(payload, "passed", "ok"), textOf(payload, "status"));
+    if (verdict.tone === "warn") {
+      // 没做成自动化校验时，command 和退出码都没有意义（根本没跑），
+      // 有意义的是后端给的原因：没授权、等审批、沙箱起不来。
+      const reason = textOf(payload, "skipped_reason");
+      return {
+        title: verdict.title,
+        detail: clip([reason, command ? `命令 ${command}` : ""].filter(Boolean).join(" · "), 160),
+        tone: verdict.tone,
+      };
+    }
     return {
-      title: passed === false ? "验证未通过" : "验证完成",
-      detail: clip([command ? `命令 ${command}` : "", exitCode !== null ? `退出码 ${exitCode}` : passed === null ? "" : passed ? "结果 通过" : "结果 未通过"].filter(Boolean).join(" · "), 160),
-      tone: passed === false ? "danger" : "accent",
+      title: verdict.title,
+      detail: clip(
+        [command ? `命令 ${command}` : "", exitCode !== null ? `退出码 ${exitCode}` : "", verdict.label === "通过" ? "结果 通过" : "结果 未通过"]
+          .filter(Boolean)
+          .join(" · "),
+        160,
+      ),
+      tone: verdict.tone,
     };
   }
   if (type === "budget.warning") {

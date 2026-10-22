@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { Notice } from "@/components/projects/ui";
 import { formatDuration, formatNumber, orNone } from "./format";
 import { StatusBadge } from "./bits";
-import { errorMessage, fetchTaskSnapshots, restoreTaskSnapshot, type Evidence, type TaskSnapshot } from "./api";
+import { errorMessage, fetchTaskSnapshots, restoreTaskSnapshot, type Evidence, type TaskSnapshot, type TestInfo } from "./api";
+import { verdictOf } from "./verdict";
 
 function Row({ label, value, tone }: { label: string; value: string; tone?: "accent" | "danger" | "warn" }) {
   const valueClass =
@@ -16,6 +17,34 @@ function Row({ label, value, tone }: { label: string; value: string; tone?: "acc
         {value}
       </span>
     </div>
+  );
+}
+
+function TestDetails({ test }: { test: TestInfo }) {
+  const verdict = verdictOf(test.passed, test.status);
+  return (
+    <>
+      <Row label="命令" value={orNone(test.command)} />
+      <Row
+        label="退出码"
+        value={test.exitCode === null ? "暂无" : String(test.exitCode)}
+        tone={test.exitCode === null ? undefined : test.exitCode === 0 ? "accent" : "danger"}
+      />
+      <Row label="结论" value={verdict.label} tone={verdict.tone} />
+      {test.skippedReason && <p className="font-mono text-[10px] text-faint">原因：{test.skippedReason}</p>}
+      {test.output ? (
+        <details className="group rounded-md border border-line bg-surface-2">
+          <summary className="cursor-pointer list-none px-2.5 py-1.5 font-mono text-[10px] text-faint hover:text-muted">
+            输出片段（{test.output.split("\n").length} 行）
+          </summary>
+          <pre className="max-h-40 overflow-auto border-t border-line px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-muted">
+            {test.output}
+          </pre>
+        </details>
+      ) : (
+        <p className="font-mono text-[10px] text-faint">无输出内容</p>
+      )}
+    </>
   );
 }
 
@@ -111,31 +140,7 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
         {!test ? (
           <p className="text-[11px] text-faint">暂无（后端未返回 test/validation）</p>
         ) : (
-          <>
-            <Row label="命令" value={orNone(test.command)} />
-            <Row
-              label="退出码"
-              value={test.exitCode === null ? "暂无" : String(test.exitCode)}
-              tone={test.exitCode === null ? undefined : test.exitCode === 0 ? "accent" : "danger"}
-            />
-            <Row
-              label="结论"
-              value={test.passed === true ? "通过" : test.passed === false ? "未通过" : orNone(test.status)}
-              tone={test.passed === true ? "accent" : test.passed === false ? "danger" : undefined}
-            />
-            {test.output ? (
-              <details className="group rounded-md border border-line bg-surface-2">
-                <summary className="cursor-pointer list-none px-2.5 py-1.5 font-mono text-[10px] text-faint hover:text-muted">
-                  输出片段（{test.output.split("\n").length} 行）
-                </summary>
-                <pre className="max-h-40 overflow-auto border-t border-line px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-muted">
-                  {test.output}
-                </pre>
-              </details>
-            ) : (
-              <p className="font-mono text-[10px] text-faint">无输出内容</p>
-            )}
-          </>
+          <TestDetails test={test} />
         )}
       </section>
 

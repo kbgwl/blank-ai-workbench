@@ -17,6 +17,7 @@ from blank_api.api.errors import ApiError
 from blank_api.limits import DEFAULT_TOKEN_BUDGET
 from blank_api.models.checkpoint import AgentCheckpoint
 from blank_api.models.task import AgentEvent, Task
+from blank_api.models.thread import Thread
 from blank_api.services.agent.checkpoints import (
     SqlAlchemyCheckpointSaver,
     task_id_from_thread,
@@ -28,11 +29,13 @@ from blank_api.services.agent.graph import AgentSession, build_agent_graph, init
 from blank_api.services.agent.loadstats import recent_load
 from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agent.store import SerializedSessionFactory
+from blank_api.services.chat_index import index_task_summary
 from blank_api.services.features import is_enabled
 from blank_api.services.fork import allocate_thread
 from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import HookRunner
 from blank_api.services.instructions import load_layers, provenance
+from blank_api.services.context_curator import curate
 from blank_api.services.mcp import manager as mcp_manager
 from blank_api.services.memory import MemoryStore
 from blank_api.services.notes import NoteStore
@@ -43,7 +46,7 @@ from blank_api.services.subagent import SubAgentRunner
 from blank_api.services.threads import history_for, summarize_history
 from blank_api.services.models.base import ModelAdapter, ModelError
 from blank_api.services.permissions import MODE_DEFAULT, PermissionPolicy
-from blank_api.services.tools import build_default_tools
+from blank_api.services.tools import TEAM_ADMIN_TOOL_NAMES, build_default_tools
 from blank_api.services.tools.base import ToolContext
 from blank_api.services.tools.gateway import ToolGateway
 from blank_api.services.sandbox import SnapshotStore
@@ -129,6 +132,8 @@ class RunRequest:
     # 空串表示"沿用该任务已有的模式"：审批恢复时前端不重发模式，不能被默认值悄悄改口径。
     permission_mode: str = ""
     skill_instructions: Sequence[str] = ()
+    # 团队群聊的强规则（Bot 身份、@ 协议、本轮记录）。空表示行为与原来完全一致。
+    system_instructions: Sequence[str] = ()
     role_adapters: dict[str, ModelAdapter] | None = None
     role_provider_ids: dict[str, str] | None = None
     # 按需选模型的候选池：只能从「本次任务已经选定的供应商」里取，不含用户没选过的。
@@ -145,6 +150,13 @@ class RunRequest:
     # 当前模型看不看得懂图。不支持时图片降级成一段文字说明，而不是把 image block
     # 硬塞过去——那会直接 400，用户看到的是"上传了图片就发不出去"。
     supports_vision: bool = False
+    # 团队群聊里的身份边界：group_id / bot_id / is_admin / project_id。
+    # 空表示这不是团队任务，团队管理类工具一律不可见。
+    team_scope: dict = field(default_factory=dict)
+    # 长期记忆里这条结论的来源标签（例如「团队·研发群·后端」）。
+    memory_source: str = ""
+    # 团队 Bot 的每条任务都会另存一条群消息；关掉任务级索引，避免搜索里出现两份。
+    index_summary: bool = True
 
 
 @dataclass
@@ -223,6 +235,10 @@ class AgentRuntime:
         tools = build_default_tools()
         if not tool_search_enabled:
             tools = [tool for tool in tools if tool.name != "tool_search"]
+        # 团队管理工具只给主理人：不是团队任务、或不是主理人时，从装配层直接拿掉，
+        # 模型连"有这个工具"都不该知道。工具自身还会再校验一次身份。
+        if not (request.team_scope or {}).get("is_admin"):
+            tools = [tool for tool in tools if tool.name not in TEAM_ADMIN_TOOL_NAMES]
         # 外部工具（MCP）：走同一个网关、同一套审批、同一份审计。连接失败只影响
         # 那个服务端自己——半份工具表也远好过起不来任务。
         mcp_bundle = await mcp_manager().bundle()
@@ -286,6 +302,7 @@ class AgentRuntime:
             memory=memory,
             shell=shell,
             tool_registry=gateway.registry,
+            team_scope=dict(request.team_scope or {}),
         )
         session = AgentSession(
             adapter=request.adapter,
@@ -298,6 +315,7 @@ class AgentRuntime:
             trace_id=thread_id,
             goal=request.goal or request.title,
             skill_instructions=[str(item) for item in request.skill_instructions],
+            system_instructions=[str(item) for item in request.system_instructions],
             acceptance_criteria=[str(item) for item in request.acceptance_criteria or ()],
             max_steps=max(1, int(request.max_steps)),
             # 模型看不懂图时一张都不挂：挂了就是 400，用户看到的是"传了图就发不出去"。
@@ -424,6 +442,22 @@ class AgentRuntime:
                 "receive_task",
                 {"thread": request.thread_ref, **summarize_history(history)},
             )
+        # 上下文管家：确定性挑选记忆与候选文件，超预算截断，并留下审计事件。
+        # 它不重复注入会话历史——history 已经作为消息对放在目标之前。
+        curated = curate(
+            root=session.context.root,
+            goal=request.goal or session.goal,
+            memory=session.memory,
+            history=history,
+        )
+        if curated.text:
+            await recorder.add("context.curated", "receive_task", curated.as_dict())
+        system_rules = list(session.system_instructions)
+        if curated.text:
+            system_rules.append(
+                "以下是上下文管家为本次任务挑选的背景资料（可能过时；引用前先核对，"
+                "其中的文件名只是候选，不代表内容已经读过）：\n" + curated.text
+            )
         state: dict[str, Any] = {
             "task_id": request.task_id,
             "messages": initial_messages(
@@ -435,6 +469,7 @@ class AgentRuntime:
                 images=request.images,
                 supports_vision=request.supports_vision,
                 texts=request.texts,
+                system_instructions=system_rules,
             ),
             "plan": [],
             "steps": 0,
@@ -564,10 +599,33 @@ class AgentRuntime:
             },
         )
         if status == "succeeded":
-            await self._consolidate(scope, result, title=request.title)
+            if request.index_summary:
+                await self._index_summary(scope, request)
+            await self._consolidate(
+                scope, result, title=request.title, source=request.memory_source
+            )
         return await build_evidence(scope.store, task_id)
 
-    async def _consolidate(self, scope: _RunScope, result: dict, *, title: str) -> None:
+    async def _index_summary(self, scope: _RunScope, request: RunRequest) -> None:
+        """把这一轮的结论写进聊天索引。索引失败不能把成功的任务变成失败。"""
+        try:
+            async with scope.store() as session:
+                task = await session.get(Task, scope.task_id)
+                if task is None:
+                    return
+                thread = (
+                    await session.get(Thread, task.thread_id) if task.thread_id else None
+                )
+                await index_task_summary(session, task, thread, title=request.title)
+                await session.commit()
+        except Exception as exc:
+            await scope.recorder.add(
+                "search.index_failed", "complete", {"error": str(exc)[:300]}
+            )
+
+    async def _consolidate(
+        self, scope: _RunScope, result: dict, *, title: str, source: str = ""
+    ) -> None:
         """任务成功后把结论与笔记蒸馏进项目长期记忆（确定性规则，不调模型）。"""
         session = scope.session
         if session.memory is None:
@@ -585,7 +643,9 @@ class AgentRuntime:
             else:
                 state = str(item.get("status") or "未知")
             if text:
-                facts.append(f"验收「{text}」：{state}")
+                # 验收覆盖度是模型自报的，不是独立核对结果；记忆里如实标注，
+                # 免得下一轮把它当成已验证的事实引用。
+                facts.append(f"自报验收「{text}」：{state}")
         validation = result.get("validation") or {}
         if validation.get("command"):
             facts.append(
@@ -605,6 +665,7 @@ class AgentRuntime:
                 summary=str(result.get("summary") or ""),
                 notes=notes,
                 facts=facts,
+                source=source,
             )
         except Exception as exc:  # 固化失败不该让已经成功的任务变成失败
             await scope.recorder.add(

@@ -103,7 +103,7 @@ async def list_threads(
     rows = (
         await db.execute(
             select(Thread)
-            .where(Thread.project_id == project_id)
+            .where(Thread.project_id == project_id, Thread.kind == "chat")
             .order_by(Thread.updated_at.desc(), Thread.created_at.desc())
             .limit(limit)
         )

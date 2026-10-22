@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test \"src/**/*.test.ts\""
+    "test": "node --test --import ./test-bootstrap.mjs \"src/**/*.test.ts\""
   },
   "dependencies": {
     "next": "16.4.1",

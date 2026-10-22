@@ -1,6 +1,8 @@
 node_modules/
+# Next 的产物目录：`.next-*` 是给并行门禁/点验开的旁路（换 distDir 与日常 dev 并存），
+# 每次点验都会生成一个，别留在 git 状态里。
 .next/
-.next-build/
+.next*/
 dist/
 packages/cli/dist/
 build/
@@ -23,6 +25,9 @@ coverage/
 evals/workspaces/
 evals/results/
 evals/regression/*.json
+# 团队端到端门禁的隔离库、日志与截图，全部是本机产物
+evals/team_e2e/.work/
+web/.team-e2e-next/
 services/api/data/*
 !services/api/data/.gitkeep
 

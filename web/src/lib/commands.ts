@@ -25,6 +25,13 @@ export const COMMANDS: Command[] = [
     href: "/settings",
     keywords: ["settings", "模型", "provider", "供应商"],
   },
+  {
+    id: "go-team",
+    label: "Bot 团队",
+    group: "前往",
+    href: "/team",
+    keywords: ["team", "bot", "团队", "群聊", "小白管家"],
+  },
 ];
 
 /** 命令面板的标题文案，与快捷键提示绑定，避免两处写死不同的键名。 */

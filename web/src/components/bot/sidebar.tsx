@@ -68,9 +68,19 @@ export function Sidebar(props: SidebarProps) {
           </svg>
         </button>
         <Link
+          href="/team"
+          title="Bot 团队"
+          className="mt-auto grid size-8 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-text"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-4" aria-hidden>
+            <circle cx="9" cy="8" r="3" />
+            <path d="M3.5 19c.6-3 2.8-4.5 5.5-4.5S13.9 16 14.5 19M15.5 5.5a3 3 0 0 1 0 6M17 14.8c2.1.3 3.3 1.7 3.7 4.2" />
+          </svg>
+        </Link>
+        <Link
           href="/settings"
           title="设置"
-          className="mt-auto grid size-8 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-text"
+          className="grid size-8 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-text"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-4" aria-hidden>
             <circle cx="12" cy="12" r="3" />
@@ -195,6 +205,16 @@ export function Sidebar(props: SidebarProps) {
       </div>
 
       <div className="border-t border-line p-2">
+        <Link
+          href="/team"
+          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-3.5 text-faint" aria-hidden>
+            <circle cx="9" cy="8" r="3" />
+            <path d="M3.5 19c.6-3 2.8-4.5 5.5-4.5S13.9 16 14.5 19M15.5 5.5a3 3 0 0 1 0 6M17 14.8c2.1.3 3.3 1.7 3.7 4.2" />
+          </svg>
+          Bot 团队
+        </Link>
         <Link
           href="/settings"
           className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 hover:text-text"

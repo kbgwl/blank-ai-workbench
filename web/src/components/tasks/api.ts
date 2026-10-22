@@ -426,6 +426,7 @@ export type TestInfo = {
   output: string;
   passed: boolean | null;
   status: string;
+  skippedReason: string;
 };
 export type UsageInfo = {
   promptTokens: number | null;
@@ -572,7 +573,7 @@ function normalizeTest(container: unknown): TestInfo | null {
   const source = pick(container, "test", "validation", "tests", "verify");
   if (!source) return null;
   if (typeof source === "string") {
-    return { command: source, exitCode: null, output: "", passed: null, status: "" };
+    return { command: source, exitCode: null, output: "", passed: null, status: "", skippedReason: "" };
   }
   const record = source as Record<string, unknown>;
   const exitCode = numOf(record, "exit_code", "exitCode", "code", "returncode");
@@ -583,6 +584,7 @@ function normalizeTest(container: unknown): TestInfo | null {
     output: textOf(record, "output", "stdout", "logs", "result", "text", "output_tail"),
     passed: passed ?? (exitCode === null ? null : exitCode === 0),
     status: textOf(record, "status", "state"),
+    skippedReason: textOf(record, "skipped_reason", "skippedReason"),
   };
 }
 

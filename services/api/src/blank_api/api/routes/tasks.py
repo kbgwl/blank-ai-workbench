@@ -5,7 +5,7 @@ import os
 import time
 import traceback
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 import anyio
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -33,7 +33,7 @@ from blank_api.schemas.task import (
     TaskRunIn,
     TaskSteerIn,
 )
-from blank_api.services.agent.evidence import build_evidence, load_task
+from blank_api.services.agent.evidence import approval_is_expired, build_evidence, load_task
 from blank_api.services.agent.artifacts import ArtifactStore
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.live import LiveFeed
@@ -694,13 +694,13 @@ async def decide_approval(
         expires_at = approval.get("expires_at")
         if expires_at:
             try:
-                expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
-                if expires.tzinfo is None:
-                    expires = expires.replace(tzinfo=timezone.utc)
-                if expires <= datetime.now(timezone.utc):
-                    raise ApiError(code="approval_expired", message="审批请求已过期，请重新运行任务生成新的审批请求", status_code=409)
+                datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
             except ValueError:
                 raise ApiError(code="approval_invalid", message="审批请求时间无效，无法继续执行", status_code=409) from None
+            # TTL 交给读侧同一个函数：这条链路曾经有三份各自实现的时间比较，
+            # 读侧说「待审批」、写侧 409，界面就只能给一个必然失败的按钮。
+            if approval_is_expired(expires_at):
+                raise ApiError(code="approval_expired", message="审批请求已过期，请重新运行任务生成新的审批请求", status_code=409)
     recorder = EventRecorder(get_session_factory(), task_id)
     await recorder.add(
         "approval.decided",
@@ -752,17 +752,15 @@ async def answer_question(
     expires_at = evidence.get("question_expires_at") or ""
     if expires_at:
         try:
-            expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
-            if expires.tzinfo is None:
-                expires = expires.replace(tzinfo=timezone.utc)
-            if expires <= datetime.now(timezone.utc):
-                raise ApiError(
-                    code="question_expired",
-                    message="问题已过期，请重新运行任务",
-                    status_code=409,
-                )
+            datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
         except ValueError:
             raise ApiError(code="question_invalid", message="问题时间无效", status_code=409) from None
+        if approval_is_expired(expires_at):
+            raise ApiError(
+                code="question_expired",
+                message="问题已过期，请重新运行任务",
+                status_code=409,
+            )
 
     await EventRecorder(get_session_factory(), task_id).add(
         "question.decided",

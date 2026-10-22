@@ -107,16 +107,35 @@ if (existsSync(PYTHON)) {
 
 // ── 4. 前端是不是最新一版（关键文案抽样）───────────────────────────────────
 const settingsHtml = path.join(WEB_DIR, "settings.html");
+// 抽样串得挑「只有这一页才有的静态文案」，别挑版本号字面量：文案会随改版过期，
+// 而版本号那一类几乎必然过期（这次就是「0.4.0 新增」早已从源码消失，包明明是新的
+// 却报旧版）。过期断言比没有断言更糟——它只会一直红，然后被人当噪音忽略。
+// 选定前先确认唯一性：grep -l 这些串，只在目标页出现的才可用。
 if (existsSync(settingsHtml)) {
   const html = readFileSync(settingsHtml, "utf8");
-  html.includes("0.4.0 新增")
+  html.includes("安全与权限")
     ? ok("前端含新设置页")
-    : bad("前端是旧版本", "settings.html 没有新分组标记");
+    : bad("前端是旧版本", "settings.html 没有「安全与权限」分组");
 }
+
+// chunk 目录：下面几项"只有某页才有的文案"都要扫它，所以先声明。
+const chunksDir = path.join(WEB_DIR, "_next", "static", "chunks");
+
+// 0.8.4 起 /team 是独立页面，靠静态导出产出 team.html。这个路由漏掉时界面不会报错
+// ——只是导航里点进去 404，而打包日志一切正常。所以按产物本身判定，不看菜单。
+const teamHtml = path.join(WEB_DIR, "team.html");
+existsSync(teamHtml) ? ok("包内含 /team 页面") : bad("包内缺 /team 页面", teamHtml);
+
+// 页面在导出时只是空壳，团队视图的文案要等客户端水合，所以只在 chunk 里认一句
+// 只有团队页才有的字符串（和会话条同一套路），别拿 team.html 的内容当证据。
+const teamChunk = existsSync(chunksDir)
+  && readdirSync(chunksDir)
+    .filter((name) => name.endsWith(".js"))
+    .some((name) => readFileSync(path.join(chunksDir, name), "utf8").includes("Bot 名册"));
+teamChunk ? ok("前端含团队视图") : bad("前端是旧版本", "没有找到团队页文案");
 
 // 会话条的文案打包后落在 JS chunk 里，页面 HTML 上看不到，只能扫 chunk。
 // 抽样一句只有会话条才有的文案，避免"前端是上一版、界面看起来正常但点不出会话"。
-const chunksDir = path.join(WEB_DIR, "_next", "static", "chunks");
 if (existsSync(chunksDir)) {
   const hit = readdirSync(chunksDir)
     .filter((name) => name.endsWith(".js"))
@@ -137,6 +156,43 @@ if (existsSync(homeHtml)) {
     : bad("首页还是旧界面", "index.html 没有 bot 输入框文案");
 } else {
   bad("首页缺失", homeHtml);
+}
+
+// ── 5. 包里不许有本机开发痕迹 ───────────────────────────────────────────────
+// 起因：`extraResources` 从 `../services/api` 整目录往外拷，过滤清单只排掉了
+// `.venv/data/tests`，于是开发机的 `.env`（指向 ./data 的 SQLite）和 `_verify/`
+// （4.9MB 的 pytest 日志、junit）跟着进了客户包。前者是本机配置，后者是验证产物，
+// 都不该出现在交付物里；更要命的是它一直"打包成功"，没人会去看。
+const FORBIDDEN = /(^|[\\/])(\.env|\.env\..+|_verify|logs|\.git)$/;
+const SECRET_FILE = /(\.db|\.db-wal|\.db-shm|\.key)$/;
+const apiTree = path.join(RESOURCES, "backend", "api");
+if (existsSync(apiTree)) {
+  const leaked = [];
+  for (const rel of readdirSync(apiTree, { recursive: true })) {
+    const name = String(rel);
+    if (FORBIDDEN.test(name) || SECRET_FILE.test(name)) leaked.push(name);
+  }
+  leaked.length
+    ? bad("包内含本机开发痕迹", leaked.slice(0, 8).join("、"))
+    : ok("包内无 .env/_verify/本地库");
+} else {
+  bad("包内后端目录缺失", apiTree);
+}
+
+// Key 只允许加密存在用户数据目录，绝不允许以明文进包。扫源码目录里的供应商 Key 形态。
+const keyPattern = /\bsk-[A-Za-z0-9_-]{16,}\b/;
+const srcTree = path.join(apiTree, "src");
+if (existsSync(srcTree)) {
+  const hits = [];
+  for (const rel of readdirSync(srcTree, { recursive: true })) {
+    const name = String(rel);
+    if (!/\.(py|json|md|txt|toml|ini|env)$/.test(name)) continue;
+    const full = path.join(srcTree, name);
+    try {
+      if (readFileSync(full, "utf8").match(keyPattern)) hits.push(name);
+    } catch {}
+  }
+  hits.length ? bad("包内源码含疑似明文 Key", hits.slice(0, 5).join("、")) : ok("包内源码无明文 Key");
 }
 
 console.log("");

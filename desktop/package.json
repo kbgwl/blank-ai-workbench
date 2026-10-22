@@ -1,6 +1,6 @@
 {
   "name": "blank-ai-workbench-desktop",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "private": true,
   "description": "空白格 AI 操作台的桌面壳",
   "main": "main.cjs",
@@ -53,7 +53,18 @@
           "!__pycache__/**",
           "!**/__pycache__/**",
           "!.pytest_cache/**",
-          "!*.pyc"
+          "!*.pyc",
+          "!.env",
+          "!.env.*",
+          "!.gitignore",
+          "!_verify/**",
+          "!_verify",
+          "!logs/**",
+          "!logs",
+          "!**/*.db",
+          "!**/*.db-wal",
+          "!**/*.db-shm",
+          "!**/*.key"
         ]
       }
     ],

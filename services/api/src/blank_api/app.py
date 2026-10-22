@@ -12,10 +12,28 @@ from blank_api.services.agent.manager import run_manager
 
 
 @asynccontextmanager
-async def app_lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
     from blank_api.api.routes.tasks import recover_pending_runs
 
+    # 团队轮次的推进器活在进程内存里：上次进程没收尾的轮次不会有别人接着推。
+    # 迁移没跑过的旧库会让这里报 missing table，不能因此挡住 API 启动。
+    try:
+        from blank_api.services.team import recover_interrupted_rounds
+
+        await recover_interrupted_rounds()
+    except Exception:
+        pass
+
     await recover_pending_runs()
+    # 0017 之前的群消息没有索引行：启动时补一次，让升级后的历史也能被搜到。
+    # 表不存在（旧库还没迁移）或补索引失败都不能挡住 API 启动。
+    try:
+        from blank_api.services.chat_index import backfill
+
+        await backfill()
+    except Exception:
+        pass
+
     async def recovery_loop() -> None:
         while True:
             await asyncio.sleep(15)
@@ -36,6 +54,9 @@ async def app_lifespan(_: FastAPI) -> AsyncIterator[None]:
         for task in (recovery_task, sweep_task):
             task.cancel()
         await asyncio.gather(recovery_task, sweep_task, return_exceptions=True)
+        orchestrator = getattr(app.state, "team_orchestrator", None)
+        if orchestrator is not None:
+            await orchestrator.shutdown()
         await run_manager.shutdown()
         # 外部工具服务端是我们起的子进程：不在这里收掉，退出后会留下孤儿进程
         from blank_api.services.mcp import manager as mcp_manager

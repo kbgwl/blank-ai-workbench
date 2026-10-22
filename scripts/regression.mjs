@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 版本升级回归门禁：一次跑完后端测试、迁移往返、前端类型检查与构建，可选跑评测样例。
-// 用法： pnpm regression [--evals] [--only T01,T03] [--skip-web]
+// 用法： pnpm regression [--evals] [--only T01,T03] [--skip-web] [--team-e2e]
 import { spawn } from "node:child_process";
 import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -13,6 +13,7 @@ const argv = process.argv.slice(2);
 const flags = {
   evals: argv.includes("--evals"),
   skipWeb: argv.includes("--skip-web"),
+  teamE2e: argv.includes("--team-e2e"),
   only: argv.includes("--only") ? argv[argv.indexOf("--only") + 1] : null,
 };
 
@@ -46,9 +47,10 @@ if (migrated) {
   await step("alembic 重新 upgrade head", "uv", ["run", "alembic", "upgrade", "head"], apiDir, pgEnv);
 }
 
-await step("后端 pytest", "uv", ["run", "pytest", "-q"], apiDir, {
-  BLANK_DATABASE_URL: "sqlite+aiosqlite:///:memory:",
-});
+// 不要给 pytest 注入 BLANK_DATABASE_URL：tests/conftest.py 已经把夹具指向
+// 临时文件库（团队编排、子代理这些后台任务与请求并发时，:memory: 每条连接是独立库，
+// 会读不到刚建的 Task，把好好的团队测试判成假失败）。
+await step("后端 pytest", "uv", ["run", "pytest", "-q"], apiDir);
 
 if (!flags.skipWeb) {
   await step("前端单元测试", "pnpm", ["-C", "web", "test"], root);
@@ -61,6 +63,10 @@ if (flags.evals) {
   if (flags.only) args.push("--only", flags.only);
   await step("评测样例集", "node", args, root);
 }
+
+// 团队链路只有跨进程才暴露问题（审批挂起后成员是否真的变化、管家挑的资料是否进了提示），
+// 单测全绿不代表可用，所以这一步单独开关，跑满约 10 分钟。
+if (flags.teamE2e) await step("团队端到端门禁", "node", ["evals/team_e2e/run.mjs"], root);
 
 const failed = steps.filter((s) => s.code !== 0);
 const report = { at: new Date().toISOString(), passed: failed.length === 0, steps };

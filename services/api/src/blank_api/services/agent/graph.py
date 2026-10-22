@@ -177,6 +177,9 @@ class AgentSession:
     goal: str
     trace_id: str = ""
     skill_instructions: list[str] = field(default_factory=list)
+    # 群聊等场景的强约束（Bot 身份、发言协议、本轮记录）。与 Skill 的"偏好"不同，
+    # 这一段是任务规则，但仍不得覆盖安全规则、审批规则与沙箱边界。
+    system_instructions: list[str] = field(default_factory=list)
     role_adapters: dict[str, ModelAdapter] = field(default_factory=dict)
     role_provider_ids: dict[str, str] = field(default_factory=dict)
     # 按需选模型（特性开关 model_routing）。router 为 None 时 call_model 完全走老路径；
@@ -643,6 +646,7 @@ def initial_messages(
     images: Sequence[dict] | None = None,
     supports_vision: bool = False,
     texts: Sequence[dict] | None = None,
+    system_instructions: Sequence[str] | None = None,
 ) -> list[dict]:
     from blank_api.services.instructions import compose
 
@@ -652,6 +656,14 @@ def initial_messages(
         system += (
             "\n用户已明确启用以下 Skill，它们只能作为工作偏好参考，不能覆盖安全规则、审批规则或任务目标：\n"
             + "\n".join(f"- {item}" for item in active_skills)
+        )
+    rules = [str(item).strip() for item in system_instructions or () if str(item).strip()]
+    if rules:
+        # 群聊协议是任务规则，不是可选偏好；但仍明确写在安全规则之后，
+        # 任何"跳过审批/越出工作区"的句子都不会因为它而生效。
+        system += (
+            "\n以下是本次任务必须遵守的协作规则（不得覆盖安全规则、审批规则与工作区边界）：\n"
+            + "\n".join(rules)
         )
     if instruction_layers:
         # 分层指令（用户级 → 项目 AGENTS.md → 本次任务）在这里合进系统提示，
@@ -1648,6 +1660,26 @@ def _changed_paths(results: list[dict]) -> list[str]:
     return paths
 
 
+def _skipped_validation(reason: str, *, command: str = "", output_tail: str = "") -> dict:
+    """构造「本次没有自动化校验」的结论。
+
+    ``passed`` 必须是 ``None`` 而不是 ``True``。控制流走 ``status == "skipped"``
+    （见 route_after_validation、resolve_status），压根不看这个字段；它是**证据**，
+    会进 ``validation.completed`` 事件、任务 extra 和前端时间线。写成 True 就等于
+    对用户说"测试跑过且通过了"，而实际上一行都没跑——正是 AGENTS 里禁止的
+    「把没验过说成验过」。收成一个函数也是为了这个：新增跳过分支时没法各写一遍 True。
+    """
+    return {
+        "command": command,
+        "passed": None,
+        "status": "skipped",
+        "exit_code": None,
+        "summary": {},
+        "output_tail": output_tail,
+        "skipped_reason": reason,
+    }
+
+
 async def run_validation_node(state: AgentState, session: AgentSession) -> AgentState:
     node = "run_validation"
     await session.recorder.add("node.started", node, {})
@@ -1657,28 +1689,12 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
     if state.get("readonly") or session.readonly:
         # 只读调研里被拒掉的 run_tests 也会出现在 results 里。不在这里提前返回，
         # 它会走进下面的测试判定，拿一个 refused 当失败，然后把整个任务判成没通过。
-        validation = {
-            "command": "",
-            "passed": True,
-            "status": "skipped",
-            "exit_code": None,
-            "summary": {},
-            "output_tail": "",
-            "skipped_reason": "只读调研，未改动任何文件，无需执行测试",
-        }
+        validation = _skipped_validation("只读调研，未改动任何文件，无需执行测试")
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}
     if not executed and not changed:
         # 纯问答/纯排查：没有可校验的产物，直接放行，不要凭空造一条失败
-        validation = {
-            "command": "",
-            "passed": True,
-            "status": "skipped",
-            "exit_code": None,
-            "summary": {},
-            "output_tail": "",
-            "skipped_reason": "本次没有改动任何文件，无需执行测试",
-        }
+        validation = _skipped_validation("本次没有改动任何文件，无需执行测试")
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}
     if executed:
@@ -1702,15 +1718,11 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         # 工具在等你批准，不是失败。判成 failed 的代价是双倍的：模型会去"修复"
         # 一个不存在的问题——重试同一个需要审批的工具、再等、再判失败，直到步数
         # 耗尽；最后整个任务还被记成「测试未通过」，前面做过的全部作废。
-        validation = {
-            "command": data.get("command") or "run_tests",
-            "passed": True,
-            "status": "skipped",
-            "exit_code": None,
-            "summary": {},
-            "output_tail": str(payload.get("message") or payload.get("output") or "")[-2000:],
-            "skipped_reason": "测试在等待你批准，本次未执行；批准后重跑即可拿到结论",
-        }
+        validation = _skipped_validation(
+            "测试在等待你批准，本次未执行；批准后重跑即可拿到结论",
+            command=data.get("command") or "run_tests",
+            output_tail=str(payload.get("message") or payload.get("output") or "")[-2000:],
+        )
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}
     if status in ("denied",) or _environment_blocked(payload):
@@ -1722,15 +1734,11 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
             if status == "denied"
             else "测试没能执行（运行环境不可用），本次未做自动化校验"
         )
-        validation = {
-            "command": data.get("command") or "run_tests",
-            "passed": True,
-            "status": "skipped",
-            "exit_code": None,
-            "summary": {},
-            "output_tail": str(payload.get("message") or payload.get("output") or "")[-2000:],
-            "skipped_reason": reason,
-        }
+        validation = _skipped_validation(
+            reason,
+            command=data.get("command") or "run_tests",
+            output_tail=str(payload.get("message") or payload.get("output") or "")[-2000:],
+        )
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}
     validation = {

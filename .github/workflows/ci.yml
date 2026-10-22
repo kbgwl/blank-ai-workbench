@@ -51,3 +51,17 @@ jobs:
           uv run alembic downgrade base
           uv run alembic upgrade head
         working-directory: services/api
+
+  team-e2e:
+    # 团队链路只有跨进程才暴露问题（审批放行后成员是否真的变化、管家挑的资料是否进了提示），
+    # 单测全绿挡不住这类结论。浏览器点验需要 Chrome，CI 里先跑后端阶段，本地用 pnpm e2e:team 补全。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: uv sync
+        working-directory: services/api
+      - run: node evals/team_e2e/run.mjs --skip-web

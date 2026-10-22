@@ -10,6 +10,7 @@ from pathlib import Path
 from blank_api.services.agent.graph import initial_messages
 from blank_api.services.instructions import (
     FILE_CHAR_LIMIT,
+    LAYER_HARNESS,
     LAYER_PROJECT,
     LAYER_TASK,
     LAYER_USER,
@@ -98,3 +99,41 @@ def test_initial_messages_without_layers_is_stable() -> None:
     with_empty = initial_messages("目标", [], None, [])
     assert with_none == with_empty
     assert with_none[0]["content"].startswith("你是空白格")
+
+
+def test_harness_layer_sits_between_project_and_task(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text("项目约定\n", encoding="utf-8")
+    harness = tmp_path / ".blank" / "harness"
+    harness.mkdir(parents=True)
+    (harness / "systemprompt.md").write_text("harness 约定\n", encoding="utf-8")
+
+    layers = load_layers(tmp_path, extra=["任务要求\n"], env=_env(tmp_path))
+    assert [item.source for item in layers] == [LAYER_PROJECT, LAYER_HARNESS, LAYER_TASK]
+
+    composed = compose("BASE", layers)
+    assert composed.index("项目约定") < composed.index("harness 约定") < composed.index("任务要求")
+    assert "任务 > harness > 项目 > 用户" in composed
+
+
+def test_harness_on_demand_content_stays_on_disk(tmp_path: Path) -> None:
+    harness = tmp_path / ".blank" / "harness"
+    (harness / "skills" / "pdf").mkdir(parents=True)
+    (harness / "systemprompt.md").write_text("先读再改\n", encoding="utf-8")
+    (harness / "skills" / "pdf" / "SKILL.md").write_text(
+        "---\ndescription: 处理 PDF\n---\n技能正文\n", encoding="utf-8"
+    )
+
+    layer = load_layers(tmp_path, env=_env(tmp_path))[0]
+    assert "技能正文" not in layer.content
+    assert "skills/pdf/SKILL.md" in layer.content
+
+
+def test_broken_harness_does_not_break_loading(tmp_path: Path) -> None:
+    """半写坏的文件只让 harness 这一层缺席，不能拖垮整次任务。"""
+    (tmp_path / "AGENTS.md").write_text("项目约定\n", encoding="utf-8")
+    harness = tmp_path / ".blank" / "harness"
+    harness.mkdir(parents=True)
+    (harness / "systemprompt.md").write_bytes(b"\xff\xfe\x00broken")
+
+    layers = load_layers(tmp_path, env=_env(tmp_path))
+    assert [item.source for item in layers] == [LAYER_PROJECT]

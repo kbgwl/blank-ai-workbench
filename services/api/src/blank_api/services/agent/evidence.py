@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -83,7 +84,7 @@ async def build_evidence(
             "arguments": call.arguments,
             "risk_level": call.risk_level,
             "message": call.result_summary,
-            "approval_state": "待审批",
+            **_approval_lifecycle(approval_context.get("expires_at")),
             **_approval_hints(approval_context, call.name, call.arguments),
         }
         for call in calls
@@ -102,8 +103,7 @@ async def build_evidence(
                     "arguments": payload.get("arguments") or {},
                     "risk_level": str(payload.get("risk_level") or "high"),
                     "message": "高风险操作等待人工审批",
-                    "approval_state": "待审批",
-                    "expires_at": (payload.get("expires_at") if isinstance(payload, dict) else None),
+                    **_approval_lifecycle(payload.get("expires_at") if isinstance(payload, dict) else None),
                     **_approval_hints(payload, str(payload.get("tool") or ""), payload.get("arguments") or {}),
                 }
             )
@@ -229,6 +229,9 @@ async def build_evidence(
         "pending_approvals": pending_approvals,
         "pending_questions": pending_questions,
         "question_expires_at": question_expires_at,
+        # 问题卡和审批卡共用同一条中断通道、同一套 TTL，前端要的「还能不能答」
+        # 也必须由同一个判定给，别让它自己解析时间串。
+        "question_expired": approval_is_expired(question_expires_at),
         "context": context_summary,
         "unverified_risks": unverified,
         "timeline": [
@@ -241,6 +244,39 @@ async def build_evidence(
             }
             for event in events
         ],
+    }
+
+
+def approval_is_expired(expires_at: object, *, now: datetime | None = None) -> bool:
+    """审批/提问项是否已经过了 TTL。
+
+    过期判定只能有一处：写侧（提交审批时拒绝并 409）和读侧（`/state` 里的
+    `approval_state`）若各算各的，界面就会照「待审批」渲染一个必然 409 的按钮——
+    真模型点验实测到了：成员挂起后 5 分钟没人点，`/state` 仍报「待审批」，
+    再批就是 `approval_expired`，整轮看着还能救、其实只能重跑。
+
+    没有时间戳＝不按 TTL 拦（写侧同样放行）；时间戳读不懂＝点不成，读侧算过期，
+    写侧会先把它当成非法时间报 409，两侧都拿不到能批准的结论。
+    """
+    if not expires_at:
+        return False
+    try:
+        expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    return expires <= (now or datetime.now(timezone.utc))
+
+
+def _approval_lifecycle(expires_at: object) -> dict[str, Any]:
+    """审批卡的状态字段。读侧和写侧（`_reject_expired`）必须给同一个答案，
+    否则界面会给出一个点了必然 409 的按钮。"""
+    expired = approval_is_expired(expires_at)
+    return {
+        "approval_state": "已过期" if expired else "待审批",
+        "expired": expired,
+        "expires_at": expires_at or None,
     }
 
 

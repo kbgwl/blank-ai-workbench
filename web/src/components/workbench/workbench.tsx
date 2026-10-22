@@ -26,6 +26,7 @@ import {
   type TaskDraft,
 } from "@/components/tasks/api";
 import { nodeLabel, statusMeta } from "@/components/tasks/status";
+import { verdictOf } from "@/components/tasks/verdict";
 import { diffStats, formatDateTime, formatNumber } from "@/components/tasks/format";
 import { buildBlocks, type Block } from "@/components/tasks/timeline";
 import { ReplyView } from "@/components/tasks/reply";
@@ -765,7 +766,7 @@ export function Workbench() {
               </Block>
 
               <Block label="证据">
-                <Kv k="测试" v={evidence?.test ? evidence.test.status || (evidence.test.passed ? "通过" : "未通过") : "未运行"} />
+                <Kv k="测试" v={evidence?.test ? verdictOf(evidence.test.passed, evidence.test.status).label : "未运行"} />
                 <Kv k="验收覆盖" v={`${evidence?.acceptance.filter((item) => item.covered === true).length ?? 0} / ${evidence?.acceptance.length ?? 0}`} />
                 <Kv k="已用步数" v={`${task.stepsUsed ?? 0}${task.maxSteps ? ` / ${task.maxSteps}` : ""}`} />
                 <Kv k="用量" v={tokenLabel(evidence)} />

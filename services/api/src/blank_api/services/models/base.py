@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
 import httpx
@@ -152,20 +153,36 @@ class ModelAdapter(ABC):
             )
 
     # ---- transport helpers --------------------------------------------------
-    def _client(self) -> httpx.AsyncClient:
+    @asynccontextmanager
+    async def _client(self) -> AsyncIterator[httpx.AsyncClient]:
+        """客户端出口统一把传输失败翻译成 ModelError。
+
+        流式调用在 `aiter_lines()` 迭代到一半时才抛超时，那一刻没有任何 `try` 兜着：
+        异常会一路穿出任务端点，客户收到 500「服务崩了」，而真实的答案是「模型太慢，
+        可以重试」。收在这一个出口上，各家适配器的 8 个流式调用点不必各写一遍翻译。
+        """
+        client = self._new_client()
+        try:
+            async with client as opened:
+                yield opened
+        except httpx.TimeoutException:
+            raise ModelError("model_timeout", f"模型请求超时：{self.config.name}", retryable=True) from None
+        except httpx.HTTPError as exc:
+            raise ModelError(
+                "model_unreachable",
+                f"模型服务不可达：{self.config.name}（{exc.__class__.__name__}）",
+                retryable=True,
+            ) from None
+
+    def _new_client(self) -> httpx.AsyncClient:
         factory = self.config.client_factory
         if isinstance(factory, httpx.AsyncClient):
             return factory
         return factory(timeout=httpx.Timeout(self.config.timeout_seconds))
 
     async def _request_json(self, method: str, url: str, **kwargs) -> dict:
-        try:
-            async with self._client() as client:
-                resp = await client.request(method, url, **kwargs)
-        except httpx.TimeoutException:
-            raise ModelError("model_timeout", f"模型请求超时：{self.config.name}", retryable=True) from None
-        except httpx.HTTPError as exc:
-            raise ModelError("model_unreachable", f"模型服务不可达：{self.config.name}（{exc.__class__.__name__}）", retryable=True) from None
+        async with self._client() as client:
+            resp = await client.request(method, url, **kwargs)
         if resp.status_code >= 400:
             raise ModelError(
                 "model_http_error",

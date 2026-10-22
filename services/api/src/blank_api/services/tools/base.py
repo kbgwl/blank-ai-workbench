@@ -53,6 +53,9 @@ class ToolContext:
     shell: Any = None
     # 工具注册表：tool_search 靠它判断"哪些工具还没加载"，激活状态按会话隔离
     tool_registry: Any = None
+    # 团队群聊身份：group_id / bot_id / is_admin / project_id。空表示非团队任务，
+    # 团队管理工具只在主理人的任务里可见。
+    team_scope: dict = field(default_factory=dict)
 
 
 @dataclass

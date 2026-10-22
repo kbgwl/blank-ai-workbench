@@ -57,6 +57,8 @@ READ_ONLY_TOOLS = frozenset(
         "web_fetch",
         "read_notes",
         "memory_search",
+        # 团队状态只读，计划模式可以查；其余 team_* 写操作仍按普通规则拒绝
+        "team_status",
         # 检索本身只读：计划模式要靠它把 git / 联网这些能力加载进来做只读取证
         "tool_search",
     }

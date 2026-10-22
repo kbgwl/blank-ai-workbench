@@ -9,6 +9,7 @@ from blank_api.api.routes import (
     settings,
     skills,
     tasks,
+    team,
     threads,
     uploads,
 )
@@ -41,3 +42,4 @@ api_router.include_router(skills.router)
 api_router.include_router(observability.router)
 api_router.include_router(settings.router)
 api_router.include_router(threads.router)
+api_router.include_router(team.router)
