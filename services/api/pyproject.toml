@@ -13,6 +13,7 @@ dependencies = [
     "langgraph>=1.2.15",
     "langgraph-checkpoint-sqlite>=3.1.2",
     "pydantic-settings>=2.12.0",
+    "pypdf>=6.21.1",
     "sqlalchemy[asyncio]>=2.0.46",
     "uvicorn[standard]>=0.54.0",
 ]

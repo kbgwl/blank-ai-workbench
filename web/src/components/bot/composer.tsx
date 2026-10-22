@@ -8,7 +8,7 @@ import { insertReference } from "./picker";
 import { composerAction } from "./turns";
 import { ReferenceChips } from "./reference-chips";
 import { referencesIn } from "./references";
-import { ACCEPT_ATTR, imageFilesFrom, type DraftImage } from "./uploads";
+import { ACCEPT_ATTR, filesFrom, type DraftAttachment } from "./uploads";
 
 export type ComposerProps = {
   projects: Project[];
@@ -28,7 +28,7 @@ export type ComposerProps = {
   draft: string;
   onDraftChange: (value: string) => void;
   /** 草稿里的图片。上传完成的才有 id，上传中的不能发送。 */
-  images: DraftImage[];
+  images: DraftAttachment[];
   onAddImages: (files: File[]) => void;
   onRemoveImage: (key: string) => void;
   onSend: () => void;
@@ -119,7 +119,7 @@ export function Composer(props: ComposerProps) {
             event.preventDefault();
             dragDepth.current = 0;
             setDragging(false);
-            const files = imageFilesFrom(event.dataTransfer?.files);
+            const files = filesFrom(event.dataTransfer?.files);
             if (files.length > 0) props.onAddImages(files);
           }}
         >
@@ -150,7 +150,7 @@ export function Composer(props: ComposerProps) {
             onPaste={(event) => {
               // 截图工具的常规用法就是 Ctrl+V。只处理剪贴板里真有图片文件的情况，
               // 复制一段带图的网页内容时也会命中这里，此时不该拦掉文本粘贴。
-              const files = imageFilesFrom(event.clipboardData?.files);
+              const files = filesFrom(event.clipboardData?.files);
               if (files.length === 0) return;
               event.preventDefault();
               props.onAddImages(files);
@@ -196,7 +196,7 @@ export function Composer(props: ComposerProps) {
               multiple
               hidden
               onChange={(event) => {
-                const files = imageFilesFrom(event.target.files);
+                const files = filesFrom(event.target.files);
                 if (files.length > 0) props.onAddImages(files);
                 // 清空：不清的话选同一张图第二次不会触发 change。
                 event.target.value = "";
@@ -207,9 +207,9 @@ export function Composer(props: ComposerProps) {
               {referencesIn(props.draft).length > 0
                 ? `已引用 ${referencesIn(props.draft).length} 个文件`
                 : uploading
-                  ? "图片上传中…"
+                  ? "附件上传中…"
                   : readyImages.length > 0
-                    ? `${readyImages.length} 张图`
+                    ? `${readyImages.length} 个附件`
                     : ""}
             </span>
 

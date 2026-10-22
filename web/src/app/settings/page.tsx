@@ -4,6 +4,7 @@ import { FeatureFlagsPanel } from "@/components/settings/feature-flags-panel";
 import { McpPanel } from "@/components/settings/mcp-panel";
 import { ProvidersView } from "@/components/settings/providers-view";
 import { RoleModelSettings } from "@/components/settings/role-model-settings";
+import { RoutingEvidencePanel } from "@/components/settings/routing-evidence-panel";
 import { SafetyPanel } from "@/components/settings/safety-panel";
 
 export default function SettingsPage() {
@@ -72,6 +73,19 @@ export default function SettingsPage() {
           </span>
         </div>
         <FeatureFlagsPanel />
+      </section>
+
+      <section>
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="text-[14px] font-medium tracking-tight">按需选模型的转正依据</h2>
+            <p className="mt-1 text-[12px] leading-relaxed text-faint">
+              model_routing 默认关闭。开不开不该凭感觉——这里把「省了多少、切了多少次、提档重试了多少次」
+              从运行记录里汇出来，样本不足时它会直说不足。
+            </p>
+          </div>
+        </div>
+        <RoutingEvidencePanel />
       </section>
 
       <section>

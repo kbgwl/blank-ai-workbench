@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { Panel } from "@/components/panel";
-import { canPickDirectory, pickDirectory } from "@/lib/desktop";
+import { canOpenPath, canPickDirectory, openPath, pickDirectory } from "@/lib/desktop";
 import {
   activateWorkspace,
   activeWorkspace,
@@ -43,6 +43,26 @@ export function WorkspacePane({ project, onChanged }: Props) {
 
   const workspace = activeWorkspace(project);
   const nativePicker = canPickDirectory();
+  const nativeShell = canOpenPath();
+
+  /**
+   * 在文件管理器里打开某个工作区。
+   *
+   * 路径在接口里是打码的，所以要先单独取一次真路径——这个动作和"显示完整路径"
+   * 用的是同一个接口，只是拿到之后不再展示而是交给系统。取不到就不打开，
+   * 不要把 `<workspace:xxx>` 这种占位串丢给文件管理器。
+   */
+  async function openInShell(workspaceId: string) {
+    setFormError(null);
+    try {
+      const real = revealed[workspaceId] ?? (await revealWorkspacePath(project!.id, workspaceId));
+      setRevealed((current) => ({ ...current, [workspaceId]: real }));
+      const failure = await openPath(real);
+      if (failure) setFormError(failure);
+    } catch (error) {
+      setFormError(errorMessage(error));
+    }
+  }
 
   async function browse() {
     if (!nativePicker || picking) return;
@@ -161,6 +181,9 @@ export function WorkspacePane({ project, onChanged }: Props) {
                         >
                           {activatingId === item.id ? "切换中" : "切到这里"}
                         </Button>
+                      )}
+                      {nativeShell && (
+                        <Button onClick={() => void openInShell(item.id)}>打开目录</Button>
                       )}
                       <Button
                         disabled={unbindingId === item.id}

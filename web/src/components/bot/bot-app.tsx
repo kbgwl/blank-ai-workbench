@@ -29,12 +29,15 @@ import { Sidebar } from "./sidebar";
 import { TurnView } from "./turn";
 import { buildSteps, isTurnRunning, touchedFiles, turnReply } from "./turns";
 import {
-  MAX_IMAGES_PER_TURN,
-  imageRejection,
+  MAX_ATTACHMENTS_PER_TURN,
+  MAX_TOTAL_IMAGE_BYTES,
+  attachmentKind,
+  attachmentRejection,
+  prepareImage,
   previewUrl,
   releasePreview,
-  uploadImage,
-  type DraftImage,
+  uploadAttachment,
+  type DraftAttachment,
 } from "./uploads";
 
 const SUGGESTIONS = [
@@ -45,6 +48,49 @@ const SUGGESTIONS = [
 ];
 
 const PROVIDER_KEY = "blank.bot.provider";
+
+/** 最近用过的工作区按项目记在本地：跨会话保留，但绝不进库（它只是偏好，不是数据）。 */
+const RECENT_WS_PREFIX = "blank.recent-workspaces.";
+
+function readRecentWorkspaces(projectId: string): string[] {
+  if (typeof window === "undefined" || !projectId) return [];
+  try {
+    const raw = window.localStorage.getItem(`${RECENT_WS_PREFIX}${projectId}`);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    // 存坏了就当没有：这个列表只影响排序，不值得为它报错。
+    return [];
+  }
+}
+
+function rememberWorkspace(projectId: string, workspaceId: string): string[] {
+  const next = [workspaceId, ...readRecentWorkspaces(projectId).filter((id) => id !== workspaceId)].slice(0, 5);
+  try {
+    window.localStorage.setItem(`${RECENT_WS_PREFIX}${projectId}`, JSON.stringify(next));
+  } catch {
+    /* 隐私模式下写不进去，排序退化成默认顺序即可 */
+  }
+  return next;
+}
+
+let draftSeq = 0;
+
+/** 建一个草稿条目。本地的缩略图只给图片用，文本与 PDF 显示文件条。 */
+function entryFor(file: File, kind: DraftAttachment["kind"], error: string): DraftAttachment {
+  draftSeq += 1;
+  return {
+    key: `att-${Date.now()}-${draftSeq}`,
+    id: "",
+    name: file.name || (kind === "image" ? "粘贴的图片" : "附件"),
+    mime: file.type,
+    size: file.size,
+    preview: kind === "image" ? previewUrl(file) : "",
+    uploading: !error,
+    error,
+    kind,
+  };
+}
 
 export function BotApp() {
   const [boot, setBoot] = useState<{ projects: Project[]; providers: Provider[] } | null>(null);
@@ -66,7 +112,7 @@ export function BotApp() {
 
   const [draft, setDraft] = useState("");
   /** 草稿里已选/已上传的图片。发送成功后清空。 */
-  const [images, setImages] = useState<DraftImage[]>([]);
+  const [images, setImages] = useState<DraftAttachment[]>([]);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -93,7 +139,23 @@ export function BotApp() {
 
   /** 当前项目与它绑定的目录。工作区是"在哪个目录里干活"，是项目的一个属性。 */
   const currentProject = boot?.projects.find((project) => project.id === projectId) ?? null;
-  const workspaces = currentProject?.workspaces ?? [];
+  // 最近切过的排前面：一个项目往往绑两三个目录，常用的那一个应该在第一行，
+  // 而不是每次都在列表里找。原始顺序仍然保留（没有记录时就是它）。
+  // 记录变动用一个版本号触发重算，而不是把 localStorage 塞进 state：
+  // 在 effect 里 setState 会级联渲染，而这里真正变的只有"排序依据"。
+  const [recentVersion, setRecentVersion] = useState(0);
+  const workspaces = useMemo(() => {
+    const all = currentProject?.workspaces ?? [];
+    const recent = readRecentWorkspaces(projectId);
+    if (recent.length === 0) return all;
+    const rank = (id: string) => {
+      const index = recent.indexOf(id);
+      return index < 0 ? recent.length : index;
+    };
+    return [...all].sort((left, right) => rank(left.id) - rank(right.id));
+    // recentVersion 只用来在"刚切过"之后重算一次，不参与计算。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProject?.workspaces, projectId, recentVersion]);
   const canPickWorkspace = canPickDirectory();
 
   // ── 启动：项目与供应商 ────────────────────────────────────────────────
@@ -296,6 +358,8 @@ export function BotApp() {
       setActionError(null);
       try {
         await activateWorkspace(projectId, workspaceId);
+        rememberWorkspace(projectId, workspaceId);
+        setRecentVersion((version) => version + 1);
         await refreshProjects();
         // 说清生效时机：正在跑的那一轮已经把根目录读进去了，切换只影响下一次启动。
         setComposerHint("已切换目录，下一轮在这个目录里执行。");
@@ -317,6 +381,8 @@ export function BotApp() {
       // 刚选的目录就是用户想用的那个：绑完立刻切成活动，否则新绑的在界面上是灰的，
       // 用户会以为没成功（这也是旧版最难理解的一处）。
       await activateWorkspace(projectId, bound.id);
+      rememberWorkspace(projectId, bound.id);
+      setRecentVersion((version) => version + 1);
       await refreshProjects();
       setComposerHint(`已绑定并切到 ${picked}`);
     } catch (error: unknown) {
@@ -332,59 +398,75 @@ export function BotApp() {
    * 相反的做法（发送时才传）会让"大图 + 慢网"变成一段按了回车什么都不发生的空白。
    */
   const addImages = useCallback(
-    (files: File[]) => {
-      if (!projectId || files.length === 0) return;
+    (incoming: File[]) => {
+      if (!projectId || incoming.length === 0) return;
       setSendError(null);
-      const room = Math.max(0, MAX_IMAGES_PER_TURN - images.length);
+      const room = Math.max(0, MAX_ATTACHMENTS_PER_TURN - images.length);
       if (room === 0) {
-        setSendError(`一次最多 ${MAX_IMAGES_PER_TURN} 张图`);
+        setSendError(`一次最多 ${MAX_ATTACHMENTS_PER_TURN} 个附件`);
         return;
       }
-      const picked = files.slice(0, room);
-      if (files.length > room) {
-        setSendError(`一次最多 ${MAX_IMAGES_PER_TURN} 张图，多出来的没有加`);
+      const picked = incoming.slice(0, room);
+      if (incoming.length > room) {
+        setSendError(`一次最多 ${MAX_ATTACHMENTS_PER_TURN} 个附件，多出来的没有加`);
       }
-      // 先在本地把条目建出来并显示缩略图，再逐个传：上传失败的图也要能被用户看见、
-      // 能被手动去掉，而不是静默消失。
-      const entries: DraftImage[] = picked.map((file, index) => {
-        const reason = imageRejection(file);
-        return {
-          key: `img-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
-          id: "",
-          name: file.name || "粘贴的图片",
-          mime: file.type,
-          size: file.size,
-          preview: previewUrl(file),
-          uploading: !reason,
-          error: reason ?? "",
-        };
-      });
-      setImages((current) => [...current, ...entries]);
-      entries.forEach((entry, index) => {
-        if (entry.error) return;
-        uploadImage(projectId, picked[index])
-          .then((ref) =>
-            setImages((current) =>
-              current.map((item) =>
-                item.key === entry.key ? { ...item, id: ref.id, uploading: false } : item,
+
+      void (async () => {
+        // 图片先降采样再上传：手机截图 6MB 压到几百 KB，模型看到的信息量不变。
+        const prepared = await Promise.all(picked.map((file) => prepareImage(file)));
+        // 总量要按"压完之后"的字节算，否则刚压小的图会被按原图大小算进上限。
+        let imageBytes = images.reduce(
+          (sum, item) => (item.kind === "image" && !item.error ? sum + item.size : sum),
+          0,
+        );
+        const entries: DraftAttachment[] = [];
+        for (const file of prepared) {
+          const kind = attachmentKind(file);
+          const reason = attachmentRejection(file);
+          if (reason || !kind) {
+            entries.push(entryFor(file, kind ?? "text", reason ?? "不支持的附件"));
+            continue;
+          }
+          if (kind === "image") {
+            if (imageBytes + file.size > MAX_TOTAL_IMAGE_BYTES) {
+              // 先在这里拦住，而不是发出去之后发现模型只看到一半。
+              setSendError(
+                `本轮图片合计超过 ${MAX_TOTAL_IMAGE_BYTES / (1024 * 1024)}MB，${file.name || "这张图"}没有加进来`,
+              );
+              continue;
+            }
+            imageBytes += file.size;
+          }
+          entries.push(entryFor(file, kind, ""));
+        }
+
+        setImages((current) => [...current, ...entries]);
+        entries.forEach((entry, index) => {
+          if (entry.error) return;
+          uploadAttachment(projectId, prepared[index])
+            .then((ref) =>
+              setImages((current) =>
+                current.map((item) =>
+                  item.key === entry.key ? { ...item, id: ref.id, uploading: false } : item,
+                ),
               ),
-            ),
-          )
-          .catch((error: unknown) =>
-            setImages((current) =>
-              current.map((item) =>
-                item.key === entry.key
-                  ? { ...item, uploading: false, error: errorMessage(error) }
-                  : item,
+            )
+            .catch((error: unknown) =>
+              setImages((current) =>
+                current.map((item) =>
+                  item.key === entry.key
+                    ? { ...item, uploading: false, error: errorMessage(error) }
+                    : item,
+                ),
               ),
-            ),
-          );
-      });
+            );
+        });
+      })();
     },
-    [images.length, projectId],
+    [images, projectId],
   );
 
-  /** 从草稿里去掉一张。预览地址要一起释放，否则那张图会一直留在内存里。 */
+  /** 从草稿里去掉一个。预览地址要一起释放，否则那张图会一直留在内存里。 */
   const removeImage = useCallback(
     (key: string) => {
       const target = images.find((item) => item.key === key);
@@ -415,8 +497,8 @@ export function BotApp() {
       const created: BotTurn = {
         id: result.task.id,
         title: result.task.title,
-        // 只发图时 bubble 里也得有东西可显示，否则会是一个空白的用户消息。
-        goal: text || `发来 ${ready.length} 张图片`,
+        // 只发附件时 bubble 里也得有东西可显示，否则会是一个空白的用户消息。
+        goal: text || `发来 ${ready.length} 个附件`,
         status: result.task.status,
         summary: "",
         createdAt: result.task.createdAt,

@@ -195,3 +195,179 @@ def test_load_images_skips_missing_and_stops_at_total_cap(tmp_path):
         root=tmp_path,
     )
     assert len(capped) == 1
+
+
+# ---------------------------------------------------------------------------
+# 文本类与 PDF
+# ---------------------------------------------------------------------------
+
+
+def _make_pdf(text: str) -> bytes:
+    """造一份最小但结构完整的单页 PDF。
+
+    不借助任何写库：要验的是"读得出来"，用写库生成再读回来等于自己证明自己。
+    手写的 xref 偏移是对的，pypdf 能正常解析。
+    """
+    body = f"BT /F1 12 Tf 20 100 Td ({text}) Tj ET".encode("latin-1")
+    objects = [
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Contents 4 0 R"
+        b"/Resources<</Font<</F1 5 0 R>>>>>>",
+        b"<</Length " + str(len(body)).encode() + b">>stream\n" + body + b"\nendstream",
+        b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for index, item in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{index} 0 obj\n".encode() + item + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n".encode() + b"0000000000 65535 f \n"
+    for offset in offsets:
+        out += f"{offset:010d} 00000 n \n".encode()
+    out += f"trailer\n<</Size {len(objects) + 1}/Root 1 0 R>>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return bytes(out)
+
+
+async def test_text_and_pdf_attachments_are_readable_and_classified(client):
+    pid = await _project(client, "文档项目")
+    doc = await client.post(
+        f"/api/v1/projects/{pid}/uploads",
+        json={"name": "需求.md", "mime": "", "data": _b64("# 需求\n把按钮改成蓝色".encode())},
+    )
+    assert doc.status_code == 201, doc.text
+    # 浏览器给 .md 的 type 常常是空串，所以分类必须靠扩展名而不是 mime。
+    assert doc.json()["kind"] == "text"
+    assert doc.json()["mime"] == "text/markdown"
+
+    pdf = await client.post(
+        f"/api/v1/projects/{pid}/uploads",
+        json={"name": "规格.pdf", "mime": "", "data": _b64(_make_pdf("Spec A"))},
+    )
+    assert pdf.status_code == 201, pdf.text
+    assert pdf.json()["kind"] == "pdf"
+
+
+def test_loader_pulls_text_and_pdf_into_prompt(tmp_path):
+    from blank_api.services.agent.graph import initial_messages
+    from blank_api.services.uploads import UploadStore, load_attachments_for
+
+    store = UploadStore(tmp_path)
+    md = store.save("p1", "需求.md", "", "# 需求\n把按钮改成蓝色".encode())
+    doc = store.save("p1", "规格.pdf", "", _make_pdf("Spec A"))
+
+    bundle = load_attachments_for(
+        "p1",
+        [{"id": md.id, "name": "需求.md"}, {"id": doc.id, "name": "规格.pdf"}],
+        root=tmp_path,
+    )
+    assert [item["name"] for item in bundle.texts] == ["需求.md", "规格.pdf"]
+    assert "把按钮改成蓝色" in bundle.texts[0]["text"]
+    assert "Spec A" in bundle.texts[1]["text"]
+    assert bundle.summarize()["used"] == 2
+
+    prompt = initial_messages("按文档改", [], texts=bundle.texts)[-1]["content"]
+    assert "用户附了 2 份文件" in prompt
+    assert "把按钮改成蓝色" in prompt
+    assert "Spec A" in prompt
+
+
+def test_scanned_pdf_is_reported_instead_of_silently_empty(tmp_path):
+    """扫描件抽不出文字是常态。抽不出就要说抽不出，而不是给模型一段空白让它编。"""
+    from pypdf import PdfWriter
+
+    from blank_api.services.uploads import UploadStore, load_attachments_for
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    target = tmp_path / "blank.pdf"
+    with target.open("wb") as handle:
+        writer.write(handle)
+
+    store = UploadStore(tmp_path)
+    ref = store.save("p1", "扫描件.pdf", "", target.read_bytes())
+    bundle = load_attachments_for("p1", [{"id": ref.id}], root=tmp_path)
+    assert bundle.texts == []
+    assert bundle.dropped[0]["reason"] == "no_text"
+
+
+def test_over_limit_images_are_counted_not_hidden(tmp_path):
+    """少给的张数必须能被上层看到——不然用户以为模型看了图，其实没有。"""
+    from blank_api.services.uploads import UploadStore, load_attachments_for
+
+    store = UploadStore(tmp_path)
+    first = store.save("p1", "a.png", "image/png", PNG)
+    second = store.save("p1", "b.png", "image/png", PNG)
+
+    bundle = load_attachments_for(
+        "p1",
+        [{"id": first.id}, {"id": second.id}],
+        max_image_bytes=len(PNG),
+        root=tmp_path,
+    )
+    assert len(bundle.images) == 1
+    summary = bundle.summarize()
+    assert summary["attached"] == 2
+    assert summary["used"] == 1
+    assert summary["dropped"][0]["reason"] == "over_limit"
+
+
+# ---------------------------------------------------------------------------
+# 回收：删任务清文件、启动扫孤儿
+# ---------------------------------------------------------------------------
+
+
+async def test_deleting_a_task_removes_only_its_own_uploads(client):
+    pid = await _project(client, "回收项目")
+    kept_ref = (
+        await client.post(
+            f"/api/v1/projects/{pid}/uploads",
+            json={"name": "留下.png", "mime": "image/png", "data": _b64()},
+        )
+    ).json()
+    gone_ref = (
+        await client.post(
+            f"/api/v1/projects/{pid}/uploads",
+            json={"name": "删掉.png", "mime": "image/png", "data": _b64()},
+        )
+    ).json()
+
+    first = (
+        await client.post(
+            f"/api/v1/projects/{pid}/tasks",
+            json={"title": "要删的", "attachments": [{"id": gone_ref["id"]}]},
+        )
+    ).json()
+    await client.post(
+        f"/api/v1/projects/{pid}/tasks",
+        json={"title": "要留的", "attachments": [{"id": kept_ref["id"]}]},
+    )
+
+    assert (await client.delete(f"/api/v1/tasks/{first['id']}")).status_code == 204
+    # 删掉的那份读不到了，另一份还得在：附件不能按"整个项目"清。
+    assert (await client.get(f"/api/v1/projects/{pid}/uploads/{gone_ref['id']}")).status_code == 404
+    assert (await client.get(f"/api/v1/projects/{pid}/uploads/{kept_ref['id']}")).status_code == 200
+
+
+def test_sweep_drops_old_orphans_and_keeps_referenced(tmp_path):
+    import os
+    import time
+
+    from blank_api.services.uploads import UploadStore
+
+    store = UploadStore(tmp_path)
+    orphan = store.save("p1", "旧草稿.png", "image/png", PNG)
+    alive = store.save("p1", "在用.png", "image/png", PNG)
+    fresh = store.save("p1", "刚选的.png", "image/png", PNG)
+
+    old = time.time() - 30 * 86400
+    for ref in (orphan, alive):
+        os.utime(ref.path, (old, old))
+
+    removed = store.sweep({alive.id})
+    assert removed == 1
+    # 被引用的不清、刚上传还可能是"用户正在写字"的草稿也不清。
+    assert (tmp_path / "p1" / f"{alive.id}.png").exists()
+    assert (tmp_path / "p1" / f"{fresh.id}.png").exists()
+    assert not (tmp_path / "p1" / f"{orphan.id}.png").exists()

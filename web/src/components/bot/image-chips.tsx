@@ -1,14 +1,28 @@
 "use client";
 
-import type { DraftImage } from "./uploads";
+import type { DraftAttachment } from "./uploads";
 
-/** 草稿区的图片条。上传中、失败、成功三种状态都在这一个卡片上表达。 */
+const KIND_LABEL: Record<DraftAttachment["kind"], string> = {
+  image: "图片",
+  pdf: "PDF",
+  text: "文本",
+};
+
+function FileGlyph({ kind }: { kind: DraftAttachment["kind"] }) {
+  return (
+    <span className="grid size-full place-items-center bg-surface-2 text-[10px] font-mono text-muted">
+      {KIND_LABEL[kind]}
+    </span>
+  );
+}
+
+/** 草稿区的附件条。上传中、失败、成功三种状态都在这一个卡片上表达。 */
 export function DraftImageChips({
   images,
   onRemove,
   disabled,
 }: {
-  images: DraftImage[];
+  images: DraftAttachment[];
   onRemove: (key: string) => void;
   disabled?: boolean;
 }) {
@@ -21,13 +35,13 @@ export function DraftImageChips({
           className="relative size-16 overflow-hidden rounded-lg border border-line bg-surface-2"
           title={`${image.name}${image.error ? ` · ${image.error}` : ""}`}
         >
-          {image.preview ? (
+          {image.kind === "image" && image.preview ? (
             // 静态导出（桌面壳从 app:// 加载 out/）用不了 next/image 的优化器，
             // 这里就是一张本地 blob 缩略图，走原生 img 才是对的。
             // eslint-disable-next-line @next/next/no-img-element
             <img src={image.preview} alt={image.name} className="size-full object-cover" />
           ) : (
-            <span className="grid size-full place-items-center text-[10px] text-faint">图片</span>
+            <FileGlyph kind={image.kind} />
           )}
 
           {image.uploading && (
@@ -42,7 +56,7 @@ export function DraftImageChips({
             </span>
           )}
 
-          {/* 失败的图要能一键去掉：留在草稿里会一直挡住发送（发送前会检查上传状态）。 */}
+          {/* 失败的附件要能一键去掉：留在草稿里会一直挡住发送（发送前会检查上传状态）。 */}
           {!disabled && (
             <button
               type="button"

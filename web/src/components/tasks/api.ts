@@ -229,6 +229,8 @@ export type AttachmentRef = {
   name: string;
   mime: string;
   size: number;
+  /** image / text / pdf。后端没给时按 mime 推断，老数据只有图片。 */
+  kind?: "image" | "text" | "pdf";
 };
 
 export type ThreadDetail = Thread & { turns: ThreadTurn[] };

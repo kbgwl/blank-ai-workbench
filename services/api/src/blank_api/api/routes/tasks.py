@@ -43,7 +43,7 @@ from blank_api.services.agent.manager import RunAlreadyActive, run_manager
 from blank_api.services.agent.queue import claim_run, enqueue_run, finish_run, renew_run
 from blank_api.services.agent.router import candidate_from_provider
 from blank_api.services.models.registry import build_adapter
-from blank_api.services.uploads import UploadStore, load_images_for
+from blank_api.services.uploads import UploadStore, load_attachments_for
 from blank_api.services.models.routing import FallbackAdapter
 from blank_api.services.sandbox import SnapshotStore
 
@@ -159,6 +159,27 @@ async def get_task(task_id: str, db: DbSession) -> TaskOut:
     return TaskOut.model_validate(await load_task(db, task_id))
 
 
+async def _drop_unused_uploads(db: DbSession, project_id: str, ids: set[str]) -> None:
+    """删掉只属于这个任务的附件。
+
+    要再查一遍"还有谁引用"：同一份附件可能被重试的轮次、或被分叉出来的会话继续用，
+    按 id 无条件删会把别人还在用的文件一起清掉。
+    """
+    if not ids:
+        return
+    rows = (
+        await db.execute(select(Task.attachments).where(Task.project_id == project_id))
+    ).scalars().all()
+    keep: set[str] = set()
+    for row in rows:
+        for item in row or []:
+            keep.add(str(item.get("id") or ""))
+    leftover = ids - keep
+    if not leftover:
+        return
+    await anyio.to_thread.run_sync(UploadStore().remove, project_id, leftover)
+
+
 @router.delete("/tasks/{task_id}", status_code=204)
 async def delete_task(task_id: str, db: DbSession) -> Response:
     """删除一条会话（任务）及其事件、运行记录、检查点、工具调用与改动记录。
@@ -183,8 +204,12 @@ async def delete_task(task_id: str, db: DbSession) -> Response:
     await db.execute(delete(FileChange).where(FileChange.task_id == task_id))
     await db.execute(delete(AgentRun).where(AgentRun.task_id == task_id))
     await db.execute(delete(ModelUsage).where(ModelUsage.task_id == task_id))
+    attached_ids = {str(item.get("id") or "") for item in (task.attachments or [])} - {""}
+    project_id = task.project_id
     await db.delete(task)
     await db.commit()
+    # 附件跟着任务走：删了任务还留着它的截图，就是一份没人认领的隐私文件。
+    await _drop_unused_uploads(db, project_id, attached_ids)
     return Response(status_code=204)
 
 
@@ -291,8 +316,17 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
     # rollback 会让本事务里的 ORM 实例全部过期，之后再读属性会触发同步懒加载，
     # 在异步会话里直接抛 MissingGreenlet。所以先把要用的字段取成普通值。
     attachment_refs = [dict(item) for item in (task.attachments or [])]
-    # 读图放到线程里：最多 20MB，同步读会把事件循环按住，这期间连 /health 都不回。
-    images = await anyio.to_thread.run_sync(load_images_for, project.id, attachment_refs)
+    # 读附件放到线程里：图片最多 20MB、PDF 还要解析，同步读会把事件循环按住，
+    # 这期间连 /health 都不回。
+    bundle = await anyio.to_thread.run_sync(load_attachments_for, project.id, attachment_refs)
+    if bundle.dropped:
+        # 少给了就必须说出来。用户看到 5 个附件、模型只用上 3 个而界面一个字不提，
+        # 比直接报错更糟：他会以为模型没看图，而不是"这轮塞不下"。
+        await EventRecorder(get_session_factory(), task.id).add(
+            "attachment.trimmed",
+            "receive_task",
+            bundle.summarize(),
+        )
     snapshot = {
         "task_id": task.id,
         "provider_id": provider.id,
@@ -302,7 +336,8 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         "goal": task.goal,
         "acceptance_criteria": list(task.acceptance_criteria or []),
         "max_steps": int(task.max_steps),
-        "images": images,
+        "images": bundle.images,
+        "texts": bundle.texts,
         "supports_vision": bool(provider.supports_vision),
         "skill_instructions": [str(item) for item in active_skills],
         # 会话上下文由运行时自己读：这里只告诉它"这一轮属于哪条会话"。

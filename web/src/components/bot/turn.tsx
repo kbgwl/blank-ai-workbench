@@ -10,6 +10,19 @@ import type { BotStep, StepFilter } from "./turns";
 import { filterSteps, turnEvidence } from "./turns";
 import { uploadUrl } from "./uploads";
 
+
+/** 附件是不是图片。老数据没有 mime 就没有 kind，按图片处理（那时只支持图片）。 */
+function isImage(item: AttachmentRef): boolean {
+  if (item.kind) return item.kind === "image";
+  return !item.mime || item.mime.startsWith("image/");
+}
+
+function fileLabel(item: AttachmentRef): string {
+  if (item.kind === "pdf" || item.mime === "application/pdf") return "PDF";
+  const dot = item.name.lastIndexOf(".");
+  return dot > 0 ? item.name.slice(dot + 1).toLowerCase() : "文件";
+}
+
 function timeLabel(value: string): string {
   if (!value) return "";
   const date = new Date(value.includes("T") ? value : value.replace(" ", "T"));
@@ -145,7 +158,7 @@ function QuestionCard({
 
 export type TurnViewProps = {
   goal: string;
-  /** 这一轮贴的图。回放时要看得见，否则用户不知道自己当时发了什么。 */
+  /** 这一轮贴的附件。回放时要看得见，否则用户不知道自己当时发了什么。 */
   images: AttachmentRef[];
   /** 拼图片读取地址用。会话属于当前项目，所以直接用当前项目 id。 */
   projectId: string;
@@ -193,20 +206,37 @@ export function TurnView(props: TurnViewProps) {
         <div className="max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-3.5 py-2 text-[13.5px] leading-relaxed text-text">
           {props.images.length > 0 && (
             <div className="mb-1.5 flex flex-wrap gap-1.5">
-              {props.images.map((image) => (
-                <a
-                  key={image.id}
-                  href={uploadUrl(props.projectId, image.id)}
-                  target="_blank"
-                  rel="noreferrer"
-                  title={image.name}
-                  className="block size-20 overflow-hidden rounded-lg border border-line transition-opacity hover:opacity-85"
-                >
-                  {/* 静态导出没有图片优化器，回放用的就是后端原图，走 img 才对。 */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={uploadUrl(props.projectId, image.id)} alt={image.name} className="size-full object-cover" />
-                </a>
-              ))}
+              {props.images.map((item) =>
+                isImage(item) ? (
+                  <a
+                    key={item.id}
+                    href={uploadUrl(props.projectId, item.id)}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={item.name}
+                    className="block size-20 overflow-hidden rounded-lg border border-line transition-opacity hover:opacity-85"
+                  >
+                    {/* 静态导出没有图片优化器，回放用的就是后端那份（上传前已降采样）。 */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={uploadUrl(props.projectId, item.id)} alt={item.name} className="size-full object-cover" />
+                  </a>
+                ) : (
+                  // 文本 / PDF 不渲染缩略图：一个打不开的黑框没有意义，给个能点开的文件名。
+                  <a
+                    key={item.id}
+                    href={uploadUrl(props.projectId, item.id)}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={item.name}
+                    className="flex max-w-[220px] items-center gap-1.5 rounded-lg border border-line px-2 py-1.5 text-[11.5px] text-muted transition-colors hover:bg-surface-3 hover:text-text"
+                  >
+                    <span className="shrink-0 font-mono text-[10px] uppercase text-faint">
+                      {fileLabel(item)}
+                    </span>
+                    <span className="truncate">{item.name}</span>
+                  </a>
+                ),
+              )}
             </div>
           )}
           <div className="whitespace-pre-wrap">{props.goal}</div>

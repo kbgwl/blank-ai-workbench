@@ -209,6 +209,42 @@ function describeSystem(event: AgentEvent): { title: string; detail: string; ton
       tone: "warn",
     };
   }
+  if (type === "attachment.trimmed") {
+    // 少给了几个附件必须让用户看见：否则他会以为模型看了全部，然后怀疑模型"没长眼睛"。
+    const attached = numOf(payload, "attached");
+    const used = numOf(payload, "used");
+    const dropped = arrayOf(payload, "dropped");
+    const reasons = dropped
+      .map((item) => textOf(item as Record<string, unknown>, "reason"))
+      .filter(Boolean);
+    const why = reasons.includes("over_limit")
+      ? "超过单轮容量上限"
+      : reasons.includes("no_text")
+        ? "文件里没有可读文字"
+        : reasons.includes("missing")
+          ? "文件已被清理"
+          : "无法读取";
+    return {
+      title: "部分附件没有交给模型",
+      detail: clip(
+        [
+          attached !== null && used !== null ? `带上 ${used}/${attached} 个` : "",
+          why,
+          dropped.length > 0
+            ? dropped
+                .map((item) => textOf(item as Record<string, unknown>, "name"))
+                .filter(Boolean)
+                .slice(0, 3)
+                .join("、")
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        180,
+      ),
+      tone: "warn",
+    };
+  }
   if (type === "subagents.planned") {
     const count = numOf(payload, "count");
     const concurrency = numOf(payload, "concurrency");

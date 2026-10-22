@@ -80,9 +80,40 @@ def _turn_messages(turn: Task, number: int) -> list[dict[str, str]]:
     if not reply:
         reply = "（这一轮没有产出总结）"
     return [
-        {"role": "user", "content": f"第 {number} 轮：{goal}"},
+        {"role": "user", "content": f"第 {number} 轮：{goal}{_attachment_note(turn)}"},
         {"role": "assistant", "content": _clip(reply, HISTORY_MAX_CHARS // 2)},
     ]
+
+
+def _attachment_note(turn: Task) -> str:
+    """这一轮带过什么附件，压成一句话附在目标后面。
+
+    附件本身不重发（图要占几万 token，且用户问的往往只是"接着说"），但"它当时
+    给过图"这个事实必须留下。否则下一轮的"刚才那张图是什么颜色"在模型看来是一个
+    凭空出现的问题，它只能瞎猜或者否认——两种都像 bug。
+    """
+    items = [item for item in (turn.attachments or []) if isinstance(item, dict)]
+    if not items:
+        return ""
+
+    def _kind(item: dict) -> str:
+        mime = str(item.get("mime") or "")
+        if mime.startswith("image/"):
+            return "image"
+        if mime == "application/pdf":
+            return "pdf"
+        return "text"
+
+    images = sum(1 for item in items if _kind(item) == "image")
+    others = [str(item.get("name") or "文件") for item in items if _kind(item) != "image"]
+    parts: list[str] = []
+    if images:
+        parts.append(f"附图 {images} 张")
+    if others:
+        head = "、".join(others[:3])
+        more = f" 等 {len(others)} 份" if len(others) > 3 else ""
+        parts.append(f"附文件 {head}{more}")
+    return f"（这一轮用户{'、'.join(parts)}，内容未随历史重发）"
 
 
 async def _own_turns(

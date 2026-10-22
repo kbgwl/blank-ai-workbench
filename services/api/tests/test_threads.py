@@ -402,36 +402,3 @@ async def test_turn_keeps_its_images_for_replay(client, workspace):
     detail = (await client.get(f"/api/v1/threads/{thread['id']}")).json()
     assert detail["turns"][0]["attachments"][0]["name"] == "改前.png"
     assert detail["turns"][0]["attachments"][0]["mime"] == "image/png"
-
-
-async def test_turn_keeps_its_images_for_replay(client, workspace):
-    """一轮贴的图要能回放出来。
-
-    只存在前端内存里是不够的：刷新页面、隔天再打开，用户要能看到"我当时发的是哪张图"。
-    所以 attachments 跟着 tasks 行走，会话详情里也带出来。
-    """
-    import base64
-
-    created = await client.post("/api/v1/projects", json={"name": "带图会话", "description": ""})
-    pid = created.json()["id"]
-    await client.post(f"/api/v1/projects/{pid}/workspaces", json={"path": str(workspace)})
-    thread = (await client.post(f"/api/v1/projects/{pid}/threads", json={"title": "看图改样式"})).json()
-
-    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
-    upload = (
-        await client.post(
-            f"/api/v1/projects/{pid}/uploads",
-            json={"name": "改前.png", "mime": "image/png", "data": base64.b64encode(png).decode()},
-        )
-    ).json()
-
-    turn = await client.post(
-        f"/api/v1/threads/{thread['id']}/turns",
-        json={"title": "照这张图改", "goal": "照这张图改", "attachments": [{"id": upload["id"], "name": "改前.png"}]},
-    )
-    assert turn.status_code == 201, turn.text
-    assert [item["id"] for item in turn.json()["attachments"]] == [upload["id"]]
-
-    detail = (await client.get(f"/api/v1/threads/{thread['id']}")).json()
-    assert detail["turns"][0]["attachments"][0]["name"] == "改前.png"
-    assert detail["turns"][0]["attachments"][0]["mime"] == "image/png"

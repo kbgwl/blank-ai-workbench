@@ -139,6 +139,9 @@ class RunRequest:
     # 用户贴进来的图片，形如 [{"name", "media_type", "data"(base64)}]。
     # 放在这里而不是读磁盘：路由那层已经把它们读成字节了，运行时不该再碰文件系统。
     images: Sequence[dict] = ()
+    # 文本类附件（含 PDF 抽出的正文），形如 [{"name", "text", "truncated"}]。
+    # 它们不是多模态内容，进提示词就够了，不需要任何供应商支持。
+    texts: Sequence[dict] = ()
     # 当前模型看不看得懂图。不支持时图片降级成一段文字说明，而不是把 image block
     # 硬塞过去——那会直接 400，用户看到的是"上传了图片就发不出去"。
     supports_vision: bool = False
@@ -431,6 +434,7 @@ class AgentRuntime:
                 history,
                 images=request.images,
                 supports_vision=request.supports_vision,
+                texts=request.texts,
             ),
             "plan": [],
             "steps": 0,

@@ -339,3 +339,29 @@ export async function streamChat(
     else if (event.event === "done") handlers.onDone?.();
   }
 }
+
+/** 按需选模型的转正依据（/observability/routing）。 */
+export type RoutingEvidence = {
+  scanned: number;
+  sampled_tasks: number;
+  calls: number;
+  switched: number;
+  escalations: number;
+  cost_units: number;
+  baseline_units: number;
+  saved_ratio: number;
+  switch_ratio: number;
+  verdict: string;
+  recent: {
+    task_id: string;
+    status: string;
+    at: string;
+    calls: number;
+    switched: number;
+    saved_ratio: number;
+  }[];
+};
+
+export function fetchRoutingEvidence(): Promise<RoutingEvidence> {
+  return request<RoutingEvidence>(`${api}/observability/routing`, { cache: "no-store" });
+}

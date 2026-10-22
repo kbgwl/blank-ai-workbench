@@ -377,6 +377,21 @@ function stopBackend() {
  * 后端只认绝对路径，让用户手打在旁边那个输入框里——盘符、反斜杠、中文目录名
  * 任一处写错就是 422，而且没法在选之前确认那个目录到底在不在。
  */
+/**
+ * 在系统文件管理器里打开目录。
+ *
+ * 为什么需要它：绑好工作区之后，用户最想做的第一件事就是"看看它到底在改哪个目录"。
+ * 界面上只能显示一串路径，点开才是他熟悉的那个窗口。先 existsSync 再打开，
+ * 是因为 shell.openPath 对不存在的路径只会返回一句英文错误，用户看不懂。
+ */
+ipcMain.handle("blank:open-path", async (_event, payload) => {
+  const target = typeof payload?.path === "string" ? payload.path.trim() : "";
+  if (!target) return { ok: false, reason: "路径为空" };
+  if (!existsSync(target)) return { ok: false, reason: "目录不存在，可能已被移动或删除" };
+  const failure = await shell.openPath(target);
+  return failure ? { ok: false, reason: failure } : { ok: true };
+});
+
 ipcMain.handle("blank:pick-directory", async (event, payload) => {
   const owner = BrowserWindow.fromWebContents(event.sender);
   const options = {
