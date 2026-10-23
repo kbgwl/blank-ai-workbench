@@ -21,13 +21,15 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from blank_api.services.agent.context import ContextCompactor
+from blank_api.services.agent.usage import account_call, merge_usage
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.permissions import MODE_ACCEPT_EDITS, MODE_DEFAULT, PermissionPolicy
 from blank_api.services.safety import SafetyPolicy
 from blank_api.services.tools.base import ToolContext
-from blank_api.services.tools.gateway import ToolGateway
+from blank_api.services.tools.gateway import ToolGateway, sandbox_backend_event_field
 from blank_api.services.worktree import (
     Worktree,
     apply_changes,
@@ -103,6 +105,11 @@ class SubAgentResult:
     diff: str = ""
     error: str = ""
     usage: dict = field(default_factory=dict)
+    # 哪一次并行编排派出的这一位；单发子代理是空串（"不属于任何一批"，不是"第 0 批"）。
+    parallel_group: str = ""
+    # 这一位自己的线程 id：用量行按它归属。批次汇总要能一次点出"这批包含哪几条线程"，
+    # 否则读的人只能把整串事件按 trace_id 重归一遍堆。
+    thread_id: str = ""
     # 实际创建的副本：只在本进程内用于合并，不进事件日志（内容是整份文件）
     tree: Worktree | None = field(default=None, repr=False)
     merge: dict = field(default_factory=dict)
@@ -115,6 +122,8 @@ class SubAgentResult:
             "depth": self.depth,
             "agent_path": self.agent_path,
             "usage": self.usage,
+            "parallel_group": self.parallel_group,
+            "thread_id": self.thread_id,
         }
         if self.worktree:
             payload["worktree"] = self.worktree
@@ -153,13 +162,20 @@ def render_merge(payload: dict) -> str:
 
 
 class _Recorder:
-    """包一层事件记录：子代理的每条事件都带 agent_path 与 depth。"""
+    """包一层事件记录：子代理的每条事件都带 agent_path 与 depth，以及它属于哪一轮。"""
 
-    def __init__(self, recorder, *, agent_path: str, depth: int, parent_thread_id: str) -> None:
+    def __init__(
+        self, recorder, *, agent_path: str, depth: int, parent_thread_id: str, root_thread_id: str = ""
+    ) -> None:
         self.recorder = recorder
         self.agent_path = agent_path
         self.depth = depth
         self.parent_thread_id = parent_thread_id
+        self.root_thread_id = root_thread_id
+        # 账本行要按轮筛，用的必须是事件行同一个值：从被包的记录器直接读，不在这里再造。
+        self.run_id = str(getattr(recorder, "run_id", "") or "")
+        # 发起轮也跟着读：孙代理不必知道团队的存在，它父辈是谁引起的它就记谁。
+        self.origin_run_id = str(getattr(recorder, "origin_run_id", "") or "")
 
     async def add(self, event: str, node: str, payload: dict) -> None:
         await self.recorder.add(
@@ -170,6 +186,7 @@ class _Recorder:
                 "agent_path": self.agent_path,
                 "depth": self.depth,
                 "parent_thread_id": self.parent_thread_id,
+                "root_thread_id": self.root_thread_id,
             },
         )
 
@@ -189,6 +206,57 @@ def _tool_call_args(call: dict) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _session_provider(session) -> tuple[str, str]:
+    """这次子代理的花费挂在哪个账号上：角色单独指定过就按角色，否则跟着任务的供应商。"""
+    role_ids = getattr(session, "role_provider_ids", None) or {}
+    return (
+        role_ids.get("subagent") or getattr(session, "provider_id", "") or "",
+        getattr(session, "provider_name", "") or "",
+    )
+
+
+def _inherited_watermark(session) -> dict:
+    """子代理的上下文管家跟着父会话的水位走，而不是自己开一套。
+
+    原来是裸构造 `ContextCompactor()`：主会话按供应商窗口（比如 64k 的 80%）压水位，
+    子代理却退回 48k 字符预算——同一趟任务里两套口径，派得越多越看不见窗口在哪儿。
+
+    只搬父会话**真的定了**的键：拿不到管家（评测 harness 那条路）、或某一项就是 0
+    （意味着"没设"而不是"设成 0"）时把它连同 0 一起塞进去，等于替子代理做了一个
+    谁都没做过的决定——0 的 trigger_ratio 会让水位线落在 0，每一步都触发压缩。
+    这种键交给 ContextCompactor 自己的默认值。
+    """
+    compactor = getattr(session, "compactor", None)
+    if compactor is None:
+        return {}
+    inherited: dict = {}
+    for key in ("context_window", "reserve_tokens", "max_chars"):
+        value = int(getattr(compactor, key, 0) or 0)
+        if value > 0:
+            inherited[key] = value
+    ratio = float(getattr(compactor, "trigger_ratio", 0.0) or 0.0)
+    if ratio > 0.0:
+        inherited["trigger_ratio"] = ratio
+    return inherited
+
+
+def batch_usage(results: list[SubAgentResult]) -> dict:
+    """一批子代理的合计用量（token 与调用次数）。
+
+    刻意不加 `latency_ms`：并行子代理的耗时是重叠的，把各自的 span 相加会得到一个比
+    整批真实墙钟还大的数——那笔账看着精确，实际是假的。
+
+    一批里谁都没花过钱时返回空 dict，而不是零填充的 dict：「没派出去」和
+    「派出去了但没花钱」是两件事，零填充会把前者说成后者。
+    """
+    total: dict = {}
+    for result in results:
+        child = {key: value for key, value in (result.usage or {}).items() if key != "latency_ms"}
+        if child:
+            total = merge_usage(total, child)
+    return total
+
+
 async def run_subagent(
     *,
     adapter: ModelAdapter,
@@ -201,6 +269,10 @@ async def run_subagent(
     agent_path: str,
     depth: int,
     parent_thread_id: str,
+    root_thread_id: str = "",
+    provider_id: str = "",
+    provider_name: str = "",
+    watermark: dict | None = None,
 ) -> SubAgentResult:
     request = request.normalized()
     if not request.goal:
@@ -217,7 +289,13 @@ async def run_subagent(
                 ok=False, error=str(exc), agent_path=agent_path, depth=depth
             )
         run_root = tree.path
-        await _Recorder(recorder, agent_path=agent_path, depth=depth, parent_thread_id=parent_thread_id).add(
+        await _Recorder(
+            recorder,
+            agent_path=agent_path,
+            depth=depth,
+            parent_thread_id=parent_thread_id,
+            root_thread_id=root_thread_id,
+        ).add(
             "worktree.created", "subagent", tree.as_dict()
         )
 
@@ -238,8 +316,14 @@ async def run_subagent(
         safety=SafetyPolicy.load(),
         tool_registry=gateway.registry,
     )
-    log = _Recorder(recorder, agent_path=agent_path, depth=depth, parent_thread_id=parent_thread_id)
-    compactor = ContextCompactor()
+    log = _Recorder(
+        recorder,
+        agent_path=agent_path,
+        depth=depth,
+        parent_thread_id=parent_thread_id,
+        root_thread_id=root_thread_id,
+    )
+    compactor = ContextCompactor(**(watermark or {}))
     messages: list[dict] = [
         {"role": "system", "content": SUBAGENT_SYSTEM.format(steps=request.max_steps)},
         {
@@ -247,10 +331,66 @@ async def run_subagent(
             "content": request.goal + ("\n（你在一个临时隔离副本里工作，改动不会影响真实工作区）" if isolated else ""),
         },
     ]
-    usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
+    usage_started = time.perf_counter()
+    provider_name = provider_name or adapter.config.name
+    # 子代理是一条独立的线程：用量行按 trace_id 归属到"哪一个 agent"，
+    # parent_thread_id 只在事件里用来还原父子关系（与 subagent.started 一致）。
+    thread_id = uuid.uuid4().hex
     steps = 0
     summary = ""
     error = ""
+    turn: dict = {}
+
+    async def account(
+        model: str, call_usage: Usage, latency_ms: int, status: str, response_id: str = ""
+    ) -> None:
+        """每一次子代理调用都落进与主代理同一张表、同一套三级口径。
+
+        原来子代理只在本地把数字累加，钱真花了但任务级的求和里没有它——
+        一个把活派下去的任务，账上却看不见被派出去的那部分。
+        """
+        nonlocal turn
+        turn = await account_call(
+            session_factory=session_factory,
+            recorder=log,
+            task_id=task_id,
+            trace_id=thread_id,
+            provider_id=provider_id,
+            provider_name=provider_name,
+            node="subagent",
+            role="subagent",
+            depth=depth,
+            agent_path=agent_path,
+            model=model,
+            provider=str(getattr(adapter, "last_provider", "") or ""),
+            usage=call_usage,
+            latency_ms=latency_ms,
+            status=status,
+            response_id=response_id,
+            turn=turn,
+            run_id=log.run_id,
+            origin_run_id=log.origin_run_id,
+            parent_thread_id=parent_thread_id,
+            root_thread_id=root_thread_id,
+            parallel_group=request.parallel_group,
+        )
+
+    async def invoke(specs: list, chat: list[ChatMessage]) -> Any:
+        """一次调用，成功与失败都进账（失败的那笔根本没花 token，只有账本说得出）。"""
+        started = time.perf_counter()
+        try:
+            response = await adapter.bind_tools(specs, chat)
+        except ModelError:
+            await account("", Usage(), int((time.perf_counter() - started) * 1000), "error")
+            raise
+        await account(
+            response.model,
+            response.usage,
+            int((time.perf_counter() - started) * 1000),
+            "ok",
+            response.response_id,
+        )
+        return response
 
     async def loop() -> None:
         nonlocal summary, steps
@@ -266,10 +406,7 @@ async def run_subagent(
                 )
                 for item in built
             ]
-            response = await adapter.bind_tools(gateway.specs(), chat)
-            usage["prompt_tokens"] += response.usage.prompt_tokens
-            usage["completion_tokens"] += response.usage.completion_tokens
-            usage["calls"] += 1
+            response = await invoke(gateway.specs(), chat)
             assistant: dict = {"role": "assistant", "content": response.text}
             if response.tool_calls:
                 assistant["tool_calls"] = response.tool_calls
@@ -290,6 +427,7 @@ async def run_subagent(
                         "status": payload.get("status"),
                         "ok": payload.get("ok"),
                         "summary": str(payload.get("output") or payload.get("message") or "")[:300],
+                        **sandbox_backend_event_field(payload),
                     },
                 )
                 messages.append(
@@ -302,13 +440,9 @@ async def run_subagent(
         # 预算用尽：让模型在无工具的情况下收个尾
         chat = [ChatMessage(role=item["role"], content=item.get("content", "")) for item in messages]
         chat.append(ChatMessage(role="user", content="步骤已用完，请直接给出结论，不要再调用工具。"))
-        response = await adapter.bind_tools([], chat)
-        usage["prompt_tokens"] += response.usage.prompt_tokens
-        usage["completion_tokens"] += response.usage.completion_tokens
-        usage["calls"] += 1
+        response = await invoke([], chat)
         summary = response.text
 
-    started = time.perf_counter()
     try:
         await asyncio.wait_for(loop(), request.timeout_seconds)
     except asyncio.TimeoutError:
@@ -343,7 +477,9 @@ async def run_subagent(
         worktree=tree.as_dict() if tree else {},
         diff=diff,
         error=error,
-        usage={**usage, "latency_ms": int((time.perf_counter() - started) * 1000)},
+        usage={**turn, "latency_ms": int((time.perf_counter() - usage_started) * 1000)},
+        parallel_group=request.parallel_group,
+        thread_id=thread_id,
         tree=tree if request.keep_worktree else None,
     )
     await log.add(
@@ -355,6 +491,12 @@ async def run_subagent(
             "summary": result.summary[:500],
             "error": result.error,
             "worktree_mode": tree.mode if tree else "",
+            # 这一位花了多少、属于哪一批、是哪条线程——三个数原先只在 `model.usage` 里，
+            # 批次要汇总就得先把整串事件按 trace_id 归堆；在这里直说一次，汇总才有可指认的来源。
+            "thread_id": thread_id,
+            "parallel_group": request.parallel_group,
+            "usage": dict(result.usage),
+            "context_window": compactor.context_window,
         },
     )
     return result
@@ -380,6 +522,8 @@ class SubAgentRunner:
             return SubAgentResult(ok=False, error="子代理不允许再嵌套子代理", depth=depth)
         self.spawned += 1
         agent_path = f"{getattr(session, 'agent_path', 'root')}/sub-{self.spawned}"
+        # 根线程从父会话一路往下传：孙代理的根仍然是最初那条线程，不是它的父亲。
+        root_thread_id = str(getattr(session, "root_thread_id", "") or session.trace_id)
         allowed = ISOLATED_TOOLS if request.isolate else READ_ONLY_TOOLS
         tools = [tool for tool in _all_tools() if tool.name in allowed]
         await session.recorder.add(
@@ -392,8 +536,10 @@ class SubAgentRunner:
                 "agent_path": agent_path,
                 "depth": depth,
                 "parent_thread_id": session.trace_id,
+                "root_thread_id": root_thread_id,
             },
         )
+        provider_id, provider_name = _session_provider(session)
         return await run_subagent(
             adapter=session.adapter,
             tools=tools,
@@ -405,6 +551,10 @@ class SubAgentRunner:
             agent_path=agent_path,
             depth=depth,
             parent_thread_id=session.trace_id,
+            root_thread_id=root_thread_id,
+            provider_id=provider_id,
+            provider_name=provider_name,
+            watermark=_inherited_watermark(session),
         )
 
     async def fan_out(
@@ -448,6 +598,8 @@ class SubAgentRunner:
         semaphore = asyncio.Semaphore(limit)
         allowed = ISOLATED_TOOLS
         tools = [tool for tool in _all_tools() if tool.name in allowed]
+        provider_id, provider_name = _session_provider(session)
+        root_thread_id = str(getattr(session, "root_thread_id", "") or session.trace_id)
 
         async def one(index: int, item: SubAgentRequest) -> SubAgentResult:
             async with semaphore:
@@ -466,6 +618,7 @@ class SubAgentRunner:
                         "agent_path": agent_path,
                         "depth": depth,
                         "parent_thread_id": session.trace_id,
+                        "root_thread_id": root_thread_id,
                         "parallel_group": group,
                         "index": index + 1,
                     },
@@ -481,10 +634,45 @@ class SubAgentRunner:
                     agent_path=agent_path,
                     depth=depth,
                     parent_thread_id=session.trace_id,
+                    root_thread_id=root_thread_id,
+                    provider_id=provider_id,
+                    provider_name=provider_name,
+                    watermark=_inherited_watermark(session),
                 )
 
         results = await asyncio.gather(
             *(one(index, item) for index, item in enumerate(bounded)), return_exceptions=False
+        )
+        # 批次收口：一次说清"这一批派了谁、各自花了多少、合计多少"。
+        # 逐个的 `subagent.completed` 已经各自带了用量，但那是一条条散着的行；
+        # 主代理的预算与「证明」面板要指认的是**这一批**，所以合计必须有一个可指的出处，
+        # 而不是让读的人自己把 N 条事件加起来。
+        total = batch_usage(list(results))
+        await session.recorder.add(
+            "subagents.completed",
+            "subagent",
+            {
+                "group": group,
+                "count": len(results),
+                "succeeded": sum(1 for item in results if item.ok),
+                "merge": merge,
+                "depth": depth,
+                "parent_thread_id": session.trace_id,
+                "root_thread_id": root_thread_id,
+                "children": [
+                    {
+                        "agent_path": item.agent_path,
+                        "thread_id": item.thread_id,
+                        "ok": item.ok,
+                        "steps": item.steps,
+                        "usage": dict(item.usage or {}),
+                    }
+                    for item in results
+                ],
+                "usage": total,
+                # 这批的共同水位：排查"子代理为什么压得比主代理早"时看这一条。
+                "context_window": int(_inherited_watermark(session).get("context_window") or 0),
+            },
         )
         if merge:
             await self._merge(results, group)

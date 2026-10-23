@@ -60,6 +60,29 @@ async def db_retry(
     raise last
 
 
+def ensure_mysql_driver_compat(database_url: str) -> bool:
+    """让 aiomysql 0.3.2 在 PyMySQL ≥1.2 上还能绑 bytes 参数；只有真用到该驱动时才动。
+
+    aiomysql 转义二进制参数时调的是 ``pymysql.converters.escape_bytes_prefixed``，
+    而 PyMySQL 从 1.2 起把这个名字换成了哨兵字符串「DO NOT IMPORT THIS!!!」
+    （上游 PyMySQL/PyMySQL#1274，1.3.0 打算直接删）。于是任何一次 bytes 绑定
+    ——LangGraph 检查点就是把 msgpack 字节写进 LONGBLOB——都会炸成
+    ``TypeError: 'str' object is not callable``，接口上表现为 500。
+    PyMySQL 里语义等价、且返回服务端可插进 SQL 的字符串（``_binary X'<hex>'``）的
+    现函数是 ``escape_bytes``，所以按它把引用补回去。等 aiomysql 修好上游引用，
+    这个函数会因为「已经是可调用」而自动不做任何事。
+    """
+    if not database_url.startswith("mysql+aiomysql"):
+        return False
+    import aiomysql.connection
+    from pymysql import converters
+
+    if callable(getattr(aiomysql.connection, "escape_bytes_prefixed", None)):
+        return False
+    aiomysql.connection.escape_bytes_prefixed = converters.escape_bytes
+    return True
+
+
 def engine_options(database_url: str) -> dict:
     """SQLite 连池参数。单独拎出来，测试可以直接验证这套口径。"""
     kwargs: dict = {}
@@ -82,6 +105,7 @@ def get_engine() -> AsyncEngine:
     global _engine, _session_factory
     if _engine is None:
         settings = get_settings()
+        ensure_mysql_driver_compat(settings.database_url)
         _engine = create_async_engine(settings.database_url, **engine_options(settings.database_url))
         _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     return _engine

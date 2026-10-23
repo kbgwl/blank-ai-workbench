@@ -27,7 +27,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.add_column(
         "tasks",
-        sa.Column("attachments", sa.JSON(), nullable=False, server_default="[]"),
+        sa.Column("attachments", sa.JSON(), nullable=False, server_default=sa.text("('[]')")),
     )
 
 

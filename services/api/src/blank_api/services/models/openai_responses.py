@@ -28,6 +28,7 @@ from blank_api.services.models.base import (
     ModelResponse,
     Usage,
     data_payload,
+    retry_after_seconds,
 )
 from blank_api.services.models.streaming import ToolCallAccumulator
 
@@ -212,6 +213,7 @@ class OpenAIResponsesAdapter(ModelAdapter):
             model=data.get("model") or self.config.model,
             tool_calls=tool_calls,
             finish_reason=status,
+            response_id=str(data.get("id") or ""),
         )
 
     async def stream(self, messages, tools=None, **kwargs) -> AsyncIterator[str]:
@@ -225,7 +227,9 @@ class OpenAIResponsesAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}")
+                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
+                                     status=resp.status_code,
+                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
                 async for raw in resp.aiter_lines():
                     payload = data_payload(raw)
                     if not payload:
@@ -264,7 +268,9 @@ class OpenAIResponsesAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}")
+                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
+                                     status=resp.status_code,
+                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
                 async for raw in resp.aiter_lines():
                     piece = data_payload(raw)
                     if not piece:
@@ -303,6 +309,7 @@ class OpenAIResponsesAdapter(ModelAdapter):
                             model=data.get("model") or model,
                             tool_calls=done_calls,
                             finish_reason=status,
+                            response_id=str(data.get("id") or ""),
                         )
                     elif kind == "error":
                         error = event.get("error") or {}

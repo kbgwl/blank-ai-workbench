@@ -85,7 +85,8 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
             status="timeout",
             output=combined,
             message=f"测试命令超时（{timeout:.0f}s），进程已终止：{command_text}",
-            data={"command": command_text, "timed_out": True, "sandbox": result["sandbox"]},
+            data={"command": command_text, "timed_out": True, "sandbox": result["sandbox"],
+                  "enforcement": result["enforcement"]},
         )
     passed = result["exit_code"] == 0
     return ToolOutcome(
@@ -98,6 +99,8 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
             "exit_code": result["exit_code"],
             "passed": passed,
             "sandbox": result["sandbox"],
+            # 测试跑不动的原因之一可能是限额把子进程拦了；没有这一行，用户只能看到"退出码非零"。
+            "enforcement": result["enforcement"],
             "summary": summarize_exit_codes(combined),
         },
     )

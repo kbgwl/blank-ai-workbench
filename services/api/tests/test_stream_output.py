@@ -326,13 +326,16 @@ def test_unsubscribe_stops_delivery():
 class StreamingAdapter(ModelAdapter):
     """按脚本吐字：正常流、空流、吐一半就炸，三种都能演。"""
 
-    def __init__(self, name: str, *, pieces=("好",), fail_at: int | None = None, empty: bool = False) -> None:
+    def __init__(self, name: str, *, pieces=("好",), fail_at: int | None = None, empty: bool = False,
+                 fail_code: str = "model_stream_error", fail_status: int = 0) -> None:
         super().__init__(
             AdapterConfig(name=name, kind="openai_compatible", base_url="", api_key="", model=name, supports_tools=True)
         )
         self.pieces = pieces
         self.fail_at = fail_at
         self.empty = empty
+        self.fail_code = fail_code
+        self.fail_status = fail_status
         self.calls = 0
 
     async def invoke(self, messages, **kwargs):  # pragma: no cover - 只走 bind_tools
@@ -352,7 +355,7 @@ class StreamingAdapter(ModelAdapter):
             raise ModelError("model_stream_empty", "流式响应为空")
         for index, piece in enumerate(self.pieces):
             if self.fail_at is not None and index == self.fail_at:
-                raise ModelError("model_stream_error", "内容被拦截")
+                raise ModelError(self.fail_code, f"流里报的错（{self.fail_code}）", status=self.fail_status)
             if on_delta is not None:
                 await on_delta(piece)
         return ModelResponse(text="".join(self.pieces), usage=Usage(prompt_tokens=5), model=self.config.name)
@@ -454,12 +457,37 @@ async def test_failure_after_first_chunk_is_not_retried(seeded, tmp_path):
     assert await _events("model.stream_fallback") == []
 
 
-async def test_stream_failure_before_any_text_still_falls_back(seeded, tmp_path):
-    adapter = StreamingAdapter("m", pieces=("一",), fail_at=0)
-    session = _session(tmp_path, adapter, stream=True)
+async def test_stream_that_never_started_falls_back_when_the_shape_is_the_problem(seeded, tmp_path):
+    """一个字都没到，且失败说的是「流式这一条路/这个问法」不行：退回一次性调用是安全的。
 
-    response = await session._call_adapter(adapter, TOOLS, [ChatMessage("user", "hi")], "execute_action", "coder")
+    #53 之前这条没有条件——任何流式失败都退。实测到供应商明说 429 与超时不答时，
+    退路把同一番话再说一遍，请求翻倍、用户多等一整轮，答案一个字都不会变。
+    """
+    for code, status in (("model_unreachable", 0), ("model_http_error", 400), ("model_stream_empty", 0)):
+        adapter = StreamingAdapter("m", pieces=("一",), fail_at=0, fail_code=code, fail_status=status)
+        session = _session(tmp_path, adapter, stream=True)
+        response = await session._call_adapter(
+            adapter, TOOLS, [ChatMessage("user", "hi")], "execute_action", "coder"
+        )
+        assert response.text == "非流式结果", f"{code}/{status} 没有退路，用户拿不到任何答案"
+        assert adapter.calls == 1, f"{code}/{status} 退路走了 {adapter.calls} 次"
 
-    # 一个字都没到：退回一次性调用是安全的
-    assert response.text == "非流式结果"
-    assert adapter.calls == 1
+
+async def test_a_shape_independent_failure_is_not_replayed(seeded, tmp_path):
+    """换说法不改答案的失败不退，而且要留下「有意不退」那一行。
+
+    只断言"没退"读不出这是决定还是没实现；`model.stream_fallback_skipped` 是这条
+    决定在证据包里的唯一凭据。
+    """
+    cases = (("model_stream_error", 0), ("model_http_error", 429), ("model_timeout", 0))
+    for code, status in cases:
+        adapter = StreamingAdapter("m", pieces=("一",), fail_at=0, fail_code=code, fail_status=status)
+        session = _session(tmp_path, adapter, stream=True)
+        with pytest.raises(ModelError) as caught:
+            await session._call_adapter(adapter, TOOLS, [ChatMessage("user", "hi")], "execute_action", "coder")
+        assert caught.value.code == code
+        assert adapter.calls == 0, f"{code}/{status} 被重放成了整包调用"
+
+    skipped = await _events("model.stream_fallback_skipped")
+    assert [(row.get("code"), row.get("status")) for row in skipped] == list(cases), skipped
+    assert not await _events("model.stream_fallback"), "不该退的那三次里，有任何一次偷偷退了"

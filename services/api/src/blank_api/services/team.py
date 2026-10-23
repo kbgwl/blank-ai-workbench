@@ -199,6 +199,15 @@ async def latest_round(session: AsyncSession, group_id: str) -> TeamRound | None
     ).scalar_one_or_none()
 
 
+def round_origin(round_id: str) -> str:
+    """一轮群聊的发起轮 id：写进账本和按它查账用的是同一个函数，不留两处各自拼一遍的机会。
+
+    带 `team-round-` 前缀而不是裸 uuid——这一列和 run_id、task_id、thread_id 同住一张表，
+    一个谁都可能长得像的值在库里读不出"它是什么"，就得回头翻代码才知道。
+    """
+    return f"team-round-{round_id}"
+
+
 async def _member_rows(session: AsyncSession, group_id: str) -> list[tuple[TeamMember, TeamBot]]:
     rows = (
         await session.execute(
@@ -666,6 +675,7 @@ class TeamOrchestrator:
         goal: str,
         system_instructions: list[str],
         run_id: str,
+        origin_run_id: str = "",
     ) -> RunRequest:
         return RunRequest(
             task_id=task.id,
@@ -674,6 +684,7 @@ class TeamOrchestrator:
             adapter=build_adapter(ctx.provider, self.client_factory),
             root=Path(ctx.workspace.path),
             run_id=run_id,
+            origin_run_id=origin_run_id,
             title=task.title,
             goal=goal,
             acceptance_criteria=(),
@@ -796,11 +807,14 @@ class TeamOrchestrator:
                 goal,
                 system_instructions,
                 run_id=f"team-{round_id}-{message_id}",
+                origin_run_id=round_origin(round_id),
             )
             task_id = task.id
             bot_name = ctx.bot.name
 
-        recorder = EventRecorder(factory, task_id, run_id=request.run_id)
+        recorder = EventRecorder(
+            factory, task_id, run_id=request.run_id, origin_run_id=request.origin_run_id
+        )
         await recorder.add(
             "team.turn.started",
             "receive_task",
@@ -1011,6 +1025,8 @@ class TeamOrchestrator:
                     task.goal,
                     [f"你正在以 {ctx.bot.name} 的身份参与群聊「{ctx.group.name}」。"],
                     run_id=f"team-{round_row.id}-{message.id}-resume",
+                    # 放行续跑花的钱属于被放行那一轮，不属于"另一轮"：run_id 变了，发起轮没变。
+                    origin_run_id=round_origin(round_row.id),
                 )
                 round_row.status = "running"
                 await session.commit()
@@ -1018,7 +1034,9 @@ class TeamOrchestrator:
                 round_id = round_row.id
                 bot_id = message.bot_id or ""
 
-            recorder = EventRecorder(factory, task_id, run_id=request.run_id)
+            recorder = EventRecorder(
+                factory, task_id, run_id=request.run_id, origin_run_id=request.origin_run_id
+            )
             if kind == "approval":
                 await recorder.add(
                     "approval.decided",
@@ -1158,6 +1176,55 @@ async def _messages_payload(rows: list[TeamMessage]) -> list[dict]:
     ]
 
 
+async def _round_ledger_usage(session: AsyncSession, round_id: str) -> dict:
+    """按发起轮问一句「这一轮几个人合起来花了多少」，钱全部从账本读。
+
+    原来这一句问不出：一轮里每个发言成员各有自己的 task 与 run_id，`run_id` 是每人一个的键，
+    而轮只有一个；能给的只有 `TeamRound.tokens`——那是编排器在发言收尾时自己累加的数，
+    中途失败的发言钱花了却不计进去。
+    每个成员是谁，靠本轮发言行对上 task_id；对不上的一律归到"未对应发言"那一档，
+    这样 `by_bot` 加起来永远等于 `tokens`，不会出现"合计对不上却没地方摆"的差额。
+    """
+    origin = round_origin(round_id)
+    speaking = (
+        await session.execute(select(TeamMessage).where(TeamMessage.round_id == round_id))
+    ).scalars().all()
+    bot_by_task = {row.task_id: (row.bot_id or "", row.bot_name) for row in speaking if row.task_id}
+    ledger = (
+        await session.execute(
+            select(
+                ModelUsage.task_id,
+                ModelUsage.run_id,
+                ModelUsage.node,
+                ModelUsage.prompt_tokens,
+                ModelUsage.completion_tokens,
+            ).where(ModelUsage.origin_run_id == origin)
+        )
+    ).all()
+    per_bot: dict[str, dict] = {}
+    for task_id, run_id, node, prompt_tokens, completion_tokens in ledger:
+        bot_id, bot_name = bot_by_task.get(task_id or "", ("", "未对应发言"))
+        entry = per_bot.setdefault(
+            bot_id or f"__{bot_name}",
+            {"bot_id": bot_id, "bot_name": bot_name, "tokens": 0, "calls": 0, "subagent_calls": 0},
+        )
+        tokens = int(prompt_tokens or 0) + int(completion_tokens or 0)
+        entry["tokens"] += tokens
+        entry["calls"] += 1
+        if str(node or "") == "subagent":
+            entry["subagent_calls"] += 1
+    by_bot = sorted(per_bot.values(), key=lambda item: (-item["tokens"], item["bot_name"]))
+    return {
+        "origin_run_id": origin,
+        "tokens": sum(int(p or 0) + int(c or 0) for _t, _r, _n, p, c in ledger),
+        "calls": len(ledger),
+        "tasks": len({row[0] for row in ledger if row[0]}),
+        "runs": len({row[1] for row in ledger if row[1]}),
+        "subagent_calls": sum(1 for row in ledger if str(row[2] or "") == "subagent"),
+        "by_bot": by_bot,
+    }
+
+
 async def group_state(group_id: str, after_id: int = 0, around_id: int = 0) -> dict:
     """一次轮询要的全部东西：群、成员、当前轮、增量消息、待审批与用量。"""
     factory = get_session_factory()
@@ -1203,6 +1270,10 @@ async def group_state(group_id: str, after_id: int = 0, around_id: int = 0) -> d
                 "error": round_row.error,
                 "created_at": _iso(round_row.created_at),
                 "updated_at": _iso(round_row.updated_at),
+                # 账本口径的本轮合计：按发起轮（origin_run_id）筛出来的，不经过编排器的累加器。
+                # 与上面那个 `tokens` 是两笔账——那个只在发言正常收尾时加，这个连中途失败的
+                # 那次发言也算。两个数各说各的口径，不许互相冒充。
+                "usage": await _round_ledger_usage(session, round_row.id),
             }
 
         if after_id > 0:
@@ -1271,6 +1342,8 @@ async def group_state(group_id: str, after_id: int = 0, around_id: int = 0) -> d
         messages = await _messages_payload(rows)
         waiting = [row for row in rows if row.status == "waiting_approval" and row.task_id]
 
+        # 全群累计（跨所有轮）的每人花费：join 只按 group_id 分组，不按轮筛。
+        # 问"这一轮"要用 round.usage——单轮群里两者相等，所以拿单轮群验不出这里的口径。
         usage_rows = (
             await session.execute(
                 select(

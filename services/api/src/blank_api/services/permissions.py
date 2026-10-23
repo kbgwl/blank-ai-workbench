@@ -18,6 +18,7 @@ import re
 from typing import TYPE_CHECKING
 
 from blank_api.services.approvals import approval_key
+from blank_api.services.log_safety import contains_secret
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型检查，运行时不会导入工具层（避免导入环）
     from blank_api.services.tools.base import ToolDefinition
@@ -189,7 +190,8 @@ def prefix_rule(text: str) -> tuple[str, ...]:
 
 
 def render_rule(rule: tuple[str, ...]) -> str:
-    return " ".join(rule)
+    """规则串：带空格的 token 必须带引号，否则 `"a b"` 记下来再读回去会多出一段。"""
+    return " ".join(f"'{token}'" if any(char.isspace() for char in token) else token for token in rule)
 
 
 def _starts_with(argv: list[str], rule: tuple[str, ...]) -> bool:
@@ -235,6 +237,7 @@ class Decision:
     reason: str = ""
     rule: str = ""
     prefix: str = ""
+    memo: str = ""
 
     @property
     def allowed(self) -> bool:
@@ -252,27 +255,33 @@ class Decision:
         body = {"outcome": self.outcome, "risk": self.risk, "rule": self.rule}
         if self.prefix:
             body["prefix"] = self.prefix
+        if self.memo:
+            body["memo"] = self.memo
         if self.reason:
             body["reason"] = self.reason
         return body
 
 
-def approve(risk: str, rule: str, prefix: str = "") -> Decision:
-    return Decision(ALLOW, risk=risk, rule=rule, prefix=prefix)
+def approve(risk: str, rule: str, prefix: str = "", memo: str = "") -> Decision:
+    return Decision(ALLOW, risk=risk, rule=rule, prefix=prefix, memo=memo)
 
 
-def ask(risk: str, rule: str, prefix: str = "") -> Decision:
-    return Decision(ASK, risk=risk, rule=rule, prefix=prefix)
+def ask(risk: str, rule: str, prefix: str = "", memo: str = "") -> Decision:
+    return Decision(ASK, risk=risk, rule=rule, prefix=prefix, memo=memo)
 
 
-def deny(risk: str, rule: str, reason: str, prefix: str = "") -> Decision:
-    return Decision(DENY, risk=risk, rule=rule, reason=reason, prefix=prefix)
+def deny(risk: str, rule: str, reason: str, prefix: str = "", memo: str = "") -> Decision:
+    return Decision(DENY, risk=risk, rule=rule, reason=reason, prefix=prefix, memo=memo)
 
 
-def approval_options(tool_name: str, prefix: str = "") -> list[dict]:
-    """审批卡上的按钮数据：本次 / 该前缀（仅命令）/ 该工具本会话。"""
+def approval_options(tool_name: str, memo: str = "") -> list[dict]:
+    """审批卡上的按钮数据：本次 / 这条命令（仅 run_shell 且粒度够细时）/ 该工具本会话。
+
+    ``memo`` 传的是 :func:`memo_rule` 算出来的那一串，不是命令本身的首段——
+    卡片上写的"总是允许 X"必须与真正写进会话账本的那条规则逐字一致，
+    否则用户批的是 ``python -c print(1)``、账本上记的却是 ``python``。
+    """
     options = [{"scope": SCOPE_ONCE, "label": "仅本次允许"}]
-    memo = memoizable_prefix(tool_name, prefix)
     if memo:
         options.append({"scope": SCOPE_PREFIX, "label": f"本会话总是允许 {memo}"})
     options.append(
@@ -309,22 +318,61 @@ MEMOIZABLE_EXES = frozenset(
     }
 )
 
+# 名单里这几个是"能给什么代码就跑什么代码"的入口：它们和 pytest / tsc 不是一类。
+# 记住一个裸名等于把整个会话的任意代码执行交给模型自选载荷，所以这类命令必须
+# 带到真正被执行的那一段（`-c` 的正文、`-m` 的模块名、脚本路径），只准收紧到
+# "这一条命令"，不准放宽到"这个解释器"。对照实物：Codex 落在
+# ~/.codex/rules/default.rules 的那条规则，正文 `-Command` 整段都在 pattern 里。
+_CODE_EXECUTORS = frozenset({"python", "python3", "py", "node", "nodejs"})
+_INLINE_CODE_FLAGS = frozenset(
+    {"-c", "-e", "--command", "-command", "-commands", "/c", "/e", "--eval", "--print"}
+)
+_MODULE_FLAGS = frozenset({"-m", "--module"})
 
-def memoizable_prefix(tool_name: str, prefix: str) -> str:
-    """判断这个前缀值不值得被记住。
 
-    带子命令的前缀（``git status``、``npm run``）粒度够细，可以记；
-    只有一个裸可执行名时，仅限跑构建/测试这一类工具——``rm`` / ``bash`` / ``curl``
-    被记住等于打开整个会话的闸门，宁可不给这一档。
+def memo_rule(command: str) -> tuple[str, ...]:
+    """这次批准该记成什么规则；空元组＝不值得记（下次照样挂卡）。
+
+    规则必须覆盖到"真正被执行的那一段"：解释器取到 ``-c`` 的正文或脚本路径为止，
+    普通命令取 :func:`command_prefix`。含密钥形态的规则不记——卡片上它是打码的，
+    让用户批准一条自己看不见全文的规则，等于把打码变成盲签。
     """
+    segments = split_segments(command)
+    if not segments:
+        return ()
+    tokens = tokenize(segments[0])
+    if not tokens:
+        return ()
+    exe = _basename(tokens[0])
+    rule: tuple[str, ...] = ()
+    if exe.lower() in _CODE_EXECUTORS:
+        # 跳过解释器自己的旗标（`-u` / `-I` / `--inspect`），停在载荷那一段：
+        # 内联代码取到正文，`-m` 取到模块名，否则取到脚本路径。裸解释器不记。
+        # 首段写 basename（与 command_prefix 一致），换一种路径写法也能命中。
+        for index in range(1, len(tokens)):
+            token = tokens[index]
+            lowered = token.lower()
+            if lowered in _INLINE_CODE_FLAGS or lowered in _MODULE_FLAGS:
+                if index + 1 < len(tokens):
+                    rule = (exe,) + tuple(tokens[1 : index + 2])
+                break
+            if not token.startswith("-"):
+                rule = (exe,) + tuple(tokens[1 : index + 1])
+                break
+    else:
+        rule = prefix_rule(command_prefix(command))
+        if rule and len(rule) < 2 and rule[0].lower() not in MEMOIZABLE_EXES:
+            rule = ()
+    if rule and contains_secret(render_rule(rule)):
+        return ()
+    return rule
+
+
+def memoizable_prefix(tool_name: str, command: str) -> str:
+    """审批卡上"本会话总是允许 X"里的 X：只有值得记的命令才给这一档。"""
     if tool_name != "run_shell":
         return ""
-    rule = prefix_rule(prefix)
-    if len(rule) >= 2:
-        return render_rule(rule)
-    if len(rule) == 1 and rule[0].lower() in MEMOIZABLE_EXES:
-        return render_rule(rule)
-    return ""
+    return render_rule(memo_rule(command))
 
 
 def parse_decision(raw: object) -> tuple[bool, str]:
@@ -384,24 +432,29 @@ class PermissionPolicy:
     def remember(self, tool: str, arguments: dict, scope: str = SCOPE_ONCE) -> None:
         """把一次批准写进会话记忆。
 
-        前缀档要过 memoizable_prefix 这一关：前端即使误传 scope=prefix，
-        也不会把 ``rm`` 这种裸可执行名写进白名单。
+        前缀档记的是 :func:`memo_rule` 算出来的那一串（解释器类必须带到正文），
+        不是命令首段——前端即使误传 scope=prefix，也记不出"整个 python"这种宽账。
         """
         self.approved_actions.add(approval_key(tool, arguments))
         if scope == SCOPE_TOOL:
             self.approved_tools.add(tool)
         elif scope == SCOPE_PREFIX:
-            prefix = memoizable_prefix(tool, command_prefix(str(arguments.get("command") or "")))
-            if prefix:
-                self.approved_prefixes.add(prefix_rule(prefix))
+            command = str(arguments.get("command") or "")
+            # 不可逆命令不进前缀账：`git push --force` 的前缀是 `git push`，
+            # 记下来等于把正常推送也放行。卡片上不给这一档，账本这层也必须自守。
+            rule = memo_rule(command) if tool == "run_shell" and not is_irreversible(command) else ()
+            if rule:
+                self.approved_prefixes.add(rule)
 
     def forget(self, tool: str, arguments: dict, scope: str = SCOPE_ONCE) -> None:
         """驳回同样要记住，否则下一步模型会拿同一个动作再问一遍。"""
         self.denied_actions.add(approval_key(tool, arguments))
         if scope == SCOPE_PREFIX:
-            prefix = memoizable_prefix(tool, command_prefix(str(arguments.get("command") or "")))
-            if prefix:
-                self.denied_prefixes.add(prefix_rule(prefix))
+            command = str(arguments.get("command") or "")
+            # 驳回 `git push --force` 不该连带把正常的 `git push` 也拒掉。
+            rule = memo_rule(command) if tool == "run_shell" and not is_irreversible(command) else ()
+            if rule:
+                self.denied_prefixes.add(rule)
 
     def snapshot(self) -> dict:
         return {
@@ -416,6 +469,8 @@ class PermissionPolicy:
         risk = tool.resolve_risk(dict(arguments or {})) if risk is None else risk
         name = tool.name
         command = str((arguments or {}).get("command") or "")
+        # 卡片上"总是允许 X"的 X 与账本里真正记下的那条规则必须是同一串，所以在这里算一次。
+        memo = memoizable_prefix(name, command)
 
         # 计划模式：只读取证，其余一律拒绝（不是询问——计划模式下不该有写动作的机会）。
         if self.mode == MODE_PLAN:
@@ -429,12 +484,16 @@ class PermissionPolicy:
             )
 
         # 不可逆操作：任何模式、任何前缀规则都不放行，必须逐个确认。
-        blanket_allow = self.mode == MODE_BYPASS or self.approve_high_risk
+        # 也不给"总是允许"这一档：`git push --force` 的前缀是 `git push`，记下来
+        # 等于连正常的推送也一起放行，而它本来必须一次一确认。
         if is_irreversible(command):
             return ask(risk, "irreversible", command_prefix(command))
 
-        if blanket_allow:
+        if self.mode == MODE_BYPASS:
             return approve(risk, "mode:bypass", command_prefix(command))
+        # 归因要和来源一致：开关就叫 approve_high_risk，别在追踪里冒充"全放行模式"。
+        if self.approve_high_risk:
+            return approve(risk, "flag:approve_high_risk", command_prefix(command))
 
         key = approval_key(name, arguments)
         if key in self.denied_actions:
@@ -466,7 +525,7 @@ class PermissionPolicy:
         if risk not in ("high", "critical"):
             return approve(risk, "risk:auto", command_prefix(command))
 
-        return ask(risk, "risk:ask", command_prefix(command))
+        return ask(risk, "risk:ask", command_prefix(command), memo=memo)
 
 
 __all__ = [

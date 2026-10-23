@@ -36,11 +36,14 @@ import {
 } from "./api";
 import {
   argumentPreview,
+  botRoundTokens,
   initials,
   insertMention,
   messageStatusLabel,
   messageTokens,
   roundActive,
+  roundGapLabel,
+  roundSpend,
   roundStatusLabel,
   shortTokens,
   splitHighlight,
@@ -376,6 +379,13 @@ export function TeamView() {
   );
   const round = state?.round ?? null;
   const busyRound = roundActive(round?.status);
+  // 本轮的花费以账本为准（跨成员任务、含没走完的发言）；账本读不到时才退回轮计数。
+  const spend = useMemo(() => roundSpend(round ?? {}), [round]);
+  const gapLabel = roundGapLabel(spend.extra);
+  const spendTitle = spend.fromLedger
+    ? `账本口径：${spend.calls} 笔 · ${spend.tasks} 个成员任务 · ${spend.runs} 次发言（含放行续跑）\n` +
+      `编排器轮计数 ${Math.max(0, Math.round(round?.tokens ?? 0))}，只累加收尾完成的发言`
+    : "本轮花费来自编排器的轮计数；账本里还没有这一轮的记录";
 
   function selectGroup(groupId: string) {
     if (groupId === activeGroupId) return;
@@ -730,14 +740,20 @@ export function TeamView() {
               <div className="hidden shrink-0 items-center gap-2 sm:flex">
                 <div className="text-right">
                   <p className="font-mono text-[10px] text-faint">
-                    {shortTokens(round?.tokens ?? 0)} / {shortTokens(activeGroup.token_budget)}
+                    {shortTokens(spend.tokens)} / {shortTokens(activeGroup.token_budget)}
                   </p>
                   <div className="mt-1 h-1 w-20 overflow-hidden rounded-full bg-surface-2">
                     <div
                       className="h-full rounded-full bg-brand/70"
-                      style={{ width: `${usagePercent(round?.tokens ?? 0, activeGroup.token_budget)}%` }}
+                      style={{ width: `${usagePercent(spend.tokens, activeGroup.token_budget)}%` }}
                     />
                   </div>
+                  {/* 账本比轮计数多出来的钱：发过言但没走完的那次，只有账本认得。 */}
+                  {gapLabel && (
+                    <p className="mt-0.5 font-mono text-[9.5px] text-warn" title={spendTitle}>
+                      {gapLabel}
+                    </p>
+                  )}
                 </div>
                 {busyRound && (
                   <Button variant="danger" onClick={() => void stop()} disabled={stopping}>
@@ -937,12 +953,14 @@ function MemberStrip({
         const speaking = member.bot_id === speakingId;
         const queued = round?.queue?.includes(member.bot_id) ?? false;
         const spoke = round?.spoken?.includes(member.bot_id) ?? false;
+        // 每人本轮花了多少：从账本按发起轮筛出来，不是拿发言条数估的。
+        const roundTokens = botRoundTokens(round, member.bot_id);
         return (
           <span
             key={member.id}
             title={`${member.role || "成员"}${member.model ? ` · ${member.model}` : ""}${
               member.enabled ? "" : "（已停用）"
-            }`}
+            }${roundTokens > 0 ? ` · 本轮 ${roundTokens.toLocaleString("en-US")} tokens` : ""}`}
             className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10.5px] transition-colors ${
               speaking
                 ? "border-brand/40 bg-brand/[0.06] text-brand"
@@ -957,6 +975,7 @@ function MemberStrip({
               }`}
             />
             {member.name}
+            {roundTokens > 0 && <span className="font-mono text-[9px] opacity-70">{shortTokens(roundTokens)}</span>}
             {member.is_admin && <span className="text-[9px] text-brand">主理人</span>}
             {queued && !speaking && <span className="text-[9px] text-warn">排队中</span>}
           </span>

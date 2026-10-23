@@ -267,9 +267,19 @@ def test_snapshot_records_shape_not_secrets(tmp_path: Path) -> None:
     env = {"PATH": sep.join(["/a", "/b"]), "HOME": "/home/x", "API_KEY": "sk-1234567890abcdef"}
     snapshot = capture(tmp_path, env=env, policy=POLICY_MINIMAL)
     view = snapshot.as_dict()
-    assert view["cwd"] == str(tmp_path.resolve())
+    # 审计视图给的是「形状」：变量名、PATH 条数、解释器叫什么，一条主机绝对路径都不给。
+    # 这里刻意用一份像真机器的 PATH（C:\Users\<用户名>\...）——`/a`、`/b` 看不出泄漏，
+    # 而这条断言要拦的正是用户名进事件流那种事。
+    host_path = r"C:\Users\linprivate\AppData\Local\Programs\Python"
+    env2 = {"PATH": sep.join([host_path, r"C:\Windows\system32"]), "HOME": "/home/x"}
+    view2 = capture(tmp_path, env=env2, policy=POLICY_MINIMAL).as_dict()
+    assert "linprivate" not in repr(view2)
+    assert ":\\" not in repr(view2).replace("\\\\", "\\")
+    assert view2["path_entries"] == ["<workspace:Python>", "<workspace:system32>"]
     assert "API_KEY" not in view["env_names"]
-    assert view["path_entries"] == ["/a", "/b"]
+    # 掩码后仍然数得出条数、认得出目录名——审计要的「当时有几个可执行入口」没丢。
+    assert view["path_entries"] == ["<workspace:a>", "<workspace:b>"]
+    assert view["cwd"] == f"<workspace:{tmp_path.resolve().name}>"
     assert "sk-1234567890abcdef" not in repr(view)
 
 

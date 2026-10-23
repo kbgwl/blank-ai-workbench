@@ -21,6 +21,7 @@ has its own budget.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,7 @@ from blank_api.services.harness.spec import (
     load_workspace_tree,
     render as render_harness,
 )
+from blank_api.services.workspace import mask_path
 
 LAYER_SYSTEM = "system"
 LAYER_USER = "user"
@@ -72,12 +74,30 @@ class InstructionLayer:
     truncated: bool = False
 
     def as_dict(self) -> dict:
+        """审计视图：指认「哪一层、哪个文件、多少字、内容是哪一版」，但不抄正文。
+
+        `sha` 是这一层真正被拼进提示词那段文本的指纹（已换行归一、已按上限截断），
+        对标 Codex 在 world_state 里用 `instructions:"<sha>"` 指代内容的手法——
+        既能在账本里指认版本，又不把几万字复制进事件流。
+        """
         return {
             "source": self.source,
-            "path": self.path,
+            "path": audit_path(self.path),
             "chars": len(self.content),
+            "sha": content_sha(self.content),
             "truncated": self.truncated,
         }
+
+
+def content_sha(text: str) -> str:
+    """内容指纹（sha256 前 40 位）。算的是注入文本，不是磁盘原文件：
+    文件被截断时，账本要说的是「模型当时看到了什么」。"""
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:40]
+
+
+def audit_path(path: str) -> str:
+    """绝对路径一律掩码；`task`/harness 这类逻辑名原样保留（它本来就不是主机路径）。"""
+    return mask_path(path) if Path(str(path)).is_absolute() else str(path)
 
 
 def read_layer(

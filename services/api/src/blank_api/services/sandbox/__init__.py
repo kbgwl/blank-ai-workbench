@@ -1,4 +1,4 @@
-from blank_api.services.sandbox.audit import AuditLog, AuditRecord
+from blank_api.services.sandbox.audit import AuditLog, AuditRecord, audit_log
 from blank_api.services.sandbox.policy import SandboxPolicy
 from blank_api.services.sandbox.runner import (
     DockerSandbox,
@@ -21,4 +21,5 @@ __all__ = [
     "SnapshotStore",
     "cleanup_containers",
     "get_sandbox",
+    "audit_log",
 ]

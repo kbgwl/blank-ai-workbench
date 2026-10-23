@@ -52,6 +52,36 @@ jobs:
           uv run alembic upgrade head
         working-directory: services/api
 
+  api-dialect:
+    # #50 量出的三类缺陷只在第二种方言上成立：提交后读回（无 INSERT RETURNING ⇒ 同步 lazy IO）、
+    # 以及 aiomysql 在 PyMySQL ≥1.2 上绑不了 bytes（检查点每轮都写二进制列）。
+    # SQLite 那一格全绿挡不住它们，所以这一格必须是真库；判定用同一份驱动两边同跑：
+    # 两边一起红 = 装置错，只有 MySQL 红 = 真方言分歧。
+    # --require-mysql 让"库没起来"变成失败，而不是静默跳过（跳过 = 这一格今天没人守）。
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_only_root_pw
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pci_only_root_pw"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --extra mysql
+        working-directory: services/api
+      - name: 两方言端到端对照（真 HTTP；步数由装置的 EXPECTED_STEPS 自查）
+        # 名字里不写死步数：写死的那份会腐烂，而"全绿"这句话需要的是装置自己对过账。
+        # 仓库根没有 pyproject.toml，uv 的项目上下文就是 services/api；装置自己按 __file__ 找得到仓库。
+        env:
+          BLANK_E2E_MYSQL_URL: mysql+aiomysql://root:ci_only_root_pw@127.0.0.1:3306/kbgai_e2e
+        run: uv run --extra mysql python ../evals/dialect_e2e.py --require-mysql
+        working-directory: services/api
+
   team-e2e:
     # 团队链路只有跨进程才暴露问题（审批放行后成员是否真的变化、管家挑的资料是否进了提示），
     # 单测全绿挡不住这类结论。浏览器点验需要 Chrome，CI 里先跑后端阶段，本地用 pnpm e2e:team 补全。

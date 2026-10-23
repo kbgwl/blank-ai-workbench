@@ -102,6 +102,9 @@ async def enable_skill(skill_id: str, db: DbSession) -> SkillOut:
         raise ApiError(code="skill_not_found", message="Skill 不存在", status_code=404)
     skill.status = "active"
     await db.commit()
+    # updated_at 是 onupdate=func.now()：提交后那一列在会话里是"待读回"状态，
+    # 直接 model_validate 会在同步上下文里触发惰性加载，当场 MissingGreenlet → 500。
+    await db.refresh(skill)
     return SkillOut.model_validate(skill)
 
 
@@ -112,6 +115,7 @@ async def disable_skill(skill_id: str, db: DbSession) -> SkillOut:
         raise ApiError(code="skill_not_found", message="Skill 不存在", status_code=404)
     skill.status = "disabled"
     await db.commit()
+    await db.refresh(skill)
     return SkillOut.model_validate(skill)
 
 
@@ -128,4 +132,5 @@ async def rollback_skill(skill_id: str, db: DbSession) -> SkillOut:
     skill.instructions = str(previous["instructions"])
     skill.version += 1
     await db.commit()
+    await db.refresh(skill)
     return SkillOut.model_validate(skill)

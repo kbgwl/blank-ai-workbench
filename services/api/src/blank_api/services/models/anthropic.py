@@ -12,6 +12,7 @@ from blank_api.services.models.base import (
     ModelResponse,
     Usage,
     data_payload,
+    retry_after_seconds,
 )
 from blank_api.services.models.streaming import ToolCallAccumulator
 
@@ -115,6 +116,7 @@ class AnthropicAdapter(ModelAdapter):
             model=data.get("model") or self.config.model,
             tool_calls=tool_calls,
             finish_reason=data.get("stop_reason"),
+            response_id=str(data.get("id") or ""),
         )
 
     async def stream(self, messages, tools=None, **kwargs) -> AsyncIterator[str]:
@@ -128,7 +130,9 @@ class AnthropicAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}")
+                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
+                                     status=resp.status_code,
+                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
                 async for raw in resp.aiter_lines():
                     payload = data_payload(raw)
                     if not payload:
@@ -152,6 +156,7 @@ class AnthropicAdapter(ModelAdapter):
         usage = Usage()
         model = self.config.model
         stop_reason: str | None = None
+        message_id = ""  # 供应商那一笔响应的 id，Anthropic 在 message_start 帧里给
 
         async with self._client() as client:
             async with client.stream(
@@ -162,7 +167,9 @@ class AnthropicAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}")
+                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
+                                     status=resp.status_code,
+                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
                 async for raw in resp.aiter_lines():
                     piece = data_payload(raw)
                     if not piece:
@@ -175,6 +182,7 @@ class AnthropicAdapter(ModelAdapter):
                     if kind == "message_start":
                         message = event.get("message") or {}
                         model = message.get("model") or model
+                        message_id = str(message.get("id") or "") or message_id
                         usage = self._usage(message.get("usage") or {}, usage)
                     elif kind == "content_block_start":
                         block = event.get("content_block") or {}
@@ -208,6 +216,7 @@ class AnthropicAdapter(ModelAdapter):
             model=model,
             tool_calls=calls.as_list(),
             finish_reason=stop_reason,
+            response_id=message_id,
         )
 
     @staticmethod

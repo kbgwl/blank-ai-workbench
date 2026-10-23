@@ -1,11 +1,15 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from blank_api.db import Base
 
 PROVIDER_KINDS = ("openai_compatible", "openai_responses", "anthropic", "ollama")
+
+# 账行上的 provider_id 找不到对应配置行时念出来的名字。两个读模型（observability、usage）
+# 共用这一个说法，界面上才不会出现"None"或者干脆凭空少一笔钱。
+PROVIDER_GONE = "供应商已删除"
 
 PROVIDER_PRESETS: dict[str, dict] = {
     "openai": {"kind": "openai_compatible", "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini", "supports_tools": True},
@@ -50,9 +54,13 @@ class ModelUsage(Base):
     __tablename__ = "model_usage"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    provider_id: Mapped[str] = mapped_column(
-        ForeignKey("model_providers.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    # 账本行对配置表不许有引用完整性。外键写在 SQLite 上从不生效（连接层没开
+    # `PRAGMA foreign_keys`），在 MySQL/PostgreSQL 上会照声明执行：以前这一列带
+    # `ON DELETE CASCADE`，真 MySQL 8.4 实测删一家供应商 = 它名下 3 笔 600 tokens 直接归零。
+    # Codex 的 `token_usage_record` 同样不引用供应商配置表——账是历史事实，不跟配置一起消失。
+    # 于是"供应商被删"是一条正常状态而不是异常状态：provider_id 悬空，读模型用左连接
+    # 把它念成「供应商已删除」（见 api/routes/observability.py、services/agent/evidence.py）。
+    provider_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     trace_id: Mapped[str] = mapped_column(String(120), nullable=False, default="", index=True)
     node: Mapped[str] = mapped_column(String(60), nullable=False, default="chat")
@@ -63,6 +71,30 @@ class ModelUsage(Base):
     cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     cache_write_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     reasoning_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # 供应商那一笔请求的 id。空串=这家没给（Ollama 一类），不许拿我们自己的 id 顶上。
+    response_id: Mapped[str] = mapped_column(String(120), nullable=False, default="", server_default="", index=True)
+    # 回合归属：这一笔钱是谁引起的、属于哪一轮。对标 Codex 的
+    # `token_usage_record{turn_id, root_turn_id}` 与 `turn_attribution{parent_turn_id, initiating_agent_path}`。
+    # 以前只有 task_id + trace_id：能问"这个任务花了多少"，问不出"这一轮花了多少"
+    # （同一任务重跑三次会并成一堆），也问不出"这条子分支是被哪条线程派下去的"。
+    # 空串一律表示"这条行上线前就存在，当时没记"，不许读成第 0 轮或根线程为空。
+    run_id: Mapped[str] = mapped_column(String(120), nullable=False, default="", server_default="", index=True)
+    # 发起轮（origin）：引起这一整棵任务树的那一轮。同一轮里每个发言成员都有自己的
+    # task_id 和自己的 run_id，所以「这几个人合起来花了多少」用 run_id 问不出来——
+    # 它是每个成员各一个值，而轮只有一个。这一列把整轮的钱收在一个键上。
+    # 顶层运行的发起轮就是它自己；子代理跟着父记录器，不用自己填。
+    # 空串=这一行上线前就存在，当时没记（不许读成"没有发起轮"）。
+    origin_run_id: Mapped[str] = mapped_column(
+        String(120), nullable=False, default="", server_default="", index=True
+    )
+    root_trace_id: Mapped[str] = mapped_column(String(120), nullable=False, default="", server_default="")
+    parent_trace_id: Mapped[str] = mapped_column(String(120), nullable=False, default="", server_default="")
+    agent_path: Mapped[str] = mapped_column(String(200), nullable=False, default="", server_default="")
+    # 这一笔属于哪一次并行编排（fan_out）。空串=不是并行派出去的（单发子代理、主线程、摘要），
+    # 或者这行上线前就存在——"没说"与"第 0 批"是两回事，读出来必须是 null。
+    parallel_group: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="", server_default="", index=True
+    )
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ok")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

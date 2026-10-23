@@ -248,6 +248,9 @@ async def create_bot(payload: TeamBotIn, db: DbSession) -> dict:
     except IntegrityError:
         await db.rollback()
         raise ApiError(code="bot_name_taken", message=f"名字「{payload.name}」已经被占用", status_code=409) from None
+    # bot_payload 要读 created_at/updated_at，那两个是服务端生成的：MySQL 的 INSERT 没有
+    # RETURNING，不先读回来就是一次同步懒加载（MissingGreenlet → 500）。
+    await db.refresh(bot)
     return await bot_payload(db, bot)
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from typing import Any
 
 _KEY_VALUE = re.compile(r"(?i)(api[_-]?key|authorization|x-api-key|bearer)(\s*[:=]\s*)(\S+)")
 _TOKEN_LIKE = re.compile(r"sk-[A-Za-z0-9_\-]{8,}")
@@ -20,6 +21,30 @@ _SECRET_SHAPES = (
 
 def contains_secret(text: str) -> bool:
     return any(pattern.search(text) for pattern in _SECRET_SHAPES)
+
+
+def mask(text: str) -> str:
+    """先按"键=值"的形状打码（保留字段名，让人看得出自己在批什么），
+    再把 redact 认不出的密钥形态整段抹掉。
+
+    只做 redact 是不够的：`password = "..."` 这类形态 `contains_secret` 认得出、
+    `redact` 却不改，边界上留了空子就等于没设边界。
+    """
+    out = redact(text)
+    for pattern in _SECRET_SHAPES:
+        out = pattern.sub("****", out)
+    return out
+
+
+def mask_deep(value: Any) -> Any:
+    """递归打码任意 JSON 形状（事件载荷、审批卡的参数、工具摘要都从这里过）。"""
+    if isinstance(value, str):
+        return mask(value) if contains_secret(value) else value
+    if isinstance(value, dict):
+        return {key: mask_deep(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [mask_deep(item) for item in value]
+    return value
 
 
 def redact(text: str, extra_secrets: Iterable[str] = ()) -> str:

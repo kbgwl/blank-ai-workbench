@@ -25,6 +25,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from blank_api.services.workspace import mask_path
+
 POLICY_INHERIT = "inherit"
 POLICY_MINIMAL = "minimal"
 POLICY_STRICT = "strict"
@@ -134,15 +136,21 @@ class ShellSnapshot:
         return env
 
     def as_dict(self) -> dict:
-        """Audit view: no variable values, only names and the shape of PATH."""
+        """审计视图：不给变量值，也不给主机绝对路径。
+
+        这份快照进事件流、证据包和全文索引。一条 Windows 开发机的 PATH 有二十几条，
+        里面全是 `C:\\Users\\<用户名>\\...` 这种目录——原样入账等于把操作者的装机结构和
+        用户名广播给所有能看到这个任务的人。掩码只有一处口径：`workspace.mask_path`
+        （和治理快照、指令层引用共用同一个函数）；本机要看真路径就打开 expose_workspace_paths。
+        """
         return {
-            "cwd": self.cwd,
+            "cwd": mask_path(self.cwd),
             "policy": self.policy,
-            "shell": self.shell,
-            "python": self.python,
-            "venv": self.venv,
+            "shell": mask_path(self.shell) if self.shell else "",
+            "python": mask_path(self.python) if self.python else "",
+            "venv": mask_path(self.venv) if self.venv else "",
             "venv_pinned": self.venv_pinned,
-            "path_entries": list(self.path_entries),
+            "path_entries": [mask_path(item) for item in self.path_entries],
             "env_names": sorted(self.env),
             "created_at": self.created_at,
         }

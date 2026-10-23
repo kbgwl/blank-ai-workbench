@@ -15,6 +15,7 @@ from blank_api.services.models.base import (
     Usage,
     data_payload,
     openai_content,
+    retry_after_seconds,
 )
 from blank_api.services.models.streaming import ToolCallAccumulator
 
@@ -70,6 +71,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
             model=data.get("model") or self.config.model,
             tool_calls=message.get("tool_calls") or [],
             finish_reason=choice.get("finish_reason"),
+            response_id=str(data.get("id") or ""),
         )
 
     async def stream(self, messages, tools=None, **kwargs) -> AsyncIterator[str]:
@@ -83,7 +85,9 @@ class OpenAICompatibleAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}")
+                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
+                                     status=resp.status_code,
+                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
                 async for raw in resp.aiter_lines():
                     payload = data_payload(raw)
                     if not payload:
@@ -116,6 +120,9 @@ class OpenAICompatibleAdapter(ModelAdapter):
         usage = Usage()
         model = self.config.model
         finish_reason: str | None = None
+        # 流式帧每片都带同一个 `id`（供应商那一笔响应的 id）；帧里拿不到就用响应头。
+        # 两个都要不上才写空串——空串是"这家没给 id"这个事实，不是"还没实现"。
+        response_id = ""
         # 不是 SSE 帧的行先收着：不认 stream 的网关会把整包 JSON 塞在这里
         plain: list[str] = []
 
@@ -128,7 +135,10 @@ class OpenAICompatibleAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}")
+                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
+                                     status=resp.status_code,
+                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
+                header_id = str(resp.headers.get("x-request-id") or resp.headers.get("x-dashscope-request-id") or "")
                 async for raw in resp.aiter_lines():
                     piece = data_payload(raw)
                     if not piece:
@@ -141,6 +151,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                         # 心跳/注释行不该中断整次调用，跳过即可
                         continue
                     model = chunk.get("model") or model
+                    response_id = response_id or str(chunk.get("id") or "")
                     if chunk.get("usage"):
                         usage = _usage_from(chunk["usage"])
                     for choice in chunk.get("choices") or []:
@@ -173,6 +184,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
             model=model,
             tool_calls=calls.as_list(),
             finish_reason=finish_reason,
+            response_id=response_id or header_id,
         )
 
 

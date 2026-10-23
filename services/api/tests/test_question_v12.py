@@ -157,6 +157,15 @@ async def test_question_blocks_the_run_and_resumes_with_the_answer(env, workspac
     assert "question.required" in types and "approval.required" not in types, types
     answered = [event for event in events if event["type"] == "question.answered"]
     assert answered and answered[0]["payload"]["answers"] == {"q1": "方案 A"}
+    # 时间线里也得留下「这一步做完了」：前端逐条渲染、审计逐条回放读的是这一份。
+    # 只有工具台账而时间线跳过它，"答案回到了上下文"这句话就没有可对核对的实物
+    # （方言端到端第 61 步实测到的正是这个空洞）。
+    completed = [
+        event for event in events
+        if event["type"] == "tool.completed" and (event["payload"] or {}).get("tool") == "request_user_input"
+    ]
+    assert completed, f"答题那一步没进时间线：{types}"
+    assert "方案 A" in completed[0]["payload"]["summary"]
 
     calls = await env.tool_calls(task_id)
     ask_calls = [item for item in calls if item.name == "request_user_input"]

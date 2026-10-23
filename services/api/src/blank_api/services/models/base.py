@@ -3,20 +3,63 @@
 from __future__ import annotations
 
 import json
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 
 import httpx
 
 
 class ModelError(Exception):
-    def __init__(self, code: str, message: str, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        retryable: bool = False,
+        *,
+        status: int = 0,
+        retry_after: float = 0.0,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.retryable = retryable
+        # 供应商给回的状态码（0 = 这一笔根本没走到有状态码的那一步）。
+        # 上层要它才能分清"换个说法再说一遍可能有用"与"再说一遍只是添乱"：
+        # 400 常是在拒 `stream` 这个参数，429/5xx 拒的是"现在不许问"，与问法无关。
+        self.status = status
+        # 供应商在 429 上明说的等待秒数（`Retry-After`，0 = 没说）。退避取它与
+        # 指数退避的较大者：服务器已经说了多久后再来，比客户端自己猜的更有依据。
+        self.retry_after = retry_after
+
+
+def retry_after_seconds(value: str | None, *, now: float | None = None) -> float:
+    """把 `Retry-After` 读成秒数：支持整秒与 HTTP 日期，读不懂就当没给。
+
+    RFC 9110 允许两种形状：`Retry-After: 120` 与 `Retry-After: Fri, 23 Oct 2026 08:00:04 GMT`。
+    主流网关两样都用，只认其中一种会把另一种静默读成 0（退回指数退避），
+    看起来"有退避"、实际没听供应商的。过去的时间按 0 算，不返回负数。
+    """
+    if not value:
+        return 0.0
+    text = value.strip()
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return 0.0
+    if when is None:
+        return 0.0
+    if when.tzinfo is None:  # 日期没带时区时按 UTC 读（HTTP 日期的规范时区）
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, when.timestamp() - (time.time() if now is None else now))
 
 
 # 增量文本回调：await 它是为了背压——模型在流式输出时，消费方（记日志、广播给界面）
@@ -100,6 +143,11 @@ class ModelResponse:
     model: str = ""
     tool_calls: list[dict] = field(default_factory=list)
     finish_reason: str | None = None
+    # 供应商侧这一笔请求的 id（Codex 的 `token_usage_record.response_id` 就是它）。
+    # 空串是事实："这家没给 id"，不是"还没实现"——用户报"这轮答得不对"时，
+    # 只有这个 id 能在供应商那边定位到具体那一笔；我们的 trace_id 只到自己家门口。
+    response_id: str = ""
+
 
 
 @dataclass
@@ -188,6 +236,8 @@ class ModelAdapter(ABC):
                 "model_http_error",
                 f"模型返回 {resp.status_code}：{resp.text[:200]}",
                 retryable=resp.status_code >= 500,
+                status=resp.status_code,
+                retry_after=retry_after_seconds(resp.headers.get("Retry-After")),
             )
         return resp.json()
 

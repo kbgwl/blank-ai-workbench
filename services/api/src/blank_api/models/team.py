@@ -21,6 +21,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -123,8 +124,14 @@ class TeamRound(Base):
     user_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="running", index=True)
     # 待发言的 bot_id 顺序队列，以及已经完成过一轮的 bot_id（含 [PASS]）。
-    queue: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
-    spoken: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    # `text("('[]')")` 不是口味：MySQL 8.4 拒绝给 JSON/TEXT 列写字面量默认值（1101），
+    # 只有 8.0.13+ 的表达式默认值这一种写法两种方言都吃。
+    queue: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list, server_default=text("('[]')")
+    )
+    spoken: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list, server_default=text("('[]')")
+    )
     tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # 主理人是否已经做过收尾。没有成员的轮次不收尾，避免自问自答。
     wrap_up_done: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -152,5 +159,7 @@ class TeamMessage(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="")
     task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    meta: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("('{}')")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

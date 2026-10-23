@@ -17,6 +17,8 @@ os.environ.setdefault("BLANK_MEMORY_DIR", tempfile.mkdtemp(prefix="blank-memory-
 os.environ.setdefault("BLANK_SETTINGS_FILE", f"{tempfile.mkdtemp(prefix='blank-settings-')}/settings.json")
 # 子代理的隔离副本也放测试自己的目录：不往系统临时目录里堆，跑完自动随 basetemp 清理
 os.environ.setdefault("BLANK_WORKTREE_ROOT", tempfile.mkdtemp(prefix="blank-worktrees-"))
+# 工具调用的审计账也落临时目录：每次网关调用都写一条 JSONL，留在仓库里就是脏数据
+os.environ.setdefault("BLANK_AUDIT_DIR", tempfile.mkdtemp(prefix="blank-audit-"))
 
 # 安全策略的产品默认是「禁止执行命令 + 每条命令都要确认」，那是给客户装机用的。
 # 测试要验证的恰恰是命令能跑通、审批能流转，所以这里把夹具调成宽松档 ——

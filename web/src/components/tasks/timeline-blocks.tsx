@@ -3,7 +3,20 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Button, Notice } from "@/components/projects/ui";
 import { clip, formatClock, formatDuration } from "./format";
-import { riskLabel, toolStatusClass } from "./status";
+import {
+  boundaryLabel,
+  boundaryNeedsWarn,
+  compactionChainLabel,
+  compactionHeadline,
+  compactionReplacementLabel,
+  compactionTriggerLabel,
+  compactionWaterLabel,
+  historyRefLabel,
+  nodeLabel,
+  riskLabel,
+  toolStatusClass,
+} from "./status";
+import type { HistoryRef } from "./status";
 import { ReplyView } from "./reply";
 import { describeTool, type ToolFact } from "./tool-display";
 import type { Block, TermLine } from "./timeline";
@@ -115,6 +128,93 @@ function PlanCard({ block }: { block: Extract<Block, { kind: "plan" }> }) {
   );
 }
 
+function RefList({ title, refs }: { title: string; refs: HistoryRef[] }) {
+  if (refs.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="font-mono text-[10px] tracking-wide text-faint uppercase">
+        {title}（{refs.length} 条）
+      </span>
+      <ul className="flex max-h-40 flex-col gap-1 overflow-auto rounded-md border border-line bg-surface-2 px-2.5 py-2">
+        {refs.map((ref, index) => (
+          <li key={`${ref.index}-${ref.sha}-${index}`} className="font-mono text-[11px] leading-relaxed text-text/80">
+            {historyRefLabel(ref)}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function BoundaryCard({ block }: { block: Extract<Block, { kind: "boundary" }> }) {
+  // 窗口链与替换记录是 #42 才有的字段。老任务不是"第 0 窗、保留 0 条"，是没说这件事，
+  // 所以这两组都按存在性判断，缺了就整段不渲染。
+  const hasChain = block.windowChain.windowNumber !== null || !!block.windowChain.windowId;
+  const hasReplacement = block.replacement.retained !== null;
+  const facts: ToolFact[] = [
+    { label: "边界", value: `${block.covered} 条之前已不是原文` },
+    { label: "本次折入", value: block.folded ? `${block.folded} 条` : "" },
+    { label: "压缩前后", value: block.tokensBefore && block.tokensAfter ? `${block.tokensBefore} → ${block.tokensAfter} tokens` : "" },
+    { label: "触发依据", value: compactionTriggerLabel(block.triggeredBy) },
+    { label: "水位", value: compactionWaterLabel(block.waterRatio, block.window) },
+    { label: "同轮裁剪", value: block.microClipped ? `${block.microClipped} 条 · 省 ${block.microCharsSaved} 字符` : "" },
+    { label: "历史窗口", value: compactionChainLabel(block.windowChain) },
+    { label: "替换", value: compactionReplacementLabel(block.replacement) },
+    { label: "节点", value: nodeLabel(block.node) },
+  ].filter((item) => item.value);
+  const chainFacts: ToolFact[] = [
+    { label: "本窗", value: block.windowChain.windowId },
+    { label: "上一窗", value: block.windowChain.previousWindowId },
+    { label: "出生窗", value: block.windowChain.firstWindowId },
+    {
+      label: "替换前后",
+      value:
+        block.replacement.beforeItems !== null && block.replacement.afterItems !== null
+          ? `${block.replacement.beforeItems} → ${block.replacement.afterItems} 条`
+          : "",
+    },
+    { label: "压缩调用", value: block.windowChain.responseId },
+  ].filter((item) => item.value);
+  return (
+    <CardShell
+      block={block}
+      accent="border-brand/25 bg-brand/[0.04]"
+      icon={
+        <span className="text-brand">
+          <BlockIcon kind="system" />
+        </span>
+      }
+      title="上下文已压缩"
+      trailing={
+        <span className="font-mono text-[10px] text-faint">{formatClock(block.at)}</span>
+      }
+    >
+      <p className="text-[12px] leading-relaxed text-muted">
+        {compactionHeadline(block.covered, block.folded, block.tokensSaved)}
+      </p>
+      <FactList facts={facts} />
+      {(hasChain || hasReplacement) && (
+        <details className="group">
+          <summary className="cursor-pointer list-none font-mono text-[10px] tracking-wide text-faint hover:text-muted">
+            这一次替换换掉了哪些历史（只有位置、字数与指纹，不含正文）
+          </summary>
+          <div className="mt-2 flex flex-col gap-2">
+            <FactList facts={chainFacts} />
+            <RefList title="丢弃" refs={block.replacement.dropped} />
+            <RefList title="新进" refs={block.replacement.added} />
+            <RefList title="替换后的历史" refs={block.replacement.items} />
+            {!hasReplacement && (
+              <p className="text-[11px] leading-relaxed text-faint">
+                这条事件带了窗口链，但没有逐条替换记录。
+              </p>
+            )}
+          </div>
+        </details>
+      )}
+    </CardShell>
+  );
+}
+
 function ToolCard({ block }: { block: Extract<Block, { kind: "tool" }> }) {
   const [open, setOpen] = useState(false);
   const status = toolStatusClass(block.status);
@@ -135,6 +235,15 @@ function ToolCard({ block }: { block: Extract<Block, { kind: "tool" }> }) {
       title={view.label}
       trailing={
         <span className="flex shrink-0 items-center gap-2">
+          {block.boundary && (
+            <span
+              className={`rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${
+                boundaryNeedsWarn(block.boundary, block.boundaryFacts) ? "border-warn/40 text-warn" : "border-line text-muted"
+              }`}
+            >
+              {boundaryLabel(block.boundary, block.boundaryFacts)}
+            </span>
+          )}
           {block.risk && (
             <span className="rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-text/80">
               {riskLabel(block.risk)}
@@ -524,6 +633,8 @@ export function TimelineBlock({
       );
     case "result":
       return <ResultCard block={block} />;
+    case "boundary":
+      return <BoundaryCard block={block} />;
     case "change":
       return <ChangeCard block={block} onHighlight={onHighlight} />;
     default:

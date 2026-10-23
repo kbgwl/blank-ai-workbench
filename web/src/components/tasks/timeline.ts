@@ -8,12 +8,19 @@ import {
   normalizeQuestions,
   normalizeStatus,
   pick,
+  recordOf,
   textOf,
   type AgentEvent,
   type ApprovalScope,
   type PendingQuestion,
 } from "./api";
 import { clip } from "./format";
+import {
+  type BoundaryFacts,
+  type CompactionReplacement,
+  type CompactionWindow,
+  type HistoryRef,
+} from "./status";
 import { verdictOf } from "./verdict";
 
 export type TermLine = { text: string; tone: "cmd" | "out" | "err" | "warn" };
@@ -41,6 +48,9 @@ export type Block =
       durationMs: number | null;
       risk: string;
       toolCallId: string;
+      boundary: string;
+      /** 后端探测出来的执行事实（强度、限额是否生效）。缺键 = 老任务，渲染时不许编。 */
+      boundaryFacts?: BoundaryFacts;
     }
   | {
       kind: "terminal";
@@ -94,6 +104,32 @@ export type Block =
       diff: string;
     }
   | {
+      kind: "boundary";
+      key: string;
+      seq: number;
+      node: string;
+      at: string;
+      /** 折进摘要的历史条数；0 表示这次只是水位推进（老事件没这个字段时也是 0）。 */
+      folded: number;
+      /** 累计已折叠到第几条历史消息——这就是"边界"本身：边界之前不再是原文。 */
+      covered: number;
+      tokensBefore: number;
+      tokensAfter: number;
+      tokensSaved: number;
+      waterRatio: number;
+      window: number;
+      triggeredBy: string;
+      microClipped: number;
+      microCharsSaved: number;
+      /**
+       * 窗口链与替换记录（#42，对标 §4.1 的 compacted）。
+       * 老任务的压缩事件没有这两组键，字段里以 null / 空数组如实表达"没说"。
+       * `window` 已经被上面占走表示 context_window，所以这里叫 windowChain，不能混。
+       */
+      windowChain: CompactionWindow;
+      replacement: CompactionReplacement;
+    }
+  | {
       kind: "system";
       key: string;
       seq: number;
@@ -108,6 +144,78 @@ const DONE_WORDS = ["completed", "result", "finished", "done", "returned", "ende
 
 function matches(type: string, words: string[]): boolean {
   return words.some((word) => type.includes(word));
+}
+
+/**
+ * 这次调用跑在哪："" = 事件没说这个事实（只读工具、被拒绝的调用、老任务）；
+ * "host" = 进程真的落在宿主上跑；其余 = 沙箱后端名。
+ * 后端刻意把 `sandbox_backend: null` 和"没有这个键"分开下发，所以这里必须按键的存在性判断，
+ * 不能用取值判断——取成 undefined 就把"宿主执行"和"没跑命令"混成了同一档。
+ */
+function eventBoundary(event: AgentEvent): string {
+  const payload = event.payload || {};
+  if (!Object.prototype.hasOwnProperty.call(payload, "sandbox_backend")) return "";
+  const value = payload.sandbox_backend;
+  return typeof value === "string" && value.trim() ? value.trim() : "host";
+}
+
+/**
+ * 这一次调用**实际被什么强制**。后端只在起了进程的调用上下发 `sandbox_enforcement`，
+ * 键不存在就返回 undefined —— 拿默认值填一遍，"未知"就会在界面上长成"没强制"或"已强制"的样子。
+ */
+function eventBoundaryFacts(event: AgentEvent): BoundaryFacts | undefined {
+  const raw = (event.payload || {}).sandbox_enforcement;
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, unknown>;
+  return {
+    strength: typeof value.boundary_strength === "string" ? value.boundary_strength : undefined,
+    limitsApplied: typeof value.limits_applied === "boolean" ? value.limits_applied : undefined,
+  };
+}
+
+/**
+ * 引用数组的搬运：只认 index / role / kind / chars / sha 这五个字段，别的一个键都不抄。
+ * 后端给的是指纹不是正文（§4.1），这里再抄一层就成了第二处会写歪的账。
+ */
+function refsOf(source: Record<string, unknown>, key: string): HistoryRef[] {
+  return arrayOf(source, key)
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => ({
+      index: numOf(item, "index") ?? 0,
+      role: textOf(item, "role"),
+      kind: textOf(item, "kind"),
+      chars: numOf(item, "chars") ?? 0,
+      sha: textOf(item, "sha"),
+      // 出身轮与跨窗留存（#44）。缺键一律读成"没说"：run 空串、其余 null，
+      // 补 0 会凭空造出"第 0 轮 / 第 1 次提问 / 从第 0 窗留下"。
+      run: textOf(item, "run"),
+      userOrder: numOf(item, "user_order"),
+      retainedSince: numOf(item, "retained_since"),
+      retainedWindows: numOf(item, "retained_windows"),
+    }));
+}
+
+/** 窗口链：`window_number` 缺失（#42 之前的老事件）必须是 null，不是 0——0 会说"这是出生窗"。 */
+function windowChainOf(payload: Record<string, unknown>): CompactionWindow {
+  return {
+    windowNumber: numOf(payload, "window_number"),
+    windowId: textOf(payload, "window_id"),
+    previousWindowId: textOf(payload, "previous_window_id"),
+    firstWindowId: textOf(payload, "first_window_id"),
+    responseId: textOf(payload, "compaction_response_id"),
+  };
+}
+
+function replacementOf(payload: Record<string, unknown>): CompactionReplacement {
+  const source = recordOf(payload, "replacement");
+  return {
+    beforeItems: numOf(source, "before_items"),
+    afterItems: numOf(source, "after_items"),
+    retained: numOf(source, "retained"),
+    added: refsOf(source, "added"),
+    dropped: refsOf(source, "dropped"),
+    items: refsOf(source, "items"),
+  };
 }
 
 function shellLine(event: AgentEvent): TermLine | null {
@@ -210,18 +318,34 @@ function describeSystem(event: AgentEvent): { title: string; detail: string; ton
       tone: verdict.tone,
     };
   }
-  if (type === "budget.warning") {
+  if (type === "budget.warning" || type === "budget.exceeded") {
+    // 预算有两种：步数与 token，token 又分「自己花的」和「派给子代理的」。
+    // 原来这一条只报步数，token 用完的那一次也写成「步数预算」——用户看到的解释是错的，
+    // 而真正的原因（派出去的那批）一个字都没提。
     const remaining = numOf(payload, "remaining");
+    const reason = textOf(payload, "reason");
+    const tokens = numOf(payload, "tokens");
+    const budget = numOf(payload, "token_budget");
+    const delegated = numOf(payload, "tokens_delegated");
+    const show = (value: number) => value.toLocaleString("zh-CN");
+    const done = type === "budget.exceeded";
+    const tokenDriven = tokens !== null && delegated !== null && delegated > 0;
     return {
-      title: "步数预算即将用完",
-      detail: remaining !== null ? `只剩 ${remaining} 步，模型开始收尾` : "模型开始收尾",
-      tone: "warn",
-    };
-  }
-  if (type === "budget.exceeded") {
-    return {
-      title: "步数预算已用完",
-      detail: textOf(payload, "steps") ? `已执行 ${textOf(payload, "steps")} 步，转为总结` : "转为总结",
+      title: done ? (tokenDriven ? "预算已用完（含派出的子代理）" : "步数预算已用完")
+        : tokenDriven ? "预算即将用完（含派出的子代理）" : "步数预算即将用完",
+      detail: clip(
+        [
+          done ? (textOf(payload, "steps") ? `已执行 ${textOf(payload, "steps")} 步` : "")
+            : remaining !== null ? `只剩 ${remaining} 步` : "",
+          tokens !== null && budget !== null ? `token ${show(tokens)}/${show(budget)}` : "",
+          delegated ? `其中派出 ${show(delegated)}` : "",
+          reason && reason !== "步数用完" ? reason : "",
+          done ? "转为总结" : "模型开始收尾",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        180,
+      ),
       tone: "warn",
     };
   }
@@ -275,6 +399,28 @@ function describeSystem(event: AgentEvent): { title: string; detail: string; ton
       tone: "accent",
     };
   }
+  if (type === "subagents.completed") {
+    const count = numOf(payload, "count");
+    const succeeded = numOf(payload, "succeeded");
+    const batch = recordOf(payload, "usage");
+    const total = numOf(batch, "total_tokens", "totalTokens");
+    const calls = numOf(batch, "calls");
+    return {
+      title: "并行批次收口",
+      detail: clip(
+        [
+          textOf(payload, "group") ? `批次 ${textOf(payload, "group")}` : "",
+          count !== null ? `${succeeded ?? "?"}/${count} 完成` : "",
+          total !== null ? `合计 ${total.toLocaleString("zh-CN")} token` : "",
+          calls !== null ? `${calls} 笔` : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        180,
+      ),
+      tone: succeeded !== null && count !== null && succeeded < count ? "warn" : "accent",
+    };
+  }
   if (type === "subagent.started") {
     return {
       title: "子代理开始工作",
@@ -311,24 +457,6 @@ function describeSystem(event: AgentEvent): { title: string; detail: string; ton
       title: conflicts > 0 ? "副本合并有冲突" : "副本改动已合并",
       detail: `写入 ${applied} 个文件${conflicts > 0 ? ` · 冲突 ${conflicts} 个未写入` : ""}`,
       tone: conflicts > 0 ? "warn" : "accent",
-    };
-  }
-  if (type === "context.compacted" || type === "context.microcompacted") {
-    const before = numOf(payload, "active_context_tokens_before");
-    const after = numOf(payload, "active_context_tokens_after");
-    const ratio = numOf(payload, "water_ratio");
-    return {
-      title: type === "context.compacted" ? "上下文已压缩" : "上下文已裁剪",
-      detail: clip(
-        [
-          before !== null && after !== null ? `${before} → ${after} tokens` : "",
-          ratio !== null && ratio > 0 ? `水位 ${Math.round(ratio * 100)}%` : "",
-        ]
-          .filter(Boolean)
-          .join(" · "),
-        160,
-      ),
-      tone: "muted",
     };
   }
   if (type.startsWith("review")) {
@@ -372,6 +500,33 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
     const isDiff = rawType.startsWith("diff") || rawType.includes("file.changed") || rawType.includes("file_change");
     const isResult =
       rawType.startsWith("result") || rawType.startsWith("task.completed") || rawType.startsWith("task.failed") || rawType.startsWith("task.cancelled") || rawType.startsWith("task.canceled") || rawType.startsWith("error");
+
+    // 压缩边界是一张卡：`context.compacted` 一次任务只发生几回，
+    // 但它标记的正是"从这里往前看，历史已经不是原文"。
+    // 同族的 context.measured 每步都发（几百条），继续留在对话流之外。
+    if (rawType === "context.compacted") {
+      const micro = recordOf(event.payload, "micro");
+      push({
+        kind: "boundary",
+        key,
+        seq: event.seq,
+        node: event.node,
+        at: event.createdAt,
+        folded: numOf(event.payload, "folded") ?? 0,
+        covered: numOf(event.payload, "covered") ?? 0,
+        tokensBefore: numOf(event.payload, "active_context_tokens_before") ?? 0,
+        tokensAfter: numOf(event.payload, "active_context_tokens_after") ?? 0,
+        tokensSaved: numOf(event.payload, "tokens_saved") ?? 0,
+        waterRatio: numOf(event.payload, "water_ratio") ?? 0,
+        window: numOf(event.payload, "context_window") ?? 0,
+        triggeredBy: textOf(event.payload, "triggered_by"),
+        microClipped: numOf(micro, "clipped") ?? 0,
+        microCharsSaved: numOf(micro, "chars_saved") ?? 0,
+        windowChain: windowChainOf(event.payload),
+        replacement: replacementOf(event.payload),
+      });
+      return;
+    }
 
     if (rawType.startsWith("plan")) {
       const { items, text } = planItems(event);
@@ -544,6 +699,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
           durationMs: null,
           risk: textOf(event.payload, "risk_level", "risk"),
           toolCallId: textOf(event.payload, "tool_call_id", "id"),
+          boundary: "",
         };
         openToolIndex.set(name, push(block));
         return;
@@ -553,6 +709,8 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
       const duration = numOf(event.payload, "duration_ms", "latency_ms", "elapsed_ms");
       const risk = textOf(event.payload, "risk_level", "risk");
       const callId = textOf(event.payload, "tool_call_id", "id");
+      const boundary = eventBoundary(event);
+      const boundaryFacts = eventBoundaryFacts(event);
       if (index !== undefined && blocks[index]?.kind === "tool") {
         const target = blocks[index] as Extract<Block, { kind: "tool" }>;
         blocks[index] = {
@@ -562,6 +720,8 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
           durationMs: duration ?? target.durationMs,
           risk: risk || target.risk,
           toolCallId: callId || target.toolCallId,
+          boundary: boundary || target.boundary,
+          boundaryFacts: boundaryFacts ?? target.boundaryFacts,
         };
         openToolIndex.delete(name);
         return;
@@ -580,6 +740,8 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
         durationMs: duration,
         risk,
         toolCallId: callId,
+        boundary,
+        boundaryFacts,
       };
       if (block.status === "running") openToolIndex.set(name, push(block));
       else push(block);

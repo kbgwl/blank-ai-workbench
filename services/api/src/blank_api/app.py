@@ -2,9 +2,12 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import JSONResponse
 
+from blank_api.api.auth import require_token
 from blank_api.api.exception_handlers import register_error_handlers
 from blank_api.api.routes import api_router
 from blank_api.config import get_settings
@@ -98,7 +101,19 @@ async def sweep_orphan_uploads() -> None:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=app_lifespan)
+    # 配了令牌 = 这不是"本机单用户"形态，那么接口面本身也不该匿名可读。
+    # FastAPI 默认把 /openapi.json 与两份交互文档挂在鉴权之外，而 include_router 上那条
+    # `dependencies=[Depends(require_token)]` 管不到它们：匿名就能拿到整份路由表、
+    # 参数形状与错误码，Swagger UI 更是一份照着点的清单（方言端到端 #53 那一格量到的）。
+    guarded = bool(settings.api_token)
+    app = FastAPI(
+        title=settings.app_name,
+        version="0.1.0",
+        lifespan=app_lifespan,
+        docs_url=None if guarded else "/docs",
+        redoc_url=None if guarded else "/redoc",
+        openapi_url=None if guarded else "/openapi.json",
+    )
     register_error_handlers(app)
     app.add_middleware(
         CORSMiddleware,
@@ -107,8 +122,30 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router, prefix="/api/v1")
+    if guarded:
+        _mount_guarded_docs(app)
 
     return app
+
+
+def _mount_guarded_docs(app: FastAPI) -> None:
+    """把上面关掉的三条挂回来，但走同一个 `require_token`。
+
+    直接删掉是最省事的，可桌面壳与运维排障要看文档——要收的是"谁能看"，不是"有没有"。
+    """
+    auth = [Depends(require_token)]
+
+    @app.get("/openapi.json", include_in_schema=False, dependencies=auth)
+    async def guarded_openapi() -> JSONResponse:
+        return JSONResponse(app.openapi())
+
+    @app.get("/docs", include_in_schema=False, dependencies=auth)
+    async def guarded_swagger():
+        return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - Swagger UI")
+
+    @app.get("/redoc", include_in_schema=False, dependencies=auth)
+    async def guarded_redoc():
+        return get_redoc_html(openapi_url="/openapi.json", title=f"{app.title} - ReDoc")
 
 
 app = create_app()

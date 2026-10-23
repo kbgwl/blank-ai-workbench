@@ -18,7 +18,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("projects", sa.Column("description", sa.Text(), nullable=False, server_default=""))
+    op.add_column("projects", sa.Column("description", sa.Text(), nullable=False, server_default=sa.text("('')")))
     op.add_column(
         "projects",
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),

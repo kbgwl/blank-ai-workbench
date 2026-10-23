@@ -15,7 +15,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("agent_runs", sa.Column("request_payload", sa.JSON(), nullable=False, server_default="{}"))
+    op.add_column("agent_runs", sa.Column("request_payload", sa.JSON(), nullable=False, server_default=sa.text("('{}')")))
 
 
 def downgrade() -> None:

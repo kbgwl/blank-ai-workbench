@@ -11,6 +11,7 @@ from blank_api.services.models.base import (
     ModelError,
     ModelResponse,
     Usage,
+    retry_after_seconds,
 )
 from blank_api.services.models.streaming import ToolCallAccumulator
 
@@ -53,6 +54,8 @@ class OllamaAdapter(ModelAdapter):
             completion_tokens=int(data.get("eval_count") or 0),
         )
         message = data.get("message") or {}
+        # Ollama 的 /api/chat 回复里没有请求 id（本地进程，没有供应商侧可查的那一笔），
+        # 所以 response_id 留空串——空是"这家没给"，不许拿我们自己的 uuid 顶上。
         return ModelResponse(
             text=message.get("content") or "",
             usage=usage,
@@ -69,7 +72,9 @@ class OllamaAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}")
+                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
+                                     status=resp.status_code,
+                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
                 async for raw in resp.aiter_lines():
                     if not raw.strip():
                         continue
@@ -98,7 +103,9 @@ class OllamaAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}")
+                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
+                                     status=resp.status_code,
+                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
                 async for raw in resp.aiter_lines():
                     if not raw.strip():
                         continue

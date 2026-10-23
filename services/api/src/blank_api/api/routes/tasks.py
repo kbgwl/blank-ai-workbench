@@ -97,6 +97,10 @@ async def persist_task(
     独立任务和"会话里的一轮"共用它：``thread_id`` / ``turn_index`` 在建行时就带上，
     而不是建完再 UPDATE 一次——那次 UPDATE 会把服务端生成的 ``updated_at`` 置为过期，
     紧接着序列化它就会在异步会话里触发一次同步懒加载（MissingGreenlet）。
+
+    ``created_at``/``updated_at`` 是服务端生成的，插入后 ORM 并不知道它们的值。
+    SQLite 会用 RETURNING 顺手带回来，MySQL 8.4 的 INSERT 没有 RETURNING：不先读回，
+    序列化时同样是一次同步懒加载。所以这里统一 refresh，两种方言走同一条路。
     """
     # 附件先过一遍存在性检查：前端传来的 id 可能是上一次上传后又被清理掉的，
     # 那种直接丢掉，不要带着一个指向空气的引用进任务。
@@ -120,6 +124,7 @@ async def persist_task(
     )
     db.add(task)
     await db.commit()
+    await db.refresh(task)
     await EventRecorder(get_session_factory(), task.id).add(
         "task.created",
         "receive_task",
@@ -847,6 +852,9 @@ async def cancel_task(task_id: str, db: DbSession) -> TaskOut:
         raise ApiError(code="task_not_cancellable", message=f"任务已结束，无法取消（当前状态：{task.status}）", status_code=409)
     task.status = "cancelled"
     await db.commit()
+    # 与 skills.py 同一形状：updated_at 带 onupdate，提交后不读回来就出参会在
+    # 同步上下文里触发惰性加载（MissingGreenlet → 500）。
+    await db.refresh(task)
     await EventRecorder(get_session_factory(), task_id).add(
         "task.cancel_requested", "receive_task", {"status": "cancelled"}
     )

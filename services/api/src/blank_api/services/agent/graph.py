@@ -6,7 +6,6 @@ import asyncio
 import json
 import re
 import time
-import uuid
 from datetime import datetime, timedelta, timezone
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -27,8 +26,8 @@ from blank_api.limits import (
     TOKEN_WRAP_UP_RATIO,
     WRAP_UP_STEPS,
 )
-from blank_api.models.model_provider import ModelUsage
 from blank_api.services.agent.events import EventRecorder
+from blank_api.services.agent import governance
 from blank_api.services.agent.live import OutputRelay
 from blank_api.services.agent.intent import (
     ADVISE_INSTRUCTION,
@@ -48,9 +47,11 @@ from blank_api.services.agent.context import (
     build_summary_prompt,
     load_summary_json,
     render_summary,
+    replacement_record,
 )
 from blank_api.services.agent.router import LIGHT, TIER_LABELS, Router
 from blank_api.services.agent.payload import render
+from blank_api.services.agent.usage import account_call, accumulate_usage, merge_usage
 from blank_api.services.features import is_enabled as feature_enabled
 from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import HookRunner, blocking_denial
@@ -58,15 +59,15 @@ from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError
 from blank_api.services.permissions import (
     MODE_DEFAULT,
     SCOPE_ONCE,
+    SCOPE_PREFIX,
     PermissionPolicy,
     approval_options,
     is_irreversible,
-    memoizable_prefix,
     parse_decision,
 )
 from blank_api.services.tools.ask import normalize_questions, parse_answers, render_answers
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key
-from blank_api.services.tools.gateway import ToolGateway
+from blank_api.services.tools.gateway import ToolGateway, sandbox_backend_event_field
 from blank_api.services.tools.registry import PARALLEL_SAFE_TOOLS, PROFILE_FULL, PROFILE_LEAN
 
 MAX_REPAIR_ROUNDS = 3
@@ -159,6 +160,11 @@ class AgentState(TypedDict, total=False):
     # 只读调研（征求意见类）：允许看，不允许改。执行节点据此把写类工具全部拒掉，
     # 交付也走「给判断」而不是「工作汇报」。
     readonly: bool
+    # 派给子代理的那部分用量，与 `usage` 分开记。
+    # `usage` 是 #33 的三级口径（单次/本回合/整个任务），说的始终是"这条线程自己花了多少"；
+    # 把孩子的钱并进它，等于让"本回合"开始包含别人的回合——那三个数就不再可比了。
+    # 分开记之后，预算看合计，三级口径仍然只说自己：两个问题都有答案，互不污染。
+    delegated_usage: dict
 
 
 async def _never_cancelled() -> bool:
@@ -176,6 +182,11 @@ class AgentSession:
     provider_name: str
     goal: str
     trace_id: str = ""
+    # 回合归属（对标 Codex 的 turn_attribution：root_turn_id / parent_turn_id）。
+    # 主代理这两项为空是**有意的**：根线程按"没有父的就是自己"在 root_thread_id() 里现算，
+    # 父线程为空就是事实（没有被谁派下来），不是漏记。子代理复用同一个会话形状时显式赋值。
+    root_trace_id: str = ""
+    parent_trace_id: str = ""
     skill_instructions: list[str] = field(default_factory=list)
     # 群聊等场景的强约束（Bot 身份、发言协议、本轮记录）。与 Skill 的"偏好"不同，
     # 这一段是任务规则，但仍不得覆盖安全规则、审批规则与沙箱边界。
@@ -209,6 +220,10 @@ class AgentSession:
     hooks: HookRunner = field(default_factory=HookRunner)
     # 最近一次组装的上下文 token 估算，前端"上下文 8.2k"那一行读它。
     context_tokens: int = 0
+    # 本回合（这一个 AgentSession）的用量累计。Codex 的 token_usage_record 同时写
+    # 单次/回合/线程三个口径，为的是"这一轮花了多少"和"这个任务累计花了多少"
+    # 都是查出来的事实，而不是读出时求和推出来的。
+    turn_usage: dict = field(default_factory=dict)
     # 已经被记录过的问题调用：节点会因中断被重放，不记账就会重复写 question.* 事件。
     recorded_questions: set[str] = field(default_factory=set)
     # 中途插话（steer）的度量：次数与生效步，用来说明人机接力是否真的省事。
@@ -236,10 +251,108 @@ class AgentSession:
     output_seen: dict[str, int] = field(default_factory=dict)
     trimmed_chars: int = 0
     trim_events: list[dict] = field(default_factory=list)
+    # 上一条 turn.context 快照的指纹：策略没变就不重复发（见 emit_governance）。
+    governance_digest: str = ""
+    # 上一条 world.state 快照的指纹：环境没变就不重复发（见 emit_world_state）。
+    world_digest: str = ""
+    # 做这次压缩的那一笔供应商调用的 id（对标 Codex `compaction_response_id`）。
+    # 每次 summarize_history 先清空再写，所以压缩记录里那个 id 一定是"这一窗"的那笔，不是上一窗的。
+    compaction_response_id: str = ""
 
     @property
     def permission_mode(self) -> str:
         return self.permissions.mode or MODE_DEFAULT
+
+    @property
+    def root_thread_id(self) -> str:
+        """引起这一整棵线程树的那条线程。
+
+        顶层会话没有父，它的根就是自己——这不是兜底，是定义。真取不到 trace_id 时返回空串，
+        空串在账本里读作"当时没记"，不许读成"根是一条空线程"。
+        """
+        return self.root_trace_id or self.trace_id
+
+    @property
+    def run_id(self) -> str:
+        """这一轮（run）的 id 只有一个真源：事件记录器。
+
+        事件行本来就带 `run_id` 列，账本行要按轮筛就必须用同一个值。在这里再拿
+        会话字段"传一次"等于多造一个可能与其不符的副本，所以直接从 recorder 读。
+        """
+        return str(getattr(self.recorder, "run_id", "") or "")
+
+    @property
+    def origin_run_id(self) -> str:
+        """引起这一整棵树的发起轮。真源同样只有事件记录器一个。
+
+        它和 `run_id` 的差别只在团队链上：一轮里每个发言成员各有自己的 run，
+        而发起轮整轮只有一个——放行续跑（`…-resume`）也算同一轮。
+        """
+        return str(getattr(self.recorder, "origin_run_id", "") or "")
+
+    async def emit_governance(self, node: str, step: int, adapter: ModelAdapter, tier: str) -> dict:
+        """把「这一步被什么策略管着」写进事件流；策略没变就不重复发。
+
+        去重是为了让人读得下去：50 步的重型任务如果每步都贴一遍相同的 300 字节快照，
+        时间线就成了噪声板，而真正要看的信号是「中途变了」。第一条必发，之后只在指纹
+        变化时发。返回的快照本身不受是否发送影响，调用方拿到的总是当前值。
+        """
+        payload = governance.turn_context(
+            node=node,
+            step=step,
+            role=role_for_node(node),
+            model=adapter.config.model,
+            provider=self.provider_name,
+            reasoning_effort=getattr(adapter.config, "reasoning_effort", "") or "",
+            verbosity=getattr(adapter.config, "verbosity", "") or "",
+            tier=tier,
+            permission_mode=self.permission_mode,
+            permissions=self.permissions.snapshot(),
+            guardian_mode=getattr(self.guardian, "mode", "") or "",
+            readonly=self.readonly,
+            workspace_root=str(self.context.root),
+            max_steps=self.max_steps,
+            token_budget=self.token_budget,
+            depth=self.depth,
+            agent_path=self.agent_path,
+            instruction_layers=self.instruction_layers,
+        )
+        digest = governance.digest(payload)
+        if digest != self.governance_digest:
+            self.governance_digest = digest
+            await self.recorder.add("turn.context", node, payload)
+        return payload
+
+    async def emit_world_state(self, node: str) -> dict:
+        """把「这一步处在什么世界」写进事件流；世界没变就不重复发。
+
+        对标 Codex 的 `world_state`（全量快照 + 内容哈希）。和 emit_governance 是两条记录、
+        两个问题：策略变没变 vs 环境变没变。中途有人（常常是 Agent 自己）改了 AGENTS.md、
+        换了虚拟环境、或者任务跑过午夜，这里就会出现第二条——那正是事后要指认的时刻。
+
+        与 Codex 有一处刻意的偏离：`operating_mode.model` 记的是本会话主模型，不是这一步
+        被路由到的那个。按档位路由的模型每一步都可能不同，把它算进指纹等于每步都宣称
+        「世界变了」，去重直接失效；那一路由事实本来就写在 turn.context 里，各归各位。
+        """
+        payload = governance.world_state(
+            permission_mode=self.permission_mode,
+            model=self.adapter.config.model,
+            provider=self.provider_name,
+            readonly=self.readonly,
+            guardian_mode=getattr(self.guardian, "mode", "") or "",
+            workspace_root=str(self.context.root),
+            instruction_layers=self.instruction_layers,
+            shell=self.shell,
+            context_window=self.compactor.context_window,
+            trigger_ratio=self.compactor.trigger_ratio,
+            reserve_tokens=self.compactor.reserve_tokens,
+            trigger_at=self.compactor.trigger_tokens(),
+        )
+        digest = governance.world_state_digest(payload)
+        if digest != self.world_digest:
+            self.world_digest = digest
+            await self.recorder.add("world.state", node, payload)
+        return payload
 
     def approval_policy(self, tool: ToolDefinition, arguments: dict) -> bool:
         """旧的布尔口径：批准与否。新代码请直接用 gateway.decide / permissions.decide。"""
@@ -247,11 +360,11 @@ class AgentSession:
 
     async def ask(self, state: AgentState, prompt: str, node: str, *, messages: list[dict] | None = None) -> dict:
         messages = list(messages) if messages is not None else list(state.get("messages") or [])
-        messages = messages + [{"role": "user", "content": prompt}]
+        messages = messages + [authored({"role": "user", "content": prompt}, self.run_id)]
         # 中途插话：在每次模型调用前取一次，插话在"下一步"生效，撤回不了已经跑完的动作
         messages = messages + await drain_steer(self, node, int(state.get("steps") or 0))
         response, usage = await self.call_model(messages, node, step=int(state.get("steps") or 0))
-        assistant: dict[str, Any] = {"role": "assistant", "content": response.text}
+        assistant: dict[str, Any] = authored({"role": "assistant", "content": response.text}, self.run_id)
         if response.tool_calls:
             assistant["tool_calls"] = response.tool_calls
         return {
@@ -327,12 +440,16 @@ class AgentSession:
         """把滑出上下文窗口的历史折叠进五要素摘要。
 
         这里直接调用 adapter.invoke，不经过 call_model —— 否则压缩会递归触发压缩。
+        429 仍走与正文同一套退避：压缩失败同样会把整轮判死，不能因为它是"幕后那一笔"
+        就少给两次机会。
         """
         prompt = build_summary_prompt(folded, previous)
         chat = [ChatMessage(role=item["role"], content=item["content"]) for item in prompt]
         started = time.perf_counter()
+        # 先清空再调：这一笔失败或没返回 id 时，绝不能把上一次压缩的 id 当成这次的。
+        self.compaction_response_id = ""
         try:
-            response = await self.adapter.invoke(chat)
+            response = await self._invoke_with_retry(chat, node="context_compact", role="summarizer")
         except ModelError:
             await self._record_usage("context_compact", "", Usage(), 0, "error", role="summarizer")
             raise
@@ -343,7 +460,12 @@ class AgentSession:
             int((time.perf_counter() - started) * 1000),
             "ok",
             role="summarizer",
+            response_id=response.response_id,
         )
+        # 压缩自己也是花真钱的一笔调用，它的供应商 id 要能被压缩记录指认（对标 Codex 的
+        # `compaction_response_id`）。只记指针，不复制用量：那笔的 token 明细已经在
+        # `model.usage`（node=context_compact）里，抄一份进压缩事件就会有两处会写歪的账。
+        self.compaction_response_id = response.response_id or ""
         return render_summary(load_summary_json(response.text))
 
     async def _routed_adapter(
@@ -427,32 +549,58 @@ class AgentSession:
             # 选中的供应商其实不支持工具调用，退回默认模型。档位也要一起退：
             # 它是「给这个模型看多少工具」的依据，模型换了依据就失效了。
             adapter, tier = self.adapter, ""
+        # 治理快照必须在真正调用之前落下：这一步可能失败、可能被中断，
+        # 而「当时是哪个模型、哪套审批与沙箱策略在管」恰恰是失败之后最该能看到的东西。
+        await self.emit_governance(node, step, adapter, tier)
         # 每个角色可能挂着不同的模型，窗口大小不同；水位必须按"这次要用的窗口"算。
         window = int(getattr(adapter.config, "context_window", 0) or 0)
         if window and window != self.compactor.context_window:
             self.compactor.context_window = window
+        # 环境快照同样落在真正调用之前，但刻意放在「窗口对齐之后」：
+        # 记在这条里的水位必须是这一步真正要用的那个。放在对齐之前，首条快照会说 0，
+        # 而这个数会进证据包被人当成当时的实情。
+        await self.emit_world_state(node)
         covered_before = self.compactor.covered
-        compacted = await self.compactor.build(messages, self.summarize_history)
+        compacted = await self.compactor.build(
+            messages, self.summarize_history, author_run_id=self.run_id
+        )
         report = self.compactor.last_report
         self.context_tokens = report.tokens_after
         # 交接笔记：压缩后必带（摘要会丢操作细节），换窗口后的第一次调用也带一次。
         # 开关关掉就整块跳过：笔记本身要占上下文，长对话里有人宁可让摘要独扛；
         # 注意跳过时也不置 notes_injected，否则关掉再打开就再也注入不进去了。
+        handoff_block = ""
         if feature_enabled("handoff_notes") and (
             report.folded or self.compactor.covered > covered_before or not self.notes_injected
         ):
             self.notes_injected = True
             block = self.notes_handoff()
             if block:
-                compacted = _insert_handoff(compacted, block)
+                handoff_block = block
+                compacted = _insert_handoff(compacted, block, run_id=self.run_id)
         if report.micro.applied:
             # 第一层：确定性裁剪。不花模型钱，但要能解释"为什么这一步省了 token"。
             await self.recorder.add("context.microcompacted", node, report.as_dict())
         if report.folded or self.compactor.covered > covered_before:
+            window = self.compactor.open_window()
             await self.recorder.add(
                 "context.compacted",
                 node,
-                {**report.as_dict(), "folded": report.folded or (self.compactor.covered - covered_before)},
+                {
+                    **report.as_dict(),
+                    "folded": report.folded or (self.compactor.covered - covered_before),
+                    **window,
+                    # 替换后的历史逐条指认 + 这次丢掉/新增了什么（对标 §4.1 的 replacement_history）。
+                    "replacement": replacement_record(
+                        messages,
+                        compacted,
+                        summary_text=self.compactor.summary,
+                        handoff_text=handoff_block,
+                        retention=self.compactor.retention,
+                        window_number=window["window_number"],
+                    ),
+                    "compaction_response_id": self.compaction_response_id,
+                },
             )
             # post_compact 钩子：两家都有同名事件，压缩后是最需要外部记账/上报的时刻
             hook_results = await self.hooks.run("post_compact", "", report.as_dict())
@@ -482,7 +630,10 @@ class AgentSession:
         try:
             response = await self._call_adapter(adapter, specs, chat, node, role)
         except ModelError:
-            await self._record_usage(node, "", Usage(), 0, "error", role=role)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            # 失败的调用也要进账：一次任务里"发了多少次请求、有多少次根本没花 token"
+            # 只能从这条记录看出来，省略它就把故障也一起省略了。
+            await self._record_usage(node, "", Usage(), latency_ms, "error", role=role)
             raise
         usage = response.usage
         # 用真实 prompt_tokens 校准估算器：水位要按模型的说法算，不能只信字符启发式
@@ -494,7 +645,17 @@ class AgentSession:
                 node,
                 {"role": role, "from": adapter.config.name, "to": selected_provider},
             )
-        await self._record_usage(node, response.model, usage, int((time.perf_counter() - started) * 1000), "ok", role=role)
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        await self._record_usage(
+            node,
+            response.model,
+            usage,
+            latency_ms,
+            "ok",
+            role=role,
+            provider=selected_provider,
+            response_id=response.response_id,
+        )
         return response, accumulate_usage(usage)
 
     async def _call_adapter(
@@ -509,43 +670,118 @@ class AgentSession:
 
         退路的边界只有一条：**已经收到文字之后不再退**。那时再跑一次会让用户看到
         两遍输出，而且流里报的错（内容审核、上下文超长）重跑一次还是同样的错。
+
+        第二条边界是这次实测补上的（#53 步骤 73/74）：供应商**明说**"现在不行"
+        （429 限流、5xx 过载、超时不答）时，把同一番话换个说法再说一遍不会改变结果，
+        只会让请求翻倍、让用户多等一整轮。退路只在"问法本身被拒"时才有意义。
+
+        429 与它们不同（#56）：它说的是"现在别问"，主流客户端会退避后再问。
+        这里给两次机会，等待取指数退避与供应商 `Retry-After` 的较大者（#57，
+        30s 封顶），两次都还是 429 才把失败交回调用方；已经出过字的流一次都不重试，
+        否则用户会看到两遍开头。压缩那一路（`_invoke_with_retry`）复用同一道闸门。
         """
         if not self.stream_output:
-            return await adapter.bind_tools(specs, chat)
+            return await self._call_non_stream(adapter, specs, chat, node, role)
 
-        relay = OutputRelay(self.context.task_id, node)
-        try:
-            response = await adapter.bind_tools_stream(specs, chat, on_delta=relay)
-        except ModelError as error:
+        retries = 0
+        while True:
+            relay = OutputRelay(self.context.task_id, node)
+            try:
+                response = await adapter.bind_tools_stream(specs, chat, on_delta=relay)
+            except ModelError as error:
+                if relay.chunks:
+                    relay.close()
+                    raise
+                if _rate_limit_may_retry(error, retries):
+                    retries += 1
+                    await self._record_rate_limit_retry(node, role, retries, error)
+                    await asyncio.sleep(_rate_limit_delay(retries, error.retry_after))
+                    continue
+                if not _fallback_can_help(error):
+                    # 有意不退也要留一行：只写"没有退路事件"与"这里本来不需要退"是两回事，
+                    # 前者在证据包里读不出是谁的决定。
+                    await self.recorder.add(
+                        "model.stream_fallback_skipped",
+                        node,
+                        {"reason": error.message, "code": error.code, "status": error.status, "role": role},
+                    )
+                    raise
+                # 有的网关不认 stream、有的中间层会吃掉 event-stream：这时一行都解析不出来。
+                # 退回一次性调用——慢一点，但结果是可信的。
+                await self.recorder.add(
+                    "model.stream_fallback",
+                    node,
+                    {"reason": error.message, "code": error.code, "status": error.status, "role": role},
+                )
+                return await self._call_non_stream(adapter, specs, chat, node, role)
+            except httpx.HTTPError as error:
+                if relay.chunks:
+                    relay.close()
+                    raise
+                await self.recorder.add(
+                    "model.stream_fallback",
+                    node,
+                    {"reason": f"{error.__class__.__name__}：{error}", "code": "stream_transport", "status": 0,
+                     "role": role},
+                )
+                return await self._call_non_stream(adapter, specs, chat, node, role)
+            relay.close()
             if relay.chunks:
-                relay.close()
-                raise
-            # 有的网关不认 stream、有的中间层会吃掉 event-stream：这时一行都解析不出来。
-            # 退回一次性调用——慢一点，但结果是可信的。
-            await self.recorder.add(
-                "model.stream_fallback",
-                node,
-                {"reason": error.message, "code": error.code, "role": role},
-            )
-            return await adapter.bind_tools(specs, chat)
-        except httpx.HTTPError as error:
-            if relay.chunks:
-                relay.close()
-                raise
-            await self.recorder.add(
-                "model.stream_fallback",
-                node,
-                {"reason": f"{error.__class__.__name__}：{error}", "code": "stream_transport", "role": role},
-            )
-            return await adapter.bind_tools(specs, chat)
-        relay.close()
-        if relay.chunks:
-            # 一条持久事件记清楚"这次确实流了、首字多久"。stream_output 要不要留着，
-            # 判断依据就是这些数字，而不是感觉。
-            await self.recorder.add(
-                "model.streamed", node, {**relay.metrics(), "model": response.model, "role": role}
-            )
-        return response
+                # 一条持久事件记清楚"这次确实流了、首字多久"。stream_output 要不要留着，
+                # 判断依据就是这些数字，而不是感觉。
+                await self.recorder.add(
+                    "model.streamed", node, {**relay.metrics(), "model": response.model, "role": role}
+                )
+            return response
+
+    async def _call_non_stream(
+        self,
+        adapter: ModelAdapter,
+        specs: list,
+        chat: list[ChatMessage],
+        node: str,
+        role: str,
+    ) -> Any:
+        """整包调用（开关关着或流式退路）同样按 429 退避重试。"""
+        retries = 0
+        while True:
+            try:
+                return await adapter.bind_tools(specs, chat)
+            except ModelError as error:
+                if not _rate_limit_may_retry(error, retries):
+                    raise
+                retries += 1
+                await self._record_rate_limit_retry(node, role, retries, error)
+                await asyncio.sleep(_rate_limit_delay(retries, error.retry_after))
+
+    async def _invoke_with_retry(self, chat: list[ChatMessage], *, node: str, role: str) -> Any:
+        """不经 call_model 的单笔调用（压缩）也按 429 退避，口径与正文调用相同。"""
+        retries = 0
+        while True:
+            try:
+                return await self.adapter.invoke(chat)
+            except ModelError as error:
+                if not _rate_limit_may_retry(error, retries):
+                    raise
+                retries += 1
+                await self._record_rate_limit_retry(node, role, retries, error)
+                await asyncio.sleep(_rate_limit_delay(retries, error.retry_after))
+
+    async def _record_rate_limit_retry(
+        self, node: str, role: str, attempt: int, error: ModelError
+    ) -> None:
+        await self.recorder.add(
+            "model.rate_limit_retry",
+            node,
+            {
+                "attempt": attempt,
+                "status": error.status,
+                "wait_ms": int(_rate_limit_delay(attempt, error.retry_after) * 1000),
+                "retry_after_ms": int(max(0.0, error.retry_after) * 1000),
+                "max_retries": RATE_LIMIT_RETRIES,
+                "role": role,
+            },
+        )
 
     async def record_usage(
         self, node: str, model: str, usage: Usage, latency_ms: int, status: str, *, role: str = "coder"
@@ -553,27 +789,86 @@ class AgentSession:
         await self._record_usage(node, model, usage, latency_ms, status, role=role)
 
     async def _record_usage(
-        self, node: str, model: str, usage: Usage, latency_ms: int, status: str, *, role: str = "coder"
+        self,
+        node: str,
+        model: str,
+        usage: Usage,
+        latency_ms: int,
+        status: str,
+        *,
+        role: str = "coder",
+        provider: str = "",
+        response_id: str = "",
     ) -> None:
-        async with self.session_factory() as session:
-            session.add(
-                ModelUsage(
-                    id=str(uuid.uuid4()),
-                    provider_id=self.role_provider_ids.get(role, self.provider_id),
-                    task_id=self.context.task_id,
-                    trace_id=self.trace_id,
-                    node=node,
-                    model=model or self.provider_name,
-                    prompt_tokens=usage.prompt_tokens,
-                    completion_tokens=usage.completion_tokens,
-                    cached_tokens=usage.cached_tokens,
-                    cache_write_tokens=usage.cache_write_tokens,
-                    reasoning_tokens=usage.reasoning_tokens,
-                    latency_ms=latency_ms,
-                    status=status,
-                )
-            )
-            await session.commit()
+        self.turn_usage = await account_call(
+            session_factory=self.session_factory,
+            recorder=self.recorder,
+            task_id=self.context.task_id,
+            trace_id=self.trace_id,
+            provider_id=self.provider_id,
+            provider_name=self.provider_name,
+            node=node,
+            role=role,
+            depth=self.depth,
+            agent_path=self.agent_path,
+            model=model,
+            provider=provider,
+            usage=usage,
+            latency_ms=latency_ms,
+            status=status,
+            response_id=response_id,
+            turn=self.turn_usage,
+            role_provider_ids=self.role_provider_ids,
+            run_id=self.run_id,
+            origin_run_id=self.origin_run_id,
+            parent_thread_id=self.parent_trace_id,
+            root_thread_id=self.root_thread_id,
+        )
+
+
+# 429 的重问策略：两次退避之后仍被拒，才把失败交回去。0.5s/1s 是刻意的短——
+# 用户在等一次回答，退避的意义是熬过一时的拥塞，不是把界面挂在后台十分钟。
+RATE_LIMIT_RETRIES = 2
+RATE_LIMIT_BASE_DELAY_SECONDS = 0.5
+# 供应商明说 `Retry-After: 1h` 时不能真的把界面挂一小时：退避最多 30s，超过就按 30s
+# 再问一次，让供应商的第二次 429 去决定下一轮。等待多少进了事件（wait_ms/retry_after_ms），
+# 被截断过这件事读得出来。
+RATE_LIMIT_MAX_DELAY_SECONDS = 30.0
+
+
+def _rate_limit_may_retry(error: ModelError, retries: int) -> bool:
+    """只有 429 且还没用完重试次数才重问。
+
+    5xx、超时、401/403/400 都不走这里：它们要么该由退路换形状，要么该立刻让用户看到原因。
+    流式路径还要额外满足"一个字都还没出"——那个条件由调用点用 ``relay.chunks`` 判断。
+    """
+    return error.status == 429 and retries < RATE_LIMIT_RETRIES
+
+
+def _rate_limit_delay(retry: int, retry_after: float = 0.0) -> float:
+    """第 retry 次重试前的等待（retry 从 1 开始）。
+
+    取「指数退避 0.5s、1s」与供应商 `Retry-After` 的较大者，再封顶到 30s：
+    服务器已经说了多久后再来，就不该比它更早；但界面也不能为此无限期挂着。
+    """
+    backoff = RATE_LIMIT_BASE_DELAY_SECONDS * (2 ** (retry - 1))
+    return min(RATE_LIMIT_MAX_DELAY_SECONDS, max(backoff, retry_after))
+
+
+def _fallback_can_help(error: ModelError) -> bool:
+    """这一次流式失败，换成整包调用有可能变成成功吗？
+
+    能：`model_stream_empty`（一行都解析不出来，多半是网关不认 stream）、
+    `model_unreachable`（连接层面的失败，SSE 这条路被中间层掐了而普通 POST 通）、
+    以及供应商拿 400 拒我们（400 是在拒**问法**，`stream` 这个参数常常就是被拒的那一个）。
+
+    不能：429 与 5xx（它说的是"现在别问"，与问法无关）、超时（再等一轮而已）、
+    401/403/404（鉴权与模型名，换形状不改答案）、以及读不出状态码的任何失败——
+    读不出就当作不能，宁可让用户立刻看到真实原因，不要为了"看起来在努力"多打一次请求。
+    """
+    if error.code in {"model_stream_empty", "model_unreachable"}:
+        return True
+    return error.code == "model_http_error" and error.status == 400
 
 
 def role_for_node(node: str) -> str:
@@ -585,31 +880,6 @@ def role_for_node(node: str) -> str:
     }.get(node, "coder")
 
 
-def accumulate_usage(usage: Usage) -> dict:
-    return {
-        "prompt_tokens": usage.prompt_tokens,
-        "completion_tokens": usage.completion_tokens,
-        "cached_tokens": usage.cached_tokens,
-        "cache_write_tokens": usage.cache_write_tokens,
-        "reasoning_tokens": usage.reasoning_tokens,
-        "calls": 1,
-    }
-
-
-def merge_usage(base: dict, delta: dict) -> dict:
-    merged = dict(base or {})
-    merged["prompt_tokens"] = int(merged.get("prompt_tokens") or 0) + int(delta.get("prompt_tokens") or 0)
-    merged["completion_tokens"] = int(merged.get("completion_tokens") or 0) + int(
-        delta.get("completion_tokens") or 0
-    )
-    for key in ("cached_tokens", "cache_write_tokens", "reasoning_tokens"):
-        merged[key] = int(merged.get(key) or 0) + int(delta.get(key) or 0)
-    merged["calls"] = int(merged.get("calls") or 0) + int(delta.get("calls") or 0)
-    merged.setdefault("provider", delta.get("provider"))
-    merged.setdefault("model", delta.get("model"))
-    return merged
-
-
 def _tokens_spent(usage: dict) -> int:
     """这个任务到目前为止花掉的 token。
 
@@ -618,6 +888,29 @@ def _tokens_spent(usage: dict) -> int:
     看绝对量而不再折算折扣价，是因为这里要管的是「别再跑了」，不是结账。
     """
     return int(usage.get("prompt_tokens") or 0) + int(usage.get("completion_tokens") or 0)
+
+
+# 会派出子代理、因此把 token 花在"别的线程"上的工具。
+DELEGATE_TOOLS = frozenset({"spawn_agent", "spawn_agents"})
+
+
+def _delegated_usage(tool: str, data: dict) -> dict:
+    """这次工具调用派给子代理的那部分用量（没有就返回空）。
+
+    只有 `spawn_agent` / `spawn_agents` 的 data 里带 usage，其余工具返回空 dict：
+    "没派子代理"不该被记成"派了但没花钱"。`latency_ms` 在这里剔掉——委派是并行的，
+    各段耗时相加得到的数比真实墙钟还大，留着是个假账。
+
+    这笔钱为什么要单独看：一次 `spawn_agents` 里四个子代理各跑 8 步，烧掉的可能比
+    主线程整轮还多，而它一行都不写在主线程的 `usage` 里。原来两道预算只看 `usage`，
+    于是"派出去多少"在预算上是隐形的——token 预算能一路不报警地把钱花在别人的窗口里。
+    """
+    if tool not in DELEGATE_TOOLS or not isinstance(data, dict):
+        return {}
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return {}
+    return {key: value for key, value in usage.items() if key != "latency_ms"}
 
 
 def attach_vision_images(chat: list[ChatMessage], images: Sequence[dict] | None) -> None:
@@ -647,6 +940,7 @@ def initial_messages(
     supports_vision: bool = False,
     texts: Sequence[dict] | None = None,
     system_instructions: Sequence[str] | None = None,
+    run_id: str = "",
 ) -> list[dict]:
     from blank_api.services.instructions import compose
 
@@ -703,17 +997,30 @@ def initial_messages(
     # 会话历史放在当前这一问之前、系统提示之后。位置是刻意的：系统提示必须
     # 仍然是第一段（前缀缓存靠它），而历史是"背景对话"，它不能被当成
     # 新的任务目标——把用户的旧要求塞到当前目标后面，模型会以为那还是它要做的事。
+    # carried 里每一条都来自**别的轮次**（上一趟任务的问答），这里不给它们补 run_id：
+    # 那一趟的轮 id 我们手上没有，冒充成"本轮写的"就是假账，留空才是"没说"。
     carried = [dict(item) for item in history or () if item.get("content")]
     # 图片本身不写进消息：见 AgentSession.vision_images 的说明。这里只留一句
     # "它给了几张图"的文本，让 state 里也有据可查（检查点、回放都读得到）。
     return [
-        {"role": "system", "content": system},
+        authored({"role": "system", "content": system}, run_id),
         *carried,
-        {"role": "user", "content": prompt},
+        authored({"role": "user", "content": prompt}, run_id),
     ]
 
 
-def _insert_handoff(messages: list[dict], block: str) -> list[dict]:
+def authored(item: dict, run_id: str) -> dict:
+    """把「哪一轮写下的」钉在历史条目上（对标 Codex 每条历史都带 turn_id）。
+
+    轮 id 只有 `AgentSession.run_id` 一个真源（#43 定的口径），这里只是把它抄到消息身上，
+    不再另算一份。已有 `run_id` 不覆盖：同一条消息被复用时，**出生**那一轮才是事实，
+    当前这一轮不是。压缩记录里的引用直接读这个键，于是"这段历史是哪一轮留下的"第一次
+    能与轮账对上（§7.7/§7.8 两处都把它列为未覆盖）。
+    """
+    return {**item, "run_id": str(item.get("run_id") or run_id or "")}
+
+
+def _insert_handoff(messages: list[dict], block: str, *, run_id: str = "") -> list[dict]:
     """交接笔记放在尾部，而不是系统提示之后。
 
     提示词缓存按"最长的相同前缀"计价，往中间插一条新消息会让它之后的全部内容失效，
@@ -723,7 +1030,7 @@ def _insert_handoff(messages: list[dict], block: str) -> list[dict]:
     """
     if not block:
         return list(messages)
-    entry = {"role": "system", "content": block}
+    entry = authored({"role": "system", "content": block}, run_id)
     for index in range(len(messages) - 1, -1, -1):
         if messages[index].get("role") == "user":
             return [*messages[:index], entry, *messages[index:]]
@@ -841,11 +1148,14 @@ def _append_tool_response(
         session.trimmed_chars += int(stats["saved"])
         session.trim_events.append({"tool": name, **stats})
     return messages + [
-        {
-            "role": "tool",
-            "content": content,
-            "tool_call_id": call.get("id") or name,
-        }
+        authored(
+            {
+                "role": "tool",
+                "content": content,
+                "tool_call_id": call.get("id") or name,
+            },
+            session.run_id if session is not None else "",
+        )
     ]
 
 
@@ -1074,13 +1384,16 @@ async def drain_steer(session: AgentSession, node: str, step: int = 0) -> list[d
         return []
     joined = "\n".join(f"- {item}" for item in texts)
     return [
-        {
-            "role": "user",
-            "content": (
-                "用户在你运行期间补充了以下指示，请从下一步开始遵守，已经完成的操作不要重做：\n"
-                f"{joined}"
-            ),
-        }
+        authored(
+            {
+                "role": "user",
+                "content": (
+                    "用户在你运行期间补充了以下指示，请从下一步开始遵守，已经完成的操作不要重做：\n"
+                    f"{joined}"
+                ),
+            },
+            session.run_id,
+        )
     ]
 
 
@@ -1195,8 +1508,8 @@ async def _approval_gate(
                 "permission_mode": session.permission_mode,
                 "permission_rule": decision.rule,
                 "command_prefix": decision.prefix,
-                "suggested_prefix": memoizable_prefix(name, decision.prefix),
-                "approval_options": approval_options(name, decision.prefix),
+                "suggested_prefix": decision.memo,
+                "approval_options": approval_options(name, decision.memo),
                 "guardian": verdict.as_dict() if session.guardian.enabled else None,
                 "expires_at": expires_at,
             }
@@ -1204,6 +1517,9 @@ async def _approval_gate(
         granted, scope = parse_decision(answer)
         if granted:
             session.permissions.remember(name, arguments, scope)
+            # 记的是哪条规则就说哪条：解释器类的前缀档超出"命令首段"，
+            # 事件里仍写 `python` 会让审计以为整个解释器被放行了。
+            learned = decision.memo if scope == SCOPE_PREFIX and decision.memo else decision.prefix
             await session.recorder.add(
                 "approval.granted",
                 node,
@@ -1212,17 +1528,18 @@ async def _approval_gate(
                     "arguments": arguments,
                     "approval_key": approval_key(name, arguments),
                     "scope": scope,
-                    "prefix": decision.prefix,
+                    "prefix": learned,
                     "expires_at": expires_at,
                 },
             )
         else:
             denied.add(name)
             session.permissions.forget(name, arguments, scope)
+            learned = decision.memo if scope == SCOPE_PREFIX and decision.memo else decision.prefix
             await session.recorder.add(
                 "approval.denied",
                 node,
-                {"tool": name, "arguments": arguments, "scope": scope, "prefix": decision.prefix},
+                {"tool": name, "arguments": arguments, "scope": scope, "prefix": learned},
             )
     return denied, blocked
 
@@ -1320,6 +1637,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
 
     messages = list(state.get("messages") or [])
     usage = dict(state.get("usage") or {})
+    delegated = dict(state.get("delegated_usage") or {})
     results = list(state.get("tool_results") or [])
     pending = list(state.get("pending") or [])
     readonly = bool(state.get("readonly")) or session.readonly
@@ -1419,6 +1737,23 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 }
             )
             messages = _append_tool_response(messages, item.call, payload, session=session, step=steps)
+            # 答题这一路过去直接 continue，把工具完成事件整条跳过了：`tools` 台账里有那一行，
+            # 但时间线——前端逐条渲染、审计逐条回放的那一份——上没有。于是「答案回到了模型
+            # 上下文」这句话在证据里拿不出可对核对的实物（方言端到端第 61 步实测：答完题的
+            # 时间线里一个 tool.completed 都没有）。它和普通工具是同一种"调用已完成"，就按同一种记。
+            await session.recorder.add(
+                "tool.completed",
+                node,
+                {
+                    "tool": name,
+                    "status": payload.get("status"),
+                    "ok": payload.get("ok"),
+                    "permission": payload.get("permission") or {},
+                    "duration_ms": payload.get("duration_ms"),
+                    "tool_call_id": payload.get("tool_call_id"),
+                    "summary": str(payload.get("output") or payload.get("message") or "")[:500],
+                },
+            )
             continue
 
         if not item.hook_blocked:
@@ -1457,9 +1792,13 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 "duration_ms": payload.get("duration_ms"),
                 "tool_call_id": payload.get("tool_call_id"),
                 "summary": str(payload.get("output") or payload.get("message") or "")[:500],
+                **sandbox_backend_event_field(payload),
             },
         )
         data = payload.get("data") or {}
+        child_usage = _delegated_usage(name, data)
+        if payload.get("ok") and child_usage:
+            delegated = merge_usage(delegated, child_usage)
         if payload.get("ok") and data.get("path") and data.get("change_type"):
             await session.recorder.add(
                 "file.changed",
@@ -1532,6 +1871,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
             "messages": messages,
             "steps": steps,
             "usage": usage,
+            "delegated_usage": delegated,
             "tool_results": results,
             "pending": [],
             "status": "paused",
@@ -1544,7 +1884,12 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     # 两道预算并行：步数管「别跑太久」，token 管「别烧太多」。只留步数是不够的——
     # 每一步都会把整段上下文重发一次，50 步可能花掉 4M，而步数一次都不会报警。
     remaining = session.max_steps - steps
-    spent = _tokens_spent(usage)
+    # 合计口径：主线程自己花的 + 派出去花的。原来只看前者，于是一次 spawn_agents
+    # 里四个子代理各跑八步，烧掉的钱比主线程整轮还多，预算却一次警都不报。
+    # `usage`（#33 的三级口径）保持只说主线程自己那部分，合并在这一处、只用于预算判断。
+    spent_self = _tokens_spent(usage)
+    spent_delegated = _tokens_spent(delegated)
+    spent = spent_self + spent_delegated
     token_limit = max(1, int(session.token_budget or DEFAULT_TOKEN_BUDGET))
     steps_out = remaining <= 0
     tokens_out = spent >= token_limit
@@ -1557,8 +1902,14 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 "steps": steps,
                 "max_steps": session.max_steps,
                 "tokens": spent,
+                "tokens_self": spent_self,
+                "tokens_delegated": spent_delegated,
                 "token_budget": token_limit,
-                "reason": "步数用完" if steps_out else "token 用完",
+                "reason": (
+                    "步数用完"
+                    if steps_out
+                    else ("token 用完" if spent_self >= token_limit else "派给子代理的 token 用完")
+                ),
             },
         )
         if readonly:
@@ -1581,6 +1932,8 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 "remaining": remaining,
                 "max_steps": session.max_steps,
                 "tokens": spent,
+                "tokens_self": spent_self,
+                "tokens_delegated": spent_delegated,
                 "token_budget": token_limit,
             },
         )
@@ -1588,6 +1941,13 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
             f"预算只剩 {remaining} 步、已用约 {max(0, token_limit - spent) // 1000}k 余量，请立即收尾："
             "不要再启动新的探索或大范围改动，优先把当前这一步做完并落下结论。"
         )
+        if spent_delegated:
+            # 不说这一句，模型看到的"余量变少了"会归因到自己多走一步，
+            # 而真正的去向是又派了一批子代理——它会继续以为派子是免费的。
+            prompt += (
+                f"（合计 {spent:,} token 里有 {spent_delegated:,} 是子代理花掉的，"
+                "再派一次子代理同样算在这轮的预算上。）"
+            )
     elif readonly:
         # 只读调研的继续语必须换一套。默认那句「如未完成请调用工具执行下一步」，
         # 模型会理解成"去把它改掉"，接着就是一次被拒的工具调用。
@@ -1610,6 +1970,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         "messages": result["messages"],
         "steps": steps,
         "usage": usage,
+        "delegated_usage": delegated,
         "tool_results": results,
         "pending": pending_calls,
         "readonly": readonly,
@@ -1710,7 +2071,15 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         await session.recorder.add(
             "tool.completed",
             node,
-            {"tool": "run_tests", "status": payload.get("status"), "ok": payload.get("ok")},
+            {
+                "tool": "run_tests",
+                "status": payload.get("status"),
+                "ok": payload.get("ok"),
+                # 带 id 才能把这次测试和台账里那一行对上：证据包靠它贴回执行边界，
+                # 「测试到底在哪跑的」是用户最关心的一条，不能只留给主循环那一路。
+                "tool_call_id": payload.get("tool_call_id"),
+                **sandbox_backend_event_field(payload),
+            },
         )
     data = payload.get("data") or {}
     status = str(payload.get("status") or "ok")

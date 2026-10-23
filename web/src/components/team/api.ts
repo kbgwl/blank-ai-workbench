@@ -65,6 +65,16 @@ export type TeamMember = {
   is_admin: boolean;
 };
 
+export type RoundLedgerUsage = {
+  origin_run_id: string;
+  tokens: number;
+  calls: number;
+  tasks: number;
+  runs: number;
+  subagent_calls: number;
+  by_bot: { bot_id: string; bot_name: string; tokens: number; calls: number; subagent_calls: number }[];
+};
+
 export type TeamRound = {
   id: string;
   group_id: string;
@@ -72,7 +82,10 @@ export type TeamRound = {
   status: string;
   queue: string[];
   spoken: string[];
+  // 编排器自己累加的轮计数：只在发言收尾时加。本轮的真实花费看 `usage`（账本口径）。
   tokens: number;
+  // 按发起轮（origin_run_id）从账本筛出来的本轮合计，跨成员任务。缺这个字段的是旧接口响应。
+  usage?: RoundLedgerUsage;
   wrap_up_done: boolean;
   error: string;
   created_at: string;

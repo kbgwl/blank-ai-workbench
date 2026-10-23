@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from collections.abc import Sequence
@@ -20,14 +21,18 @@ from blank_api.services.permissions import (
     ask,
     approve,
     deny,
-    memoizable_prefix,
 )
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key, validate_arguments
 from blank_api.services.tools.registry import ToolRegistry
 
+log = logging.getLogger(__name__)
+
 MAX_LOGGED_CHARS = 4000
 MAX_RESULT_CHARS = 8000
 APPROVAL_STATUS = "awaiting_approval"
+# 命令类工具（run_shell / run_tests）在结果里写这个键；只读工具不写。
+# 于是「键在不在」本身就是「这次调用起没起进程」的判据，见 _sandbox_backend。
+SANDBOX_DATA_KEY = "sandbox"
 
 
 def _redact(text: str, secrets: Sequence[str], limit: int = MAX_LOGGED_CHARS) -> str:
@@ -42,6 +47,110 @@ def _redact_value(value, secrets: Sequence[str], limit: int = MAX_RESULT_CHARS):
     if isinstance(value, list):
         return [_redact_value(item, secrets, limit) for item in value]
     return value
+
+
+def _sandbox_backend(outcome: ToolOutcome) -> tuple[str | None, bool]:
+    """(跑在哪, 这次调用起没起进程)。
+
+    命令类工具在沙箱里跑时写后端名（如 docker），沙箱开关关着时写 None ——
+    意思是「进程直接落在宿主上」，而不是「没跑命令」。所以判据取键的存在性：
+    把宿主直连和只读工具都读成"缺字段"，最该露出来的那一档就跟没发生过一样。
+    """
+    data = outcome.data if isinstance(outcome.data, dict) else {}
+    if SANDBOX_DATA_KEY not in data:
+        return None, False
+    value = data[SANDBOX_DATA_KEY]
+    return (value if isinstance(value, str) and value else None), True
+
+
+def _command_enforcement(payload: dict) -> dict:
+    """从工具结果里取"这一次执行实际被什么强制"。缺键就是没起进程，不补默认值。"""
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return {}
+    enforcement = data.get("enforcement")
+    if not isinstance(enforcement, dict) or not enforcement:
+        return {}
+    keep = (
+        "limits_applied", "boundary_strength", "boundary_strength_label",
+        "memory_enforced", "memory_bytes", "pids_enforced", "pids_limit",
+        "tree_kill_enforced", "filesystem_enforced", "network_enforced",
+        "cpu_enforced", "disk_enforced", "job_created", "job_assigned", "job_error",
+    )
+    return {key: enforcement[key] for key in keep if key in enforcement}
+
+
+def sandbox_backend_event_field(payload: dict) -> dict:
+    """把执行边界原样带进 `tool.completed` 事件，口径只在这里定义一次。
+
+    键缺席 = 这次调用没起进程（只读工具、被拒绝的调用）；值为 null = 进程起在宿主上。
+    这两个状态在证据里必须长得不一样，否则「宿主直连执行」就藏进了一片缺字段里。
+    `sandbox_enforcement` 回答的是另一半问题：起了进程之后，policy 里那些数字**哪几个真的被执行了**。
+    只记后端名，就还会重演"面板写 512m、内核什么都没拦"那一类谎。
+    """
+    out: dict = {}
+    if "sandbox_backend" not in payload:
+        # 没起进程（只读工具、被拒的调用）：两条事实一起缺席，读的一侧不用分辨"缺一个还是缺两个"。
+        return {}
+    out["sandbox_backend"] = payload["sandbox_backend"]
+    enforcement = _command_enforcement(payload)
+    if enforcement:
+        out["sandbox_enforcement"] = enforcement
+    return out
+
+
+def _audit_action(name: str, arguments: dict) -> str:
+    """审计行的一行摘要：优先取能看懂这次动作干了什么的参数。"""
+    for key in ("command", "path", "pattern", "query", "goal"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return f"{name} {value.strip()[:200]}"
+    return name
+
+
+def _audit(
+    name: str,
+    arguments: dict,
+    outcome: ToolOutcome,
+    context: ToolContext,
+    node: str,
+    duration_ms: int,
+    backend: str | None,
+    ran_command: bool,
+) -> None:
+    """每次经过网关的调用（含被拒绝的）落一条审计账，按任务可还原调用链。
+
+    命令已经跑完了才写账，写失败不能反过来把调用判成失败，所以这里只留日志。
+    但也不能无声吞掉：审计通道断了却没人知道，比没有审计更危险。
+    """
+    from blank_api.services.sandbox import AuditRecord, audit_log  # 延迟导入，与 shell.py 同一口径
+
+    data = outcome.data if isinstance(outcome.data, dict) else {}
+    exit_code = data.get("exit_code")
+    try:
+        audit_log().record(
+            AuditRecord(
+                action=_audit_action(name, arguments),
+                tool=name,
+                task_id=context.task_id,
+                node=node,
+                project_id=(context.team_scope or {}).get("project_id") or None,
+                workspace=str(context.root),
+                detail={
+                    "arguments": _redact_value(arguments, context.extra_secrets, MAX_LOGGED_CHARS),
+                    "ran_command": ran_command,
+                    "host_execution": ran_command and backend is None,
+                    "message": outcome.message[:500],
+                },
+                exit_code=exit_code if isinstance(exit_code, int) else None,
+                duration_ms=duration_ms,
+                backend=backend,
+                status=outcome.status,
+            ),
+            context.extra_secrets,
+        )
+    except Exception as exc:  # noqa: BLE001 - 审计写入失败不该改判本次调用
+        log.warning("审计日志写入失败（本次调用结果不受影响）：%s %s", exc.__class__.__name__, exc)
 
 
 class ToolGateway:
@@ -176,6 +285,10 @@ class ToolGateway:
                 "permission": decision.as_dict() if decision is not None else {},
             }
         )
+        backend, ran_command = _sandbox_backend(safe)
+        if ran_command:
+            payload["sandbox_backend"] = backend
+        _audit(name, arguments, safe, context, node, duration_ms, backend, ran_command)
         return payload
 
     def _approved(self, tool: ToolDefinition, arguments: dict, context: ToolContext) -> bool:
@@ -204,8 +317,9 @@ class ToolGateway:
         self, tool: ToolDefinition, arguments: dict, risk: str, decision: Decision | None = None
     ) -> ToolOutcome:
         raw_prefix = decision.prefix if decision is not None else ""
-        # 只有值得记住的前缀才作为「总是允许 X」的建议下发；rm 这类裸可执行名不会出现在这里。
-        suggested = memoizable_prefix(tool.name, raw_prefix)
+        # 建议的「总是允许 X」取自决策里那条可记忆规则（解释器类带正文），
+        # 不是命令首段：只拿 raw_prefix 会把 `python -c …` 缩成 `python`。
+        memo = decision.memo if decision is not None else ""
         return ToolOutcome(
             ok=False,
             status=APPROVAL_STATUS,
@@ -222,8 +336,8 @@ class ToolGateway:
                 "approval_key": approval_key(tool.name, arguments),
                 "permission_rule": decision.rule if decision is not None else "",
                 "command_prefix": raw_prefix,
-                "suggested_prefix": suggested,
-                "approval_options": approval_options(tool.name, raw_prefix),
+                "suggested_prefix": memo,
+                "approval_options": approval_options(tool.name, memo),
             },
         )
 

@@ -18,6 +18,14 @@ dependencies = [
     "uvicorn[standard]>=0.54.0",
 ]
 
+[project.optional-dependencies]
+# 「能换 MySQL」要能被安装才算成立：这两个驱动此前只在开发机上手装过，
+# pyproject 与 uv.lock 里都没有，`uv sync` 出来的新环境连不上 MySQL。
+# 上界写死在 1.3.0 之前：PyMySQL 1.3 计划删除 `escape_bytes_prefixed` 这个别名，
+# aiomysql 0.3.2 还在 import 它，届时会直接 ImportError（1.2.x 由
+# blank_api.db.ensure_mysql_driver_compat() 兜住，见 db.py 的说明）。
+mysql = ["aiomysql>=0.3.2,<0.4", "pymysql>=1.2,<1.3"]
+
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",

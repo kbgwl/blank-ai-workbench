@@ -21,6 +21,7 @@ from blank_api.services.subagent import (
     DEFAULT_CONCURRENCY,
     MAX_PARALLEL_AGENTS,
     SubAgentRequest,
+    batch_usage,
     render_merge,
 )
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, fail, ok
@@ -132,12 +133,14 @@ async def _spawn_agents(context: ToolContext, arguments: dict) -> ToolOutcome:
         payload.append(
             {
                 "agent_path": result.agent_path,
+                "thread_id": result.thread_id,
                 "ok": result.ok,
                 "steps": result.steps,
                 "summary": result.summary[:2_000],
                 "error": result.error,
                 "merge": result.merge,
                 "diff": result.diff[:20_000],
+                "usage": dict(result.usage or {}),
             }
         )
 
@@ -148,6 +151,10 @@ async def _spawn_agents(context: ToolContext, arguments: dict) -> ToolOutcome:
         succeeded=succeeded,
         merge=merge,
         agents=payload,
+        # 这一批的合计与批次号：主代理的预算要把派出去的那部分算在自己这一轮头上，
+        # 「证明」面板要能指着一次 fan_out 说合计是多少。没有它们，这笔钱在工具结果里就消失了。
+        parallel_group=results[0].parallel_group,
+        usage=batch_usage(results),
     )
 
 

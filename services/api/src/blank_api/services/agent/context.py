@@ -30,8 +30,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+
+from blank_api.services.instructions import content_sha
 
 DEFAULT_CONTEXT_CHARS = 48_000
 TOOL_RESULT_CHARS = 8_000
@@ -190,6 +193,128 @@ class CompactionReport:
         }
 
 
+def message_ref(
+    item: dict,
+    index: int,
+    *,
+    summary_text: str = "",
+    handoff_text: str = "",
+    user_order: int | None = None,
+) -> dict:
+    """历史里的一条换成"指认得出来、但不抄正文"的引用。
+
+    Codex 的 `replacement_history` 把整段新历史原样写进本机日志（实测一条 30 万字节，里面有
+    `E:\\projects\\…` 这种主机路径）。我们的事件会进证据包、被同项目其他人看到、还进全文索引，
+    所以借它的**结构**（逐条 + 出处 + 指纹），不借它**抄正文**那一手——与 #41 对指令层同一口径。
+    `kind` 是判定不是搬运：`system` 那两条到底是"压缩摘要"还是"交接笔记"，界面和用户都需要分开看。
+    """
+    content = str(item.get("content") or "")
+    role = str(item.get("role") or "")
+    if item.get("tool_call_id"):
+        kind = "tool_result"
+    elif item.get("tool_calls"):
+        kind = "tool_call"
+    elif role == "system" and summary_text and content == summary_text:
+        kind = "summary"
+    elif role == "system" and handoff_text and content == handoff_text:
+        kind = "handoff"
+    else:
+        kind = role or "unknown"
+    return {
+        "index": index,
+        "role": role,
+        "kind": kind,
+        "chars": len(content),
+        "sha": content_sha(content),
+        # 出生那一轮（对标 Codex 每条历史都带 internal_chat_message_metadata_passthrough.turn_id）。
+        # 空串就留着空串：这条消息是谁写的、哪一轮写的没记过，不能替它编一个第 0 轮。
+        "run": str(item.get("run_id") or ""),
+        # 第几次用户输入（对标 guardian_metadata.user_input_order）。非 user 条目是 None，
+        # 前端读成"没说"，不是"第 0 次"。
+        "user_order": user_order,
+    }
+
+
+def history_refs(
+    items: Sequence[dict],
+    *,
+    summary_text: str = "",
+    handoff_text: str = "",
+) -> list[dict]:
+    refs: list[dict] = []
+    order = 0
+    for index, item in enumerate(items):
+        user_order: int | None = None
+        if str(item.get("role") or "") == "user":
+            user_order = order
+            order += 1
+        refs.append(
+            message_ref(
+                item,
+                index,
+                summary_text=summary_text,
+                handoff_text=handoff_text,
+                user_order=user_order,
+            )
+        )
+    return refs
+
+
+def replacement_record(
+    before: Sequence[dict],
+    after: Sequence[dict],
+    *,
+    summary_text: str = "",
+    handoff_text: str = "",
+    retention: dict[str, dict] | None = None,
+    window_number: int | None = None,
+) -> dict:
+    """一次替换换进了什么、丢掉了什么。
+
+    比的是**内容指纹**，不是消息身份——我们没有任何持久化的消息行可以指（会话状态存在 LangGraph
+    检查点里，Codex 的 `retained_source.message_id` 那种出处我们给不出来）。因此"同一条被裁剪过"
+    会算成"旧的一条丢了、新的一条进来了"，这是事实而不是缺陷：裁剪确实改了模型看到的内容。
+    `dropped` 只列引用不列正文，但它足以回答 §4 里那个我们此前答不出的问题：这次压缩丢了哪些内容。
+
+    `retention` + `window_number` 给留下的条目补上 Codex `guardian_metadata.retained_source` 那一半
+    语义：一条内容**从第几窗起留下**、**已跨过几窗**。身份用内容指纹派生（`ret:<sha12>`）而不是
+    另发一个 uuid——我们没有消息行可指，但同一份内容在任何一窗都该认成同一条，这点比 Codex 更硬。
+    同一窗里出现两次相同内容（复读的工具输出）只算跨了一窗。
+    """
+    after_refs = history_refs(after, summary_text=summary_text, handoff_text=handoff_text)
+    kept_shas = {item["sha"] for item in after_refs}
+    before_refs = history_refs(before)
+    dropped = [item for item in before_refs if item["sha"] not in kept_shas]
+    added = [item for item in after_refs if item["sha"] not in {b["sha"] for b in before_refs}]
+    for ref in [*after_refs, *dropped]:
+        ref["retained_id"] = f"ret:{str(ref['sha'])[:12]}"
+    if retention is not None and window_number is not None:
+        touched: set[str] = set()
+        for ref in after_refs:
+            sha = str(ref["sha"])
+            entry = retention.get(sha)
+            if entry is None:
+                entry = retention[sha] = {"first_window": window_number, "windows_held": 1}
+            elif sha not in touched:
+                entry["windows_held"] = int(entry.get("windows_held") or 0) + 1
+            touched.add(sha)
+            ref["retained_since"] = int(entry["first_window"])
+            ref["retained_windows"] = int(entry["windows_held"])
+        for ref in dropped:
+            entry = retention.get(str(ref["sha"]))
+            if entry is None:
+                continue
+            ref["retained_since"] = int(entry["first_window"])
+            ref["retained_windows"] = int(entry["windows_held"])
+    return {
+        "before_items": len(before_refs),
+        "after_items": len(after_refs),
+        "retained": len(after_refs) - len(added),
+        "added": added,
+        "dropped": dropped,
+        "items": after_refs,
+    }
+
 
 def _microcompact(
     messages: Sequence[dict],
@@ -247,6 +372,24 @@ def _normalize(messages: Sequence[dict]) -> list[dict]:
     return normalized
 
 
+def _safe_cut(history: Sequence[dict], cut: int) -> int:
+    """把切点退回到不会拆散工具调用配对的位置。
+
+    `role="tool"` 的结果必须紧跟在声明了对应 `tool_calls` 的那条 assistant 之后，
+    OpenAI 与 DeepSeek 都按这条校验；切点落在配对中间，折叠后发给供应商的就是
+    一条孤儿工具结果，供应商回 400、整条任务失败（2026-10-22 真实链路实测到）。
+    往回退只多留几条原文，代价是省得少一点；往下扔会把结果连同证据一起丢掉。
+    """
+    while 0 < cut < len(history) and (history[cut] or {}).get("role") == "tool":
+        cut -= 1
+    if cut == 0 and history and (history[0] or {}).get("role") == "tool":
+        # 退到段头仍然是一条没有归属的工具结果：往回退等于什么都不折，水位压不下去。
+        # 这一段是最老的内容，整段推过去才是对的。
+        while cut < len(history) and (history[cut] or {}).get("role") == "tool":
+            cut += 1
+    return cut
+
+
 def _split_prefix(messages: Sequence[dict]) -> tuple[list[dict], list[dict]]:
     """系统提示与任务目标永远保留，其余算作可折叠的历史。"""
     system = next((item for item in messages if item.get("role") == "system"), None)
@@ -281,6 +424,8 @@ def compact_messages(messages: Sequence[dict], max_chars: int = DEFAULT_CONTEXT_
         tail.append(item)
         used += size
     tail.reverse()
+    cut = _safe_cut(history, len(history) - len(tail))
+    tail = list(history[cut:])
     omitted = max(0, len(history) - len(tail))
     marker = {
         "role": "system",
@@ -369,6 +514,39 @@ class ContextCompactor:
     calibration: float = 1.0
     calibration_samples: int = field(default=0)
     observed_tokens: int = 0
+    # 窗口链（对标 Codex `compacted` 的 window_number / first_window_id / previous_window_id / window_id）。
+    # 出生就是第 0 窗并已有 id，所以第一次压缩时 previous_window_id == first_window_id，
+    # 与 Codex 实测的 window 1（prev 与 first 同为 01a13d6e-fc65…）形状一致。
+    window_number: int = 0
+    window_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    first_window_id: str = ""
+    # 留存台账（对标 guardian_metadata.retained_source）：内容指纹 → 从第几窗留下、已跨几窗。
+    # 只在压缩这一刻记账，不当主键；条目按 sha 累积，长对话里也就是一堆四十来字节的数。
+    retention: dict[str, dict] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # default_factory 的字段没法被另一个字段的默认值引用，出生窗口在这里补登记。
+        self.first_window_id = self.first_window_id or self.window_id
+
+    def open_window(self) -> dict:
+        """压缩真的发生了才换窗口：与 `context.compacted` 同频，不是每次组装都算一窗。
+
+        窗口号是给"现在活的是第几段历史"这个问句的答案；id 只用来把同一次执行的
+        多条记录串起来，不当主键用（我们的事件主键是 `seq`）。
+        """
+        previous = self.window_id
+        self.window_number += 1
+        self.window_id = str(uuid.uuid4())
+        return {**self.window, "previous_window_id": previous}
+
+    @property
+    def window(self) -> dict:
+        """当前窗口的身份。链上任何一条记录都能用这三个字段回到"我替换掉了谁"。"""
+        return {
+            "window_number": self.window_number,
+            "window_id": self.window_id,
+            "first_window_id": self.first_window_id,
+        }
 
     # -- 水位 ---------------------------------------------------------------
     def trigger_tokens(self) -> int:
@@ -432,7 +610,9 @@ class ContextCompactor:
         """把 token 水位换算成这一轮的消息字符预算。"""
         return max(2_000, int(trigger * self._chars_per_token(messages)))
 
-    async def build(self, messages: Sequence[dict], summarize: SummarizeFn | None = None) -> list[dict]:
+    async def build(
+        self, messages: Sequence[dict], summarize: SummarizeFn | None = None, *, author_run_id: str = ""
+    ) -> list[dict]:
         normalized = _normalize(messages)
         if not normalized:
             self.last_report = CompactionReport()
@@ -500,7 +680,10 @@ class ContextCompactor:
             tail.append(item)
             used += size
         tail.reverse()
-        cut = len(history) - len(tail)
+        # 切点不能落在工具调用的配对中间：往回退会把发起那条 assistant 一起留在尾部，
+        # 代价是少省几条，换来的是发出去的消息供应商认。
+        cut = _safe_cut(history, len(history) - len(tail))
+        tail = list(history[cut:])
 
         folded_now = 0
         if cut > self.covered and summarize is not None:
@@ -514,11 +697,12 @@ class ContextCompactor:
                 self.fold_failures += 1
 
         if self.summary.strip():
-            head = {"role": "system", "content": self.summary}
+            head = {"role": "system", "content": self.summary, "run_id": author_run_id}
         else:
             head = {
                 "role": "system",
                 "content": f"上下文已压缩：省略 {cut} 条较早执行消息；以最近状态和任务证据为准。",
+                "run_id": author_run_id,
             }
         result = [*prefix, head, *tail]
         self.last_report = CompactionReport(

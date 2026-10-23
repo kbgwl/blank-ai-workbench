@@ -121,6 +121,9 @@ class RunRequest:
     adapter: ModelAdapter
     root: str | Path
     run_id: str = ""
+    # 发起轮：引起这一整棵任务树的那一轮。空=这次运行自己就是发起轮（记录器里退回 run_id）。
+    # 只有跨任务的链上它才和 run_id 不同：一轮群聊里每个发言成员各有自己的 run_id。
+    origin_run_id: str = ""
     title: str = ""
     goal: str = ""
     acceptance_criteria: Sequence[str] = ()
@@ -227,7 +230,16 @@ class AgentRuntime:
 
     async def _prepare(self, request: RunRequest, thread_id: str) -> _RunScope:
         store = SerializedSessionFactory(self.session_factory)
-        recorder = EventRecorder(store, request.task_id, trace_id=thread_id, run_id=request.run_id)
+        # 一次执行必须有一个轮 id：入口给了就用入口的（那是 run 台账里那一行，能和
+        # AgentRun 对上），没给就退回这条线程的 attempt 键。留空等于账本上出现一批
+        # 「按哪轮都筛不到」的钱——同步 /run 这个入口真的没有 run 台账。
+        recorder = EventRecorder(
+            store,
+            request.task_id,
+            trace_id=thread_id,
+            run_id=request.run_id or thread_id,
+            origin_run_id=request.origin_run_id,
+        )
         settings = SettingsStore().read()
         # 设置页可以关掉按需加载：关掉后所有工具每轮都下发，tool_search 也就没有意义了。
         # 走特性注册表，老字段 tools.search 仍然作为回落值生效。
@@ -470,6 +482,7 @@ class AgentRuntime:
                 supports_vision=request.supports_vision,
                 texts=request.texts,
                 system_instructions=system_rules,
+                run_id=recorder.run_id,
             ),
             "plan": [],
             "steps": 0,

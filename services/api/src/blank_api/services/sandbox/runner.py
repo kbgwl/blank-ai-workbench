@@ -16,6 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from blank_api.services.log_safety import redact
+from blank_api.services.sandbox import boundary, windows_job
 from blank_api.services.sandbox.policy import SandboxPolicy
 
 MAX_OUTPUT_CHARS = 20000
@@ -36,6 +37,10 @@ class SandboxResult:
     backend: str
     truncated: bool = False
     notes: list[str] = field(default_factory=list)
+    # 这一次执行**实际被什么强制**的结构化事实（Job 限额、边界强度）。
+    # 界面与证据包读这个字段，不读 notes：notes 是给人看的，会被改文案；
+    # 把判据建在文案上，改一句话就能把"未强制"说成"已强制"。
+    enforcement: dict[str, object] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -50,6 +55,23 @@ def _clip(text: str) -> tuple[str, bool]:
     if len(text) <= MAX_OUTPUT_CHARS:
         return text, False
     return text[-MAX_OUTPUT_CHARS:] + "\n…（输出已截断）", True
+
+
+def _decode_host(raw: bytes) -> str:
+    """宿主（local 后端）子进程输出的解码。
+
+    中文 Windows 上 cmd 与系统消息写的是 GBK：一律按 UTF-8 解码会把"配额不足，无法处理此命令。"
+    这类**恰好说明限额被内核拒了**的信息变成一串替换字符——等于把最关键的证据丢掉。
+    UTF-8 解不动才退回 GBK，两者都解不动才用替换字符。容器里的输出仍是 UTF-8，不走这里。
+    """
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    try:
+        return raw.decode("gbk")
+    except UnicodeDecodeError:
+        return raw.decode("utf-8", "replace")
 
 
 class DockerSandbox:
@@ -137,7 +159,14 @@ async def cleanup_containers() -> int:
 
 
 class LocalSandbox:
-    """无 Docker 时的退路：直接在本机子进程执行，只做时长与进程树清理，不做隔离。"""
+    """本机子进程执行：内核强制的部分由 Job Object 提供，其余只是策略级约束。
+
+    M0 探针（`evals/win_isolation_probe.py`，结论见 docs/SANDBOX-WINDOWS-DESIGN.md §2.0）定了两件事：
+    - Job 的内存上限、活跃进程数上限、`KILL_ON_JOB_CLOSE` 在非管理员下**真的被内核强制**（都有阳性对照）；
+    - AppContainer 入口恒 575、`CreateRestrictedToken` 恒 998、`CreateProcessWithTokenW` 缺特权 →
+      **文件与网络边界在这类机器上不可能由系统强制**。
+    所以这个类的职责是：把前者做真，把后者说清。它不许在 notes 里写"已隔离"。
+    """
 
     name = "local"
 
@@ -158,6 +187,13 @@ class LocalSandbox:
         base.update(self.policy.filter_env(env or {}))
         started = time.perf_counter()
         creationflags = 0x00000200 if sys.platform == "win32" else 0
+
+        memory_bytes = windows_job.parse_size(self.policy.memory)
+        job = windows_job.create_job(
+            "blank-sandbox-" + uuid.uuid4().hex[:8],
+            memory_bytes=memory_bytes,
+            active_process_limit=self.policy.pids or 0,
+        )
         proc = await asyncio.create_subprocess_shell(
             script,
             cwd=workspace,
@@ -166,6 +202,12 @@ class LocalSandbox:
             stderr=asyncio.subprocess.PIPE,
             creationflags=creationflags,
         )
+        # 挂 Job 必须在起进程之后立刻做：这中间它已经派生的进程不算在这条限额里（见 assign_pid 的说明）
+        assigned, assign_error = (False, job.error) if not job.ok else windows_job.assign_pid(job, proc.pid)
+        # 必须在 close_job 之前算：关句柄会把 job.handle 置 0，之后再读 Job 就永远是"没建成"，
+        # 于是这条命令明明被内核限着 48MB，账上却写成"限额未强制"——反向说谎同样是谎。
+        # 变异验证：把这一行挪到 close_job 之后，本文件三条 enforcement 断言立刻变红。
+        enforcement = _enforcement(job, assigned, assign_error)
         timed_out = False
         try:
             raw_out, raw_err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -173,9 +215,13 @@ class LocalSandbox:
             timed_out = True
             await kill_process_tree(proc.pid)
             raw_out, raw_err = b"", "命令超过时间限制，进程树已被终止".encode()
+        finally:
+            # 关句柄 = 沙箱生命周期结束。挂了 KILL_ON_JOB_CLOSE 时，还活着的整棵树一起走；
+            # M0 的 P6.7 证明这条在内核层生效，对照（不挂 Job）的同种进程则活得好好的。
+            windows_job.close_job(job)
         duration = int((time.perf_counter() - started) * 1000)
-        stdout, trunc_out = _clip(raw_out.decode("utf-8", "replace"))
-        stderr, trunc_err = _clip(raw_err.decode("utf-8", "replace"))
+        stdout, trunc_out = _clip(_decode_host(raw_out))
+        stderr, trunc_err = _clip(_decode_host(raw_err))
         return SandboxResult(
             command=redact(script),
             exit_code=None if timed_out else proc.returncode,
@@ -185,11 +231,88 @@ class LocalSandbox:
             timed_out=timed_out,
             backend=self.name,
             truncated=trunc_out or trunc_err,
-            notes=["本地模式无隔离，仅用于开发机"],
+            notes=_enforcement_notes(enforcement),
+            enforcement=enforcement,
         )
 
     async def cleanup(self) -> int:
+        # Job 句柄在每次 run 的 finally 里已经关掉，进程树不会跨任务存活。
+        # 这里返回 0 是事实，不是"还没实现"：跨进程残留需要 runner 化之后才谈得上枚举。
         return 0
+
+
+def limits_not_applied(reason: str) -> dict[str, object]:
+    """沙箱开关为关（命令直接跑在宿主进程上）时的账：每一项都写 False，并写清为什么。
+
+    这条是给 `off` 档用的。没有它，界面只能拿 policy 里的配置值当生效值展示——
+    设计稿 §1 里"展示值冒充生效值"那一条就是这么产生的。键集合与 `_enforcement` 保持一致，
+    读的一方不用分两种形状。
+    """
+    cap = boundary.measure()
+    return {
+        "boundary_strength": cap.strength,
+        "boundary_strength_label": cap.label,
+        "boundary_measured_seconds_ago": cap.as_dict().get("age_seconds"),
+        "boundary_apparatus_ok": cap.apparatus_ok,
+        "limits_applied": False,
+        "job_created": False,
+        "job_assigned": False,
+        "job_error": reason,
+        "memory_enforced": False,
+        "memory_bytes": 0,
+        "pids_enforced": False,
+        "pids_limit": 0,
+        "tree_kill_enforced": False,
+        "filesystem_enforced": False,
+        "network_enforced": False,
+        "cpu_enforced": False,
+        "disk_enforced": False,
+    }
+
+
+def _enforcement(job: windows_job.Job, assigned: bool, assign_error: str) -> dict[str, object]:
+    """把"哪几条真的被内核强制了"算成结构化事实。测不出来就写 unknown，不许默认成真。"""
+    cap = boundary.measure()
+    enforced = bool(job.ok and assigned)
+    return {
+        "boundary_strength": cap.strength,
+        "boundary_strength_label": cap.label,
+        "boundary_measured_seconds_ago": cap.as_dict().get("age_seconds"),
+        "boundary_apparatus_ok": cap.apparatus_ok,
+        "limits_applied": True,
+        "job_created": job.ok,
+        "job_assigned": assigned,
+        "job_error": job.error or assign_error or "",
+        "memory_enforced": enforced and "memory_bytes" in job.enforced,
+        "memory_bytes": int(job.enforced.get("memory_bytes", 0)),
+        "pids_enforced": enforced and "active_process_limit" in job.enforced,
+        "pids_limit": int(job.enforced.get("active_process_limit", 0)),
+        "tree_kill_enforced": enforced and "kill_on_close" in job.enforced,
+        # 这两条由 M0 直接定死：拿不到 AC/受限令牌的机器上，OS 不会替我们拒文件与网络。
+        "filesystem_enforced": cap.strength == "os_enforced",
+        "network_enforced": cap.strength == "os_enforced",
+        "cpu_enforced": False,
+        "disk_enforced": False,
+    }
+
+
+def _enforcement_notes(enforcement: dict[str, object]) -> list[str]:
+    out: list[str] = []
+    if enforcement["memory_enforced"] and enforcement["pids_enforced"]:
+        out.append("内存上限 {}MB、活跃进程上限 {} 由 Windows Job Object 强制（内核级，非我们数着玩）".format(
+            round(int(enforcement["memory_bytes"]) / 1024 / 1024, 1), enforcement["pids_limit"]))
+    elif enforcement["job_created"] and not enforcement["job_assigned"]:
+        out.append("限额没生效：子进程没能挂进 Job（{}）".format(enforcement["job_error"]))
+    else:
+        out.append("限额未由内核强制：{}".format(enforcement["job_error"] or "本平台无 Job Object"))
+    if enforcement["tree_kill_enforced"]:
+        out.append("命令结束时整棵进程树被 Job 带走（KILL_ON_JOB_CLOSE 已生效）")
+    if not enforcement["filesystem_enforced"]:
+        out.append("文件边界未由系统强制：模型把路径藏在脚本字符串里时 OS 不会拒（边界强度={}）".format(
+            enforcement["boundary_strength"]))
+    if not enforcement["network_enforced"]:
+        out.append("网络边界未由系统强制：默认全部放行，靠审批与审计")
+    return out
 
 
 async def kill_process_tree(pid: int) -> None:

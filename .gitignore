@@ -57,6 +57,8 @@ data/*.key
 data/artifacts/
 data/snapshots/
 data/workspaces/
+# 工具调用审计账（JSONL）：默认落 data/audit/，里面是每一步做了什么，属于运行期隐私
+data/audit/
 # 用户贴进来的截图：从仓库根启动后端时会落到这里，属于隐私数据，绝不能进版本库
 data/uploads/
 

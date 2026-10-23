@@ -90,6 +90,9 @@ async def create_thread(project_id: str, payload: ThreadCreate, db: DbSession) -
     )
     db.add(thread)
     await db.commit()
+    # created_at/updated_at 由服务端生成：MySQL 的 INSERT 没有 RETURNING，不读回来
+    # 就会在序列化时触发一次同步懒加载（MissingGreenlet → 500）。见 routes/tasks.py 同一条说明。
+    await db.refresh(thread)
     return ThreadOut.model_validate(thread)
 
 

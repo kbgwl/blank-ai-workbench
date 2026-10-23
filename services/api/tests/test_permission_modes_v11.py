@@ -126,11 +126,15 @@ def test_only_memoizable_prefixes_get_the_prefix_scope() -> None:
     assert memoizable_prefix("run_shell", "npm run") == "npm run"
     # 跑构建/测试类工具，单个可执行名也可以记
     assert memoizable_prefix("run_shell", "pytest") == "pytest"
-    assert memoizable_prefix("run_shell", "python") == "python"
+    # 解释器不是"构建工具"：裸名记下来等于把任意载荷交给模型自选，
+    # 必须带到真正被执行的那一段（这里靠 v37 的细则用例守住）。
+    assert memoizable_prefix("run_shell", "python") == ""
+    assert memoizable_prefix("run_shell", "node") == ""
     # 危险裸名一律拒绝
-    for dangerous in ("rm", "bash", "sh", "curl", "git", "powershell", "cmd"):
-        assert memoizable_prefix("run_shell", dangerous) == "", dangerous
-        scopes = [item["scope"] for item in approval_options("run_shell", dangerous)]
+    for dangerous in ("rm", "bash", "sh", "curl", "git", "powershell", "pwsh", "cmd"):
+        memo = memoizable_prefix("run_shell", dangerous)
+        assert memo == "", dangerous
+        scopes = [item["scope"] for item in approval_options("run_shell", memo)]
         assert SCOPE_PREFIX not in scopes, dangerous
     assert memoizable_prefix("apply_patch", "git push") == ""
 
@@ -141,6 +145,16 @@ def test_remember_refuses_to_widen_a_dangerous_prefix() -> None:
     policy.remember("run_shell", {"command": "rm -rf build"}, SCOPE_PREFIX)
     assert not policy.approved_prefixes
     assert _decide(policy, "run_shell", {"command": "rm -rf dist"}, "high").outcome == ASK
+    # 裸解释器同样记不出"整个 python"
+    policy.remember("run_shell", {"command": "python"}, SCOPE_PREFIX)
+    assert not policy.approved_prefixes
+    assert _decide(policy, "run_shell", {"command": "python evil.py"}, "high").outcome == ASK
+    # 不可逆命令即便带了可记忆的前缀（git push）也不进账本
+    policy.remember("run_shell", {"command": "git push origin main --force"}, SCOPE_PREFIX)
+    assert not policy.approved_prefixes
+    assert (
+        _decide(policy, "run_shell", {"command": "git push origin main"}, "high").outcome == ASK
+    )
 
 
 # --------------------------------------------------------------------------- #

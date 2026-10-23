@@ -428,13 +428,80 @@ export type TestInfo = {
   status: string;
   skippedReason: string;
 };
+/** 三级口径里的一级。后端 `model.usage` 事件一次写 call/turn/task 三个，
+ *  这里只取面板要用的那几个数，字段缺失照实给 null（老任务根本没这类事件）。 */
+export type UsageLevel = {
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  cachedTokens: number | null;
+  calls: number | null;
+  /** 供应商那一笔请求的 id；空串=这一家没给（本地 Ollama）或这条记录早于该字段上线。 */
+  responseId: string;
+};
+/** 一轮（run）的账：后端 `turn_rollup` 的投影，回答「这一轮花了多少」。 */
+export type UsageTurn = {
+  runId: string;
+  /** 这一轮里出现过几条线程（1 = 只有主代理，>1 = 派过子代理）。 */
+  threads: number | null;
+  subagentCalls: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  cachedTokens: number | null;
+  calls: number | null;
+};
+/** 一条线程（分支）的账 + 它的出身：后端 `branch_rollup` 的投影。 */
+export type UsageBranch = {
+  traceId: string;
+  agentPath: string;
+  parentTraceId: string;
+  rootTraceId: string;
+  runId: string;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  cachedTokens: number | null;
+  calls: number | null;
+};
+/** 一次并行编排（fan_out）的合计账：后端 `parallel_group_rollup` 的投影。 */
+export type UsageParallelGroup = {
+  group: string;
+  runId: string;
+  threads: number | null;
+  agentPaths: string[];
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  cachedTokens: number | null;
+  calls: number | null;
+};
 export type UsageInfo = {
   promptTokens: number | null;
   completionTokens: number | null;
   totalTokens: number | null;
+  cachedTokens: number | null;
+  cacheWriteTokens: number | null;
+  reasoningTokens: number | null;
+  cacheHitRatio: number | null;
   latencyMs: number | null;
   calls: number | null;
   models: string[];
+  levels: { call: UsageLevel | null; turn: UsageLevel | null; task: UsageLevel | null } | null;
+  /** null = 后端压根没给这两个键（服务版本早于回合归属）；[] = 给了，且确实没有可归的账。
+   *  这两个读法在面板上必须不一样：把「没说」显示成「没有」就是在编事实。 */
+  turns: UsageTurn[] | null;
+  branches: UsageBranch[] | null;
+  /** 归属上线前落下的账有多少笔。老账只以条数出现，绝不并成「第 0 轮」。 */
+  unattributedCalls: number | null;
+  /** 按并行编排批次的合计（后端 `parallel_group_rollup`）。null = 后端还没有这个键。 */
+  parallelGroups: UsageParallelGroup[] | null;
+  /** 带批次号的笔数 / 不带的。不带的包括单发子代理、主线程、摘要，也包括批次号上线前的老账。 */
+  batchedCalls: number | null;
+  unbatchedCalls: number | null;
+  /** 花在子代理身上的那些行合计（按账本行现数，不是从图状态里累计出来的那个数）。 */
+  delegatedTokens: number | null;
+  delegatedCalls: number | null;
 };
 /** 审批作用域：仅本次 / 本会话该命令前缀 / 本会话该工具。 */
 export type ApprovalScope = "once" | "prefix" | "tool";
@@ -471,12 +538,81 @@ export type PendingQuestion = {
   allowFreeText: boolean;
 };
 
+/** 一步当时被什么策略管着。后端只在全局 digest 变化时落一条，所以这里通常是 1 条 + 若干变更。 */
+export type GovernanceChange = {
+  step: number | null;
+  node: string;
+  model: string;
+  tier: string;
+  mode: string;
+};
+
+export type Governance = {
+  snapshots: number;
+  models: string[];
+  modes: string[];
+  sandbox: {
+    backend: string;
+    enabled: boolean | null;
+    isolation: string;
+    network: boolean | null;
+    readOnlyRoot: boolean | null;
+    limits: string;
+    denied: string;
+    /** 现场探测出来的边界强度：os_enforced / job_only / none / unknown。
+     * 空串 = 这个任务跑的时候后端还没有这个字段，不能拿今天的探测结果冒充当时。 */
+    boundaryStrength: string;
+    boundaryStrengthLabel: string;
+    enforcementSource: string;
+    /** 配置值里哪几项真的被执行了。缺键按"未强制"处理：宁可少说，不许把没拦的说成拦了。 */
+    enforced: Record<string, boolean>;
+  } | null;
+  features: { name: string; on: boolean; source: string }[];
+  changes: GovernanceChange[];
+};
+
+export type InstructionRef = {
+  source: string;
+  /** 掩码后的路径：事件会进时间线、证据包和全文索引，主机绝对路径不许出现在这里。 */
+  path: string;
+  chars: number | null;
+  /** 内容指纹（sha256 前 40 位）。指令正文从不入账，指认版本靠它。 */
+  sha: string;
+  truncated: boolean;
+};
+
+/** 环境快照（对标 Codex `world_state`）。后端每条都是当时的全量，所以 current 取最后一条。 */
+export type WorldState = {
+  snapshots: number;
+  current: {
+    date: string;
+    timezone: string;
+    cwd: string;
+    /** captured / unknown —— unknown 是那会儿还没装配 shell 环境层，不是"探测失败"。 */
+    status: string;
+    shell: string;
+    os: string;
+    python: string;
+    pathEntries: number | null;
+    contextWindow: number | null;
+    triggerAt: number | null;
+    mode: string;
+    model: string;
+    /** 整套指令的版本号（顺序也算在内）。 */
+    instructionsDigest: string;
+    instructions: InstructionRef[];
+  } | null;
+  changes: { seq: number | null; node: string }[];
+};
+
 export type Evidence = {
   status: string;
   acceptance: AcceptanceItem[];
   changes: ChangeItem[];
   test: TestInfo | null;
   usage: UsageInfo;
+  governance: Governance;
+  world: WorldState;
   pendingApprovals: PendingApproval[];
   pendingQuestions: PendingQuestion[];
   tools: ToolRecord[];
@@ -484,6 +620,10 @@ export type Evidence = {
   unverified: string[];
   raw: Record<string, unknown>;
 };
+
+const EMPTY_GOVERNANCE: Governance = { snapshots: 0, models: [], modes: [], sandbox: null, features: [], changes: [] };
+
+const EMPTY_WORLD: WorldState = { snapshots: 0, current: null, changes: [] };
 
 const EMPTY_EVIDENCE: Evidence = {
   status: "",
@@ -494,10 +634,25 @@ const EMPTY_EVIDENCE: Evidence = {
     promptTokens: null,
     completionTokens: null,
     totalTokens: null,
+    cachedTokens: null,
+    cacheWriteTokens: null,
+    reasoningTokens: null,
+    cacheHitRatio: null,
     latencyMs: null,
     calls: null,
     models: [],
+    levels: null,
+    turns: null,
+    branches: null,
+    unattributedCalls: null,
+    parallelGroups: null,
+    batchedCalls: null,
+    unbatchedCalls: null,
+    delegatedTokens: null,
+    delegatedCalls: null,
   },
+  governance: EMPTY_GOVERNANCE,
+  world: EMPTY_WORLD,
   pendingApprovals: [],
   pendingQuestions: [],
   tools: [],
@@ -588,18 +743,117 @@ function normalizeTest(container: unknown): TestInfo | null {
   };
 }
 
+function normalizeUsageLevel(source: unknown): UsageLevel | null {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+  const record = source as Record<string, unknown>;
+  const prompt = numOf(record, "prompt_tokens", "input_tokens", "promptTokens");
+  const completion = numOf(record, "completion_tokens", "output_tokens", "completionTokens");
+  return {
+    promptTokens: prompt,
+    completionTokens: completion,
+    totalTokens:
+      numOf(record, "total_tokens", "totalTokens") ??
+      (prompt === null && completion === null ? null : (prompt ?? 0) + (completion ?? 0)),
+    cachedTokens: numOf(record, "cached_tokens", "cachedTokens", "cache_read_input_tokens"),
+    calls: numOf(record, "calls", "request_count"),
+    responseId: textOf(record, "response_id", "responseId"),
+  };
+}
+
+function normalizeUsageTurn(source: unknown): UsageTurn | null {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+  const record = source as Record<string, unknown>;
+  return {
+    runId: textOf(record, "run_id", "runId"),
+    threads: numOf(record, "threads", "thread_count"),
+    subagentCalls: numOf(record, "subagent_calls", "subagentCalls"),
+    promptTokens: numOf(record, "prompt_tokens", "promptTokens"),
+    completionTokens: numOf(record, "completion_tokens", "completionTokens"),
+    // 汇总数只在后端真给了的时候才存在。这里不拿 prompt+completion 顶：
+    // 顶上去的数看不出是算的还是记的，对不上账时反而更难查。
+    totalTokens: numOf(record, "total_tokens", "totalTokens"),
+    cachedTokens: numOf(record, "cached_tokens", "cachedTokens"),
+    calls: numOf(record, "calls"),
+  };
+}
+
+function normalizeUsageBranch(source: unknown): UsageBranch | null {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+  const record = source as Record<string, unknown>;
+  return {
+    traceId: textOf(record, "trace_id", "traceId"),
+    agentPath: textOf(record, "agent_path", "agentPath"),
+    parentTraceId: textOf(record, "parent_thread_id", "parent_trace_id", "parentTraceId"),
+    rootTraceId: textOf(record, "root_thread_id", "root_trace_id", "rootTraceId"),
+    runId: textOf(record, "run_id", "runId"),
+    promptTokens: numOf(record, "prompt_tokens", "promptTokens"),
+    completionTokens: numOf(record, "completion_tokens", "completionTokens"),
+    totalTokens: numOf(record, "total_tokens", "totalTokens"),
+    cachedTokens: numOf(record, "cached_tokens", "cachedTokens"),
+    calls: numOf(record, "calls"),
+  };
+}
+
+function normalizeUsageParallelGroup(source: unknown): UsageParallelGroup | null {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+  const record = source as Record<string, unknown>;
+  return {
+    group: textOf(record, "group", "parallel_group"),
+    runId: textOf(record, "run_id", "runId"),
+    threads: numOf(record, "threads", "thread_count"),
+    agentPaths: arrayOf(record, "agent_paths", "agentPaths").map((item) => String(item)),
+    promptTokens: numOf(record, "prompt_tokens", "promptTokens"),
+    completionTokens: numOf(record, "completion_tokens", "completionTokens"),
+    totalTokens: numOf(record, "total_tokens", "totalTokens"),
+    cachedTokens: numOf(record, "cached_tokens", "cachedTokens"),
+    calls: numOf(record, "calls"),
+  };
+}
+
+/** 列表型汇总的读法：键不在就是 null（后端没说），别用空数组冒充「后端说了没有」。 */
+function normalizeUsageRollup<T>(source: unknown, key: string, alt: string, item: (value: unknown) => T | null): T[] | null {
+  const value = pick<unknown>(source, key, alt);
+  if (!Array.isArray(value)) return null;
+  return value.map(item).filter((entry): entry is T => entry !== null);
+}
+
 function normalizeUsage(container: unknown): UsageInfo {
   const record = recordOf(container, "usage", "token_usage", "tokens");
   const prompt = numOf(record, "prompt_tokens", "input_tokens", "promptTokens");
   const completion = numOf(record, "completion_tokens", "output_tokens", "completionTokens");
   const total = numOf(record, "total_tokens", "totalTokens") ?? (prompt !== null || completion !== null ? (prompt ?? 0) + (completion ?? 0) : null);
+  const levels = pick<Record<string, unknown>>(record, "levels", "usage_levels");
   return {
     promptTokens: prompt,
     completionTokens: completion,
     totalTokens: total,
+    // 缓存与推理单独成项：「打开缓存开关」和「缓存真的命中」的区别，只有把这两个数
+    // 摊在输入旁边才看得见；后端没给（老任务）就是 null，面板照实显示「暂无」。
+    cachedTokens: numOf(record, "cached_tokens", "cachedTokens", "cache_read_input_tokens"),
+    cacheWriteTokens: numOf(record, "cache_write_tokens", "cacheWriteTokens"),
+    reasoningTokens: numOf(record, "reasoning_tokens", "reasoningTokens", "reasoning_output_tokens"),
+    cacheHitRatio: numOf(record, "cache_hit_ratio", "cacheHitRatio"),
     latencyMs: numOf(record, "latency_ms", "latency", "duration_ms", "total_latency_ms"),
     calls: numOf(record, "calls", "request_count"),
     models: arrayOf(record, "models", "model").map((item) => String(item)),
+    levels: levels
+      ? {
+          call: normalizeUsageLevel(levels["call"]),
+          turn: normalizeUsageLevel(levels["turn"]),
+          task: normalizeUsageLevel(levels["task"]),
+        }
+      : null,
+    // 回合归属的两张表直接从账本行汇总（后端 evidence.turn_rollup / branch_rollup），
+    // 前端不再从事件 payload 里推一遍：两处各推一次早晚对不上，且对不上时看不出错在哪边。
+    turns: normalizeUsageRollup(record, "turns", "usage_turns", normalizeUsageTurn),
+    branches: normalizeUsageRollup(record, "branches", "usage_branches", normalizeUsageBranch),
+    unattributedCalls: numOf(record, "unattributed_calls", "unattributedCalls"),
+    // 并行批次的账：一次 fan_out 花了多少，由后端按账本行的批次号现数（evidence.parallel_group_rollup）。
+    parallelGroups: normalizeUsageRollup(record, "parallel_groups", "parallelGroups", normalizeUsageParallelGroup),
+    batchedCalls: numOf(record, "batched_calls", "batchedCalls"),
+    unbatchedCalls: numOf(record, "unbatched_calls", "unbatchedCalls"),
+    delegatedTokens: numOf(record, "delegated_tokens", "delegatedTokens"),
+    delegatedCalls: numOf(record, "delegated_calls", "delegatedCalls"),
   };
 }
 
@@ -666,6 +920,172 @@ function normalizeToolRecords(container: unknown): ToolRecord[] {
     }));
 }
 
+/** 治理快照的投影。老任务没有 turn.context 事件，后端返回 snapshots:0 —— 这里就照实空着，
+ * 不能拿当前设置去"补"一份，那等于把今天的策略冒充成执行那天的策略。 */
+function normalizeGovernance(source: unknown): Governance {
+  const block = recordOf(source, "governance");
+  if (Object.keys(block).length === 0) return EMPTY_GOVERNANCE;
+  const first = recordOf(block, "first");
+  const sandbox = recordOf(first, "sandbox");
+  const enforcedRaw = recordOf(sandbox, "enforced");
+  const enforced: Record<string, boolean> = {};
+  for (const [key, value] of Object.entries(enforcedRaw)) {
+    if (typeof value === "boolean") enforced[key] = value;
+  }
+  // 展示值与生效值分不开，就是这个面板最早撒的谎：cpus 一直显示 1.0，可没有任何东西在执行它。
+  // 每一项后面标出"谁在执行"，标不出来就标"未强制"。timeout 由我们自己的计时器执行，
+  // 不是内核强制，所以它不进这张表——它没有"配置了但没人管"这一档。
+  const limitKeys: [string, string][] = [
+    ["cpus", "cpu"],
+    ["memory", "memory"],
+    ["pids", "pids"],
+    ["tmpfs", "filesystem"],
+    ["timeout_seconds", ""],
+  ];
+  const limits = limitKeys
+    .map(([key, field]) => {
+      const value = sandbox[key];
+      if (value === undefined || value === null || value === "") return "";
+      const mark = field === "" || enforced[field] ? "" : "（未强制）";
+      return `${key} ${String(value)}${mark}`;
+    })
+    .filter(Boolean)
+    .join(" · ");
+  const features = Object.entries(recordOf(first, "features"))
+    .map(([name, value]) => ({
+      name,
+      on: boolOf(value, "on") === true,
+      source: textOf(value, "source"),
+    }))
+    .filter((item) => item.on || item.source === "env");
+  // 后端把 features 摊成 {name:{on,source}}，这里换成数组方便渲染；只留开着的
+  // 和被环境变量强制关掉的——8 个全显示是噪音，但"你以为开着其实被 env 关了"必须看得见。
+  const list = (key: string): string[] => arrayOf(block, key).map((item) => (typeof item === "string" ? item : ""));
+  return {
+    snapshots: numOf(block, "snapshots") ?? 0,
+    models: list("models"),
+    modes: list("modes"),
+    sandbox: Object.keys(sandbox).length === 0 ? null : {
+      backend: textOf(sandbox, "backend"),
+      enabled: boolOf(sandbox, "enabled"),
+      isolation: textOf(sandbox, "isolation"),
+      network: boolOf(sandbox, "network"),
+      readOnlyRoot: boolOf(sandbox, "read_only_root"),
+      limits,
+      denied: textOf(sandbox, "denied"),
+      boundaryStrength: textOf(sandbox, "boundary_strength"),
+      boundaryStrengthLabel: textOf(sandbox, "boundary_strength_label"),
+      enforcementSource: textOf(sandbox, "enforcement_source"),
+      enforced,
+    },
+    features,
+    changes: arrayOf(block, "changes").map((item) => ({
+      step: numOf(item, "step"),
+      node: textOf(item, "node"),
+      model: textOf(item, "model"),
+      tier: textOf(item, "tier"),
+      mode: textOf(item, "permission_mode"),
+    })),
+  };
+}
+
+/** 环境快照的投影（对标 Codex `world_state{full:true}`）。
+ *
+ * 老任务没有 world.state 事件 → snapshots 0、current null，界面显示「暂无」。
+ * 不许拿今天的目录/shell 去补一份：那等于把现在的环境冒充成执行那天的环境。
+ * 数字缺失一律 `null`，不给 0 —— "当时没记"和"当时是 0 条 PATH"是两件事。 */
+function normalizeWorld(source: unknown): WorldState {
+  const block = recordOf(source, "world");
+  if (Object.keys(block).length === 0) return EMPTY_WORLD;
+  const payload = recordOf(block, "current");
+  const state = recordOf(payload, "state");
+  if (Object.keys(state).length === 0) {
+    return { snapshots: numOf(block, "snapshots") ?? 0, current: null, changes: [] };
+  }
+  const local = recordOf(recordOf(state, "environments"), "local");
+  const mode = recordOf(state, "operating_mode");
+  const guidance = recordOf(state, "context_window_guidance");
+  return {
+    snapshots: numOf(block, "snapshots") ?? 0,
+    current: {
+      date: textOf(state, "current_date"),
+      timezone: textOf(state, "timezone"),
+      cwd: textOf(local, "cwd"),
+      status: textOf(local, "status"),
+      shell: textOf(local, "shell"),
+      os: textOf(local, "os"),
+      python: textOf(local, "python"),
+      pathEntries: numOf(local, "path_entries"),
+      contextWindow: numOf(guidance, "context_window"),
+      triggerAt: numOf(guidance, "trigger_at"),
+      mode: textOf(mode, "mode"),
+      model: textOf(mode, "model"),
+      instructionsDigest: textOf(mode, "instructions"),
+      instructions: arrayOf(state, "instructions").map((item) => ({
+        source: textOf(item, "source"),
+        path: textOf(item, "path"),
+        chars: numOf(item, "chars"),
+        sha: textOf(item, "sha"),
+        truncated: boolOf(item, "truncated") === true,
+      })),
+    },
+    changes: arrayOf(block, "changes").map((item) => ({
+      seq: numOf(item, "seq"),
+      node: textOf(item, "node"),
+    })),
+  };
+}
+
+/** 边界强度的那半句。空串是老任务：那时后端还没探测过，不能拿今天的值冒充当时。 */
+const STRENGTH_SEGMENT: Record<string, string> = {
+  os_enforced: "文件与网络边界由系统强制",
+  job_only: "只有内存/进程数/进程树被内核强制",
+  none: "无任何内核强制",
+  unknown: "边界探测装置不可信，不承诺任何边界",
+};
+
+/** 边界那一行的文案。放在这里而不是组件里：它是判定，得能被断言。
+ * 「local」会被读成有一种沙箱叫 local，它真正的意思是没开隔离——这层意思不能省。
+ * 强度段是后加的：没有它，"宿主直连"后面跟着 memory 512m，用户会以为那个数字有人在执行。 */
+export function sandboxBoundaryLabel(sb: Governance["sandbox"]): string {
+  if (!sb) return "暂无";
+  // 档位说的是"这台机器拦得住什么"，不是"这次执行被拦了什么"。
+  // 关档跑的时候 boundary_strength 依然是 job_only（探测没坏，机器确实能建 Job），
+  // 直接把它接在「沙箱未启用」后面就成了一句谎——这条是点验时在真页面上撞出来的。
+  const strength = STRENGTH_SEGMENT[sb.boundaryStrength] ?? "";
+  const enforcedAny = Object.values(sb.enforced).some((value) => value === true);
+  return [
+    sb.enabled === false
+      ? "沙箱未启用"
+      : sb.backend === "none"
+        ? "无可用沙箱后端"
+        // `local` 不是沙箱的名字，是"没起容器、进程就在这个宿主上"。直接把代号印出来，
+        // 读者会以为有一种叫 local 的隔离在保护他——docker 那格可以印代号，因为它真是容器。
+        : sb.backend === "local"
+          ? "无容器（进程在本机）"
+          : sb.backend,
+    sb.isolation === "container" ? "容器隔离" : "宿主直连（不承诺隔离）",
+    sb.network === null ? "" : sb.network ? "可联网" : "断网",
+    sb.readOnlyRoot === null ? "" : sb.readOnlyRoot ? "根目录只读" : "根目录可写",
+    strength === "" || enforcedAny ? strength : "本次未强制任何限额",
+    sb.enforcementSource === "docker_flags" ? "限额由容器参数提交，未在本机实测" : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** 边界行要不要显警告色。没隔离、没后端、能联网，三种都够用户重新决定要不要继续。
+ * 强度已知但不是 os_enforced 也一样要警告：那说明文件与网络只是策略级约束，
+ * 模型把路径藏进脚本字符串里时没有任何东西会拦。 */
+export function sandboxBoundaryNeedsWarn(sb: Governance["sandbox"]): boolean {
+  if (!sb) return true;
+  if (sb.enabled === false || sb.backend === "none" || sb.network === true) return true;
+  if (sb.isolation !== "container" && sb.boundaryStrength !== "" && sb.boundaryStrength !== "os_enforced") {
+    return true;
+  }
+  return false;
+}
+
 export function normalizeEvidence(source: unknown): Evidence {
   if (!source || typeof source !== "object") return { ...EMPTY_EVIDENCE };
   const raw = source as Record<string, unknown>;
@@ -679,6 +1099,8 @@ export function normalizeEvidence(source: unknown): Evidence {
     changes: normalizeChanges(container),
     test: normalizeTest(container),
     usage: normalizeUsage(container),
+    governance: normalizeGovernance(container),
+    world: normalizeWorld(container),
     pendingApprovals: normalizeApprovals(container),
     pendingQuestions: normalizeQuestions(container),
     tools: normalizeToolRecords(container),

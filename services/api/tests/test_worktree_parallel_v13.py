@@ -170,6 +170,15 @@ async def test_fan_out_runs_children_concurrently(workspace: Path):
     assert len({result.agent_path for result in results}) == 3
     assert all(result.agent_path.startswith("root/par-") for result in results)
     assert "subagents.planned" in session.recorder.types()
+    # 脱离库跑图（session_factory=None）时三级事件照发：账本只能少一半，不能全静默
+    usage_events = [payload for event, payload in session.recorder.events if event == "model.usage"]
+    assert len(usage_events) == 3, "并行子代理的调用一条都没记：派出去的钱在离线形状里也看不见"
+    assert all({"call", "turn", "task"} <= set(payload) for payload in usage_events)
+    assert all(
+        payload["depth"] == 1 and payload["agent_path"].startswith("root/par-") for payload in usage_events
+    )
+    # 没有库可查，任务级退回本回合——绝不把兄弟线程的调用算成自己的总数
+    assert all(payload["task"] == payload["turn"] for payload in usage_events)
 
 
 async def test_fan_out_caps_the_number_of_children(workspace: Path):

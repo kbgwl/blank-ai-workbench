@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 
 from blank_api.api.auth import require_token
 from blank_api.deps import DbSession
-from blank_api.models.model_provider import ModelProvider, ModelUsage
+from blank_api.models.model_provider import PROVIDER_GONE, ModelProvider, ModelUsage
 from blank_api.models.run import AgentRun
 from blank_api.models.task import AgentEvent, ToolCall
 from blank_api.services.models.pricing import estimate_cost
@@ -22,6 +22,11 @@ def _role(node: str) -> str:
     }.get(node, "tester" if node == "run_validation" else "runtime")
 
 
+# 供应商这一行已经不在了（被删掉，或者这笔账落下时就没有对应的配置行）。钱是真花出去的，
+# 所以这里必须用左连接，并且给这些行一个念得出人话的桶名（PROVIDER_GONE）——直接 outerjoin
+# 会得到 "None/模型名"，既读不出含义，又会把孤儿当成一家供应商。
+
+
 @router.get("/summary")
 async def observability_summary(db: DbSession) -> dict:
     model_rows = (
@@ -36,7 +41,7 @@ async def observability_summary(db: DbSession) -> dict:
                 ModelUsage.latency_ms,
                 ModelUsage.trace_id,
                 ModelUsage.cached_tokens,
-            ).join(ModelProvider, ModelProvider.id == ModelUsage.provider_id)
+            ).outerjoin(ModelProvider, ModelProvider.id == ModelUsage.provider_id)
         )
     ).all()
     role_totals: dict[str, dict] = defaultdict(lambda: {"calls": 0, "failed": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "latency_ms": 0})
@@ -51,7 +56,7 @@ async def observability_summary(db: DbSession) -> dict:
         bucket["completion_tokens"] += completion or 0
         bucket["cached_tokens"] += cached or 0
         bucket["latency_ms"] += latency or 0
-        model_bucket = model_totals[f"{provider}/{model}"]
+        model_bucket = model_totals[f"{provider or PROVIDER_GONE}/{model}"]
         model_bucket["calls"] += 1
         model_bucket["failed"] += status != "ok"
         model_bucket["prompt_tokens"] += prompt or 0

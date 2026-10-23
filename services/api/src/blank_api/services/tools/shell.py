@@ -162,12 +162,19 @@ async def execute_command(
             "timed_out": result.timed_out,
             "sandbox": result.backend,
             "notes": list(result.notes),
+            # 这一次执行实际被什么强制（Job 限额 / 边界强度）。界面读它，不读 notes。
+            "enforcement": getattr(result, "enforcement", {}) or {},
             "timeout_budget": budget,
         }
     result = await run_process(command, root, budget, shell=shell, env=env)
     result["sandbox"] = None
     result["notes"] = []
     result["timeout_budget"] = budget
+    from blank_api.services.sandbox.runner import limits_not_applied
+
+    # 关档也得有一本账：不写这一行，界面就只能拿 policy 的配置值当生效值展示。
+    result["enforcement"] = limits_not_applied(
+        "沙箱开关为关：这条命令直接跑在宿主进程上，policy 里的限额没有对它生效")
     return result
 
 
@@ -229,6 +236,7 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
                 "timed_out": True,
                 "sandbox": result["sandbox"],
                 "isolation": result["sandbox"] or "local",
+                "enforcement": result["enforcement"],
             },
         )
     combined = stdout if not stderr else f"{stdout}\n[stderr]\n{stderr}".strip()
@@ -248,6 +256,8 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
                 "command": command,
                 "sandbox": result["sandbox"],
                 "isolation": result["sandbox"] or "local",
+                # 限额被内核拒的时候走的正是这一支（非零退出码），账必须记在这里才看得见。
+                "enforcement": result["enforcement"],
                 **({"hint": "windows_cmd_syntax"} if hint else {}),
             },
         )
@@ -260,6 +270,7 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
         sandbox=result["sandbox"],
         isolation=result["sandbox"] or "local",
         isolation_notes=result["notes"],
+        enforcement=result["enforcement"],
     )
 
 

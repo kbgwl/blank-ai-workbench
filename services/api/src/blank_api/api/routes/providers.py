@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from blank_api.api.auth import require_token
 from blank_api.api.errors import ApiError
 from blank_api.deps import DbSession
-from blank_api.models.model_provider import PROVIDER_PRESETS, ModelProvider, ModelUsage
+from blank_api.models.model_provider import PROVIDER_PRESETS, PROVIDER_GONE, ModelProvider, ModelUsage
 from blank_api.schemas.model import ChatIn, ProviderCreate, ProviderOut, ProviderUpdate
 from blank_api.services.crypto import decrypt_secret, encrypt_secret, key_hint
 from blank_api.services.models.base import ChatMessage, ModelError
@@ -244,14 +244,19 @@ async def usage_summary(db: DbSession) -> dict:
                 ModelUsage.completion_tokens,
                 ModelUsage.latency_ms,
                 ModelUsage.cached_tokens,
-            ).join(ModelUsage, ModelUsage.provider_id == ModelProvider.id)
+            )
+            # 左连接而不是内连接：供应商行删掉以后它名下的钱还在账上（见 model_provider.py 的说明）。
+            # 这条路径是成本页与总览页的合计来源，内连接会让界面上直接少算。
+            .select_from(ModelUsage)
+            .outerjoin(ModelProvider, ModelProvider.id == ModelUsage.provider_id)
         )
     ).all()
     totals: dict[str, dict] = {}
     for name, model, status, prompt, completion, latency, cached in rows:
+        provider = name or PROVIDER_GONE
         bucket = totals.setdefault(
-            f"{name}/{model}",
-            {"provider": name, "model": model, "calls": 0, "failed": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "total_latency_ms": 0},
+            f"{provider}/{model}",
+            {"provider": provider, "model": model, "calls": 0, "failed": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "total_latency_ms": 0},
         )
         bucket["calls"] += 1
         bucket["failed"] += 1 if status != "ok" else 0
