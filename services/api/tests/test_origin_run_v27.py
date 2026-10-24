@@ -535,3 +535,86 @@ async def test_a_group_wide_field_is_not_a_round_field(env, workspace):  # noqa:
         {"round": round_tokens, "group": group_tokens}, ensure_ascii=False
     )
     assert fresh["round"]["usage"]["calls"] == state["round"]["usage"]["calls"], "没有发起轮的账不许冒充一轮"
+
+
+async def test_group_cumulative_counts_money_without_a_speaking_row(env, workspace):  # noqa: F811
+    """全群累计不能拿发言行当筛子：发起轮在群里、却没挂到任何消息的账也要进这一档。
+
+    旧实现是 `TeamMessage JOIN ModelUsage ON task_id`——只认"有发言行"的钱。这一笔
+    （task_id 不属于任何消息、origin 是本轮）在 `round.usage` 里算得出来，在全群累计里却被
+    inner join 悄悄吃掉，而且没有任何"未对应发言"档可以摆它，于是两个口径都说不清它去哪了。
+    """
+    install_team_model(env)
+    _, _, group_id = await make_group(env, workspace, members=("后端",))
+    await env.client.post(f"{API}/team/groups/{group_id}/messages", json={"content": "做一个登录页"})
+    state = await wait_round(env, group_id, ("completed",))
+    before = state["usage"]
+    provider_id = await _any_provider_id()
+
+    async with _factory()() as session:
+        session.add(
+            ModelUsage(
+                id="usage-group-ghost-1",
+                provider_id=provider_id,
+                task_id="task-without-any-message",
+                trace_id="thread-group-ghost",
+                node="subagent",
+                model="mock",
+                prompt_tokens=400,
+                completion_tokens=40,
+                origin_run_id=round_origin(state["round"]["id"]),
+            )
+        )
+        await session.commit()
+
+    after = await _round_state(env, group_id)
+    usage = after["usage"]
+    assert usage["tokens"] == before["tokens"] + 440, json.dumps(
+        {"before": before["tokens"], "after": usage["tokens"]}, ensure_ascii=False
+    )
+    assert usage["calls"] == before["calls"] + 1
+    assert usage["subagent_calls"] == before["subagent_calls"] + 1
+    ghost = next(item for item in usage["by_bot"] if item["bot_id"] == "")
+    assert ghost["bot_name"] == "未对应发言" and ghost["tokens"] == 440
+    assert ghost["calls"] == 1 and ghost["subagent_calls"] == 1, ghost
+    assert sum(item["tokens"] for item in usage["by_bot"]) == usage["tokens"]
+    assert sum(item["calls"] for item in usage["by_bot"]) == usage["calls"]
+    assert sum(item["subagent_calls"] for item in usage["by_bot"]) == usage["subagent_calls"]
+    assert after["usage_by_bot"] == usage["by_bot"], "兼容字段必须与账本合计同源，不许另算一遍"
+
+
+async def test_group_cumulative_counts_a_row_matching_both_keys_once(env, workspace):  # noqa: F811
+    """既挂在成员任务上、又带着本轮 origin 的账只能加一次。
+
+    两个来源（task_id 属于群内消息 / origin_run_id 属于群内轮次）取并集；不去重的话，
+    每一笔正常的发言账都会命中两次，全群合计凭空翻倍。
+    """
+    install_team_model(env)
+    _, _, group_id = await make_group(env, workspace, members=("后端",))
+    await env.client.post(f"{API}/team/groups/{group_id}/messages", json={"content": "做一个登录页"})
+    state = await wait_round(env, group_id, ("completed",))
+    member_task = next(row["task_id"] for row in messages_of(state, "bot") if row["task_id"])
+    before = state["usage"]
+    provider_id = await _any_provider_id()
+
+    async with _factory()() as session:
+        session.add(
+            ModelUsage(
+                id="usage-both-keys-1",
+                provider_id=provider_id,
+                task_id=member_task,
+                trace_id="thread-both-keys",
+                node="execute_action",
+                model="mock",
+                prompt_tokens=700,
+                completion_tokens=70,
+                origin_run_id=round_origin(state["round"]["id"]),
+            )
+        )
+        await session.commit()
+
+    usage = (await _round_state(env, group_id))["usage"]
+    assert usage["tokens"] == before["tokens"] + 770, json.dumps(
+        {"before": before["tokens"], "after": usage["tokens"]}, ensure_ascii=False
+    )
+    assert usage["calls"] == before["calls"] + 1

@@ -1225,6 +1225,79 @@ async def _round_ledger_usage(session: AsyncSession, round_id: str) -> dict:
     }
 
 
+def _chunked(items: list[str], size: int = 500):
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+async def _group_ledger_usage(session: AsyncSession, group_id: str) -> dict:
+    """全群累计：账本行只要挂在这个群的发言任务上、或发起轮属于这个群的某一轮，就计入。
+
+    旧写法是 `TeamMessage JOIN ModelUsage ON task_id`：inner join 只认"有发言行"的钱。
+    一笔发起轮在本群、task_id 却没挂到任何消息上的账（比如中途失败后没写成消息的那次调用）
+    会被静默丢掉，而 `usage_by_bot` 又没有"未对应发言"档可以摆它。
+    这里两个来源取并集、按 usage.id 去重；对不上发言的归"未对应发言"，
+    于是 `Σ by_bot == tokens` 是构造出来的，不是巧合。
+    """
+    messages = (
+        await session.execute(
+            select(TeamMessage.task_id, TeamMessage.bot_id, TeamMessage.bot_name).where(
+                TeamMessage.group_id == group_id, TeamMessage.task_id.isnot(None)
+            )
+        )
+    ).all()
+    bot_by_task = {
+        task_id: (bot_id or "", bot_name) for task_id, bot_id, bot_name in messages
+    }
+    round_ids = (
+        await session.execute(select(TeamRound.id).where(TeamRound.group_id == group_id))
+    ).scalars().all()
+    origins = [round_origin(round_id) for round_id in round_ids]
+
+    columns = (
+        ModelUsage.id,
+        ModelUsage.task_id,
+        ModelUsage.run_id,
+        ModelUsage.node,
+        ModelUsage.prompt_tokens,
+        ModelUsage.completion_tokens,
+    )
+    # 同一笔账可能两个来源都命中（正常的发言账就是这样），按 id 去重，不许加两次。
+    found: dict[str, tuple] = {}
+
+    async def collect(condition) -> None:
+        rows = (await session.execute(select(*columns).where(condition))).all()
+        for row in rows:
+            found.setdefault(row[0], row[1:])
+
+    for chunk in _chunked(list(bot_by_task)):
+        await collect(ModelUsage.task_id.in_(chunk))
+    for chunk in _chunked(origins):
+        await collect(ModelUsage.origin_run_id.in_(chunk))
+
+    per_bot: dict[str, dict] = {}
+    for task_id, _run_id, node, prompt_tokens, completion_tokens in found.values():
+        bot_id, bot_name = bot_by_task.get(task_id or "", ("", "未对应发言"))
+        entry = per_bot.setdefault(
+            bot_id or f"__{bot_name}",
+            {"bot_id": bot_id, "bot_name": bot_name, "tokens": 0, "calls": 0, "subagent_calls": 0},
+        )
+        entry["tokens"] += int(prompt_tokens or 0) + int(completion_tokens or 0)
+        entry["calls"] += 1
+        if str(node or "") == "subagent":
+            entry["subagent_calls"] += 1
+    by_bot = sorted(per_bot.values(), key=lambda item: (-item["tokens"], item["bot_name"]))
+    ledger = list(found.values())
+    return {
+        "tokens": sum(int(p or 0) + int(c or 0) for _t, _r, _n, p, c in ledger),
+        "calls": len(ledger),
+        "tasks": len({row[0] for row in ledger if row[0]}),
+        "runs": len({row[1] for row in ledger if row[1]}),
+        "subagent_calls": sum(1 for row in ledger if str(row[2] or "") == "subagent"),
+        "by_bot": by_bot,
+    }
+
+
 async def group_state(group_id: str, after_id: int = 0, around_id: int = 0) -> dict:
     """一次轮询要的全部东西：群、成员、当前轮、增量消息、待审批与用量。"""
     factory = get_session_factory()
@@ -1342,24 +1415,10 @@ async def group_state(group_id: str, after_id: int = 0, around_id: int = 0) -> d
         messages = await _messages_payload(rows)
         waiting = [row for row in rows if row.status == "waiting_approval" and row.task_id]
 
-        # 全群累计（跨所有轮）的每人花费：join 只按 group_id 分组，不按轮筛。
-        # 问"这一轮"要用 round.usage——单轮群里两者相等，所以拿单轮群验不出这里的口径。
-        usage_rows = (
-            await session.execute(
-                select(
-                    TeamMessage.bot_id,
-                    TeamMessage.bot_name,
-                    func.coalesce(func.sum(ModelUsage.prompt_tokens + ModelUsage.completion_tokens), 0),
-                )
-                .join(ModelUsage, ModelUsage.task_id == TeamMessage.task_id)
-                .where(TeamMessage.group_id == group_id, TeamMessage.bot_id.isnot(None))
-                .group_by(TeamMessage.bot_id, TeamMessage.bot_name)
-            )
-        ).all()
-        usage_by_bot = [
-            {"bot_id": bot_id or "", "bot_name": name or "", "tokens": int(tokens or 0)}
-            for bot_id, name, tokens in usage_rows
-        ]
+        # 全群累计（跨所有轮）：两个来源取并集（挂在本群发言任务上 / 发起轮属于本群某一轮），
+        # 再按 usage.id 去重。问"这一轮"要用 round.usage——单轮群里两者相等，
+        # 所以拿单轮群验不出这里的口径；两个数各说各的，不许互相冒充。
+        usage = await _group_ledger_usage(session, group_id)
         summary = await group_summary(session, group)
 
     pending: list[dict] = []
@@ -1391,7 +1450,8 @@ async def group_state(group_id: str, after_id: int = 0, around_id: int = 0) -> d
         "round": round_payload,
         "messages": messages,
         "pending": pending,
-        "usage_by_bot": usage_by_bot,
+        "usage": usage,
+        "usage_by_bot": usage["by_bot"],
     }
 
 

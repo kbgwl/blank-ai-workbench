@@ -75,6 +75,8 @@ export type RoundLedgerUsage = {
   by_bot: { bot_id: string; bot_name: string; tokens: number; calls: number; subagent_calls: number }[];
 };
 
+export type GroupLedgerUsage = Omit<RoundLedgerUsage, "origin_run_id">;
+
 export type TeamRound = {
   id: string;
   group_id: string;
@@ -161,7 +163,9 @@ export type TeamGroupState = {
   round: TeamRound | null;
   messages: TeamMessage[];
   pending: PendingTurn[];
-  usage_by_bot: { bot_id: string; bot_name: string; tokens: number }[];
+  // 全群累计（跨所有轮）的账本口径：连没有发言行的钱也算，与 round.usage 各说各的。
+  usage: GroupLedgerUsage;
+  usage_by_bot: GroupLedgerUsage["by_bot"];
 };
 
 export type ChatSearchHit = {
