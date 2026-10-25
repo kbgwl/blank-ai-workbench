@@ -60,6 +60,34 @@ async def db_retry(
     raise last
 
 
+# PyMySQL 的上界（与 pyproject 的 mysql extra 同源；tests/test_mysql_driver_expiry_v81.py 钉两者一致）。
+# aiomysql 0.3.2 在模块顶层 import pymysql.converters.escape_bytes_prefixed，而 PyMySQL 1.3
+# 计划删掉这个别名（1.2.x 已经把它换成哨兵字符串）。上界一旦放宽，坏的是 aiomysql 的 import 本身。
+PYMYSQL_UPPER_BOUND = "1.3"
+
+
+def pymysql_release_version() -> str | None:
+    """PyMySQL 的**发行**版本号；拿不到就返回 None，绝不拿别处的号冒充。
+
+    不能读 ``pymysql.__version__``：1.2.3 把它硬写成 ``"2.2.8"``（为了通过 Django 的
+    mysqlclient 版本检查），真实发行号在发行元数据与 ``VERSION_STRING`` 里。
+    按 ``__version__`` 判 `<1.3` 这条上界，会把没到期的环境读成已过期。
+    """
+    from importlib import metadata
+
+    try:
+        return metadata.version("PyMySQL")
+    except metadata.PackageNotFoundError:
+        pass
+    try:
+        import pymysql
+
+        # 有模块没元数据（源码直装）：VERSION_STRING 才是发行号
+        return str(getattr(pymysql, "VERSION_STRING", "")).strip() or None
+    except ImportError:
+        return None
+
+
 def ensure_mysql_driver_compat(database_url: str) -> bool:
     """让 aiomysql 0.3.2 在 PyMySQL ≥1.2 上还能绑 bytes 参数；只有真用到该驱动时才动。
 
@@ -74,7 +102,18 @@ def ensure_mysql_driver_compat(database_url: str) -> bool:
     """
     if not database_url.startswith("mysql+aiomysql"):
         return False
-    import aiomysql.connection
+    try:
+        import aiomysql.connection
+    except ImportError as error:
+        # 1.3.0 真删掉那个别名时坏在这里：aiomysql 的模块顶层 import 就过不去，
+        # 下面那身猴子补丁根本来不及跑。所以这一步只能换驱动或等上游修引用，
+        # 把异常原样抛出去只会留下一句 cannot import name，没人知道该动哪里。
+        raise ImportError(
+            "aiomysql 装不起来：它 import 的 pymysql.converters.escape_bytes_prefixed 已被上游删除"
+            f"（当前 PyMySQL 发行版 {pymysql_release_version() or '未知'}，"
+            f"本项目声明的上界是 <{PYMYSQL_UPPER_BOUND}）。"
+            "这不是能靠放宽上界解决的事——换驱动（如 asyncmy）或等 aiomysql 修引用。"
+        ) from error
     from pymysql import converters
 
     if callable(getattr(aiomysql.connection, "escape_bytes_prefixed", None)):

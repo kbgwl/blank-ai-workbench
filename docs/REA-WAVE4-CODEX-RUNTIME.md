@@ -3944,6 +3944,70 @@ U1 也少一条（新加的跨运行用例一起红了）；全部按实测写�
 5. 逐条授权列表按 `RollupList` 折叠展示，超过一屏时靠展开看；没有做「按路径搜索」——
    真机上 ACE 条数多时读起来仍要人滚。
 
+## 7.42 任务 #81：`pymysql<1.3` 这条买来的时间量了一遍——到期那天坏在哪一行
+
+**这条上界是 §7.18/#50 那批写下的**（`services/api/pyproject.toml` 的 `mysql` extra：
+`aiomysql>=0.3.2,<0.4`、`pymysql>=1.2,<1.3`）。当时的说法是「PyMySQL 1.3 计划删除
+`escape_bytes_prefixed`，届时会直接 ImportError」，**这句是从上游 issue 读来的，不是量出来的**。
+这一批把它量成实物，并回答「到期到底坏在哪」。
+
+**先量上界到没到期**（PyPI JSON，2026-10-25 实测）：`PyMySQL` 最新发布 **1.2.3**（本机装的正是它，
+`importlib.metadata.version` 与 `VERSION_STRING` 一致）、`aiomysql` 最新发布 **0.3.2**——
+上游既没删别名，也没有修好引用的新版本。所以这条上界**仍在有效期内**，不需要裁决换驱动；
+但它买来的是多久的时间，以前没人能答。
+
+**到期那天坏在哪一行**：`aiomysql/connection.py:20` 是**模块顶层**的
+`from pymysql.converters import (escape_item, encoders, decoders, escape_string, escape_bytes_prefixed, through)`。
+装置是干净子进程里 `del pymysql.converters.escape_bytes_prefixed` 之后，再走一遍
+`ensure_mysql_driver_compat("mysql+aiomysql://…")`（实测前先跑同一脚本的**对照格**：不删别名时必须打印 `OK`）。
+量出来的形状：
+
+- 坏在 **import 那一刻**，异常是 `ImportError: cannot import name 'escape_bytes_prefixed' …`；
+  **猴子补丁来不及跑**——`ensure_mysql_driver_compat()` 那身补丁要在 aiomysql 已经导入成功之后才有机会执行。
+  这一句才是「只能换驱动或等上游修引用」的实测依据；以前它只是我的推理。
+- 因此 `db.py` 里把那圈裸 import 包起来，重新抛出**点名的** ImportError：带当前 PyMySQL 发行号、
+  带在册上界 `1.3`、带出路（换驱动或等 aiomysql 修引用），并保留 `__cause__`。
+  裸抛只会留一句 `cannot import name`，没人知道该动哪里。
+
+**顺带挖出一条读数坑（这批最值钱的部分）**：PyMySQL 1.2.3 把 `pymysql.__version__` **硬写成 `"2.2.8"`**
+（`pymysql/__init__.py:58`，`VERSION_STRING = "1.2.3"` 才是真号），目的是通过 Django 的
+mysqlclient 版本检查。按 `__version__` 判 `<1.3`，会把**没到期的环境读成已过期**（2.2.8 ≥ 1.3）。
+交叉印证：SQLAlchemy 的 pymysql 方言撞过同一件事，`retrieve_dbapi_version()` 只读 `VERSION_STRING`，
+注释里原样写着「`__version__` … e.g. "2.2.8" for a pymysql that is itself version 1.2.0」。
+新增 `db.pymysql_release_version()` 与上游同一口径：只读发行元数据，退一步读 `VERSION_STRING`，
+两个都拿不到就返回 `None`——**不拿别的号冒充**。
+
+**落点**：`services/api/src/blank_api/db.py`（上界常量 + 版本读法 + 点名 ImportError）、
+`tests/test_mysql_driver_expiry_v81.py` 4 条（E4 上界在册且与常量同源、E1 发行号来自元数据且未到期、
+E2 假号分歧哨兵、E3 到期形状真造出来）、`pyproject.toml` 注释改成实测口径。
+E2 是一条**有退役条件的哨兵**：它断言的不是字面 `"2.2.8"`，而是「假号会越过上界、发行号不会」；
+哪天上游撤了伪装，它会红并告诉你「退役这条、E1 的元数据口径不要动」。
+
+**证据**：新用例 4/4；与旧兼容文件同跑 **7 passed rc=0**（`E:/tmp/m81/compat-2.log`）；
+后端全量 **1129 passed / 23 skipped**，第一次 354.86s rc=0（`regression-81.log`）、
+最终字节复跑 349.66s rc=0（`regression-81b.log`）= 上一批基线 1125 + 本批 4，计数自洽。
+变异电池 `E:/tmp/m81/battery.py` 7 条靶：先 `--probe` 取实测红集合（`battery-probe-2.log`），
+再按实测逐字钉进 `EXPECTED` 跑判定轮（`battery-run1.log`）**7/7 `[ALL-OK]` rc=0**；
+基线自检看的是「`4 passed` 且 rc=0」而不是「红集合为空」——用例没被收集时也是 rc=0、红集合也是空的。
+改完注释与 `@needs_pymysql` 装饰器后，在**最终字节**上复跑一轮判定轮（`battery-run3.log`）仍是 7/7 `[ALL-OK]` rc=0。
+M6（放宽对照格断言）**实测红集合为空**，按机制登记为**等价变异**：对照格只在「对照本身会坏」的环境里承重，
+本机驱动装得上、探针两次都真跑，所以它没有可观察后果；这条靶留在表里是为了换机器时它才有猎物。
+E1/E2/E3 带 `@needs_pymysql`：没装 `mysql` extra 的环境（CI 只跑 SQLite）会**点名跳过**并写清缺谁，
+不会报成错误，也不许静默恒通过。
+
+**诚实的缺口**
+
+1. **没有真的 PyMySQL 1.3 可装**（PyPI 上不存在），到期形状是「干净解释器里真删那个名字」造出来的模拟。
+   忠实之处：坏的那一行就是 aiomysql 模块顶层那句 import，删除动作打在同一个模块对象上；
+   不忠实之处：真 1.3.0 也许还会顺带删别的（我们只验了这一个名字），pip/uv 的解析行为也没重新走一遍。
+   真装上那天要重量的清单写进 `pyproject.toml` 注释了。
+2. **没在真 MySQL 上复跑到期形状**：这条判定是纯 import 期的，不需要数据库；
+   但「换驱动（asyncmy）之后 bytes 转义对不对」是另一件事，本批没测、也没装 asyncmy。
+3. `PYMYSQL_UPPER_BOUND` 只与 `pyproject` 的声明对账（E4），**不与 `uv.lock` 对账**——
+   锁文件里的实际解析结果本批没读（`uv` 不在本机 venv 里，见工具链记忆）。
+4. 上界到期这件事本身**不进 CI 的告警面**：CI 只跑 SQLite（`mysql` extra 没装），
+   E1/E3 在有驱动的开发机上才是活的，CI 上会走 skip/不适用；哪天 CI 补上 MySQL job，这三条判定才真跑。
+
 ## 9. 复现命令
 
 ```bash
@@ -4086,6 +4150,14 @@ cd web && E:/env/node/node-v24.20.0-win-x64/node.exe --import ./test-bootstrap.m
 cd web && REAL_ONLY=1 E:/env/node/node-v24.20.0-win-x64/node.exe --import ./test-bootstrap.mjs E:/tmp/m80/ui-verify.mjs         # 反证：不经替身直通 :8061，38/38 rc=0（ui-verify-real-1.log）
 cd web && E:/env/node/node-v24.20.0-win-x64/node.exe E:/tmp/m80/ui-mutate.mjs                                                 # 渲染变异 8/8 打红（ui-mutate-2.log）；两条 suite 基线先各绿、逐字节还原
 ```
+
+# 驱动上界到期这一批（#81）：先探实测红集合，再按实测钉期望
+cd services/api && .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_mysql_driver_expiry_v81.py tests/test_mysql_driver_compat_v31.py   # 7 passed（E1–E4 + 旧兼容三条）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m81/battery.py --probe                                                                 # 探针轮：打出 7 条靶各自的实测红集合（battery-probe-2.log）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m81/battery.py                                                                         # 判定轮：7/7 按实测命中、M6 登记等价、[ALL-OK] rc=0（battery-run1.log）
+.venv/Scripts/python.exe -X utf8 -m pytest -q                                                                                  # 全量 1129 passed / 23 skipped, rc=0（regression-81.log）
+# 上界到没到期问 PyPI 本身（不需要装任何东西）：
+.venv/Scripts/python.exe -X utf8 -c "import json,urllib.request as u; [print(p, json.load(u.urlopen('https://pypi.org/pypi/%s/json'%p))['info']['version']) for p in ('PyMySQL','aiomysql')]"
 **电池期间源码归电池独占**：上面两条 `ui-verify*.mjs` 不许与 `ui-mutate.mjs` 并行——
 本批实际并行过一次，那份没有汇总行的日志改名成 `ui-verify-5.ABANDONED-contaminated-by-mutate.log` 留档、不作数（见 §7.41）。
 

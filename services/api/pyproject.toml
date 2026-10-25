@@ -24,6 +24,11 @@ dependencies = [
 # 上界写死在 1.3.0 之前：PyMySQL 1.3 计划删除 `escape_bytes_prefixed` 这个别名，
 # aiomysql 0.3.2 还在 import 它，届时会直接 ImportError（1.2.x 由
 # blank_api.db.ensure_mysql_driver_compat() 兜住，见 db.py 的说明）。
+# 2026-10-25 实测（#81）：PyPI 上 PyMySQL 仍只到 1.2.3、aiomysql 仍只到 0.3.2，上界没到期；
+# 到期那天坏的是 aiomysql 模块顶层那句 import（干净解释器里真删别名量出来的），
+# 猴子补丁来不及跑——所以只能换驱动或等上游修引用，放宽这条上界不是解法。
+# 判定与复现在 tests/test_mysql_driver_expiry_v81.py；注意 PyMySQL 的 `__version__` 是
+# 给 Django 看的假号（1.2.3 报 "2.2.8"），判上界一律读发行元数据 / VERSION_STRING。
 mysql = ["aiomysql>=0.3.2,<0.4", "pymysql>=1.2,<1.3"]
 
 [dependency-groups]
