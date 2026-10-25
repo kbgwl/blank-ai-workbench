@@ -690,6 +690,8 @@ class TeamOrchestrator:
             acceptance_criteria=(),
             max_steps=max(1, int(ctx.bot.max_steps or 8)),
             permission_mode=ctx.bot.permission_mode or MODE_DEFAULT,
+            # 成员任务逐字继承群档位：群是成员任务的父级边界，子级没有"自己挑一档"的入口。
+            sandbox_tier=str(ctx.group.sandbox_tier or ""),
             system_instructions=system_instructions,
             thread_ref=ctx.thread.id,
             supports_vision=bool(ctx.provider.supports_vision),
@@ -1142,6 +1144,7 @@ async def group_summary(session: AsyncSession, group: TeamGroup) -> dict:
         "admin_bot_id": group.admin_bot_id or "",
         "max_speakers": int(group.max_speakers or 5),
         "token_budget": int(group.token_budget or 0),
+        "sandbox_tier": str(group.sandbox_tier or ""),
         "member_count": member_count,
         "last_message": preview,
         "round_status": round_row.status if round_row is not None else "",

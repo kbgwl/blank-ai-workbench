@@ -12,13 +12,17 @@ class AgentCheckpoint(Base):
     __tablename__ = "agent_checkpoints"
 
     thread_id: Mapped[str] = mapped_column(String(120), primary_key=True)
-    checkpoint_ns: Mapped[str] = mapped_column(String(120), primary_key=True, default="")
+    checkpoint_ns: Mapped[str] = mapped_column(
+        String(120), primary_key=True, default="", server_default=""
+    )
     checkpoint_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     task_id: Mapped[str] = mapped_column(
         ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True
     )
     parent_checkpoint_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    serde_type: Mapped[str] = mapped_column(String(40), nullable=False, default="msgpack")
+    serde_type: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="msgpack", server_default="msgpack"
+    )
     checkpoint: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -28,12 +32,18 @@ class AgentCheckpointWrite(Base):
     __tablename__ = "agent_checkpoint_writes"
 
     thread_id: Mapped[str] = mapped_column(String(120), primary_key=True)
-    checkpoint_ns: Mapped[str] = mapped_column(String(120), primary_key=True, default="")
+    checkpoint_ns: Mapped[str] = mapped_column(
+        String(120), primary_key=True, default="", server_default=""
+    )
     checkpoint_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     write_task_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     idx: Mapped[int] = mapped_column(Integer, primary_key=True)
-    task_path: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    task_path: Mapped[str] = mapped_column(
+        String(200), nullable=False, default="", server_default=""
+    )
     channel: Mapped[str] = mapped_column(String(120), nullable=False)
-    serde_type: Mapped[str] = mapped_column(String(40), nullable=False, default="msgpack")
+    serde_type: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="msgpack", server_default="msgpack"
+    )
     value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

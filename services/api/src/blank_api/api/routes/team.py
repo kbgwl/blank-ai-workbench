@@ -31,6 +31,7 @@ from blank_api.schemas.team import (
 )
 from blank_api.services.agent.evidence import approval_is_expired, build_evidence
 from blank_api.services.chat_index import delete_group_docs, search_chat
+from blank_api.services.sandbox.tiers import normalize_tier, resolve_tier
 from blank_api.services.team import (
     ADMIN_NAME,
     MAX_BOTS,
@@ -322,6 +323,16 @@ async def create_group(payload: TeamGroupIn, db: DbSession) -> dict:
     if project is None:
         raise ApiError(code="project_not_found", message="项目不存在", status_code=404)
     admin = await ensure_admin(db)
+    # 群档位在这里解析一次：不可用就拒绝建群，而不是让成员任务跑到一半才发现。
+    tier = normalize_tier(payload.sandbox_tier, strict=True) if payload.sandbox_tier else ""
+    if tier:
+        resolution = resolve_tier(tier, strict=True)
+        if not resolution.available:
+            raise ApiError(
+                code="sandbox_tier_unavailable",
+                message=resolution.notice,
+                status_code=409,
+            )
     group = TeamGroup(
         id=uuid.uuid4().hex,
         project_id=payload.project_id,
@@ -330,6 +341,7 @@ async def create_group(payload: TeamGroupIn, db: DbSession) -> dict:
         admin_bot_id=admin.id,
         max_speakers=payload.max_speakers,
         token_budget=payload.token_budget,
+        sandbox_tier=tier,
     )
     db.add(group)
     await db.flush()

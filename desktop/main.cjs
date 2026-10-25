@@ -16,6 +16,7 @@ const { spawn } = require("node:child_process");
 const path = require("node:path");
 const process = require("node:process");
 const { readAttempts, shouldDowngrade, startingState, readyState } = require("./gpu-guard.cjs");
+const { resolveApiBase } = require("./api-base.cjs");
 
 /**
  * 主进程日志落文件。
@@ -44,8 +45,10 @@ if (LOG_FILE) {
   console.error = tee("error");
 }
 
-const PORT = process.env.BLANK_BACKEND_PORT ?? "8000";
-const HEALTH_URL = process.env.BLANK_BACKEND_HEALTH ?? `http://127.0.0.1:${PORT}/api/v1/health`;
+const PORT = String(process.env.BLANK_BACKEND_PORT ?? "").trim() || "8000";
+// preload 把这个值注入渲染进程；前端构建时烘焙的 NEXT_PUBLIC_API_BASE 只是兜底。
+const API_BASE = resolveApiBase(process.env);
+const HEALTH_URL = process.env.BLANK_BACKEND_HEALTH ?? `${API_BASE}/api/v1/health`;
 const APP_ORIGIN = "app://bundle";
 
 /** 打包后静态站随 extraResources 落到 resources/web；开发态直接读 web/out。 */
@@ -384,6 +387,14 @@ function stopBackend() {
  * 界面上只能显示一串路径，点开才是他熟悉的那个窗口。先 existsSync 再打开，
  * 是因为 shell.openPath 对不存在的路径只会返回一句英文错误，用户看不懂。
  */
+/**
+ * 渲染进程在 sandbox 里读不到主进程的环境变量，后端地址只能由 preload 同步取一次。
+ * 同步是刻意的：`http.ts` 在模块加载时就要拿到基址，异步注入会让首屏请求落回烘焙值。
+ */
+ipcMain.on("blank:api-base", (event) => {
+  event.returnValue = API_BASE;
+});
+
 ipcMain.handle("blank:open-path", async (_event, payload) => {
   const target = typeof payload?.path === "string" ? payload.path.trim() : "";
   if (!target) return { ok: false, reason: "路径为空" };
@@ -501,7 +512,7 @@ async function waitForContent(win, timeoutMs = 20000) {
 /** 自检用：BLANK_PROBE=1 时从渲染进程直连一次后端，把结果打进日志（排查跨源问题）。 */
 async function probeBackendFromRenderer(win) {
   if (process.env.BLANK_PROBE !== "1") return;
-  const base = process.env.NEXT_PUBLIC_API_BASE ?? `http://127.0.0.1:${PORT}`;
+  const base = API_BASE;
   const result = await win.webContents
     .executeJavaScript(
       `fetch(${JSON.stringify(`${base}/api/v1/health`)})

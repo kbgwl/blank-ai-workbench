@@ -66,6 +66,7 @@ class EventRecorder:
                             id=event_id,
                             task_id=self.task_id,
                             run_id=self.run_id,
+                            origin_run_id=self.origin_run_id,
                             step_id=event_id,
                             parent_event_id=previous.id if previous is not None else "",
                             seq=seq,

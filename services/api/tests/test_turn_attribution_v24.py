@@ -59,6 +59,8 @@ ATTRIBUTION_KEYS = {
     "agent_path",
     "depth",
     "parallel_group",
+    # M3 起多了 sandbox_mode：这一笔账当时按哪一档边界跑（空串=上线前的老行）。
+    "sandbox_mode",
 }
 
 
@@ -401,9 +403,11 @@ async def test_evidence_pack_exposes_turns_branches_and_honest_gap(seeded, tmp_p
     assert usage["turns"][0]["total_tokens"] == usage["total_tokens"], (
         "按轮合计与任务总量必须相等：不等就是有一头算漏了"
     )
+    assert usage["turns"][0]["kind"] == "run"
     assert usage["branches"][0]["trace_id"] == ROOT_THREAD
     assert set(usage["turns"][0]) == {
         "run_id",
+        "kind",
         "threads",
         "subagent_calls",
         "calls",

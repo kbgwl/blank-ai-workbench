@@ -191,6 +191,39 @@ def test_the_mysql_connection_string_is_parsed_and_bounded() -> None:
             device._split_mysql_url(bad)
 
 
+def test_the_postgres_connection_string_is_parsed_and_bounded() -> None:
+    """第三格同样要把库名当标识符用；MySQL 的 URL 不能混进来，口令也不许回显。"""
+    shown, host, port, user, password, database = device._split_postgres_url(
+        "postgresql+asyncpg://pg60:Kbgai60Passw0rd@127.0.0.1:55432/kbgai_e2e"
+    )
+    assert (host, port, user, password, database) == ("127.0.0.1", 55432, "pg60", "Kbgai60Passw0rd",
+                                                      "kbgai_e2e")
+    assert "Kbgai60Passw0rd" not in shown
+
+    for bad in (
+        "",
+        "mysql+aiomysql://root@127.0.0.1:3307/kbgai_e2e",       # 方言不对
+        "postgresql+asyncpg://postgres@127.0.0.1:5432/not!a!db",
+        "postgresql+asyncpg://postgres@127.0.0.1:5432/db;drop--",
+    ):
+        with pytest.raises(device.PostgresMissing):
+            device._split_postgres_url(bad)
+
+
+def test_the_verdict_names_the_postgres_cell() -> None:
+    """加了第三格以后，归属必须点到 PostgreSQL 头上，不能还写着 MySQL。"""
+    rc, lines = device.verdict({"sqlite": {"19": "PASS"}, "postgres": {"19": "FAIL"}})
+    assert rc == 1 and any("只有 PostgreSQL 红" in x for x in lines), lines
+    # 两个被测格一起红时，不许各说一句"只有 X 红"——那是两句假话。
+    rc, lines = device.verdict({"sqlite": {"19": "PASS"}, "mysql": {"20": "FAIL"},
+                                "postgres": {"20": "FAIL"}})
+    assert rc == 1 and any("非对照格" in x for x in lines), lines
+    assert not any("只有 MySQL 红" in x or "只有 PostgreSQL 红" in x for x in lines), lines
+    rc, lines = device.verdict({"sqlite": {"19": "PASS"}, "mysql": {"19": "PASS"},
+                                "postgres": {"19": "PASS"}})
+    assert rc == 0 and any("判据成立" in x for x in lines), lines
+
+
 def test_the_verdict_fails_loudly_when_any_cell_is_red() -> None:
     """红了该算谁的：判据要求**每格都绿**，任何一格红都不许把退出码交回 0。
 

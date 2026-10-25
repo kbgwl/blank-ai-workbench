@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -44,6 +45,26 @@ def _usage_totals(rows) -> dict:
     }
 
 
+_ATTEMPT_RUN_ID = re.compile(r"^task:[^:\s]+:attempt:\d+$")
+
+
+def run_id_kind(run_id: object) -> str:
+    """给 `run_id` 定形状：空串 / 群轮 / 同步入口的 attempt 键 / 普通运行。
+
+    账本里实测四种形状共存：空串（回合归属上线前）、``team-<轮>-<消息>``（群聊发言）、
+    ``task:<uuid>:attempt:N``（同步入口兜底）、``agent_runs.id``（排队入口）。
+    这里只做**读侧命名**，不改任何存量值——空串仍然是"当时没记"，不是第 0 轮。
+    """
+    value = str(run_id or "")
+    if not value:
+        return "unrecorded"
+    if value.startswith("team-"):
+        return "team"
+    if _ATTEMPT_RUN_ID.match(value):
+        return "attempt"
+    return "run"
+
+
 def turn_rollup(rows) -> list[dict]:
     """按轮（run_id）把账本行合起来 —— "这一轮花了多少"就是这张表。
 
@@ -59,6 +80,7 @@ def turn_rollup(rows) -> list[dict]:
     return [
         {
             "run_id": run_id,
+            "kind": run_id_kind(run_id),
             "threads": len({row.trace_id for row in group if row.trace_id}),
             "subagent_calls": sum(1 for row in group if str(getattr(row, "node", "") or "") == "subagent"),
             **_usage_totals(group),
@@ -89,6 +111,35 @@ def branch_rollup(rows) -> list[dict]:
             **_usage_totals(group),
         }
         for trace_id, group in sorted(grouped.items())
+    ]
+
+
+def origin_rollup(rows) -> list[dict]:
+    """按发起轮（origin_run_id）把账本行合起来 —— 跨成员任务的一整轮花销就是这张表。
+
+    与 `turns` 的区别：一轮团队里有几个成员、几个 Task、几条 run，`turns` 会给出好几行；
+    `origins` 把同一轮引起的全部钱收成一行。团队之外（顶层运行）发起轮就是 run 本身，
+    两张表恰好同形——这不是巧合，是"发起轮=引起这棵树的那一轮"的定义。
+
+    `origin_run_id` 为空的行**不进这里**：那是这一列上线前落下的账，并成"第 0 轮"
+    等于替它编了一个归属。有多少条由 `usage.origin_unattributed_calls` 单独说。
+    """
+    grouped: dict[str, list] = {}
+    for row in rows:
+        origin = str(getattr(row, "origin_run_id", "") or "")
+        if not origin:
+            continue
+        grouped.setdefault(origin, []).append(row)
+    return [
+        {
+            "origin_run_id": origin,
+            "run_ids": sorted({str(row.run_id) for row in group if row.run_id}),
+            "threads": len({row.trace_id for row in group if row.trace_id}),
+            "tasks": len({str(row.task_id) for row in group if row.task_id}),
+            "subagent_calls": sum(1 for row in group if str(getattr(row, "node", "") or "") == "subagent"),
+            **_usage_totals(group),
+        }
+        for origin, group in sorted(grouped.items())
     ]
 
 
@@ -153,6 +204,74 @@ def window_turn_rollup(items) -> list[dict]:
         if isinstance(held, int) and held > entry["max_windows_held"]:
             entry["max_windows_held"] = held
     return [grouped[run_id] for run_id in sorted(grouped)]
+
+
+def boundary_report(events: list[AgentEvent], started: dict) -> dict[str, Any]:
+    """一次任务到底有哪些动作落在边界内、哪些在边界外。
+
+    `boundary_kind` 是 M3 起每个 `tool.completed` 都带的字段。老任务没有这个键，
+    它们的调用落进 `unattributed` —— 不猜成 `in_process`，也不从工具名反推：
+    「当时没记」和「记了是进程内」是两件事。
+    """
+    counts = {"blocked": 0, "mcp_host_process": 0, "process": 0, "in_process": 0, "unattributed": 0}
+    modes: set[str] = set()
+    mcp_calls = 0
+    profile: dict[str, Any] = {}
+    for event in events:
+        if event.type == "turn.context" and isinstance(event.payload, dict):
+            # 取最后一条治理快照的逐条授权：中途改过「仅限工作区」或换过档位，
+            # 末次就是任务结束时生效的那一份。老任务没有这一列。
+            item = event.payload.get("permission_profile")
+            if isinstance(item, dict) and item:
+                profile = item
+            continue
+        if event.type != "tool.completed" or not isinstance(event.payload, dict):
+            continue
+        kind = str(event.payload.get("boundary_kind") or "")
+        if kind in counts and kind != "unattributed":
+            counts[kind] += 1
+        else:
+            counts["unattributed"] += 1
+        mode = str(event.payload.get("sandbox_mode") or "")
+        if mode:
+            modes.add(mode)
+        if kind == "mcp_host_process":
+            mcp_calls += 1
+    sandbox = started.get("sandbox") if isinstance(started, dict) else {}
+    sandbox = sandbox if isinstance(sandbox, dict) else {}
+    mcp = started.get("mcp") if isinstance(started, dict) else {}
+    mcp = mcp if isinstance(mcp, dict) else {}
+    return {
+        "sandbox": {
+            "tier": sandbox.get("tier", ""),
+            "requested": sandbox.get("requested", ""),
+            "backend": sandbox.get("backend", ""),
+            "strength": sandbox.get("strength", ""),
+            "degraded": sandbox.get("degraded"),
+            "filesystem_enforced": sandbox.get("filesystem_enforced"),
+            "network_enforced": sandbox.get("network_enforced"),
+            "notice": sandbox.get("notice", ""),
+        },
+        "mcp": {
+            # 连上的 MCP 服务端是宿主进程：它们的调用不进任务沙箱。证据包必须
+            # 单独把这条事实说出来，否则"所有工具都在边界内"就是一句假话。
+            "boundary": mcp.get("boundary", ""),
+            "note": mcp.get("boundary_note", ""),
+            "servers": mcp.get("servers") or [],
+            "calls": mcp_calls,
+        },
+        "tool_calls": counts,
+        # 一次任务里出现过的档位。子代理/团队成员的档位继承由写入侧保证；
+        # 这里读的是"事件实际写了哪些"，两者对不上就是继承链路断了。
+        "sandbox_modes": sorted(modes),
+        # 对标 Codex `turn_context.permission_profile`：末次治理快照里「这一步能碰哪些路径」。
+        # 老任务没有这一条就报 unrecorded，绝不按档位反推一份假授权出来。
+        "permission_profile": profile
+        or {
+            "type": "unrecorded",
+            "note": "该任务没有权限快照（M4 之前的老任务），不按档位反推",
+        },
+    }
 
 
 async def build_evidence(
@@ -318,12 +437,14 @@ async def build_evidence(
     call_backend = {
         str(payload.get("tool_call_id")): {
             k: v for k, v in (("sandbox_backend", payload.get("sandbox_backend")),
-                              ("sandbox_enforcement", payload.get("sandbox_enforcement")))
+                              ("sandbox_enforcement", payload.get("sandbox_enforcement")),
+                              ("sandbox_mode", payload.get("sandbox_mode")),
+                              ("boundary_kind", payload.get("boundary_kind")))
             if k in payload
         }
         for payload in (event.payload for event in events if event.type == "tool.completed")
         if isinstance(payload, dict)
-        and "sandbox_backend" in payload
+        and ("sandbox_backend" in payload or "boundary_kind" in payload)
         and payload.get("tool_call_id")
     }
     prompt_tokens = sum(row.prompt_tokens for row, _ in usage_rows)
@@ -400,6 +521,15 @@ async def build_evidence(
         unverified.append(
             f"存在待审批的高风险操作：{', '.join(sorted({a['tool'] for a in pending_approvals}))}"
         )
+    started_payload = next(
+        (
+            event.payload
+            for event in events
+            if event.type == "task.started" and isinstance(event.payload, dict)
+        ),
+        {},
+    )
+    boundaries = boundary_report(events, started_payload)
     return {
         "task": {
             "id": task.id,
@@ -433,6 +563,7 @@ async def build_evidence(
         "validation": validation,
         "governance": governance_summary,
         "world": world_summary,
+        "boundaries": boundaries,
         "usage": {
             "providers": providers,
             "models": models,
@@ -453,6 +584,12 @@ async def build_evidence(
             "turns": turn_rollup([row for row, _ in usage_rows]),
             "branches": branch_rollup([row for row, _ in usage_rows]),
             "unattributed_calls": sum(1 for row, _ in usage_rows if not str(getattr(row, "run_id", "") or "")),
+            # 按发起轮汇总：一轮团队里有几个成员/几条 run，这里合起来只有一个数。
+            # 未挂发起轮的老账单独计数，不混进任何一轮。
+            "origins": origin_rollup([row for row, _ in usage_rows]),
+            "origin_unattributed_calls": sum(
+                1 for row, _ in usage_rows if not str(getattr(row, "origin_run_id", "") or "")
+            ),
             # 按并行编排批次汇总：一次 fan_out 花了多少，从这里直接读，不用把 branches 表加一遍。
             "parallel_groups": parallel_group_rollup([row for row, _ in usage_rows]),
             "batched_calls": sum(1 for row, _ in usage_rows if str(getattr(row, "parallel_group", "") or "")),
@@ -477,6 +614,14 @@ async def build_evidence(
             ),
             # 模型累计耗时（毫秒），前端「耗时」行读这个字段；不填就只会显示「暂无」。
             "latency_ms": sum(row.latency_ms for row, _ in usage_rows),
+            # 每条用量行都记着它是在哪一档沙箱里产生的。这里给去重后的档位集合；
+            # 空串是 M3 之前的账，单独计数，不当成 workspace 也不算进集合。
+            "sandbox_modes": sorted(
+                {str(getattr(row, "sandbox_mode", "") or "") for row, _ in usage_rows} - {""}
+            ),
+            "sandbox_mode_unattributed_calls": sum(
+                1 for row, _ in usage_rows if not str(getattr(row, "sandbox_mode", "") or "")
+            ),
         },
         "tools": [
             {
@@ -506,6 +651,10 @@ async def build_evidence(
         "timeline": [
             {
                 "seq": event.seq,
+                "run_id": event.run_id,
+                # 每个事件自带发起轮：不用再拿 task_id 去 join 账本，也能回答
+                # "这条事件属于哪一轮群聊引起的任务树"。
+                "origin_run_id": event.origin_run_id,
                 "node": event.node,
                 "type": event.type,
                 "payload": event.payload,

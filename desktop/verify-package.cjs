@@ -12,6 +12,7 @@
  */
 const { execFileSync } = require("node:child_process");
 const { closeSync, existsSync, openSync, readFileSync, readdirSync, readSync } = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const ROOT = path.join(__dirname, "dist", "win-unpacked");
@@ -102,6 +103,39 @@ if (existsSync(PYTHON)) {
     info.has_threads ? ok("threads 路由已注册") : bad("threads 路由缺失");
   } catch (error) {
     bad("包内解释器导入失败", error.message.split("\n")[0]);
+  }
+}
+
+// ── 3b. 安装包内的边界探针：用包内解释器真跑一遍 doctor --sandbox ───────────
+// 只检查 doctor.py 存在等于没检查：探针要按 .pth 的源码路径真的执行，八条边界
+// 都要有结论，且不允许出现"不确定"。这一步也能抓到"包内解释器缺 stdlib 模块"。
+const doctorReport = path.join(os.tmpdir(), `blank-doctor-${process.pid}.json`);
+const DOCTOR_IDS = ["P-READ", "P-WRITE", "P-ENV", "P-NET", "P-PROC", "P-ESCAPE", "P-INHERIT", "P-AUDIT"];
+if (existsSync(PYTHON)) {
+  try {
+    execFileSync(
+      PYTHON,
+      ["-X", "utf8", "-m", "blank_api.doctor", "--sandbox", "--json", doctorReport],
+      {
+        cwd: API_DIR,
+        encoding: "utf8",
+        timeout: 180000,
+        env: { ...process.env, PYTHONIOENCODING: "utf-8", BLANK_SANDBOX_ALLOW_LOCAL: "1" },
+      }
+    );
+    const report = JSON.parse(readFileSync(doctorReport, "utf8"));
+    const ids = (report.boundaries ?? []).map((item) => item.id);
+    report.capability?.apparatus_ok
+      ? ok("包内边界探针装置可信")
+      : bad("包内边界探针装置不可信", JSON.stringify(report.capability));
+    ids.join(",") === DOCTOR_IDS.join(",")
+      ? ok("包内八条边界都跑了")
+      : bad("包内边界探针跑漏", ids.join(",") || "没有产出");
+    report.exit_code === 0
+      ? ok("包内边界报告无不确定项")
+      : bad("包内边界报告有不确定项", JSON.stringify(report.summary));
+  } catch (error) {
+    bad("包内边界探针执行失败", String(error.message).split("\n")[0]);
   }
 }
 

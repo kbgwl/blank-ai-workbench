@@ -81,6 +81,11 @@ class Capability:
         return out
 
 
+def strength_label(strength: str) -> str:
+    """档位模块也要给 `none` 一个标签；文案只在这张表里定义一次。"""
+    return _STRENGTH_LABEL.get(strength, strength)
+
+
 _CACHE: tuple[float, Capability] | None = None
 
 

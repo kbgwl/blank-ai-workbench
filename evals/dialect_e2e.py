@@ -1,17 +1,19 @@
-"""把应用真跑在两种数据库方言上（真 HTTP 端到端，两边同驱动对照）。
+"""把应用真跑在多种数据库方言上（真 HTTP 端到端，同一驱动逐格对照）。
 
 这不是 schema 检查（`tests/test_schema_agreement_v29.py` 量的是建库/迁移/两条建库路径对账），
-问的是下一层：**应用自己发出的那些 SQL 在第二种方言上跑不跑得动**。所以判据只认真实接口：
+问的是下一层：**应用自己发出的那些 SQL 在别的方言上跑不跑得动**。所以判据只认真实接口：
 同一段驱动、同样的步数（见 `EXPECTED_STEPS`，改步骤必须同时改这句话）、同样的断言，
-先在 SQLite 上跑一遍（对照），再在 MySQL 上跑一遍（被测）。
+先在 SQLite 上跑一遍（对照），再到 MySQL / PostgreSQL 上跑（被测）。
 
-为什么必须两边同跑：某一步在 MySQL 上红了，可能不是方言缺陷，而是我这段 payload 写错。
-两边一起红 = 装置错；只有 MySQL 红 = 真分歧。与"新旧同跑"是同一条纪律，只是换了维度。
+为什么必须逐格同跑：某一步在 MySQL 上红了，可能不是方言缺陷，而是我这段 payload 写错。
+两格一起红 = 装置错；只有被测格红 = 真分歧。与"新旧同跑"是同一条纪律，只是换了维度。
 
 用法：
     uv run --extra mysql python evals/dialect_e2e.py                     # 没有 MySQL 时明确跳过
     set BLANK_E2E_MYSQL_URL=mysql+aiomysql://root@127.0.0.1:3307/kbgai_e2e
     uv run --extra mysql python evals/dialect_e2e.py --require-mysql     # CI：没库就是失败，不是跳过
+    set BLANK_E2E_POSTGRES_URL=postgresql+asyncpg://postgres@127.0.0.1:5432/kbgai_e2e
+    python evals/dialect_e2e.py --only sqlite,postgres --require-postgres
 
 环境纪律：
 - 只连操作者给定的那台 MySQL，库名照 URL 里的走；绝不碰别人的实例；
@@ -484,6 +486,57 @@ class MySQLMissing(RuntimeError):
     """没给 URL、没装驱动，或那台服务器连不上——这三种都属于"这一格今天没法判"。"""
 
 
+class PostgresMissing(RuntimeError):
+    """与 MySQLMissing 同义：PostgreSQL 这一格今天没法判。"""
+
+
+def _split_postgres_url(url: str):
+    from sqlalchemy.engine import make_url
+
+    if not url.strip():
+        raise PostgresMissing(
+            "没给 BLANK_E2E_POSTGRES_URL（形如 postgresql+asyncpg://postgres@127.0.0.1:5432/kbgai_e2e）")
+    try:
+        parsed = make_url(url)
+    except Exception as error:  # noqa: BLE001 — URL 写坏属于"这一格没法判"
+        raise PostgresMissing(f"BLANK_E2E_POSTGRES_URL 解析不了：{error}") from error
+    if not parsed.drivername.startswith("postgresql"):
+        raise PostgresMissing(f"BLANK_E2E_POSTGRES_URL 不是 postgresql 方言：{parsed.drivername}")
+    database = (parsed.database or "").strip()
+    # 同 MySQL：库名要拼进 DDL，标识符不能参数化，只认字面标识符。
+    if not re.fullmatch(r"[A-Za-z0-9_]{1,60}", database):
+        raise PostgresMissing(f"库名不适合当标识符使用：{database!r}")
+    return parsed.render_as_string(hide_password=True), parsed.host or "127.0.0.1", int(parsed.port or 5432), (
+        parsed.username or "postgres"), parsed.password or "", database
+
+
+def postgres_admin(url: str, *statements: str) -> None:
+    """用 asyncpg 连到 maintenance 库执行 DDL；连不上就抛 PostgresMissing。"""
+    try:
+        import asyncpg
+    except ImportError as error:
+        raise PostgresMissing(f"PostgreSQL 驱动没装（asyncpg）：{error}") from error
+    import asyncio
+
+    _, host, port, user, password, _ = _split_postgres_url(url)
+
+    async def run() -> None:
+        try:
+            connection = await asyncpg.connect(
+                host=host, port=port, user=user, password=password or None,
+                database="postgres", timeout=10,
+            )
+        except Exception as error:  # noqa: BLE001
+            raise PostgresMissing(f"{host}:{port} 连不上：{type(error).__name__}: {error}") from error
+        try:
+            for statement in statements:
+                await connection.execute(statement)
+        finally:
+            await connection.close()
+
+    asyncio.run(run())
+
+
 def _split_mysql_url(url: str):
     from sqlalchemy.engine import make_url
 
@@ -526,7 +579,7 @@ def mysql_admin(url: str, *statements: str) -> None:
         connection.close()
 
 
-def prepare(engine: str, mysql_url: str) -> tuple[str, Path]:
+def prepare(engine: str, mysql_url: str, postgres_url: str = "") -> tuple[str, Path]:
     """建出干净的库并跑完整条历史；返回 (database_url, 实例目录)。"""
     instance = SCRATCH / f"instance-{engine}"
     if instance.exists():
@@ -551,6 +604,14 @@ def prepare(engine: str, mysql_url: str) -> tuple[str, Path]:
             f"create database {database} character set utf8mb4",
         )
         url = mysql_url
+    elif engine == "postgres":
+        _, _, _, _, _, database = _split_postgres_url(postgres_url)
+        postgres_admin(
+            postgres_url,
+            f"drop database if exists {database} with (force)",
+            f"create database {database}",
+        )
+        url = postgres_url
     else:
         url = f"sqlite+aiosqlite:///{(instance / 'e2e.db').as_posix()}"
     env = dict(os.environ, BLANK_DATABASE_URL=url, PYTHONIOENCODING="utf-8")
@@ -1976,6 +2037,26 @@ def checkpoint_witness(engine: str, url: str, instance: Path) -> str:
                     rows, size = cursor.fetchone()
             finally:
                 connection.close()
+        elif engine == "postgres":
+            import asyncio
+
+            try:
+                import asyncpg
+            except ImportError as error:
+                return f"跳过（PostgreSQL 驱动没装：{error}）"
+            _, host, port, user, password, database = _split_postgres_url(url)
+
+            async def read():
+                connection = await asyncpg.connect(
+                    host=host, port=port, user=user, password=password or None,
+                    database=database, timeout=10,
+                )
+                try:
+                    return await connection.fetchrow(query)
+                finally:
+                    await connection.close()
+
+            rows, size = asyncio.run(read())
         else:
             import sqlite3
 
@@ -2006,13 +2087,28 @@ def verdict(totals: dict[str, dict[str, str]]) -> tuple[int, list[str]]:
         return 0, ["每一格全绿：对照判据成立"]
     lines = [f"红了的是：{red}"]
     control_steps = set(red.get(CONTROL, []))
-    tested_steps = set(red.get("mysql", []))
-    if tested_steps - control_steps:
-        lines.append(f"只有 MySQL 红（=真方言分歧候选）：{sorted(tested_steps - control_steps)}")
-    if tested_steps & control_steps:
-        lines.append(f"两格一起红（=装置错，不是换库问题）：{sorted(tested_steps & control_steps)}")
-    if control_steps - tested_steps:
-        lines.append(f"只有对照格（{CONTROL}）红（=判据不成立）：{sorted(control_steps - tested_steps)}"
+    labels = {"mysql": "MySQL", "postgres": "PostgreSQL"}
+    tested_cells = [engine for engine in red if engine != CONTROL]
+    if len(tested_cells) == 1:
+        engine = tested_cells[0]
+        steps = set(red[engine])
+        label = labels.get(engine, engine)
+        if steps - control_steps:
+            lines.append(f"只有 {label} 红（=真方言分歧候选）：{sorted(steps - control_steps)}")
+        if steps & control_steps:
+            lines.append(f"两格一起红（=装置错，不是换库问题）：{sorted(steps & control_steps)}")
+    elif tested_cells:
+        # 三格同跑时两个被测格一起红：再说"只有 MySQL/PostgreSQL 红"就是假话。
+        differing = {engine: sorted(set(red[engine]) - control_steps)
+                     for engine in tested_cells if set(red[engine]) - control_steps}
+        if differing:
+            lines.append(f"非对照格与对照不同的步骤（=真方言分歧候选）：{differing}")
+        shared = set().union(*(set(red[engine]) for engine in tested_cells)) & control_steps
+        if shared:
+            lines.append(f"两格一起红（=装置错，不是换库问题）：{sorted(shared)}")
+    tested_union = set().union(*(set(red[engine]) for engine in tested_cells)) if tested_cells else set()
+    if control_steps - tested_union:
+        lines.append(f"只有对照格（{CONTROL}）红（=判据不成立）：{sorted(control_steps - tested_union)}"
                      "——连不做换库的那一格都过不去，红的那一步就不能算到方言头上")
     if len(totals) < 2:
         lines.append("只跑了一格：对照判据不成立，上面这份只是单格清单")
@@ -2024,14 +2120,17 @@ def main() -> int:
     parser.add_argument("--only", default="sqlite,mysql")
     parser.add_argument("--require-mysql", action="store_true",
                         help="CI 用：没有可连的 MySQL 就判失败（退出码 2），而不是静默跳过")
+    parser.add_argument("--require-postgres", action="store_true",
+                        help="CI 用：没有可连的 PostgreSQL 就判失败（退出码 2），而不是静默跳过")
     args = parser.parse_args()
 
     engines = [part.strip() for part in args.only.split(",") if part.strip()]
     mysql_url = os.environ.get("BLANK_E2E_MYSQL_URL", "").strip()
+    postgres_url = os.environ.get("BLANK_E2E_POSTGRES_URL", "").strip()
     start_stub()
     totals: dict[str, dict[str, str]] = {}
     for engine in engines:
-        if engine not in {"sqlite", "mysql"}:
+        if engine not in {"sqlite", "mysql", "postgres"}:
             print(f"[ABORT] 不认识这一格：{engine}")
             return 2
         if engine == "mysql":
@@ -2043,11 +2142,22 @@ def main() -> int:
                     return 2
                 print(f"[SKIP] MySQL 这一格今天没法判：{error}")
                 continue
+        if engine == "postgres":
+            try:
+                _split_postgres_url(postgres_url)
+            except PostgresMissing as error:
+                if args.require_postgres:
+                    print(f"[ABORT] CI 要求 PostgreSQL 这一格必须跑，但起不来：{error}")
+                    return 2
+                print(f"[SKIP] PostgreSQL 这一格今天没法判：{error}")
+                continue
         try:
-            url, instance = prepare(engine, mysql_url)
-        except MySQLMissing as error:
-            if engine == "mysql" and args.require_mysql:
-                print(f"[ABORT] CI 要求 MySQL 这一格必须跑，但那台库起不来：{error}")
+            url, instance = prepare(engine, mysql_url, postgres_url)
+        except (MySQLMissing, PostgresMissing) as error:
+            required = ((engine == "mysql" and args.require_mysql)
+                        or (engine == "postgres" and args.require_postgres))
+            if required:
+                print(f"[ABORT] CI 要求 {engine} 这一格必须跑，但那台库起不来：{error}")
                 return 2
             print(f"[SKIP] {engine} 这一格今天没法判：{error}")
             continue
@@ -2083,7 +2193,7 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 proc.kill()
     rc, lines = verdict(totals)
-    print("\n===== 两方言判定 =====")
+    print("\n===== 方言对照判定 =====")
     for line in lines:
         print(line)
     print(f"\n退出码={rc}（0=每一格全绿；1=有格红，归属见上面；2=这一格今天没法判）")

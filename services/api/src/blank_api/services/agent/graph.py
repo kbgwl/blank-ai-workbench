@@ -52,6 +52,7 @@ from blank_api.services.agent.context import (
 from blank_api.services.agent.router import LIGHT, TIER_LABELS, Router
 from blank_api.services.agent.payload import render
 from blank_api.services.agent.usage import account_call, accumulate_usage, merge_usage
+from blank_api.services import approval_rules
 from blank_api.services.features import is_enabled as feature_enabled
 from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import HookRunner, blocking_denial
@@ -63,7 +64,9 @@ from blank_api.services.permissions import (
     PermissionPolicy,
     approval_options,
     is_irreversible,
+    memo_rule,
     parse_decision,
+    render_rule,
 )
 from blank_api.services.tools.ask import normalize_questions, parse_answers, render_answers
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key
@@ -215,6 +218,9 @@ class AgentSession:
     # 只读调研模式：由意图判定打开，整个执行回合只放行只读工具。
     readonly: bool = False
     permissions: PermissionPolicy = field(default_factory=PermissionPolicy)
+    # 本任务的沙箱档位（off / workspace / workspace-net）。审批模式与它正交：
+    # 这里回答"跑在哪"，permissions.mode 回答"问不问"。两者都进 turn.context。
+    sandbox_tier: str = "workspace"
     is_cancelled: Callable[[], Awaitable[bool]] = _never_cancelled
     compactor: ContextCompactor = field(default_factory=ContextCompactor)
     hooks: HookRunner = field(default_factory=HookRunner)
@@ -311,11 +317,15 @@ class AgentSession:
             guardian_mode=getattr(self.guardian, "mode", "") or "",
             readonly=self.readonly,
             workspace_root=str(self.context.root),
+            sandbox_tier=self.sandbox_tier,
             max_steps=self.max_steps,
             token_budget=self.token_budget,
             depth=self.depth,
             agent_path=self.agent_path,
             instruction_layers=self.instruction_layers,
+            # 路径授权要按工具层真正用的那份 SafetyPolicy 报，不能在这里再 load 一次：
+            # 两份策略各自读设置，出问题时快照与执行就会各说各话。
+            safety=getattr(self.context, "safety", None),
         )
         digest = governance.digest(payload)
         if digest != self.governance_digest:
@@ -823,6 +833,7 @@ class AgentSession:
             origin_run_id=self.origin_run_id,
             parent_thread_id=self.parent_trace_id,
             root_thread_id=self.root_thread_id,
+            sandbox_mode=self.sandbox_tier,
         )
 
 
@@ -1532,6 +1543,24 @@ async def _approval_gate(
                     "expires_at": expires_at,
                 },
             )
+            # 前缀档落盘：换任务、重启进程之后仍认得这条签名。写盘失败只记事实，
+            # 不让一次已经获批的调用失败（用户批的是"执行这条命令"，不是"写这个文件"）。
+            if scope == SCOPE_PREFIX and name == "run_shell" and learned:
+                rule = memo_rule(str(arguments.get("command") or ""))
+                persisted = (
+                    approval_rules.add_rule("run_shell", rule, source_task=session.context.task_id)
+                    if rule
+                    else False
+                )
+                await session.recorder.add(
+                    "approval.rule_persisted",
+                    node,
+                    {
+                        "tool": name,
+                        "prefix": render_rule(rule) if rule else "",
+                        "persisted": persisted,
+                    },
+                )
         else:
             denied.add(name)
             session.permissions.forget(name, arguments, scope)

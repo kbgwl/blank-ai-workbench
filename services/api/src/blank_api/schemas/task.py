@@ -61,6 +61,8 @@ class TaskRunIn(BaseModel):
     approved_command_prefixes: list[str] = Field(default_factory=list, max_length=50)
     # 四档权限模式（对标 Claude Code 的 defaultMode）；空串表示沿用该任务已有的模式。
     permission_mode: Literal["", "default", "accept_edits", "plan", "bypass"] = ""
+    # 三档沙箱档位；空串表示用设置页的默认档。档位只决定"跑在哪"，审批模式决定"问不问"。
+    sandbox_tier: Literal["", "off", "workspace", "workspace-net"] = ""
     fallback_provider_ids: list[str] = Field(default_factory=list, max_length=5)
     role_provider_ids: dict[str, str] = Field(default_factory=dict, max_length=8)
 
@@ -70,6 +72,7 @@ class EventOut(BaseModel):
 
     seq: int
     run_id: str = ""
+    origin_run_id: str = ""
     step_id: str = ""
     parent_event_id: str = ""
     node: str

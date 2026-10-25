@@ -128,7 +128,7 @@ async def read_mcp() -> dict:
 async def read_safety_runtime() -> dict:
     """当前这台机器到底是怎么隔离的，以及策略的生效值。
 
-    设置页要能说清「本机受限执行」和「容器隔离」的区别：客户端没有 Docker 是常态，
+    设置页要能说清「容器隔离」「本机实测边界」「无隔离」的区别：客户端没有 Docker 是常态，
     含糊地写一句"已开启沙箱"只会让客户以为跑不可信代码是安全的。
     """
     policy = SafetyPolicy.load()

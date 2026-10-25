@@ -14,11 +14,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import posixpath
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from blank_api.services.approvals import approval_key
 from blank_api.services.log_safety import contains_secret
+from blank_api.services.sandbox.tiers import DEFAULT_TIER, normalize_tier
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型检查，运行时不会导入工具层（避免导入环）
     from blank_api.services.tools.base import ToolDefinition
@@ -285,7 +287,12 @@ def approval_options(tool_name: str, memo: str = "") -> list[dict]:
     if memo:
         options.append({"scope": SCOPE_PREFIX, "label": f"本会话总是允许 {memo}"})
     options.append(
-        {"scope": SCOPE_TOOL, "label": f"本会话总是允许 {tool_name}", "warning": "该工具在本会话内不再询问"}
+        {
+            "scope": SCOPE_TOOL,
+            "label": f"本会话总是允许 {tool_name}",
+            # 工具档仍在不可逆判定之后生效：`git push --force` / `drop table` 照样逐条问。
+            "warning": "该工具在本会话内不再询问；不可逆命令仍逐条确认",
+        }
     )
     return options
 
@@ -398,14 +405,54 @@ def parse_decision(raw: object) -> tuple[bool, str]:
 # --------------------------------------------------------------------------- #
 # 策略
 # --------------------------------------------------------------------------- #
+_TOOL_PATH_KEYS = ("path", "file_path", "target")
+
+
+def path_scope(arguments: dict | None) -> str:
+    """这次调用落在哪个目标路径前缀上；没有路径参数的工具返回空串（整个工具）。
+
+    用参数本身而不是父目录：`apply_patch path=src/a.py` 批的是那个文件，
+    不是"整个 src 目录"。宁可多问一次，也不要把一次文件级批准扩成一次目录级批准。
+    绝对路径原样保留——文件工具本来就会拒掉它，这里不为它额外开一条路。
+    """
+    data = arguments if isinstance(arguments, dict) else {}
+    for key in _TOOL_PATH_KEYS:
+        raw = data.get(key)
+        if isinstance(raw, str) and raw.strip():
+            text = raw.strip().replace("\\", "/")
+            normalized = posixpath.normpath(text)
+            return "" if normalized in ("", ".") else normalized
+    return ""
+
+
+def _covers_path(granted: str, target: str) -> bool:
+    if not granted:
+        return True
+    if not target:
+        return False
+    return target == granted or target.startswith(granted.rstrip("/") + "/")
+
+
+def render_tool_grant(grant: tuple[str, str, str]) -> str:
+    tier, tool, prefix = grant
+    return f"{tier}:{tool}:{prefix or '.'}"
+
+
 @dataclass
 class PermissionPolicy:
     """一次任务运行期间的权限状态。可变：批准与拒绝会就地写入，供后续步骤复用。"""
 
     mode: str = MODE_DEFAULT
-    approved_tools: set[str] = field(default_factory=set)
+    # 工具档授权按 (档位, 工具, 目标路径前缀) 分桶。旧形状是一个裸工具名，
+    # 等于"这个会话里随便哪个档位都不再问"——切到 off（宿主完整权限）仍然免问。
+    approved_tools: set[tuple[str, str, str]] = field(default_factory=set)
+    # 审批的免问范围是任务级事实，必须跟着 turn.context 一起被快照。
+    sandbox_tier: str = DEFAULT_TIER
     approved_actions: set[str] = field(default_factory=set)
     approved_prefixes: set[tuple[str, ...]] = field(default_factory=set)
+    # 落盘的前缀规则（跨任务、跨重启）。与会话内那一档分开存：追踪里要说得清
+    # 这次放行是"这次会话刚批的"还是"以前记在 approvals.json 里的"。
+    persistent_prefixes: set[tuple[str, ...]] = field(default_factory=set)
     denied_prefixes: set[tuple[str, ...]] = field(default_factory=set)
     denied_actions: set[str] = field(default_factory=set)
     approve_high_risk: bool = False
@@ -419,11 +466,21 @@ class PermissionPolicy:
         approved_tools=(),
         approved_actions=(),
         approved_prefixes=(),
+        sandbox_tier: str = DEFAULT_TIER,
     ) -> "PermissionPolicy":
+        tier = normalize_tier(sandbox_tier)
+        grants: set[tuple[str, str, str]] = set()
+        for item in approved_tools or ():
+            if isinstance(item, (tuple, list)) and len(item) == 3:
+                grants.add((str(item[0]), str(item[1]), str(item[2])))
+            else:
+                # 裸工具名是调用方在说"这个工具，本档位、整个工作区"。
+                grants.add((tier, str(item), ""))
         return cls(
             mode=mode if mode in MODES else MODE_DEFAULT,
+            sandbox_tier=tier,
             approve_high_risk=bool(approve_high_risk),
-            approved_tools=set(approved_tools or ()),
+            approved_tools=grants,
             approved_actions=set(approved_actions or ()),
             approved_prefixes={prefix_rule(item) for item in (approved_prefixes or ()) if prefix_rule(item)},
         )
@@ -437,7 +494,9 @@ class PermissionPolicy:
         """
         self.approved_actions.add(approval_key(tool, arguments))
         if scope == SCOPE_TOOL:
-            self.approved_tools.add(tool)
+            # 记下"哪个档位、哪个工具、哪片路径"：档位换了就重新问，
+            # 目标路径出了这片前缀也重新问。
+            self.approved_tools.add((self.sandbox_tier, tool, path_scope(arguments)))
         elif scope == SCOPE_PREFIX:
             command = str(arguments.get("command") or "")
             # 不可逆命令不进前缀账：`git push --force` 的前缀是 `git push`，
@@ -455,12 +514,30 @@ class PermissionPolicy:
             rule = memo_rule(command) if tool == "run_shell" and not is_irreversible(command) else ()
             if rule:
                 self.denied_prefixes.add(rule)
+        elif scope == SCOPE_TOOL:
+            # 驳回到工具档就把同一档位/同一片路径上的旧授权撤掉；
+            # 否则"刚才明明点了拒绝，下一步又静默跑了"。
+            target = path_scope(arguments)
+            self.approved_tools = {
+                grant
+                for grant in self.approved_tools
+                if not (
+                    grant[0] == self.sandbox_tier
+                    and grant[1] == tool
+                    and _covers_path(grant[2], target)
+                )
+            }
 
     def snapshot(self) -> dict:
         return {
             "mode": self.mode,
-            "approved_tools": sorted(self.approved_tools),
+            # 免问范围本身就是边界的一部分：只写"批过哪些工具"回答不了
+            # "切到 off 之后这些批准还算不算"。三段的形状让读的人一眼看见档位与路径。
+            "sandbox_tier": self.sandbox_tier,
+            "tool_scope": "tier+tool+target_path_prefix",
+            "approved_tools": sorted(render_tool_grant(grant) for grant in self.approved_tools),
             "approved_prefixes": sorted(render_rule(rule) for rule in self.approved_prefixes),
+            "persistent_prefixes": sorted(render_rule(rule) for rule in self.persistent_prefixes),
             "denied_prefixes": sorted(render_rule(rule) for rule in self.denied_prefixes),
         }
 
@@ -513,9 +590,18 @@ class PermissionPolicy:
             hit = covered_by_rules(command, self.approved_prefixes)
             if hit:
                 return approve(risk, f"prefix:{hit}", prefix)
+            # 落盘规则排在会话规则之后：同一串两边都有时，追踪仍念"这次会话批的"。
+            # 拒绝规则先于它生效（上面已经判过），所以持久化不会覆盖本会话的驳回。
+            durable = covered_by_rules(command, self.persistent_prefixes)
+            if durable:
+                return approve(risk, f"prefix:persistent:{durable}", prefix)
 
-        if name in self.approved_tools:
-            return approve(risk, f"tool:{name}", command_prefix(command))
+        target = path_scope(arguments)
+        if any(
+            tier == self.sandbox_tier and granted_tool == name and _covers_path(prefix, target)
+            for tier, granted_tool, prefix in self.approved_tools
+        ):
+            return approve(risk, f"tool:{self.sandbox_tier}:{name}", command_prefix(command))
 
         # "接受编辑"：普通文件写入自动放行（有备份可回滚）。
         # 但敏感路径 / 含密钥的补丁仍是高风险，不能被这一档静默吞掉。

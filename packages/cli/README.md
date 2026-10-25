@@ -14,7 +14,12 @@ blank
 ```bash
 node packages/cli/src/index.mjs
 node packages/cli/src/index.mjs doctor
+node packages/cli/src/index.mjs doctor --sandbox
 ```
+
+`doctor --sandbox` 会用后端 Python 真跑八条边界探针（读/写越界、注册表、出网、
+进程数、自放大、进程树继承、证据包同源），并把结果和这次执行的账本逐条对质。
+本机没有 Docker 时，要测 `job_only` 边界需设置 `BLANK_SANDBOX_ALLOW_LOCAL=1`。
 
 可选功能按需启用：
 

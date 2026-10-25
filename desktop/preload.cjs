@@ -5,8 +5,21 @@
  */
 const { contextBridge, ipcRenderer } = require("electron");
 
+/**
+ * 后端基址在运行时取一次。静态导出的前端把构建时的地址烘焙进了包，
+ * 换 `BLANK_BACKEND_PORT` / `BLANK_API_BASE` 后只能靠这里覆盖，否则界面会一直打旧端口。
+ * 取不到就留空，让前端退回烘焙值（浏览器直接打开导出的页面时没有壳）。
+ */
+let apiBase = "";
+try {
+  apiBase = String(ipcRenderer.sendSync("blank:api-base") ?? "");
+} catch {
+  /* 主进程未注册该频道时保持空串 */
+}
+
 contextBridge.exposeInMainWorld("blankDesktop", {
   platform: process.platform,
+  apiBase,
   versions: {
     electron: process.versions.electron,
     chrome: process.versions.chrome,

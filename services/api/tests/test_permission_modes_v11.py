@@ -224,6 +224,10 @@ def test_session_tool_memory_skips_the_next_ask() -> None:
     assert _decide(policy, "run_shell", {"command": "wget https://b"}, "high").outcome == ALLOW
     # 但不会外溢到别的工具
     assert _decide(policy, "apply_patch", {"path": ".env", "patch": "x"}, "high").outcome == ASK
+    # 不可逆命令仍在工具档之前判定，照样逐条确认（#70 的裁决）
+    override = _decide(policy, "run_shell", {"command": "git push --force origin main"}, "high")
+    assert override.outcome == ASK
+    assert override.rule == "irreversible"
 
 
 def test_once_scope_does_not_promote_to_prefix() -> None:

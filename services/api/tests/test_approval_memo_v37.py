@@ -165,6 +165,11 @@ def test_card_label_matches_the_ledger_rule() -> None:
         for item in approval_options("run_shell", decision.memo)
     }
     assert labels[SCOPE_PREFIX] == "本会话总是允许 python -c 'print(1 + 2)'"
+    # 工具档是会话级宽口径，必须把"不可逆仍逐条确认"写在同一张卡上（#70 的裁决）
+    tool_option = next(
+        item for item in approval_options("run_shell", decision.memo) if item["scope"] == SCOPE_TOOL
+    )
+    assert "不可逆命令仍逐条确认" in tool_option["warning"]
 
     policy.remember("run_shell", {"command": 'python -c "print(1 + 2)"'}, SCOPE_PREFIX)
     assert [render_rule(rule) for rule in policy.approved_prefixes] == [

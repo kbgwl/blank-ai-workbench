@@ -18,6 +18,23 @@ DESTRUCTIVE = re.compile(
     r"\bgit\s+push\b|\bdrop\s+(table|database)\b|\btruncate\b|\bmv\s+.*\s/|\brmdir\s+/s)"
 )
 NETWORK = re.compile(r"(?i)(\bcurl\b|\bwget\b|\bnetworkbrowser\b|\bssh\b|\bscp\b|https?://)")
+# 内联代码：一段字符串交给解释器执行，路径/命令正则看不见正文。
+# `python -c "open('x','w')…"` 过去算 medium，默认模式下按 risk:auto 静默跑。
+_INTERPRETER = re.compile(
+    r"(?i)^\s*(?:[^\s\"']*[\\/])?"
+    r"(python[0-9.]*|py|node|perl|ruby|php|pwsh|powershell|bash|sh|zsh|cmd)(?:\.exe)?\s+(.*)$"
+)
+_LONG_INLINE_FLAGS = {
+    "-c",
+    "-e",
+    "-p",
+    "-r",
+    "-command",
+    "/c",
+    "-encodedcommand",
+    "-enc",
+}
+_SEGMENT_SPLIT = re.compile(r"&&|\|\||[;&|]")
 MAX_OUTPUT_CHARS = 8000
 
 
@@ -35,8 +52,30 @@ def build_env(policy: str | None = None) -> dict[str, str]:
     return env
 
 
+def _has_inline_code(command: str) -> bool:
+    """解释器后面跟着内联代码旗标（`-c` / `-e` / `-Command` …）就算。
+
+    旗标必须出现在第一个非旗标参数之前：`python script.py -c foo` 的 `-c` 是脚本的
+    参数，不是解释器开关；`python -I -u -c '…'` 则是。
+    """
+    for segment in _SEGMENT_SPLIT.split(command):
+        match = _INTERPRETER.match(segment)
+        if not match:
+            continue
+        for token in match.group(2).split():
+            lowered = token.strip("\"'").lower()
+            if lowered in _LONG_INLINE_FLAGS:
+                return True
+            # `bash -lc` / `node -pe`：短旗标并写时含 c/e 也算
+            if re.fullmatch(r"-[a-z]*[ce]", lowered):
+                return True
+            if not lowered.startswith("-"):
+                break
+    return False
+
+
 def assess_risk(command: str) -> str:
-    if DESTRUCTIVE.search(command) or NETWORK.search(command):
+    if DESTRUCTIVE.search(command) or NETWORK.search(command) or _has_inline_code(command):
         return "high"
     return "medium"
 
@@ -132,6 +171,50 @@ def truncate(text: str) -> tuple[str, bool]:
     return text[:MAX_OUTPUT_CHARS] + "\n…（输出已截断）", True
 
 
+def _tier_enforcement(facts: dict, base: dict | None = None) -> dict:
+    """把档位事实并进 enforcement：两处口径都在这里合，读的一侧只认一个形状。
+
+    `network_enforced` 取交集（都真才算真）：Job 那条账说真、档位说没强制时，
+    宁可报「没强制」，也不让一个更乐观的来源把另一处压掉。
+    """
+    out = dict(base or {})
+    for key in ("filesystem_enforced", "network_enforced"):
+        out[key] = bool(out.get(key)) and bool(facts.get(key))
+    out.update(
+        {
+            "sandbox_tier": facts.get("tier", ""),
+            "sandbox_tier_requested": facts.get("requested", ""),
+            "sandbox_tier_degraded": bool(facts.get("degraded")),
+            "tier_available": bool(facts.get("available", True)),
+            "tier_reason": facts.get("reason", ""),
+            "tier_notice": facts.get("notice", ""),
+        }
+    )
+    return out
+
+
+def _engine_enforcement(facts: dict) -> dict:
+    """容器后端的账：DockerSandbox 不建 Job，限额来自容器参数。"""
+    limits = bool(facts.get("limits_enforced"))
+    return {
+        "boundary_strength": facts.get("strength", "none"),
+        "boundary_strength_label": facts.get("label", ""),
+        "limits_applied": limits,
+        "job_created": False,
+        "job_assigned": False,
+        "job_error": "容器后端不建 Windows Job Object",
+        "memory_enforced": limits,
+        "memory_bytes": 0,
+        "pids_enforced": limits,
+        "pids_limit": 0,
+        "tree_kill_enforced": limits,
+        "filesystem_enforced": bool(facts.get("filesystem_enforced")),
+        "network_enforced": bool(facts.get("network_enforced")),
+        "cpu_enforced": limits,
+        "disk_enforced": False,
+    }
+
+
 async def execute_command(
     command: str | list[str],
     root: Path,
@@ -139,42 +222,70 @@ async def execute_command(
     shell: bool = True,
     env: dict[str, str] | None = None,
     safety=None,
+    tier: str = "",
 ) -> dict:
-    """BLANK_SANDBOX_ENABLED 时经沙箱执行（容器隔离 + 密钥过滤），否则退回本地进程。
+    """按任务档位执行命令：沙箱 / 宿主直连 / 拒绝，三种结果都带同一本账。
 
     ``safety`` 是能力边界；这里只用它的超时上限，允许/拒绝由网关与工具入口判定。
     把上限放在这一层，是因为它必须对 run_shell 与 run_tests 同时生效 ——
     只在其中一个工具里限时，另一个就是旁路。
-    """
-    from blank_api.services.sandbox import SandboxPolicy, get_sandbox
 
-    policy = SandboxPolicy()
+    ``tier`` 只允许收紧，不可能把部署开关重新打开：`resolve_tier` 在开关关闭时
+    会把它落成 off 并写明原因。`workspace-net` 在测不出网络强制的机器上直接拒绝，
+    不会退回宿主执行。
+    """
+    from blank_api.services.sandbox import get_sandbox
+    from blank_api.services.sandbox.runner import limits_not_applied
+    from blank_api.services.sandbox.tiers import resolve_tier
+
+    resolution = resolve_tier(tier)
+    facts = resolution.as_dict()
     budget = float(timeout)
     if safety is not None:
         budget = min(budget, float(getattr(safety, "timeout_seconds", budget) or budget))
+    if not resolution.available:
+        # 拒绝也是一种结果，而且必须与"跑在宿主上"长得不一样：起进程的键一个都不写。
+        return {
+            "exit_code": None,
+            "stdout": "",
+            "stderr": resolution.notice,
+            "timed_out": False,
+            "sandbox": None,
+            "tier": facts,
+            "tier_blocked": True,
+            "notes": [resolution.notice],
+            "enforcement": _tier_enforcement(facts, limits_not_applied(resolution.notice)),
+            "timeout_budget": budget,
+        }
+    policy = resolution.policy
     if policy.enabled:
         script = command if isinstance(command, str) else shlex.join(command)
         result = await get_sandbox(policy).run(script, workspace=str(root), timeout_seconds=budget)
+        enforcement = getattr(result, "enforcement", {}) or {}
+        if not enforcement:
+            enforcement = _engine_enforcement(facts)
         return {
             "exit_code": result.exit_code,
             "stdout": result.stdout,
             "stderr": result.stderr,
             "timed_out": result.timed_out,
             "sandbox": result.backend,
-            "notes": list(result.notes),
+            "tier": facts,
+            "notes": [*result.notes, resolution.notice],
             # 这一次执行实际被什么强制（Job 限额 / 边界强度）。界面读它，不读 notes。
-            "enforcement": getattr(result, "enforcement", {}) or {},
+            "enforcement": _tier_enforcement(facts, enforcement),
             "timeout_budget": budget,
         }
     result = await run_process(command, root, budget, shell=shell, env=env)
     result["sandbox"] = None
-    result["notes"] = []
+    result["tier"] = facts
+    result["notes"] = [resolution.notice]
     result["timeout_budget"] = budget
-    from blank_api.services.sandbox.runner import limits_not_applied
-
     # 关档也得有一本账：不写这一行，界面就只能拿 policy 的配置值当生效值展示。
-    result["enforcement"] = limits_not_applied(
-        "沙箱开关为关：这条命令直接跑在宿主进程上，policy 里的限额没有对它生效")
+    result["enforcement"] = _tier_enforcement(
+        facts,
+        limits_not_applied(f"{resolution.notice}；policy 里的限额没有对它生效"),
+    )
     return result
 
 
@@ -204,11 +315,19 @@ def policy_gate(context: ToolContext, tool_name: str, arguments: dict):
     )
 
 
-def runs_in_docker() -> bool:
-    """工具层据此决定用宿主解释器还是容器内解释器。"""
-    from blank_api.services.sandbox import SandboxPolicy, get_sandbox
+def runs_in_docker(tier: str = "") -> bool:
+    """工具层据此决定用宿主解释器还是容器内解释器。
 
-    return get_sandbox(SandboxPolicy()).name == "docker"
+    `off` 档不建容器，所以即使部署里装了 Docker 也必须用宿主解释器；
+    档位解析在这里与执行层走同一个函数。
+    """
+    from blank_api.services.sandbox import get_sandbox
+    from blank_api.services.sandbox.tiers import resolve_tier
+
+    resolution = resolve_tier(tier)
+    if not resolution.available or not resolution.policy.enabled:
+        return False
+    return get_sandbox(resolution.policy).name == "docker"
 
 
 async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
@@ -221,10 +340,30 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
     snapshot = getattr(context, "shell", None)
     env = snapshot.env_for() if hasattr(snapshot, "env_for") else None
     safety = getattr(context, "safety", None)
-    result = await execute_command(command, context.root, timeout, env=env, safety=safety)
+    result = await execute_command(
+        command,
+        context.root,
+        timeout,
+        env=env,
+        safety=safety,
+        tier=getattr(context, "sandbox_tier", "") or "",
+    )
     timeout = result.get("timeout_budget", timeout)
     stdout = truncate(mask_output(result["stdout"], context.root))[0]
     stderr = truncate(mask_output(result["stderr"], context.root))[0]
+    if result.get("tier_blocked"):
+        # 档位不提供时命令根本没起：不许写成 sandbox=None（那会被读成"跑在宿主上"）。
+        return ToolOutcome(
+            ok=False,
+            status="denied",
+            output=stdout,
+            message=f"沙箱档位不可用，命令未执行：{result.get('stderr') or ''}".strip(),
+            data={
+                "tier": result.get("tier", {}),
+                "tier_blocked": True,
+                "enforcement": result["enforcement"],
+            },
+        )
     if result["timed_out"]:
         return ToolOutcome(
             ok=False,
@@ -236,6 +375,7 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
                 "timed_out": True,
                 "sandbox": result["sandbox"],
                 "isolation": result["sandbox"] or "local",
+                "tier": result.get("tier", {}),
                 "enforcement": result["enforcement"],
             },
         )
@@ -256,6 +396,7 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
                 "command": command,
                 "sandbox": result["sandbox"],
                 "isolation": result["sandbox"] or "local",
+                "tier": result.get("tier", {}),
                 # 限额被内核拒的时候走的正是这一支（非零退出码），账必须记在这里才看得见。
                 "enforcement": result["enforcement"],
                 **({"hint": "windows_cmd_syntax"} if hint else {}),
@@ -270,6 +411,7 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
         sandbox=result["sandbox"],
         isolation=result["sandbox"] or "local",
         isolation_notes=result["notes"],
+        tier=result.get("tier", {}),
         enforcement=result["enforcement"],
     )
 

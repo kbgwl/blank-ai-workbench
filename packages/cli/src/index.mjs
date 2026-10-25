@@ -54,11 +54,50 @@ function init() {
   console.log(`空白格配置已初始化：${dir}`);
 }
 
+function findPython(root) {
+  const candidates = [
+    process.env.BLANK_PYTHON,
+    root && path.join(root, "services", "api", ".venv", "Scripts", "python.exe"),
+    root && path.join(root, "services", "api", ".venv", "bin", "python"),
+  ].filter(Boolean);
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+/**
+ * `blank doctor --sandbox` 不自己判断边界：本机能不能拦住越界，只有真跑一遍才知道。
+ * 这里只负责把同一个 API 包里的 doctor 探针拉起来，并沿用源码工作区的 PYTHONPATH。
+ */
+function sandboxDoctor(rest) {
+  const root = findRoot();
+  const python = findPython(root);
+  if (!python) {
+    console.error("找不到后端 Python：设置 BLANK_PYTHON，或在源码工作区里先建 services/api/.venv。");
+    process.exitCode = 2;
+    return;
+  }
+  const pythonPath = root ? path.join(root, "services", "api", "src") : "";
+  const env = { ...process.env, PYTHONIOENCODING: "utf-8" };
+  if (pythonPath) {
+    env.PYTHONPATH = [pythonPath, env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+  }
+  const child = spawn(python, ["-X", "utf8", "-m", "blank_api.doctor", ...rest], {
+    cwd: root ? path.join(root, "services", "api") : process.cwd(),
+    stdio: "inherit",
+    env,
+  });
+  child.on("error", (error) => {
+    console.error(`拉起边界探针失败：${error.message}`);
+    process.exitCode = 2;
+  });
+  child.on("exit", (code) => process.exit(code ?? 1));
+}
+
 function doctor() {
   console.log(`Node.js: ${process.version}`);
   console.log(`平台：${process.platform}`);
   console.log(`配置：${configDir()}`);
   console.log(`工作区：${findRoot() ?? "未检测到项目工作区"}`);
+  if (args.includes("--sandbox")) sandboxDoctor(args.slice(1));
 }
 
 function listPackages() {
@@ -139,6 +178,7 @@ switch (command) {
     console.log("  blank list            查看已启用的可选功能");
     console.log("  blank add brainstorm  启用头脑风暴功能");
     console.log("  blank doctor          检查 Node、配置和工作区");
+  console.log("  blank doctor --sandbox  逐条攻击八条执行边界，并和这次执行的账本比对");
     break;
   default:
     console.error(`未知命令：${command}`);

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, UniqueConstraint, false, func, text, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from blank_api.db import Base
@@ -25,17 +25,33 @@ PROVIDER_PRESETS: dict[str, dict] = {
 class ModelProvider(Base):
     __tablename__ = "model_providers"
 
+    # 与迁移 0003 同名：列上的 unique=True 会被 PG 自动命名成 model_providers_name_key，
+    # 两条建库路径（alembic / create_all）于是给出两个名字，按名字 DROP 的脚本会一个中一个空。
+    __table_args__ = (UniqueConstraint("name", name="uq_model_providers_name"),)
+
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
     kind: Mapped[str] = mapped_column(String(40), nullable=False)
     base_url: Mapped[str] = mapped_column(String(500), nullable=False)
-    api_key_encrypted: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    api_key_encrypted: Mapped[str] = mapped_column(
+        String(1000), nullable=False, default="", server_default=""
+    )
     default_model: Mapped[str] = mapped_column(String(200), nullable=False)
-    temperature: Mapped[float] = mapped_column(Float, nullable=False, default=0.2)
-    max_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=2048)
-    context_window: Mapped[int] = mapped_column(Integer, nullable=False, default=128000)
-    supports_tools: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    supports_vision: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    temperature: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.2, server_default="0.2"
+    )
+    max_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=2048, server_default="2048"
+    )
+    context_window: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=128000, server_default="128000"
+    )
+    supports_tools: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    supports_vision: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     # 输出档位：只有 Responses / 推理系列认这两个字段，其余供应商留空即可
     reasoning_effort: Mapped[str] = mapped_column(String(20), nullable=False, default="", server_default="")
     verbosity: Mapped[str] = mapped_column(String(20), nullable=False, default="", server_default="")
@@ -46,7 +62,9 @@ class ModelProvider(Base):
     # 0 表示未填，路由时按"未知"处理，不会拿它去比较成本。
     total_params_b: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
     active_params_b: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
@@ -62,11 +80,19 @@ class ModelUsage(Base):
     # 把它念成「供应商已删除」（见 api/routes/observability.py、services/agent/evidence.py）。
     provider_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    trace_id: Mapped[str] = mapped_column(String(120), nullable=False, default="", index=True)
-    node: Mapped[str] = mapped_column(String(60), nullable=False, default="chat")
+    trace_id: Mapped[str] = mapped_column(
+        String(120), nullable=False, default="", server_default="", index=True
+    )
+    node: Mapped[str] = mapped_column(
+        String(60), nullable=False, default="chat", server_default="chat"
+    )
     model: Mapped[str] = mapped_column(String(200), nullable=False)
-    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    completion_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     # 缓存与推理的细分计量：不拆出来就看不出"便宜是因为命中缓存"还是"少调了一次"
     cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     cache_write_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -95,6 +121,14 @@ class ModelUsage(Base):
     parallel_group: Mapped[str] = mapped_column(
         String(24), nullable=False, default="", server_default="", index=True
     )
-    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ok")
+    # 这一笔账跑在哪个沙箱档位。空串=这一列上线前的老行（当时没记），不许读成 workspace。
+    sandbox_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="", server_default=""
+    )
+    latency_ms: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="ok", server_default="ok"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

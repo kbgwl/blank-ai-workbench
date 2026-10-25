@@ -13,6 +13,11 @@ SQLite 上这些差别一个字都看不见——列宽、可空性、字面量�
 
   A1 迁移动出来的表集合/列名集合/可空性/外键集合 == ORM 声明的（#47 列宽、#48 外键、#49 默认值
       三次分歧都是这一类，只是当时按具体问题各补了一次；这一条把它们统一成一条闸门）
+  A1b 类型/长度、索引/唯一约束/主键、服务端默认值也逐列/逐对象对账（#64 从 PG/MySQL 的
+      #61–#63 搬回来的维度；SQLite 是主方言，生产走 alembic，测试走 create_all，两边差一点
+      就可能出现"测试全绿、生产缺索引"）。实测 20 表 / 213 列（118 列带长度）/
+      38 索引 / 6 唯一约束 / 21 外键 / 125 个非空默认值 / 0 个 CHECK。CHECK 两边都是 0，
+      不写空对空判定；哪天某条迁移引入 CHECK，再补对账。
   A2 ORM 声明编译成 MySQL DDL 后，LOB 列不许带裸字面量 DEFAULT（能失败的守卫：改回 `server_default="[]"` 即红）
   A3 迁移文件里也不许再出现 LOB 列 + 纯字符串 `server_default`（AST 扫，认 `sa.Text()`/`Text`/`JSON` 三种写法——
       只认"函数调用"的那种扫法漏掉了 `mapped_column(JSON, ...)`，本批实测被真 MySQL 打回过一次）
@@ -36,11 +41,22 @@ import sqlalchemy as sa
 from sqlalchemy import CreateTable
 from sqlalchemy.dialects import mysql
 
+from blank_api import models  # noqa: F401  create_all 的 oracle 来自已注册的表，别依赖 conftest 的导入顺序
 from blank_api.db import Base
 
 CWD = Path(__file__).resolve().parents[1]
 VERSIONS = CWD / "alembic" / "versions"
 LOB_TYPES = {"Text", "JSON"}
+
+# 实测下界（#64，迁移动出来的那个库）：表 20 / 列 213 / 带长度 118 / 索引 38 /
+# 唯一约束 6 / 外键 21 / 非空默认值 125。下界只防"对账对象是空的所以全绿"。
+MIN_TABLES = 20
+MIN_COLUMNS = 200
+MIN_LENGTHS = 100
+MIN_INDEXES = 30
+MIN_UNIQUES = 6
+MIN_FKS = 20
+MIN_DEFAULTS = 120
 
 # 原裸字面量靶点：改完之后，这些列在迁移动出来的库里必须还带那个字面量默认值
 LITERAL_SITES = [
@@ -65,15 +81,18 @@ LITERAL_SITES = [
 
 
 @pytest.fixture(scope="module")
-def migrated_db(tmp_path_factory) -> Path:
-    """真跑一遍整条历史（0001 → head），拿到迁移出来的那个库。
+def provisioned_pair(tmp_path_factory) -> dict[str, Path]:
+    """同一条历史的两种出生方式：`alembic upgrade head` 与 `create_all`，各建一个真库。
 
-    用 subprocess + `alembic` 而不是在测试进程里调 `command.upgrade`：
+    迁移用 subprocess + `alembic` 而不是在测试进程里调 `command.upgrade`：
     env.py 走的是应用的异步引擎，同进程里跑会把事件循环和连接池搅在一起。
+    create_all 是测试与本地快速起库走的那条路；两者形状不一致，测试库就与生产不是同一个东西。
     """
-    db_path = tmp_path_factory.mktemp("schema-agreement") / "migrated.db"
+    base = tmp_path_factory.mktemp("schema-agreement")
+    migrated_path = base / "migrated.db"
+    orm_path = base / "orm.db"
     env_vars = dict(os.environ)
-    env_vars["BLANK_DATABASE_URL"] = f"sqlite+aiosqlite:///{db_path.as_posix()}"
+    env_vars["BLANK_DATABASE_URL"] = f"sqlite+aiosqlite:///{migrated_path.as_posix()}"
     env_vars["PYTHONIOENCODING"] = "utf-8"
     done = subprocess.run(
         [sys.executable, "-X", "utf8", "-m", "alembic", "upgrade", "head"],
@@ -86,33 +105,75 @@ def migrated_db(tmp_path_factory) -> Path:
         timeout=600,
     )
     assert done.returncode == 0, done.stdout[-2000:] + done.stderr[-2000:]
-    assert db_path.exists(), "alembic rc=0 但库文件不在（这条历史从没被真跑过）"
-    return db_path
+    assert migrated_path.exists(), "alembic rc=0 但库文件不在（这条历史从没被真跑过）"
+
+    engine = sa.create_engine(f"sqlite:///{orm_path.as_posix()}")
+    try:
+        Base.metadata.create_all(engine)
+    finally:
+        engine.dispose()
+    assert orm_path.exists(), "create_all 没建出库文件"
+    return {"migrated": migrated_path, "orm": orm_path}
+
+
+@pytest.fixture(scope="module")
+def migrated_db(provisioned_pair: dict[str, Path]) -> Path:
+    return provisioned_pair["migrated"]
+
+
+def _default_of(column) -> str | None:
+    default = column.server_default
+    if default is None:
+        return None
+    arg = getattr(default, "arg", None)
+    raw = getattr(arg, "text", None) or str(arg)
+    return " ".join(str(raw).split())
 
 
 def _reflected(db_path: Path) -> dict[str, dict]:
     engine = sa.create_engine(f"sqlite:///{db_path.as_posix()}")
-    meta = sa.MetaData()
-    meta.reflect(bind=engine, extend_existing=True)
-    shape = {
-        table.name: {
-            "columns": {c.name: bool(c.nullable) for c in table.columns},
-            "fks": {f"{fk.parent.name} -> {fk.target_fullname}" for fk in table.foreign_keys},
-        }
-        for table in meta.tables.values()
-    }
-    engine.dispose()
-    return shape
-
-
-def _orm_shape() -> dict[str, dict]:
-    return {
-        table.name: {
-            "columns": {c.name: bool(c.nullable) for c in table.columns},
-            "fks": {f"{fk.parent.name} -> {fk.target_fullname}" for fk in table.foreign_keys},
-        }
-        for table in Base.metadata.tables.values()
-    }
+    try:
+        meta = sa.MetaData()
+        meta.reflect(bind=engine, extend_existing=True)
+        inspector = sa.inspect(engine)
+        shape = {}
+        for table in meta.tables.values():
+            pk = inspector.get_pk_constraint(table.name)
+            shape[table.name] = {
+                "columns": {c.name: bool(c.nullable) for c in table.columns},
+                "types": {c.name: str(c.type) for c in table.columns},
+                "lengths": {c.name: getattr(c.type, "length", None) for c in table.columns},
+                "defaults": {c.name: _default_of(c) for c in table.columns},
+                # SQLite 只有显式命名的外键才反射得出名字（`fk_tasks_thread_id`），其余是 None；
+                # 名字与 ON DELETE 都算身份：按名字 DROP 的脚本只认名字。
+                "fks": {
+                    (
+                        fk.get("name"),
+                        tuple(fk.get("constrained_columns") or []),
+                        fk.get("referred_table"),
+                        tuple(fk.get("referred_columns") or []),
+                        (fk.get("options") or {}).get("ondelete"),
+                        (fk.get("options") or {}).get("onupdate"),
+                    )
+                    for fk in inspector.get_foreign_keys(table.name)
+                },
+                "indexes": {
+                    (ix.get("name"), tuple(ix.get("column_names") or []), bool(ix.get("unique")))
+                    for ix in inspector.get_indexes(table.name)
+                },
+                "uniques": {
+                    (uq.get("name"), tuple(uq.get("column_names") or []))
+                    for uq in inspector.get_unique_constraints(table.name)
+                },
+                "checks": {
+                    (ck.get("name"), ck.get("sqltext"))
+                    for ck in inspector.get_check_constraints(table.name)
+                },
+                "pk": (pk.get("name"), tuple(pk.get("constrained_columns") or [])),
+            }
+        return shape
+    finally:
+        engine.dispose()
 
 
 # --------------------------------------------------------------------------- #
@@ -120,26 +181,147 @@ def _orm_shape() -> dict[str, dict]:
 # --------------------------------------------------------------------------- #
 
 
-def test_both_provisioning_paths_agree(migrated_db: Path) -> None:
-    migrated, orm = _reflected(migrated_db), _orm_shape()
-    migrated.pop("alembic_version", None)
+def _pair(provisioned_pair: dict[str, Path]) -> tuple[dict[str, dict], dict[str, dict]]:
+    migrated = dict(_reflected(provisioned_pair["migrated"]))
+    assert "alembic_version" in migrated, "迁移库连 alembic_version 都没有，整条历史等于没跑"
+    migrated.pop("alembic_version")
+    orm = _reflected(provisioned_pair["orm"])
+    assert len(orm) >= MIN_TABLES, (
+        f"ORM 只建出 {len(orm)} 张表（期望至少 {MIN_TABLES}）——oracle 本身不完整，对账无意义"
+    )
+    return migrated, orm
+
+
+def test_both_provisioning_paths_agree(provisioned_pair: dict[str, Path]) -> None:
+    migrated, orm = _pair(provisioned_pair)
 
     assert set(migrated) == set(orm), (
         f"迁移少建 {sorted(set(orm) - set(migrated))} / ORM 多声明 {sorted(set(migrated) - set(orm))}"
     )
+    column_count = sum(len(t["columns"]) for t in migrated.values())
+    fk_count = sum(len(t["fks"]) for t in migrated.values())
+    assert column_count >= MIN_COLUMNS, f"迁移只建出 {column_count} 列（期望至少 {MIN_COLUMNS}）"
+    assert fk_count >= MIN_FKS, f"迁移只建出 {fk_count} 个外键（期望至少 {MIN_FKS}）"
+
+    differences: list[str] = []
     for name in sorted(migrated):
         left, right = migrated[name]["columns"], orm[name]["columns"]
-        assert set(left) == set(right), (
-            f"{name}: 迁移缺列 {sorted(set(right) - set(left))} / ORM 缺列 {sorted(set(left) - set(right))}"
-        )
-        mismatched = [
+        if set(left) != set(right):
+            differences.append(
+                f"{name}: 迁移缺列 {sorted(set(right) - set(left))} / ORM 缺列 {sorted(set(left) - set(right))}"
+            )
+            continue
+        differences.extend(
             f"{name}.{column}: 迁移 nullable={left[column]} 但 ORM nullable={right[column]}"
-            for column in sorted(set(left) & set(right))
+            for column in sorted(left)
             if left[column] != right[column]
-        ]
-        assert not mismatched, "可空性分歧（迁移动出来的库允许 NULL，而代码声明非空）：" + "; ".join(mismatched)
-        assert migrated[name]["fks"] == orm[name]["fks"], (
-            f"{name} 的外键集合分歧：迁移={sorted(migrated[name]['fks'])} ORM={sorted(orm[name]['fks'])}"
+        )
+        if migrated[name]["fks"] != orm[name]["fks"]:
+            differences.append(
+                f"{name}: 外键集合分歧 仅迁移={sorted(migrated[name]['fks'] - orm[name]['fks'], key=repr)} "
+                f"仅ORM={sorted(orm[name]['fks'] - migrated[name]['fks'], key=repr)}"
+            )
+    assert not differences, "两条建库路径的形状不一致：" + "; ".join(differences)
+
+
+def test_column_types_and_lengths_agree(provisioned_pair: dict[str, Path]) -> None:
+    migrated, orm = _pair(provisioned_pair)
+
+    compared = with_length = 0
+    differences: list[str] = []
+    for name in sorted(migrated):
+        left, right = migrated[name], orm[name]
+        for column in sorted(set(left["types"]) & set(right["types"])):
+            compared += 1
+            if left["types"][column] != right["types"][column]:
+                differences.append(
+                    f"{name}.{column}: 类型 迁移={left['types'][column]!r} ORM={right['types'][column]!r}"
+                )
+            if left["lengths"][column] is not None:
+                with_length += 1
+            if left["lengths"][column] != right["lengths"][column]:
+                differences.append(
+                    f"{name}.{column}: 长度 迁移={left['lengths'][column]!r} ORM={right['lengths'][column]!r}"
+                )
+    assert compared >= MIN_COLUMNS, f"只比到 {compared} 列（期望至少 {MIN_COLUMNS}）——对账对象不完整"
+    assert with_length >= MIN_LENGTHS, f"只比到 {with_length} 个带长度的列（期望至少 {MIN_LENGTHS}）"
+    assert not differences, "类型/长度分歧：" + "; ".join(differences)
+
+    anchors = {
+        ("model_usage", "run_id"): 120,
+        ("agent_events", "run_id"): 120,
+        ("model_usage", "origin_run_id"): 120,
+        ("model_providers", "name"): 100,
+    }
+    for (table, column), length in anchors.items():
+        assert migrated[table]["lengths"][column] == length, (
+            f"锚点 {table}.{column} 在迁移库里的长度是 {migrated[table]['lengths'][column]!r}，"
+            f"不是实测的 {length}——对账锚点失效"
+        )
+
+
+def test_indexes_and_uniques_agree(provisioned_pair: dict[str, Path]) -> None:
+    migrated, orm = _pair(provisioned_pair)
+
+    index_count = sum(len(t["indexes"]) for t in migrated.values())
+    unique_count = sum(len(t["uniques"]) for t in migrated.values())
+    assert index_count >= MIN_INDEXES, f"迁移只建出 {index_count} 个索引（期望至少 {MIN_INDEXES}）"
+    assert unique_count >= MIN_UNIQUES, f"迁移只建出 {unique_count} 个唯一约束（期望至少 {MIN_UNIQUES}）"
+
+    differences: list[str] = []
+    for name in sorted(migrated):
+        for key, label in (("indexes", "索引"), ("uniques", "唯一约束")):
+            only_migrated = migrated[name][key] - orm[name][key]
+            only_orm = orm[name][key] - migrated[name][key]
+            if only_migrated or only_orm:
+                differences.append(
+                    f"{name}: {label} 仅迁移={sorted(only_migrated, key=repr)} "
+                    f"仅ORM={sorted(only_orm, key=repr)}"
+                )
+        if migrated[name]["pk"] != orm[name]["pk"]:
+            differences.append(f"{name}: 主键 迁移={migrated[name]['pk']!r} ORM={orm[name]['pk']!r}")
+    assert not differences, "索引/约束分歧：" + "; ".join(differences)
+
+    assert ("uq_model_providers_name", ("name",)) in migrated["model_providers"]["uniques"], (
+        f"model_providers 上没有实测过的命名唯一约束，实测={migrated['model_providers']['uniques']}"
+    )
+    assert ("ix_model_usage_parallel_group", ("parallel_group",), False) in migrated["model_usage"]["indexes"], (
+        f"model_usage 上没有 parallel_group 索引，实测={migrated['model_usage']['indexes']}"
+    )
+
+
+def test_server_defaults_agree(provisioned_pair: dict[str, Path]) -> None:
+    migrated, orm = _pair(provisioned_pair)
+
+    default_count = sum(1 for t in migrated.values() for v in t["defaults"].values() if v is not None)
+    assert default_count >= MIN_DEFAULTS, f"迁移只留下 {default_count} 个默认值（期望至少 {MIN_DEFAULTS}）"
+
+    differences = [
+        f"{name}.{column}: 迁移={migrated[name]['defaults'][column]!r} "
+        f"ORM={orm[name]['defaults'].get(column, '<缺列>')!r}"
+        for name in sorted(migrated)
+        for column in sorted(migrated[name]["defaults"])
+        if migrated[name]["defaults"][column] != orm[name]["defaults"].get(column)
+    ]
+    assert not differences, "默认值分歧（SQLite 上 true()/false() 与迁移写的 '1'/'0' 必须反射成同一个字面量）：" + "; ".join(differences)
+
+    anchors = {
+        ("model_providers", "supports_tools"): "0",
+        ("model_providers", "supports_vision"): "0",
+        ("model_providers", "enabled"): "1",
+        ("team_bots", "is_admin"): "0",
+        ("team_bots", "enabled"): "1",
+        ("team_members", "enabled"): "1",
+        ("team_rounds", "wrap_up_done"): "0",
+        ("workspaces", "is_active"): "1",
+        ("tasks", "attachments"): "'[]'",
+        ("tasks", "goal"): "''",
+        ("agent_runs", "request_payload"): "'{}'",
+    }
+    for (table, column), expected in anchors.items():
+        assert migrated[table]["defaults"][column] == expected, (
+            f"锚点 {table}.{column} 的默认值是 {migrated[table]['defaults'][column]!r}，"
+            f"不是实测的 {expected!r}——对账锚点失效"
         )
 
 

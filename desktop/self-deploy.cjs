@@ -114,7 +114,8 @@ function buildWeb() {
     env: {
       ...process.env,
       BLANK_DESKTOP_BUILD: "1",
-      // 桌面壳里前端直连本机后端，和打包时用同一个地址，避免部署完打不开接口。
+      // 这里只是烘焙兜底值：壳运行时会用 BLANK_API_BASE / BLANK_BACKEND_PORT
+      // 注入真实地址（见 preload.cjs），换端口不必重新构建。
       NEXT_PUBLIC_API_BASE: process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000",
       NODE_OPTIONS: "",
     },
@@ -138,7 +139,7 @@ function syncShell(dir) {
     return;
   }
 
-  const entries = ["main.cjs", "preload.cjs", "gpu-guard.cjs"];
+  const entries = ["main.cjs", "api-base.cjs", "preload.cjs", "gpu-guard.cjs"];
   const sources = entries.map((name) => path.join(__dirname, name));
   for (const file of sources) {
     if (!fs.existsSync(file)) fail(`缺少壳入口源文件：${file}`);

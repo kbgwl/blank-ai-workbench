@@ -179,7 +179,7 @@ Docker / Hyper-V / Windows Sandbox 全部排除。Codex 在这台机器上实际
 | 每次命令调用都带 `sandbox_policy`（rollout 里每条 `custom_tool_call` 都能回溯到当时的边界） | `tool.completed` 事件与证据包里没有执行边界；被拒的调用不留痕；`AuditLog` 是一个没人调用的孤儿类 | **已实现**：边界进事件、进证据包、进时间线卡片，并落 JSONL 审计账（`sandbox_backend_event_field` + `AuditLog.record`） |
 | 用量三级累计 + 缓存/推理字段 | 表里已经有单次与缓存/推理列，但累计只能靠求和推；事件流与证据包里看不见这三个口径 | **已实现**（任务 #32，见 §7.3）：每次调用落一条 `model.usage`，一次带出 单次/本回合/整个任务 三个口径 + 缓存与推理；证据包求和与事件任务级同源；面板新增「缓存命中 / 推理 / 三级口径」三行。**子代理已并入同一本账**（任务 #33，见 §7.4）：落账抽成唯一函数 `usage.account_call()`，线上真跑出一条派了子代理的任务，面板上 `本回合 22,275 ≠ 任务累计 26,505`。**供应商那一笔的 request id 也进了同一处收口**（任务 #40，见 §7.5）：`response_id` 从适配器一路到 `model_usage` 行、`model.usage` 事件与「证明」面板，DeepSeek 真链路 7/7、真任务 5/5、真浏览器 5/5 |
 | 压缩写 `replacement_history`，环境写 `world_state(full, 内容哈希)` | 压缩只留一个"已压缩"标记，不留下"替换到哪里为止"；环境压根没记账，指令层以 dataclass repr 的形式把**正文和主机路径**抄进事件（单条 `turn.context` 实测 4145 字节） | **两半都落地**：边界那一半见任务 #31（§7.2）——`context.compacted` 带 `boundary`/`covered`/`folded`/水位，时间线里是一张卡；环境那一半见任务 #41（§7.6）——`world.state` 全量快照 + 指令用 sha256 前 40 位指认，正文与主机路径不再入账（4145 → 1770 字节）。**替换历史见任务 #42（§7.7）**：窗口链（窗号递增 + `window_id`/`previous_window_id`/`first_window_id`）与逐条引用（位置/角色/种类/字数/内容指纹）已入账并进界面；**整段 `replacement_history` 原文按裁决刻意不抄**——借结构不借抄正文 |
-| `permission_profile` 展开成逐条 ACE 与 `missing_path_behavior` | 只记审批模式与前缀规则 | 未动，属沙箱立项范围 |
+| `permission_profile` 展开成逐条 ACE 与 `missing_path_behavior` | 只记审批模式与前缀规则 | **已实现**（任务 #77，见 §7.38）：`turn_context.permission_profile` 逐条列出工作区/允许根/外部通配，每条带 `enforced_by`（`os`/`policy`/`none`）——本机 job_only 下如实写 `policy`，不冒充内核；`missing_path_behavior` 与 `SafetyPolicy._outside_paths` 同源（`skip`），关掉「仅限工作区」时写 `not_applicable`；证据包取末次快照，老任务报 `unrecorded` 不按档位反推 |
 | 沙箱 = 独立账号 + DPAPI + 工作区专属 SID ACL | Docker 容器；无 Docker 时只能 `allow_local` 直连 | 立项设计已出：**`docs/SANDBOX-WINDOWS-DESIGN.md`**（§1 是今天真实生效/只是展示值的对照表，含一条实测的逃逸证据；实现未动） |
 | `root_turn_id` 进事件 | `depth`/`agent_path` 在内存里 | 已随快照带出（`depth`/`agent_path` 进 `turn.context` payload） |
 | `token_usage_record.turn_id` + `resume_metadata.turn_attribution.{root_turn_id, parent_turn_id, initiating_agent_path}` | 用量行只有 `trace_id`，钱问不出「哪一轮花的、谁引起的」；子代理那几笔与主线程混在同一张表里靠时间猜 | **已实现**（任务 #43，见 §7.8）：`run_id` 成为 `model_usage` 的一等列（迁移 0019），行的归属与 `model.usage` 事件同源；`root_thread_id`/`parent_thread_id`/`agent_path` 四处同写；证据包补 `turns`/`branches`/`unattributed_calls` 三张账，老账只报条数、绝不并成「第 0 轮」 |
@@ -200,6 +200,19 @@ Docker / Hyper-V / Windows Sandbox 全部排除。Codex 在这台机器上实际
 | 429 限流只代表「现在别问」：主流客户端会退避后再问，而不是把这一轮判死 | #53 把 429 归进「与问法无关」、不退路是对的，但**一句都不再问**：供应商抖一下整轮就失败；装置第 77 步只钉了"不许静默成功"，没钉"过一会儿能好" | **已实现**（任务 #56，见 §7.21）：流式与整包两条路都只对 429 退避重试 **2 次**（0.5s/1s），已经出字后一次都不重试；每次重试落 `model.rate_limit_retry`（attempt/status/wait_ms/max_retries），两次仍 429 才走原来的 `stream_fallback_skipped`。装置从 80 步长成 **81 步**：桩只拒第一次，断言「恰好一条重试事件 + 终局成功 + 退路 0 次」；两格各 81/81 rc=0 |
 | 429 上供应商给的 `Retry-After` 比客户端猜的退避更权威；压缩那一笔也是花真钱的调用 | #56 只做了固定 0.5s/1s 盲猜——供应商明说「1 秒后再来」也照样 0.5 秒就敲门，说 120 秒也没有上界；`summarize_history` 直接调 `adapter.invoke`（避免递归压缩），这条路的 429 仍是即刻失败 | **已实现**（任务 #57，见 §7.22）：等待取 `Retry-After`（整秒或 HTTP 日期）与指数退避的**较大者**、**30s 封顶**；事件新增 `retry_after_ms` 原值与含封顶的 `wait_ms`；四条适配器的 HTTP 抛错点全部把表头骑到 `ModelError`；压缩复用同一套闸门/事件（`role=summarizer`、`node=context_compact`）。装置从 81 步长成 **82 步**：桩带 `Retry-After: 1`，断言 waited=1000ms、终局成功、退路 0 次；两格各 82/82 rc=0 |
 | 压缩只有离线反证/单机真模型探针，装置从没让它在跨方言的 HTTP 栈上真发生 | #42/#44 的 `window_chain_probe.py` 只跑单机 SQLite + 真供应商；#57 的压缩退避只有离线用例；装置 82 步里没有一步会跨过窗口水位，"压缩在两种方言上是否工作"没有实物 | **已实现**（任务 #58，见 §7.23）：装置 82 → **83 步**，窗口调成 1200 tokens（水位 984）+ 两轮各读 6KB 文件逼出真折叠；断言窗口链逐窗递增、边界严格前进、替换 `dropped/items` 非空、`compaction_response_id` 指认摘要响应；摘要那笔第一次 429+`Retry-After: 1`，事件 waited=1000ms。两格各 **83/83** rc=0，读数同为 **2 窗 / 末窗折叠 3 条 / dropped=5 / items=4 / 成功工具 2 个**；3 靶按实测红集合命中 |
+| 压缩的「摘要」在真模型与两种数据库上是不是同一件事：真模型写的摘要、供应商响应 id、窗口链与替换记录必须一起出现 | #58 的摘要由桩写死五要素 JSON，真模型压缩只有 #42/#44 的单机 SQLite 证据；"真模型跨方言"从未同框（:8061 当时还跑着 0017 旧库旧代码，事件里连 `replacement`/`compaction_response_id` 都没有） | **已实现**（任务 #59，见 §7.24）：`compaction_probe.py` 可指向任意实例（`PROBE_BASE/PROBE_OUT_DIR`）并加 5 条硬判据（摘要非空、每窗响应 id、窗口链 1..N 且 boundary 严格前进、替换 dropped/items 非空、证据包与事件同一组非空 id）。真 DeepSeek × SQLite(:8061) 与 MySQL 8.4(:8063) 各 **11/11** rc=0，两格同为 **2 窗 / boundary 3→7 / 摘要 400+ 字符**；库内 `agent_events` 与 `model_usage.response_id` 逐项相同。组合变异靶使 5 条新判据全红、旧 6 条保持绿，`graph.py` sha256 逐字节还原 |
+| 它的结论只住在一种出生方式（SQLite）里：「PostgreSQL」只是迁移分支里的一行 `else`，从没起过一台真库 | 0021/0022/0023 都写着 `if dialect.name == "sqlite" ... else`，但没有任何一条证据是 PG 上跑出来的——整条迁移历史、应用、83 步 HTTP 判定全部零实跑；CI 也只有 MySQL 一格 | **已实现**（任务 #60，见 §7.25）：便携 PG 17.6（`127.0.0.1:55432`）上整条 0001→0023 历史 rc=0、`downgrade base`→`upgrade head` rc=0；同一份 83 步驱动新增 `postgres` 格，SQLite 对照 + PG 各 **83/83**、合计 166 PASS、0 FAIL、rc=0；PG 库内 7 任务 / 187 事件 / 23 笔账 / 461 条检查点。装置新增 PG URL 解析、建库、检查点见证与归属点名，CI `api-dialect` 增 `postgres:17` service。负对照（PG 专属坏 `search_path`）装置 rc=1，`db.py` 逐字节还原 |
+| 「两条建库路径给出同一个 schema」只在 SQLite 上对过账；PG 的 `create_all` 与迁移是否一致从没量过 | #49 的 A1 只跑 SQLite，而 SQLite 对可空性/默认值照收不误；#60 只证明迁移路径能跑，测试与本地快速起库用的 `create_all` 路径在 PG 上的形状没有对账 | **已实现**（任务 #61，见 §7.26）：真 PG 17.6 上开两个库分别跑迁移与 `create_all`，逐表/逐列/可空性/外键/服务端默认值对账。第一次真跑数出 **77 列**只有迁移侧有服务端默认值（ORM 只有 Python `default=`），已把 ORM 补齐（Text/JSON 用表达式默认值，不改 Python 默认值、不改迁移）；3 条用例绿，2 条变异靶按实测红集合命中并逐字节还原，全量 **976 passed / 17 skipped**；CI `api-dialect` 增该对账步骤 |
+| 同一个 schema 还包含**列类型/长度、索引与唯一约束**：不是"列名一样"就等价。约束名是运维/迁移按名字引用的对象 | #61 的对账只到列名/可空性/外键/默认值，`String(36)` vs `String(120)` 这类漂移看不见；索引少一条、唯一约束名字不同，两条路建出来的库在 DBA 工具与后续迁移眼里并不等价 | **已实现**（任务 #62，见 §7.27）：真 PG 上补比 **213 列的反射类型与长度**（118 列带长度）、**44 个索引**、**6 个唯一约束**（名字一起比）。第一次跑就红在 `model_providers.name`：迁移 0003 显式命名 `uq_model_providers_name`，ORM 的 `unique=True` 被 PG 自动命名成 `model_providers_name_key`。ORM 改成显式 `UniqueConstraint` 后 5 条全绿；3 条变异靶按实测红集合精确命中、逐字节还原。CHECK 两边都是 0 条，不写空对空的对账，记了触发条件 |
+| MySQL 侧两条建库路径自 #49 之后只剩「迁移能跑通」；`create_all` 没再逐列对过 | #61/#62 的对账只在 PG 上跑；MySQL 的列宽漂移、少一条索引、外键自动命名都看不见。而 MySQL 对同一个 `now()` 会存成两种同义写法，直接逐字比会天天假红 | **已实现**（任务 #63，见 §7.28）：真 MySQL 8.4 上两个库分别跑迁移与 `create_all`，比 **213 列 / 118 个长度 / 48 个索引 / 6 个唯一约束 / 21 个外键（名字 + ON DELETE）/ 125 个服务端默认值**。第一次量出 13 条：12 条是同义时间写法（0023 的 ALTER 重述成 `CURRENT_TIMESTAMP`，create_all 是 `(now())`），1 条是真分歧——`tasks.thread_id` 迁移显式命名 `fk_tasks_thread_id`，ORM 被服务端自动命名成 `tasks_ibfk_2`。ORM 补名字后 0 分歧；新增 4 条用例，PG 侧同时补比外键名与动作；4 靶变异按实测红集合命中，全量 **976 passed / 23 skipped**；CI `api-dialect` 增该步骤 |
+| 主方言 SQLite 的两条建库路径只对过表/列/可空性/外键；类型、长度、索引、约束名、默认值没比 | #61–#63 把新维度补在了 PG/MySQL 上，主方言反而缺席。生产走 `alembic`、测试与本地起库走 `create_all`——两边差一个索引或一个约束名，测试全绿而生产缺对象 | **已实现**（任务 #64，见 §7.29）：SQLite 上两条真库逐项对账：**20 表 / 213 列（118 个长度）/ 38 索引 / 6 唯一约束 / 21 外键（名字 + 动作）/ 125 默认值 / 0 CHECK**。先量出 8 条布尔默认值分歧：迁移写 `'1'/'0'`，ORM 的 `text("true"/"false")` 落成 `'true'/'false'`；改用 `true()/false()` 后 0 分歧。v29 从 6 条长到 **9 条**，4 靶变异红集合精确相等，全量 **979 passed / 23 skipped** |
+| 全群累计的 `usage_by_bot` 拿发言行当筛子：没有发言行的钱被 inner join 静默丢掉，也没有"未对应发言"档 | #47 把本轮的合计改成按发起轮筛账本，但全群累计仍是 `TeamMessage JOIN ModelUsage ON task_id`——一笔 origin 在本群、task 却没挂到任何消息上的钱，两个口径都说不清它去哪了；而且没有总数可以核对每档之和 | **已实现**（任务 #65，见 §7.30）：两个来源取并集（task_id 属于群内消息 / origin_run_id 属于群内轮次）、按 `usage.id` 去重；对不上发言的归"未对应发言"，`Σ by_bot == tokens` 成为构造出来的恒等式。`group_state` 新增 `usage`，`usage_by_bot` 保留为同源别名。2 条新用例，4 靶变异红集合精确相等，全量 **981 passed / 23 skipped** |
+| 事件时间线只记 `run_id`（每人一个），发起轮进了账本却没进事件：证据包离开数据库就说不清一条事件属于哪一轮 | #47 把 `origin_run_id` 记进了 `model_usage`、记录器内存里也有，但 `agent_events` 没有这一列；`/tasks/{id}/events` 与证据包 `timeline` 都只端出 `run_id`，跨任务归属还得再 join 任务或账本 | **已实现**（任务 #66，见 §7.31）：`AgentEvent` 补 `origin_run_id`（VARCHAR(120)、非空、默认空串、带索引），`EventRecorder.add` 落库，`EventOut` 与证据包 `timeline` 同源端出；老行保持空串（当时没记，不许用 `run_id` 回填）。迁移 0024；新用例 6 条，自然红 6/6，6 靶变异红集合精确相等，全量 **987 passed / 23 skipped** |
+| 证据包只有「按 run / 按 trace / 并行组」三张表，没有「按发起轮」的那一张：一条事件有了归属字段，却仍要人肉把一轮拆出来的成员任务加回去 | #66 端出了每条事件的 `origin_run_id`，`usage.turns` 里也按 `run_id` 有账；但团队一轮的发起轮（群轮）自己没有一行的汇总，跨任务核对只能逐条筛 | **已实现**（任务 #67，见 §7.32）：`evidence.origin_rollup()` 按 `origin_run_id` 汇总 `run_ids/threads/tasks/subagent_calls` 与用量；`usage.origins` 与 `usage.turns` 并列，空发起轮的账**不编成第 0 轮**，只由 `usage.origin_unattributed_calls` 报数。新用例 3 条，4 靶变异红集合精确相等（自然红是 HEAD 上的 collection ImportError，见 §7.32）；全量见 §7.33 |
+| 批准记忆只活在会话与任务里：换一个任务、重启一次进程，用户刚说过的「总是允许这个前缀」就不认了 | #54 把规则粒度修到正文，但 `PermissionPolicy` 只在内存、任务级靠回放 `approval.granted`；同一台机器上换任务仍要重新挂卡。Codex 对应的是持久化的 `~/.codex/rules/default.rules` | **已实现**（任务 #68，见 §7.33）：前缀档落盘到 `approvals.json`（默认与设置同目录，`BLANK_APPROVALS_FILE` 可指认），只收 `scope=prefix` 的 `run_shell` 前缀，去重/最新在前/上限 200，坏文件 fail-closed；判定里记 `prefix:persistent:…` 与本次会话的批准分开归因。新用例 22 条，自然红在 HEAD 上为 collection ImportError，8 靶变异红集合精确相等；全量 **1012 passed / 23 skipped** |
+| 内联解释器代码（`python -c "open(...).write(...)"`、`node -e`、`pwsh -Command`）算 medium，默认模式按 `risk:auto` **静默执行**，审批卡一次都不出现 | `assess_risk` 只认破坏性命令与联网；`risk_for` 把这类命令判成 medium，而 `PermissionPolicy.decide` 对非 high/critical 直接 `risk:auto`。这不是批准记忆放行，是根本没问 | **已实现**（任务 #69，见 §7.34）：`_has_inline_code()` 认解释器后的 `-c/-e/-Command/-EncodedCommand/cmd /c/bash -lc`（旗标必须在第一个非旗标参数之前，`-m 模块` 与脚本参数不算），命中即 high；复合命令任一段命中即 high。新用例 22 条，自然红 **14 failed / 8 passed**，4 靶变异红集合精确相等 |
+| 它的规则只记「这一条命令 / 这个前缀」，没有「整个工具本会话全放行」这一档；放行边界窄，卡片不需要解释例外 | 工具档比它宽：记住 `run_shell` 后普通命令不再问——但 `is_irreversible()` 排在工具档**之前**，`git push --force` / `drop table` 仍逐条问。卡片却只写「该工具在本会话内不再询问」，把「有例外」写没了 | **已实现**（任务 #70，见 §7.35）：文案改成「该工具在本会话内不再询问；不可逆命令仍逐条确认」，并补一条**能失败**的断言——工具档记住后不可逆命令仍必须 `ASK/irreversible`（把工具分支挪到不可逆判定之前即红）。判定逻辑零改动，57 条审批用例全绿 |
+| 它按 `turn_id` / `turn_attribution` 的字段名直接区分谁是谁，消费方不需要猜字符串形状 | `run_id` 一列混着四种实测形状（空串 / `team-…` / `task:<uuid>:attempt:N` / `agent_runs.id`），证据包 `turns` 只给原值；界面与外部消费者只能各自 `startswith` 或正则猜，猜错了也不报错 | **已实现**（任务 #71，见 §7.36）：`evidence.run_id_kind()` 在**读侧**定形状 `unrecorded/team/attempt/run`，`turns[].kind` 随每轮带出；存量值一个不改（空串仍是「当时没记」）。新用例 3 条 + v24 键集，自然红：v24 单跑 **1 failed / 12 passed**（`KeyError: 'kind'`）、v45 为 collection ImportError；4 靶变异红集合精确相等 |
 
 ## 7. 本轮落地与其验证证据
 
@@ -572,7 +585,7 @@ Codex 的 rollout 里 `token_usage_record` 是线程级还是会话级一眼可�
 | Codex 有 | 没抄的原因 |
 | --- | --- |
 | `approvals_reviewer`、`disabled_plugin_ids` | 我们没有插件市场与多审阅人身份，编字段等于造没人写的空列 |
-| `permission_profile` 逐条 ACE + `missing_path_behavior` | 需要 ACL 层先存在；这是沙箱立项的输出，不是快照层的输出 |
+| `permission_profile` 逐条 ACE + `missing_path_behavior` | **已补（#77，见 §7.38）**，但不是抄：逐条 ACE 与 `missing_path_behavior` 都有，每条额外带 `enforced_by`——本机没有 ACL 层时如实写 `policy`，不冒充内核 ACL |
 | `sandbox_policy.type` 的 `workspace-write` 命名 | 我们的 `SandboxPolicy` 已有语义，再取一个别名只会让两套名字漂移 |
 | DPAPI 存账号口令 | 立项阶段先做设计；抄之前要回答"我们是否要引入本地账号"这个更大的决定 |
 | `custom_tool_call` 与 `function_call` 双轨（496 : 5） | 那是它插件/自定义工具生态的产物，我们只有一种工具调用，没有对应需求 |
@@ -2590,6 +2603,1051 @@ BLANK_E2E_MYSQL_URL="mysql+aiomysql://root@127.0.0.1:3307/kbgai_e2e" \
 services/api/.venv/Scripts/python.exe -X utf8 E:/tmp/m83/mutate58.py
 services/api/.venv/Scripts/python.exe -X utf8 E:/tmp/m83/mutate58b.py
 ```
+
+## 7.24 任务 #59：真 DeepSeek 的摘要，在 SQLite 与 MySQL 上是同一组 id
+
+#58 的「还没覆盖」第 1 条写着：装置里的摘要是桩写的 JSON，真模型压缩只有 #42/#44 的单机
+SQLite。本节把真模型拉进跨方言：同一个 provider（`deepseek-chat`），一次跑 :8061（SQLite）、
+一次跑 :8063（MySQL 8.4），窗口临时调到 2000，两份读数逐项对照。
+
+**先修掉的两个取证环境问题**
+
+- :8061 的进程跑的是旧代码：第一次真跑事件里没有 `window_number`/`replacement`/
+  `compaction_response_id`，六条旧判据照样全绿——**判据没盯的字段，旧进程就能一直混过去**。
+  按既定规则重启实例后才看到新字段。
+- 重启后又撞 `no such column: model_usage.response_id`（`POST /run` 500）：隔离库停在
+  alembic 0017，代码已是 0023。补 `alembic upgrade head` 后恢复。这两件事都说明
+  「实例在跑」不等于「代码和库是这一版」。
+
+**判据加硬（11 条）**
+
+除原有六条（有压缩事件、`covered`、触发原因、水位、证据聚合、工具配对不散）外，新增五条，
+都盯着真模型才会有的东西：
+
+1. `summary_chars > 0`（每次折叠的摘要非空——空摘要这条以前没人钉）；
+2. 每窗 `compaction_response_id` 非空（对标 §4 的 `compaction_response_id`，DeepSeek 每次都回 id）；
+3. `window_number` 从 1 起、`previous_window_id` 逐窗接上一窗的 `window_id`、`boundary` 严格前进；
+4. `replacement.dropped` 与 `replacement.items` 都非空（替换历史真的记了丢掉什么/换进什么）；
+5. 证据包 `context.windows[*].compaction_response_id` 与 `context.compacted` 事件是**同一组非空 id**。
+
+**两格实测**
+
+日志：`E:/tmp/m59/final-sqlite.log` / `final-mysql.log`。
+
+| 判据 | SQLite（:8061，任务 `df01ebe3`） | MySQL（:8063，任务 `9f9311c3`） |
+| --- | --- | --- |
+| 结果 | **11/11 PASS，rc=0** | **11/11 PASS，rc=0** |
+| 事件数 / 压缩次数 | 39 / 2 | 39 / 2 |
+| 窗口号 / 边界 | `[1, 2]` / `[3, 7]` | `[1, 2]` / `[3, 7]` |
+| `summary_chars` | `[435, 725]` | `[450, 758]` |
+| 摘要响应 id | `56a446bb…` / `8856ceb5…` | `d10c37e6…` / `e3d5f6ff…` |
+| 替换 retained/dropped/items | 7/2/8、5/6/6 | 7/2/8、5/6/6 |
+| 窗口归属 | 每窗 1 条 turn，`turns_unattributed=0` | 同左 |
+
+- 两格 provider 的 `context_window` 都由 65536 临时改为 2000，finally 恢复 65536
+  （日志里 `restore_window=200 -> 65536`）。
+- 真模型摘要长度每次不同（这两格是 435/725 与 450/758），判据只钉「非空」不钉字数——
+  钉字数等于把模型采样写死。
+
+**不经过装置的库内复核**（`E:/tmp/m59/crosscheck.py`）：
+
+```text
+== sqlite == windows=[1,2] boundaries=[3,7]
+event_ids=['56a446bb…','8856ceb5…']  usage_ids=[同左]  tokens=[[618,228],[976,345]]
+same_order=True chain_linked=True
+== mysql == windows=[1,2] boundaries=[3,7]
+event_ids=['d10c37e6…','e3d5f6ff…']  usage_ids=[同左]  tokens=[[621,230],[1200,375]]
+same_order=True chain_linked=True
+```
+
+`model_usage.node='context_compact'` 的两笔摘要调用，`response_id` 与 `agent_events` 里
+`context.compacted` 的指针逐项相同、顺序一致；`window_id`/`previous_window_id` 首尾相接。
+这是「真模型真被叫了两次、事件里指的是同两次」的独立证据。
+
+**变异电池（2 靶，红集合实测）**
+
+| 靶 | 注入 | rc | 实测红集合 |
+| --- | --- | --- | --- |
+| M1（产品） | `compaction_response_id` 恒为空串 | 1 | 仅「每次压缩都指认了供应商响应 id」红；「证据包与事件同一组 id」当时**没红**——空==空也成立。据此给该判据补 `all(evidence_ids)` |
+| M2（产品） | 摘要长度置 0 + 窗口号恒为 1 + `replacement={}` + 响应 id 空 | 1 | 5 条新判据**全红**，旧 6 条全绿 |
+| 还原 | `graph.py` sha256 | — | 注入前 `02e9f685…`，还原后同值，`git diff` 为空 |
+
+M1 暴露的是判据自身的空值假绿，不是产品缺陷；M2 才是「证据字段全丢」这一形态。
+两靶都按实测记录，没有按推理写红集合。
+
+**离线用例**
+
+`test_compaction_window_v23.py` + `test_response_id_v21.py` + `test_turn_attribution_v24.py`
++ `test_dialect_device_v32.py`：**54 passed / 11.15s**。
+
+全量后端回归：**974 passed / 14 skipped**（rc=0，249.82s，`E:/tmp/m59/regression59.log`；
+与 #58 持平——本批只改探针，未动产品代码与用例）。第一次从仓库根跑错了收集范围，
+把 `services/api/data/snapshots/` 的运行产物当测试收进来（759 个 collection error）；
+正确口径与 §7.23 相同：在 `services/api` 目录下跑。
+
+**还没覆盖的（量出来的，不是猜的）**
+
+1. **真 429 / `Retry-After` 仍未在真供应商上发生**：DeepSeek 不给可控的 429，这一形态
+   只有 #58 的桩证据。真模型这一批证明的是「摘要真发生、id 真骑回来」，不是「真限流也听得懂」。
+2. 2000 窗口是人工配置；真实 65536 窗口下同一任务一次都不会折——触发点是造出来的。
+3. 两次折叠都在 `execute_action` 节点；plan/validation 节点的真模型压缩没有被单独点名。
+4. MySQL 格仍是本机 3307 `root` 无口令的 `kbgai_m59` 库；CI runner 上的真库 job 仍未跑过。
+5. 探针需要活实例 + 真 Key，不能进 CI（会花钱、要密钥）；它是取证工具，不是回归用例。
+6. 真模型摘要内容没有做语义正确性判定——只证明非空与可追溯；「摘要是否忠实」仍要靠
+   人工/模型评审，不在本判定里。
+
+复现：
+
+```bash
+# SQLite 格（:8061 必须是当前代码，库先 alembic upgrade head）
+PYTHONIOENCODING=utf-8 services/api/.venv/Scripts/python.exe -X utf8 -u evals/compaction_probe.py
+
+# MySQL 格（:8063 = MySQL 8.4 + 真供应商；启动脚本与库在 E:/tmp/m59/mysql-cell/）
+BLANK_DATABASE_URL="mysql+aiomysql://root@127.0.0.1:3307/kbgai_m59" \
+BLANK_SECRET_KEY_FILE="E:/tmp/realmodel/secret.key" \
+BLANK_SETTINGS_FILE="E:/tmp/m59/mysql-cell/settings.json" \
+BLANK_MEMORY_DIR="E:/tmp/m59/mysql-cell/memory" \
+BLANK_NOTES_DIR="E:/tmp/m59/mysql-cell/notes" \
+BLANK_WORKTREE_ROOT="E:/tmp/m59/mysql-cell/worktrees" \
+BLANK_AUDIT_DIR="E:/tmp/m59/mysql-cell/audit" \
+BLANK_SANDBOX_ENABLED=0 PYTHONPATH=src \
+  services/api/.venv/Scripts/python.exe -m uvicorn blank_api.app:app --host 127.0.0.1 --port 8063
+
+PROBE_BASE=http://127.0.0.1:8063 PROBE_PROVIDER_ID=6370024d-9590-4c08-bea3-ac1a8e8f41c6 \
+PROBE_OUT_DIR="E:/tmp/m59/mysql-cell" PYTHONIOENCODING=utf-8 \
+  services/api/.venv/Scripts/python.exe -X utf8 -u evals/compaction_probe.py
+
+# 库内复核与变异靶
+services/api/.venv/Scripts/python.exe -X utf8 E:/tmp/m59/crosscheck.py
+services/api/.venv/Scripts/python.exe -X utf8 E:/tmp/m59/mutate59b.py inject   # 跑完 restore
+```
+
+## 7.25 任务 #60：第三格真的来了——PostgreSQL 17.6 上的迁移、应用与 83 步同一套判据
+
+#60 的题目写在 §7.22、§7.24 的「还没覆盖」里：PostgreSQL 一直只是迁移代码里的方言分支
+（0021/0022/0023 都写着 `if dialect.name == "sqlite" ... else`），从没起过一台真库。
+这一批把它跑成第三格：**真 PostgreSQL 17.6 + 同一条 alembic 历史 + 同一份 83 步 HTTP 驱动**。
+
+**装置与实例**
+
+- EnterpriseDB 便携包 `postgresql-17.6-1-windows-x64-binaries.zip` 解到 `E:/tmp/pg60/pgsql`；
+  `initdb -U postgres --auth=trust --locale=C`，只监听 `127.0.0.1:55432`。
+  `kbgai_pg60` 用于迁移往返，`kbgai_e2e` 是装置格。
+- 这是**隔离的本机实例**（trust、无口令、无 TLS），不是部署形态；只用来量"应用在 PG 上跑不跑"。
+
+**接线（只动装置与 CI，产品代码零改动）**
+
+- `_split_postgres_url`：SQLAlchemy URL 解析、库名只认 `[A-Za-z0-9_]{1,60}`（要拼进 DDL 的标识符）、口令不回显；
+- `postgres_admin`：asyncpg 连 maintenance 库，`drop database ... with (force)` + `create database`；
+- `prepare(engine, mysql_url, postgres_url)` 在 `postgres` 格建库后跑同一条 `alembic upgrade head`；
+- `checkpoint_witness` 多一条 asyncpg 分支，直查 `agent_checkpoint_writes`；
+- `verdict()` 从写死 MySQL 改成按格点名（`MySQL` / `PostgreSQL`），对照格红仍让整次判定作废；
+  **三格同跑时两个被测格一起红，不再各念一句「只有 X 红」**，改念「非对照格与对照不同的步骤」并列出共有红步；
+- CLI 新增 `postgres` 格与 `--require-postgres`；默认仍是 `sqlite,mysql`，旧调用行为不变；
+- 离线闸门 19 条全绿（新增 2 条：PG URL 解析/拒绝、PG 归属点名）；
+- CI `api-dialect` 增加 `postgres:17` service，一次跑
+  `--only sqlite,mysql,postgres --require-mysql --require-postgres`（**未在 GitHub runner 上跑过**，见未覆盖 2）。
+
+**实测**
+
+1. 迁移：`alembic upgrade head` 0001→0023 **rc=0**（`E:/tmp/pg60/alembic.log`）；
+   `downgrade base` **rc=0** 后再 `upgrade head` **rc=0**，末态 `0023_timestamps_not_null`、public **21 张表**
+   （`downgrade.log` / `reupgrade.log`）。整条历史没有为 PG 改一行。
+2. 装置：`--only sqlite,postgres` 两格各 **83/83 PASS、0 FAIL**，合计 **166 条 PASS**，
+   rc=0「每一格全绿：对照判据成立」；每格服务日志里 SQL 相关行 **0**，桩连接/服务/截断 **52/52/0**。
+3. 检查点：两格都 **461 行**，末次字节数同为 **286,410**（首次绿跑是 286,411 / 286,410）。
+   字节和会随两次运行各自的 id / 时间等运行值变动，所以只把行数当跨格一致判据，不主张逐字节相等。
+4. 绿跑后直查 PG：`alembic_version=0023`，`tasks=7`（5 succeeded / 2 failed——后两条正是第 77/78 步
+   故意造的 429 与超时）、`agent_events=187`、`model_usage=23`、`agent_checkpoint_writes=461`。
+5. 负对照（装置能不能红）：只在 `db.py::engine_options` 给 PG 加 `search_path=mutation_absent`
+   （alembic 自建引擎，不受影响）⇒ uvicorn 启动时 `relation "agent_runs" does not exist`，装置 **rc=1**；
+   `db.py` 逐字节还原，`git hash-object` = `7adbaef8…` = HEAD。
+   这一靶证明 PG 格不是"没跑也报绿"；它红在启动而非步骤归属，步骤级归属由离线 `verdict()` 用例钉住。
+6. 回归：离线 `test_dialect_device_v32` **19 passed**；后端全量 **976 passed / 14 skipped**
+   （rc=0，244.43s，`E:/tmp/pg60/regression60.log`；#59 的 974 + 本批 2 条）。
+   三格归属分支修正（两个被测格同时红）后，装置用例 **19 passed**、全量复跑仍 **976 passed / 14 skipped**
+   （rc=0，241.03s，`E:/tmp/pg60/regression60b.log`）。
+
+**还没覆盖的（量出来的，不是猜的）**
+
+1. PG 是本机 trust 实例，没验口令 / TLS / 远程连接；也不是"别人运维的 PG"。
+2. CI 的 PG service 只写进了 yml，**GitHub runner 上一次没跑过**（与 MySQL 那一格同一条账）。
+3. 只在 Windows + PG 17.6 上跑过；PG 16 / Linux 形态没有实物。
+4. 负对照在启动阶段就红了，没有产出「只有 PostgreSQL 红」的步骤级红集合；那条归属只由离线用例守。
+5. 检查点只对账行数与字节和，未做逐行 / 逐字节的跨方言相等判定；两次绿跑的字节和本身就能差 1。
+6. `test_schema_agreement_v29.py` 仍是 SQLite↔MySQL 两方言，PG 的逐列对账没有加。
+7. #29–#60 中 #29–#58 已在 `c6581e3`；**#59 / #60 仍未 commit**（HEAD=`c6581e3`，未 push）。
+
+复现：
+
+```bash
+# 1) 起隔离实例（便携包在 E:/tmp/pg60）
+E:/tmp/pg60/pgsql/bin/initdb.exe -D E:/tmp/pg60/data -U postgres --auth=trust --encoding=UTF8 --locale=C
+E:/tmp/pg60/pgsql/bin/pg_ctl.exe -D E:/tmp/pg60/data -l E:/tmp/pg60/pg.log \
+  -o "-p 55432 -c listen_addresses=127.0.0.1" start
+
+# 2) 整条迁移历史与往返（kbgai_pg60 先建库）
+cd services/api
+BLANK_DATABASE_URL="postgresql+asyncpg://postgres@127.0.0.1:55432/kbgai_pg60" \
+  .venv/Scripts/python.exe -X utf8 -m alembic upgrade head
+BLANK_DATABASE_URL="postgresql+asyncpg://postgres@127.0.0.1:55432/kbgai_pg60" \
+  .venv/Scripts/python.exe -X utf8 -m alembic downgrade base
+BLANK_DATABASE_URL="postgresql+asyncpg://postgres@127.0.0.1:55432/kbgai_pg60" \
+  .venv/Scripts/python.exe -X utf8 -m alembic upgrade head
+
+# 3) 离线闸门（19 passed）
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_dialect_device_v32.py
+
+# 4) SQLite 对照 + PostgreSQL 被测（83 步；从仓库根）
+cd ../..
+BLANK_E2E_POSTGRES_URL="postgresql+asyncpg://postgres@127.0.0.1:55432/kbgai_e2e" \
+  services/api/.venv/Scripts/python.exe -X utf8 -u evals/dialect_e2e.py \
+  --only sqlite,postgres --require-postgres
+
+# 5) PG 专属负对照：注入坏 search_path，装置必须 rc=1，然后逐字节还原
+services/api/.venv/Scripts/python.exe -X utf8 E:/tmp/pg60/mutate_pgcell.py inject
+BLANK_E2E_POSTGRES_URL="postgresql+asyncpg://postgres@127.0.0.1:55432/kbgai_e2e" \
+  services/api/.venv/Scripts/python.exe -X utf8 -u evals/dialect_e2e.py --only sqlite,postgres --require-postgres
+services/api/.venv/Scripts/python.exe -X utf8 E:/tmp/pg60/mutate_pgcell.py restore
+```
+
+## 7.26 任务 #61：两条建库路径在 PostgreSQL 上对账——77 列的默认值只有迁移侧有
+
+#60 证明的是「迁移能建出库、应用能跑」；没有证明「另一条建库路径（`Base.metadata.create_all`）
+在 PG 上给出同一个 schema」。这不是同一件事：#49 的 A1 只在 SQLite 上对过账，
+而 SQLite 对列宽、可空性、默认值照收不误——只有真方言才会把这些分歧变成事故
+（#47 的 `String(36)→String(120)`、#48 的 `ON DELETE CASCADE` 都是这么被真库抓出来的）。
+
+**装置**（`services/api/tests/test_schema_agreement_pg_v33.py`，3 条判定）
+
+- 在真 PG 上开两个**独立库**：一个跑 `alembic upgrade head`（0001→0023），
+  一个跑 `create_all()`；库名带进程号，跑完 `drop database ... with (force)`。
+- 对账五个维度：表集合、列集合、可空性、外键集合、**服务端默认值**。
+  默认值只比两个库反射出来的结果，不比 ORM 里的 Python 字面量——PG 会把等价写法
+  规范化成同一个 `column_default`（`DEFAULT ''` 与 `DEFAULT ('')` 都是 `''::character varying`，
+  先用探针 `probe_defaults_a/b` 验过，不是推断）。
+- 防空绿：`counted >= 17`、`tasks.attachments` 必须含 `[]`、`agent_runs.request_payload` 必须含 `{}`；
+  另有一条值探针：不带 `description/created_at/updated_at` 插入 `projects`，必须真落空串与非空时间。
+- 没给 `BLANK_TEST_POSTGRES_URL` 时三条都跳过（默认测试入口与 CI `api` job 没有 PG）；
+  给了却连不上是**失败**（`AssertionError`），不是跳过。
+
+**第一次真跑就红了：77 列只有迁移侧有服务端默认值**
+
+- `test_both_provisioning_paths_agree_on_postgres` 与值探针都绿；默认值一条红，
+  实测 **77 个列**（20 张表）`迁移=<默认值>` 而 `create_all=None`：
+  19 张表里 `''` 的 varchar、`''`/`'{}'`/`'[]'` 的 Text/JSON、`0/1/5/8/2048/60000/128000` 的整数、
+  `true/false` 的布尔、`0.2` 的浮点；ORM 侧这些列只有 Python `default=`（插入时由 SQLAlchemy 填），
+  所以 `create_all` 的 DDL 里一个默认值都没有。
+- 顺带量到一处口径分歧：`tasks.max_steps` 迁移侧服务端默认值是 **8**，
+  而 Python 默认值（`DEFAULT_MAX_STEPS`）已是 **200**——应用插入走 200，裸 SQL 走 8。
+  这不是本批引入的，模型里加了一行注释如实写明，没有擅自改任何一侧。
+
+**处置：只补 ORM 的 `server_default`，迁移与 Python 默认值都不动**
+
+- 8 个模型文件、77 个列补上与迁移侧一致的服务端默认值；Text/JSON 一律用
+  `text("('')")` / `text("('{}')")` / `text("('[]')")` 表达式默认值（MySQL 8.4 对 LOB 裸字面量
+  默认值会 1101，这正是 #49 的约束）；varchar/int/bool/float 用普通字符串或 `text("true")`。
+- Python `default=` 全部保留：应用插入的取值路径一个字没变，变的是 `create_all` 建出来的 DDL。
+- CI `api-dialect` 在三方言驱动之后加一步 `pytest -q tests/test_schema_agreement_pg_v33.py`，
+  用同一个 `postgres:17` service（连 maintenance 库 `postgres`，自己建/删两个临时库）。
+
+**验证**
+
+1. 修前红基线：`1 failed, 2 passed`，红集合恰好 77 列（`E:/tmp/pg60/pg-agree-red1.log`）。
+2. 修后：3 passed（PG 17.6，`127.0.0.1:55432`）；`test_schema_agreement_v29.py` 仍 **6 passed**。
+3. 变异电池两条，红集合按实测：
+   - M1 摘掉 `tasks.status` 的 `server_default` ⇒ 只有 `test_server_defaults_agree_on_postgres` 红，
+     红行 `tasks.status: 迁移="'draft'::character varying" create_all=None`；
+   - M2 把 `tasks.attachments` 改 `nullable=True` ⇒ 只有 `test_both_provisioning_paths_agree_on_postgres` 红，
+     红行 `tasks.attachments: 迁移 nullable=False 但 ORM nullable=True`；
+   - 两次都逐字节还原，`task.py` sha256 = `07b819d0…`，还原后复跑 3 passed（`E:/tmp/pg61/m1.log` / `m2.log`）。
+4. 全量：**976 passed / 17 skipped**（rc=0，246.22s，`E:/tmp/pg61/regression61.log`）；
+   新增 3 条在没有 `BLANK_TEST_POSTGRES_URL` 时按设计跳过，跳过数从 14 变成 17。
+
+**还没覆盖的（量出来的，不是猜的）**
+
+1. 只对账表/列/可空性/外键/默认值：**列类型与长度、索引、唯一约束、CHECK** 没有逐项比——
+   `String(36)` 与 `String(120)` 这类漂移在这条判定下仍然看不见。
+2. 变异只打在 ORM 侧；迁移侧只被"第一次自然红"覆盖过，没有单独的迁移变异靶。
+3. CI 的这条新步骤与 `postgres:17` service 一样，**GitHub runner 上没跑过**。
+4. 只在 Windows + PG 17.6 上跑；PG 16 / Linux 形态没有实物。
+5. `test_schema_agreement_v29.py` 的 A5（0023 NULL 闸门）仍只在 SQLite 上有拒绝证据。
+6. 补的 77 个 `server_default` 只经过 SQLite 全量回归与 MySQL DDL 编译检查（A2），
+   **MySQL 上真跑 `create_all` 路径没有重跑**（产品迁移路径不经过它）。
+
+复现：
+
+```bash
+# 需要一台真 PG；没给 URL 时三条按设计跳过
+cd services/api
+BLANK_TEST_POSTGRES_URL="postgresql+asyncpg://postgres@127.0.0.1:55432/postgres" \
+  .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_schema_agreement_pg_v33.py
+
+# 变异（M1 默认值 / M2 可空性），跑完必须 restore
+.venv/Scripts/python.exe -X utf8 E:/tmp/pg61/mutate_orm.py inject-default
+.venv/Scripts/python.exe -X utf8 E:/tmp/pg61/mutate_orm.py restore
+.venv/Scripts/python.exe -X utf8 E:/tmp/pg61/mutate_orm.py inject-nullable
+.venv/Scripts/python.exe -X utf8 E:/tmp/pg61/mutate_orm.py restore
+```
+
+## 7.27 任务 #62：schema 不止列名——类型/长度、索引、唯一约束，以及一处真实的约束名分歧
+
+#61 把两条建库路径的「列名 / 可空性 / 外键 / 服务端默认值」对上了，但那不是 schema 的全部：
+`String(36)` 与 `String(120)` 在列名上完全一样，少一条索引、唯一约束换个名字，也同样看不出来。
+这一批先在真 PG 上**量实物**（`E:/tmp/pg62/probe_shapes.py`，只打印不判定）：
+
+- 20 张表 / **213 列**，类型分布 `VARCHAR(36)` 49、`TIMESTAMP` 31、`INTEGER` 26、`VARCHAR(120)` 15、
+  `TEXT` 14、`JSON` 11、…；其中 **118 列带长度**。
+- **44 个索引**、**6 个唯一约束**；CHECK 约束**两边都是 0 条**。
+- 类型/长度、索引的「列集合 + unique 标志」全部一致——唯一分歧在**名字**上。
+
+**第一次真跑就红：唯一约束的名字**
+
+```
+model_providers 索引分歧：迁移独有=[('uq_model_providers_name', ('name',), True)]
+                                  ORM 独有=[('model_providers_name_key', ('name',), True)]
+model_providers 唯一约束分歧：迁移独有=[('uq_model_providers_name', ('name',))]
+                                        ORM 独有=[('model_providers_name_key', ('name',))]
+```
+
+机理：迁移 0003 写的是 `sa.UniqueConstraint("name", name="uq_model_providers_name")`；
+ORM 只写 `unique=True`，PG 按 `<table>_<column>_key` 自动命名。两条路建出来的库语义相同，
+但**按名字 DROP 的脚本会一个中一个空**，以后的迁移也认不出它们是同一个对象。
+处置：ORM 改成显式 `UniqueConstraint("name", name="uq_model_providers_name")`（与迁移同源），
+列上的 `unique=True` 去掉；Python 侧行为与迁移文件都没动。这个修法在 SQLite/MySQL 的 `create_all` 上
+同样生效，不只 PG。
+
+**装置**（`test_schema_agreement_pg_v33.py` 从 3 条长成 5 条）
+
+- `test_column_types_and_lengths_agree_on_postgres`：反射两库的 `str(type)` 与 `length` 逐列比；
+  防空绿 `compared >= 200`、`with_length >= 100`，并钉三个具体锚点——`model_usage.run_id` /
+  `agent_events.run_id` / `model_usage.origin_run_id` 必须是 `VARCHAR(120)`（#47 放宽的那三列）。
+- `test_indexes_and_uniques_agree_on_postgres`：索引按 `(name, columns, unique)`、唯一约束按
+  `(name, columns)` 比；防空绿 `index_count >= 40`、`unique_count >= 6`，并钉
+  `("uq_model_providers_name", ("name",))` 必须在迁移库里。
+- **CHECK 不做对账**：当前 20 张表两条路径都是 0 条，空对空的相等是一条永不失败的装饰
+  （#49 的「只认 `ast.Call` 扫出 0 处」就是这类假绿的近亲）。触发条件写在文件头：一旦任何模型/迁移
+  加 `CheckConstraint`，先让两边各反射出一条非空 CHECK，再纳入对账。
+- 模块里显式 `import blank_api.models`：`create_all` 的 oracle 来自已注册的表，别依赖 conftest 的导入顺序
+  （勘察脚本第一版就因此得到 `orm={}`，20 张表被比成 0 张——防空绿断言会先拦下这种形状）。
+
+**验证**
+
+1. 修前红基线：`1 failed, 4 passed`，红的只有索引/唯一约束那一条，红因与勘察逐字相同（`E:/tmp/pg62/red1.log`）。
+2. 修后：`5 passed`（PG 17.6，`E:/tmp/pg62/green1.log`）；`test_schema_agreement_v29.py` 仍 **6 passed**。
+3. 变异电池 **3/3 红集合精确相等**（`E:/tmp/pg62/mutate_orm.py`，日志 `mutations.log`）：
+   - M1 `model_providers.name` 的 `String(100)` → `String(120)` ⇒ 只有类型/长度一条红；
+   - M2 摘掉 `parallel_group` 的 `index=True` ⇒ 只有索引/唯一一条红；
+   - M3 把约束名改成 `uq_model_providers_name_mut` ⇒ 只有索引/唯一一条红；
+   - 基线 sha256 `55f5a97d…`，每条还原后哈希一致、基线复绿。
+4. 全量：第一次 **975 passed / 1 failed / 19 skipped**（244.20s，`regression62.log`），唯一红是既有的墙钟用例
+   `test_read_only_calls_overlap`（实测 0.47s vs 0.45s），而它同一条用例里的**交错证据 `trace.overlap` 是通过的**
+   ——并行确实发生了，只是计时超线。按纪律不放宽阈值：单跑 **3/3 绿**（`wall1/2/3.log`），空载后复跑
+   **976 passed / 19 skipped**（rc=0，249.73s，`regression62b.log`）；在最终字节上再跑一次同样
+   **976 passed / 19 skipped**（rc=0，250.80s，`regression62c.log`）。新增的两条在无 `BLANK_TEST_POSTGRES_URL`
+   时按设计跳过，跳过数从 17 变成 19。
+
+**还没覆盖的（量出来的，不是猜的）**
+
+1. **CHECK 约束**：今天两条路径都是 0 条，没有可对实物；触发条件已写在用例头部。
+2. 索引只比「名字 + 列 + unique」；`USING`、部分索引的 `WHERE`、排序方向、包含列（INCLUDE）没有比。
+3. 类型用反射的字符串形式比（`VARCHAR(120)` / `TIMESTAMP` / `JSON`）；collation、enum 标签、数组维度没有单独比。
+4. 变异只在 ORM 侧；迁移侧仍只由「第一次自然红」覆盖。
+5. 这一批只在 PG 17.6 + Windows 上跑；MySQL 的 `create_all` 路径**没有重跑**（同一处修复对它是方言中立的，
+   但这是推理，不是读数）。CI 的 `api-dialect` 复用同一条 pytest 步骤，**GitHub runner 仍没跑过**。
+
+复现：
+
+```bash
+cd services/api
+BLANK_TEST_POSTGRES_URL="postgresql+asyncpg://postgres@127.0.0.1:55432/postgres" \
+  .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_schema_agreement_pg_v33.py
+
+# 勘察：只打印两库的形状差异
+.venv/Scripts/python.exe -X utf8 E:/tmp/pg62/probe_shapes.py
+
+# 变异电池：3 靶，跑完自动还原并以 sha256 自证
+.venv/Scripts/python.exe -X utf8 E:/tmp/pg62/mutate_orm.py
+```
+
+## 7.28 任务 #63：同一套 schema 对账搬到真 MySQL 8.4——13 条读数量出一条真分歧
+
+#62 把 PG 的两条建库路径对到了类型/长度/索引/唯一约束，但它在「还没覆盖的」里自己记着：
+**MySQL 的 `create_all` 路径没有重跑**。MySQL 侧自 #49 之后只有「整条迁移能跑通」与 83 步 HTTP，
+而 `create_all` 是测试与本地快速起库用的另一条路——两边形状不一致，测试库就与生产库不是同一个东西。
+
+这一批在真 MySQL 8.4.0（`127.0.0.1:3307`，自管实例）上开两个库：一个 `alembic upgrade head`，
+一个 `Base.metadata.create_all()`，然后逐表反射对账（`E:/tmp/mysql63/probe_shapes.py`）。读数：
+
+- 20 张表 / **213 列**，其中 **118 列带长度**；**48 个索引**（MySQL 反射把唯一约束背后的索引
+  也列进 `get_indexes`，与 `get_unique_constraints` 重复，两边同源即可）、**6 个唯一约束**、
+  **21 个外键**、**125 个非空服务端默认值**；CHECK 两边都是 **0 条**。
+- 类型/长度、可空性、索引/唯一约束的集合、主键全部一致。
+
+**第一次真跑：13 条分歧，分成两类**
+
+```
+search_docs.created_at: 默认值 迁移='CURRENT_TIMESTAMP' create_all='(now())'
+...（共 12 个 created_at/updated_at）
+tasks: 外键 仅迁移=[('fk_tasks_thread_id', ('thread_id',), 'threads', ('id',))]
+             仅 create_all=[('tasks_ibfk_2', ('thread_id',), 'threads', ('id',))]
+```
+
+1. **12 条时间默认值的两种写法不是分歧。** 迁移 0014/0016/0017 建表时两边都写 `func.now()`，
+   但 0023 在 MySQL 上做 `SET NOT NULL` 必须 `MODIFY` 整列定义；Alembic 会把
+   `existing_server_default=sa.text("CURRENT_TIMESTAMP")` 重述进 DDL，于是迁移库把默认值存成
+   `CURRENT_TIMESTAMP`，而 `create_all` 存的是表达式默认值 `(now())`。MySQL 文档里
+   `NOW()` 与 `CURRENT_TIMESTAMP` 是同义词，两者都在插入时求值。**没有改迁移**（改历史迁移
+   不会改变已经迁移过的库，而且这次差异是语义相同的）；用例对**这一族**写法归一，
+   再用「不带时间列插一行必须真落当前时间」证明归一没掩盖「默认值丢了」。
+2. **外键名是真分歧。** 迁移 0014 的 `batch.create_foreign_key("fk_tasks_thread_id", ...)` 有名字，
+   ORM 只写 `ForeignKey("threads.id", ondelete="SET NULL")`：MySQL 自动起 `tasks_ibfk_2`、
+   PG 自动起 `tasks_thread_id_fkey`。**按名字 DROP 的脚本会一个中一个空**——与 #62 的唯一约束名
+   是同一类缺陷，只是这次在另一条方言上、另一个对象上。修法：ORM 补同名
+   `ForeignKey("threads.id", name="fk_tasks_thread_id", ...)`，Python 行为与迁移文件都没动。
+
+同时把 PG 侧 v33 的 `fks` 身份从「从哪列指向哪列」扩成
+`(name, constrained_columns, referred_table, referred_columns, ondelete, onupdate)`：
+之前那一版即使 ORM 外键名与迁移不同，PG 对账也会全绿——这是 #62 留下的一个盲区，这一批补上。
+
+**装置**（新增 `test_schema_agreement_mysql_v40.py`，4 条；文件名避开已被鉴权面占用的 v34）
+
+- `test_both_provisioning_paths_agree_on_mysql`：逐列比 nullable/类型/长度/默认值（时间族归一），
+  逐表比外键（名字 + ON DELETE/UPDATE）/索引/唯一约束/CHECK/主键。防空绿：表 ≥20、列 ≥200、
+  带长度列 ≥100、索引 ≥40、唯一 ≥6、外键 ≥20、非空默认值 ≥120。
+- `test_timestamp_default_spellings_are_equivalent_on_mysql`：钉住「写法分歧恰好是这 12 列、
+  归一后都等于 `CURRENT_TIMESTAMP`」，再在迁移库与 `create_all` 库各插一行不带时间列的记录，
+  断言 `created_at/updated_at` 非空。别的默认值真变了归对账用例管，这条只负责时间族——
+  第一版把「任何默认值分歧」都算成自己的红，变异 M4 量出来后已收窄（见下）。
+- `test_foreign_key_names_and_actions_agree_on_mysql`：两库的 `tasks` 外键名集合相等，
+  且 `fk_tasks_thread_id` 存在、`ON DELETE` 为 `SET NULL`。
+- `test_expression_defaults_land_values_on_mysql`：#49 的表达式默认值（`('[]')`/`('')`）在两种建库
+  路径上都真落值；裸 SQL 不走 SQLAlchemy 的 JSON 反序列化，MySQL 把 JSON 列念成字符串，用例自己解析。
+
+**验证**
+
+1. 修前勘察：`diffs=13`（`E:/tmp/mysql63/shapes.json` 第一次落盘）；修 ORM 外键名后同一勘察
+   `diffs=0`（12 条时间写法按同义归一）。
+2. 修后：MySQL 4 条 + PG 5 条 = **9 passed**，两种方言都真跑迁移与 `create_all`。
+3. 变异电池 **4/4 红集合精确相等**（`E:/tmp/mysql63/mutate63.py`，日志 `mutate.log`）：
+   - M1 ORM 外键名改成 `fk_tasks_thread_id_mut` ⇒ MySQL 两条（对账 + 外键锚点）、PG 对账一条；
+   - M2 `model_providers.name` 的 `String(100)` → `String(120)` ⇒ MySQL 对账、PG 类型/长度；
+   - M3 摘掉 `parallel_group` 的 `index=True` ⇒ MySQL 对账、PG 索引/唯一；
+   - M4 `tasks.status` 的默认值 `"draft"` → `"done"` ⇒ MySQL 对账、PG 服务端默认值。
+   - **第一次 M4 多红了一条**（时间默认值用例）：它当时把「任何默认值分歧」都算成时间族的失守，
+     红集合实测 3 条而期望写了 2 条。按纪律不放宽期望，收窄用例职责后重跑 4/4；基线 sha256
+     `cbd35ae0…`（task.py）/ `55f5a97d…`（model_provider.py），每条还原后哈希一致、基线复绿。
+4. 全量：无 MySQL/PG 环境变量时新增 4 条按设计跳过——**976 passed / 23 skipped**，rc=0，243.96s
+   （`E:/tmp/mysql63/regression63.log`）；跳过数从 19 变成 23。
+5. CI `api-dialect` 增 `MySQL 两条建库路径对账` 步骤（`BLANK_TEST_MYSQL_URL` 指向 service 的
+   `mysql` 系统库），与 PG 对账同 job。
+
+**还没覆盖的（量出来的，不是猜的）**
+
+1. **CHECK 约束**：两条路径都是 0 条，没有可对实物；触发条件同 #62——任一侧出现非空 CHECK 再纳入。
+2. 索引只比「名字 + 列 + unique」；`USING`、前缀长度、排序方向、隐藏列没有比。
+3. 类型用反射字符串比；collation、字符集、enum 标签没有单独比。
+4. 变异只打 ORM 侧；迁移侧仍由「第一次自然红」与迁移文件本身覆盖。
+5. 只在 MySQL 8.4.0 Windows 自管实例 + PG 17.6 上跑；CI runner 仍没跑过。
+6. 时间默认值的归一只放行 `CURRENT_TIMESTAMP` / `NOW()` 这一族；换成 `UTC_TIMESTAMP()` 这类
+   真不同表达式时，归一不相等，由对账用例红——但这一点是推理，没有单独造一次变异。
+
+复现：
+
+```bash
+cd services/api
+BLANK_TEST_MYSQL_URL="mysql+aiomysql://root:@127.0.0.1:3307/mysql" \
+BLANK_TEST_POSTGRES_URL="postgresql+asyncpg://postgres@127.0.0.1:55432/postgres" \
+  .venv/Scripts/python.exe -X utf8 -m pytest -q \
+    tests/test_schema_agreement_mysql_v40.py tests/test_schema_agreement_pg_v33.py
+
+# 勘察：两库形状差异 + SHOW CREATE TABLE 原文
+.venv/Scripts/python.exe -X utf8 E:/tmp/mysql63/probe_shapes.py
+
+# 变异电池：4 靶，跑完自动还原并以 sha256 自证
+.venv/Scripts/python.exe -X utf8 E:/tmp/mysql63/mutate63.py
+```
+
+## 7.29 任务 #64：把 PG/MySQL 的对账维度搬回主方言 SQLite——8 条布尔默认值分歧
+
+#61–#63 一路把「两条建库路径同形状」从列名扩到类型/长度/索引/唯一约束/外键名/默认值，
+但补的全是第二、第三种方言；**主方言 SQLite 的 v29 还停在 #49 的四样**（表/列/可空性/外键）。
+生产库走 `alembic upgrade head`，测试与本地快速起库走 `create_all`——主方言上少一个索引、
+约束名不同，测试依旧全绿，生产却缺对象。这一批把 v29 从「只建一个迁移库、拿 ORM 字面量当 oracle」
+改成「两条真库互相对账」，并把新维度逐个搬回来。
+
+**读数**（`E:/tmp/sqlite64/probe_shapes.py`，两库各自真跑）：
+
+- 20 表 / **213 列**，其中 **118 列带长度**；**38 个索引**（SQLite 不像 MySQL 那样把唯一约束
+  重复列进 `get_indexes`）、**6 个唯一约束**、**21 个外键**、**125 个非空服务端默认值**、
+  **0 个 CHECK**。
+- 类型/长度、索引/唯一/主键、外键（名字 + ON DELETE/UPDATE）、默认值，第一次修完布尔后全一致。
+
+**唯一的真分歧：布尔默认值的拼法**
+
+```
+model_providers.supports_tools: 默认值 迁移='0' ORM='false'
+model_providers.enabled:        默认值 迁移='1' ORM='true'
+...（共 8 列：model_providers 3、team_bots 2、team_members 1、team_rounds 1、workspaces 1）
+```
+
+迁移侧（0020/0022）写的是字符串 `'1'/'0'`；ORM 侧此前写 `server_default=text("true"/"false")`，
+在 SQLite 上原样落成 `'true'/'false'`。SQLite 会把它们各自读回 1/0，所以**行为测试全绿**——
+这正说明「只测行为」看不见声明漂移。修法：ORM 改用 SQLAlchemy 的 `true()/false()`，在 SQLite 上
+编译成 `1/0`、在 PG 上编译成 `true/false`（PG 服务端归一成布尔）、在 MySQL 上落 `1/0`，
+与三条迁移的写法语义一致；Python `default=` 未动。改动只在 `model_provider.py` / `team.py` /
+`project.py` 的 `server_default`。
+
+**装置**（`test_schema_agreement_v29.py`，6 → 9 条）
+
+- `provisioned_pair`：同一个临时目录里建两个库，迁移那条走 subprocess + `alembic upgrade head`
+  （env.py 用应用异步引擎，同进程跑会搅事件循环），另一条 `Base.metadata.create_all()`；
+  模块显式 `import blank_api.models`，否则 `create_all` 只会建出 0 张表（#62 踩过一次）。
+- `_reflected` 从「列/可空性/外键二元组」扩到类型、长度、默认值原文、外键六元组
+  （名字 + 列 + 目标表 + 目标列 + ON DELETE + ON UPDATE）、索引、唯一约束、CHECK、主键。
+- A1 仍是表/列/可空性/外键的总闸门；新增
+  `test_column_types_and_lengths_agree`（防空绿：比到 ≥200 列、≥100 个带长度列；
+  锚点 `model_usage.run_id`/`agent_events.run_id`/`model_usage.origin_run_id` = `VARCHAR(120)`、
+  `model_providers.name` = `VARCHAR(100)`）、
+  `test_indexes_and_uniques_agree`（索引 ≥30、唯一 ≥6；锚点 `uq_model_providers_name`、
+  `ix_model_usage_parallel_group`）、
+  `test_server_defaults_agree`（默认值 ≥120；锚点 8 个布尔列与
+  `tasks.attachments="'[]'"`、`tasks.goal="''"`、`agent_runs.request_payload="'{}'"`）。
+  CHECK 两边都是 0 条，不写空对空判定，触发条件记在文件头。
+- A2–A5（LOB 字面量默认值、迁移 AST 扫描、默认值落值、0023 NULL 闸门）原样保留。
+
+**验证**
+
+1. 修前勘察：`diffs=8`（8 条布尔拼法，`E:/tmp/sqlite64/shapes.json` 第一次落盘）；改 ORM 后
+   同一勘察 `diffs=0`。诚实缺口：这 8 条没有留 pytest 自然红，改由变异 M1（把同一列写回
+   `text("false")`）证明该判定会红。
+2. 修后 `pytest -q tests/test_schema_agreement_v29.py`：**9 passed**（5.13s，含两次真建库）。
+3. 变异电池 **4/4 红集合精确相等**（`E:/tmp/sqlite64/mutate64.py`）：
+   - M1 `supports_tools` 默认值写回 `text("false")` ⇒ 只红 `test_server_defaults_agree`；
+   - M2 `model_providers.name` `String(100)` → `String(120)` ⇒ 只红类型/长度；
+   - M3 摘掉 `parallel_group` 的 `index=True` ⇒ 只红索引/唯一；
+   - M4 摘掉 `tasks` 外键名 ⇒ 只红总闸门。
+   基线 sha256 `deaa816f…`（model_provider.py）/ `cbd35ae0…`（task.py），每条还原后哈希一致、
+   基线复绿。变异靶点跨 CRLF 时必须先归一换行再匹配（第一版按 `\n` 找靶点，报「0 次」）。
+4. 全量：**979 passed / 23 skipped**，245.79s（`E:/tmp/sqlite64/regression64.log`），
+   979 = #63 的 976 + 新增 3 条；跳过数不变（本文件不需要外部库，默认就跑）。
+
+**还没覆盖的（量出来的，不是猜的）**
+
+1. **CHECK 约束**：两条路径都是 0 条，没有可对实物；触发条件同 #62/#63——任一侧出现非空 CHECK。
+2. 索引只比「名字 + 列 + unique」；partial index 的 `WHERE`、表达式索引、排序方向没有比。
+   当前 SQLite 38 个索引全是普通列索引。
+3. 类型用反射字符串比；SQLite 的 affinity 会吞掉一些写法差异（如 `DATETIME` vs `TIMESTAMP`），
+   这类差异只有第二方言能看见。
+4. 变异只打 ORM 侧；迁移侧由第一次自然红与迁移文件本身覆盖。
+5. 只在 SQLite（Windows 自带）上跑；`alembic` 两条路径的 5 秒成本适合进默认套件，不需要 CI 新步骤。
+
+复现：
+
+```bash
+cd services/api
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_schema_agreement_v29.py
+
+# 勘察：两库形状差异
+.venv/Scripts/python.exe -X utf8 E:/tmp/sqlite64/probe_shapes.py
+
+# 变异电池：4 靶，跑完自动还原并以 sha256 自证
+.venv/Scripts/python.exe -X utf8 E:/tmp/sqlite64/mutate64.py
+```
+
+## 7.30 任务 #65：全群累计不能拿发言行当筛子——两个来源取并集
+
+#47 把「这一轮合起来花了多少」改成按 `origin_run_id` 查账本，`round.usage` 对不上发言的钱
+还有「未对应发言」一档。但同一个响应里的全群累计 `usage_by_bot` 仍是 #45 的写法：
+
+```sql
+TeamMessage JOIN ModelUsage ON ModelUsage.task_id = TeamMessage.task_id
+WHERE TeamMessage.group_id = :g GROUP BY bot
+```
+
+inner join 只认「有发言行」的钱。一笔发起轮属于本群、task_id 却没挂到任何消息上的账
+（中途失败后没写成消息的那次调用、编排器的额外调用），`round.usage` 算得出来，
+全群累计却把它静默吃掉；返回里既没有总数、也没有差额档，看的人无法知道少没少。
+
+**实现（`services/team.py` 新增 `_group_ledger_usage`）**
+
+- 两个来源取并集：① `task_id` 属于本群任一条消息（连上线前没有 `origin_run_id` 的老账也算）；
+  ② `origin_run_id` 属于本群任一 `TeamRound`（连没有发言行的钱也算）。两个来源按 `usage.id`
+  去重，正常发言账两个条件都命中，不去重会凭空翻倍。
+- 对不上发言的行归 `bot_id=""`、`bot_name="未对应发言"`，与 `round.usage` 同一档名字；
+  于是 `Σ by_bot == tokens`、`Σ calls == calls`、`Σ subagent_calls == subagent_calls`
+  三条都是构造出来的恒等式。
+- `group_state` 新增 `usage` 字段（`tokens / calls / tasks / runs / subagent_calls / by_bot`），
+  与 `round.usage` 同形状但**没有** `origin_run_id`；`usage_by_bot` 保留为 `usage["by_bot"]`
+  的同源别名，不另算一遍。前端 `web/src/components/team/api.ts` 只补类型（`GroupLedgerUsage`），
+  页面尚未消费这个字段——不假装已经展示。
+- 大群的 task_id / origin 列表按 500 一段做 `IN`，避开旧版 SQLite 的变量上限。
+
+**验证**
+
+1. 自然红：两条新用例在修前都红（`KeyError: 'usage'`；旧响应没有这个字段），修前
+   `2 failed, 10 deselected`。
+2. 修后 `tests/test_origin_run_v27.py + tests/test_team.py`：**20 passed**。
+3. 变异电池 **4/4 红集合精确相等**（`E:/tmp/team65/mutate65.py`，基线 sha256 `399f488f…`）：
+   - M1 摘掉 origin 来源 ⇒ 只红「没有发言行的钱」；
+   - M2 摘掉按 id 去重 ⇒ 红「两个键都命中只算一次」+「全群字段不是轮字段」；
+   - M3 不数子代理 ⇒ 红「没有发言行的钱」（第一版只断言了顶层 `subagent_calls`，
+     每档之和没对，M3 因此全绿——补上 `Σ by_bot.subagent_calls == usage.subagent_calls`
+     后重跑 4/4，没有放宽期望）；
+   - M4 摘掉 task 来源 ⇒ 只红「全群字段不是轮字段」（没有 origin 的老账被丢）。
+   每条变异后都先还原、再复绿，sha256 逐字节核对。
+4. 全量：第一次 **980 passed / 1 failed / 23 skipped**，唯一红是既有的墙钟用例
+   `test_read_only_calls_overlap`（0.65s vs 0.45s；同一用例的交错证据 `trace.overlap`
+   已通过，是并行确实发生、只是负载下超时）；单跑 **3/3 绿**（0.60 / 0.59 / 0.77s），
+   不放宽阈值。空载复跑 **981 passed / 23 skipped**，rc=0，291.92s
+   （`E:/tmp/team65/regression65b.log`）。
+
+**还没覆盖的（量出来的，不是猜的）**
+
+1. 全群累计现在把「本群所有用量的行」读进进程再分档；大群（数万笔）下这是每次轮询的
+   扫描成本。当前没有实测大群，先记录不优化——要用 SQL 侧 `GROUP BY task_id, node`
+   聚合时再补性能判定。
+2. `tasks` / `runs` 两档只用于展示，没有单独的行为判定；恒等式只钉了 tokens/calls/subagent_calls。
+3. 前端没有渲染 `usage`，只更新了类型；要做「全群累计」面板时仍需浏览器点验。
+4. 变异只打在 `_group_ledger_usage` 内部；路由层是否把这个字段原样透出，由 20 条 HTTP 用例覆盖。
+
+复现：
+
+```bash
+cd services/api
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_origin_run_v27.py tests/test_team.py
+.venv/Scripts/python.exe -X utf8 E:/tmp/team65/mutate65.py
+```
+
+## 7.31 任务 #66：发起轮进事件时间线——每个事件自己说得清归属
+
+#47 把发起轮记进了账本，`EventRecorder` 上也一直有 `origin_run_id`，但 `agent_events`
+这一层没有它：`/tasks/{id}/events` 与证据包的 `timeline` 都只端出 `run_id`。后者是
+"每人一个"的键——团队一轮里每个发言成员各有自己的 Task 和自己的 run，所以拿事件回答
+"这条事件属于哪一轮群聊"必须再去 join 任务或账本。证据包一旦离开数据库，归属就丢了。
+
+**实现（一列、一个写入点、两个出口）**
+
+- `models/task.py:102` `AgentEvent` 新增 `origin_run_id`（`String(120)`、`NOT NULL`、
+  `server_default=""`、带索引），与账本 `model_usage.origin_run_id` 同源同宽。
+- `services/agent/events.py:69` `EventRecorder.add` 把记录器上的那个值写进每一行；
+  顶层运行的"发起轮就是它自己"仍在构造器里定义一次（`:38`），子代理的 `_Recorder`
+  （`services/subagent.py:178`）只是照抄，所以孙辈事件天然知道被哪一轮引起的。
+- 读侧两个出口同源：`schemas/task.py:73` `EventOut` 端出 `origin_run_id`（`/events` 与
+  SSE 共用），`services/agent/evidence.py:512` 的 `timeline` 同时给 `run_id` 与
+  `origin_run_id`。
+- 迁移 `alembic/versions/0024_events_origin_run_id.py`：加列 + 建索引。存量行保持空串——
+  它们上线前没记过发起轮，**不许拿 `run_id` 回填**（那会把"没记"伪装成一个答案）。
+
+**判定装置（每条都能失败）**
+
+- 用例 `tests/test_event_origin_v41.py` **6 条**：记录器写入与改值同源；顶层运行以自己
+  为发起轮、两个都没给时留空串；子代理每条事件继承父辈发起轮；`/tasks/{id}/events`
+  原样端出（老事件是空串）；证据包 `timeline` 两个键都在；迁移 0024 的子进程往返
+  （0023 上没有列 → 加列/索引 → 老行空串且行原样 → 降级回去）。
+- **自然红**：把同一份用例放到 HEAD（`edfddc2`）的临时 worktree 上跑，**6/6 全红**，
+  原因各自成立：3 条 `'AgentEvent' object has no attribute 'origin_run_id'`、
+  2 条 `KeyError: 'origin_run_id'`（接口 / 证据包）、1 条迁移 DDL 为空。
+- 变异 **6/6 红集合精确相等**：M1 写库丢掉发起轮 ⇒ 5 条；M2 顶层不再以自己为发起轮 ⇒
+  1 条；M3 证据包不端出 ⇒ 1 条；M4 接口不端出 ⇒ 1 条；M5 迁移不建索引 ⇒ 1 条；
+  M6 迁移用 `run_id` 回填 ⇒ 1 条。基线 4 份文件 sha256 逐字节还原
+  （`E:/tmp/event66/mutate66.py`）。
+- 全量 **987 passed / 23 skipped**，rc=0，259.82s（`E:/tmp/event66/regression66.log`）；
+  987 = #65 的 981 + 新增 6 条。
+
+**还没覆盖的（量出来的，不是猜的）**
+
+1. 老行（上线前的 `agent_events`）没有回填：真实旧库里这些事件的发起轮仍是空串，
+   要归属只能退回 `run_id` / 任务线索。这是有意的诚实缺口。
+2. 事件上的发起轮不参与任何聚合；证据包还没有「按发起轮汇总事件」的表，只有逐条字段。
+3. 只加了 SQLite 子进程迁移往返；MySQL/PG 上这条迁移的实跑未单独做（schema 对账 v29
+   会覆盖列/索引形状，但不会替 MySQL 执行 ALTER）。
+4. 变异只打写入/读出口与迁移；`EventOut` 的 SSE 分支由同一定义覆盖，未单独变异。
+
+复现：
+
+```bash
+cd services/api
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_event_origin_v41.py
+.venv/Scripts/python.exe -X utf8 E:/tmp/event66/mutate66.py
+```
+
+## 7.32 任务 #67：证据包按发起轮汇总——不把「没记」并成第 0 轮
+
+#66 让每条事件自己说得清发起轮，但证据包只有 `turns`（按 `run_id`）、`branches`
+（按 `trace_id`）与 `parallel_groups`。团队一轮里每个发言成员各有自己的 run，要回答
+「这一轮一共花了多少、动过几个任务」仍得把成员行筛出来手加；而群轮本身在那三张表里
+没有一行。这一批补的就是这张表。
+
+**实现（一个函数、两个字段）**
+
+- `services/agent/evidence.py:95` `origin_rollup(rows)`：按 `origin_run_id` 分组，
+  产出 `origin_run_id` / `run_ids`（去重排序）/ `threads`（trace 数）/ `tasks`（task 数）/
+  `subagent_calls`（`node == "subagent"` 的行数）与 `_usage_totals()` 的用量字段。
+- `evidence.py:487` `usage["origins"]` 与 `usage["turns"]` 并列；`:488`
+  `usage["origin_unattributed_calls"]` 报出没有发起轮的账本行数。
+- **空串不参与分组**：空发起轮只读作"上线前没记"，把它并成"第 0 轮"等于替历史编一个
+  归属。要归属只能退回 `run_id` / 任务线索——这是有意的缺口，不是补全。
+
+**判定装置**
+
+- 用例 `tests/test_origin_evidence_v42.py` **3 条**：① `origin_rollup` 的分组、空串排除、
+  子代理计数；② 端到端证据包的 `usage["origins"]` 与 `usage["turns"]` 并列，且各档
+  `total_tokens` 由库内账本行**现场求和核对**（不写死数字）；③ 同一次查询下
+  `origin_rollup(rows)` 与证据包 `usage["origins"]` 自洽。
+- **自然红**：HEAD（`edfddc2`）的 worktree 上整个文件在 collection 阶段
+  `ImportError: cannot import name 'origin_rollup'`——不是逐条失败。逐条可失败性由下面的
+  变异靶提供，不拿"红灯数量"冒充覆盖。
+- 变异 **4/4 红集合精确相等**：M1 按 `run_id` 分组 ⇒ 2 条；M2 把空串并成第 0 轮 ⇒ 2 条；
+  M3 不数子代理 ⇒ 2 条（实测集合，不是预期写宽）；M4 证据包不端出 `origins` ⇒ 2 条。
+  `evidence.py` sha256 逐字节还原（`E:/tmp/event66/mutate67.py`）。
+
+**还没覆盖的**
+
+1. 只汇总量，不汇事件条数/失败数；要核对"这一轮挂过几次卡"仍得读 `timeline`。
+2. 空发起轮的账只有计数，没有明细出口；老库要归因仍得 join 任务。
+3. 没有在真实 MySQL/PG 上重跑这张汇总表；SQL 只是 `select` 账本行，方言风险低但未单测。
+
+复现：
+
+```bash
+cd services/api
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_origin_evidence_v42.py
+.venv/Scripts/python.exe -X utf8 E:/tmp/event66/mutate67.py
+```
+
+## 7.33 任务 #68：批准过的前缀落盘——换任务、重启进程仍认得
+
+#54 把"总是允许"的粒度修到真正执行的那一段，但记忆只有两层：会话内
+（`PermissionPolicy`）与任务内（回放 `approval.granted`）。换一个任务，同一串命令
+还要再挂一次卡。Codex 把这类决定写成 `~/.codex/rules/default.rules`，进程重启不失效。
+
+**实现（一层存储、一个加载点、一个落盘点）**
+
+- `services/approval_rules.py`：`path()` 默认取与设置文件同目录的 `approvals.json`
+  （桌面壳把设置指到用户数据目录，规则自然跟着走；`BLANK_APPROVALS_FILE` 可指认）；
+  `add_rule` 原子写（临时文件 + `os.replace`），重复规则移到最前、上限 200；
+  `_read` 对**文件缺失/坏 JSON/版本不认识/非 UTF-8** 一律返回空表（fail-closed）。
+  只收 `run_shell` 的非空前缀——`scope=tool` 是"本会话该工具"的宽口径，写盘等于整机永久放行。
+- `services/settings.py:106` 新增公开的 `settings_path()`，规则文件与设置同源。
+- `services/permissions.py:411` `PermissionPolicy.persistent_prefixes` 与本次会话的
+  `approved_prefixes` 分开存；`:522` 只有整条命令逐段命中才放行，归因写
+  `prefix:persistent:…`（本会话的批准仍念 `prefix:…`，驳回先于它生效）。
+- `services/agent/graph.py:1540` 在 `approval.granted` 之后、且仅当
+  `scope == prefix and name == run_shell` 且算得出规则时落盘，并补一条
+  `approval.rule_persisted`（含 `persisted` 真假）；写盘失败不让已获批的调用失败。
+- `services/agent/runtime.py:275` 每次构建策略时加载规则；读不出来就是空集——多问一次，
+  而不是少问一次。
+
+**判定装置**
+
+- 用例 `tests/test_approval_persist_v43.py` **22 条**，三块：
+  ① 存储：往返、去重（**直接看文件本身**，不只读侧）、上限、只收 `run_shell`；
+  ② fail-closed：坏 JSON / 版本不认识 / `rules` 非表 / 坏字节 / 坏条目逐条跳过；
+  ③ 判定与端到端：落盘前缀单独归因、不覆盖另一段内联正文与复合命令第二段、
+  手改进去的不可逆规则仍然问、本会话驳回优先、端到端"批准 → 落盘 → 新任务不再挂卡
+  （`prefix:persistent:…`）"、`scope=tool` 一条都不写盘。
+- **自然红**：HEAD 的 worktree 上 `ImportError: cannot import name 'approval_rules'`，
+  在 collection 阶段整文件失败。逐条可失败性由变异靶提供。
+- 变异 **8/8 红集合精确相等**：M1 运行时什么都不加载 ⇒ 1 条；M2 判定忽略落盘规则 ⇒ 2 条；
+  M3 任意作用域都落盘 ⇒ 1 条；M4 接受不认识的版本 ⇒ 1 条；M5 写盘不去重 ⇒ 1 条；
+  M6 任意工具都收 ⇒ 2 条；M7 写盘不封顶 ⇒ 1 条；M8 坏字节直接抛 ⇒ 1 条。
+  4 份文件 sha256 逐字节还原（`E:/tmp/event68/mutate68.py`）。
+- 全量 **1012 passed / 23 skipped**，rc=0，274.23s；1012 = #66 的 987 + #67 的 3 + 本任务的 22。
+
+**过程中量到的一件事（已修）**
+
+用例集第一次交叉跑就红了 `test_permission_modes_v11.py::test_once_scope_asks_again_for_the_next_command`：
+前一个用例批准了 `git push` 前缀，规则写进了**会话级**共享文件，下一个用例的新任务因此
+被静默放行。这不是实现坏了，恰恰是落盘层按设计生效；修法是把 `BLANK_APPROVALS_FILE`
+在 conftest 里做成**每个用例一份空文件**（`_isolate_approvals_file`），跨任务持久化只在
+单个用例内验证。
+
+**还没覆盖 / 有意的取舍**
+
+1. 只落 `run_shell` 的 `prefix` 档；`scope=tool` 与 `scope=once` 都不写盘（产品取舍）。
+2. 文件是给人看懂、可手工编辑的，没有签名/完整性校验；能改文件的人本来就能改设置。
+3. 并发写是最后写入者赢（临时文件 + 原子替换只保证不出现半截文件，不做合并）。
+4. 前端没有"查看/撤销已落盘规则"的入口；目前删除文件即全部忘记（CLI/文件层操作）。
+5. 默认路径跟设置文件走；桌面安装包下的实际落点未在打包产物上单独点验。
+
+复现：
+
+```bash
+cd services/api
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_approval_persist_v43.py
+.venv/Scripts/python.exe -X utf8 E:/tmp/event68/mutate68.py
+```
+
+## 7.34 任务 #69：内联解释器代码抬成高风险——「没问过」不是「记住后放行」
+
+`assess_risk` 原先只认两类：破坏性命令（`rm`/`del`/`git push`/`drop table`…）与联网
+（`curl`/`wget`/`http(s)://`）。其余一律 medium，而 `PermissionPolicy.decide` 对
+非 high/critical 直接返回 `risk:auto`。于是
+`python -c "open('secrets.txt','w').write('x')"` 这类**路径与命令正则都看不见正文**的
+调用，一次审批卡都不挂就执行了。这与 #54 的批准记忆无关，是审批闸根本没被触达。
+
+**实现（一个判定放进 `assess_risk`）**
+
+- `services/tools/shell.py` 新增 `_has_inline_code()`：按 `&& || ; & |` 切段，每段若以
+  解释器开头（`python*`/`py`/`node`/`perl`/`ruby`/`php`/`pwsh`/`powershell`/`bash`/`sh`/
+  `zsh`/`cmd`，允许绝对路径与 `.exe`），且**在第一个非旗标参数之前**出现内联旗标
+  （`-c`/`-e`/`-p`/`-r`/`-Command`/`-EncodedCommand`/`/c`，或 `-lc`/`-pe` 这类短旗标并写），
+  即判 high。
+- 两个刻意的边界：`python script.py -c foo` 的 `-c` 是脚本参数；`python -m pytest`
+  是模块入口——两者都不抬高。普通脚本调用仍是 medium/`risk:auto`，收紧只针对内联正文。
+- 复合命令任一段命中即 high：`pytest -q && python -c '…'` 不能靠第一段降风险。
+
+**判定装置**
+
+- `tests/test_inline_code_risk_v44.py` **22 条**：12 组内联形态（含绝对路径、旗标前置、
+  PowerShell `-EncodedCommand`、`cmd /c`、`bash -lc`）为 high；7 组非内联形态仍 medium
+  （`-m 模块`、脚本参数、`py -V`、`pytest`、`git status`、`npm run build`）；复合命令两正一反；
+  用**生产定义** `shell_tools()` 判定 `python -c …write()` 得到 `ASK/high`（改动前是
+  `ALLOW/risk:auto`），并保留普通脚本 `risk:auto` 作为对照。
+- **自然红**：同一份用例放到 HEAD 的 worktree 上跑，**14 failed / 8 passed**——红的正是
+  12 组内联参数 + 复合命令 + 生产工具判定，绿的正是"不该收紧"的 7 组与普通脚本对照。
+- 变异 **4/4 红集合精确相等**：M1 `assess_risk` 不认内联 ⇒ 14 条；M2 去掉"第一个非旗标
+  参数即停" ⇒ 脚本参数一条；M3 解释器只留 python/node 系 ⇒ 4 条；M4 把 `-m` 当内联 ⇒
+  模块入口一条。`shell.py` sha256 逐字节还原（`E:/tmp/event69/mutate69.py`）。
+
+**代价与还没覆盖的**
+
+1. 审批频率上升：`bash -lc 'ls'` 这类包装也会挂卡；这是有意的取舍——包装里的正文同样
+   看不见，宁可多问。
+2. 只按**首段可执行名**识别，`env python -c …`、`cmd /c` 里再套一层、编码后的
+   PowerShell（`-EncodedCommand` 已被判 high，但内容不解析）未逐形态覆盖。
+3. 风险只影响"要不要问"；内联正文里又藏路径/密钥的检测仍靠 `safety.py` 与执行边界，
+   本批没有扩大它。
+4. 真模型/浏览器未重跑；本批是风险判定层，界面只会在待审批列表里多出这类卡片。
+
+复现：
+
+```bash
+cd services/api
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_inline_code_risk_v44.py
+.venv/Scripts/python.exe -X utf8 E:/tmp/event69/mutate69.py
+```
+
+## 7.35 任务 #70：工具档的例外写回卡片——「不再询问」不能删掉不可逆
+
+**量出的偏差**：`PermissionPolicy.decide()` 的判定顺序是 计划模式 → `is_irreversible()`
+（L495–499）→ bypass / 高风险开关 → 动作 / 前缀 / 持久前缀 → `approved_tools`（L531）→
+接受编辑 → `risk:auto`。也就是说工具档**确实不会**放行不可逆命令：记住 `run_shell`
+以后，`git push --force`、`drop table`、`mkfs` 仍然 `ASK/irreversible`。
+
+但卡片 `approval_options()` 的 warning 只写「该工具在本会话内不再询问」。前半句对普通
+命令成立，后半句却成了一律无条件的承诺——用户批的是一张写着「以后都不问」的卡，实际
+仍会被逐条拦。这不是权限缺陷，是**文案与判定不同源**：判定里那条例外没有任何界面出口。
+
+**改动**
+
+- `services/permissions.py`：warning 改成「该工具在本会话内不再询问；不可逆命令仍逐条确认」。
+- `tests/test_permission_modes_v11.py`：工具档记住后，`curl` 得到 `ALLOW`，而
+  `mkfs.ext4 /dev/sda1` 仍必须 `ASK` 且 `rule == "irreversible"`。这条断言**能失败**——
+  把 `approved_tools` 分支挪到不可逆判定之前，它立刻变 `ALLOW`。
+- `tests/test_approval_memo_v37.py`：卡片 warning 必须含「不可逆命令仍逐条确认」，
+  文案回退即红。
+
+**结果与边界**：两个文件 **57 条全绿**；判定逻辑零改动，本批没有新增分支，因此没有
+值得做的变异靶（改文案不会红，正是因为它不是逻辑）。同批的 #69 已把内联代码抬成
+high，卡片因此会更频繁地出现在这类命令上，文案必须先把「工具档仍拦不可逆」说清。
+
+复现：
+
+```bash
+cd services/api
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_permission_modes_v11.py tests/test_approval_memo_v37.py
+```
+
+## 7.36 任务 #71：`run_id` 的四种形状在读侧命名——「没记」与「记了但认不出」分开
+
+账本里 `run_id` 实测四种形状共存：
+
+| 形状 | 出处 | 读侧名字 |
+| --- | --- | --- |
+| 空串 | 回合归属上线前的存量行 | `unrecorded` |
+| `team-<轮>-<消息>` | 群聊发言轮 | `team` |
+| `task:<uuid>:attempt:N` | 同步入口的兜底键 | `attempt` |
+| `agent_runs.id` | 排队入口的真实运行 id | `run` |
+
+证据包 `usage.turns[].run_id` 之前只端原值，界面与外部消费者只能各自 `startswith` /
+正则去猜；猜错了不报错，只是悄悄把群轮当普通运行、或把空串当第 0 轮。而「空串」与
+「认不出的新形状」在账上含义完全不同：前者是**当时没记**，后者是**记了但读侧不认识**，
+把两者混成一个 `run` 就把诚实缺口抹掉了。
+
+**实现（只读侧，不改存量）**
+
+- `services/agent/evidence.py` 新增 `run_id_kind()`：空串 → `unrecorded`；`team-` 前缀 →
+  `team`；`^task:[^:\s]+:attempt:\d+$` → `attempt`；其余 → `run`。
+- `turn_rollup()` 的每一项多一个 `"kind"`，与 `run_id`、用量同源；空串行仍然整行丢弃
+  （不编号成第 0 轮），由 `unattributed_calls` 报数。
+- `run_id_kind()` 的 docstring 写死这条口径：这是**命名**，不是回填；`run` 是兜底桶，
+  不校验 uuid 形状，未来第五种形状出现时应显式加分支而不是默认冒充 `run`。
+
+**判定装置**
+
+- `tests/test_run_id_kind_v45.py` **3 条**：四种形状逐一命名；attempt 后缀必须完整
+  （`task:…:attempt` 少了数字不算 `attempt`）；`turn_rollup` 带出 `kind` 且空串行仍被丢弃。
+- `tests/test_turn_attribution_v24.py` 的精确键集加入 `"kind"`，并钉住普通运行读到
+  `kind == "run"`——键集少一项、或形状判错都会红。
+- **自然红**：同一份用例放回 HEAD 的 worktree，`v24` 单跑 **1 failed / 12 passed**
+  （`KeyError: 'kind'`）；`v45` 是 **collection ImportError**（`run_id_kind` 尚不存在）。
+- **变异 4/4 红集合精确相等**：M1 删掉 `team-` 分支 ⇒ 形状与轮表各一条；M2 空串行不丢弃 ⇒
+  轮表、v24 老账用例与「丢弃空串」用例三条；M3 轮表不带 `kind` ⇒ 轮表与 v24 键集两条；
+  M4 放宽 attempt 正则 ⇒ 后缀用例一条。`evidence.py` sha256 逐字节还原
+  （`E:/tmp/event71/mutate71.py`）。
+
+**代价与还没覆盖的**
+
+1. `run` 同时容纳「普通运行」与「未来未知形状」。这是刻意的保守兜底，但也意味着新形状
+   上线而读侧不改时不会报警——目前只在文档里写明「新形状要显式加分支」。
+2. 形状判定不含 uuid 语义校验（`task:anything:attempt:1` 也算 attempt）；账本写入侧的
+   构造点仍由 `EventRecorder` 单点负责，读侧不做二次验证。
+3. 历史行按值即时分类，不做迁移回填；空串永远读作 `unrecorded`，不会被补成 `run`。
+4. 界面未改：`kind` 已进证据包，前端是否展示另立任务；本批只保证数据面同源可核。
+
+复现：
+
+```bash
+cd services/api
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_run_id_kind_v45.py tests/test_turn_attribution_v24.py
+.venv/Scripts/python.exe -X utf8 E:/tmp/event71/mutate71.py
+```
+
+## 7.37 任务 #72：桌面壳的后端地址运行时可配——烘焙值退回兜底
+
+**量出的偏差**：静态导出把 `NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000` 编进了
+`web/out` 的 chunk；壳却按 `BLANK_BACKEND_PORT` 拉起后端（`main.cjs` 的 `PORT`）。
+两者只在不改端口时碰巧一致：用户或部署脚本一旦把端口改成 8123，后端在 8123，
+界面仍去敲 8000，表现为「后端明明起着，界面一直说不可达」。旧的自检
+`probeBackendFromRenderer` 也读 `NEXT_PUBLIC_API_BASE`，于是自检跟着烘焙值一起错。
+
+**实现（运行时注入优先于构建值）**
+
+- `desktop/api-base.cjs`：唯一算法——`BLANK_API_BASE` 优先（去尾部斜杠），否则
+  `http://127.0.0.1:${BLANK_BACKEND_PORT || 8000}`。`main.cjs` 的 `HEALTH_URL`、
+  sidecar 参数与自检都读它。
+- `main.cjs` 注册同步 IPC `blank:api-base`；`preload.cjs` 在暴露
+  `window.blankDesktop` 时取一次并带上 `apiBase`（取不到留空串）。
+- `web/src/lib/http.ts`：`resolveApiBase(injected, baked)`——注入值非空则用它，否则退回
+  `NEXT_PUBLIC_API_BASE`。模块加载时求值，正好赶在首屏请求之前。
+- 打包清单同步：`electron-builder.files` 与 `self-deploy.cjs` 的壳入口列表都加上
+  `api-base.cjs`（少一处，解包自部署时主进程会 `MODULE_NOT_FOUND`）。
+
+**判定装置**
+
+- `desktop/tests/api-base.test.cjs` **5 条**：默认 8000、端口生效、显式地址优先、
+  尾部斜杠/空白归一、空白端口回默认。桌面全套 **15 passed**（含原有 GPU 10 条）。
+- `web/src/lib/http.test.ts` **4 条**：注入值压过烘焙值、无注入退回烘焙值、都没有走相对
+  路径、非字符串按未注入处理。前端全套 **153 passed**、`tsc --noEmit` rc=0。
+- **真 Electron 点验**（不是只看单测）：用
+  `BLANK_DESKTOP_BUILD=1 NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000` 构建静态导出
+  （`out/_next/static/chunks/…js` 里确实还有 `127.0.0.1:8000`），再以
+  `BLANK_BACKEND_PORT=8123` 启动壳、8123 上放一个只认 `/api/v1/health` 的桩。
+  8123 的访问日志出现 `GET /api/v1/health origin=app://bundle`、
+  `GET /api/v1/projects origin=app://bundle`、`GET /api/v1/providers origin=app://bundle`
+  ——**渲染进程的应用代码确实改打了 8123**；主进程日志同时是
+  `渲染进程直连后端 http://127.0.0.1:8123 → ok 200`。截图落在
+  `E:/tmp/desktop8000/proof.png`，窗口按 `main.cjs` 的 1280×820 创建。
+
+**边界与还没覆盖的**
+
+1. 只重跑了静态导出，**没有重打 electron-builder 安装包**；打包后的 `app.asar` 是否带
+   `api-base.cjs` 只由清单与自部署拷贝列表保证，未按产物点验。
+2. 运行态只支持 HTTP 基址；若将来前端走 WebSocket/SSE 的绝对地址，需同样从
+   `window.blankDesktop.apiBase` 派生，不能另写一份 `8000`。
+3. 反证没有做成「拆掉 preload 注入再跑」：那样渲染进程会去打用户常驻的 8000，
+   属于禁止触碰的实例。注入是否承重由「烘焙值 8000 + 运行值 8123 + 8123 收到
+   `origin=app://bundle`」这条实物证明。
+4. `BLANK_BACKEND_HEALTH` 仍可整体覆盖健康地址（调试用），此时 `API_BASE` 与健康探测
+   可以指向不同主机——这是刻意的逃生口，不是日常配置。
+
+复现：
+
+```bash
+cd desktop && node --test tests/gpu-guard.test.cjs tests/api-base.test.cjs
+cd web && node --test --import ./test-bootstrap.mjs "src/**/*.test.ts"
+# 真点验：web 静态导出 + 8123 桩 + 壳（BLANK_BACKEND_PORT=8123 BLANK_PROBE=1 BLANK_SHOT=…）
+```
+
+## 7.38 任务 #77：权限展开成逐条 ACE——「谁能碰哪些路径」不再靠人回去读配置
+
+**量出的偏差**：Codex 的 `turn_context.permission_profile` 是**生效值**，不是配置引用——
+`:root` 只读、仓库可写、`.git` 只读且 `missing_path_behavior:"skip"`，逐条摆在那里
+（§2 的实测样本）。我们此前只写审批模式与前缀规则：读一条快照回答不了「这一步能碰哪些
+路径」，得回设置页猜当时生效没有。差距表里这一行一直挂着「属沙箱立项范围」；M2–M4 把
+档位、边界种类与自证装置做出来之后，这一条才具备写成事实的前提。
+
+**实现（一条真源，两层不许混）**
+
+- `governance.permission_profile()`：把限制展开成 `file_system.entries`——工作区一条
+  `access:"write"`、每个允许根各一条、外部一条通配；每条都带 `enforced_by`：
+  `os`（容器 / AppContainer 真拒）、`policy`（`SafetyPolicy` 的路径闸门，执行前判定）、
+  `none`（关档且关闭「仅限工作区」）。容器里的外部路径落 `access:"none"` 而不是 `"deny"`：
+  宿主路径根本不在挂载表里，说「拒」比说「没有」更含糊。
+- `missing_path_behavior` 取 `safety.MISSING_PATH_BEHAVIOR`，与 `_outside_paths` 的
+  实现同源：闸门只判**存在**的越界绝对路径，不存在的新目标直接跳过。关掉「仅限工作区」
+  时写 `not_applicable`，不继续写 `skip`，更不写 `fail`——那会凭空造出一条我们没有的行为。
+- `network` 拆成 `{requested, enforced_by, command_gate}`。本机 job_only 下这三项会分开：
+  档位要的是不通网，真正拦着的是命令闸门的正则，不是内核。
+- `turn_context` 顶层新增 `permission_profile`（与 Codex 同位置）；`graph.emit_governance`
+  把工具层正在用的那份 `SafetyPolicy` 传进去，**不在治理层再 `load()` 一次**——两份策略
+  各自读设置，快照与执行就会各说各话。
+- 证据包 `boundaries.permission_profile` 取**末次** `turn.context` 的那一份：中途改过
+  「仅限工作区」或换过档位，末次就是收尾时生效的那一份，逐次变化仍在事件流里。老任务
+  报 `{"type":"unrecorded"}`，绝不按档位反推一份假授权。
+
+**判据与计数**：`tests/test_permission_profile_v48.py` **10 passed**（job_only 归到
+`policy`、内核已强制翻成 `os`、容器外部路径是 `none`、关档仍报路径闸门、只有真没边界才
+说 `unrestricted`、`missing_path_behavior` 与闸门行为对质、允许根不漏宿主路径、
+`turn_context` 带快照且指纹稳定、证据包老任务 `unrecorded`、证据包取末次）。
+相关八套（v48 / `test_governance_snapshot_v16` / `test_boundary_facts_v20` /
+`test_world_state_v22` / `test_doctor_v47` / `test_safety_policy_v050` /
+`test_sandbox_matrix_v21` / `test_sandbox_v07`）**114 passed / 14 skipped**。
+
+形状收敛：`permission_profile` 最后只留 `type / enforced_by / missing_path_behavior /
+file_system / network` 五个键。第一版还带过 `"shell": {"enabled": …}`，没有任何一条判定
+读它，也没有任何一层边界由它保证——**没有断言覆盖的字段不进治理快照**，删掉。
+删掉后在**当前代码**上复跑全量：**1092 passed / 23 skipped**，rc=0，387.71s
+（`E:/tmp/m77/regression-77-final.log`）。计数与删字段前那一次（1092/23）一样，
+这本身就是那个字段没人读的旁证。上一次 1082（#75 的基线）+ 本批 10 条 = 1092。
+
+基线不是 HEAD（HEAD 早于 M3，连 `boundary_report` 都没有），而是**本批动手前的工作区**：
+分别摘掉两处接线后自然红——摘 `turn_context` 的键 → **1 failed / 9 passed**（`KeyError`），
+再摘证据包那块 → **3 failed / 7 passed**，还原后 10/10 绿、`cmp` 逐字节一致。
+
+变异电池 **8/8 按实测红集合精确命中**（M6 第一次期望写少了一条：允许根的掩码在
+job_only 用例里也被断言，实测红了 2 条，按实测改期望而不是收窄断言）：
+
+| # | 变异 | 实测红 |
+|---|---|---|
+| M1 | 内核已强制也报 `policy` | 1 条（os 用例） |
+| M2 | 永远说 `managed` | 1 条（unrestricted 用例） |
+| M3 | 把 `skip` 写成 `fail` | 2 条（闸门对质 + not_applicable） |
+| M4 | 外部通配放行 | 2 条（job_only + off 档） |
+| M5 | 网络拦截归到 `none` | 1 条（job_only 网络口径） |
+| M6 | 允许根写真实路径 | 2 条（掩码 + 泄漏） |
+| M7 | 证据包整块消失 | 2 条（unrecorded + 末次） |
+| M8 | 证据包取第一条快照 | 1 条（末次） |
+
+**真链路**（隔离实例 `:8061`，真 DeepSeek，任务 `20e6fbe6-…`）**8/8**：P1 真任务的
+`turn.context` 带上了授权；P2 逐条 ACE 是 `<workspace:ws>` 写 + `*` 拒；P3 关档时
+`type=managed, enforced_by=policy`；P4 `missing_path_behavior=skip`；P5 授权里没有
+`E:\projects` / 用户目录；P6 证据包与末次事件**逐字段相等**；P7 快照去重仍是 1 条；
+N1 负对照用 #77 之前的老任务 `16663dff-…`，证据包报 `unrecorded`。
+
+**诚实的缺口**
+
+1. 这**不是内核 ACL**：`enforced_by:"policy"` 就是在说「执行前判定」，只有 `os_enforced`
+   或容器才写 `os`。把本机 job_only 的授权读成「系统会拒」仍然是错的。
+2. `missing_path_behavior:"skip"` 是**如实记录**，不是顺手收紧：不存在的目标不参与越界
+   判定，因此往一个不存在的外部路径写，闸门看不见；路径藏在解释器字符串里时更是看不见
+   （设计稿 §1 的实测）。要不要收紧是产品裁决，本批不擅自改闸门。
+3. 界面没有新增区块：前端本来就没有渲染 `boundaries`，这份授权在证据包 JSON 与
+   `/tasks/{id}/evidence` 里可读。要做卡片得单独判一轮浏览器点验。
+4. 证据包只保留末次授权；任务中途从 `workspace` 换到 `off` 的**历史**只存在于事件流，
+   证据包不列时间线。
 
 ## 9. 复现命令
 

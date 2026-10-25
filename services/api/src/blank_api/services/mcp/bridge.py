@@ -53,6 +53,22 @@ STATE_READY = "ready"
 STATE_FAILED = "failed"
 STATE_SKIPPED = "skipped"
 
+# MCP 服务端的执行边界：它们是我们拉起来的**宿主**进程，不进入任务沙箱档位。
+# 这件事必须写进状态与证据，否则「全 Agent 进边界」会变成一句只对自家工具成立的谎。
+BOUNDARY_HOST = "host_process"
+BOUNDARY_NONE = "none"
+BOUNDARY_UNKNOWN = "unknown"
+BOUNDARY_NOTE = "MCP 服务端是宿主进程，不受任务沙箱档位约束（stdio 由我们启动，http 在远端）"
+
+
+def mcp_boundary(state: str) -> str:
+    """按连接状态给边界事实：连上了就是宿主进程；跳过＝没起进程；失败＝不知道。"""
+    if state == STATE_READY:
+        return BOUNDARY_HOST
+    if state == STATE_SKIPPED:
+        return BOUNDARY_NONE
+    return BOUNDARY_UNKNOWN
+
 
 @dataclass
 class MCPStatus:
@@ -64,11 +80,19 @@ class MCPStatus:
     server_info: str = ""
 
     def as_dict(self) -> dict:
-        body = {"name": self.name, "transport": self.transport, "state": self.state, "tools": self.tools}
+        body = {
+            "name": self.name,
+            "transport": self.transport,
+            "state": self.state,
+            "tools": self.tools,
+            "boundary": mcp_boundary(self.state),
+        }
         if self.error:
             body["error"] = self.error
         if self.server_info:
             body["server"] = self.server_info
+        if self.state == STATE_READY:
+            body["boundary_note"] = BOUNDARY_NOTE
         return body
 
 
@@ -87,6 +111,9 @@ class MCPBundle:
         return {
             "tools": len(self.tools),
             "servers": [item.as_dict() for item in self.statuses],
+            # 汇总口径：只要有一个服务端连上，就有宿主进程在替我们执行工具。
+            "boundary": BOUNDARY_HOST if self.ready else BOUNDARY_NONE,
+            "boundary_note": BOUNDARY_NOTE if self.ready else "没有已连接的 MCP 服务端",
         }
 
 

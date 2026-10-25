@@ -254,10 +254,13 @@ OS 不会替我们拒**（§1 的实测形状）。这一档拦越界靠的是�
 - **M2 三档 × 四模式矩阵落地**：档位成为任务级配置并进 `turn.context`；免问范围按档位+路径前缀。
   退出判据：矩阵 12 格里每格至少一条可失败断言；P-NET / P-PROC / P-ESCAPE / P-INHERIT 四条有结论。
   （M0 已注定：本机 P-NET 只能测"没隔离"那一侧，AC 出网默认拒无法验证。）
-- **M3 全 Agent 进边界**：文件工具、子代理、团队、MCP 走同一边界；`sandbox_mode` 进用量与事件侧。
+- **M3 全 Agent 进边界**（已完成，交付记录见 §7.3）：文件工具、子代理、团队、MCP 走同一边界；
+  `sandbox_mode` 进用量与事件侧。
   退出判据：一条真跑的任务里，**每个** `agent_path` 都能查出它所在的档位；跨档降档必须失败。
-- **M4 自证产品化**：`blank doctor --sandbox` + 证据包里的边界报告 + 安装包内的探针。
+- **M4 自证产品化**（本机部分已完成，交付记录见 §7.4）：`blank doctor --sandbox` +
+  证据包里的边界报告 + 安装包内的探针。
   退出判据：在**第二台**机器（不同权限形状）上跑通，输出与本机差异可解释。
+  **第二台机器本批没有**：探针与差异载体已交付，这条判据仍未验，见 §7.4 末段。
 
 ### 7.1 M1 交付记录（2026-10-22，判据按 §7 两段分开算）
 
@@ -304,6 +307,210 @@ web 113/113 + `tsc --noEmit` rc=0；API 全量 760 passed / 14 skipped，
 P-NET。CPU/磁盘按 §8 不做，界面上永远标"未强制"。桌面静态导出 `out/` 里的边界行是改动前的文案，
 随下一次 `BLANK_DESKTOP_BUILD=1 next build` 一起带走。
 
+### 7.2 M2 交付记录（2026-10-24）：三档 × 四模式矩阵
+
+判据按 §7 原文逐条对：**12 格每格都有可失败断言**，四条探针都有确定结论。
+装置全部是真执行层（`execute_command` → `LocalSandbox` → Job），没有替身。
+
+- **12 格矩阵**（`tests/test_sandbox_matrix_v21.py::test_matrix_cell`，3 档 × 4 模式）。
+  每格同时钉两半：
+  - 模式侧：`plan` 对 shell/写补丁一律 `DENY`；`accept_edits` 自动放行补丁且规则名为
+    `mode:accept_edits`；`bypass` 仍对不可逆命令 `ASK`（`irreversible`）——免问不等于关边界；
+    `default` 中风险走 `risk:auto`。
+  - 档位侧：`off` → `sandbox is None`、`limits_applied False`、提示含「无隔离」；
+    `workspace` → `sandbox == "local"`、`degraded True`、`filesystem_enforced/network_enforced` 恒 `False`、
+    本机 `limits_applied True`；`workspace-net` → `tier_blocked True`、限额全 False、提示含
+    「不会降级成 off」。
+- **拒绝而不是降级**：`workspace-net` 在 `job_only` 机器上返回 `tier_blocked`，网关转成
+  `sandbox_blocked` 事件、**不带** `sandbox_backend` 键。这条键的有无就是「命令没跑」与
+  「命令落在宿主上」的分界（对照格：`off` 真跑时 `sandbox_backend` 存在且为 `null`）。
+- **授权按档位分桶**：`(tier, tool, target_path_prefix)` 三元组。高风险 `python -c` 在 `off`
+  档批准后，切回 `workspace` 必须重新 `ASK`；`sk-` 密钥补丁的路径前缀只覆盖审批时的
+  `src/a.py`，换路径不得复用。
+- **装配层**：非法档 422、`workspace-net` 409；设置里的非法值回落 `workspace`；
+  `task.started` 携带 `sandbox.requested/tier/strength/degraded/notice/reason`，
+  resume 从 `task.started.payload.sandbox.requested` 读回档位——重启后档位不靠猜。
+- **P-NET**：沙箱内 Python 连本机监听端**成功**，事件同时写 `network_enforced False`。
+  断言 `connected is (not network_enforced)`，两者不一致就红。本机只能证明「没隔离」那一侧，
+  AC 出网默认拒无法验证——§7 已注明。
+- **P-PROC**：同一命令 `pids=128` 正常（阳性对照），`pids=1` 时解释器起不来且
+  `pids_limit == 1`。限额由内核执行，不是账上写的。
+- **P-ESCAPE**：`job_only` 下脚本成功写好工作区外文件，事件诚实写 `filesystem_enforced False`。
+  写成即证明，失败即证明真的拦住了——两边都不允许含糊。
+- **P-INHERIT**：`off` 档孙进程持续写心跳（阳性对照，测试自行 `taskkill` 收尾）；
+  `workspace` 档父进程退出、Job 关闭后心跳大小**不再增长**。对照组先证明装置本身能写出字，
+  否则「心跳停了」可能只是脚本没跑起来。
+
+交付过程中抓出并修掉一处**真实运行缺陷**：`DEFAULT_ENV_ALLOWLIST` 少了 `SYSTEMROOT`，
+沙箱内 Python 起 socket 直接 `WinError 10106`（Winsock 初始化失败）。P-NET 第一次红就是它——
+被误读成「网络边界生效」之前，先看的是连接端根本没收到数据。补入
+`SYSTEMROOT/SYSTEMDRIVE/WINDIR/COMSPEC/PATHEXT/TEMP/TMP/USERPROFILE` 后 P-NET 通过；
+这不是放宽网络策略，网络仍然 `allowed`，只是别让操作系统管道变量缺失冒充边界。
+
+同一轮把 `off` 档的文案谎话清掉：`backend_info()` 关档时返回 `backend="none"`、
+`label="无隔离（宿主完整权限）"`，且不再构造任何后端；后端不可用时保留可操作原因
+（Docker / `BLANK_SANDBOX_ALLOW_LOCAL=1`）。档位事实（`sandbox_tier/requested/degraded/
+tier_available/tier_reason/tier_notice`）与执行账（15 键）在事件里分成两组白名单，
+`test_boundary_facts_v20.py` 按组断言，面板只读这些键。
+
+**变异反证**（每次 `cp` 备份、跑完 `cmp` 字节还原）：
+
+| # | 变异 | 预期 | 实测 |
+|---|---|---|---|
+| A | `shell.py` 去掉 `not resolution.available` 阻断 | 所有 `workspace-net` 格 + 阻断事件红 | 精确 5 红 |
+| B1 | `permissions.decide` 去掉档位相等比较 | 换档仍复用批准 | 1 红（tier_change） |
+| B2 | `_covers_path` 恒 `True` | 路径前缀失效 | 1 红（path_scoped） |
+| C | `active_process_limit=0` | 账上不再声称限额 | 1 红（P-PROC 对照） |
+| D | Job 记录限额但不设 `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` | `pids=1` 仍能起进程 | 1 红，报「pids=1 时第二个进程仍然起得来」 |
+| E | `close_job` 变空操作 | 孙进程继续写心跳 | 1 红，`63 != 27` 字节 |
+| F | `off` 档 `label` 改回「本机受限执行」 | 文案谎话回归 | 1 红 |
+
+C 与 D 分开做是有意的：C 证明「限额没接进 Job」会被账本抓到，D 证明「账本声称了但内核
+没执行」也会被抓到——后者才是更难发现的那种谎。
+
+计数（从产物取）：`test_sandbox_matrix_v21.py` 27 passed；
+受影响九套 + 矩阵合计 **159 passed / 14 skipped**。`workspace-net` 不在本机提供，
+§9 第 5 条因此按 (a) 落地：默认 `job_only` + 界面与证据包如实写「文件/网络未由系统强制」，
+需要 `os_enforced` 的环境以管理员运行并用 `blank doctor --sandbox` 看差异（M4）。
+
+### 7.3 M3 交付记录（2026-10-24）：整条执行面进同一套边界账
+
+M2 只把**命令类工具**钉在档位上。M3 的退出判据是两句：**每个 `agent_path` 都能查出
+它当时在哪一档**；**跨档降档必须失败**。落地时把"边界"拆成两个互不冒充的事实：
+
+- `sandbox_mode`：这次调用按哪一档跑（`off` / `workspace` / `workspace-net`）。
+- `boundary_kind`：这次调用实际落在哪一层——
+  `in_process`（API 进程内，如文件读写）、`process`（我们起的子进程，受档位约束）、
+  `mcp_host_process`（外部 MCP 服务端，宿主进程，**不在任务边界内**）、
+  `blocked`（档位不可用，没执行）。
+
+**档位只能收紧，不能变宽。** 排序 `off(2) > workspace-net(1) > workspace(0)` 落在
+`tiers.PERMISSIVENESS` / `assert_not_looser`；任一方为空（当时没记）不冒充知道。三个入口：
+
+- `AgentRuntime.run()`：同一任务第二次运行换到更宽的档位 → 409 `sandbox_tier_downgrade`，
+  闸门在装配之前，被拒的那次**一行事件都不写**；
+- `AgentRuntime.resume()`：显式带档位时同样过闸；不带则沿用
+  `task.started.payload.sandbox.requested`（与 M2 的恢复口径同源）；
+- `run_subagent()`：收到比 `parent_tier` 更宽的档位直接返回 `ok=False`，
+  且守卫在**任何模型调用之前**——不给"先花一次钱再拒绝"留口子。
+
+**团队群是档位的第二处真源。** `team_groups.sandbox_tier` 建群时解析并落库
+（不可用 → 409 `sandbox_tier_unavailable`，不留半个群），成员 Task 一律继承；
+群摘要把它读回来，事件侧每个成员任务的 `task.started.sandbox.requested` 都应是这一档。
+
+**用量账。** `model_usage.sandbox_mode` + `model.usage.attribution.sandbox_mode`：
+主代理、子代理、团队成员走同一个 `account_call`，空串只表示"这一列上线前的老行"。
+证据包 `usage.sandbox_modes` 给去重集合，`sandbox_mode_unattributed_calls` 单独计数。
+
+**每个 `tool.completed` 都带** `sandbox_mode` 与 `boundary_kind`——包括只读工具：
+只读也有边界，只是边界在进程内。审计账（`tool-calls.jsonl`）的 `detail` 写同一对值，
+事件与审计账可以逐条对账。键的语义沿用 M1：`sandbox_backend` 缺席=没起进程；
+值为 `null`=进程落在宿主上；`sandbox_blocked`=档位不可用未执行。
+
+**MCP 边界必须单独说。** `MCPStatus.as_dict()` / `MCPBundle.as_dict()` 给
+`boundary: host_process | none | unknown`（连上/跳过/失败三种事实，不许都写成宿主），
+连上时附诚实说明「MCP 服务端是宿主进程，不受任务沙箱档位约束」；`task.started.mcp`
+原样带走，供证据包读。工具名 `mcp__*` 的调用在事件里记 `mcp_host_process`。
+
+**证据包新增 `boundaries`**：`sandbox`（档位/后端/强度/文件与网络是否强制/提示）、
+`mcp`（边界、说明、服务端清单、`calls` 计数）、`tool_calls` 按 `boundary_kind` 计数、
+`sandbox_modes`（事件里实际出现过的档位）。`tools[]` 每条也贴回
+`boundary_kind/sandbox_mode`；老任务没有这个键的调用落进 `unattributed`，
+不从工具名反推成 `in_process`。
+
+**迁移 0025**：`model_usage.sandbox_mode`、`team_groups.sandbox_tier`，`VARCHAR(20)`、
+`NOT NULL`、`server_default=''`；老行保持空串，不许补成 `workspace`。
+`tests/test_agent_boundary_m3_v46.py` 用真 alembic 升级到 0024 → 插老行 → 升 head →
+断言老行仍是空串 → 降回 0024 且行数不丢。
+
+**判据与计数**（从产物取）：`test_agent_boundary_m3_v46.py` 9 passed
+（档位排序、运行入口 409、子代理拒绝、子代理用量行、四种边界种类、证据包汇总、
+MCP 三态、用量账、迁移往返）；`test_team.py` 17 passed（含群档位继承与建群拒绝）；
+受影响十一套 + 新套件合计 **224 passed**；API 全量实跑 **1075 passed / 23 skipped**
+（2026-10-24，5 分 11 秒），无新增失败。
+
+**变异反证**（每次 `cp` 备份、跑完 `cmp` 字节还原）：
+
+| # | 变异 | 预期 | 实测 |
+|---|---|---|---|
+| A | `runtime.run` 去掉档位闸门 | 第二次换 off 仍 200 | 1 红（期望 409 实得 200） |
+| B | `run_subagent` 用自身当父级（等于去掉继承守卫） | 更宽档位仍继续执行 | 1 红（走到适配器才发现） |
+| C | `account_call` 不写行上的 `sandbox_mode` | 行上读回空串 | 2 红（`['',''] != ['off','off']`） |
+| D | 网关不写 `boundary_kind` | 事件缺边界种类 | 2 红（工具事件 + 证据包计数） |
+| E | `MCPStatus.as_dict` 去掉 `boundary` | 状态无法回答在哪跑 | 1 红（KeyError） |
+| F | 证据包不返回 `boundaries` | 报告整块消失 | 1 红（KeyError） |
+| G | 团队 `_request` 不传群档位 | 成员任务回落默认档 | 1 红（`off != workspace`） |
+| H | 建群时不检查档位可用性 | 不可用档也建出群 | 1 红（201 != 409） |
+
+**诚实的缺口**：
+
+- `in_process` 不经过 Job，路径边界仍靠 `SafetyPolicy` 的路径闸门与审批——这不是
+  新漏洞，只是 M3 把它**记成了事实**，不再混进"没起进程所以没有边界"。
+- HTTP 型 MCP 的"进程"其实在远端；`host_process` 描述的是"不归本机任务边界管"这个
+  共同事实，不声称部署位置。
+- `boundary_kind` 从 M3 起才有；老任务一律 `unattributed`，界面不得按工具名补猜。
+
+### 7.4 M4 交付记录（2026-10-24）：把"我们说安全"变成"你自己跑一遍"
+
+**入口**：`blank doctor --sandbox`（`packages/cli/src/index.mjs` 转发到
+`python -m blank_api.doctor`，用同一个包的 `services/api/src`）。也可直接
+`python -m blank_api.doctor --sandbox --json <path>`。`--task <id> --api <url>`
+额外核对一条真跑任务的证据包（P-AUDIT）。
+
+**八条边界全部真执行**，不是读配置猜：在 `workspace` 档里跑子进程，逐个尝试
+读工作区外文件、写工作区外文件、读 `HKCU\Environment`、连本机监听端、越限额起第二个
+进程、用 `icacls` 给自己加 ACE、让孙进程在父进程退出后继续写心跳；P-AUDIT 则直接读
+证据包。每条结论只有四个词：`enforced` / `not_enforced` / `unknown` / `not_tested`。
+探针装置自带阳性对照（监听端必须先收到 doctor 自己的连接；pids 必须先跑 128 的对照组；
+无 Job 对照组的孙进程必须先写出心跳），对照失败一律 `unknown`，不许冒充结论。
+
+**行为和账本对质**：每条探针走的就是 `execute_command`，报告里同时写本次执行的
+`filesystem_enforced` / `network_enforced` / `pids_enforced` / `tree_kill_enforced`。
+行为说"没拦住"而账本说"已强制"（或反过来）时 `consistent=false`，doctor 退出码 1。
+`unknown` 也退出 1；`not_tested`（容器后端、未给任务号）不算失败，但必须在报告里写明原因。
+
+**本机实测**（job_only，装置可信）：P-READ / P-WRITE / P-ENV / P-NET / P-ESCAPE 五条
+`not_enforced`（全部与账本一致），P-PROC / P-INHERIT `enforced`（pids=1 第二个进程起不来；
+Job 关闭后孙进程心跳停止），P-AUDIT 在隔离实例 `:8061` 上跑一条真任务后 `verified`
+（`1 条工具调用都带边界字段，计数一致`）。同一命令指向 M3 之前的老任务时，
+P-AUDIT 报"证据链不成立"并退出 1——这是正例的负对照，不是文案。
+
+**输出**：人读的表格 + `--json` 完整报告（`capability`、三档解析、`probe_enforcement`、
+八条 `boundaries`、`summary`、`exit_code`）。差异可解释性就落在这份 JSON 里：
+换一台机器，`capability.strength`、`apparatus_ok`、三档 `available/degraded/reason`
+和八条状态会一起变，不需要重新解释一遍文案。
+
+**安装包内的探针**：`desktop/verify-package.cjs` 新增 3b 段，用包内解释器
+`python -m blank_api.doctor --sandbox` 真跑一遍，断言装置可信、八条都跑了、无 `unknown`。
+`electron-builder --dir` 后实跑 21 项全过；把包内 `doctor.py` 临时改名做负对照，
+该段立即报"包内边界探针执行失败"、verify 退出 1，改名恢复后 `cmp` 字节一致。
+顺带记下打包坑：electron-builder 的 npm 依赖收集需要 node/npm 在 `PATH`，只给
+`node.exe` 绝对路径会以 "No JSON content found in output" 失败（构建日志有、退出码非 0）。
+
+**判据与计数**：`tests/test_doctor_v47.py` 7 passed（拒绝/超时/对照失败的状态归属、
+P-AUDIT 五种缺字段、退出码、本机八条对质、无后端时不硬跑）；API 全量实跑
+**1082 passed / 23 skipped**（2026-10-24，4 分 57 秒，rc=0，无新增跳过）；5 条变异全部实测红并
+`cmp` 字节还原：
+
+| # | 变异 | 预期 | 实测 |
+|---|---|---|---|
+| A | 任何非零退出都算 `enforced` | 脚本语法错误被读成"拦住" | 1 红 |
+| B | `pids_verdict` 不检查对照组 | 装置坏了也出限额结论 | 1 红 |
+| C | 审计不检查 `boundary_kind` | 老任务被误判"已核" | 1 红 |
+| D | P-READ 无条件报 `enforced` | 行为与账本对不上 | 1 红 |
+| E | 退出码忽略 `unknown/inconsistent` | doctor 假绿 | 1 红 |
+
+**诚实的缺口**：
+
+- **第二台机器没有**：退出判据原文要求"在第二台机器上跑通，输出与本机差异可解释"。
+  本批只交付了可复现的差异载体（doctor JSON + `verify-package` 的同一段），
+  没有第二台机器就是没有，不能拿本机四次重跑冒充。
+- Docker 后端的八条行为探针一律 `not_tested`：doctor 不越界探测容器内路径；容器边界
+  的证据是 `policy.docker_flags` 与运行时合同，不是本机行为自证。
+- P-ENV 在 AppContainer 下可能读到被虚拟化的 `HKCU` 视图；若那天出现"行为未拦住、
+  账本说强制"，doctor 会报不一致并退出 1，需要人看报告而不是自动解释掉。
+- P-AUDIT 只对 M3 之后的任务成立；老任务的 `unattributed` 会让它红，这是有意的。
+
 ## 8. 明确不做
 
 - **不承诺"防恶意代码"**：AppContainer + 受限令牌防的是"模型犯错与越界"，不是防一个铁了心的本地 rootkit。
@@ -322,14 +529,14 @@ P-NET。CPU/磁盘按 §8 不做，界面上永远标"未强制"。桌面静态�
    是"进不去就禁用该 MCP 并说明"，还是"允许它留在宿主 + 面板红字标注"？
 4. 产品默认档：`workspace` 是默认，但今天桌面装机常态是 `off`（`safety.py:156-158`）。
    改默认会让既有用户的命令突然跑不通——需要一次显式的迁移与告知。
-5. **M0 之后的新问题（需要裁决）**：本机只有 `job_only`。三选一——
+5. **M0 之后的新问题（已在 M2 按 (a) 落地）**：本机只有 `job_only`。三选一——
    (a) 默认 `job_only` + 界面写清"文件边界未由系统强制"，想要 `os_enforced` 的用户自己以管理员运行，
    `blank doctor --sandbox` 告诉他差异在哪；
    (b) 提供一次性提权安装步骤（建一个 AC 档案 / 建专用账号），把边界做成真的，代价是安装体验变重；
    (c) 在非管理员 Windows 上**不提供**命令执行沙箱档，只跑审批模式。
-   我的默认是 (a)：它不改安装体验、不撒谎，且 (b)(c) 都能作为 (a) 的后续叠加。
-   **（a）的界面前提已在 M1c 交付**（§7.1）：面板逐条标「未强制」、角标说清 Job 档只强制三项、
-   关档不再出现任何强制承诺。所以这一条现在只差裁决，不再差实现。
+   采纳 (a)：它不改安装体验、不撒谎，且 (b)(c) 都能作为 (a) 的后续叠加。
+   `workspace-net` 在本机被**拒绝**（`tier_blocked`）而不是降级成 `off`——`off` 的权限严格更大，
+   悄悄降级等于在用户不知情时扩权。界面前提已在 M1c 交付，M2 补齐了 12 格矩阵与四条探针（§7.2）。
 
 ## 10. 复现命令
 
@@ -372,4 +579,21 @@ cd web && API_PROXY_TARGET=http://127.0.0.1:8062 BLANK_WEB_DIST_DIR=.next-8062 \
 PATH="/e/env/node/node-v24.20.0-win-x64:$PATH" node E:/tmp/m1b/boundary-verify.mjs
 # 变异反证（装置必须能红）：把 api.ts 里 enforcedAny 写死 true → 单元 1 红 + 点验 2 红；
 # 把「无容器（进程在本机）」改回 raw backend → 单元 1 红 + 点验 1 红。
+
+# —— M4 复现（§7.4）——
+# 八条边界真执行（本机 job_only 必须得到 2 拦住 / 5 未强制 / 1 未测；rc=0）
+cd services/api && BLANK_SANDBOX_ALLOW_LOCAL=1 PYTHONIOENCODING=utf-8 PYTHONPATH=src \
+  .venv/Scripts/python.exe -X utf8 -m blank_api.doctor --sandbox --json E:/tmp/doctor.json
+# Node 入口（同一套探针）
+BLANK_SANDBOX_ALLOW_LOCAL=1 /e/env/node/node-v24.20.0-win-x64/node.exe \
+  packages/cli/src/index.mjs doctor --sandbox
+# P-AUDIT 正例：先跑一条真任务（M3 之后），再核对；老任务必须是 rc=1
+cd services/api && BLANK_SANDBOX_ALLOW_LOCAL=1 PYTHONIOENCODING=utf-8 PYTHONPATH=src \
+  .venv/Scripts/python.exe -X utf8 -m blank_api.doctor --sandbox \
+  --task <task-id> --api http://127.0.0.1:8061/api/v1
+# 判据与变异
+cd services/api && PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m pytest tests/test_doctor_v47.py -q
+# 安装包内的探针：打包后自检（缺 doctor.py 时 3b 段必须红）
+cd desktop && PATH="/e/env/node/node-v24.20.0-win-x64:$PATH" node node_modules/electron-builder/out/cli/cli.js --dir
+PATH="/e/env/node/node-v24.20.0-win-x64:$PATH" node verify-package.cjs
 ```

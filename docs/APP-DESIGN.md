@@ -79,7 +79,7 @@
 
 同时要改：
 
-- 去掉 `next.config.ts` 的 `/api/*` rewrite（静态导出不支持 rewrite）。前端 API 基址改由 `NEXT_PUBLIC_API_BASE` 决定：网页/开发态留空走相对路径，桌面构建填 `http://127.0.0.1:8000`
+- 去掉 `next.config.ts` 的 `/api/*` rewrite（静态导出不支持 rewrite）。前端 API 基址改由 `NEXT_PUBLIC_API_BASE` 决定：网页/开发态留空走相对路径，桌面构建填 `http://127.0.0.1:8000`。**构建值只是兜底**：壳运行时由 preload 把 `BLANK_API_BASE` / `BLANK_BACKEND_PORT` 算出的地址注入 `window.blankDesktop.apiBase`，`lib/http.ts` 优先用它，换端口不必重新构建
 - 后端 CORS 放行桌面壳来源
 - `globals.css` 里已有成套令牌（`--bg/--surface/--line/--text/--accent/--brand`），**沿用，不推倒重来**
 
@@ -257,7 +257,7 @@
 
 1. **前端静态化**（已实测可行）：加 `output: "export"`；`/tasks/[id]` 改查询参数（4 处链接 + 路由文件）；去掉 `/api/*` rewrite，API 基址改由 `NEXT_PUBLIC_API_BASE` 决定；后端 CORS 放行桌面壳来源
 2. **Electron 壳跑起来**：主进程 + 窗口（自绘标题栏、最小尺寸、记忆位置）、托盘、全局快捷键、单实例；先加载静态 `out/` 验证界面完整
-3. **后端进程守护**：探测 8000 端口 → 未就绪则拉起 sidecar → 健康检查 → 崩溃重启 → 失败进"服务未启动"专屏
+3. **后端进程守护**：探测 `BLANK_API_BASE` / `BLANK_BACKEND_PORT`（默认 `127.0.0.1:8000`）→ 未就绪则拉起 sidecar → 健康检查 → 崩溃重启 → 失败进"服务未启动"专屏；同一地址由 preload 注入渲染进程，避免前端仍打烘焙端口
 4. **套设计系统**：令牌固化进 `globals.css`，先换外壳（标题栏 / 导航 / 状态栏），再逐屏替换
 5. **后端打包**：PyInstaller `onedir` 出 `blank-backend.exe`，写 spec 收纳 alembic 与 LangGraph 隐藏导入
 6. **出包**：`electron-builder` → 便携版单 exe（内测）+ NSIS 安装包；配图标、版本号、覆盖升级

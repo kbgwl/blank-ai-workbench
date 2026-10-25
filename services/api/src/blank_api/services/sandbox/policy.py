@@ -20,6 +20,17 @@ DEFAULT_ENV_ALLOWLIST = (
     "NODE_ENV",
     "CI",
     "GIT_CONFIG",
+    # Windows 进程的运行必需品，不是用户私货：缺 SYSTEMROOT 时 Winsock 初始化会直接
+    # 失败（WinError 10106），沙箱里的 Python 连本机端口都建不出来。M2 的 P-NET 探针
+    # 第一次跑就撞上这条——把"环境被削坏"误读成"网络被强制"是最危险的假阳性。
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
 )
 
 

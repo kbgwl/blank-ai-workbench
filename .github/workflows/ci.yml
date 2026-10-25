@@ -55,9 +55,9 @@ jobs:
   api-dialect:
     # #50 量出的三类缺陷只在第二种方言上成立：提交后读回（无 INSERT RETURNING ⇒ 同步 lazy IO）、
     # 以及 aiomysql 在 PyMySQL ≥1.2 上绑不了 bytes（检查点每轮都写二进制列）。
-    # SQLite 那一格全绿挡不住它们，所以这一格必须是真库；判定用同一份驱动两边同跑：
-    # 两边一起红 = 装置错，只有 MySQL 红 = 真方言分歧。
-    # --require-mysql 让"库没起来"变成失败，而不是静默跳过（跳过 = 这一格今天没人守）。
+    # SQLite 那一格全绿挡不住它们，所以这两格必须是真库；判定用同一份驱动逐格同跑：
+    # 与对照格一起红 = 装置错，只有某一格红 = 真方言分歧。
+    # --require-mysql / --require-postgres 让"库没起来"变成失败，而不是静默跳过（跳过 = 这一格今天没人守）。
     runs-on: ubuntu-latest
     services:
       mysql:
@@ -69,17 +69,44 @@ jobs:
         options: >-
           --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pci_only_root_pw"
           --health-interval 5s --health-timeout 3s --health-retries 20
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci_only_pg_pw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --extra mysql
         working-directory: services/api
-      - name: 两方言端到端对照（真 HTTP；步数由装置的 EXPECTED_STEPS 自查）
+      - name: 三方言端到端对照（真 HTTP；步数由装置的 EXPECTED_STEPS 自查）
         # 名字里不写死步数：写死的那份会腐烂，而"全绿"这句话需要的是装置自己对过账。
         # 仓库根没有 pyproject.toml，uv 的项目上下文就是 services/api；装置自己按 __file__ 找得到仓库。
         env:
           BLANK_E2E_MYSQL_URL: mysql+aiomysql://root:ci_only_root_pw@127.0.0.1:3306/kbgai_e2e
-        run: uv run --extra mysql python ../evals/dialect_e2e.py --require-mysql
+          BLANK_E2E_POSTGRES_URL: postgresql+asyncpg://postgres:ci_only_pg_pw@127.0.0.1:5432/kbgai_e2e
+        run: >-
+          uv run --extra mysql python ../evals/dialect_e2e.py
+          --only sqlite,mysql,postgres --require-mysql --require-postgres
+        working-directory: services/api
+      - name: PG 两条建库路径对账（alembic vs create_all）
+        # 这一格比 HTTP 更早暴露"迁移写了、ORM 没写"的漂移：#61 第一次真跑就数出
+        # 77 个列的服务端默认值只有迁移侧有。给 URL 就连不上即失败；不给才跳过。
+        env:
+          BLANK_TEST_POSTGRES_URL: postgresql+asyncpg://postgres:ci_only_pg_pw@127.0.0.1:5432/postgres
+        run: uv run python -m pytest -q tests/test_schema_agreement_pg_v33.py
+        working-directory: services/api
+      - name: MySQL 两条建库路径对账（alembic vs create_all）
+        # #63：MySQL 侧自 #49 后只剩"迁移能跑通"和 HTTP，create_all 没再逐列对过。
+        # 这一格比类型/长度/索引/唯一约束/外键名与 ON DELETE/服务端默认值；
+        # 12 个时间列的 CURRENT_TIMESTAMP vs (now()) 是 0023 重述默认值的同义写法，用例单独钉住。
+        env:
+          BLANK_TEST_MYSQL_URL: mysql+aiomysql://root:ci_only_root_pw@127.0.0.1:3306/mysql
+        run: uv run --extra mysql python -m pytest -q tests/test_schema_agreement_mysql_v40.py
         working-directory: services/api
 
   team-e2e:

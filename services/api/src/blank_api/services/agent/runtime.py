@@ -29,6 +29,7 @@ from blank_api.services.agent.graph import AgentSession, build_agent_graph, init
 from blank_api.services.agent.loadstats import recent_load
 from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agent.store import SerializedSessionFactory
+from blank_api.services.approval_rules import load_prefix_rules
 from blank_api.services.chat_index import index_task_summary
 from blank_api.services.features import is_enabled
 from blank_api.services.fork import allocate_thread
@@ -50,6 +51,13 @@ from blank_api.services.tools import TEAM_ADMIN_TOOL_NAMES, build_default_tools
 from blank_api.services.tools.base import ToolContext
 from blank_api.services.tools.gateway import ToolGateway
 from blank_api.services.sandbox import SnapshotStore
+from blank_api.services.sandbox.tiers import (
+    TierDowngrade,
+    UnknownTier,
+    assert_not_looser,
+    normalize_tier,
+    resolve_tier,
+)
 from blank_api.services.workspace import mask_path
 
 
@@ -134,6 +142,9 @@ class RunRequest:
     approved_command_prefixes: Sequence[str] = ()
     # 空串表示"沿用该任务已有的模式"：审批恢复时前端不重发模式，不能被默认值悄悄改口径。
     permission_mode: str = ""
+    # 空串表示"用设置页的默认档"；审批恢复时同样要读回任务首次运行记下的档位，
+    # 否则一次恢复就能把 workspace 静默换成 off（或反之）。
+    sandbox_tier: str = ""
     skill_instructions: Sequence[str] = ()
     # 团队群聊的强规则（Bot 身份、@ 协议、本轮记录）。空表示行为与原来完全一致。
     system_instructions: Sequence[str] = ()
@@ -174,6 +185,9 @@ class _RunScope:
     # 外部工具（MCP）这轮的连接结果：写进 task.started，让"我的服务端怎么没生效"
     # 有一个可以直接看的地方，而不是只剩"工具列表里没有"。
     mcp: dict = field(default_factory=dict)
+    # 档位解析结果（requested/tier/strength/notice）。task.started 与 turn.context
+    # 都从这里取，避免两处各自解析出不同的档位。
+    sandbox: dict = field(default_factory=dict)
 
 
 class AgentRuntime:
@@ -228,6 +242,43 @@ class AgentRuntime:
             ).scalar_one_or_none()
         return str((payload or {}).get("permission_mode") or "")
 
+    async def _stored_tier(self, task_id: str) -> str:
+        """任务首次运行请求的档位，供审批恢复沿用。
+
+        读 `requested` 而不是 `tier`：上次可能因为部署开关关闭被落成 off，
+        恢复时开关若已打开，仍然应该按用户当初要的那一档重新解析。
+        """
+        async with self.session_factory() as session:
+            payload = (
+                await session.execute(
+                    select(AgentEvent.payload)
+                    .where(AgentEvent.task_id == task_id, AgentEvent.type == "task.started")
+                    .order_by(AgentEvent.seq.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        sandbox = (payload or {}).get("sandbox")
+        if not isinstance(sandbox, dict):
+            return ""
+        return str(sandbox.get("requested") or "")
+
+    async def _guard_tier_change(self, request: RunRequest) -> None:
+        """同一个任务不许换到更宽的档位继续跑。
+
+        续跑/重跑可以显式给档位，但只能收紧。把 `workspace` 的任务改用 `off` 续跑，
+        等于在用户点过的那道边界之外接着花他的钱；子代理同理（见 `subagent.run_subagent`）。
+        老任务没有 `task.started.sandbox` 时 `stored` 为空，不冒充知道。
+        """
+        stored = await self._stored_tier(request.task_id)
+        try:
+            assert_not_looser(stored, request.sandbox_tier)
+        except TierDowngrade as exc:
+            raise ApiError(
+                code="sandbox_tier_downgrade",
+                message=f"{exc}；请沿用任务首次运行时的档位，或新建任务",
+                status_code=409,
+            ) from None
+
     async def _prepare(self, request: RunRequest, thread_id: str) -> _RunScope:
         store = SerializedSessionFactory(self.session_factory)
         # 一次执行必须有一个轮 id：入口给了就用入口的（那是 run 台账里那一行，能和
@@ -241,6 +292,21 @@ class AgentRuntime:
             origin_run_id=request.origin_run_id,
         )
         settings = SettingsStore().read()
+        # 档位在装配层解析一次：网关、工具上下文、子代理与治理快照读的是同一份结果。
+        # 不可用就整任务拒绝——不让它有"先跑起来再说"的机会。
+        requested_tier = request.sandbox_tier or str(
+            (settings.get("sandbox") or {}).get("default_tier") or ""
+        )
+        try:
+            sandbox = resolve_tier(requested_tier, strict=True)
+        except UnknownTier as exc:
+            raise ApiError(code="sandbox_tier_invalid", message=str(exc), status_code=422) from None
+        if not sandbox.available:
+            raise ApiError(
+                code="sandbox_tier_unavailable",
+                message=sandbox.notice,
+                status_code=409,
+            )
         # 设置页可以关掉按需加载：关掉后所有工具每轮都下发，tool_search 也就没有意义了。
         # 走特性注册表，老字段 tools.search 仍然作为回落值生效。
         tool_search_enabled = is_enabled("tool_search", settings)
@@ -268,7 +334,11 @@ class AgentRuntime:
             approved_tools=allowed,
             approved_actions=approved_actions,
             approved_prefixes=request.approved_command_prefixes or (),
+            sandbox_tier=sandbox.tier,
         )
+        # 落盘的前缀规则：重启/换任务后仍认得用户以前批准过的命令签名。
+        # 读不出来（文件缺失/损坏）就是空集——fail-closed，多问一次而不是少问一次。
+        permissions.persistent_prefixes = load_prefix_rules()
         adapters = [request.adapter, *(request.role_adapters or {}).values()]
         # 按需选模型：候选不足两个就没有"选"可言，直接不建路由，
         # 关掉开关时行为与单模型完全一致（router=None 时 call_model 走原路径）。
@@ -315,6 +385,7 @@ class AgentRuntime:
             shell=shell,
             tool_registry=gateway.registry,
             team_scope=dict(request.team_scope or {}),
+            sandbox_tier=sandbox.tier,
         )
         session = AgentSession(
             adapter=request.adapter,
@@ -351,6 +422,7 @@ class AgentRuntime:
             memory=memory,
             shell=shell,
             instruction_layers=layers,
+            sandbox_tier=sandbox.tier,
         )
         subagents.bind(session)
         graph = build_agent_graph(session, SqlAlchemyCheckpointSaver(store))
@@ -367,6 +439,7 @@ class AgentRuntime:
             config=config,
             thread_id=thread_id,
             mcp=mcp_bundle.as_dict(),
+            sandbox=sandbox.as_dict(),
         )
 
     async def _fire_hooks(self, scope: _RunScope, event: str, payload: dict) -> None:
@@ -381,6 +454,7 @@ class AgentRuntime:
 
     async def run(self, request: RunRequest) -> dict[str, Any]:
         thread_id = await next_thread_id(self.session_factory, request.task_id)
+        await self._guard_tier_change(request)
         scope = await self._prepare(request, thread_id)
         await self._rehydrate(request.task_id, scope.session.permissions)
         recorder, session = scope.recorder, scope.session
@@ -406,6 +480,10 @@ class AgentRuntime:
                 "max_steps": session.max_steps,
                 "permission_mode": session.permission_mode,
                 "permissions": session.permissions.snapshot(),
+                # 档位是任务级配置：审批恢复与事后审计都读这一条（requested 优先）。
+                "sandbox": scope.sandbox,
+                # 扁平一份进去：事件消费方（面板/证据包）不必再钻进 sandbox.tier 里找。
+                "sandbox_mode": getattr(session, "sandbox_tier", ""),
                 "tools": session.gateway.registry.visible_names(),
                 "tools_deferred": session.gateway.registry.deferred_names(),
                 "mcp": scope.mcp,
@@ -522,6 +600,10 @@ class AgentRuntime:
         thread_id = await latest_thread_id(self.session_factory, request.task_id)
         if not request.permission_mode:
             request.permission_mode = await self._stored_mode(request.task_id) or MODE_DEFAULT
+        if not request.sandbox_tier:
+            request.sandbox_tier = await self._stored_tier(request.task_id)
+        else:
+            await self._guard_tier_change(request)
         scope = await self._prepare(request, thread_id)
         await self._rehydrate(request.task_id, scope.session.permissions)
         await self._set_status(scope, "running")
@@ -533,6 +615,7 @@ class AgentRuntime:
                 "decision": decision if isinstance(decision, (bool, str)) else dict(decision),
                 "permission_mode": scope.session.permission_mode,
                 "permissions": scope.session.permissions.snapshot(),
+                "sandbox": scope.sandbox,
             },
         )
         try:

@@ -382,6 +382,19 @@ def db_before(tmp_path_factory) -> Path:
 
 
 @pytest.fixture(scope="module")
+def db_at_0022(db_before, tmp_path_factory) -> Path:
+    """同一份数据只走到 0022：这一格的判据是「0022 的重建没搬坏账本」。
+
+    不能拿 head 来比：之后每加一列（0023 时间戳、0024 发起轮、0025 档位）都会让
+    「逐列相等」变成一条永远修不完的红。head 与 ORM 的一致性由下面那条单独管。
+    """
+    path = tmp_path_factory.mktemp("v28-0022") / "at-0022.db"
+    shutil.copy(db_before, path)
+    _alembic(["upgrade", "0022_ledger_no_cascade"], path)
+    return path
+
+
+@pytest.fixture(scope="module")
 def db_after(db_before, tmp_path_factory) -> Path:
     """同一份数据走完 0022 的库。"""
     path = tmp_path_factory.mktemp("v28") / "after.db"
@@ -400,13 +413,13 @@ def test_the_legacy_database_really_declares_the_cascade(db_before):
     assert "ON DELETE CASCADE" in ddl.upper(), ddl
 
 
-def test_migration_0022_leaves_the_ledger_intact(db_before, db_after):
+def test_migration_0022_leaves_the_ledger_intact(db_before, db_at_0022):
     """0022 摘掉外键，但不许搬坏账本：行、值、列宽、索引一个都不能变。
 
     SQLite 不能 ALTER 掉一条内联外键，只能整表重建——所以"重建后和重建前逐列相等"
-    是这条迁移唯一算数的证据。
+    是这条迁移唯一算数的证据。对照库停在 0022，不跟着 head 走（见 fixture 说明）。
     """
-    before, after = sqlite3.connect(db_before), sqlite3.connect(db_after)
+    before, after = sqlite3.connect(db_before), sqlite3.connect(db_at_0022)
     rows_before, rows_after = _rows_of(before), _rows_of(after)
     assert len(rows_before) == TOTAL_CALLS, "基数没自证，比较没有意义"
     assert rows_after == rows_before, json.dumps(

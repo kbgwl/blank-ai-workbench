@@ -35,14 +35,22 @@ from blank_api.services.tools.base import ToolContext, ToolDefinition, ok
 from blank_api.services.tools.gateway import ToolGateway, sandbox_backend_event_field
 
 TASK_ID = "task-boundary-facts-1"
-# 事件里允许出现的字段：与 gateway._command_enforcement 的 keep 清单一致，
-# 面板（api.ts / status.ts）只读这些，读不到别的东西。
-EVENT_KEYS = {
+# 执行引擎自己交出来的那本账（LocalSandbox / limits_not_applied）。
+ENGINE_KEYS = {
     "limits_applied", "boundary_strength", "boundary_strength_label",
     "memory_enforced", "memory_bytes", "pids_enforced", "pids_limit",
     "tree_kill_enforced", "filesystem_enforced", "network_enforced",
     "cpu_enforced", "disk_enforced", "job_created", "job_assigned", "job_error",
 }
+# M2：档位事实由 _tier_enforcement 合并进来，与后端名同源；事件里要能回答
+# "当时按哪一档跑、降级没有、为什么"。
+TIER_KEYS = {
+    "sandbox_tier", "sandbox_tier_requested", "sandbox_tier_degraded",
+    "tier_available", "tier_reason", "tier_notice",
+}
+# 事件里允许出现的字段：与 gateway._command_enforcement 的 keep 清单一致，
+# 面板（api.ts / status.ts）只读这些，读不到别的东西。
+EVENT_KEYS = ENGINE_KEYS | TIER_KEYS
 ALL_LIMIT_FIELDS = {"memory", "pids", "tree_kill", "cpu", "disk", "network", "filesystem"}
 
 
@@ -199,7 +207,7 @@ def test_panel_reads_exactly_these_field_names():
 def test_off_path_reports_the_same_key_set_as_on_path():
     """关档也得有一本账，而且键集合与执行层一致——读的一侧不用分两种形状。"""
     off = limits_not_applied("沙箱开关为关")
-    assert EVENT_KEYS <= set(off)
+    assert ENGINE_KEYS <= set(off), "执行层那本账的键集合必须与开档一致"
     assert off["limits_applied"] is False
     assert off["memory_enforced"] is False and off["memory_bytes"] == 0
     assert off["pids_enforced"] is False and off["pids_limit"] == 0

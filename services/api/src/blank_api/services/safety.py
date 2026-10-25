@@ -12,7 +12,8 @@
 「点了允许但还是失败」，比直接拒绝更难解释。
 
 客户端没有 Docker 是常态（桌面版装机不带容器运行时），因此策略在这里是唯一的
-安全承诺来源：Docker 可用时它叠加容器隔离，不可用时它是本机受限执行。
+安全承诺来源：Docker 可用时它叠加容器隔离，不可用时它最多做到策略级约束——
+关档时没有隔离，就必须直说「无隔离」，不能再借"本机受限执行"四个字暗示有边界。
 """
 
 from __future__ import annotations
@@ -71,6 +72,11 @@ _ABSOLUTE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\[^\\/]|/[^/\s])")
 # 可能会把路径写在 `--out=C:\x` 或 `> C:\x` 里，先按这些符号粗切一刀。
 _PATH_SPLIT = re.compile(r"[=,]")
 _TRAILING_PUNCT = "\"'`)]},;"
+
+# 路径闸门对「不存在的目标」怎么处理。真语义就写在这里：`_outside_paths` 只判**存在**的越界
+# 绝对路径，不存在的新目标直接跳过——否则 `echo "C:\\nope"` 这种字面量会被误杀。
+# 治理快照把这两个字母抄进 `permission_profile.missing_path_behavior`，两边不许各写各的。
+MISSING_PATH_BEHAVIOR = "skip"
 
 
 @dataclass(frozen=True)
@@ -270,7 +276,8 @@ class SafetyPolicy:
         """返回第一条越界路径；没有则返回空串。
 
         只把「真实存在」的绝对路径算作越界，避免把 ``echo "C:\\nope"`` 这种字面量
-        误判成越界 —— 误杀会让人关掉整条策略，比漏判更糟。
+        误判成越界 —— 误杀会让人关掉整条策略，比漏判更糟。这就是
+        `MISSING_PATH_BEHAVIOR = "skip"` 的出处：不存在的目标不参与判定。
         """
         roots = self.roots_for(workspace)
         try:
@@ -392,12 +399,18 @@ def _replace(policy: SafetyPolicy, **changes) -> SafetyPolicy:
 class BackendInfo:
     """界面要能回答「现在到底是怎么隔离的」，而不是笼统写个"已开启沙箱"。"""
 
-    backend: str  # docker / local
-    isolation: str  # container / process
+    backend: str  # docker / local / none
+    isolation: str  # container / none / 实测强度（job_only、os_enforced…）
     label: str
     detail: str
     platform: str = field(default_factory=lambda: os.name)
     docker_available: bool = False
+    # 档位事实与后端名同源（resolve_tier），界面不必自己再推导一遍
+    tier: str = ""
+    strength: str = ""
+    available: bool = True
+    reason: str = ""
+    notice: str = ""
 
     def as_dict(self) -> dict:
         return {
@@ -407,44 +420,70 @@ class BackendInfo:
             "detail": self.detail,
             "platform": self.platform,
             "docker_available": self.docker_available,
+            "tier": self.tier,
+            "strength": self.strength,
+            "available": self.available,
+            "reason": self.reason,
+            "notice": self.notice,
         }
 
 
 def backend_info() -> BackendInfo:
+    """默认档 + 现场实测的诚实账。`off` 下必须写「无隔离」，不许伪装成受限执行。"""
     from shutil import which
 
+    from blank_api.services.sandbox.tiers import resolve_tier
+
     docker = which("docker") is not None
-    if docker and _sandbox_enabled():
+    resolution = resolve_tier("")
+    facts = {
+        "docker_available": docker,
+        "tier": resolution.tier,
+        "strength": resolution.strength,
+        "available": resolution.available,
+        "reason": resolution.reason,
+        "notice": resolution.notice,
+    }
+    if not resolution.global_enabled:
+        return BackendInfo(
+            backend="none",
+            isolation="none",
+            label="无隔离（宿主完整权限）",
+            detail=(
+                resolution.notice
+                + "。策略开关仍然生效（禁止命令、禁网、路径闸门），但它是审批与拦截，不是隔离边界。"
+            ),
+            **facts,
+        )
+    if resolution.backend == "docker":
         return BackendInfo(
             backend="docker",
             isolation="container",
             label="容器隔离",
             detail="命令在一次性容器里执行：工作区是唯一可写挂载点，默认无网络，CPU/内存/进程数/时长均有上限。",
-            docker_available=True,
+            **facts,
         )
-    if docker:
+    if not resolution.available:
         return BackendInfo(
-            backend="local",
-            isolation="process",
-            label="本机受限执行",
-            detail="检测到 Docker，但容器沙箱未启用。命令在本机子进程内执行，仅受安全策略约束。",
-            docker_available=True,
+            backend="none",
+            isolation="none",
+            label="沙箱后端不可用：命令会被拒绝",
+            detail=(
+                resolution.notice
+                + "。装 Docker，或开发机显式设置 BLANK_SANDBOX_ALLOW_LOCAL=1。"
+            ),
+            **facts,
         )
     return BackendInfo(
         backend="local",
-        isolation="process",
-        label="本机受限执行",
+        isolation=resolution.strength,
+        label="本机执行：" + resolution.label,
         detail=(
-            "未检测到 Docker，命令在本机子进程内执行：工作目录钉在工作区、环境变量走白名单、"
-            "超时后回收整棵进程树。这是策略级隔离，不是内核级隔离——真正跑不可信代码请装 Docker 或改用云沙箱。"
+            resolution.notice
+            + "。工作目录钉在工作区、环境变量走白名单、超时后回收整棵进程树——这些是策略级约束。"
         ),
-        docker_available=False,
+        **facts,
     )
-
-
-def _sandbox_enabled() -> bool:
-    raw = str(os.environ.get("BLANK_SANDBOX_ENABLED", "false")).strip().lower()
-    return raw in ("1", "true", "yes", "on")
 
 
 __all__ = [

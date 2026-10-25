@@ -49,6 +49,11 @@ DEFAULTS: dict[str, Any] = {
         # 新任务的默认权限模式
         "default_mode": MODE_DEFAULT,
     },
+    "sandbox": {
+        # 新任务的默认档位。产品默认 workspace；部署级开关（BLANK_SANDBOX_ENABLED）
+        # 仍然优先，关闭时任何档位都落成 off 并留痕。
+        "default_tier": "workspace",
+    },
     "tools": {
         # 工具超过一定数量后按需检索加载（tool_search）
         "search": True,
@@ -101,6 +106,11 @@ def _path() -> Path:
     target = Path(override) if override else _LEGACY_SETTINGS
     _migrate_legacy(target)
     return target
+
+
+def settings_path() -> Path:
+    """设置文件位置（公开给同样要落到"用户数据目录"的兄弟文件用，例如审批规则）。"""
+    return _path()
 
 
 @lru_cache(maxsize=8)
@@ -167,6 +177,7 @@ def normalize(raw: Any) -> dict[str, Any]:
     compaction = data.get("compaction") if isinstance(data.get("compaction"), dict) else {}
     permissions = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
     tools = data.get("tools") if isinstance(data.get("tools"), dict) else {}
+    sandbox = data.get("sandbox") if isinstance(data.get("sandbox"), dict) else {}
     safety = data.get("safety") if isinstance(data.get("safety"), dict) else {}
     features = data.get("features") if isinstance(data.get("features"), dict) else {}
 
@@ -210,6 +221,15 @@ def normalize(raw: Any) -> dict[str, Any]:
             ),
         },
         "permissions": {"default_mode": default_mode},
+        "sandbox": {
+            # 认不出的档位退回默认，不退回 off：手改文件写坏了一个词，
+            # 不该等于把每个新任务的隔离都关掉。
+            "default_tier": (
+                str(sandbox.get("default_tier") or "").strip().lower()
+                if str(sandbox.get("default_tier") or "").strip().lower() in ("off", "workspace", "workspace-net")
+                else DEFAULTS["sandbox"]["default_tier"]
+            )
+        },
         "tools": {"search": _as_bool(tools.get("search"), DEFAULTS["tools"]["search"])},
         # 只收认得出布尔语义的值：手改文件时写成字符串 "on" 也认，写成一坨
         # 无法解释的东西就丢掉，让注册表默认值接手，而不是让开关变成随机行为。

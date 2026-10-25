@@ -8,7 +8,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from blank_api.db import Base
@@ -23,7 +23,9 @@ class SearchDoc(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # team_message = 群聊里的一句话；task = 一轮对话的结论。
-    source: Mapped[str] = mapped_column(String(20), nullable=False, default="team_message")
+    source: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="team_message", server_default="team_message"
+    )
     source_id: Mapped[str] = mapped_column(String(80), nullable=False)
     project_id: Mapped[str] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
@@ -35,12 +37,22 @@ class SearchDoc(Base):
     task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     message_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     # 群名或任务标题：搜索结果列表里要能一眼看出"这是哪里的对话"。
-    title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
-    speaker: Mapped[str] = mapped_column(String(100), nullable=False, default="")
-    role: Mapped[str] = mapped_column(String(16), nullable=False, default="")
-    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    title: Mapped[str] = mapped_column(
+        String(200), nullable=False, default="", server_default=""
+    )
+    speaker: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="", server_default=""
+    )
+    role: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="", server_default=""
+    )
+    content: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=text("('')")
+    )
     # 空格包围的 token 串（" 登录 接口 jie "），查询用 LIKE 做候选集，再精确打分。
-    tokens: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tokens: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=text("('')")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()

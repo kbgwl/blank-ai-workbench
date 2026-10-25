@@ -61,6 +61,8 @@ class TeamGroupIn(BaseModel):
     member_ids: list[str] = Field(default_factory=list, max_length=4)
     max_speakers: int = Field(default=5, ge=1, le=8)
     token_budget: int = Field(default=60_000, ge=5_000, le=2_000_000)
+    # 整群的执行档位；成员任务逐字继承。空串=按设置默认档。
+    sandbox_tier: Literal["", "off", "workspace", "workspace-net"] = ""
 
 
 class TeamGroupUpdate(BaseModel):

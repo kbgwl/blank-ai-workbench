@@ -15,6 +15,9 @@ os.environ.setdefault("BLANK_NOTES_DIR", tempfile.mkdtemp(prefix="blank-notes-")
 os.environ.setdefault("BLANK_MEMORY_DIR", tempfile.mkdtemp(prefix="blank-memory-"))
 # 运行时设置也落临时目录：测试绝不能读到或写进仓库里的 data/settings.json
 os.environ.setdefault("BLANK_SETTINGS_FILE", f"{tempfile.mkdtemp(prefix='blank-settings-')}/settings.json")
+# 落盘的审批前缀规则同理：一次测试留下的 approvals.json 会改变后续用例的判定。
+# 具体用例可再用 monkeypatch 指向自己的 tmp_path，做跨任务的隔离验证。
+os.environ.setdefault("BLANK_APPROVALS_FILE", f"{tempfile.mkdtemp(prefix='blank-approvals-')}/approvals.json")
 # 子代理的隔离副本也放测试自己的目录：不往系统临时目录里堆，跑完自动随 basetemp 清理
 os.environ.setdefault("BLANK_WORKTREE_ROOT", tempfile.mkdtemp(prefix="blank-worktrees-"))
 # 工具调用的审计账也落临时目录：每次网关调用都写一条 JSONL，留在仓库里就是脏数据
@@ -45,6 +48,12 @@ import pytest  # noqa: E402
 
 from blank_api.app import create_app  # noqa: E402
 from blank_api.db import Base, get_engine  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_approvals_file(tmp_path, monkeypatch):
+    """每个用例一份空的审批规则：上个用例批准过的前缀不该改变下个用例的判定。"""
+    monkeypatch.setenv("BLANK_APPROVALS_FILE", str(tmp_path / "approvals.json"))
 
 
 @pytest.fixture

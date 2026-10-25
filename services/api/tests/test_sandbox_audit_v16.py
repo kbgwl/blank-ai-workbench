@@ -105,15 +105,21 @@ async def test_host_execution_is_stated_not_omitted(seeded, workspace, audit_dir
     assert entry["exit_code"] == 0
 
 
-async def test_readonly_call_carries_no_boundary(seeded, workspace, audit_dir):
+async def test_readonly_call_carries_its_boundary_without_a_process(seeded, workspace, audit_dir):
     payload = await ToolGateway(build_default_tools()).execute(
         "read_file", {"path": "README.md"}, _context(workspace), "act"
     )
     assert "sandbox_backend" not in payload
-    assert sandbox_backend_event_field(payload) == {}
+    # M3：只读工具没有"跑在哪"，但它有边界——在 API 进程内，且当时按某一档跑。
+    # 这两条必须进事件，否则"全 Agent 进边界"只对命令类工具成立。
+    assert sandbox_backend_event_field(payload) == {
+        "sandbox_mode": "workspace",
+        "boundary_kind": "in_process",
+    }
     entry = _entries(audit_dir)[0]
     assert entry["detail"]["ran_command"] is False
     assert entry["detail"]["host_execution"] is False
+    assert entry["detail"]["boundary_kind"] == "in_process"
 
 
 async def test_backend_name_is_carried_through_untouched(seeded, tmp_path, audit_dir):
@@ -201,7 +207,10 @@ async def test_evidence_says_where_each_command_ran(seeded, workspace, audit_dir
     evidence = await build_evidence(get_session_factory(), TASK_ID)
     by_name = {row["name"]: row for row in evidence["tools"]}
     assert by_name["run_shell"]["sandbox_backend"] is None
+    # 只读工具没有后端，但有边界种类与档位（M3 起每个 tool.completed 都带）。
     assert "sandbox_backend" not in by_name["read_file"]
+    assert by_name["read_file"]["boundary_kind"] == "in_process"
+    assert by_name["run_shell"]["boundary_kind"] == "process"
 
 
 async def test_the_graph_itself_puts_the_boundary_in_the_event(env, workspace):  # noqa: F811
@@ -233,6 +242,10 @@ async def test_the_graph_itself_puts_the_boundary_in_the_event(env, workspace): 
     events = {row.payload.get("tool"): row.payload for row in rows if isinstance(row.payload, dict)}
     assert "sandbox_backend" not in events["read_file"]
     assert events["run_shell"]["sandbox_backend"] is None
+    # 图里两个 emit 点都要把 M3 的边界字段带出去，不能只有网关单测看得到。
+    assert events["read_file"]["boundary_kind"] == "in_process"
+    assert events["run_shell"]["boundary_kind"] == "process"
+    assert events["read_file"]["sandbox_mode"] == events["run_shell"]["sandbox_mode"] != ""
     # 运行时真的在往审计账上写（不是只有单测手工构造记录）：一条只读、一条宿主命令。
     entries = AuditLog(Path(os.environ["BLANK_AUDIT_DIR"])).read(task_id)
     assert [entry["tool"] for entry in entries] == ["read_file", "run_shell"]

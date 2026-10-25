@@ -11,8 +11,12 @@ class MemoryCandidate(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
-    source: Mapped[str] = mapped_column(String(120), nullable=False, default="daily")
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    source: Mapped[str] = mapped_column(
+        String(120), nullable=False, default="daily", server_default="daily"
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending", server_default="pending"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -23,8 +27,10 @@ class Skill(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     instructions: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
-    version: Mapped[int] = mapped_column(nullable=False, default=1)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="draft", server_default="draft"
+    )
+    version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     source_candidate_id: Mapped[str | None] = mapped_column(
         ForeignKey("memory_candidates.id", ondelete="SET NULL"), nullable=True
     )

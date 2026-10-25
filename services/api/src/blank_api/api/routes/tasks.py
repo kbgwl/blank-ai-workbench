@@ -347,6 +347,8 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         "skill_instructions": [str(item) for item in active_skills],
         # 会话上下文由运行时自己读：这里只告诉它"这一轮属于哪条会话"。
         "thread_ref": task.thread_id or "",
+        # 空串＝沿用设置页默认档；运行时负责解析、降级与拒绝，路由层不预先猜。
+        "sandbox_tier": payload.sandbox_tier,
     }
     # 候选必须在这里算：下面 rollback 会让 ORM 实例过期，之后读 api_key_encrypted
     # 会触发同步懒加载，在异步会话里直接抛 MissingGreenlet。

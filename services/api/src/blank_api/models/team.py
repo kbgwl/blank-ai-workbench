@@ -20,8 +20,10 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
     text,
+    true,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -45,8 +47,12 @@ class TeamBot(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(24), nullable=False, unique=True)
-    role: Mapped[str] = mapped_column(String(100), nullable=False, default="")
-    instructions: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    role: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="", server_default=""
+    )
+    instructions: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=text("('')")
+    )
     # 没绑供应商就跟随"第一个启用的供应商"；绑了就必须在运行时仍然启用。
     provider_id: Mapped[str | None] = mapped_column(
         ForeignKey("model_providers.id", ondelete="SET NULL"), nullable=True, index=True
@@ -55,11 +61,19 @@ class TeamBot(Base):
     workspace_id: Mapped[str | None] = mapped_column(
         ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True
     )
-    permission_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="default")
-    max_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=8)
+    permission_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="default", server_default="default"
+    )
+    max_steps: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=8, server_default="8"
+    )
     # 主理人（小白管家）只有一位：不能改名、不能删除、不能停用。
-    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_admin: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -74,14 +88,25 @@ class TeamGroup(Base):
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    topic: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    topic: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=text("('')")
+    )
     admin_bot_id: Mapped[str | None] = mapped_column(
         ForeignKey("team_bots.id", ondelete="SET NULL"), nullable=True
     )
     # 一轮里最多几次发言（含主理人开场与收尾）。这是防止 Bot 互相 @ 停不下来的硬闸。
-    max_speakers: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    max_speakers: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default="5"
+    )
     # 一轮的 token 预算，按本轮各 Task 的 ModelUsage 累计。
-    token_budget: Mapped[int] = mapped_column(Integer, nullable=False, default=60_000)
+    token_budget: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=60_000, server_default="60000"
+    )
+    # 群聊里每个成员的执行档位。成员任务一律继承这一档，不许自己挑；
+    # 空串=建群时没记（老群），运行时按设置默认档解析，不在这里编一个值。
+    sandbox_tier: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="", server_default=""
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -99,12 +124,16 @@ class TeamMember(Base):
     bot_id: Mapped[str] = mapped_column(
         ForeignKey("team_bots.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    position: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     # 每个 Bot 在群里一条自己的会话：上一轮它说过什么，这一轮还记得。
     thread_id: Mapped[str | None] = mapped_column(
         ForeignKey("threads.id", ondelete="SET NULL"), nullable=True
     )
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
@@ -122,7 +151,9 @@ class TeamRound(Base):
         ForeignKey("team_groups.id", ondelete="CASCADE"), nullable=False, index=True
     )
     user_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    status: Mapped[str] = mapped_column(String(24), nullable=False, default="running", index=True)
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="running", server_default="running", index=True
+    )
     # 待发言的 bot_id 顺序队列，以及已经完成过一轮的 bot_id（含 [PASS]）。
     # `text("('[]')")` 不是口味：MySQL 8.4 拒绝给 JSON/TEXT 列写字面量默认值（1101），
     # 只有 8.0.13+ 的表达式默认值这一种写法两种方言都吃。
@@ -132,10 +163,16 @@ class TeamRound(Base):
     spoken: Mapped[list] = mapped_column(
         JSON, nullable=False, default=list, server_default=text("('[]')")
     )
-    tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     # 主理人是否已经做过收尾。没有成员的轮次不收尾，避免自问自答。
-    wrap_up_done: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    wrap_up_done: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    error: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=text("('')")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -155,9 +192,15 @@ class TeamMessage(Base):
     role: Mapped[str] = mapped_column(String(12), nullable=False)
     bot_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     # 名字冗余一份：Bot 改名或被删除后，历史消息仍然要能显示"当时是谁说的"。
-    bot_name: Mapped[str] = mapped_column(String(24), nullable=False, default="")
-    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    bot_name: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="", server_default=""
+    )
+    content: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=text("('')")
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="", server_default=""
+    )
     task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     meta: Mapped[dict] = mapped_column(
         JSON, nullable=False, default=dict, server_default=text("('{}')")

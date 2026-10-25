@@ -143,7 +143,7 @@ export type AgentSettingsPatch = {
   safety?: Partial<SafetySettings>;
 };
 
-/** 这台机器此刻到底怎么隔离的：容器 / 本机受限执行。 */
+/** 这台机器此刻到底怎么隔离的：容器 / 本机实测边界 / 无隔离。 */
 export type SafetyRuntime = {
   backend: {
     backend: string;
@@ -152,6 +152,11 @@ export type SafetyRuntime = {
     detail: string;
     platform: string;
     docker_available: boolean;
+    tier?: string;
+    strength?: string;
+    available?: boolean;
+    reason?: string;
+    notice?: string;
   };
   policy: SafetySettings;
   default_mode: string;

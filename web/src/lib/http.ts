@@ -48,8 +48,21 @@ export const jsonInit = { headers: { "content-type": "application/json" } };
  * - 网页 / 开发态：留空 → 走相对路径 `/api/...`，由 Next 的 rewrite 代理到本机后端。
  * - 桌面壳构建：`NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000` → 直连后端。
  *   静态导出没有服务器，rewrite 不生效，所以桌面构建必须给绝对地址。
+ * - 桌面壳运行态：preload 注入 `window.blankDesktop.apiBase`，优先于烘焙值——
+ *   `BLANK_BACKEND_PORT` / `BLANK_API_BASE` 改了端口时，界面不用重新构建。
  */
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+type DesktopBridge = { apiBase?: unknown };
+
+export function resolveApiBase(injected: unknown, baked: string | undefined): string {
+  const fromShell = typeof injected === "string" ? injected.trim() : "";
+  if (fromShell) return fromShell.replace(/\/+$/, "");
+  return baked ?? "";
+}
+
+export const API_BASE = resolveApiBase(
+  (globalThis as { blankDesktop?: DesktopBridge }).blankDesktop?.apiBase,
+  process.env.NEXT_PUBLIC_API_BASE,
+);
 
 export const API_V1 = `${API_BASE}/api/v1`;
 

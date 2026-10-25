@@ -15,9 +15,10 @@ import time
 
 import httpx
 
-BASE = "http://127.0.0.1:8061/api/v1"
+BASE = os.environ.get("PROBE_BASE", "http://127.0.0.1:8061").rstrip("/") + "/api/v1"
 PROVIDER = os.environ.get("PROBE_PROVIDER_ID", "cfc2806d-2f8e-4834-8b11-141d1148e80f")
 SMALL_WINDOW = int(os.environ.get("PROBE_WINDOW", "2000"))
+OUT_DIR = os.environ.get("PROBE_OUT_DIR", r"E:\tmp\realmodel")
 GOAL = (
     "依次做三件事，每件事都要真的调用工具：\n"
     "1) read_file 读取 README.md；\n"
@@ -65,15 +66,43 @@ try:
     measured = [row for row in events if (row.get("type") or "") == "context.measured"]
     evidence = client.get(f"/tasks/{task_id}/evidence").json()
     context_block = evidence.get("context") or {}
-    out = rf"E:\tmp\realmodel\evidence-compaction-{task_id[:8]}.json"
+    os.makedirs(OUT_DIR, exist_ok=True)
+    out = os.path.join(OUT_DIR, f"evidence-compaction-{task_id[:8]}.json")
     with open(out, "w", encoding="utf-8") as handle:
         json.dump({"events": events, "evidence_context": context_block}, handle, ensure_ascii=False, indent=2)
 
     first = (compacted[0].get("payload") or {}) if compacted else {}
+    windows = [row.get("payload") or {} for row in compacted]
+    summary_chars = [int(item.get("summary_chars") or 0) for item in windows]
+    response_ids = [str(item.get("compaction_response_id") or "") for item in windows]
+    boundaries = [int(item.get("boundary") or 0) for item in windows]
+    numbers = [int(item.get("window_number") or 0) for item in windows]
+    chained = bool(windows) and numbers == list(range(1, len(windows) + 1)) and all(
+        str(windows[index].get("window_id") or "")
+        and str(windows[index].get("previous_window_id") or "")
+        == str(windows[index - 1].get("window_id") or "")
+        for index in range(1, len(windows))
+    ) and bool(windows[0].get("window_id"))
+    advancing = all(boundaries[index] > boundaries[index - 1] for index in range(1, len(boundaries)))
+    replacement_ready = all(
+        isinstance(item.get("replacement"), dict)
+        and bool((item.get("replacement") or {}).get("dropped"))
+        and bool((item.get("replacement") or {}).get("items"))
+        for item in windows
+    )
+    evidence_windows = context_block.get("windows") or []
+    evidence_ids = [str(item.get("compaction_response_id") or "") for item in evidence_windows]
     # 真实取值带阶段后缀（tokens:fold / tokens:micro / chars:fold），冒号前才是判定依据。
     trigger_base = str(first.get("triggered_by") or "").split(":")[0]
     failed = [row for row in events if (row.get("type") or "").startswith("task.failed")]
     checks = {
+        "摘要由模型写出且每次非空（summary_chars > 0）": bool(windows) and all(value > 0 for value in summary_chars),
+        "每次压缩都指认了供应商响应 id": bool(windows) and all(response_ids),
+        "窗口编号从 1 起、窗口链首尾相接且边界严格前进": chained and advancing,
+        "替换记录同时给出丢掉与新增条目": replacement_ready,
+        "证据包窗口链与事件是同一组非空响应 id": bool(windows)
+        and evidence_ids == response_ids
+        and all(evidence_ids),
         "真的触发了一次压缩（有 context.compacted 事件）": bool(compacted),
         "事件里有边界位置 covered": bool(compacted) and int(first.get("covered") or 0) > 0,
         "事件里区分了水位触发与字符预算触发": bool(compacted) and trigger_base in {"tokens", "chars"},
@@ -90,6 +119,8 @@ try:
     }
     print(f"events={len(events)} measured={len(measured)} compacted={len(compacted)}")
     print(f"first_payload={json.dumps(first, ensure_ascii=False)[:420]}")
+    print(f"windows={numbers} boundaries={boundaries} summary_chars={summary_chars}")
+    print(f"compaction_response_ids={response_ids}")
     print(f"evidence_context={json.dumps(context_block, ensure_ascii=False)}")
     for row in failed:
         print(f"task_failed_payload={json.dumps(row.get('payload') or {}, ensure_ascii=False)[:300]}")

@@ -28,6 +28,7 @@ from blank_api.services.agent.usage import account_call, merge_usage
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.permissions import MODE_ACCEPT_EDITS, MODE_DEFAULT, PermissionPolicy
 from blank_api.services.safety import SafetyPolicy
+from blank_api.services.sandbox.tiers import TierDowngrade, assert_not_looser
 from blank_api.services.tools.base import ToolContext
 from blank_api.services.tools.gateway import ToolGateway, sandbox_backend_event_field
 from blank_api.services.worktree import (
@@ -273,10 +274,17 @@ async def run_subagent(
     provider_id: str = "",
     provider_name: str = "",
     watermark: dict | None = None,
+    sandbox_tier: str = "workspace",
+    parent_tier: str = "",
 ) -> SubAgentResult:
     request = request.normalized()
     if not request.goal:
         return SubAgentResult(ok=False, error="子任务目标为空", agent_path=agent_path, depth=depth)
+    try:
+        sandbox_tier = assert_not_looser(parent_tier, sandbox_tier)
+    except TierDowngrade as exc:
+        # 子代理只能继承父级的边界，不许自己挑一个更宽的。这不是参数错，是越权。
+        return SubAgentResult(ok=False, error=str(exc), agent_path=agent_path, depth=depth)
 
     tree: Worktree | None = None
     run_root = Path(root)
@@ -304,6 +312,8 @@ async def run_subagent(
         MODE_ACCEPT_EDITS if isolated else MODE_DEFAULT,
         approved_tools=set(),
         approved_actions=set(),
+        # 子代理继承父任务的档位，不许自己挑一个更宽的执行边界。
+        sandbox_tier=sandbox_tier,
     )
     context = ToolContext(
         root=run_root,
@@ -312,6 +322,7 @@ async def run_subagent(
         approval_policy=permissions.decide,
         trace_id=parent_thread_id,
         permissions=permissions,
+        sandbox_tier=sandbox_tier,
         # 子代理不能成为绕过客户安全设置的侧门：同一台机器、同一份策略。
         safety=SafetyPolicy.load(),
         tool_registry=gateway.registry,
@@ -373,6 +384,7 @@ async def run_subagent(
             parent_thread_id=parent_thread_id,
             root_thread_id=root_thread_id,
             parallel_group=request.parallel_group,
+            sandbox_mode=sandbox_tier,
         )
 
     async def invoke(specs: list, chat: list[ChatMessage]) -> Any:
@@ -524,6 +536,7 @@ class SubAgentRunner:
         agent_path = f"{getattr(session, 'agent_path', 'root')}/sub-{self.spawned}"
         # 根线程从父会话一路往下传：孙代理的根仍然是最初那条线程，不是它的父亲。
         root_thread_id = str(getattr(session, "root_thread_id", "") or session.trace_id)
+        tier = str(getattr(session, "sandbox_tier", "") or "")
         allowed = ISOLATED_TOOLS if request.isolate else READ_ONLY_TOOLS
         tools = [tool for tool in _all_tools() if tool.name in allowed]
         await session.recorder.add(
@@ -537,6 +550,7 @@ class SubAgentRunner:
                 "depth": depth,
                 "parent_thread_id": session.trace_id,
                 "root_thread_id": root_thread_id,
+                "sandbox_tier": tier,
             },
         )
         provider_id, provider_name = _session_provider(session)
@@ -555,6 +569,8 @@ class SubAgentRunner:
             provider_id=provider_id,
             provider_name=provider_name,
             watermark=_inherited_watermark(session),
+            sandbox_tier=tier,
+            parent_tier=tier,
         )
 
     async def fan_out(
@@ -600,6 +616,7 @@ class SubAgentRunner:
         tools = [tool for tool in _all_tools() if tool.name in allowed]
         provider_id, provider_name = _session_provider(session)
         root_thread_id = str(getattr(session, "root_thread_id", "") or session.trace_id)
+        tier = str(getattr(session, "sandbox_tier", "") or "")
 
         async def one(index: int, item: SubAgentRequest) -> SubAgentResult:
             async with semaphore:
@@ -619,6 +636,7 @@ class SubAgentRunner:
                         "depth": depth,
                         "parent_thread_id": session.trace_id,
                         "root_thread_id": root_thread_id,
+                        "sandbox_tier": tier,
                         "parallel_group": group,
                         "index": index + 1,
                     },
@@ -638,6 +656,8 @@ class SubAgentRunner:
                     provider_id=provider_id,
                     provider_name=provider_name,
                     watermark=_inherited_watermark(session),
+                    sandbox_tier=tier,
+                    parent_tier=tier,
                 )
 
         results = await asyncio.gather(

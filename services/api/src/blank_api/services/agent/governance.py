@@ -21,42 +21,73 @@ from typing import Any
 from blank_api.services.features import FEATURES, resolve
 from blank_api.services.instructions import content_sha
 from blank_api.services.sandbox import boundary
-from blank_api.services.sandbox.policy import SandboxPolicy
 from blank_api.services.sandbox.runner import SandboxUnavailable, get_sandbox
+from blank_api.services.sandbox.tiers import resolve_tier
 from blank_api.services.workspace import mask_path
 
 
-def sandbox_boundary(writable_root: str = "") -> dict[str, Any]:
-    """命令此刻实际会被什么边界执行。
+def sandbox_boundary(writable_root: str = "", tier: str = "") -> dict[str, Any]:
+    """命令此刻实际会被什么边界执行——按本任务的档位，不按进程默认值。
 
     每次现取，不缓存：策略可能被改，缓存等于把「上次读到的值」冒充「现在的值」。
     后端一律走 `get_sandbox`，不在这里重新推导一遍选择逻辑——推导一份就多一个会漂移的地方。
+    `off` 档不返回任何后端：说"local 后端"会被读成"还有个受限执行层"。
     """
-    policy = SandboxPolicy()
-    try:
-        backend = get_sandbox(policy).name
-        denied = ""
-    except SandboxUnavailable as exc:
-        # 起不来也是事实，要原样写出来：命令类工具此刻会被直接拒掉，
-        # 这不是「跑得很慢」，是「根本没跑」。
-        backend, denied = "none", str(exc)
+    resolution = resolve_tier(tier)
+    policy = resolution.policy
+    backend, denied = "none", ""
+    if not resolution.available:
+        # 档位不提供（例如 workspace-net 在测不出网络强制的机器上）：命令会被直接拒。
+        # 后端不可用时把具体原因一并带上（装 Docker / 开 ALLOW_LOCAL），否则用户只知道
+        # "被拒了"，不知道下一步该改哪一项。
+        denied = resolution.notice
+        try:
+            get_sandbox(policy)
+        except SandboxUnavailable as exc:
+            denied = f"{resolution.notice}；{exc}"
+    elif policy.enabled:
+        try:
+            backend = get_sandbox(policy).name
+        except SandboxUnavailable as exc:
+            # 起不来也是事实，要原样写出来：命令类工具此刻会被直接拒掉，
+            # 这不是「跑得很慢」，是「根本没跑」。
+            backend, denied = "none", str(exc)
+    strength = resolution.strength if policy.enabled and resolution.available else "none"
     # 配置值 ≠ 生效值。下面这些数字是 policy 里写着的目标，`enforced` 才回答"谁真的在执行它"：
     # 非管理员的 Windows 上（M0 实测档位 job_only）内存/进程数/进程树由 Job Object 强制，
     # CPU、磁盘、文件与网络边界谁都没强制——继续把 cpus=1.0 当成生效值展示就是撒谎。
-    enforced = boundary.enforced_fields(backend, limits_enabled=policy.enabled)
+    limits_enabled = bool(policy.enabled and resolution.limits_enforced)
+    enforced = boundary.enforced_fields(backend, limits_enabled=limits_enabled)
     cap = boundary.measure()
+    if not policy.enabled:
+        source = "sandbox_disabled"
+    elif not resolution.available:
+        source = "no_backend"
+    else:
+        source = boundary.enforcement_source(backend, limits_enabled=True)
     return {
+        "tier": resolution.tier,
+        "tier_requested": resolution.requested,
+        "tier_available": resolution.available,
+        "tier_degraded": resolution.degraded,
+        "tier_reason": resolution.reason,
+        "tier_notice": resolution.notice,
         "backend": backend,
         "enabled": policy.enabled,
         # 隔离强度只有两种真实说法：容器，或者宿主直连（宿主直连不承诺隔离）。
         "isolation": "container" if backend == "docker" else "host",
         # 现场探测出来的档位与来源，与工具事件里的 sandbox_enforcement 同一口径。
-        "boundary_strength": cap.strength,
-        "boundary_strength_label": cap.label,
+        # off 档一律 none：机器能建 Job 不等于这次任务建了 Job。
+        "boundary_strength": strength,
+        "boundary_strength_label": boundary.strength_label(strength),
         "boundary_measured_seconds_ago": cap.as_dict().get("age_seconds"),
         "boundary_apparatus_ok": cap.apparatus_ok,
-        "enforcement_source": boundary.enforcement_source(backend, limits_enabled=policy.enabled),
+        "enforcement_source": source,
         "enforced": enforced,
+        # 与 enforced 同源的逐项事实，放在顶层是因为界面文案直接读这两条；
+        # 让它们各自去 enforced 里猜，迟早和工具事件的口径漂开。
+        "filesystem_enforced": bool(enforced.get("filesystem")),
+        "network_enforced": bool(enforced.get("network")),
         "allow_local": policy.allow_local,
         "cpus": policy.cpus,
         "memory": policy.memory,
@@ -120,6 +151,84 @@ def instructions_digest(layers: list[Any] | tuple[Any, ...] | None) -> str:
     return content_sha("\n\n".join(parts))
 
 
+def permission_profile(
+    *,
+    sandbox: dict[str, Any],
+    safety: Any = None,
+    workspace: str = "",
+) -> dict[str, Any]:
+    """把「这一步能碰哪些路径」展开成逐条 ACE（对标 Codex `turn_context.permission_profile`）。
+
+    Codex 写的是生效值而不是配置引用：读一条记录就知道当时能碰哪些路径，不用再回去
+    解析配置。我们照这个形状做，但每条多带一个 `enforced_by`——本机多数时候拿不到
+    内核级文件边界（M0 实测 `job_only`），把「策略闸门会拦」写成「系统会拒」就是本
+    立项要消灭的那类谎：
+
+    - `os`：容器 / AppContainer 层由系统拒；
+    - `policy`：`SafetyPolicy` 的路径闸门（执行前判定，不是内核）；
+    - `none`：没有任何一层在管（关档且关闭「仅限工作区」）。
+
+    `missing_path_behavior` 取 `safety.MISSING_PATH_BEHAVIOR`（`skip`）：闸门只判
+    **存在**的越界绝对路径，不存在的新目标不参与判定。这是我们的真实语义，不是
+    为了长得像 Codex 而抄的常量。
+    """
+    from blank_api.services import safety as safety_mod
+    from blank_api.services.workspace import mask_path
+
+    restrict = bool(getattr(safety, "restrict_to_workspace", False))
+    network_gate = "allow" if bool(getattr(safety, "network_enabled", False)) else "deny"
+    backend = str(sandbox.get("backend") or "")
+    container = backend == "docker"
+    fs_enforced = bool(sandbox.get("filesystem_enforced"))
+
+    # 工作区自己总是可写；谁在保证这条，取决于这台机器真拿到了哪一层。
+    inside_by = "os" if (container or fs_enforced) else ("policy" if restrict else "none")
+    entries: list[dict[str, Any]] = []
+    if workspace:
+        entries.append({"path": workspace, "access": "write", "enforced_by": inside_by})
+    for root in tuple(getattr(safety, "allowed_roots", ()) or ()):
+        text = str(root or "").strip()
+        if text:
+            entries.append({"path": mask_path(text), "access": "write", "enforced_by": inside_by})
+
+    # 工作区之外：容器里宿主路径根本不在挂载表里，说"拒"比说"没有"更含糊；
+    # 非容器但有内核级文件边界时是系统拒；只有策略闸门时是判定拒；都没有就是能写。
+    if container:
+        entries.append({"path": "*", "access": "none", "enforced_by": "os"})
+    elif fs_enforced:
+        entries.append({"path": "*", "access": "deny", "enforced_by": "os"})
+    elif restrict:
+        entries.append({"path": "*", "access": "deny", "enforced_by": "policy"})
+    else:
+        entries.append({"path": "*", "access": "write", "enforced_by": "none"})
+
+    restricted = container or fs_enforced or restrict
+    if container or fs_enforced:
+        network_by = "os"
+    elif network_gate == "deny":
+        network_by = "policy"
+    else:
+        network_by = "none"
+    return {
+        "type": "managed" if restricted else "unrestricted",
+        "enforced_by": inside_by,
+        # 闸门的真实语义：不存在的目标不参与越界判定。关掉「仅限工作区」时这条不再适用，
+        # 但也不许写成"fail"——那会凭空造出一条我们没有的行为。
+        "missing_path_behavior": safety_mod.MISSING_PATH_BEHAVIOR if restrict else "not_applicable",
+        "file_system": {
+            "type": "restricted" if restricted else "unrestricted",
+            "entries": entries,
+        },
+        # `requested` 是档位要求，`enforced_by` 才回答"谁在拦"。job_only 下两者会分开：
+        # 要的是不通网，真正拦着的是命令闸门的正则，不是内核。
+        "network": {
+            "requested": "open" if bool(sandbox.get("network")) else "none",
+            "enforced_by": network_by,
+            "command_gate": network_gate,
+        },
+    }
+
+
 def turn_context(
     *,
     node: str,
@@ -135,12 +244,14 @@ def turn_context(
     guardian_mode: str = "",
     readonly: bool = False,
     workspace_root: str = "",
+    sandbox_tier: str = "",
     max_steps: int = 0,
     token_budget: int = 0,
     depth: int = 0,
     agent_path: str = "root",
     instruction_layers: list[Any] | None = None,
     settings: dict[str, Any] | None = None,
+    safety: Any = None,
 ) -> dict[str, Any]:
     """一次模型调用当时的完整治理状态。字段形状对齐 Codex 的 `turn_context`，
     但只报我们自己真有依据的东西——没有的（比如 approvals_reviewer 的 guardian 线程 id）不编。
@@ -151,6 +262,7 @@ def turn_context(
     masked_root = mask_path(workspace_root) if workspace_root else ""
     # 一次取时刻：连取三次可能跨过午夜，那就会写出一个「今天既是 21 号也是 22 号」的快照。
     now = datetime.now().astimezone()
+    sandbox = sandbox_boundary(masked_root, tier=sandbox_tier)
     return {
         "step": step,
         "node": node,
@@ -178,7 +290,10 @@ def turn_context(
         # 指纹里一旦混进秒级时钟，digest 每一步都变，去重永不命中，等于每步重贴一遍同样的策略。
         "current_date": now.strftime("%Y-%m-%d"),
         "timezone": now.tzname() or now.strftime("%z"),
-        "sandbox": sandbox_boundary(masked_root),
+        "sandbox": sandbox,
+        # 对标 Codex：限制展开成逐条 ACE，而不是"用了哪个 profile"。与 sandbox 并列，
+        # 因为路径闸门在关档时仍然生效——它不属于沙箱，属于安全策略。
+        "permission_profile": permission_profile(sandbox=sandbox, safety=safety, workspace=masked_root),
         "features": feature_snapshot(settings),
     }
 

@@ -57,10 +57,33 @@ def _sandbox_backend(outcome: ToolOutcome) -> tuple[str | None, bool]:
     把宿主直连和只读工具都读成"缺字段"，最该露出来的那一档就跟没发生过一样。
     """
     data = outcome.data if isinstance(outcome.data, dict) else {}
+    if data.get("tier_blocked"):
+        # 档位不可用时命令根本没起。读成"跑在宿主上"是最危险的一种误读：
+        # 它会把一条被拒绝的命令记成一次宿主执行，审计里正好反过来。
+        return None, False
     if SANDBOX_DATA_KEY not in data:
         return None, False
     value = data[SANDBOX_DATA_KEY]
     return (value if isinstance(value, str) and value else None), True
+
+
+# 边界种类：一次工具调用实际落在哪一层。"审批问没问"与"在哪执行"是两回事，
+# 证据里必须分得开——同一个工具在不同档位下可能落在完全不同的边界上。
+BOUNDARY_BLOCKED = "blocked"  # 档位不可用，没执行
+BOUNDARY_MCP_HOST = "mcp_host_process"  # 外部 MCP 服务端进程（宿主，不在任务边界内）
+BOUNDARY_PROCESS = "process"  # 我们起的子进程（受沙箱档位约束）
+BOUNDARY_IN_PROCESS = "in_process"  # 在 API 进程内完成（文件读写、规划等）
+
+
+def _boundary_kind(name: str, outcome: ToolOutcome, ran_command: bool) -> str:
+    data = outcome.data if isinstance(outcome.data, dict) else {}
+    if data.get("tier_blocked"):
+        return BOUNDARY_BLOCKED
+    if str(name or "").startswith("mcp__"):
+        return BOUNDARY_MCP_HOST
+    if ran_command:
+        return BOUNDARY_PROCESS
+    return BOUNDARY_IN_PROCESS
 
 
 def _command_enforcement(payload: dict) -> dict:
@@ -76,6 +99,9 @@ def _command_enforcement(payload: dict) -> dict:
         "memory_enforced", "memory_bytes", "pids_enforced", "pids_limit",
         "tree_kill_enforced", "filesystem_enforced", "network_enforced",
         "cpu_enforced", "disk_enforced", "job_created", "job_assigned", "job_error",
+        # 档位：事件里要能回答"这条命令当时按哪一档跑、降级了没有、为什么"。
+        "sandbox_tier", "sandbox_tier_requested", "sandbox_tier_degraded",
+        "tier_available", "tier_reason", "tier_notice",
     )
     return {key: enforcement[key] for key in keep if key in enforcement}
 
@@ -89,9 +115,20 @@ def sandbox_backend_event_field(payload: dict) -> dict:
     只记后端名，就还会重演"面板写 512m、内核什么都没拦"那一类谎。
     """
     out: dict = {}
+    # 每次调用都要能回答"按哪一档跑、实际落在哪一层边界"。它们与起没起进程无关，
+    # 所以必须放在下面那个早退之前：只读工具也有边界，只是边界在进程内。
+    mode = payload.get("sandbox_mode")
+    if isinstance(mode, str) and mode:
+        out["sandbox_mode"] = mode
+    kind = payload.get("boundary_kind")
+    if isinstance(kind, str) and kind:
+        out["boundary_kind"] = kind
+    if "sandbox_blocked" in payload:
+        # 档位不可用：命令没起，但"为什么没起"必须进事件，否则界面只剩一条普通的 denied。
+        out["sandbox_blocked"] = payload["sandbox_blocked"]
     if "sandbox_backend" not in payload:
         # 没起进程（只读工具、被拒的调用）：两条事实一起缺席，读的一侧不用分辨"缺一个还是缺两个"。
-        return {}
+        return out
     out["sandbox_backend"] = payload["sandbox_backend"]
     enforcement = _command_enforcement(payload)
     if enforcement:
@@ -140,6 +177,9 @@ def _audit(
                     "arguments": _redact_value(arguments, context.extra_secrets, MAX_LOGGED_CHARS),
                     "ran_command": ran_command,
                     "host_execution": ran_command and backend is None,
+                    # 审计账也要能和事件对得上：同一次调用在两处读出的档位/边界必须一致。
+                    "sandbox_mode": str(context.sandbox_tier or ""),
+                    "boundary_kind": _boundary_kind(name, outcome, ran_command),
                     "message": outcome.message[:500],
                 },
                 exit_code=exit_code if isinstance(exit_code, int) else None,
@@ -288,6 +328,13 @@ class ToolGateway:
         backend, ran_command = _sandbox_backend(safe)
         if ran_command:
             payload["sandbox_backend"] = backend
+        elif safe.data.get("tier_blocked"):
+            facts = safe.data.get("enforcement") or {}
+            payload["sandbox_blocked"] = facts.get("tier_notice") or "沙箱档位不可用，命令未执行"
+        # 档位与边界种类对每次调用都写：面板/证据包按 tool.completed 就能还原
+        # "这个动作当时被哪一层拦住、还是在宿主进程里跑的"。
+        payload["sandbox_mode"] = str(context.sandbox_tier or "")
+        payload["boundary_kind"] = _boundary_kind(name, safe, ran_command)
         _audit(name, arguments, safe, context, node, duration_ms, backend, ran_command)
         return payload
 

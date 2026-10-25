@@ -26,15 +26,23 @@ class Thread(Base):
     project_id: Mapped[str] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    title: Mapped[str] = mapped_column(
+        String(200), nullable=False, default="", server_default=""
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="active", server_default="active"
+    )
     # chat = 用户对话；team = 团队群里某个 Bot 自己的隐藏会话。
     # 隐藏会话不进对话列表，否则用户每建一个 Bot 就会多出一条点开没内容的"对话"。
-    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="chat")
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="chat", server_default="chat"
+    )
     forked_from: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     # 轮次计数单独存一份：列表页要显示"共几轮"，每次去 count 一遍 tasks
     # 在一个有几百轮的会话上会变成列表接口的主要开销。
-    turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    turn_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()

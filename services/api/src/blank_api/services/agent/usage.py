@@ -110,6 +110,7 @@ async def account_call(
     parent_thread_id: str = "",
     root_thread_id: str = "",
     parallel_group: str = "",
+    sandbox_mode: str = "",
 ) -> dict:
     """落一行用量 + 发一条三级事件，返回新的回合累计。
 
@@ -155,6 +156,7 @@ async def account_call(
                     parent_trace_id=parent_thread_id or "",
                     agent_path=agent_path or "",
                     parallel_group=parallel_group or "",
+                    sandbox_mode=sandbox_mode or "",
                 )
             )
             await session.commit()
@@ -190,6 +192,8 @@ async def account_call(
             # 哪一次并行编排引起的。空串=不属于任何一批（单发子代理、主线程、摘要），
             # 与"第 0 批"是两回事；老行同样是空串，读出来必须是 null。
             "parallel_group": parallel_group or "",
+            # 这一笔账当时按哪一档边界跑。空串=上线前的老行，不许读成 workspace。
+            "sandbox_mode": sandbox_mode or "",
         },
         "call": call,
         "turn": dict(merged),

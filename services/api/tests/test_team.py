@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -25,6 +26,7 @@ from tests.test_agent_v04 import (  # noqa: F401
 
 from blank_api.api.routes.team import _BACKGROUND
 from blank_api.db import dispose_engine, get_session_factory
+from blank_api.models.task import AgentEvent, Task
 from blank_api.models.thread import Thread
 from blank_api.services.team import ADMIN_NAME, is_pass, mentioned_names
 
@@ -96,7 +98,15 @@ def install_team_model(env, *, member_tool: bool = False, prompt: int = 120, com
     env.mock._handler = handler
 
 
-async def make_group(env, workspace, *, members=("后端",), budget: int = 60_000, max_speakers: int = 5):
+async def make_group(
+    env,
+    workspace,
+    *,
+    members=("后端",),
+    budget: int = 60_000,
+    max_speakers: int = 5,
+    sandbox_tier: str = "",
+):
     project_id = await create_project(env, workspace)
     provider_id = await create_provider(env)
     created: dict[str, dict] = {}
@@ -107,16 +117,19 @@ async def make_group(env, workspace, *, members=("后端",), budget: int = 60_00
         )
         assert resp.status_code == 201, resp.text
         created[name] = resp.json()
+    body = {
+        "project_id": project_id,
+        "name": "交付群",
+        "topic": "把登录页做出来",
+        "member_ids": [created[name]["id"] for name in members],
+        "max_speakers": max_speakers,
+        "token_budget": budget,
+    }
+    if sandbox_tier:
+        body["sandbox_tier"] = sandbox_tier
     resp = await env.client.post(
         f"{API}/team/groups",
-        json={
-            "project_id": project_id,
-            "name": "交付群",
-            "topic": "把登录页做出来",
-            "member_ids": [created[name]["id"] for name in members],
-            "max_speakers": max_speakers,
-            "token_budget": budget,
-        },
+        json=body,
     )
     assert resp.status_code == 201, resp.text
     return project_id, provider_id, resp.json()["group"]["id"]
@@ -275,6 +288,60 @@ async def test_silent_member_is_recorded_as_pass(env, workspace):  # noqa: F811
     reviewer = next(row for row in messages_of(state, "bot") if row["bot_name"] == "评审")
     assert reviewer["status"] == "pass"
     assert reviewer["content"] == ""
+
+
+async def test_group_sandbox_tier_reaches_every_member_task(env, workspace):  # noqa: F811
+    """M3：群的档位落库并传给每个成员的 Task，而不是只在建群请求里出现过。"""
+    install_team_model(env)
+    project_id, _, group_id = await make_group(
+        env, workspace, members=("后端", "评审"), sandbox_tier="off"
+    )
+    state = (await env.client.get(f"{API}/team/groups/{group_id}/state")).json()
+    assert state["group"]["sandbox_tier"] == "off"
+
+    await env.client.post(f"{API}/team/groups/{group_id}/messages", json={"content": "做一个登录页"})
+    await wait_round(env, group_id, ("completed",))
+
+    async with get_session_factory()() as session:
+        payloads = (
+            await session.execute(
+                select(AgentEvent.payload)
+                .join(Task, Task.id == AgentEvent.task_id)
+                .where(Task.project_id == project_id, AgentEvent.type == "task.started")
+            )
+        ).scalars().all()
+    assert len(payloads) >= 2, "管理员与成员都应各有一个 Task"
+    for payload in payloads:
+        assert payload["sandbox"]["requested"] == "off"
+        assert payload["sandbox_mode"] == "off"
+
+
+async def test_group_refuses_an_unavailable_tier(env, workspace, monkeypatch):  # noqa: F811
+    """档位解析在**建群时**就做：不可用就拒绝，而不是让成员任务跑到一半才发现。"""
+    from blank_api.api.routes import team as team_routes
+
+    monkeypatch.setattr(
+        team_routes,
+        "resolve_tier",
+        lambda *args, **kwargs: SimpleNamespace(
+            available=False, notice="workspace-net 不提供：本机无法强制网络边界"
+        ),
+    )
+    project_id = await create_project(env, workspace)
+    bot = (await env.client.post(f"{API}/team/bots", json={"name": "后端"})).json()
+    resp = await env.client.post(
+        f"{API}/team/groups",
+        json={
+            "project_id": project_id,
+            "name": "网络群",
+            "member_ids": [bot["id"]],
+            "sandbox_tier": "workspace-net",
+        },
+    )
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"]["code"] == "sandbox_tier_unavailable"
+    groups = (await env.client.get(f"{API}/team/groups")).json()
+    assert all(group["name"] != "网络群" for group in groups)
 
 
 async def test_token_budget_stops_the_round(env, workspace):  # noqa: F811
