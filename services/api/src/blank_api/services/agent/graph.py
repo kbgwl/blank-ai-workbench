@@ -45,6 +45,7 @@ from blank_api.services.agent.intent import (
 from blank_api.services.agent.context import (
     ContextCompactor,
     build_summary_prompt,
+    guardian_trail,
     load_summary_json,
     render_summary,
     replacement_record,
@@ -610,6 +611,18 @@ class AgentSession:
                         window_number=window["window_number"],
                     ),
                     "compaction_response_id": self.compaction_response_id,
+                    # 审阅侧的轨迹（对标 §4.1 的 guardian_history）：压缩把模型的历史折掉了，
+                    # 审阅人本来看得见几条、当时是在哪个窗口与哪套模式下审的，得另外记一遍。
+                    "guardian_history": guardian_trail(
+                        messages,
+                        compacted,
+                        reviews=await guardian_reviews_for(self),
+                        in_effect={
+                            "window_tokens": int(self.compactor.context_window or 0),
+                            "approval_mode": self.permission_mode,
+                            "guardian_mode": getattr(self.guardian, "mode", "") or "",
+                        },
+                    ),
                 },
             )
             # post_compact 钩子：两家都有同名事件，压缩后是最需要外部记账/上报的时刻
@@ -1452,6 +1465,56 @@ async def _question_gate(session: AgentSession, node: str, pending: list[dict]) 
     return answers
 
 
+def guardian_review_of(seq: int, run_id: str, payload: dict) -> dict:
+    """一条 `guardian.reviewed` 事件 → 审阅轨迹里的判定条目（投影，不是第二本账）。
+
+    刻意**不带 arguments**：参数里可能有主机路径与密钥，而 `approval_key` 这枚指纹足够把它
+    对回审批卡与工具调用行。老事件没有 `outcome` 就不写这个键——缺键是"当时没记"，
+    补成空串会被读成"记过了、没有去向"。
+    """
+    review = {
+        "seq": int(seq),
+        "run": str(run_id or ""),
+        "tool": str(payload.get("tool") or ""),
+        "approval_key": str(payload.get("approval_key") or ""),
+        "verdict": str(payload.get("verdict") or ""),
+        "reasons": list(payload.get("reasons") or []),
+        "model": str(payload.get("model") or ""),
+        "latency_ms": int(payload.get("latency_ms") or 0),
+    }
+    if "outcome" in payload:
+        review["outcome"] = str(payload["outcome"])
+    return review
+
+
+async def guardian_reviews_for(session: AgentSession) -> list[dict]:
+    """这次压缩之前，本任务审过哪几次——真源只有事件流，不碰会话内存。
+
+    为什么不能拿 `AgentSession` 上的副本：驳回或暂停之后再跑一次，会话是**新建**的
+    （和 `drain_steer` 同一个理由），上一轮的审查仍是这条任务的事实。真链路实测过这个形状：
+    4 次审查之后又压缩了 6 窗，内存副本一条都带不过来，`reviews` 全是空的。
+    """
+    from sqlalchemy import select
+
+    from blank_api.models.task import AgentEvent
+
+    async with session.session_factory() as db:
+        rows = (
+            await db.execute(
+                select(AgentEvent.seq, AgentEvent.run_id, AgentEvent.payload)
+                .where(
+                    AgentEvent.task_id == session.context.task_id,
+                    AgentEvent.type == "guardian.reviewed",
+                )
+                .order_by(AgentEvent.seq)
+            )
+        ).fetchall()
+    return [
+        guardian_review_of(int(row.seq), str(row.run_id or ""), row.payload if isinstance(row.payload, dict) else {})
+        for row in rows
+    ]
+
+
 async def _approval_gate(
     session: AgentSession, node: str, pending: list[dict]
 ) -> tuple[set[str], dict[str, str]]:
@@ -1495,18 +1558,34 @@ async def _approval_gate(
                 "error" if verdict.error else "ok",
                 role="guardian",
             )
-            await session.recorder.add(
-                "guardian.reviewed", node, {"tool": name, "arguments": arguments, **verdict.as_dict()}
-            )
+            key = approval_key(name, arguments)
+            # 审完之后走到了哪一步：blocked=不弹卡直接拒，auto=代批，asked=交给人。
+            # 这个去向写在事件里，轨迹再从事件读——两处不各写一遍，才不会写歪。
+            outcome = "asked"
             if verdict.denied:
+                outcome = "blocked"
+            elif reversible and session.guardian.can_auto_approve(verdict):
+                outcome = "auto_approved"
+            await session.recorder.add(
+                "guardian.reviewed",
+                node,
+                {
+                    "tool": name,
+                    "approval_key": key,
+                    "arguments": arguments,
+                    "outcome": outcome,
+                    **verdict.as_dict(),
+                },
+            )
+            if outcome == "blocked":
                 blocked[name] = "；".join(verdict.reasons) or "审查模型判定该操作不安全"
                 continue
-            if reversible and session.guardian.can_auto_approve(verdict):
+            if outcome == "auto_approved":
                 session.permissions.remember(name, arguments, SCOPE_ONCE)
                 await session.recorder.add(
                     "guardian.auto_approved",
                     node,
-                    {"tool": name, "arguments": arguments, "reasons": verdict.reasons},
+                    {"tool": name, "approval_key": key, "arguments": arguments, "reasons": verdict.reasons},
                 )
                 continue
         expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()

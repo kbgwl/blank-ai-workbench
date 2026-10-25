@@ -564,6 +564,7 @@ async def build_evidence(
         "governance": governance_summary,
         "world": world_summary,
         "boundaries": boundaries,
+        "guardian_history": _guardian_history(events),
         "usage": {
             "providers": providers,
             "models": models,
@@ -698,6 +699,71 @@ def _approval_lifecycle(expires_at: object) -> dict[str, Any]:
     }
 
 
+def _guardian_history(events: list[AgentEvent]) -> dict[str, Any]:
+    """审阅侧的账（对标 §4.1 的 `guardian_history`）。
+
+    真源只有两处，这里一个都不新造：`guardian.reviewed` / `guardian.auto_approved` 事件
+    （每次独立审查的判定）与 `context.compacted` 里的 `guardian_history`（那次压缩之前，
+    审阅侧看得到几条历史、模型侧只剩几条）。逐条 `items` 留在事件里不抄第二遍——与
+    `windows` 只搬条数同一个理由：两处副本会写歪。
+
+    `windows_unrecorded` 是给老任务留的：压缩发生过、但那条记录里没有审阅侧轨迹，就数一笔，
+    不补一份"看起来记过了"的空条目。`decisions` 为空既可能是"没审过"也可能是"当时没记"，
+    所以判定条数一律从事件读，不按档位或审批模式反推。
+    """
+    decisions: list[dict[str, Any]] = []
+    auto: list[dict[str, Any]] = []
+    windows: list[dict[str, Any]] = []
+    unrecorded = 0
+    for event in events:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if event.type == "guardian.reviewed":
+            decisions.append(
+                {
+                    "seq": event.seq,
+                    "run_id": event.run_id,
+                    "tool": str(payload.get("tool") or ""),
+                    # 一次具体动作的稳定标识：靠它和审批卡、ToolCall 行对上。
+                    "approval_key": str(payload.get("approval_key") or ""),
+                    "verdict": str(payload.get("verdict") or ""),
+                    "reasons": list(payload.get("reasons") or []),
+                    "model": str(payload.get("model") or ""),
+                    "latency_ms": int(payload.get("latency_ms") or 0),
+                    "timed_out": bool(payload.get("timed_out")),
+                    "error": str(payload.get("error") or ""),
+                }
+            )
+            if "outcome" in payload:
+                # 审完之后走到了哪一步（blocked/auto_approved/asked）。老事件没有这一格：
+                # 缺键就是"当时没记"，不补成空串——补了就被读成"记过了、没有去向"。
+                decisions[-1]["outcome"] = str(payload["outcome"])
+        elif event.type == "guardian.auto_approved":
+            auto.append({"seq": event.seq, "approval_key": str(payload.get("approval_key") or "")})
+        elif event.type == "context.compacted":
+            trail = payload.get("guardian_history")
+            if not isinstance(trail, dict):
+                unrecorded += 1
+                continue
+            windows.append(
+                {
+                    "seq": event.seq,
+                    "window_number": int(payload.get("window_number") or 0),
+                    # 审阅侧 vs 模型侧：Codex 实测同一窗 96 vs 18，压缩丢的是模型的历史。
+                    "items_reviewed": int(trail.get("items_reviewed") or 0),
+                    "items_in_model_context": int(trail.get("items_in_model_context") or 0),
+                    "reviewed_chars": int(trail.get("reviewed_chars") or 0),
+                    "reviews": len(trail.get("reviews") or []),
+                    "in_effect": dict(trail.get("in_effect") or {}),
+                }
+            )
+    return {
+        "decisions": decisions,
+        "auto_approvals": auto,
+        "windows": windows,
+        "windows_unrecorded": unrecorded,
+    }
+
+
 def _approval_hints(context: dict, tool: str, arguments) -> dict[str, Any]:
     """把审批事件里的权限上下文摘到待审批项上；上下文不属于该工具时留空，不编造。"""
     if not context or str(context.get("tool") or "") != tool:
@@ -709,6 +775,10 @@ def _approval_hints(context: dict, tool: str, arguments) -> dict[str, Any]:
         "suggested_prefix": context.get("suggested_prefix") or "",
         "approval_options": context.get("approval_options") or [],
     }
+    if "guardian" in context:
+        # 独立审查员当时说了什么，批准的人必须看得见：`None` 是记过的真值（审查关着），
+        # 键不存在才是"这条卡是审查进载荷之前的老任务"。缺键不补空字典。
+        hints["guardian"] = context.get("guardian")
     if not context.get("arguments") and arguments:
         # 事件里没带参数时，用调用记录补一份，前端才能渲染「总是允许 X」的实际命令。
         hints["arguments_preview"] = arguments

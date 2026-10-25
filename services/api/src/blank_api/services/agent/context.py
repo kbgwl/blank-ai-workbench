@@ -33,6 +33,7 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from blank_api.services.instructions import content_sha
 
@@ -313,6 +314,41 @@ def replacement_record(
         "added": added,
         "dropped": dropped,
         "items": after_refs,
+    }
+
+
+def guardian_trail(
+    before: Sequence[dict],
+    after: Sequence[dict],
+    *,
+    reviews: Sequence[dict] = (),
+    in_effect: dict[str, Any] | None = None,
+) -> dict:
+    """审阅侧的轨迹清单（对标 §4.1 的 `guardian_history`）。
+
+    实测 Codex 一条 `compacted` 里两侧是**不对称**的：`replacement_history` 18 / 36 / 39 项，
+    `guardian_history` 96 / 151 / 133 项、228,102 字节起——压缩丢的是**模型**的历史，
+    审阅侧一条不丢，而且原样抄正文（`retained_context` 里连主机路径都在）。我们借这个
+    "两侧条数各记一遍"的结构，不借抄正文：`items` 是替换**前**那份全量历史的逐条引用，
+    构造路径与 `replacement_record` 里的 `before_refs` 完全同一（所以被折掉的每一条
+    都能在这里按 `retained_id` 对上），「审阅人本来看得见几条、模型现在只剩几条」答得出，
+    「原文是什么」仍然只能回工作区文件与工具事件——这是与 Codex 的口径差别，不是遗漏。
+
+    `reviews` 是这次压缩之前发生过的独立审查判定（真源是 `guardian.reviewed` 事件，
+    由调用方把事件 seq 一起带进来，两处必须逐 seq 相等）。`in_effect` 记当时生效的预算与
+    模式，对标 Codex 条目上的 `fallback_token_limit_override`：那条审阅是在哪个窗口、
+    哪套审批模式下做出来的，事后要问得出来。
+    """
+    items = history_refs(before)
+    for ref in items:
+        ref["retained_id"] = f"ret:{str(ref['sha'])[:12]}"
+    return {
+        "items": items,
+        "items_reviewed": len(items),
+        "items_in_model_context": len(list(after)),
+        "reviewed_chars": sum(int(ref["chars"] or 0) for ref in items),
+        "reviews": [dict(item) for item in reviews],
+        "in_effect": dict(in_effect or {}),
     }
 
 

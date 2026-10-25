@@ -128,7 +128,7 @@ Windows 沙箱的落盘结构与它自己的日志。凡本文出现的数字与
 | `first_window_id` / `previous_window_id` / `window_id` | 三个 uuid7；`first` 始终 `01a13d6e-fc65…`，`previous` 等于上一条的 `window_id` | **窗口链**：新窗口指回被它替换掉的那个，整条替换史能从任意一条往回走 |
 | `replacement_history` | list，18 → 36 → 39 项，每项 `{type,id,role,content[],internal_chat_message_metadata_passthrough}` | 替换后的**全量**历史，原样落盘、可重放（不是摘要字符串） |
 | `replacement_history_metadata` | 与上一项**等长**的平行数组：`{retained_source{id{message_id,turn_id,role},revision,complete}, client_authored, user_input_order, mcp_attribution{status,sources[]}}` | 逐条**出处**：这条保留内容来自哪条消息、是否完整、是客户端写的还是工具产生的、原始用户输入排在第几位 |
-| `guardian_history` | 96 / 151 / 133 项，228,102 字节；类型分布 `reasoning 27 · custom_tool_call 23 · custom_tool_call_output 23 · message 20 · function_call* 3` | 审阅人（guardian）看的**全量轨迹**：压缩丢的是活动历史，审阅侧一条不丢 |
+| `guardian_history` | 96 / 151 / 133 项，228,102 字节；类型分布 `reasoning 27 · custom_tool_call 23 · custom_tool_call_output 23 · message 20 · function_call* 3` | 审阅人（guardian）看的**全量轨迹**：压缩丢的是活动历史，审阅侧一条不丢（我们这一侧的对应实现见 §7.40，任务 #79） |
 | `retained_context` | `{verified_answers, incomplete, user_messages[{revision,order,turn_id,message_id,text,complete}]}` | 被**点名保留**的用户原话（带 order 与"是否完整"），不只是"塞回去了几条" |
 | `compaction_response_id` | `resp_080281808ab14ccf016ad0968ec7d48199a80fc5be24a0d819` | **做这次压缩的那一笔供应商调用**的 id——压缩本身花的是真钱，得能追到那一笔 |
 | `latest_token_usage_record` | 8 键：`thread_id/turn_id/session_id/root_turn_id/response_id/usage/turn_token_usage/thread_token_usage`（三级各自带 cached / cache_write / reasoning） | 压缩**那一刻**的三级用量定格；`root_turn_id` 在这里就是一等字段 |
@@ -182,9 +182,10 @@ Docker / Hyper-V / Windows Sandbox 全部排除。Codex 在这台机器上实际
 | `permission_profile` 展开成逐条 ACE 与 `missing_path_behavior` | 只记审批模式与前缀规则 | **已实现**（任务 #77，见 §7.38）：`turn_context.permission_profile` 逐条列出工作区/允许根/外部通配，每条带 `enforced_by`（`os`/`policy`/`none`）——本机 job_only 下如实写 `policy`，不冒充内核；`missing_path_behavior` 与 `SafetyPolicy._outside_paths` 同源（`skip`），关掉「仅限工作区」时写 `not_applicable`；证据包取末次快照，老任务报 `unrecorded` 不按档位反推 |
 | 沙箱 = 独立账号 + DPAPI + 工作区专属 SID ACL | Docker 容器；无 Docker 时只能 `allow_local` 直连 | 立项设计已出：**`docs/SANDBOX-WINDOWS-DESIGN.md`**（§1 是今天真实生效/只是展示值的对照表，含一条实测的逃逸证据；实现未动） |
 | 「另一台机器的差异都能归因」是 M4 的退出判据 | 八条探针只能各自自证，**没有任何东西把两份报告放在一起对质**；「归因」这个问题无从回答，本机又没有第二台机器（无 docker、无 wsl） | **已实现装置**（任务 #78，见 §7.39）：报告 schema 2 起带机器指纹（`host_id` 是主机名的 sha256 前 12 位，明文不落）与 `audit_task_id` 跑法标记；`blank doctor --compare A.json B.json` 按**只收实测关系的归因表**判五种结果，同机两份报告**主动拒证**（`same_host` rc=1），缺指纹/换 schema/跨平台/装置没自证过一律不比；换 Python 或系统版本只列进 `context`，**不解释任何探针**。17 条用例（HEAD 基线 17 红）、变异 10/10 按实测红集合命中、四份真报告五组对质逐条真 rc。**跨机实物仍缺**（`EXPLAINED`/`UNEXPLAINED` 只有离线夹具证明过，#76 保持未结） |
+| 一整条不删减的 `guardian_history`（实测 96 / 151 / 133 项 vs `replacement_history` 18 / 36 / 39 项） | 审阅判定只活在 `AgentSession` 内存里，压缩记录不带、证据包不带；此前本格按「刻意不做」记账（§7.7 缺口 2、§7.9 缺口 4） | **已实现**（任务 #79，见 §7.40）：`context.compacted` 带 `guardian_history` 六键（审阅侧全量引用 + 判定清单 + 当时生效的窗口与模式），判定是 `guardian.reviewed` **事件的投影**、不是会话副本——真链路量出旧写法在「驳回→暂停→再跑」后一次都带不过来（4 条判定在前、6 次压缩在后，`reviews` 全为 0），改成压缩那一刻现查事件后实测跨 `attempt` 带上（seq 64/71 出生在 `attempt:1`、落进 `attempt:2` 的压缩 133）；`outcome` 进事件；证据包 `decisions`/`windows`/`windows_unrecorded` 与事件逐字段同源。16 条用例（HEAD 上整文件收集 ImportError）、17 个变异按**实测**红集合命中（`battery-run4` 报 8 条 MISMATCH 后写回）、真链路 13/13 绿。**正文仍按裁决不抄**，`client_authored`/`mcp_attribution`/`retained_source` 未做，前端未渲染（#80） |
 | `root_turn_id` 进事件 | `depth`/`agent_path` 在内存里 | 已随快照带出（`depth`/`agent_path` 进 `turn.context` payload） |
 | `token_usage_record.turn_id` + `resume_metadata.turn_attribution.{root_turn_id, parent_turn_id, initiating_agent_path}` | 用量行只有 `trace_id`，钱问不出「哪一轮花的、谁引起的」；子代理那几笔与主线程混在同一张表里靠时间猜 | **已实现**（任务 #43，见 §7.8）：`run_id` 成为 `model_usage` 的一等列（迁移 0019），行的归属与 `model.usage` 事件同源；`root_thread_id`/`parent_thread_id`/`agent_path` 四处同写；证据包补 `turns`/`branches`/`unattributed_calls` 三张账，老账只报条数、绝不并成「第 0 轮」 |
-| `replacement_history_metadata` 逐条出处（`retained_source`/`revision`/`user_input_order`/`client_authored`）+ 一整条不删减的 `guardian_history` | #42 的引用只有位置/角色/种类/字数/指纹——知道"留了哪几条"，不知道"这条是谁写的、第几次问的、活过了几窗" | **已实现**（任务 #44，见 §7.9）：引用多五枚字段 `run`/`user_order`/`retained_id`/`retained_since`/`retained_windows`，出生轮只有一个真源（`EventRecorder.run_id`）且 `carried` 不盖章；跨窗身份按内容寻址 `ret:<sha12>`；证据包 `windows[].turns` + `turns_unattributed` 与事件同源。`guardian_history` 那 228KB 全量审阅轨迹**按裁决没做**，`retained_source.message_id`/`revision`/`complete` 列为未覆盖 |
+| `replacement_history_metadata` 逐条出处（`retained_source`/`revision`/`user_input_order`/`client_authored`）+ 一整条不删减的 `guardian_history` | #42 的引用只有位置/角色/种类/字数/指纹——知道"留了哪几条"，不知道"这条是谁写的、第几次问的、活过了几窗" | **已实现**（任务 #44，见 §7.9）：引用多五枚字段 `run`/`user_order`/`retained_id`/`retained_since`/`retained_windows`，出生轮只有一个真源（`EventRecorder.run_id`）且 `carried` 不盖章；跨窗身份按内容寻址 `ret:<sha12>`；证据包 `windows[].turns` + `turns_unattributed` 与事件同源。`guardian_history` 那 228KB 全量审阅轨迹的**清单**半边已由任务 #79 补上（正文仍按裁决不抄，见 §7.40），`retained_source.message_id`/`revision`/`complete` 列为未覆盖 |
 | 一次调用的归属与它的用量在同一行里（`latest_token_usage_record` + `turn_attribution.initiating_agent_path`） | #43 把"哪一轮、谁引起的"算清了，token 预算却仍只盯主线程自己的 `usage`；`spawn_agents` 给主代理的负载里没有用量（§7.4 自己记下的缺口 1）；"那一次 fan_out 花了多少"只能从 `agent_path` 字符串里再解析一遍 | **已实现**（任务 #45，见 §7.10）：`parallel_group` 成为 `model_usage` 的一等列（迁移 0020），空串＝"不属于任何一批 / 当时没记"；委派单列成 `delegated_usage` 并进两道预算闸（耗尽原因分「token 用完」与「派给子代理的 token 用完」），#33 的三级口径一个字没动；批次合计进 `subagents.completed` 与工具负载、并进证据包 `parallel_groups`；孩子只继承父压缩器**真给过的**水位键；`latency_ms` 刻意不相加 |
 | `current_date`/`timezone` 进治理快照 | 事件与提示词里都没有，模型不知道"今天" | 已补进快照（天粒度）；注入提示词未做，会改变每次调用行为，单独决策 |
 | 一轮的钱问得出「这一轮里这几个人合起来花了多少」 | #45 只在单任务（一条线程）上验过批次与委派；团队群聊里每个成员各有一条 `AgentSession`，那条链上有没有把委派算进预算、批次行认不认得出出身，只有代码推理没有实物 | **已取证**（任务 #46，见 §7.11）：真 DeepSeek 跑了一轮三人发言的群，`Σ 成员气泡 = Σ usage_by_bot = round.tokens = 101,172`，成员任务里 33,267 = 主线程 30,279 + 派出去 2,988 = 批次 `153fb8` 两条线程之和——**委派确实在群预算之内**。同时量出两处还欠着：账本四列里带 `team-` 的行数为 **0**（群线程与成员的账没有列级连接），每条成员任务自己就是 root（"这三个人合起来花了多少"只能读编排器加的 `team_rounds.tokens`）。界面那一处缺陷（`team-…` 轮 id 砍前八位，同轮三条发言念成同一个 `team-016`）已修并过了 7/7 变异与 10/10 真浏览器点验 |
@@ -843,7 +844,8 @@ E:/env/node/node-v24.20.0-win-x64/node.exe E:/tmp/m1b/world_ui_verify.mjs
 1. `replacement_history` **原文照抄刻意不做**（见上面的裁决）。要回放"被折掉的到底是什么"，
    现在能定位到"第几条、什么角色、什么种类、多少字、内容指纹是什么"，取不回正文。
 2. Codex 的 `guardian_history`、`retained_context` 的来源语义（`retained_source`）没有对应实现；
-   我们的 `retained` 只是"替换后仍在的条数"。
+   我们的 `retained` 只是"替换后仍在的条数"。（`guardian_history` 的**清单**由任务 #79 补上，
+   正文仍按裁决不抄、`retained_source.message_id` 依旧写不出来：见 §7.40）
 3. `compaction_response_id` 与用量行只做**集合归属**判定（指针 ∈ 该节点用量 id 集合），
    没有逐条一一配对——`model.usage` 与 `context.compacted` 之间没有共享的关联键可依赖。
 4. "摘要调用失败前把 `compaction_response_id` 重置成空"这一步**没有可观测的事件路径**，
@@ -1041,6 +1043,8 @@ E:/env/node/node-v24.20.0-win-x64/node.exe E:/tmp/m1b/turn_ui_verify.mjs        
 4. `guardian_history`（228KB 全量审阅轨迹）按裁决**没有做**：压缩丢的是活动历史，而我们的审阅侧
    并没有独立副本，只有 `context.compacted` 里那份引用清单（位置/字数/指纹）。要回看被折掉的正文，
    现在只能靠工作区文件与命令输出事件，历史账本给不出来——这是审计口径上的真实缺口。
+   （这一格的**清单**半边由任务 #79 补上：审阅侧全量引用 + 判定副本 + 当时生效的模式；
+   **正文**半边仍按同一裁决不抄，见 §7.40。）
 5. `client_authored` / `mcp_attribution`：`kind` 只到 `summary/handoff/user/assistant/tool_call/tool_result`，
    分不出"客户端写的 / 工具产生的 / MCP 来的"。
 6. 跨任务与团队交接的轮归属还没接：`run` 只在一个任务内成立（同 §7.8 未覆盖 2）。
@@ -3741,6 +3745,113 @@ M10 第一版把整行改成 `else:` 产生 `SyntaxError`，pytest 报 **ERROR**
 4. 装置没进 CI：`api-dialect` / `team-e2e` 之外没有 doctor 的格子，跨机对账本质上需要两台机器，
    runner 给不了（runner 之间同镜像，比出来只会是 `consistent`，没有信息量）。
 
+## 7.40 任务 #79：审阅轨迹成为一等记录——「审查过什么」不再只活在会话内存里
+
+**Codex 的实物**（§4.1 同一批 rollout）：`guardian_history` 分别 **96 / 151 / 133 项**、
+228,102 / 373,181 / 532,767 字节，而同一份 rollout 的 `replacement_history` 只有 **18 / 36 / 39 项**
+——审阅侧是模型侧的 5–8 倍。`guardian_metadata` 的键频次是
+`client_authored 202 · mcp_attribution 85 · retained_source 27 · user_input_order 118 · fallback_token_limit_override 84`，
+reasoning 条目还带 `encrypted_content`。这一格 §7.7 与 §7.9 都写的是「刻意不做」，本轮按用户点名补上。
+
+**做的口径：借结构，不借抄正文。** 三处落点：
+
+1. `services/agent/context.py: guardian_trail(before, after, *, reviews, in_effect)`——六个键
+   `items` / `items_reviewed` / `items_in_model_context` / `reviewed_chars` / `reviews` / `in_effect`。
+   `items` 是 `history_refs(before)` 的全量引用（不是模型侧剩下的那几条）再补
+   `retained_id = ret:<sha12>`；`in_effect` 对标 `fallback_token_limit_override` 那一族「当时生效的档位」。
+   **正文一个字节不进轨迹**——`agent_events` 会进证据包、被同项目其他人读到、还进全文索引，
+   §7.6 那条 4145→1770 的教训就是同一个理由；能核对的是位置/角色/种类/字数/内容指纹。
+2. `services/agent/graph.py`：`context.compacted` 载荷带上 `guardian_history`；
+   `guardian_review_of()` + `guardian_reviews_for()` 把判定清单读成 **`guardian.reviewed` 事件的投影**；
+   `_approval_gate` 把 `outcome`（`asked`/`blocked`/`auto_approved`）写进事件本身；
+   **删掉 `AgentSession.guardian_reviews`**——判定的真源只有一个，副本长在内存上就是第二个口径。
+3. `services/agent/evidence.py`：证据包 `guardian_history` = `{decisions, auto_approvals, windows, windows_unrecorded}`。
+   `decisions` 逐字段从事件读，**不按档位反推**；老压缩没记轨迹就只数 `windows_unrecorded`、不补空的；
+   审批卡 `_approval_hints` 念出 `guardian`——`None` 是「记过、当时关着」，缺键是「老任务没记过」，两种状态不并成一种。
+
+**真链路量出来的缺陷（本任务真正的收获，离线全绿时看不见）**
+
+装置 `E:/tmp/m79/trail_probe.py` 打在隔离实例 :8061 的真 DeepSeek 上：把供应商 `context_window`
+临时改 3000 逼一次真压缩（`finally` 里还原，实测 rc=200 回到 65536），驱动是「**驳回 → 再 /run**」循环，
+全程从不批准——这台实例没开沙箱，真模型的一条命令都不该被执行。
+
+- 第 5 次跑（task `299c729f`，**130 条事件 / 6 次压缩 / 4 次审查**）：判定 seq **19/26/49/56**
+  全在压缩 **81/88/95/102/109/124** 之前，证据包 `decisions` 四条齐全，**而每一次压缩的 `reviews` 都是 0**。
+  根因：`guardian_reviews` 是会话内存上的副本，驳回把任务挂成 `paused`、再跑时新建会话，上一轮的审查一条都带不过来
+  （和 `drain_steer` 是同一个理由）。
+- 修法即上面的第 2 点。第 6 次跑（task `41c82847`，**139 条事件 / 7 次压缩 / 2 次审查**）：
+  判定 64/71 出生在 `attempt:1`，压缩 seq=133 发生在 `attempt:2`，`reviews` 两条都带上来了，
+  每条的 `run` 念的是**出生轮**不是当前轮，`outcome=asked`、`verdict=allow`、`reasons` 是真
+  DeepSeek-flash 的原话（`latency_ms` 1043 / 1148），命令原文只以 `approval_key` 指认。
+- **探针自己也被修过一次**：第一版的 R6c 在「判定在前、压缩在后、却一次都没带上」这种**该红**的形状上
+  报了 NOT-TESTED——判据写宽了。加强后拿两份**已落盘的实物**复读（`E:/tmp/m79/r6c-replay-1.log`，rc=0）：
+  `299c729f` → **FAIL**、`41c82847` → **PASS**，同一格判据一红一绿。
+- probe-6 其余 12 格（`E:/tmp/m79/trail-probe-6.log`，13 项判定 FAIL 0 / NOT-TESTED 0，rc=0）：
+  六键齐全；**审阅侧 22 vs 模型侧 9**；每条引用恰好 8 个键、不含正文；禁词（`E:\projects`、`.ssh`、`sk-` 等）
+  **0 命中**，整块 5,912 字节；`in_effect={window_tokens: 3000, approval_mode: default, guardian_mode: veto}`
+  与末次 `turn.context` 同源；证据包与事件那条轨迹**逐字段相等**，且 `items_reviewed=22` 等于清单长度、
+  `reviewed_chars=10808` 等于逐条 `chars` 求和（独立复算，不是自己抄自己）；两条判定同指纹
+  （同一个 `dir /b` 被审了两次，如实记两条）。N1 负对照：#79 之前的老任务 `cbd4ae9b` 有 1 次压缩 →
+  `windows=0`、`windows_unrecorded=1`，不补空的。
+
+**离线装置**
+
+`tests/test_guardian_trail_v51.py` 16 条。HEAD 基线（`E:/tmp/m79/red-baseline.txt`）是**整文件收集 ImportError**
+（`cannot import name 'guardian_trail'`）——16 条全是新增判定，没有一条是复述既有行为。
+其中两条专治本轮缺陷：`test_a_review_from_an_earlier_run_is_still_in_the_trail`（跨 `attempt` 的判定必须还在轨迹里，
+就是真链路那个形状的钉桩）与 `test_a_review_recorded_before_the_outcome_was_kept_has_no_invented_outcome`
+（老事件没有 `outcome` 就不许凭空写一个空串）。
+
+变异电池 `E:/tmp/m79/battery.py`：17 靶，`[ALL-OK]` rc=0，三个源文件 `cmp` 逐字节还原。
+**实测轮 `battery-run4.txt` 报了 8 条 MISMATCH**——U3/U4/U5/U14–U17 的期望是我推理写的，与实测不符，
+U1 也少一条（新加的跨运行用例一起红了）；全部按实测写回后才跑到 `battery-run5.txt` 全绿。红集合是量的，不是想的：
+
+| 靶 | 改的是什么 | 实测红（条数） |
+| --- | --- | --- |
+| U1 | 压缩记录里不带审阅轨迹（删整块 `guardian_history`） | 4 |
+| U2 | 轨迹只列模型侧剩下的（`history_refs(before)`→`(after)`） | 5 |
+| U3 | 轨迹里的判定清单写成空（`reviews=await guardian_reviews_for(self)`→`()`) | 3 |
+| U4 | 事件里不写审查的去向（删 `"outcome": outcome`） | 3 |
+| U5 | 事件与指纹不对齐（删 `"approval_key": key`） | 2 |
+| U6 | 审批卡不念审查意见（`hints["guardian"] = …`→`pass`） | 2 |
+| U7 | 证据包整块消失（删 `"guardian_history": _guardian_history(events)`） | 1 |
+| U8 | 引用没有留存身份（`retained_id`→`review_id`） | 2 |
+| U9 | 当时生效的模式不记（`in_effect`→`{}`） | 2 |
+| U10 | 没记过的轨迹不数（去掉 `unrecorded += 1`） | 1 |
+| U11 | 审阅侧字节数写死 0 | 3 |
+| U12 | 证据包把判定从档位反推（`guardian.reviewed`→`turn.context`） | 3 |
+| U13 | 每次都当成压缩落轨迹（`if report.folded or …`→`if True:`） | 2 |
+| U14 | 投影把命令原文抄进轨迹（多带一个 `arguments`） | 2 |
+| U15 | 判定条目念当前轮而不是出生轮（`run`→`""`） | 4 |
+| U16 | 老事件的去向被补成空串（无键也写 `""`） | 1 |
+| U17 | 证据包丢掉审查的去向（`if "outcome" in payload:`→`if False:`） | 2 |
+
+两处装置自身的失守，都当场报出来了：U8 第一版把整段循环改成空壳，是**语法错**——pytest rc=4、红集合为空，
+电池报 MISMATCH 而不是假绿（和 §7.39 的 M10 同一课）；`test_no_compaction_means_no_review_trail` 一开始
+在 13 个变体下都红不了，`[NEVER-RED]` 把它点出来，补 U13 才杀掉。
+
+**读数**：v51 与 v12 同进程 25 passed；全量回归 `E:/tmp/m79/regression-79b.log` =
+**1125 passed / 23 skipped in 372.74s，rc=0**（上一批基线 1109 + 本批 16 条，计数自洽）。
+取证结束后 :8061 的配置已按 `E:/tmp/m79/settings.backup.json` 逐字节还原（`guardian=off`、`shell_enabled=false`）
+并重启回原状，供应商窗口实测 65536。
+
+**诚实的缺口**
+
+1. **不抄正文**（裁决不变）：要回放「被折掉的到底是什么」，现在能定位到第几条、什么角色、什么种类、
+   多少字、内容指纹是什么，**取不回正文**。
+2. `client_authored` / `mcp_attribution` / `retained_source` / `revision` 仍无对应实现：
+   我们没有「这条是谁写的、第几次改的」的一等来源，只有 `role` + `run` + `user_order`。
+3. 轨迹**不跨任务**：`guardian_reviews_for()` 按 `task_id` 查事件。团队链路里成员各记各的，
+   全群审阅轨迹要靠 #67 的按发起轮汇总去拼，这一格没做。
+4. 判定条目只覆盖 `guardian.reviewed` 的**产出**，不带「审查当时看到了什么」：`reasons` 是模型原话，
+   但它是在哪条指令、哪套档位下说出这句话的，仍要靠同 seq 附近的 `turn.context` 由人读——
+   Codex 把整份审阅输入原样入账，我们没有（这也是缺口 1 的另一面）。
+5. 加强后的 R6c 判据只在**两份既有实物**上复读过（一红一绿），没在第三次真跑上重验；
+   真链路也只在 SQLite 那台 :8061 上量过，MySQL / PG 上「跨 attempt 的判定随压缩落下」这个形状没有实物。
+6. **前端没渲染**：`guardian_history` 现在只活在证据包 JSON 里，界面上看不见（#80 的活）。
+7. 轨迹是压缩那一刻的快照投影，之后的驳回/批准不会改写它：想问「这条判定最后怎么样了」要读
+   `guardian.reviewed` 的 `outcome` 与后续审批事件，两者现在靠 `approval_key` 对齐，没有外键。
+
 ## 9. 复现命令
 
 ```bash
@@ -3861,6 +3972,13 @@ API_PROXY_TARGET=http://127.0.0.1:8062 BLANK_WEB_DIST_DIR=.next-8062 E:/env/node
 E:/env/node/node-v24.20.0-win-x64/node.exe E:/tmp/m1b/team_chain_dom_peek.mjs                                              # 先量 DOM 形状（U3 那个分号就是这么栽的）
 E:/env/node/node-v24.20.0-win-x64/node.exe E:/tmp/m1b/team_chain_ui_verify.mjs                                             # 真 Chrome 10/10 PASS（1440×900；期望全由接口现算）
 PYTHONIOENCODING=utf-8 services/api/.venv/Scripts/python.exe -X utf8 E:/tmp/m1b/team_chain_ui_negative.py                 # 反证：真源码改坏 → 指定 U6/U7/U9 红、其余七条绿 → 还原 10/10 且 sha256 一致
+
+# 审阅轨迹这一批（#79）：离线 16 条 → 变异电池 → 真链路 13 格 → 同一格判据一红一绿
+cd services/api && .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_guardian_trail_v51.py tests/test_guardian_v12.py   # 25 passed
+.venv/Scripts/python.exe -X utf8 E:/tmp/m79/battery.py                                                                     # 变异电池 17/17 按实测红集合命中、16 条全部可失败，[ALL-OK] rc=0（期望来自实测轮 battery-run4.txt）
+bash E:/tmp/realmodel/restart-8061.sh &                                                                                    # 改过后端代码必须先重启隔离实例，再点验
+PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -X utf8 E:/tmp/m79/trail_probe.py                                           # 真 DeepSeek R0–R6c + N1：13 格 FAIL 0 / NOT-TESTED 0, rc=0（供应商窗口临时 3000，finally 里还原并实测 65536）
+PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -X utf8 E:/tmp/m79/r6c_replay.py                                            # 不花钱复读两份实物：299c729f=FAIL（旧内存副本）、41c82847=PASS（事件投影），[ALL-OK] rc=0
 ```
 
 浏览器点验（chip）是一次性脚本，放在仓库外：`E:\tmp\realmodel\chip-verify.mjs`，
