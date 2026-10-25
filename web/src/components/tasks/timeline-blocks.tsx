@@ -11,6 +11,7 @@ import {
   compactionReplacementLabel,
   compactionTriggerLabel,
   compactionWaterLabel,
+  guardianReviewLabel,
   historyRefLabel,
   nodeLabel,
   riskLabel,
@@ -463,6 +464,7 @@ function ApprovalCard({
   ) => void;
 }) {
   const decided = block.state !== "pending";
+  const reviewNote = guardianReviewLabel(block.guardian);
   return (
     <CardShell
       block={block}
@@ -487,6 +489,14 @@ function ApprovalCard({
     >
       {block.risk && <p className="text-[12px] text-warn">{riskLabel(block.risk)}操作，需人工确认后才继续执行</p>}
       {block.message && <p className="text-[12px] leading-relaxed text-text/80">{block.message}</p>}
+      {reviewNote && (
+        <p
+          className="text-[11.5px] leading-relaxed text-muted"
+          title="独立审查员先看过了；它放行不等于安全，它说话也不会替你批准"
+        >
+          {reviewNote}
+        </p>
+      )}
       <JsonBlock value={block.args} />
       {decided ? (
         <p className="font-mono text-[11px] text-faint">该请求已处理，不会重复执行。</p>

@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { MarkdownView } from "@/components/bot/markdown-view";
 import { Button, Field, Input, Notice, Spinner, StateLine } from "@/components/projects/ui";
+import { guardianFromPayload } from "@/components/tasks/api";
+import { guardianReviewLabel } from "@/components/tasks/status";
 import { errorCode, errorMessage } from "@/lib/http";
 import {
   answerTeamQuestion,
@@ -1173,6 +1175,8 @@ function ApprovalBlock({
   const args = argumentPreview(approval.arguments);
   const options = approval.approval_options ?? [];
   const expired = approval.expired === true;
+  // 审查意见和任务时间线共用同一个三态读法：缺键、关着、说过话不是一种状态。
+  const reviewNote = guardianReviewLabel(guardianFromPayload(approval));
   return (
     <div className="mt-3 rounded-lg border border-line bg-surface px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
@@ -1189,6 +1193,11 @@ function ApprovalBlock({
         <pre className="mt-2 max-h-28 overflow-auto rounded-md bg-surface-2 px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-text/80">
           {args}
         </pre>
+      )}
+      {reviewNote && (
+        <p className="mt-2 text-[11px] leading-relaxed text-muted" title="独立审查员先看过了；它放行不等于安全，它说话也不会替你批准">
+          {reviewNote}
+        </p>
       )}
       {expired ? (
         <p className="mt-2.5 text-[11px] text-faint">

@@ -517,6 +517,8 @@ export type PendingApproval = {
   /** 后端下发的可选作用域，前端不自己编造档位。 */
   scopes: { scope: ApprovalScope; label: string }[];
   mode: string;
+  /** 独立审查员的话。undefined=这张卡是"审查进载荷之前"的老任务；null=记过了、当时审查关着。 */
+  guardian?: GuardianVerdictInfo | null;
 };
 export type ToolRecord = {
   id: string;
@@ -605,6 +607,94 @@ export type WorldState = {
   changes: { seq: number | null; node: string }[];
 };
 
+/** 一条逐条授权（对标 Codex `turn_context.permission_profile.file_system.entries`）。
+ * `enforcedBy` 才是这行的重点：`policy` 是我们自己的闸门在执行前判定，不是系统会拒。 */
+export type BoundaryEntry = { path: string; access: string; enforcedBy: string };
+
+export type PermissionProfile = {
+  /** managed / unrestricted / unrecorded；空串 = 后端没给这一格（早于 M4 的服务）。 */
+  type: string;
+  /** unrecorded 时后端会写清"为什么不按档位反推"，原文照抄，不改写。 */
+  note: string;
+  enforcedBy: string;
+  /** 闸门的真实语义（skip / not_applicable）；空串 = 没记。 */
+  missingPathBehavior: string;
+  fileSystemType: string;
+  entries: BoundaryEntry[];
+  network: { requested: string; enforcedBy: string; commandGate: string } | null;
+  /** null = 载荷里没有 shell 这一格，不能读成"shell 关着"。 */
+  shellEnabled: boolean | null;
+};
+
+/** 边界报告（evidence.py 的 boundary_report）：这次任务的每一笔调用落在哪一层边界内。 */
+export type Boundaries = {
+  /** 后端有没有给出 boundaries 这一块。false 时界面只说"没有这份报告"，不铺一串 0。 */
+  recorded: boolean;
+  tier: string;
+  requested: string;
+  backend: string;
+  strength: string;
+  degraded: boolean | null;
+  filesystemEnforced: boolean | null;
+  networkEnforced: boolean | null;
+  notice: string;
+  mcp: { boundary: string; note: string; servers: string[]; calls: number | null };
+  toolCalls: {
+    blocked: number | null;
+    mcpHostProcess: number | null;
+    process: number | null;
+    inProcess: number | null;
+    unattributed: number | null;
+  };
+  sandboxModes: string[];
+  profile: PermissionProfile;
+};
+
+/** 一次独立审查的判定。`outcome` 是"审完之后走到了哪一步"，缺键就是当时没记（老事件）。 */
+export type GuardianDecision = {
+  seq: number | null;
+  runId: string;
+  tool: string;
+  approvalKey: string;
+  verdict: string;
+  reasons: string[];
+  model: string;
+  latencyMs: number | null;
+  timedOut: boolean;
+  error: string;
+  outcome: string | null;
+};
+
+/** 一次压缩里审阅侧的账：看得到几条历史、模型侧剩几条、随账带上了几条判定。 */
+export type GuardianWindow = {
+  seq: number | null;
+  windowNumber: number | null;
+  itemsReviewed: number | null;
+  itemsInModelContext: number | null;
+  reviewedChars: number | null;
+  reviews: number | null;
+  inEffect: Record<string, string | number>;
+};
+
+export type GuardianHistory = {
+  recorded: boolean;
+  decisions: GuardianDecision[];
+  autoApprovals: { seq: number | null; approvalKey: string }[];
+  windows: GuardianWindow[];
+  /** null = 后端没给（老服务）；0 = 记过了，且每一次压缩都记了。 */
+  windowsUnrecorded: number | null;
+};
+
+/** 审批卡上的审查意见。三种状态靠 `guardian` 这个键在不在、是不是 null 区分。 */
+export type GuardianVerdictInfo = {
+  verdict: string;
+  reasons: string[];
+  model: string;
+  latencyMs: number | null;
+  timedOut: boolean;
+  error: string;
+};
+
 export type Evidence = {
   status: string;
   acceptance: AcceptanceItem[];
@@ -613,6 +703,8 @@ export type Evidence = {
   usage: UsageInfo;
   governance: Governance;
   world: WorldState;
+  boundaries: Boundaries;
+  guardian_history: GuardianHistory;
   pendingApprovals: PendingApproval[];
   pendingQuestions: PendingQuestion[];
   tools: ToolRecord[];
@@ -624,6 +716,40 @@ export type Evidence = {
 const EMPTY_GOVERNANCE: Governance = { snapshots: 0, models: [], modes: [], sandbox: null, features: [], changes: [] };
 
 const EMPTY_WORLD: WorldState = { snapshots: 0, current: null, changes: [] };
+
+/** 计数一律 null：这一块后端根本没给，界面只能念「没有这份报告」，不能念一串 0。 */
+const EMPTY_BOUNDARIES: Boundaries = {
+  recorded: false,
+  tier: "",
+  requested: "",
+  backend: "",
+  strength: "",
+  degraded: null,
+  filesystemEnforced: null,
+  networkEnforced: null,
+  notice: "",
+  mcp: { boundary: "", note: "", servers: [], calls: null },
+  toolCalls: { blocked: null, mcpHostProcess: null, process: null, inProcess: null, unattributed: null },
+  sandboxModes: [],
+  profile: {
+    type: "",
+    note: "",
+    enforcedBy: "",
+    missingPathBehavior: "",
+    fileSystemType: "",
+    entries: [],
+    network: null,
+    shellEnabled: null,
+  },
+};
+
+const EMPTY_GUARDIAN_HISTORY: GuardianHistory = {
+  recorded: false,
+  decisions: [],
+  autoApprovals: [],
+  windows: [],
+  windowsUnrecorded: null,
+};
 
 const EMPTY_EVIDENCE: Evidence = {
   status: "",
@@ -653,6 +779,8 @@ const EMPTY_EVIDENCE: Evidence = {
   },
   governance: EMPTY_GOVERNANCE,
   world: EMPTY_WORLD,
+  boundaries: EMPTY_BOUNDARIES,
+  guardian_history: EMPTY_GUARDIAN_HISTORY,
   pendingApprovals: [],
   pendingQuestions: [],
   tools: [],
@@ -893,16 +1021,41 @@ function normalizeApprovals(container: unknown): PendingApproval[] {
   const rows = arrayOf(container, "pending_approvals", "approvals", "awaiting_approval");
   return rows
     .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
-    .map((item) => ({
-      toolCallId: textOf(item, "tool_call_id", "id", "approval_id"),
-      tool: textOf(item, "tool", "name", "action") || "未知操作",
-      args: recordOf(item, "arguments", "args", "input", "params"),
-      risk: textOf(item, "risk_level", "risk", "level"),
-      message: textOf(item, "message", "reason", "summary", "approval_state"),
-      prefix: textOf(item, "suggested_prefix", "prefix"),
-      scopes: normalizeApprovalScopes(item),
-      mode: textOf(item, "permission_mode", "mode"),
-    }));
+    .map((item) => {
+      // 三种状态各有各的读法，所以不能用 pick（它把 null 折成 undefined）：
+      // 键不在=这张卡早于审查进载荷；null=记过了、当时审查关着；对象=审查员真说了话。
+      const guardian = guardianFromPayload(item);
+      return {
+        toolCallId: textOf(item, "tool_call_id", "id", "approval_id"),
+        tool: textOf(item, "tool", "name", "action") || "未知操作",
+        args: recordOf(item, "arguments", "args", "input", "params"),
+        risk: textOf(item, "risk_level", "risk", "level"),
+        message: textOf(item, "message", "reason", "summary", "approval_state"),
+        prefix: textOf(item, "suggested_prefix", "prefix"),
+        scopes: normalizeApprovalScopes(item),
+        mode: textOf(item, "permission_mode", "mode"),
+        ...(guardian === undefined ? {} : { guardian }),
+      };
+    });
+}
+
+/** 审批载荷上的审查意见（三态）。时间线和待批列表共用这一个读法，免得两处判歪。 */
+export function guardianFromPayload(source: Record<string, unknown>): GuardianVerdictInfo | null | undefined {
+  if (!("guardian" in source)) return undefined;
+  return normalizeGuardianVerdict(source["guardian"]);
+}
+
+function normalizeGuardianVerdict(source: unknown): GuardianVerdictInfo | null {
+  if (!source || typeof source !== "object") return null;
+  const raw = source as Record<string, unknown>;
+  return {
+    verdict: textOf(raw, "verdict"),
+    reasons: arrayOf(raw, "reasons").map((item) => (typeof item === "string" ? item : "")).filter(Boolean),
+    model: textOf(raw, "model"),
+    latencyMs: numOf(raw, "latency_ms"),
+    timedOut: boolOf(raw, "timed_out") === true,
+    error: textOf(raw, "error"),
+  };
 }
 
 function normalizeToolRecords(container: unknown): ToolRecord[] {
@@ -1036,6 +1189,109 @@ function normalizeWorld(source: unknown): WorldState {
   };
 }
 
+/** 边界报告的投影（对标 Codex `turn_context` 里那半张权限表）。
+ *
+ * 读法只有一条纪律：**这份报告不存在 ≠ 报告里说什么都没发生**。
+ * 老服务不返回 `boundaries` → recorded=false，界面只念「后端没给边界报告」；
+ * 返回了但某个计数缺键 → null（未记），不许补 0——0 是"一次都没有"这个事实。 */
+function normalizeBoundaries(source: unknown): Boundaries {
+  const block = recordOf(source, "boundaries");
+  if (Object.keys(block).length === 0) return EMPTY_BOUNDARIES;
+  const sandbox = recordOf(block, "sandbox");
+  const mcp = recordOf(block, "mcp");
+  const counts = recordOf(block, "tool_calls");
+  const profile = recordOf(block, "permission_profile");
+  const fs = recordOf(profile, "file_system");
+  const network = recordOf(profile, "network");
+  const shell = profile["shell"];
+  return {
+    recorded: true,
+    tier: textOf(sandbox, "tier"),
+    requested: textOf(sandbox, "requested"),
+    backend: textOf(sandbox, "backend"),
+    strength: textOf(sandbox, "strength"),
+    degraded: boolOf(sandbox, "degraded"),
+    filesystemEnforced: boolOf(sandbox, "filesystem_enforced"),
+    networkEnforced: boolOf(sandbox, "network_enforced"),
+    notice: textOf(sandbox, "notice"),
+    mcp: {
+      boundary: textOf(mcp, "boundary"),
+      note: textOf(mcp, "note"),
+      servers: arrayOf(mcp, "servers").map((item) => (typeof item === "string" ? item : textOf(item, "name"))).filter(Boolean),
+      calls: numOf(mcp, "calls"),
+    },
+    toolCalls: {
+      blocked: numOf(counts, "blocked"),
+      mcpHostProcess: numOf(counts, "mcp_host_process"),
+      process: numOf(counts, "process"),
+      inProcess: numOf(counts, "in_process"),
+      unattributed: numOf(counts, "unattributed"),
+    },
+    sandboxModes: arrayOf(block, "sandbox_modes").map((item) => (typeof item === "string" ? item : "")).filter(Boolean),
+    profile: {
+      type: textOf(profile, "type"),
+      note: textOf(profile, "note"),
+      enforcedBy: textOf(profile, "enforced_by"),
+      missingPathBehavior: textOf(profile, "missing_path_behavior"),
+      fileSystemType: textOf(fs, "type"),
+      entries: arrayOf(fs, "entries").map((item) => ({
+        path: textOf(item, "path"),
+        access: textOf(item, "access"),
+        enforcedBy: textOf(item, "enforced_by"),
+      })),
+      network: Object.keys(network).length === 0 ? null : {
+        requested: textOf(network, "requested"),
+        enforcedBy: textOf(network, "enforced_by"),
+        commandGate: textOf(network, "command_gate"),
+      },
+      shellEnabled: typeof shell === "object" && shell !== null ? boolOf(shell, "enabled") : null,
+    },
+  };
+}
+
+/** 审阅轨迹的投影（#79 的 `guardian_history`）。
+ *
+ * 判定只从事件来，界面再抄一遍就成了第三个口径，所以这里只搬字段、不做任何推断：
+ * `outcome` 缺键保持 null（当时没记去向），`windows_unrecorded` 缺键保持 null（老服务）。 */
+function normalizeGuardianHistory(source: unknown): GuardianHistory {
+  const block = recordOf(source, "guardian_history");
+  if (Object.keys(block).length === 0) return EMPTY_GUARDIAN_HISTORY;
+  return {
+    recorded: true,
+    decisions: arrayOf(block, "decisions").map((item) => ({
+      seq: numOf(item, "seq"),
+      runId: textOf(item, "run_id", "run"),
+      tool: textOf(item, "tool"),
+      approvalKey: textOf(item, "approval_key"),
+      verdict: textOf(item, "verdict"),
+      reasons: arrayOf(item, "reasons").map((line) => (typeof line === "string" ? line : "")).filter(Boolean),
+      model: textOf(item, "model"),
+      latencyMs: numOf(item, "latency_ms"),
+      timedOut: boolOf(item, "timed_out") === true,
+      error: textOf(item, "error"),
+      outcome: "outcome" in (item as object) ? textOf(item, "outcome") || null : null,
+    })),
+    autoApprovals: arrayOf(block, "auto_approvals").map((item) => ({
+      seq: numOf(item, "seq"),
+      approvalKey: textOf(item, "approval_key"),
+    })),
+    windows: arrayOf(block, "windows").map((item) => ({
+      seq: numOf(item, "seq"),
+      windowNumber: numOf(item, "window_number"),
+      itemsReviewed: numOf(item, "items_reviewed"),
+      itemsInModelContext: numOf(item, "items_in_model_context"),
+      reviewedChars: numOf(item, "reviewed_chars"),
+      reviews: numOf(item, "reviews"),
+      inEffect: Object.fromEntries(
+        Object.entries(recordOf(item, "in_effect")).filter(
+          ([, value]) => typeof value === "string" || typeof value === "number",
+        ) as [string, string | number][],
+      ),
+    })),
+    windowsUnrecorded: numOf(block, "windows_unrecorded"),
+  };
+}
+
 /** 边界强度的那半句。空串是老任务：那时后端还没探测过，不能拿今天的值冒充当时。 */
 const STRENGTH_SEGMENT: Record<string, string> = {
   os_enforced: "文件与网络边界由系统强制",
@@ -1101,6 +1357,8 @@ export function normalizeEvidence(source: unknown): Evidence {
     usage: normalizeUsage(container),
     governance: normalizeGovernance(container),
     world: normalizeWorld(container),
+    boundaries: normalizeBoundaries(container),
+    guardian_history: normalizeGuardianHistory(container),
     pendingApprovals: normalizeApprovals(container),
     pendingQuestions: normalizeQuestions(container),
     tools: normalizeToolRecords(container),

@@ -4,6 +4,7 @@ import {
   eventToolArgs,
   eventToolName,
   eventToolOutput,
+  guardianFromPayload,
   numOf,
   normalizeQuestions,
   normalizeStatus,
@@ -12,6 +13,7 @@ import {
   textOf,
   type AgentEvent,
   type ApprovalScope,
+  type GuardianVerdictInfo,
   type PendingQuestion,
 } from "./api";
 import { clip } from "./format";
@@ -83,6 +85,8 @@ export type Block =
       prefix: string;
       scopes: { scope: ApprovalScope; label: string }[];
       state: "pending" | "granted" | "denied";
+      /** 独立审查的意见。undefined=这张卡早于审查进载荷，null=审查关着，对象=审查员说了话。 */
+      guardian?: GuardianVerdictInfo | null;
     }
   | {
       kind: "result";
@@ -633,6 +637,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
             label: textOf(item, "label", "title"),
           })),
         state: "pending",
+        guardian: guardianFromPayload(source),
       };
       openApprovalIndex.set(tool, push(block));
       return;

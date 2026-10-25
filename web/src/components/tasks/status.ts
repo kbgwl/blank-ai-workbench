@@ -1,4 +1,15 @@
-import type { UsageBranch, UsageParallelGroup, UsageTurn } from "./api.ts";
+import type {
+  Boundaries,
+  BoundaryEntry,
+  GuardianDecision,
+  GuardianHistory,
+  GuardianVerdictInfo,
+  GuardianWindow,
+  PermissionProfile,
+  UsageBranch,
+  UsageParallelGroup,
+  UsageTurn,
+} from "./api.ts";
 
 export type StatusMeta = {
   label: string;
@@ -399,4 +410,205 @@ export function delegatedSpendLabel(tokens: number | null, calls: number | null)
   if (tokens !== null) parts.push(`派给子代理 ${show(tokens)}`);
   if (calls !== null) parts.push(`${show(calls)} 笔`);
   return parts.join(" · ");
+}
+
+// ---------------------------------------------------------------------------
+// 边界报告与审阅轨迹（#77 的 permission_profile + #79 的 guardian_history）
+//
+// 这一族的文案全部是判定，所以写在模块里而不是 JSX 里：它们必须能被断言，
+// 也要能在被改坏时打红。共同的纪律是「没记」与「记了是零」不许共用一个读法。
+// ---------------------------------------------------------------------------
+
+/** 缺键念「未记」，真 0 念 0 —— 后者是事实，前者是这份报告没覆盖到。 */
+const count = (value: number | null): string => (value === null ? "未记" : value.toLocaleString("zh-CN"));
+
+const STRENGTH_TEXT: Record<string, string> = {
+  os_enforced: "文件与网络由系统强制",
+  job_only: "仅内存/进程数/进程树由内核强制",
+  none: "无内核强制",
+  unknown: "边界探测不可信，不承诺任何边界",
+};
+
+/** 档位那一行：要求的、实际的、降级没有、谁在强制，四件事一次说完。 */
+export function sandboxTierLabel(boundaries: Boundaries): string {
+  if (!boundaries.recorded) return "";
+  const tier = boundaries.tier || "未记档位";
+  const wanted = boundaries.requested && boundaries.requested !== tier ? `（要求 ${boundaries.requested}）` : "";
+  const degraded = boundaries.degraded === true ? " · 已降级" : "";
+  const strength = boundaries.strength
+    ? STRENGTH_TEXT[boundaries.strength] ?? `边界强度 ${boundaries.strength}`
+    : "边界强度未记";
+  return `档位 ${tier}${wanted}${degraded} · ${strength}`;
+}
+
+/** 该亮警告的三种情形：档位被部署策略降级、内核层没管到文件与网络、或压根没人强制写入。 */
+export function boundariesNeedWarn(boundaries: Boundaries): boolean {
+  if (!boundaries.recorded) return false;
+  if (boundaries.degraded === true) return true;
+  if (boundaries.strength && boundaries.strength !== "os_enforced") return true;
+  return boundaries.profile.entries.some((entry) => entry.enforcedBy === "none" && entry.access === "write");
+}
+
+const ENFORCED_BY_TEXT: Record<string, string> = {
+  os: "系统强制",
+  policy: "策略闸门（执行前判定，不是系统拒）",
+  none: "无人强制",
+};
+
+const ACCESS_TEXT: Record<string, string> = {
+  write: "可写",
+  read: "只读",
+  deny: "拒绝",
+  none: "不进挂载表",
+};
+
+/** 一条逐条授权。尾巴上"谁在保证"是这一行存在的理由——只有路径和读写，就会被读成系统会拒。 */
+export function permissionEntryLabel(entry: BoundaryEntry): string {
+  const path = entry.path || "未命名路径";
+  const access = ACCESS_TEXT[entry.access] ?? (entry.access || "未记");
+  const enforced = ENFORCED_BY_TEXT[entry.enforcedBy] ?? (entry.enforcedBy || "未记");
+  return `${path} · ${access} · ${enforced}`;
+}
+
+/** 「不存在的目标怎么算」：这是闸门的真实语义，认不出来就原样露出来，不套中文。 */
+export function missingPathLabel(behavior: string): string {
+  if (!behavior) return "";
+  if (behavior === "skip") return "不存在的目标不参与越界判定（skip）";
+  if (behavior === "fail") return "不存在的目标按拒绝处理（fail）";
+  if (behavior === "not_applicable") return "未开「仅限工作区」，这条不适用";
+  return behavior;
+}
+
+export function networkGuardLabel(network: Boundaries["profile"]["network"]): string {
+  if (!network) return "";
+  const wanted = network.requested === "open" ? "要求可通网" : network.requested === "none" ? "要求不通网" : "网络要求未记";
+  const by = ENFORCED_BY_TEXT[network.enforcedBy] ?? (network.enforcedBy || "未记");
+  const gate = network.commandGate === "deny" ? "命令闸门拒绝" : network.commandGate === "allow" ? "命令闸门放行" : "命令闸门未记";
+  return `${wanted} · ${by} · ${gate}`;
+}
+
+/** 每一笔调用落在哪一层。五类分开数，是因为「MCP 宿主进程」根本不进任务沙箱。 */
+export function toolCallBoundaryLabel(boundaries: Boundaries): string {
+  const { blocked, mcpHostProcess, process: spawned, inProcess, unattributed } = boundaries.toolCalls;
+  const parts = [
+    `进程内 ${count(inProcess)}`,
+    `起进程 ${count(spawned)}`,
+    `MCP 宿主 ${count(mcpHostProcess)}`,
+    `被档位拦 ${count(blocked)}`,
+    `未归属 ${count(unattributed)}`,
+  ];
+  if (unattributed !== null && unattributed > 0) parts.push("（未归属=当时没记边界，不猜成进程内）");
+  return parts.join(" · ");
+}
+
+const VERDICT_TEXT: Record<string, string> = { allow: "放行", deny: "否决", abstain: "未表态" };
+
+const OUTCOME_TEXT: Record<string, string> = {
+  asked: "交给人批准",
+  blocked: "审查直接拒",
+  auto_approved: "审查代批",
+};
+
+/** 一条判定的读法。审批指纹与命令原文都不在这行里：那是内部标识与用户数据，不上汇总行。 */
+export function guardianDecisionLabel(decision: GuardianDecision): string {
+  const parts = [
+    `第 ${decision.seq ?? "?"} 条`,
+    decision.tool || "未知工具",
+    VERDICT_TEXT[decision.verdict] ?? (decision.verdict || "判定未记"),
+    `出自 ${decision.runId ? shortTurnId(decision.runId) : "无名轮"}`,
+  ];
+  // 去向缺键就是"记这条的时候还没有这一格"，不补成"没去向"。
+  if (decision.outcome !== null) parts.push(`去向 ${OUTCOME_TEXT[decision.outcome] ?? decision.outcome}`);
+  if (decision.model) {
+    parts.push(decision.latencyMs === null ? decision.model : `${decision.model} ${decision.latencyMs.toLocaleString("zh-CN")}ms`);
+  }
+  if (decision.timedOut) parts.push("超时");
+  if (decision.error) parts.push("审查出错");
+  return parts.join(" · ");
+}
+
+/** 一次压缩：审阅侧看得见几条、模型侧只剩几条——Codex 实物是 96 vs 18，丢的是模型的历史。 */
+export function guardianWindowLabel(window: GuardianWindow): string {
+  const parts = [
+    `第 ${window.windowNumber ?? "?"} 窗`,
+    `审阅侧 ${count(window.itemsReviewed)} 条 · 模型侧 ${count(window.itemsInModelContext)} 条`,
+    `判定 ${count(window.reviews)} 条随账`,
+    `${count(window.reviewedChars)} 字`,
+  ];
+  const effect = window.inEffect;
+  const effectParts = [
+    effect.guardian_mode ? `审查=${String(effect.guardian_mode)}` : "",
+    effect.approval_mode ? `审批=${String(effect.approval_mode)}` : "",
+    effect.window_tokens ? `窗口 ${Number(effect.window_tokens).toLocaleString("zh-CN")}` : "",
+  ].filter(Boolean);
+  if (effectParts.length) parts.push(`生效 ${effectParts.join(" ")}`);
+  return parts.join(" · ");
+}
+
+/** 轨迹汇总行。「带上判定」数的是窗，不是判定条数：跨运行续跑时判定只有几条，窗却有七面。 */
+export function guardianHeadline(trail: GuardianHistory): string {
+  if (!trail.recorded) return "";
+  const carried = trail.windows.filter((window) => (window.reviews ?? 0) > 0).length;
+  const parts = [
+    `判定 ${trail.decisions.length} 条`,
+    `代批 ${trail.autoApprovals.length} 次`,
+    `压缩 ${trail.windows.length} 窗（其中 ${carried} 窗带上判定）`,
+  ];
+  if (trail.windowsUnrecorded !== null && trail.windowsUnrecorded > 0) parts.push(`另有 ${trail.windowsUnrecorded} 次压缩没记轨迹`);
+  return parts.join(" · ");
+}
+
+/**
+ * 审批卡上的审查意见。三种状态必须长得不一样：
+ * `undefined`=这张卡是"审查进载荷之前"的老任务（整段不显示）；
+ * `null`=记过了、当时审查关着（要说，否则批准的人以为没人看过）；
+ * 对象=审查员真说了话。
+ */
+export function guardianReviewLabel(guardian: GuardianVerdictInfo | null | undefined): string {
+  if (guardian === undefined) return "";
+  if (guardian === null) return "独立审查未开启：这次没有第二个模型看过这条操作";
+  const verdict = VERDICT_TEXT[guardian.verdict] ?? (guardian.verdict || "未表态");
+  const head = `审查员：${verdict}`;
+  const note = guardian.timedOut ? "（审查超时，按未表态处理）" : guardian.error ? `（审查出错：${guardian.error}）` : "";
+  const reasons = guardian.reasons.filter(Boolean).join("；");
+  return reasons ? `${head}${note} · ${reasons}` : `${head}${note}`;
+}
+
+/** 后端有没有真的强制这一层：null（没这一格）与 false（记过了、没强制）不是一回事。 */
+export function enforcedFlagLabel(value: boolean | null): string {
+  if (value === null) return "未记";
+  return value ? "系统强制" : "未强制";
+}
+
+/** 权限快照的来历。unrestricted 是「按宿主权限执行」这个事实，不是「没配」。 */
+export function permissionProfileTypeLabel(profile: PermissionProfile): string {
+  if (!profile.type) return "权限快照未记（后端早于 M4）";
+  if (profile.type === "managed") return "受管权限（逐条授权见下）";
+  if (profile.type === "unrestricted") return "不受限：按宿主权限直接执行";
+  if (profile.type === "unrecorded") return "无权限快照：该任务当时没记";
+  return profile.type;
+}
+
+/** MCP 那一路走的是宿主进程、不进任务沙箱，所以它要单独成行，不混进调用归账。 */
+export function mcpBoundaryLabel(boundaries: Boundaries): string {
+  const mcp = boundaries.mcp;
+  if (!mcp.boundary && mcp.calls === null && mcp.servers.length === 0 && !mcp.note) return "";
+  const parts = [
+    `MCP 边界 ${mcp.boundary || "未记"}`,
+    `服务端 ${mcp.servers.length} 个${mcp.servers.length > 0 ? `（${mcp.servers.join("、")}）` : ""}`,
+    `调用 ${count(mcp.calls)} 次`,
+  ];
+  if (mcp.note) parts.push(mcp.note);
+  return parts.join(" · ");
+}
+
+/** 这次任务里出现过的档位序列。空数组=后端没记过，不能念成「一路 off」。 */
+export function sandboxModesLabel(modes: string[]): string {
+  return modes.length === 0 ? "" : modes.join(" → ");
+}
+
+/** shell 那一格：载荷没给时整行不显示，显示出来就是替后端编了一句。 */
+export function shellGrantLabel(enabled: boolean | null): string {
+  if (enabled === null) return "";
+  return enabled ? "shell 允许" : "shell 禁止";
 }

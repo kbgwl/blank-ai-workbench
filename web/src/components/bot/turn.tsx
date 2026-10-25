@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/projects/ui";
 import { formatDuration } from "../tasks/format";
+import { guardianReviewLabel } from "../tasks/status";
 import type { AttachmentRef, PendingApproval, PendingQuestion } from "../tasks/api";
 import { MarkdownView } from "./markdown-view";
 import { StepView } from "./steps";
@@ -65,6 +66,7 @@ function ApprovalCard({
   busy: boolean;
 }) {
   const command = String(approval.args.command ?? approval.args.path ?? "");
+  const reviewNote = guardianReviewLabel(approval.guardian);
   return (
     <div className="my-2 rounded-xl border border-warn/35 bg-warn/[0.04] p-3">
       <p className="text-[12.5px] font-medium text-warn">
@@ -77,6 +79,11 @@ function ApprovalCard({
         </pre>
       )}
       {approval.message && <p className="mt-1 text-[11.5px] text-muted">{approval.message}</p>}
+      {reviewNote && (
+        <p className="mt-1 text-[11.5px] leading-relaxed text-muted" title="独立审查员先看过了；它放行不等于安全，它说话也不会替你批准">
+          {reviewNote}
+        </p>
+      )}
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         <Button variant="primary" disabled={busy} onClick={() => onDecide("approve", "once")}>
           允许这一次

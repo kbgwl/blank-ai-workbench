@@ -3852,6 +3852,98 @@ U1 也少一条（新加的跨运行用例一起红了）；全部按实测写�
 7. 轨迹是压缩那一刻的快照投影，之后的驳回/批准不会改写它：想问「这条判定最后怎么样了」要读
    `guardian.reviewed` 的 `outcome` 与后续审批事件，两者现在靠 `approval_key` 对齐，没有外键。
 
+## 7.41 任务 #80：边界、权限快照与审阅轨迹进界面——后端说过的话，卡片得念出来
+
+**这一批的起点不是「缺功能」，是「数据早就到了、页面没念」。**
+#77 的 `permission_profile`、M4 的 `boundary_report`、#79 的 `guardian_history` 三块都已经写进
+`/api/v1/tasks/{id}/evidence`，审批载荷里也早就有 `guardian`（`services/api/src/blank_api/services/team.py:1427`
+的群聊 `pending[].approvals` 直接复用 `build_evidence(...)["pending_approvals"]`，等于后端一直在递，
+前端一直不接）。§7.40 的缺口 6 就是这一格。
+
+**三态是这批唯一的主张**：`undefined`（载荷里根本没这个键，这张卡/这台后端早于那一版）、
+`null`（记过了、当时关着）、对象（说了话）。三态在 JS 里用真值判断必然塌成两种，所以：
+- `web/src/components/tasks/api.ts`：`guardianFromPayload()` 用 `"guardian" in obj` 读，
+  `boundaries` / `permission_profile` 同理归一化成 `recorded` / `type === ""` 这种「没记」的显式形状；
+  读侧绝不把「没记」补成 `0` 或空数组（与 §7.40 的 `windows_unrecorded` 同一口径）。
+- `web/src/components/tasks/status.ts`：15 个纯函数把归一化后的形状拼成人话
+  （`sandboxTierLabel` / `enforcedFlagLabel` / `permissionEntryLabel` / `guardianReviewLabel` /
+  `guardianDecisionLabel` / `guardianWindowLabel` / `toolCallBoundaryLabel` …），
+  每个都单独可测、也是判定变异的靶。
+- 渲染四处：`tasks/evidence-panel.tsx` 新增「边界与授权」「审阅轨迹」两个区块
+  （只有 `boundaries.recorded` / `guardian_history.recorded` 为真才出现，没记就整块不说）；
+  `tasks/timeline-blocks.tsx` 与 `bot/turn.tsx` 的任务审批卡念审查意见；
+  `team/team-view.tsx` 群聊审批卡念审查意见（这批抓出来的真缺陷）。
+- 每行都带「谁在保证」：`文件边界 = 系统强制` 与 `策略闸门（执行前判定，不是系统拒）` 分列，
+  档位被部署策略降级时念「要求 workspace · 实际 off · 已降级」——面板上那句「沙箱档位 workspace」
+  是最容易被读成「系统会拦」的一句话，这是这块区块存在的理由。
+
+**离线**：`web/src/components/tasks/boundaries.test.ts` 新增 30 条（三态、降级、归账未归属、
+代批不冒充实判、缺键不编话）；web 全量 **183 passed / 0 fail，rc=0**（`E:/tmp/m80/green5.txt`）；
+`tsc --noEmit` **无输出 rc=0**（`E:/tmp/m80/tsc6.txt`）。
+
+**判定变异电池**（`E:/tmp/m80/battery.mjs`）：22 条靶只改归一化与标签函数，
+**22/22 按实测红集合命中，rc=0**（`E:/tmp/m80/battery-run2.txt`），起跑前有一条
+「未变异必须 rc=0」的自检。三条值得单独念：
+`enforced-null-collapses` / `payload-drop-tristate` 专治「用真值判断折叠三态」，
+`tier-drop-degraded` 专治「只念档位、不念降级」——这三个正是这批最可能自己写出来的错。
+
+**渲染变异电池**（`E:/tmp/m80/ui-mutate.mjs`，4 个 tsx 文件 × 8 条靶，两条点验 suite）：
+两条基线先各绿一次（task 44/44、team 16/16），不绿就整批 `ABORT`；每条靶跑完 `copyFileSync`
+逐字节还原并 `equals` 校验；**8/8 被打红，rc=0**（`E:/tmp/m80/ui-mutate-2.log`）。
+其中 `team-drop-review`（`{reviewNote && (` → `{false && (`）红 3 条、
+`team-collapse-missing`（把缺键并成 null）只红 TB3a 一条——这两条就是「群聊卡片接了线」和
+「三态没塌」的可失败证明。
+
+**真 Chrome 点验（playwright-core + 本机 Chrome，视口 1440×900，断言读 `textContent`）**
+
+1. 任务侧 **44/44，rc=0**（`E:/tmp/m80/ui-verify-4.log`，同一份 44/44 也在电池基线里复现过）：
+   打的是替身 :8063（经 dev :3123 代理），面板两个新区块的每一行、逐条授权列表、
+   轨迹汇总行、判定条数与压缩窗条数都从 `/evidence` 现取再与 DOM 比；
+   V7/V8 是「剥掉键之后区块必须不出现」的负对照。
+2. 群聊侧 **16/16，rc=0**（`E:/tmp/m80/ui-verify-team-7.log`）：三个群的期望全部由
+   `/team/groups/{id}/state` 的载荷经 `guardianFromPayload` + `guardianReviewLabel` 现算，
+   TB0d 先证明「对象/null/缺键」算出**三种不同的话**，再拿页面逐条对；
+   TB1b/TB2b/TB3a 是页面作用域的负断言（不许出现 `timed_out`、`latency_ms` 这种原始键，
+   不许关着的时候凭空出现「审查员：」，缺键的时候两种话都不许出现）；
+   TB1c/TB2c/TB3b 反过来钉「加了判定行没把卡片其余部分挤掉」。
+3. **反证那一路不靠替身**：`REAL_ONLY=1` 关掉两条替身专属负对照后直通真模型实例 :8061，
+   **38/38，rc=0**（`E:/tmp/m80/ui-verify-real-1.log`）——真后端没被替身改动带偏，
+   替身只影响它自己造的那三种 guardian 形状。
+
+**替身装置（`E:/tmp/m80/stub2.mjs`）的纪律**：只动两处——审批载荷的 `guardian`（set/keep/drop 三态）
+与左栏群名，其余（工具名、参数、时间线、证据包）**逐字节照抄真物**；自检 8/8（`stub-selfcheck-2.log`）
+里 T0a–T0c 分别验三种形状真被造出来、T0g 验另外两个群名没被改。装置自己的存活靠 SSE 逐块写 +
+`res.on("error")` + `AbortController`，被截断的次数要在日志里数出来。
+
+**这批在装置上栽的四次，全部如实记**（红的全是我的测量，不是产品）：
+1. **群名有两个来源**：左栏来自 `/team/bootstrap`，卡片来自 `/state`。替身只改了 `/state`，
+   点验报 `locator.click` 找不到群名——看起来像页面坏了，实际是装置改漏了一处。
+2. **判据写宽造出假阳性**：TB3 第一版断「卡片里没有批准按钮」，而三张真卡的 `expired` 本来就是 `true`，
+   界面本就不给按钮；`card.includes("驳回")` 是靠过期提示里那句「批准/驳回都不会再生效」撞绿的。
+   修法：期望一律由载荷的 `expired` 推导，chip 只认按钮区独有的「已过期」，缺失类判定升到页面作用域。
+3. **等待条件与容器都圈错过**：等「群名出现」＝左栏瞬间就有、数据还没渲染；
+   按「高风险操作」圈容器只圈到 19 个字的标题行，判定行不在里面。
+   用 `peek-team-dom.mjs` 打出祖先链才确认卡片根是 `div.mt-3 rounded-lg border …`，
+   最终选择器锚在「需要你确认 + 该卡工具名」。
+4. **并发跑第二条点验 = 测在飞的变异**：电池正在改写 4 个 tsx 时我并行起了 `ui-verify.mjs`，
+   当场叫停，那份 12 行、没有汇总日志的产物改名成
+   `ui-verify-5.ABANDONED-contaminated-by-mutate.log` 留档不作数。电池独占源码。
+
+**诚实的缺口**
+
+1. `bot/turn.tsx` 那张审批卡只在 `isLive && running` 时挂载（`bot-app.tsx:653`，
+   `activeTaskId` 只能由**本会话发起的运行**产生），存量实物渲染不出来——
+   这半句目前只有离线用例与 `timeline-blocks.tsx` 的同源读法在守，**需要一次真模型跑才能浏览器点验**。
+   群聊那一路已经用存量实物点验过，所以「卡片念审查意见」这件事有两个来源、验了一个半。
+2. 审查的 `timed_out` / `error` 两种形状**没有实物**：真链路（#79）落下来的判定全是
+   `verdict=allow`、`timed_out=false`，替身也只造了 allow。标签函数写了这两种文案、
+   离线用例钉住了，浏览器上没见过。
+3. 这批纯前端，没有跨方言的新证据；点验只在 Windows + Chrome 上取过。
+4. 界面仍然念不出「审查当时看到了什么」：`reasons` 是模型原话，被审的输入正文不在轨迹里
+   （沿 §7.40 缺口 1、4，裁决不变）。
+5. 逐条授权列表按 `RollupList` 折叠展示，超过一屏时靠展开看；没有做「按路径搜索」——
+   真机上 ACE 条数多时读起来仍要人滚。
+
 ## 9. 复现命令
 
 ```bash
@@ -3980,6 +4072,22 @@ bash E:/tmp/realmodel/restart-8061.sh &                                         
 PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -X utf8 E:/tmp/m79/trail_probe.py                                           # 真 DeepSeek R0–R6c + N1：13 格 FAIL 0 / NOT-TESTED 0, rc=0（供应商窗口临时 3000，finally 里还原并实测 65536）
 PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -X utf8 E:/tmp/m79/r6c_replay.py                                            # 不花钱复读两份实物：299c729f=FAIL（旧内存副本）、41c82847=PASS（事件投影），[ALL-OK] rc=0
 ```
+
+# 边界/权限/审阅轨迹进界面这一批（#80）：离线 → 判定变异 → 替身自检 → 双路点验 → 渲染变异 → 反证
+cd web && E:/env/node/node-v24.20.0-win-x64/node.exe --test --import ./test-bootstrap.mjs src/components/tasks/boundaries.test.ts   # 30 passed（三态/降级/归账未归属/缺键不编话）
+cd web && E:/env/node/node-v24.20.0-win-x64/node.exe --test --import ./test-bootstrap.mjs "src/**/*.test.ts"                     # 183 passed / 0 fail（E:/tmp/m80/green5.txt）
+cd web && E:/env/node/node-v24.20.0-win-x64/node.exe ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.json                # 无输出 rc=0（E:/tmp/m80/tsc6.txt）
+E:/env/node/node-v24.20.0-win-x64/node.exe E:/tmp/m80/battery.mjs                                                             # 判定变异电池 22/22（battery-run2.txt；起跑前一条「未变异 rc=0」自检）
+E:/env/node/node-v24.20.0-win-x64/node.exe E:/tmp/m80/stub2.mjs                                                               # 替身 :8063：只改 guardian 三态 + 两处群名来源（/team/bootstrap 与 /state），其余逐字节照抄真物
+E:/env/node/node-v24.20.0-win-x64/node.exe E:/tmp/m80/stub-selfcheck.mjs                                                      # 替身自检 8/8（stub-selfcheck-2.log）
+API_PROXY_TARGET=http://127.0.0.1:8063 BLANK_WEB_DIST_DIR=.next-m80 E:/env/node/node-v24.20.0-win-x64/node.exe web/node_modules/next/dist/bin/next dev -p 3123 &
+cd web && E:/env/node/node-v24.20.0-win-x64/node.exe --import ./test-bootstrap.mjs E:/tmp/m80/ui-verify.mjs                     # 真 Chrome 44/44 rc=0，视口 1440×900（ui-verify-4.log）
+cd web && E:/env/node/node-v24.20.0-win-x64/node.exe --import ./test-bootstrap.mjs E:/tmp/m80/ui-verify-team.mjs                # 群聊 16/16 rc=0（ui-verify-team-7.log；期望全由 /state 载荷现算）
+cd web && REAL_ONLY=1 E:/env/node/node-v24.20.0-win-x64/node.exe --import ./test-bootstrap.mjs E:/tmp/m80/ui-verify.mjs         # 反证：不经替身直通 :8061，38/38 rc=0（ui-verify-real-1.log）
+cd web && E:/env/node/node-v24.20.0-win-x64/node.exe E:/tmp/m80/ui-mutate.mjs                                                 # 渲染变异 8/8 打红（ui-mutate-2.log）；两条 suite 基线先各绿、逐字节还原
+```
+**电池期间源码归电池独占**：上面两条 `ui-verify*.mjs` 不许与 `ui-mutate.mjs` 并行——
+本批实际并行过一次，那份没有汇总行的日志改名成 `ui-verify-5.ABANDONED-contaminated-by-mutate.log` 留档、不作数（见 §7.41）。
 
 浏览器点验（chip）是一次性脚本，放在仓库外：`E:\tmp\realmodel\chip-verify.mjs`，
 先起 `BLANK_WEB_DIST_DIR=.next-verify API_PROXY_TARGET=http://127.0.0.1:8061 next dev -p 3120`，

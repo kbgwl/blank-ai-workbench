@@ -46,7 +46,11 @@
     ".next-verify/types/**/*.ts",
     ".next-verify/dev/types/**/*.ts",
     ".next-8062/types/**/*.ts",
-    ".next-8062/dev/types/**/*.ts"
+    ".next-8062/dev/types/**/*.ts",
+    ".next-m80/types/**/*.ts",
+    ".next-m80/dev/types/**/*.ts",
+    ".next-m80r/types/**/*.ts",
+    ".next-m80r/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

@@ -10,14 +10,30 @@ import {
   restoreTaskSnapshot,
   sandboxBoundaryLabel,
   sandboxBoundaryNeedsWarn,
+  type Boundaries,
   type Evidence,
+  type GuardianHistory,
   type TaskSnapshot,
   type TestInfo,
   type UsageInfo,
 } from "./api";
 import { verdictOf } from "./verdict";
 import {
+  boundariesNeedWarn,
   delegatedSpendLabel,
+  enforcedFlagLabel,
+  guardianDecisionLabel,
+  guardianHeadline,
+  guardianWindowLabel,
+  mcpBoundaryLabel,
+  missingPathLabel,
+  networkGuardLabel,
+  permissionEntryLabel,
+  permissionProfileTypeLabel,
+  sandboxModesLabel,
+  sandboxTierLabel,
+  shellGrantLabel,
+  toolCallBoundaryLabel,
   usageBranchLabel,
   usageCacheLabel,
   usageParallelGroupLabel,
@@ -264,6 +280,105 @@ function WorldDetails({ evidence }: { evidence: Evidence }) {
   );
 }
 
+/**
+ * 边界与授权（#77 的 permission_profile + M4 的 boundary_report）。
+ *
+ * 这一块的存在理由只有一个：面板上「沙箱档位 workspace」这句话太容易被读成「系统会拒」。
+ * 所以每行都要带上"谁在保证"——策略闸门在执行前判定，系统拒绝是另一回事。
+ */
+function BoundaryDetails({ boundaries }: { boundaries: Boundaries }) {
+  const risky = boundariesNeedWarn(boundaries);
+  const profile = boundaries.profile;
+  const networkLine = networkGuardLabel(profile.network);
+  const missingLine = missingPathLabel(profile.missingPathBehavior);
+  const modesLine = sandboxModesLabel(boundaries.sandboxModes);
+  const mcpLine = mcpBoundaryLabel(boundaries);
+  const shellLine = shellGrantLabel(profile.shellEnabled);
+  return (
+    <>
+      <Row
+        label="沙箱档位"
+        value={orNone(sandboxTierLabel(boundaries))}
+        tone={risky ? "warn" : undefined}
+        title="要求什么档、实际落在哪档、有没有被部署策略降级，以及这一档由谁强制"
+      />
+      {boundaries.notice && (
+        <p className={`text-[11px] leading-relaxed ${risky ? "text-warn" : "text-muted"}`}>{boundaries.notice}</p>
+      )}
+      <Row
+        label="文件边界"
+        value={enforcedFlagLabel(boundaries.filesystemEnforced)}
+        tone={boundaries.filesystemEnforced === false ? "warn" : undefined}
+        title="后端探测出来的事实：这一层是不是由系统（Job Object / 受限令牌）真的拦住"
+      />
+      <Row
+        label="网络边界"
+        value={enforcedFlagLabel(boundaries.networkEnforced)}
+        tone={boundaries.networkEnforced === false ? "warn" : undefined}
+      />
+      {boundaries.backend && <Row label="隔离后端" value={boundaries.backend} />}
+      {modesLine && <Row label="档位变化" value={modesLine} title="这次任务里真实出现过的档位序列" />}
+      <Row
+        label="权限快照"
+        value={permissionProfileTypeLabel(profile)}
+        tone={profile.type === "unrestricted" ? "warn" : undefined}
+        title="这份授权清单的来历：受管、不受限，还是当时压根没记"
+      />
+      {profile.note && <p className="text-[11px] leading-relaxed text-muted">{profile.note}</p>}
+      <RollupList
+        heading={`逐条授权（${profile.entries.length} 条）`}
+        entries={profile.entries.map(permissionEntryLabel)}
+        emptyText={
+          profile.type === ""
+            ? "暂无：后端没给权限快照这一块"
+            : "没有逐条授权记录——只有档位与审批模式在管，别把它读成「全禁止」"
+        }
+      />
+      {missingLine && <p className="font-mono text-[10px] text-faint">不存在的目标：{missingLine}</p>}
+      {networkLine && <Row label="网络闸门" value={networkLine} />}
+      {shellLine && <Row label="命令执行" value={shellLine} />}
+      <Row
+        label="调用归账"
+        value={toolCallBoundaryLabel(boundaries)}
+        tone={(boundaries.toolCalls.unattributed ?? 0) > 0 ? "warn" : undefined}
+        title="每一笔工具调用落在哪一层边界里。未归属=当时没记边界，不猜成进程内"
+      />
+      {mcpLine && <Row label="MCP" value={mcpLine} title="MCP 服务端在宿主进程里跑，不进任务沙箱" />}
+    </>
+  );
+}
+
+/** 审阅轨迹（#79 的 guardian_history）：压缩把模型的历史折掉了，审阅侧还看得见全部。 */
+function GuardianTrailDetails({ trail }: { trail: GuardianHistory }) {
+  return (
+    <>
+      <Row
+        label="轨迹汇总"
+        value={orNone(guardianHeadline(trail))}
+        title="判定条数、代批次数、压缩窗数，以及其中几窗真带上了判定"
+      />
+      <RollupList
+        heading={`独立审查判定（${trail.decisions.length} 条）`}
+        entries={trail.decisions.map(guardianDecisionLabel)}
+        emptyText="审查员开着，但这次没有任何一条操作经过它判定"
+      />
+      <RollupList
+        heading={`压缩窗（${trail.windows.length} 面）`}
+        entries={trail.windows.map(guardianWindowLabel)}
+        emptyText="这次任务没有发生压缩"
+      />
+      {trail.autoApprovals.length > 0 && (
+        <p className="text-[11px] leading-relaxed text-muted">
+          审查代批 {trail.autoApprovals.length} 次（只有可撤销的操作能被代批，审批指纹不上页面）
+        </p>
+      )}
+      {trail.windowsUnrecorded === null && (
+        <p className="font-mono text-[10px] text-faint">这台后端还没有「压缩未记轨迹」这一格（早于 #79），不猜条数。</p>
+      )}
+    </>
+  );
+}
+
 export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evidence: Evidence | null; error: string | null }) {
   const [snapshots, setSnapshots] = useState<TaskSnapshot[]>([]);
   const [restoring, setRestoring] = useState<string | null>(null);
@@ -408,6 +523,20 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
         <section className="flex flex-col gap-1.5 border-t border-line pt-3">
           <h4 className="font-mono text-[10px] tracking-wide text-faint uppercase">当时的环境</h4>
           <WorldDetails evidence={evidence} />
+        </section>
+      )}
+
+      {evidence.boundaries.recorded && (
+        <section className="flex flex-col gap-1.5 border-t border-line pt-3">
+          <h4 className="font-mono text-[10px] tracking-wide text-faint uppercase">边界与授权</h4>
+          <BoundaryDetails boundaries={evidence.boundaries} />
+        </section>
+      )}
+
+      {evidence.guardian_history.recorded && (
+        <section className="flex flex-col gap-1.5 border-t border-line pt-3">
+          <h4 className="font-mono text-[10px] tracking-wide text-faint uppercase">审阅轨迹</h4>
+          <GuardianTrailDetails trail={evidence.guardian_history} />
         </section>
       )}
 

@@ -134,6 +134,9 @@ export type TeamApproval = {
   command_prefix?: string;
   suggested_prefix?: string;
   approval_options?: ApprovalOption[];
+  // 载荷里还有 guardian（独立审查的原始形状）。三态：缺键=这张卡早于审查进载荷、
+  // null=审查关着、对象=审查员说了话。一律用 tasks/api 的 guardianFromPayload 读，
+  // 这里不声明成归一化形状，免得把没归一化的东西当成归一化过的用。
 };
 
 export type TeamQuestion = {
