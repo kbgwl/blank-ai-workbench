@@ -97,7 +97,7 @@ function doctor() {
   console.log(`平台：${process.platform}`);
   console.log(`配置：${configDir()}`);
   console.log(`工作区：${findRoot() ?? "未检测到项目工作区"}`);
-  if (args.includes("--sandbox")) sandboxDoctor(args.slice(1));
+  if (args.includes("--sandbox") || args.includes("--compare")) sandboxDoctor(args.slice(1));
 }
 
 function listPackages() {

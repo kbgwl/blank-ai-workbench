@@ -181,6 +181,7 @@ Docker / Hyper-V / Windows Sandbox 全部排除。Codex 在这台机器上实际
 | 压缩写 `replacement_history`，环境写 `world_state(full, 内容哈希)` | 压缩只留一个"已压缩"标记，不留下"替换到哪里为止"；环境压根没记账，指令层以 dataclass repr 的形式把**正文和主机路径**抄进事件（单条 `turn.context` 实测 4145 字节） | **两半都落地**：边界那一半见任务 #31（§7.2）——`context.compacted` 带 `boundary`/`covered`/`folded`/水位，时间线里是一张卡；环境那一半见任务 #41（§7.6）——`world.state` 全量快照 + 指令用 sha256 前 40 位指认，正文与主机路径不再入账（4145 → 1770 字节）。**替换历史见任务 #42（§7.7）**：窗口链（窗号递增 + `window_id`/`previous_window_id`/`first_window_id`）与逐条引用（位置/角色/种类/字数/内容指纹）已入账并进界面；**整段 `replacement_history` 原文按裁决刻意不抄**——借结构不借抄正文 |
 | `permission_profile` 展开成逐条 ACE 与 `missing_path_behavior` | 只记审批模式与前缀规则 | **已实现**（任务 #77，见 §7.38）：`turn_context.permission_profile` 逐条列出工作区/允许根/外部通配，每条带 `enforced_by`（`os`/`policy`/`none`）——本机 job_only 下如实写 `policy`，不冒充内核；`missing_path_behavior` 与 `SafetyPolicy._outside_paths` 同源（`skip`），关掉「仅限工作区」时写 `not_applicable`；证据包取末次快照，老任务报 `unrecorded` 不按档位反推 |
 | 沙箱 = 独立账号 + DPAPI + 工作区专属 SID ACL | Docker 容器；无 Docker 时只能 `allow_local` 直连 | 立项设计已出：**`docs/SANDBOX-WINDOWS-DESIGN.md`**（§1 是今天真实生效/只是展示值的对照表，含一条实测的逃逸证据；实现未动） |
+| 「另一台机器的差异都能归因」是 M4 的退出判据 | 八条探针只能各自自证，**没有任何东西把两份报告放在一起对质**；「归因」这个问题无从回答，本机又没有第二台机器（无 docker、无 wsl） | **已实现装置**（任务 #78，见 §7.39）：报告 schema 2 起带机器指纹（`host_id` 是主机名的 sha256 前 12 位，明文不落）与 `audit_task_id` 跑法标记；`blank doctor --compare A.json B.json` 按**只收实测关系的归因表**判五种结果，同机两份报告**主动拒证**（`same_host` rc=1），缺指纹/换 schema/跨平台/装置没自证过一律不比；换 Python 或系统版本只列进 `context`，**不解释任何探针**。17 条用例（HEAD 基线 17 红）、变异 10/10 按实测红集合命中、四份真报告五组对质逐条真 rc。**跨机实物仍缺**（`EXPLAINED`/`UNEXPLAINED` 只有离线夹具证明过，#76 保持未结） |
 | `root_turn_id` 进事件 | `depth`/`agent_path` 在内存里 | 已随快照带出（`depth`/`agent_path` 进 `turn.context` payload） |
 | `token_usage_record.turn_id` + `resume_metadata.turn_attribution.{root_turn_id, parent_turn_id, initiating_agent_path}` | 用量行只有 `trace_id`，钱问不出「哪一轮花的、谁引起的」；子代理那几笔与主线程混在同一张表里靠时间猜 | **已实现**（任务 #43，见 §7.8）：`run_id` 成为 `model_usage` 的一等列（迁移 0019），行的归属与 `model.usage` 事件同源；`root_thread_id`/`parent_thread_id`/`agent_path` 四处同写；证据包补 `turns`/`branches`/`unattributed_calls` 三张账，老账只报条数、绝不并成「第 0 轮」 |
 | `replacement_history_metadata` 逐条出处（`retained_source`/`revision`/`user_input_order`/`client_authored`）+ 一整条不删减的 `guardian_history` | #42 的引用只有位置/角色/种类/字数/指纹——知道"留了哪几条"，不知道"这条是谁写的、第几次问的、活过了几窗" | **已实现**（任务 #44，见 §7.9）：引用多五枚字段 `run`/`user_order`/`retained_id`/`retained_since`/`retained_windows`，出生轮只有一个真源（`EventRecorder.run_id`）且 `carried` 不盖章；跨窗身份按内容寻址 `ret:<sha12>`；证据包 `windows[].turns` + `turns_unattributed` 与事件同源。`guardian_history` 那 228KB 全量审阅轨迹**按裁决没做**，`retained_source.message_id`/`revision`/`complete` 列为未覆盖 |
@@ -3648,6 +3649,97 @@ N1 负对照用 #77 之前的老任务 `16663dff-…`，证据包报 `unrecorded
    `/tasks/{id}/evidence` 里可读。要做卡片得单独判一轮浏览器点验。
 4. 证据包只保留末次授权；任务中途从 `workspace` 换到 `off` 的**历史**只存在于事件流，
    证据包不列时间线。
+
+### 7.39 任务 #78：跨机对账装置——「另一台机器也是这么红的」要能拿两份报告对质
+
+**量出的偏差**：M4 的退出判据是「第二台机器上八条探针的差异，都能归因到已知的环境层」
+（设计稿 `docs/SANDBOX-WINDOWS-DESIGN.md` §6）。本机没有第二台机器：无 docker、无 wsl.exe，
+M0 的实测表就是这一台非管理员 Win11 build 26300。此前 `blank doctor --sandbox` 只产出**一份**
+自证报告，两台机器各跑一次之后**没有任何东西把它们放在一起比**——「差异能不能归因」这个问题
+根本无从回答。这一批交付的是**对账装置本身**，跨机的实物仍缺（见缺口 1）。
+
+**实现（`services/api/src/blank_api/doctor.py`，`SCHEMA_VERSION` 1 → 2）**
+
+- **机器指纹**：`host_identity()` 落 `host_id`（`sha256(node|platform|machine|os_version)` 前 12 位，
+  **主机名不进明文**）+ `platform / machine / os_release / os_version / elevated`。`elevated` 用
+  `IsUserAnAdmin`（非 win32 退到 `geteuid`，拿不到写 `None` 而不是 `False`——「不知道」不是「没提权」）。
+- **跑法标记**：报告新增顶层 `audit_task_id`。P-AUDIT 的结论取决于**这次有没有带 `--task`**，
+  不带就是 `not_tested`；没有这个标记，两次不同跑法的报告会被当成机器差异。
+- **归因表 `_ATTRIBUTION` 只收实测过的关系**（这是整条装置的承重墙）：每条是
+  「差异字段 → 能解释它的探针集合」。身份层（`boundary_strength`/`appcontainer`/
+  `restricted_token`/`elevated`）只许解释文件与网络四条（P-READ/P-WRITE/P-ENV/P-ESCAPE）；
+  Job 层只许解释 P-PROC/P-INHERIT；`backend`/`tier_available` 只许解释「整档没跑起来」的批量
+  `not_tested`。**Python 版本、系统小版本、架构一律只列进 `context`，不解释任何探针**——
+  否则「机器不一样」变成万能理由。
+- **三道拒绝先于比较**：缺 `host`/`audit_task_id`（schema 1 的老报告）→ `incompatible_reports`，
+  note 里写明「不按档位补一份假指纹」；`schema` 不同；`platform` 不同（八条探针是 Windows 语义）。
+  任一侧 `capability.apparatus_ok is not True` → `apparatus_untrusted`，**那一边没有结论资格**，
+  点名是左还是右。
+- **反冒充**：`host_id` 相同 → `same_host`，rc=1。同一台机器跑两份报告不构成跨机证据。
+- **防「没比过报平安」**：`compare_reports()` 的 `base` 里先写 `compared: False`，只有过了三道拒绝
+  才置 True；`render_compare()` 因此分两支——没比过就念「八条探针**没有逐条比较过**（原因见上面的
+  说明），这里不报平安」。这一条是被真跑逼出来的：第一版在 `incompatible_reports` 的提前返回里
+  照样打了「逐条相同」。
+- 结果五值：`consistent` / `differences_explained`（rc 0）与 `unexplained_difference` / `same_host` /
+  `incompatible_reports` / `apparatus_untrusted`（rc 1）。CLI 入口 `blank doctor --compare A.json B.json`，
+  `packages/cli/src/index.mjs` 的分发条件原来只认 `--sandbox`，**`--compare` 根本到不了 Python**，一并修掉。
+
+**判据与计数**：`tests/test_doctor_compare_v49.py` **17 passed**。取证基线用 `git show HEAD:doctor.py`
+（#66–#77 已提交于 `dd96bad`，HEAD 可用）：把 HEAD 版 doctor.py 换回去、用**最终这 17 条**重跑 →
+**17 failed**（全是 `AttributeError`/`KeyError`：没有 `host_identity`、没有 `compare_reports`、没有 `--compare`），
+换回来 **17 passed**，`cmp` 逐字节一致。
+
+变异电池 **10/10 按实测红集合精确命中**（`E:/tmp/m78/battery-rerun1.txt`，还原后 `cmp` 通过）：
+
+| # | 变异 | 实测红 |
+|---|---|---|
+| M1 | 身份层差异什么探针都解释（`_IDENTITY_PROBES`→`_SANDBOXED_PROBES`） | 1 条（P-PROC 承重墙） |
+| M2 | 同机两份报告也当跨机证据（`if base["same_host"]`→`if False`） | 2 条（夹具 + 真跑自比） |
+| M3 | 缺机器指纹时补一份 | 1 条 |
+| M4 | 报告版本不同也照比 | 1 条 |
+| M5 | 跨平台也照比 | 1 条 |
+| M6 | 没测过装置（`is not True`→`is False`）当成可信 | 1 条 |
+| M7 | P-AUDIT 的差异算成机器差异（去掉 `run_flags`） | 1 条 |
+| M8 | 换版本也算理由 | 1 条 |
+| M9 | 主机名写进报告明文 | 1 条 |
+| M10 | 没比过也报八条一致（`elif result.get("compared")`→`elif True`） | 1 条 |
+
+M10 第一版把整行改成 `else:` 产生 `SyntaxError`，pytest 报 **ERROR** 而不是 FAILED，红集合为空——
+电池当场报 `MISMATCH`（装置没被蒙过去）；改成 `elif True:` 才是合法的靶。**变异必须是"能跑的错"**，
+语法错测的是解析器不是判定。
+
+**真跑**（本机 `job_only`，`E:/tmp/m78/`）：`report-a.json` = 默认可信跑法八条逐条；
+`report-b.json` = 带 `--task 20e6fbe6-…` → P-AUDIT `verified`；`report-c.json` = 不给
+`BLANK_SANDBOX_ALLOW_LOCAL` → 七条 `not_tested`；`report-old.json` = 把 schema 改回 1 并删掉指纹。
+`--compare` 实测（`E:/tmp/m78/compare-rerun2.txt`，逐条真 rc）：
+
+- `a` vs `a` → `same_host` rc=1，正文点出「这是同一台机器跑了两次，M4 的『第二台机器』没有满足」；
+- `a` vs `b` → `same_host` rc=1，同时列出 `P-AUDIT not_tested → verified 归因 run_flags`；
+- `a` vs `c` → `same_host` rc=1，七条 `not_tested` 全部归因 `backend、tier_available`；
+- `b` vs `c` → 同上，第八条 `P-AUDIT verified → not_tested 归因 run_flags`；
+- `a` vs `old` → `incompatible_reports` rc=1，右侧 `host_id` 显示为 `?`，且**没有**「逐条相同」那句话。
+
+**读数与一次我自己的失效**：收尾跑了**两遍串行**全量，均 rc=0：
+`1109 passed / 23 skipped`（327.95s，`regression-78.log`）与 `1109 passed / 23 skipped`（337.85s，
+`regression-78-final.log`）。在此之前，一次全量被会话中断留在半截态（末行是 44% 的进度条、没有汇总行），
+我把「grep 不到 failed」当成了「没有失败」；随后同一台机器上两个全量重叠跑，其一留下
+`3 failed, 1106 passed, 23 skipped in 608.51s`（608s ≈ 正常两倍的墙钟），**它的断言原文又被后一遍
+`>` 覆盖了**——这 3 条红因此**未结案**，只能记为「重叠全量下的读数，且我销毁了自己的出处」。
+`test_sandbox_matrix_v21.py` 单独复跑 27 passed，它与 v49/v47 两两同进程复跑 44/34 passed，
+都不红。教训两条已写进验证纪律：**完成通知只证明进程结束，不证明结果可用**；**日志路径必须唯一、不许覆盖**。
+
+**诚实的缺口**
+
+1. **跨机的实物还没有**：`EXPLAINED` 与 `UNEXPLAINED` 两条分支只有离线夹具证明过能红/能绿；
+   本机四份真实报告两两 `same_host`，装置**主动拒绝**把它们当成跨机证据——这是设计不是失败，
+   但 M4 的退出判据（#76）仍未满足。
+2. 归因表只收**实测过**的关系，因此偏保守：换 CPU 架构、换文件系统（ReFS/NTFS 大小写敏感性）、
+   杀软拦截这类差异现在会落进 `unexplained_difference`，**这是有意的**（宁可判红也不给万能理由），
+   但第一次在真第二台机器上跑时，很可能要为此扩表。
+3. `elevated` 只回答「这个进程是不是管理员」，不回答「这台机器能不能建成 AppContainer」——
+   后者要 M0 探针真跑，报告里靠 `capability.appcontainer` 承载，`--compare` 只比现成的值。
+4. 装置没进 CI：`api-dialect` / `team-e2e` 之外没有 doctor 的格子，跨机对账本质上需要两台机器，
+   runner 给不了（runner 之间同镜像，比出来只会是 `consistent`，没有信息量）。
 
 ## 9. 复现命令
 
