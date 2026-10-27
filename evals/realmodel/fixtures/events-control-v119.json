@@ -1,0 +1,1521 @@
+{
+ "task_id": "5deb14b2-a236-401a-8420-7cd03e6f3acf",
+ "events": [
+  {
+   "seq": 1,
+   "run_id": "",
+   "origin_run_id": "",
+   "step_id": "261edeb0-01bb-4303-a856-b2386f2612b1",
+   "parent_event_id": "",
+   "node": "receive_task",
+   "type": "task.created",
+   "payload": {
+    "title": "对照：无钩子的隔离副本",
+    "acceptance_criteria": [],
+    "attachments": 0,
+    "trace_id": "5deb14b2-a236-401a-8420-7cd03e6f3acf"
+   }
+  },
+  {
+   "seq": 2,
+   "run_id": "",
+   "origin_run_id": "",
+   "step_id": "4c11d9f4-4c74-422f-98d3-237eb5b24615",
+   "parent_event_id": "261edeb0-01bb-4303-a856-b2386f2612b1",
+   "node": "receive_task",
+   "type": "thread.turn",
+   "payload": {
+    "thread": "1366a0c2-d8fd-4eb5-9ca8-55daa00c327e",
+    "turn": 1,
+    "trace_id": "5deb14b2-a236-401a-8420-7cd03e6f3acf"
+   }
+  },
+  {
+   "seq": 3,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "b5e65ae2-53b5-4b1b-b8a7-5c74caf33ba0",
+   "parent_event_id": "4c11d9f4-4c74-422f-98d3-237eb5b24615",
+   "node": "receive_task",
+   "type": "task.started",
+   "payload": {
+    "title": "对照：无钩子的隔离副本",
+    "goal": "用 spawn_agent 派一个子代理（background=false、isolate=true、label=v119ctl），子任务目标写「用 read_file 读 note.txt 并复述其中的标记串」。拿到子代理结论后直接汇报，不要自己读文件、不要执行命令。",
+    "acceptance_criteria": [],
+    "workspace": "<workspace:ws-v119>",
+    "provider": "DeepSeek",
+    "model": "deepseek-chat",
+    "max_steps": 8,
+    "permission_mode": "default",
+    "permissions": {
+     "mode": "default",
+     "sandbox_tier": "off",
+     "tool_scope": "tier+tool+target_path_prefix",
+     "approved_tools": [],
+     "approved_prefixes": [],
+     "persistent_prefixes": [],
+     "denied_prefixes": [],
+     "ruleset": {
+      "path": "E:\\tmp\\realmodel\\permissions.rules",
+      "allow": [],
+      "deny": [],
+      "error": ""
+     }
+    },
+    "sandbox": {
+     "requested": "workspace",
+     "tier": "off",
+     "strength": "none",
+     "label": "无内核强制（宿主直连）",
+     "backend": "none",
+     "global_enabled": false,
+     "available": true,
+     "degraded": true,
+     "limits_enforced": false,
+     "filesystem_enforced": false,
+     "network_enforced": false,
+     "notice": "部署策略关闭了沙箱：本任务无隔离，命令直接以宿主完整权限执行",
+     "reason": "sandbox_disabled"
+    },
+    "sandbox_mode": "off",
+    "tools": [
+     "tool_search",
+     "update_plan",
+     "enter_plan_mode",
+     "exit_plan_mode",
+     "request_user_input",
+     "task_output",
+     "task_stop",
+     "list_files",
+     "read_file",
+     "search_code",
+     "write_notes",
+     "read_notes",
+     "apply_patch",
+     "run_shell",
+     "run_tests"
+    ],
+    "tools_deferred": [
+     "spawn_agent",
+     "spawn_agents",
+     "memory_search",
+     "memory_write",
+     "git",
+     "web_search",
+     "web_fetch"
+    ],
+    "mcp": {
+     "tools": 0,
+     "servers": [],
+     "boundary": "none",
+     "boundary_note": "没有已连接的 MCP 服务端",
+     "by_boundary": {},
+     "unbounded_servers": []
+    },
+    "compaction": {
+     "context_window": 65536,
+     "trigger_ratio": 0.82,
+     "reserve_tokens": 16384,
+     "trigger_at": 49152
+    },
+    "guardian_mode": "off",
+    "thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "snapshot_id": "",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 4,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "19dd6890-2b24-4e65-9369-68ee2dd7d4d5",
+   "parent_event_id": "b5e65ae2-53b5-4b1b-b8a7-5c74caf33ba0",
+   "node": "receive_task",
+   "type": "shell.snapshot",
+   "payload": {
+    "cwd": "<workspace:ws-v119>",
+    "policy": "minimal",
+    "shell": "<workspace:cmd.exe>",
+    "python": "<workspace:python.exe>",
+    "venv": "",
+    "venv_pinned": false,
+    "path_entries": [
+     "<workspace:bin>",
+     "<workspace:bin>",
+     "<workspace:bin>",
+     "<workspace:bin>",
+     "<workspace:bin>",
+     "<workspace:bin>",
+     "<workspace:bin>",
+     "<workspace:bin>",
+     "<workspace:bin>",
+     "<workspace:bin>",
+     "<workspace:bin>",
+     "<workspace:pnpm>",
+     "<workspace:System32>",
+     "<workspace:WINDOWS>",
+     "<workspace:Wbem>",
+     "<workspace:v1.0>",
+     "<workspace:OpenSSH>",
+     "<workspace:微信web开发者工具>",
+     "<workspace:cmd>",
+     "<workspace:bin>",
+     "<workspace:shims>",
+     "<workspace:WindowsApps>",
+     "<workspace:bin>",
+     "<workspace:tools>",
+     "<workspace:vendor_perl>",
+     "<workspace:core_perl>"
+    ],
+    "env_names": [
+     "COMSPEC",
+     "HOME",
+     "LANG",
+     "LC_ALL",
+     "PATH",
+     "PATHEXT",
+     "PYTHONPATH",
+     "SYSTEMROOT",
+     "TEMP",
+     "TMP",
+     "USERPROFILE"
+    ],
+    "created_at": "2026-10-27T14:32:55",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 5,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "e55badf5-94e1-4459-ab15-3b97e8f90e29",
+   "parent_event_id": "19dd6890-2b24-4e65-9369-68ee2dd7d4d5",
+   "node": "receive_task",
+   "type": "context.curated",
+   "payload": {
+    "text": "共享项目记忆（由历史任务固化，可能过时，引用前先核对）：\n- [共享记忆·任务结论·project｜2026-10-27 · 工具链点验 · 任务 c4b0a3d2-46e5-4f25-856f-ba81cc4f554a] 结果：结论 - 标记串为 KBGAI-V119-REALMODEL-MARKER-4C7D。 - 子代理 agent-c490c785 状态 completed，FROM-HOOK.txt 存在，内容为「created by worktree_create hook」。\n- [共享记忆·任务结论·project｜2026-10-27 · 唤醒正文不许变形 · 任务 3ad40891-1cbb-4738-a96d-f8b538fef0b1] 结果：结论 - note.txt 中的标记串为 KBGAI-V119-REALMODEL-MARKER-4C7D - 后台钩子以退出码 2 结束，报 ASYNC-WAKE-REALMODEL-9F31，未查明原因\n- [共享记忆·任务结论·project｜2026-10-27 · 第二轮 · 任务 47447867-b6cf-4685-bd6c-ac6d5e88900b] 结果：第二轮已就位\n\n工作区里名字相关的文件（只是候选，未读内容）：\n- note.txt",
+    "chars": 567,
+    "memory_hits": [
+     {
+      "bullet": "结果：结论 - 标记串为 KBGAI-V119-REALMODEL-MARKER-4C7D。 - 子代理 agent-c490c785 状态 completed，FROM-HOOK.txt 存在，内容为「created by worktree_create hook」。",
+      "section": "2026-10-27 · 工具链点验 · 任务 c4b0a3d2-46e5-4f25-856f-ba81cc4f554a",
+      "score": 23,
+      "kind": "任务结论",
+      "type": "project",
+      "task_id": "c4b0a3d2-46e5-4f25-856f-ba81cc4f554a",
+      "source_task": "c4b0a3d2-46e5-4f25-856f-ba81cc4f554a",
+      "source": "workspace"
+     },
+     {
+      "bullet": "结果：结论 - note.txt 中的标记串为 KBGAI-V119-REALMODEL-MARKER-4C7D - 后台钩子以退出码 2 结束，报 ASYNC-WAKE-REALMODEL-9F31，未查明原因",
+      "section": "2026-10-27 · 唤醒正文不许变形 · 任务 3ad40891-1cbb-4738-a96d-f8b538fef0b1",
+      "score": 23,
+      "kind": "任务结论",
+      "type": "project",
+      "task_id": "3ad40891-1cbb-4738-a96d-f8b538fef0b1",
+      "source_task": "3ad40891-1cbb-4738-a96d-f8b538fef0b1",
+      "source": "workspace"
+     },
+     {
+      "bullet": "结果：第二轮已就位",
+      "section": "2026-10-27 · 第二轮 · 任务 47447867-b6cf-4685-bd6c-ac6d5e88900b",
+      "score": 1,
+      "kind": "任务结论",
+      "type": "project",
+      "task_id": "47447867-b6cf-4685-bd6c-ac6d5e88900b",
+      "source_task": "47447867-b6cf-4685-bd6c-ac6d5e88900b",
+      "source": "workspace"
+     }
+    ],
+    "files": [
+     "note.txt"
+    ],
+    "history_turns": 0,
+    "truncated": false,
+    "sources": [
+     "任务结论",
+     "文件路径"
+    ],
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 6,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "7ccffd2e-380e-45c1-b2ff-ca1141001c73",
+   "parent_event_id": "e55badf5-94e1-4459-ab15-3b97e8f90e29",
+   "node": "create_plan",
+   "type": "node.started",
+   "payload": {
+    "task_id": "5deb14b2-a236-401a-8420-7cd03e6f3acf",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 7,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "a89ab0cb-a2cb-4148-ac0e-75aedd768309",
+   "parent_event_id": "7ccffd2e-380e-45c1-b2ff-ca1141001c73",
+   "node": "create_plan",
+   "type": "turn.context",
+   "payload": {
+    "step": 0,
+    "node": "create_plan",
+    "role": "planner",
+    "model": "deepseek-chat",
+    "provider": "DeepSeek",
+    "reasoning_effort": "",
+    "verbosity": "",
+    "tier": "",
+    "permission_mode": "default",
+    "permissions": {
+     "mode": "default",
+     "sandbox_tier": "off",
+     "tool_scope": "tier+tool+target_path_prefix",
+     "approved_tools": [],
+     "approved_prefixes": [],
+     "persistent_prefixes": [],
+     "denied_prefixes": [],
+     "ruleset": {
+      "path": "E:\\tmp\\realmodel\\permissions.rules",
+      "allow": [],
+      "deny": [],
+      "error": ""
+     }
+    },
+    "guardian_mode": "off",
+    "readonly": false,
+    "workspace": "<workspace:ws-v119>",
+    "max_steps": 8,
+    "token_budget": 1500000,
+    "depth": 0,
+    "agent_path": "root",
+    "instructions": [],
+    "current_date": "2026-10-27",
+    "timezone": "中国标准时间",
+    "sandbox": {
+     "tier": "off",
+     "tier_requested": "off",
+     "tier_available": true,
+     "tier_degraded": false,
+     "tier_reason": "sandbox_disabled",
+     "tier_notice": "部署策略关闭了沙箱：本任务无隔离，命令直接以宿主完整权限执行",
+     "backend": "none",
+     "enabled": false,
+     "isolation": "host",
+     "boundary_strength": "none",
+     "boundary_strength_label": "无内核强制（宿主直连）",
+     "boundary_measured_seconds_ago": 0.2,
+     "boundary_apparatus_ok": true,
+     "enforcement_source": "sandbox_disabled",
+     "enforced": {
+      "memory": false,
+      "pids": false,
+      "tree_kill": false,
+      "cpu": false,
+      "disk": false,
+      "network": false,
+      "filesystem": false
+     },
+     "filesystem_enforced": false,
+     "network_enforced": false,
+     "allow_local": false,
+     "cpus": 1.0,
+     "memory": "512m",
+     "pids": 128,
+     "tmpfs": "128m",
+     "read_only_root": true,
+     "network": false,
+     "timeout_seconds": 120.0,
+     "writable_root": "<workspace:ws-v119>",
+     "denied": ""
+    },
+    "permission_profile": {
+     "type": "managed",
+     "enforced_by": "policy",
+     "missing_path_behavior": "skip",
+     "file_system": {
+      "type": "restricted",
+      "entries": [
+       {
+        "path": "<workspace:ws-v119>",
+        "access": "write",
+        "enforced_by": "policy"
+       },
+       {
+        "path": "*",
+        "access": "deny",
+        "enforced_by": "policy"
+       }
+      ]
+     },
+     "network": {
+      "requested": "none",
+      "enforced_by": "policy",
+      "command_gate": "deny"
+     }
+    },
+    "features": {
+     "tool_search": {
+      "on": true,
+      "source": "legacy"
+     },
+     "handoff_notes": {
+      "on": true,
+      "source": "default"
+     },
+     "prompt_cache": {
+      "on": true,
+      "source": "default"
+     },
+     "parallel_read_tools": {
+      "on": false,
+      "source": "default"
+     },
+     "model_routing": {
+      "on": false,
+      "source": "default"
+     },
+     "load_balance": {
+      "on": false,
+      "source": "default"
+     },
+     "tiered_tools": {
+      "on": false,
+      "source": "default"
+     },
+     "stream_output": {
+      "on": true,
+      "source": "default"
+     },
+     "fs_broker": {
+      "on": false,
+      "source": "default"
+     }
+    },
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 8,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "6dc38f44-984a-47ad-8cf1-668688edf5d3",
+   "parent_event_id": "a89ab0cb-a2cb-4148-ac0e-75aedd768309",
+   "node": "create_plan",
+   "type": "world.state",
+   "payload": {
+    "full": true,
+    "state": {
+     "operating_mode": {
+      "mode": "default",
+      "model": "deepseek-chat",
+      "provider": "DeepSeek",
+      "readonly": false,
+      "guardian_mode": "off",
+      "instructions": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4"
+     },
+     "instructions": [],
+     "environments": {
+      "local": {
+       "cwd": "<workspace:ws-v119>",
+       "status": "captured",
+       "shell": "cmd.exe",
+       "os": "Windows 11",
+       "machine": "AMD64",
+       "python": "python.exe",
+       "has_venv": false,
+       "venv_pinned": false,
+       "path_entries": 26,
+       "env_names": [
+        "COMSPEC",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "PATHEXT",
+        "PYTHONPATH",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "USERPROFILE"
+       ]
+      }
+     },
+     "context_window_guidance": {
+      "context_window": 65536,
+      "trigger_ratio": 0.82,
+      "reserve_tokens": 16384,
+      "trigger_at": 49152
+     },
+     "current_date": "2026-10-27",
+     "timezone": "中国标准时间"
+    },
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 9,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "336d1589-70b9-4976-8dbc-3891d8e6d7fa",
+   "parent_event_id": "6dc38f44-984a-47ad-8cf1-668688edf5d3",
+   "node": "create_plan",
+   "type": "context.measured",
+   "payload": {
+    "active_context_tokens_before": 1783,
+    "active_context_tokens_after": 1783,
+    "tokens_saved": 0,
+    "micro": {
+     "clipped": 0,
+     "duplicates": 0,
+     "base64_removed": 0,
+     "chars_saved": 0
+    },
+    "folded": 0,
+    "boundary": 0,
+    "summary_chars": 0,
+    "covered": 0,
+    "context_window": 65536,
+    "trigger_at": 49152,
+    "water_ratio": 0.0272,
+    "calibration": 1.0,
+    "observed_tokens": 0,
+    "triggered_by": "",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 10,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "a8ca31a1-a822-46a1-a603-c3ce4bf34cea",
+   "parent_event_id": "336d1589-70b9-4976-8dbc-3891d8e6d7fa",
+   "node": "create_plan",
+   "type": "model.streamed",
+   "payload": {
+    "chunks": 55,
+    "chars": 118,
+    "first_delta_ms": 983,
+    "model": "deepseek-flash",
+    "role": "planner",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 11,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "5979a303-4639-4b30-895a-3941afa92c0b",
+   "parent_event_id": "a8ca31a1-a822-46a1-a603-c3ce4bf34cea",
+   "node": "create_plan",
+   "type": "model.usage",
+   "payload": {
+    "role": "planner",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "depth": 0,
+    "agent_path": "root",
+    "attribution": {
+     "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "parent_thread_id": "",
+     "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "agent_path": "root",
+     "depth": 0,
+     "parallel_group": "",
+     "sandbox_mode": "off"
+    },
+    "call": {
+     "prompt_tokens": 3670,
+     "completion_tokens": 55,
+     "cached_tokens": 512,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 3725,
+     "calls": 1,
+     "model": "deepseek-flash",
+     "provider": "DeepSeek",
+     "latency_ms": 1332,
+     "status": "ok",
+     "response_id": "d6f12189-8e88-478f-b624-2a548e30d446"
+    },
+    "turn": {
+     "prompt_tokens": 3670,
+     "completion_tokens": 55,
+     "cached_tokens": 512,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 3725,
+     "calls": 1
+    },
+    "task": {
+     "prompt_tokens": 3670,
+     "completion_tokens": 55,
+     "cached_tokens": 512,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 3725,
+     "latency_ms": 1332,
+     "calls": 1
+    }
+   }
+  },
+  {
+   "seq": 12,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "4cd2b45c-72ed-4497-8d74-0c30f87a2a97",
+   "parent_event_id": "5979a303-4639-4b30-895a-3941afa92c0b",
+   "node": "create_plan",
+   "type": "intent.classified",
+   "payload": {
+    "intent": "act",
+    "note": "派子代理读 note.txt 并复述标记串",
+    "steps": [
+     "检索子代理工具",
+     "派子代理读 note.txt",
+     "取回子代理结论并汇报"
+    ],
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 13,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "862ce5e3-9871-481c-a002-4aaa01d48828",
+   "parent_event_id": "4cd2b45c-72ed-4497-8d74-0c30f87a2a97",
+   "node": "create_plan",
+   "type": "snapshot.created",
+   "payload": {
+    "snapshot_id": "20261027143257-85a805e6",
+    "files": [
+     "note.txt"
+    ],
+    "file_count": 1,
+    "copied": true,
+    "skipped_reason": "",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 14,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "96c8378c-c282-4ec3-a4ca-cba68d6b7544",
+   "parent_event_id": "862ce5e3-9871-481c-a002-4aaa01d48828",
+   "node": "create_plan",
+   "type": "plan.created",
+   "payload": {
+    "plan": [
+     "检索子代理工具",
+     "派子代理读 note.txt",
+     "取回子代理结论并汇报"
+    ],
+    "text": "{\"intent\": \"act\", \"note\": \"派子代理读 note.txt 并复述标记串\", \"steps\": [\"检索子代理工具\", \"派子代理读 note.txt\", \"取回子代理结论并汇报\"], \"answer\": \"\"}",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 15,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "1c2b233b-d23d-4127-ba27-91165b83c057",
+   "parent_event_id": "96c8378c-c282-4ec3-a4ca-cba68d6b7544",
+   "node": "execute_action",
+   "type": "node.started",
+   "payload": {
+    "step": 1,
+    "max_steps": 8,
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 16,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "eee964b5-7871-4e74-9f26-7ea3ef15b569",
+   "parent_event_id": "1c2b233b-d23d-4127-ba27-91165b83c057",
+   "node": "execute_action",
+   "type": "context.measured",
+   "payload": {
+    "active_context_tokens_before": 3863,
+    "active_context_tokens_after": 3863,
+    "tokens_saved": 0,
+    "micro": {
+     "clipped": 0,
+     "duplicates": 0,
+     "base64_removed": 0,
+     "chars_saved": 0
+    },
+    "folded": 0,
+    "boundary": 0,
+    "summary_chars": 0,
+    "covered": 0,
+    "context_window": 65536,
+    "trigger_at": 49152,
+    "water_ratio": 0.0589,
+    "calibration": 2.0583,
+    "observed_tokens": 3670,
+    "triggered_by": "",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 17,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "8a4ba92b-7d0c-46f7-a0ca-1c744dcb6a31",
+   "parent_event_id": "eee964b5-7871-4e74-9f26-7ea3ef15b569",
+   "node": "execute_action",
+   "type": "model.usage",
+   "payload": {
+    "role": "coder",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "depth": 0,
+    "agent_path": "root",
+    "attribution": {
+     "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "parent_thread_id": "",
+     "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "agent_path": "root",
+     "depth": 0,
+     "parallel_group": "",
+     "sandbox_mode": "off"
+    },
+    "call": {
+     "prompt_tokens": 3748,
+     "completion_tokens": 42,
+     "cached_tokens": 3584,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 3790,
+     "calls": 1,
+     "model": "deepseek-flash",
+     "provider": "DeepSeek",
+     "latency_ms": 1147,
+     "status": "ok",
+     "response_id": "f710ef06-4b6f-4632-a20f-82a3da97351b"
+    },
+    "turn": {
+     "prompt_tokens": 7418,
+     "completion_tokens": 97,
+     "cached_tokens": 4096,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 7515,
+     "calls": 2
+    },
+    "task": {
+     "prompt_tokens": 7418,
+     "completion_tokens": 97,
+     "cached_tokens": 4096,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 7515,
+     "latency_ms": 2479,
+     "calls": 2
+    }
+   }
+  },
+  {
+   "seq": 18,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "fc7bda7f-7258-4e1c-955f-ad74de5720fb",
+   "parent_event_id": "8a4ba92b-7d0c-46f7-a0ca-1c744dcb6a31",
+   "node": "execute_action",
+   "type": "node.started",
+   "payload": {
+    "step": 2,
+    "max_steps": 8,
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 19,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "8a0bdebf-cb18-47e7-b95a-401f6c5139dd",
+   "parent_event_id": "fc7bda7f-7258-4e1c-955f-ad74de5720fb",
+   "node": "execute_action",
+   "type": "tool.requested",
+   "payload": {
+    "tool": "tool_search",
+    "arguments": {
+     "query": "派子代理 spawn_agent"
+    },
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 20,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "a68122b9-c17e-473b-9681-6fefec062b16",
+   "parent_event_id": "8a0bdebf-cb18-47e7-b95a-401f6c5139dd",
+   "node": "execute_action",
+   "type": "tool.completed",
+   "payload": {
+    "tool": "tool_search",
+    "call_id": "call_00_xVtBgZ6Wpfdu70asxM1g3172",
+    "tool_call_id": "13c0c82e-60c5-44b5-afb8-5a9408b95a24",
+    "artifact_path": "data/artifacts/5deb14b2-a236-401a-8420-7cd03e6f3acf/13c0c82e-60c5-44b5-afb8-5a9408b95a24.json",
+    "status": "ok",
+    "ok": true,
+    "risk_level": "low",
+    "permission": {
+     "outcome": "allow",
+     "risk": "low",
+     "rule": "risk:auto"
+    },
+    "duration_ms": 0,
+    "summary": "已加载 2 个工具（本次会话可继续调用）：spawn_agent、spawn_agents\n- spawn_agent（medium）：把一个可以独立完成、边界清楚的子任务交给子代理，它会返回结论（可带隔离副本中的 diff）。适合大范围侦察、反复试错、需要独立上下文的工作；简单一步就能做完的事不要用它。isolate=true 时子代理在临时副本里工作，改动不会影响真实工作区。background=true 时立即返回 agent_id，之后用 task_output 取结论、task_stop 取消——需要同时推进别的事时用它；需要立刻拿到结论时不要用。需要同时分头做几件事时改用 spawn_agents。\n- spawn_agents（medium）：并行分派多个子代理：每个子任务拿到自己的隔离副本与独立上下文，同时开工，最后把各自的结论和 diff 汇总回来。适合「同时摸清几个模块 / 各写一份方案再对比」这类工作。merge=true 时会把无冲突、且主工作区对应文件没有未提交改动的改动写回；同一文件被多个子代理改过算冲突，不写入，只交回 diff。\n下一步直接调用这些工具即",
+    "sandbox_mode": "off",
+    "boundary_kind": "in_process",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 21,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "be80c9c9-97c1-42ce-b835-e45620fbbdb3",
+   "parent_event_id": "a68122b9-c17e-473b-9681-6fefec062b16",
+   "node": "execute_action",
+   "type": "context.measured",
+   "payload": {
+    "active_context_tokens_before": 4846,
+    "active_context_tokens_after": 4846,
+    "tokens_saved": 0,
+    "micro": {
+     "clipped": 0,
+     "duplicates": 0,
+     "base64_removed": 0,
+     "chars_saved": 0
+    },
+    "folded": 0,
+    "boundary": 0,
+    "summary_chars": 0,
+    "covered": 0,
+    "context_window": 65536,
+    "trigger_at": 49152,
+    "water_ratio": 0.0739,
+    "calibration": 1.5143,
+    "observed_tokens": 3748,
+    "triggered_by": "",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 22,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "18952990-940d-41f1-b86b-ffcb305d9826",
+   "parent_event_id": "be80c9c9-97c1-42ce-b835-e45620fbbdb3",
+   "node": "execute_action",
+   "type": "model.usage",
+   "payload": {
+    "role": "coder",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "depth": 0,
+    "agent_path": "root",
+    "attribution": {
+     "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "parent_thread_id": "",
+     "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "agent_path": "root",
+     "depth": 0,
+     "parallel_group": "",
+     "sandbox_mode": "off"
+    },
+    "call": {
+     "prompt_tokens": 5504,
+     "completion_tokens": 103,
+     "cached_tokens": 1792,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 5607,
+     "calls": 1,
+     "model": "deepseek-flash",
+     "provider": "DeepSeek",
+     "latency_ms": 1185,
+     "status": "ok",
+     "response_id": "cfa0f912-a424-489a-8829-cd6d9e34adf8"
+    },
+    "turn": {
+     "prompt_tokens": 12922,
+     "completion_tokens": 200,
+     "cached_tokens": 5888,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 13122,
+     "calls": 3
+    },
+    "task": {
+     "prompt_tokens": 12922,
+     "completion_tokens": 200,
+     "cached_tokens": 5888,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 13122,
+     "latency_ms": 3664,
+     "calls": 3
+    }
+   }
+  },
+  {
+   "seq": 23,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "f10cf7ee-9626-4787-9737-2d9c0aac377c",
+   "parent_event_id": "18952990-940d-41f1-b86b-ffcb305d9826",
+   "node": "execute_action",
+   "type": "node.started",
+   "payload": {
+    "step": 3,
+    "max_steps": 8,
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 24,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "65a8be2c-3176-41b8-a332-786c6f191d0f",
+   "parent_event_id": "f10cf7ee-9626-4787-9737-2d9c0aac377c",
+   "node": "execute_action",
+   "type": "tool.requested",
+   "payload": {
+    "tool": "spawn_agent",
+    "arguments": {
+     "goal": "用 read_file 读 note.txt 并复述其中的标记串",
+     "isolate": true,
+     "label": "v119ctl",
+     "background": false
+    },
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 25,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "200c5ff0-3990-467e-b1c0-9cd88ccc7259",
+   "parent_event_id": "65a8be2c-3176-41b8-a332-786c6f191d0f",
+   "node": "subagent",
+   "type": "subagent.started",
+   "payload": {
+    "goal": "用 read_file 读 note.txt 并复述其中的标记串",
+    "isolate": true,
+    "max_steps": 4,
+    "agent_path": "root/sub-1",
+    "agent_id": "agent-9fd6b47d",
+    "depth": 1,
+    "parent_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "sandbox_tier": "off",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 26,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "842b335f-642f-4306-8c79-4212b8acd660",
+   "parent_event_id": "200c5ff0-3990-467e-b1c0-9cd88ccc7259",
+   "node": "subagent",
+   "type": "worktree.created",
+   "payload": {
+    "path": "E:\\tmp\\realmodel\\worktrees\\v119ctl-2415aa8d",
+    "mode": "copy",
+    "name": "v119ctl-2415aa8d",
+    "notes": "fatal: not a git repository (or any of the parent directories): .git",
+    "agent_path": "root/sub-1",
+    "depth": 1,
+    "parent_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 27,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "df424c97-7e81-4955-b410-535f7eb4e9c5",
+   "parent_event_id": "842b335f-642f-4306-8c79-4212b8acd660",
+   "node": "subagent",
+   "type": "model.usage",
+   "payload": {
+    "role": "subagent",
+    "trace_id": "c2c32b69916e46aba8ec1a9f67ce7ad4",
+    "depth": 1,
+    "agent_path": "root/sub-1",
+    "attribution": {
+     "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "thread_id": "c2c32b69916e46aba8ec1a9f67ce7ad4",
+     "parent_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "agent_path": "root/sub-1",
+     "depth": 1,
+     "parallel_group": "",
+     "sandbox_mode": "off"
+    },
+    "call": {
+     "prompt_tokens": 1479,
+     "completion_tokens": 42,
+     "cached_tokens": 1280,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 1521,
+     "calls": 1,
+     "model": "deepseek-flash",
+     "provider": "DeepSeek",
+     "latency_ms": 1198,
+     "status": "ok",
+     "response_id": "1e0fa44b-7f90-4e91-afce-ca36f09ba949"
+    },
+    "turn": {
+     "prompt_tokens": 1479,
+     "completion_tokens": 42,
+     "cached_tokens": 1280,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 1521,
+     "calls": 1
+    },
+    "task": {
+     "prompt_tokens": 14401,
+     "completion_tokens": 242,
+     "cached_tokens": 7168,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 14643,
+     "latency_ms": 4862,
+     "calls": 4
+    },
+    "parent_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 28,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "d4e7e889-8618-442a-801e-9f17263c89cc",
+   "parent_event_id": "df424c97-7e81-4955-b410-535f7eb4e9c5",
+   "node": "subagent",
+   "type": "tool.requested",
+   "payload": {
+    "tool": "read_file",
+    "arguments": {
+     "path": "note.txt"
+    },
+    "agent_path": "root/sub-1",
+    "depth": 1,
+    "parent_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 29,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "94fc32a3-45f2-41fc-9b87-6e1449c53dfb",
+   "parent_event_id": "d4e7e889-8618-442a-801e-9f17263c89cc",
+   "node": "subagent",
+   "type": "tool.completed",
+   "payload": {
+    "tool": "read_file",
+    "status": "ok",
+    "ok": true,
+    "summary": "KBGAI-V119-REALMODEL-MARKER-4C7D\n这行用于真模型 read_file 点验。\n",
+    "sandbox_mode": "off",
+    "boundary_kind": "in_process",
+    "agent_path": "root/sub-1",
+    "depth": 1,
+    "parent_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 30,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "d9fc14f5-0a7f-40de-8167-08676aac8a53",
+   "parent_event_id": "94fc32a3-45f2-41fc-9b87-6e1449c53dfb",
+   "node": "subagent",
+   "type": "model.usage",
+   "payload": {
+    "role": "subagent",
+    "trace_id": "c2c32b69916e46aba8ec1a9f67ce7ad4",
+    "depth": 1,
+    "agent_path": "root/sub-1",
+    "attribution": {
+     "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "thread_id": "c2c32b69916e46aba8ec1a9f67ce7ad4",
+     "parent_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "agent_path": "root/sub-1",
+     "depth": 1,
+     "parallel_group": "",
+     "sandbox_mode": "off"
+    },
+    "call": {
+     "prompt_tokens": 1756,
+     "completion_tokens": 70,
+     "cached_tokens": 1408,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 1826,
+     "calls": 1,
+     "model": "deepseek-flash",
+     "provider": "DeepSeek",
+     "latency_ms": 1196,
+     "status": "ok",
+     "response_id": "53e7f2a5-2a7c-4e29-bbef-e1088bfde441"
+    },
+    "turn": {
+     "prompt_tokens": 3235,
+     "completion_tokens": 112,
+     "cached_tokens": 2688,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 3347,
+     "calls": 2
+    },
+    "task": {
+     "prompt_tokens": 16157,
+     "completion_tokens": 312,
+     "cached_tokens": 8576,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 16469,
+     "latency_ms": 6058,
+     "calls": 5
+    },
+    "parent_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 31,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "c5fef1b8-770e-41a0-99f2-a53bfc45f5e7",
+   "parent_event_id": "d9fc14f5-0a7f-40de-8167-08676aac8a53",
+   "node": "subagent",
+   "type": "worktree.removed",
+   "payload": {
+    "path": "E:\\tmp\\realmodel\\worktrees\\v119ctl-2415aa8d",
+    "mode": "copy",
+    "agent_path": "root/sub-1",
+    "depth": 1,
+    "parent_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 32,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "a552f03e-5a1e-41f8-ae5d-c890b0b398c4",
+   "parent_event_id": "c5fef1b8-770e-41a0-99f2-a53bfc45f5e7",
+   "node": "subagent",
+   "type": "subagent.completed",
+   "payload": {
+    "ok": true,
+    "steps": 2,
+    "summary": "已用 read_file 读取 note.txt（75 字节，未截断），内容共两行：\n\n1. 标记串：`KBGAI-V119-REALMODEL-MARKER-4C7D`\n2. 说明行：「这行用于真模型 read_file 点验。」\n\n未做任何修改。",
+    "error": "",
+    "agent_id": "agent-9fd6b47d",
+    "worktree_mode": "copy",
+    "thread_id": "c2c32b69916e46aba8ec1a9f67ce7ad4",
+    "parallel_group": "",
+    "usage": {
+     "prompt_tokens": 3235,
+     "completion_tokens": 112,
+     "cached_tokens": 2688,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 3347,
+     "calls": 2,
+     "latency_ms": 2471
+    },
+    "context_window": 65536,
+    "agent_path": "root/sub-1",
+    "depth": 1,
+    "parent_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 33,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "88c1cbed-7a2f-4ee6-966d-9ae41167a75d",
+   "parent_event_id": "a552f03e-5a1e-41f8-ae5d-c890b0b398c4",
+   "node": "execute_action",
+   "type": "tool.completed",
+   "payload": {
+    "tool": "spawn_agent",
+    "call_id": "call_00_iiosO6xESMfTVfVGq21a3249",
+    "tool_call_id": "0b66f0ac-cfb3-4b6c-8a9e-250091929421",
+    "artifact_path": "data/artifacts/5deb14b2-a236-401a-8420-7cd03e6f3acf/0b66f0ac-cfb3-4b6c-8a9e-250091929421.json",
+    "status": "ok",
+    "ok": true,
+    "risk_level": "medium",
+    "permission": {
+     "outcome": "allow",
+     "risk": "medium",
+     "rule": "risk:auto"
+    },
+    "duration_ms": 2580,
+    "summary": "已用 read_file 读取 note.txt（75 字节，未截断），内容共两行：\n\n1. 标记串：`KBGAI-V119-REALMODEL-MARKER-4C7D`\n2. 说明行：「这行用于真模型 read_file 点验。」\n\n未做任何修改。",
+    "sandbox_mode": "off",
+    "boundary_kind": "in_process",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 34,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "e0ec6c20-a876-4ba4-823d-ba032fc66bdf",
+   "parent_event_id": "88c1cbed-7a2f-4ee6-966d-9ae41167a75d",
+   "node": "execute_action",
+   "type": "context.measured",
+   "payload": {
+    "active_context_tokens_before": 4785,
+    "active_context_tokens_after": 4785,
+    "tokens_saved": 0,
+    "micro": {
+     "clipped": 0,
+     "duplicates": 0,
+     "base64_removed": 0,
+     "chars_saved": 0
+    },
+    "folded": 0,
+    "boundary": 0,
+    "summary_chars": 0,
+    "covered": 0,
+    "context_window": 65536,
+    "trigger_at": 49152,
+    "water_ratio": 0.073,
+    "calibration": 1.325,
+    "observed_tokens": 5504,
+    "triggered_by": "",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 35,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "8c31a239-5a82-4bb6-9571-21c37d84879f",
+   "parent_event_id": "e0ec6c20-a876-4ba4-823d-ba032fc66bdf",
+   "node": "execute_action",
+   "type": "model.streamed",
+   "payload": {
+    "chunks": 63,
+    "chars": 109,
+    "first_delta_ms": 875,
+    "model": "deepseek-flash",
+    "role": "coder",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 36,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "e629eb67-0360-4e41-84a6-697b4b6cf6b5",
+   "parent_event_id": "8c31a239-5a82-4bb6-9571-21c37d84879f",
+   "node": "execute_action",
+   "type": "model.usage",
+   "payload": {
+    "role": "coder",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "depth": 0,
+    "agent_path": "root",
+    "attribution": {
+     "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "parent_thread_id": "",
+     "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "agent_path": "root",
+     "depth": 0,
+     "parallel_group": "",
+     "sandbox_mode": "off"
+    },
+    "call": {
+     "prompt_tokens": 6173,
+     "completion_tokens": 63,
+     "cached_tokens": 5376,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 6236,
+     "calls": 1,
+     "model": "deepseek-flash",
+     "provider": "DeepSeek",
+     "latency_ms": 1249,
+     "status": "ok",
+     "response_id": "ad487541-dfc2-43c7-8295-8b075feb5dd1"
+    },
+    "turn": {
+     "prompt_tokens": 19095,
+     "completion_tokens": 263,
+     "cached_tokens": 11264,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 19358,
+     "calls": 4
+    },
+    "task": {
+     "prompt_tokens": 22330,
+     "completion_tokens": 375,
+     "cached_tokens": 13952,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 22705,
+     "latency_ms": 7307,
+     "calls": 6
+    }
+   }
+  },
+  {
+   "seq": 37,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "5b4998c7-5069-4ed6-89b7-199497d2adfa",
+   "parent_event_id": "e629eb67-0360-4e41-84a6-697b4b6cf6b5",
+   "node": "run_validation",
+   "type": "node.started",
+   "payload": {
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 38,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "2d72e710-d504-450c-a45a-895c850bfe09",
+   "parent_event_id": "5b4998c7-5069-4ed6-89b7-199497d2adfa",
+   "node": "run_validation",
+   "type": "validation.completed",
+   "payload": {
+    "command": "",
+    "passed": null,
+    "status": "skipped",
+    "exit_code": null,
+    "summary": {},
+    "output_tail": "",
+    "skipped_reason": "本次没有改动任何文件，无需执行测试",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 39,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "aeb90bc6-9cc0-4b20-b8a9-a631d55ff3c5",
+   "parent_event_id": "2d72e710-d504-450c-a45a-895c850bfe09",
+   "node": "summarize_result",
+   "type": "node.started",
+   "payload": {
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 40,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "ebccb9ce-2ada-4f0b-a19d-797df704200b",
+   "parent_event_id": "aeb90bc6-9cc0-4b20-b8a9-a631d55ff3c5",
+   "node": "summarize_result",
+   "type": "context.measured",
+   "payload": {
+    "active_context_tokens_before": 5295,
+    "active_context_tokens_after": 5295,
+    "tokens_saved": 0,
+    "micro": {
+     "clipped": 0,
+     "duplicates": 0,
+     "base64_removed": 0,
+     "chars_saved": 0
+    },
+    "folded": 0,
+    "boundary": 0,
+    "summary_chars": 0,
+    "covered": 0,
+    "context_window": 65536,
+    "trigger_at": 49152,
+    "water_ratio": 0.0808,
+    "calibration": 1.3075,
+    "observed_tokens": 6173,
+    "triggered_by": "",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 41,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "681c5507-3649-465e-8c5f-fc5a06d1dcf4",
+   "parent_event_id": "ebccb9ce-2ada-4f0b-a19d-797df704200b",
+   "node": "summarize_result",
+   "type": "model.streamed",
+   "payload": {
+    "chunks": 58,
+    "chars": 96,
+    "first_delta_ms": 937,
+    "model": "deepseek-flash",
+    "role": "reviewer",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 42,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "bdc6cf73-77f1-4206-9a51-31f58d0c84e3",
+   "parent_event_id": "681c5507-3649-465e-8c5f-fc5a06d1dcf4",
+   "node": "summarize_result",
+   "type": "model.usage",
+   "payload": {
+    "role": "reviewer",
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "depth": 0,
+    "agent_path": "root",
+    "attribution": {
+     "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+     "thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "parent_thread_id": "",
+     "root_thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+     "agent_path": "root",
+     "depth": 0,
+     "parallel_group": "",
+     "sandbox_mode": "off"
+    },
+    "call": {
+     "prompt_tokens": 6527,
+     "completion_tokens": 58,
+     "cached_tokens": 6144,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 6585,
+     "calls": 1,
+     "model": "deepseek-flash",
+     "provider": "DeepSeek",
+     "latency_ms": 1264,
+     "status": "ok",
+     "response_id": "abea0b0f-40ef-4722-98a3-c6f457171eee"
+    },
+    "turn": {
+     "prompt_tokens": 25622,
+     "completion_tokens": 321,
+     "cached_tokens": 17408,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 25943,
+     "calls": 5
+    },
+    "task": {
+     "prompt_tokens": 28857,
+     "completion_tokens": 433,
+     "cached_tokens": 20096,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 29290,
+     "latency_ms": 8571,
+     "calls": 7
+    }
+   }
+  },
+  {
+   "seq": 43,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "1b6cfad2-9cce-4d36-a146-f43a97c7c80d",
+   "parent_event_id": "bdc6cf73-77f1-4206-9a51-31f58d0c84e3",
+   "node": "summarize_result",
+   "type": "delivery.recorded",
+   "payload": {
+    "mode": "report",
+    "chars": 96,
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 44,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "7a167c89-a001-4acb-9f8f-0e523864d2e3",
+   "parent_event_id": "1b6cfad2-9cce-4d36-a146-f43a97c7c80d",
+   "node": "complete",
+   "type": "task.completed",
+   "payload": {
+    "status": "succeeded",
+    "reason": "",
+    "summary": "结论\n- note.txt 标记串为 KBGAI-V119-REALMODEL-MARKER-4C7D，与历史记忆一致。\n- 子代理在隔离副本中只读，未改动工作区；主工作区文件内容未独立复核。",
+    "usage": {
+     "prompt_tokens": 25622,
+     "completion_tokens": 321,
+     "cached_tokens": 17408,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "total_tokens": 25943,
+     "calls": 5
+    },
+    "validation": {
+     "command": "",
+     "passed": null,
+     "status": "skipped",
+     "exit_code": null,
+     "summary": {},
+     "output_tail": "",
+     "skipped_reason": "本次没有改动任何文件，无需执行测试"
+    },
+    "thread_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1",
+    "context_tokens": 5295,
+    "steer": {
+     "count": 0,
+     "steps": []
+    },
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  },
+  {
+   "seq": 45,
+   "run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "origin_run_id": "5a4d527d-5f04-42b8-80ff-df8e60992c70",
+   "step_id": "003780e5-5a4e-43a8-96e4-bc224a781d9f",
+   "parent_event_id": "7a167c89-a001-4acb-9f8f-0e523864d2e3",
+   "node": "complete",
+   "type": "memory.consolidated",
+   "payload": {
+    "path": "E:\\tmp\\realmodel\\memory\\ws-v119-e8fcf376.md",
+    "added": 1,
+    "skipped": 0,
+    "dropped": 0,
+    "total_chars": 679,
+    "trace_id": "task:5deb14b2-a236-401a-8420-7cd03e6f3acf:attempt:1"
+   }
+  }
+ ]
+}

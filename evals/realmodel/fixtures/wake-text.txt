@@ -1,0 +1,1 @@
+ASYNC-WAKE-REALMODEL-9F31：后台检查说 read_file 已跑过

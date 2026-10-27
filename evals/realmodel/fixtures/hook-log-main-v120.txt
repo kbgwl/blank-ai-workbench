@@ -1,0 +1,1 @@
+{"event": "worktree_remove", "target": "", "path": "E:\\tmp\\realmodel\\worktrees\\hookcopy-d9ugm5nf", "mode": "hook", "base": "E:\\tmp\\realmodel\\ws-v119"}

@@ -251,6 +251,21 @@ grep -n 'interface AgentInput' -A 40 \
   E:/env/npm-global/node_modules/@anthropic-ai/claude-code/sdk-tools.d.ts
 ```
 
+真模型点验（#120 起在仓库里，不再依赖 `E:/tmp/realmodel` 里的一次性脚本）：
+
+```bash
+# 离线自检 + 变异电池（不花钱）
+services/api/.venv/Scripts/python.exe -X utf8 -m pytest services/api/tests/test_realmodel_device_v120.py -q
+services/api/.venv/Scripts/python.exe -X utf8 evals/realmodel/mutation_battery.py
+
+# 起带钩子姿态的隔离实例（自检不过就不起；姿态写进 instance-posture-<port>.json）
+BLANK_REALMODEL_HOME=E:/tmp/realmodel bash evals/realmodel/launch-instance.sh --with-hooks &
+
+# 三格真跑（花真模型的钱）；已跑过的按 RM_TASK_MAIN/RM_TASK_ENC/RM_TASK_CTL 复用
+BLANK_REALMODEL_PROVIDER=<provider id> BLANK_REALMODEL_HOME=E:/tmp/realmodel \
+  services/api/.venv/Scripts/python.exe -X utf8 evals/realmodel/async_hooks_v119.py
+```
+
 ## 12. 本轮没有验证的
 
 - `isolation: "remote"` 的云端执行行为（本机只有字符串，没有云端账号实测）。
@@ -260,6 +275,15 @@ grep -n 'interface AgentInput' -A 40 \
 - `asyncRewake` 在真实模型下的唤醒时序（没有构造付费调用）。#119 用真实子
   进程钩子 + FakeAdapter 验证了「唤醒进下一次请求」，但没有验证真实模型收到
   提醒后的续跑行为。
+- **#120 更新**：装置进仓库后，`E:/tmp/realmodel/v119_*.py` 那三个一次性脚本不再是
+  复现路径；`evals/realmodel/README.md` 的跑法是唯一口径。仍然没验的三格原话抄在这里，
+  免得读数被当成通过：真模型看到唤醒后改不改道（要人读回放）、结算后才回来的唤醒
+  （产品记 `missed`，装置只确认它没冒充 `delivered`）、`hook.context_injected` 里的正文
+  （按脱敏设计只有 `chars`/`sources`，逐字由编码格在线上钉）。
+- **#120 新增未验**：对照格本轮是**复用**早前无钩子那一次的读数，不是与主格同一时刻
+  双实例并跑；若要同时钉「两种姿态各起一台」，得先 `launch-instance.sh`（不带参数）
+  在另一个端口起一台、再按端口读留痕。`premise_error` 只按当前 `BLANK_REALMODEL_BASE`
+  那台实例的留痕判定。
 
 ## 13. 本批落地：#110–#119
 
@@ -423,6 +447,10 @@ missed → 1；不解析 async 配置 → 2（含一条真实运行时配置判�
 `start-8061-with-hooks.sh` 起（`BLANK_HOOKS` 三条 + `BLANK_HOOK_SETTLE=2`），
 点验完已按 PID 收回原姿态（不带 `BLANK_HOOKS`）。
 
+> **#120 更正**：这一段记的是当时真实跑过的那一轮，读数照抄不改；但那三个脚本和
+> `start-8061-with-hooks.sh` 已被 `evals/realmodel/` 取代，其中启动器 `printf` 手拼的
+> `BLANK_HOOKS` 是坏 JSON（见 §14），照着它复现会得到「没有钩子」的姿态。
+
 | 判据 | 线上读数 |
 | --- | --- |
 | #118 副本来自钩子 | `worktree.created{mode:"hook", path:"…\\worktrees\\hookcopy-utlfxet_"}`；子代理读到了钩子独有的 `FROM-HOOK.txt`，全文出现在 `task_output` 结论里 |
@@ -454,3 +482,70 @@ missed → 1；不解析 async 配置 → 2（含一条真实运行时配置判�
 `rc=2`；指向无钩子那一次 `rc=0`。
 
 
+
+## 14. #120 真模型点验装置进仓库 + 装置离线自检
+
+上一批结尾我自己登记了那条欠账：点验活在 `E:/tmp/realmodel/v119_*.py` 里，
+换台机器、换个人就复现不了。现在判据、夹具、钩子、启动器、变异电池全在
+`evals/realmodel/`，凭据仍然不在仓库里（`test_装置目录里不许有凭据或密钥文件` 扫整个目录）。
+搬运不是复制粘贴——第一次真跑就翻在装置自己身上，翻车点逐条钉成了能失败的用例。
+
+**翻车一：启动器 `printf` 手拼的 `BLANK_HOOKS` 是坏 JSON，产品静默读成「没有钩子」。**
+`HookRunner.from_env` 是 fail-closed 的（`services/hooks.py:291-305`）：解析失败就降级成
+「没有钩子」，**哪里都不报错**。于是三格照跑、钱照花，回来 11 条钩子判据全红——
+红得对，但那 11 条测的是姿态不是产品。修法分两道闸：
+
+- `evals/realmodel/hooks_config.py` 成为 `BLANK_HOOKS` 的唯一来源：`--print` 用
+  `json.dumps` 生成（引号交给序列化，不再手拼），`--check` 校验合法 JSON、三个事件齐、
+  命令恰好两段、夹具文件真存在、`async` 只落在 `post_tool_use`。启动器先 `--check`，
+  不过就 rc 2 **拒绝起服务**。
+- 启动器把姿态写进 `instance-posture-<port>.json`；装置在**花钱之前**读它
+  （`lib.premise_error`）：要真跑主格/编码格而姿态不是 `hooks` → rc 2 拒跑；要真跑对照格
+  而姿态是 `hooks`、或留痕文件不在（实例是手起的，姿态未知）→ 同样拒跑。
+  复用早前的任务 id 不花钱，闸门不拦。
+
+坏 JSON 那串留在自检里当永久负基线：产品必须读成 `enabled is False`
+（`test_手拼的坏JSON只能读成没有钩子`），配置生成器则必须被 `HookRunner.from_env`
+认下来（`test_启动器生成的钩子配置过产品自己的解析器`）——喂**产品的解析器**，
+不喂装置自己的读法，否则两边一起错就看不见了。
+
+**翻车二：装置有两套复用变量名，闸门把合法跑法判成失效。**
+姿态闸门按格子名拼 `RM_TASK_CONTROL`，各格自己读 `RM_TASK_CTL`。于是「复用对照格、
+只花主格+编码格的钱」在闸门眼里是「要新跑对照格」，rc 2 拦死。拦的方向没错（没白花钱），
+但装置自己把唯一不烧钱的跑法堵死了。现在变量名只有 `async_hooks_v119.TASK_ENV` 一处，
+`reused()`/`reuse_map()` 与三个 `run_*` 都走它；改名那一下立刻红
+（电池 M20）。顺带补了 `RM_CELL` 格子名拼错必须 rc 2——写错一个字母静默少跑一格，
+剩下的看着全绿其实是没判（电池 M21）。
+
+**翻车三：`reachable()` 探的是 `/health`，而产品只有 `/api/v1/health`。**
+404 也满足「有响应」，实例根本没起来时装置照样认为活着。现在探应用自己的健康路由、
+且要求 `status_code < 400`（电池 M15/M16）。
+
+**收紧 #118 清理那一条**：旧判据只问「`hook-events.log` 里出现过 `worktree_remove`」，
+而这份日志在 `BLANK_REALMODEL_HOME` 里跨轮累积——上一轮的同名行能让它**假绿**。
+现在拆成两格：事件流里的 `worktree.removed`（按轮天然隔离）与带外审计行，
+后者必须命中**本轮** `mode=hook` 的那个副本路径（`judgments.py:61-110`）。
+`test_陈旧审计行只能红在带外那一格` 先断言旧形状在这份日志上本来会绿，
+再断言新判据的红集合恰好那一条（电池 M13/M14）。
+
+**变异电池进仓库**：`evals/realmodel/mutation_battery.py`，21 条变异打在
+`lib.py`/`judgments.py`/`hooks_config.py`/`async_hooks_v119.py` 上。它自己也是 Windows
+上的一课：用 `read_text`/`write_text` 还原源码时把 LF 文件静默翻成 CRLF，
+「逐字节还原」那句承诺是假的——现在按字节读写、记住原行尾，每条变异后立刻比对 sha。
+期望红集合来自实测登记（`fixtures/battery-booked-v120.json`），第二轮起逐字核对；
+本轮 21/21 无哑弹，`[ALL-OK]`。
+
+**线上读数（2026-10-27，:8061，DeepSeek，主格+编码格真跑、对照格复用无钩子那一次）**：
+29 条判据全部读到，红 1 条且正是那条必须为红的（`对照·mode 不该是 hook`），`RC=0`。
+关键读数：`worktree.created{mode:"hook", path:"…\hookcopy-d9ugm5nf"}`，子代理在副本里读到
+钩子独有的 `FROM-HOOK.txt`；`hook-events.log` 的清理行带着**同一个**路径；
+`hook.completed{async, exit_code:2}` 四条、`additional_context_chars=45` = 原文（修复前同格读成 39）；
+注入块 119 字（下限 59）、`sources` 指向 `post_tool_use`/`read_file`；`spawn_agent` 返回
+`agent-2fdb1091`、`duration_ms=0`，`task_output` 用同一个 id 取回结论；#117 五条读数全绿
+（`restorable=false` 加原话 `skipped_reason`）。这一轮的实物取回仓库当绿基线
+（`fixtures/events-main-v120.json` / `evidence-main-v120.json` / `hook-log-main-v120.txt`），
+离线整轮重放 16 条全绿并钉住上述实测值（`test_姿态修好后那轮主格实物全绿且读数钉死`）。
+
+装置目录、跑法与「不覆盖什么」见 `evals/realmodel/README.md`。仍然判不了的三格照旧写清：
+真模型看到唤醒后改不改道（要靠人读回放）、结算后才回来的唤醒（产品记 `missed`，装置只确认
+它没被冒充成 `delivered`）、注入事件里的正文（按脱敏设计只有 `chars` 与 `sources`）。
