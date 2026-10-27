@@ -647,12 +647,12 @@ M25 每格 home 不分成同一份），登记换代为 `fixtures/battery-booked
 **超时那一档是实测出来的形状。** `subprocess.run(timeout=…)` 只杀直接子进程，然后照样等管道关；
 `docker.bat` 是 cmd 再拉一个孙进程的载体，孙进程占着管道就得白等。同一份桩（`ping -n 5` ≈4 秒）
 配 0.4 秒闸门，当刻重跑 3 次：那种写法 **4.06–4.08s**，改成 `Popen + communicate(timeout)` +
-`taskkill /PID /T /F` 杀整棵树 **0.63–0.65s**（工件 `E:/tmp/v122/rig/killtree_cost.py`，
-跑完 `tasklist` 里没有残留 ping）。判据 `test_探测超时既不算可用也要自己把进程带走` 钉的就是那个上界，
+`taskkill /PID /T /F` 杀整棵树 **0.63–0.65s**（一次性量具 `E:/tmp/v122/rig/killtree_cost.py`，
+收尾即删；跑完 `tasklist` 里没有残留 ping）。判据 `test_探测超时既不算可用也要自己把进程带走` 钉的就是那个上界，
 M28 实测红 1。
 
 **缓存：一台机器问一次，但检查必须在锁内。** TTL 60s + `force` + `invalidate`。
-10 个并发 `ensure_fresh` 只起 **1** 条子进程、总耗时 0.098s（`E:/tmp/v122/rig/cost_final.py`）；
+10 个并发 `ensure_fresh` 只起 **1** 条子进程、总耗时 0.098s（一次性量具 `E:/tmp/v122/rig/cost_final.py`，收尾即删）；
 把缓存检查挪到 `with _LOCK:` 外面就会变成各探各的——M44 实测红那一条正是并发用例。
 
 **一条撤回的错误结论，值得记下来。** 早前一版脚本打出「10 并发起了 10 条子进程、耗时 2.395s」，
@@ -676,9 +676,10 @@ M28 实测红 1。
 
 **开机那行读数要当场落盘。** lifespan 里挂了 `probe_execution_backend()`（M35 红 1；
 `test_应用启动装配里真的挂着那一次探测` 自己开 lifespan，因为 `ASGITransport` 不跑它）。
-真机 :8061 实测：stdout 重定向到文件时那行**约 30 秒才出现**——第一次读日志（启动后约 6 秒）
-只有 4 行 uvicorn 自己的日志，缓存里却已经躺着 `docker_age_seconds=56.4`，说明探测早跑完了、
-print 还压在块缓冲里。加上 `flush=True` 后重启，5 秒内那行就在文件里了：
+真机 :8061 实测：stdout 重定向到文件时那行不会当场落盘——启动后约 6 秒读日志只有 4 行
+uvicorn 自己的日志，而缓存里那时已经躺着 `docker_age_seconds=56.4`（探测早跑完了，print
+还压在块缓冲里）；打完三次 HTTP 请求后再读（约一分半后）它才出现。
+加上 `flush=True` 后重启，5 秒内那行就在文件里了：
 `[sandbox] 执行后端探测：not_installed｜PATH 里找不到 docker 可执行文件`
 （工件 `E:/tmp/realmodel/8061-v122b.log`）。探测自身炸了不许挡 API 启动（M36 红 1）。
 
@@ -693,8 +694,8 @@ print 还压在块缓冲里。加上 `flush=True` 后重启，5 秒内那行就�
 变异电池 23 条（M26–M48），**0 哑弹**、逐字节还原校验通过，红集合当刻读数：
 M26 红 6、M27 红 9、M28 红 1、M29 红 1、M30 红 2、M31 红 2、M32 红 2、M33 红 3、M34 红 1、
 M35 红 1、M36 红 1、M37 红 1、M38 红 2、M39 红 1、M43 红 1、M44 红 1、M45 红 1、M46 红 1、
-M47 红 1、M48 红 1、M40/M41 红 2、M42 红 3（工件 `E:/tmp/v122/rig/battery-out6.txt`；
-电池是一次性装置，收尾删，红集合抄在这里）。
+M47 红 1、M48 红 1、M40/M41 红 2、M42 红 3（电池 `E:/tmp/v122/rig/battery.py` 是一次性装置，
+收尾即删；上面那行红集合就是它当刻的读数 `battery-out6.txt`，逐条抄在这里，`[ALL-OK] 变异 23 条，哑弹 0 条`）。
 
 **界面点验（真 Chrome，:3210 私有 dev 实例代理到 :8061，`:3000/:8000` 未碰）。**
 `#safety` 面板横幅渲染出
@@ -707,6 +708,7 @@ M47 红 1、M48 红 1、M40/M41 红 2、M42 红 3（工件 `E:/tmp/v122/rig/batt
 
 **这一批仍不覆盖**：`not_installed` 时到底该不该自动降成本机执行（默认档仍是产品裁决，没替客户改）；
 Docker 真装好的那台机器（本机没有容器可用，`ready` 一档只由桩证明）；
-Linux/macOS 上的探测只在 CI 的形状里，没在真 mac 上点过；
+桩在 POSIX 分支上也写了（shebang 脚本 + `exit`），但**本机只真跑过 Windows**，
+mac/Linux 上那两条分支没实物点过；
 `remote` 隔离形态完全没接；缓存是进程级的，多 worker 各探各的（本批只保证单进程内不重复）。
 
