@@ -4,6 +4,10 @@
 # 只带路径、不带凭据：settings.json / secret.key / run.db 全在 BLANK_REALMODEL_HOME
 # 指向的目录里（默认 E:/tmp/realmodel），那个目录**永远不进仓库**。
 # 不加 --with-hooks 时是**对照姿态**（不配任何钩子），对照格要用它。
+#
+# 同刻双实例并跑（#121）：一台带钩子、一台不带，各自的 home 必须是**独立的一份 run.db**
+# （共用一份会互相写），但 secret.key 必须同一把（供应商行是它加密封存的）。
+# 给第二台传 BLANK_REALMODEL_SEED_HOME=<主实例的 home>，缺库时从那里拷一份过来。
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,6 +50,16 @@ fi
 # 姿态留痕：装置在花钱之前读这一份，主格/编码格要求 hooks，对照格要求 no-hooks。
 # 手起的实例没有这份留痕 → 装置直接 rc 2 拒绝跑，不再拿真模型去试姿态。
 mkdir -p "$HOME_DIR"
+# 第二台实例得有**自己的一份 run.db**（共用一份会互相写），但 secret.key 得是同一把
+# （供应商行里那枚 Key 只有同一把密钥解得开）。只拷文件，从不读内容。
+if [[ -n "${BLANK_REALMODEL_SEED_HOME:-}" && ! -f "$HOME_DIR/run.db" ]]; then
+  for f in run.db secret.key settings.json; do
+    if [[ -f "$BLANK_REALMODEL_SEED_HOME/$f" ]]; then
+      cp "$BLANK_REALMODEL_SEED_HOME/$f" "$HOME_DIR/$f"
+    fi
+  done
+  echo "[launch] 从 $BLANK_REALMODEL_SEED_HOME 铺了 run.db/secret.key/settings.json 到 $HOME_DIR"
+fi
 printf '{"port": %s, "posture": "%s", "hook_settle": "%s", "started_at": "%s"}\n' \
   "$PORT" "$POSTURE" "${BLANK_HOOK_SETTLE:-}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   > "$HOME_DIR/instance-posture-$PORT.json"

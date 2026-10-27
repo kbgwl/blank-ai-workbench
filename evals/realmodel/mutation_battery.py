@@ -1,14 +1,16 @@
 """装置变异电池：把装置本身改坏，看离线自检红在哪些用例上。
 
-跑法（不花钱，全程只动 `evals/realmodel/{lib,judgments}.py` 两个文件，跑完逐字节还原）：
+跑法（不花钱，全程只动 `evals/realmodel/{lib,judgments,hooks_config,async_hooks_v119}.py`
+四个文件，跑完按原行尾逐字节还原）：
 
     services/api/.venv/Scripts/python.exe -X utf8 evals/realmodel/mutation_battery.py
 
 退出码与点验装置同一副纪律：`0` = 每条变异都红、还原后复跑全绿；
 `1` = 有哑弹或与登记的红集合不一致；`2` = 电池自己没跑起来（基线不绿、锚点没命中）。
 
-期望红集合**按实测登记**在 `fixtures/battery-booked-v120.json`，第一轮跑出来什么就登记
-什么，第二轮起逐字核对。判据改了却不改登记，这里就打不平——这正是它的用处。
+期望红集合**按实测登记**在 `fixtures/battery-booked-v121.json`（上一批是 v120，两批合跑之后
+红集合变了，重新登记），第一轮跑出来什么就登记什么，第二轮起逐字核对。
+判据改了却不改登记，这里就打不平——这正是它的用处。
 """
 
 from __future__ import annotations
@@ -27,9 +29,11 @@ JUD = HERE / "judgments.py"
 CFG = HERE / "hooks_config.py"
 DRV = HERE / "async_hooks_v119.py"
 TARGETS = (LIB, JUD, CFG, DRV)
-BOOK = HERE / "fixtures" / "battery-booked-v120.json"
+BOOK = HERE / "fixtures" / "battery-booked-v121.json"
 API = REPO / "services" / "api"
-TESTS = "tests/test_realmodel_device_v120.py"
+# 两副自检一起跑：装置的路由与判据分在两个批次里登记，红集合要一起算，
+# 不然"这一批改的东西打红了上一批的用例"会被当成无关噪声。
+TESTS = ("tests/test_realmodel_device_v120.py", "tests/test_realmodel_instances_v121.py")
 
 MUTATIONS = [
     ("M1 对照格没红不再判作废", LIB,
@@ -95,12 +99,28 @@ MUTATIONS = [
      '    except json.JSONDecodeError as exc:\n        return [f"BLANK_HOOKS 不是合法 JSON：{exc}"]',
      '    except json.JSONDecodeError:\n        return []'),
     # M20/M21 是这次闸门把合法跑法判成失效那一条的形状：变量名有两套。
-    ("M20 闸门按格子名拼复用变量（回到 RM_TASK_CONTROL）", DRV,
-     '"control": "RM_TASK_CTL"}',
-     '"control": "RM_TASK_CONTROL"}'),
+    # #121 之后变量名只剩一处登记（`lib.CELLS`），所以靶子从"驱动里那套名字"
+    # 挪到"这张表里的名字"——分叉不再是可能写法，改错就同时打红两批的用例。
+    ("M20 对照格的复用变量名再分叉一次", LIB,
+     '"control": {"task": "RM_TASK_CTL", "base": "RM_BASE_CTL", "home": "RM_HOME_CTL"}',
+     '"control": {"task": "RM_TASK_CONTROL", "base": "RM_BASE_CTL", "home": "RM_HOME_CTL"}'),
     ("M21 格子名写错不再拦", DRV,
-     "    unknown = [c for c in cells if c not in TASK_ENV]",
+     "    unknown = [c for c in cells if c not in lib.CELLS]",
      "    unknown: list[str] = []"),
+    # M22–M25 是 #121 这一批：一格一台实例。
+    ("M22 分组回到只看一台（每格的留痕塌成一格）", LIB,
+     "        groups.setdefault(targets[cell].base, []).append(cell)",
+     '        groups.setdefault("同一台", []).append(cell)'),
+    ("M23 坏掉的留痕被当成没有钩子", LIB,
+     '            if got != "no-hooks":',
+     '            if got == "hooks":'),
+    ("M24 每格的 base 变量名分叉（对照格悄悄回落到主格那台）", LIB,
+     '"base": "RM_BASE_CTL", "home": "RM_HOME_CTL"}',
+     '"base": "RM_BASE_CONTROL", "home": "RM_HOME_CTL"}'),
+    ("M25 每格的 home 不分（两台实例抢同一份 run.db）", LIB,
+     "        home=Path(home) if home else root.home,",
+     "        home=root.home,",
+     ),
 ]
 
 
@@ -111,7 +131,7 @@ def sha(p: Path) -> str:
 def run_pytest() -> tuple[list[str], int]:
     proc = subprocess.run(
         [str(API / ".venv" / "Scripts" / "python.exe"), "-X", "utf8", "-E", "-m", "pytest",
-         "-q", TESTS, "-rf", "--no-header"],
+         "-q", *TESTS, "-rf", "--no-header"],
         cwd=str(API), capture_output=True, text=True, encoding="utf-8", errors="replace")
     # 参数化用例的名字里带空格与方括号，用 (.+)$ 收全，别用 \S+（会截成 "test_x[119"）；
     # 行尾 pytest 还会拼上 "- AssertionError: ..."，那一段随终端宽度截断，

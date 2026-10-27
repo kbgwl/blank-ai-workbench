@@ -594,12 +594,23 @@ def test_手拼的坏JSON只能读成没有钩子() -> None:
     assert HC.check(BROKEN_RAW, "x", DEVICE / "hooks"), "坏配置必须被启动器自检拦下"
 
 
+def _targets(posture, cells: list[str]) -> dict[str, lib.Target]:
+    """一台实例的跑法：三格都指全局那台，姿态就是那一份留痕。
+
+    #121 把闸门改成按**每格自己那台**的留痕判定，旧签名（一个 posture 打三格）
+    在这里保留成"三格同机"这一特例——用例本身判的还是姿态，没有顺手放宽。
+    """
+    return {cell: lib.Target(base=f"http://127.0.0.1:{posture['port'] if posture else '8061'}",
+                             port=posture["port"] if posture else "8061", posture=posture)
+            for cell in cells}
+
+
 @pytest.mark.parametrize("cells,reuse,posture,pass_", [
     # 主格 + 编码格真跑：只有 hooks 姿态放行
     (["main", "encoding"], {"main": "", "encoding": ""}, HOOK_POSTURE, True),
     (["main", "encoding"], {"main": "", "encoding": ""}, None, False),
     (["main", "encoding"], {"main": "", "encoding": ""}, PLAIN_POSTURE, False),
-    # 三格都想真跑：一台实例给不出两种姿态，必须拦
+    # 三格都想真跑在一台上：一台实例给不出两种姿态，必须拦
     (["main", "encoding", "control"], {"main": "", "encoding": "", "control": ""}, HOOK_POSTURE, False),
     (["main", "encoding", "control"], {"main": "", "encoding": "", "control": ""}, PLAIN_POSTURE, False),
     # 对照格复用早前无钩子那一次：钩子姿态下也放行
@@ -612,7 +623,7 @@ def test_手拼的坏JSON只能读成没有钩子() -> None:
         "无钩子姿态同样拦三格", "对照格复用放行", "对照格真跑无钩子放行",
         "对照格真跑不许带钩子", "全复用不花钱就不拦"])
 def test_花钱之前的姿态闸门(cells: list[str], reuse: dict[str, str], posture, pass_: bool) -> None:
-    err = lib.premise_error(cells=cells, reuse=reuse, posture=posture)
+    err = lib.premise_error(cells=cells, reuse=reuse, targets=_targets(posture, cells))
     assert bool(err) is not pass_, err
     if not pass_:
         assert lib.decide_exit_code(abort=err) == lib.EXIT_INCONCLUSIVE
@@ -624,7 +635,7 @@ def test_复用任务id的变量名在闸门与各格之间不许分叉(monkeypa
     """上一版有两套名字：姿态闸门按格子名拼 `RM_TASK_CONTROL`，各格自己读
     `RM_TASK_CTL`。于是「复用对照格、只花主格+编码格的钱」这一下合法跑法被闸门读成
     「要新跑对照格」，直接 rc 2 作废——拦的方向没错（没白花钱），但装置自己把跑法堵死了。
-    反证：把 `TASK_ENV["control"]` 改回 RM_TASK_CONTROL，这一条立刻红。"""
+    反证：把 `lib.CELLS["control"]["task"]` 改回 RM_TASK_CONTROL，这一条立刻红。"""
     import async_hooks_v119 as DRV
 
     monkeypatch.setenv("RM_TASK_CTL", "5deb14b2")
@@ -632,12 +643,13 @@ def test_复用任务id的变量名在闸门与各格之间不许分叉(monkeypa
     reuse = DRV.reuse_map()
     assert reuse["control"] == "5deb14b2", reuse
     assert lib.premise_error(cells=["main", "encoding", "control"],
-                             reuse=reuse, posture=HOOK_POSTURE) == ""
+                             reuse=reuse, targets=_targets(HOOK_POSTURE, ["main", "encoding", "control"])) == ""
 
     monkeypatch.delenv("RM_TASK_CTL")
     assert lib.premise_error(cells=["main", "encoding", "control"],
-                             reuse=DRV.reuse_map(), posture=HOOK_POSTURE), \
-        "真要把对照格在新实例上跑一遍时，闸门必须拦住"
+                             reuse=lib.reuse_map(),
+                             targets=_targets(HOOK_POSTURE, ["main", "encoding", "control"])), \
+        "真要把对照格在同一台上跑一遍时，闸门必须拦住"
 
 
 def test_格子名写错时装置自己先失效(monkeypatch, capsys) -> None:

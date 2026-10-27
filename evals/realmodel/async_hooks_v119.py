@@ -16,6 +16,13 @@
     export BLANK_REALMODEL_BASE=http://127.0.0.1:8061
     services/api/.venv/Scripts/python.exe -X utf8 evals/realmodel/async_hooks_v119.py
 
+三格可以各指一台实例（对照格要的是**没配钩子**那一台）：
+
+    RM_BASE_CTL=http://127.0.0.1:8065 RM_HOME_CTL=E:/tmp/realmodel-ctl 同上
+
+不给就沿用 `BLANK_REALMODEL_BASE` 那一台——但那样一来三格同时真跑会被姿态闸门拦下，
+因为一台实例给不出两种姿态（要同刻并跑就得两台）。
+
 已经跑过的那几轮可以按任务 id 复用事件重算，不再花模型的钱：
 
     RM_TASK_MAIN=... RM_TASK_ENC=... RM_TASK_CTL=... 同上
@@ -68,19 +75,18 @@ def seed_workspace(cfg: lib.Config) -> None:
         f"这是真模型点验的标记文件。\n标记串：{MARKER}\n", encoding="utf-8")
 
 
-# 复用任务 id 的变量名只在这里出现一次。
-# 上一版有两套：姿态闸门按格子名拼（RM_TASK_CONTROL），各格自己读（RM_TASK_CTL），
-# 于是「复用对照格、只花主格+编码格的钱」在闸门眼里是「要新跑对照格」，
-# 直接 rc 2 拦死——拦的方向是对的（没白花钱），但装置自己把合法跑法判成了失效。
-TASK_ENV = {"main": "RM_TASK_MAIN", "encoding": "RM_TASK_ENC", "control": "RM_TASK_CTL"}
+# 一格一份任务 id、一台实例：变量名与 base/home 只在 `lib.CELLS` 里定义一次。
+# 上一版这里另有一套 TASK_ENV，闸门按格子名拼出 RM_TASK_CONTROL、各格自己读 RM_TASK_CTL，
+# 「复用对照格、只花主格+编码格的钱」被闸门判成装置失效（真跑当场 rc 2，钱倒是没白花）。
+TASK_ENV = {cell: spec["task"] for cell, spec in lib.CELLS.items()}
 
 
 def reused(cell: str) -> str:
-    return os.environ.get(TASK_ENV[cell], "").strip()
+    return lib.reused(cell)
 
 
 def reuse_map() -> dict[str, str]:
-    return {cell: reused(cell) for cell in TASK_ENV}
+    return lib.reuse_map()
 
 
 def run_main(client: lib.Client, cfg: lib.Config, rec: lib.Recorder, notes: list[str]) -> None:
@@ -168,27 +174,35 @@ def run_control(client: lib.Client, cfg: lib.Config, rec: lib.Recorder) -> bool:
 
 
 def main() -> int:
-    cfg = lib.config_from_env()
     cells = [c.strip() for c in os.environ.get("RM_CELL", "main,encoding,control").split(",") if c.strip()]
     rec = lib.Recorder()
     notes: list[str] = []
 
-    reuse = reuse_map()
+    reuse = lib.reuse_map()
     # RM_CELL 写错格子名不能静默少跑一格：那一格的判据根本不会进读数表。
-    unknown = [c for c in cells if c not in TASK_ENV]
+    unknown = [c for c in cells if c not in lib.CELLS]
     skip = ""
-    abort = f"RM_CELL 里有不认识的格子 {unknown}（可选：{sorted(TASK_ENV)}）" if unknown else ""
-    if not abort and not cfg.provider_id and not all(reuse[cell] for cell in cells):
+    abort = f"RM_CELL 里有不认识的格子 {unknown}（可选：{sorted(lib.CELLS)}）" if unknown else ""
+    provider = lib.config_from_env().provider_id
+    if not abort and not provider and not all(reuse[cell] for cell in cells):
         skip = "没给 BLANK_REALMODEL_PROVIDER，也没有可复用的任务 id"
-    client = lib.Client(cfg)
-    if not skip and not abort and not client.reachable():
-        abort = f"{cfg.base} 连不上（实例没起？端口不对？）"
+    # 一格一台实例：复用格也要读它那台的事件，所以探活按格各自的 base 来。
+    # 建配置排在格子名校验之后——`RM_CELL=ctl` 这种拼错要的是装置自杀，不是 KeyError。
+    cfgs = clients = targets = {}
+    if not abort and not skip:
+        cfgs = {cell: lib.cell_config(cell) for cell in cells}
+        clients = {cell: lib.Client(cfgs[cell]) for cell in cells}
+        targets = {cell: cfgs[cell].target() for cell in cells}
+        by_base: dict[str, lib.Client] = {}
+        for cell in cells:
+            by_base.setdefault(cfgs[cell].base, clients[cell])
+        offline = [base for base, cli in by_base.items() if not cli.reachable()]
+        if offline:
+            abort = "连不上：" + "、".join(offline) + "（实例没起？端口不对？）"
     if not skip and not abort:
         # 姿态没钉住就别花钱：#120 第一次真跑就是带着坏配置跑完三格，
         # 11 条钩子判据全红，红的是姿态，不是产品。
-        posture_abort = lib.premise_error(cells=cells, reuse=reuse, posture=cfg.posture())
-        if posture_abort:
-            abort = posture_abort
+        abort = lib.premise_error(cells=cells, reuse=reuse, targets=targets)
 
     if skip or abort:
         rec.report("读数（没跑判据）")
@@ -196,15 +210,24 @@ def main() -> int:
         lib.print_gate(skip=skip, abort=abort, rc=rc)
         return rc
 
-    print(f"[姿态] {cfg.posture_file.name} -> {cfg.posture()}")
-    seed_workspace(cfg)
+    for cfg in {c.base: c for c in cfgs.values()}.values():
+        print(f"[姿态] {cfg.base} -> {cfg.posture_file.name}: {cfg.posture()}")
+    # 每一格的读数来自哪里必须自己念出来：复用格是旧事件的重量，不是此刻的实物，
+    # 「对照格与主格同刻双实例并跑」这种话只有在这一格真跑在新实例上时才允许说。
+    for cell in cells:
+        if reuse.get(cell):
+            print(f"[来源] {cell} 格复用 task={reuse[cell]} @ {cfgs[cell].base}（旧读数，不是此刻的实物）")
+        else:
+            print(f"[来源] {cell} 格此刻真跑 @ {cfgs[cell].base}")
+    for cfg in {str(c.workspace): c for c in cfgs.values()}.values():
+        seed_workspace(cfg)
     if "main" in cells:
-        run_main(client, cfg, rec, notes)
+        run_main(clients["main"], cfgs["main"], rec, notes)
     if "encoding" in cells:
-        run_encoding(client, cfg, rec)
+        run_encoding(clients["encoding"], cfgs["encoding"], rec)
     control_red = None
     if "control" in cells:
-        control_red = run_control(client, cfg, rec)
+        control_red = run_control(clients["control"], cfgs["control"], rec)
 
     fails = [name for name in rec.fails if name != J.CONTROL_RED_NAME]
     rc = lib.decide_exit_code(fails=fails, control_red=control_red)

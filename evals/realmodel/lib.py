@@ -37,6 +37,18 @@ AGENT_ID_RE = re.compile(r"agent-[0-9a-f]{8}")
 # 文案改了这里要跟着改，否则 floor 判据会静默变宽（装置自检 D7 钉住这一条）。
 WAKE_WRAPPER = "后台钩子以退出码 2 结束："
 
+# 一格 = 一份任务 id + 一台实例。上一批这张表是隐形的：任务 id 的变量名
+# 在闸门与各格各写一遍（#120 的 M20），实例的 base 更是全装置只有一个，
+# 于是「对照格在另一台没配钩子的实例上与主格同刻真跑」根本表达不出来。
+# 变量名只在这里出现一次，其余一律查这张表。
+CELLS: dict[str, dict[str, str]] = {
+    "main": {"task": "RM_TASK_MAIN", "base": "RM_BASE_MAIN", "home": "RM_HOME_MAIN"},
+    "encoding": {"task": "RM_TASK_ENC", "base": "RM_BASE_ENC", "home": "RM_HOME_ENC"},
+    "control": {"task": "RM_TASK_CTL", "base": "RM_BASE_CTL", "home": "RM_HOME_CTL"},
+}
+# 要花钱的格子必须先钉住姿态：主格与编码格要钩子，对照格要**没有**钩子。
+HOOK_CELLS = ("main", "encoding")
+
 
 @dataclass
 class Config:
@@ -82,6 +94,20 @@ class Config:
     def hook_log(self) -> Path:
         return self.home / "hook-events.log"
 
+    def target(self) -> "Target":
+        return Target(base=self.base, port=self.port, posture=self.posture(),
+                      posture_file=self.posture_file.name)
+
+
+@dataclass
+class Target:
+    """一格实际要落在哪台实例上，以及那台实例自证的姿态。"""
+
+    base: str
+    port: str
+    posture: dict | None
+    posture_file: str = ""
+
 
 def config_from_env() -> Config:
     """凭据与实例环境一律从外部注入，仓库里不落一个字节。
@@ -94,6 +120,37 @@ def config_from_env() -> Config:
         home=Path(os.environ.get("BLANK_REALMODEL_HOME", "E:/tmp/realmodel")),
         provider_id=os.environ.get("BLANK_REALMODEL_PROVIDER", "").strip(),
     )
+
+
+def cell_config(cell: str) -> Config:
+    """一格一台实例：`RM_BASE_<格>` / `RM_HOME_<格>` 覆盖全局，没给就沿用全局那台。
+
+    对照格要的是**没配钩子**的实例，与主格不可能同为一台；上一批只有一个全局 base，
+    所以它只能复用早前那一次的读数（文档 §12 记的就是这条欠账）。
+    home 也要跟着分：两台实例共用一份 `run.db` 会互相写，`secret.key` 才需要复用同一把。
+    """
+    spec = CELLS[cell]
+    base = os.environ.get(spec["base"], "").strip()
+    home = os.environ.get(spec["home"], "").strip()
+    root = config_from_env()
+    return Config(
+        base=(base or root.base).rstrip("/"),
+        home=Path(home) if home else root.home,
+        provider_id=root.provider_id,
+    )
+
+
+def reuse_map() -> dict[str, str]:
+    return {cell: reused(cell) for cell in CELLS}
+
+
+def reused(cell: str) -> str:
+    """这一格要不要花钱：给了任务 id 就是复用早前那一次的读数。
+
+    变量名只有 `CELLS` 这一处定义——闸门与各格都查它。上一版两套名字
+    （`RM_TASK_CONTROL` / `RM_TASK_CTL`）把「复用对照格」判成装置失效。
+    """
+    return os.environ.get(CELLS[cell]["task"], "").strip()
 
 
 class Client:
@@ -162,32 +219,49 @@ class Recorder:
             print("红集合：" + json.dumps(self.fails, ensure_ascii=False))
 
 
-# 要花钱的格子必须先钉住姿态：主格与编码格要钩子，对照格要**没有**钩子。
-HOOK_CELLS = ("main", "encoding")
+# ---------------------------------------------------------------- 花钱之前的姿态闸门
 
 
-def premise_error(*, cells: list[str], reuse: dict[str, str], posture: dict | None) -> str:
-    """花钱之前的姿态核对；返回非空串就是「这次别跑」。
+def premise_error(*, cells: list[str], reuse: dict[str, str],
+                  targets: dict[str, Target]) -> str:
+    """花钱之前按**每格自己那台实例**的自证核对姿态；返回非空串就是「这次别跑」。
 
-    #120 第一次真跑就是栽在这里：启动器手拼的 `BLANK_HOOKS` 是坏 JSON，产品
-    fail-closed 读成「没有钩子」，装置照常把三格跑完，11 条钩子判据全红——
-    红得对，但那 11 条测的是姿态不是产品，钱白花。姿态未知（留痕文件不在）
-    一律不跑：手起的实例不能假定它带了钩子。
+    #120 第一次真跑栽在姿态上：启动器手拼的 `BLANK_HOOKS` 是坏 JSON，产品 fail-closed
+    读成「没有钩子」，装置把三格跑完、11 条钩子判据全红，钱白花。那一版只会看
+    全局那台实例的留痕，于是「主格在 :8061 带钩子、对照格在 :8062 不带钩子」这种
+    同刻并跑根本没法表达——只能复用早前无钩子那一次的读数。现在按 base 分组：
+    同一台既要领钩子格又要领对照格，直接拦（一份实例给不出两种姿态）。
     """
     fresh = [cell for cell in cells if not reuse.get(cell)]
     if not fresh:
         return ""
-    got = (posture or {}).get("posture")
-    if any(cell in HOOK_CELLS for cell in fresh) and got != "hooks":
-        where = "留痕文件不在（实例是手起的？姿态未知）" if posture is None else f"读到姿态 {got!r}"
-        return (f"要真跑 {fresh}，但 {where}——钩子判据在没有钩子的实例上必红，"
-                f"那是白花钱。用 evals/realmodel/launch-instance.sh --with-hooks 起实例")
-    if "control" in fresh:
-        if posture is None:
-            return f"对照格要真跑，但留痕文件不在，姿态未知（用 {POSTURE_HINT}）"
-        if got == "hooks":
-            return (f"对照格要在**没配钩子**的实例上真跑，当前姿态 {got!r}："
-                    f"那条该红的判据红不了，整次点验只能作废（rc 2）")
+    groups: dict[str, list[str]] = {}
+    for cell in fresh:
+        groups.setdefault(targets[cell].base, []).append(cell)
+    for base, group in groups.items():
+        target = targets[group[0]]
+        got = (target.posture or {}).get("posture")
+        hook_cells = [cell for cell in group if cell in HOOK_CELLS]
+        plain_cells = [cell for cell in group if cell not in HOOK_CELLS]
+        if hook_cells and plain_cells:
+            return (f"{base} 这一台同时要领钩子格 {hook_cells} 和对照格 {plain_cells}："
+                    f"一份实例给不出两种姿态。对照格请用 {CELLS['control']['base']} "
+                    f"指到另一台（{POSTURE_HINT}，不带 --with-hooks）")
+        if hook_cells and got != "hooks":
+            where = ("留痕文件不在（实例是手起的？姿态未知）"
+                     if target.posture is None else f"读到姿态 {got!r}")
+            return (f"要真跑 {hook_cells}，但 {base} {where}——钩子判据在没有钩子的实例上必红，"
+                    f"那是白花钱。用 evals/realmodel/launch-instance.sh --with-hooks 起实例")
+        if plain_cells:
+            if target.posture is None:
+                return (f"对照格 {plain_cells} 要真跑，但 {base} 的留痕文件不在，"
+                        f"姿态未知（用 {POSTURE_HINT}）")
+            if got != "no-hooks":
+                # 只认启动器自证的那一个值：坏文件、半截配置、手起的实例都算"姿态未知"。
+                # 对照格的读数靠的就是"这台确实没有钩子"，姿态不明时它红也不是证据、
+                # 绿也不是证据，钱花了只换来一份没法引用的读数。
+                return (f"对照格 {plain_cells} 要真跑，但 {base} 的留痕读到姿态 {got!r}"
+                        f"（要的是 'no-hooks'）：那条该红的判据红不了，整次点验只能作废（rc 2）")
     return ""
 
 
