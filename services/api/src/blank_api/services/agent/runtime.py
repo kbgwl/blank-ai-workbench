@@ -30,6 +30,8 @@ from blank_api.services.agent.loadstats import recent_load
 from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agent.store import SerializedSessionFactory
 from blank_api.services.approval_rules import load_prefix_rules
+from blank_api.services.approvals import approval_key
+from blank_api.services.permission_rules import load_ruleset
 from blank_api.services.chat_index import index_task_summary
 from blank_api.services.features import is_enabled
 from blank_api.services.fork import allocate_thread
@@ -188,6 +190,8 @@ class _RunScope:
     # 档位解析结果（requested/tier/strength/notice）。task.started 与 turn.context
     # 都从这里取，避免两处各自解析出不同的档位。
     sandbox: dict = field(default_factory=dict)
+    # 本轮的子代理运行器：收尾时要把仍在跑的后台子代理收走（见 _finish）。
+    subagents: Any = None
 
 
 class AgentRuntime:
@@ -195,10 +199,14 @@ class AgentRuntime:
         self.session_factory = session_factory
 
     async def _rehydrate(self, task_id: str, permissions: PermissionPolicy) -> None:
-        """从事件日志回放本任务的批准与驳回。
+        """从事件日志回放本任务的批准、驳回与已消费的一次性授权。
 
         会话记忆本来只活在进程内存里，而审批恢复、后端重启都会重建 AgentSession；
         不回放的话，用户"本会话总是允许 git status"的授权每次恢复都会丢。
+
+        `approval.consumed` 必须和授权一起按 seq 回放：单次越界批准在执行前就销账，
+        只回放 `approval.granted` 会把同一枚 key 重新授权一次，用户的驳回也被顶掉。
+        三类事件共用一个序，后发生的事实覆盖先发生的。
         """
         async with self.session_factory() as session:
             rows = (
@@ -207,7 +215,9 @@ class AgentRuntime:
                         select(AgentEvent)
                         .where(
                             AgentEvent.task_id == task_id,
-                            AgentEvent.type.in_(("approval.granted", "approval.denied")),
+                            AgentEvent.type.in_(
+                                ("approval.granted", "approval.denied", "approval.consumed")
+                            ),
                         )
                         .order_by(AgentEvent.seq)
                     )
@@ -224,23 +234,42 @@ class AgentRuntime:
             if not isinstance(arguments, dict):
                 arguments = {}
             scope = str(payload.get("scope") or "once")
-            if row.type == "approval.granted":
+            if row.type == "approval.consumed":
+                # 记录里带了 key 就直接用：arguments 落库前经过打码，含密钥的命令
+                # 重新算出来的指纹与批准时那枚并不相同。
+                key = str(payload.get("approval_key") or "")
+                permissions.approved_actions.discard(key or approval_key(tool, arguments))
+            elif row.type == "approval.granted":
                 permissions.remember(tool, arguments, scope)
             else:
                 permissions.forget(tool, arguments, scope)
 
     async def _stored_mode(self, task_id: str) -> str:
-        """任务首次运行时记下的权限模式，供审批恢复沿用。"""
+        """任务当前生效的权限模式：新开一轮、审批恢复都沿用。
+
+        取最近一条 `permission.mode_changed` 或 `task.started`。模型主动拨过的模式
+        必须活过审批中断与后续轮次——否则"进入计划模式"只在这一轮有效，用户下一条
+        消息就悄悄变回默认，而界面上的治理快照还写着 plan。
+        """
         async with self.session_factory() as session:
-            payload = (
+            row = (
                 await session.execute(
-                    select(AgentEvent.payload)
-                    .where(AgentEvent.task_id == task_id, AgentEvent.type == "task.started")
+                    select(AgentEvent.type, AgentEvent.payload)
+                    .where(
+                        AgentEvent.task_id == task_id,
+                        AgentEvent.type.in_(("task.started", "permission.mode_changed")),
+                    )
                     .order_by(AgentEvent.seq.desc())
                     .limit(1)
                 )
-            ).scalar_one_or_none()
-        return str((payload or {}).get("permission_mode") or "")
+            ).first()
+        if row is None:
+            return ""
+        kind, payload = row
+        data = payload if isinstance(payload, dict) else {}
+        if kind == "permission.mode_changed":
+            return str(data.get("to") or "")
+        return str(data.get("permission_mode") or "")
 
     async def _stored_tier(self, task_id: str) -> str:
         """任务首次运行请求的档位，供审批恢复沿用。
@@ -339,6 +368,12 @@ class AgentRuntime:
         # 落盘的前缀规则：重启/换任务后仍认得用户以前批准过的命令签名。
         # 读不出来（文件缺失/损坏）就是空集——fail-closed，多问一次而不是少问一次。
         permissions.persistent_prefixes = load_prefix_rules()
+        # 人手写的 allow/deny 规则。文件写坏时整份停用并把错误记进事件：
+        # 静默失效会让用户以为"我明明写了 deny"。
+        ruleset = load_ruleset()
+        permissions.ruleset = ruleset
+        if ruleset.rules or ruleset.error:
+            await recorder.add("permission_rules.loaded", "receive_task", ruleset.summary())
         adapters = [request.adapter, *(request.role_adapters or {}).values()]
         # 按需选模型：候选不足两个就没有"选"可言，直接不建路由，
         # 关掉开关时行为与单模型完全一致（router=None 时 call_model 走原路径）。
@@ -440,6 +475,7 @@ class AgentRuntime:
             thread_id=thread_id,
             mcp=mcp_bundle.as_dict(),
             sandbox=sandbox.as_dict(),
+            subagents=subagents,
         )
 
     async def _fire_hooks(self, scope: _RunScope, event: str, payload: dict) -> None:
@@ -452,9 +488,62 @@ class AgentRuntime:
                 {"event": event, "results": [item.as_dict() for item in results]},
             )
 
+    async def _close_hooks(self, scope: _RunScope) -> None:
+        """任务收尾：给后台钩子一个有界窗口，并如实记下没等到 / 没送到的那些。
+
+        后台钩子退出码 2 的正常去处是「下一次模型调用」；任务已经收尾时没有下一次，
+        所以这里不假装送达——记 ``hook.wakeup_missed``，让人在时间线上看见
+        「有个叫醒晚了」。等不到的子进程会被取消，事件里只留掩码后的命令与原因。
+        """
+        hooks = scope.session.hooks
+        completed, abandoned = await hooks.close()
+        for item in completed:
+            await scope.recorder.add(
+                "hook.completed",
+                "receive_task",
+                {
+                    "event": item.event,
+                    "async": True,
+                    "phase": "session_end",
+                    "results": [item.as_dict()],
+                },
+            )
+        wakeups = hooks.drain_wakeups()
+        if wakeups:
+            await scope.recorder.add(
+                "hook.wakeup_missed",
+                "receive_task",
+                {
+                    "count": len(wakeups),
+                    "delivered": False,
+                    "reason": "任务已收尾，没有下一次模型调用",
+                    "items": [
+                        {
+                            "event": str(item.get("event") or ""),
+                            "exit_code": item.get("exit_code"),
+                        }
+                        for item in wakeups
+                    ],
+                },
+            )
+        if abandoned:
+            await scope.recorder.add(
+                "hook.abandoned",
+                "receive_task",
+                {
+                    "count": len(abandoned),
+                    "phase": "session_end",
+                    "budget_seconds": hooks.settle_timeout,
+                    "commands": [mask_path(command) for command in abandoned],
+                },
+            )
+
     async def run(self, request: RunRequest) -> dict[str, Any]:
         thread_id = await next_thread_id(self.session_factory, request.task_id)
         await self._guard_tier_change(request)
+        # 同一任务的后继轮次沿用模型拨过的模式；没有历史事件才落到设置页默认值。
+        if not request.permission_mode:
+            request.permission_mode = await self._stored_mode(request.task_id)
         scope = await self._prepare(request, thread_id)
         await self._rehydrate(request.task_id, scope.session.permissions)
         recorder, session = scope.recorder, scope.session
@@ -583,6 +672,7 @@ class AgentRuntime:
                 reason=exc.message,
                 extra={"code": exc.code, "retryable": exc.retryable, "thread_id": thread_id},
             )
+            await self._close_hooks(scope)
             raise ApiError(code=exc.code, message=exc.message, status_code=502) from None
         except GraphInterrupt as exc:
             result, interrupts = {}, list(exc.args or [])
@@ -594,9 +684,31 @@ class AgentRuntime:
             "session_end",
             {"task_id": request.task_id, "thread_id": scope.thread_id, "interrupts": len(interrupts)},
         )
+        await self._close_hooks(scope)
         return await self._finalize(request, scope, result, interrupts)
 
     async def resume(self, request: RunRequest, decision: Any = True) -> dict[str, Any]:
+        return await self._resume(
+            request, Command(resume=decision), decision=decision, crash_recovery=False
+        )
+
+    async def resume_crash(self, request: RunRequest) -> dict[str, Any]:
+        """进程被杀/断电后的续跑：从最近检查点继续，不新开 attempt。
+
+        新开 attempt（``run()``）会让已经执行过的工具在全新状态里再执行一遍。
+        LangGraph 的检查点只回放最后一个未完成的节点，已落写的工具结果直接在
+        状态里，所以用 ``ainvoke(None)`` 接着走。
+        """
+        return await self._resume(request, None, decision=None, crash_recovery=True)
+
+    async def _resume(
+        self,
+        request: RunRequest,
+        graph_input: Any,
+        *,
+        decision: Any,
+        crash_recovery: bool,
+    ) -> dict[str, Any]:
         thread_id = await latest_thread_id(self.session_factory, request.task_id)
         if not request.permission_mode:
             request.permission_mode = await self._stored_mode(request.task_id) or MODE_DEFAULT
@@ -607,19 +719,19 @@ class AgentRuntime:
         scope = await self._prepare(request, thread_id)
         await self._rehydrate(request.task_id, scope.session.permissions)
         await self._set_status(scope, "running")
-        await scope.recorder.add(
-            "task.resumed",
-            "receive_task",
-            {
-                "thread_id": thread_id,
-                "decision": decision if isinstance(decision, (bool, str)) else dict(decision),
-                "permission_mode": scope.session.permission_mode,
-                "permissions": scope.session.permissions.snapshot(),
-                "sandbox": scope.sandbox,
-            },
-        )
+        payload = {
+            "thread_id": thread_id,
+            "permission_mode": scope.session.permission_mode,
+            "permissions": scope.session.permissions.snapshot(),
+            "sandbox": scope.sandbox,
+        }
+        if crash_recovery:
+            payload["crash_recovery"] = True
+        else:
+            payload["decision"] = decision if isinstance(decision, (bool, str)) else dict(decision)
+        await scope.recorder.add("task.resumed", "receive_task", payload)
         try:
-            result = await scope.graph.ainvoke(Command(resume=decision), scope.config)
+            result = await scope.graph.ainvoke(graph_input, scope.config)
         except ModelError as exc:
             await self._finish(
                 scope,
@@ -628,6 +740,7 @@ class AgentRuntime:
                 reason=exc.message,
                 extra={"code": exc.code, "thread_id": thread_id},
             )
+            await self._close_hooks(scope)
             raise ApiError(code=exc.code, message=exc.message, status_code=502) from None
         except GraphInterrupt as exc:
             result, interrupts = {}, list(exc.args or [])
@@ -639,6 +752,7 @@ class AgentRuntime:
             "session_end",
             {"task_id": request.task_id, "thread_id": scope.thread_id, "interrupts": len(interrupts)},
         )
+        await self._close_hooks(scope)
         return await self._finalize(request, scope, result, interrupts)
 
     async def _finalize(
@@ -788,6 +902,11 @@ class AgentRuntime:
         steps: int | None = None,
         extra: dict | None = None,
     ) -> None:
+        # 任务走到终点时仍在跑的后台子代理必须收走：否则任务已经显示"完成"，
+        # 它们还在调用模型、写事件，账目与界面从此对不上。等待审批不是一个终点——
+        # 恢复后还要用同一个句柄取结论，所以那一档不收。
+        if status != "waiting_approval" and scope.subagents is not None:
+            await scope.subagents.aclose(scope.task_id, reason=f"task_{status}")
         async with scope.store() as session:
             task = await session.get(Task, scope.task_id)
             if task is None:
@@ -815,6 +934,19 @@ class AgentRuntime:
         if routing:
             payload["routing"] = routing
         await scope.recorder.add(event_type, "complete", payload)
+        if status in ("succeeded", "failed", "cancelled"):
+            # fs-broker（#105）：任务走到终点，它那一枚 broker 随任务收走——
+            # 关 Job 句柄由内核带走整棵进程树（M0 P6.7 实测生效）。收尸失败不改判任务，
+            # 但必须把异常喊出来，不给"残留 broker 还活着"留静默。
+            from blank_api.services.tools import fs_broker as _fs_broker
+
+            try:
+                await _fs_broker.manager().release_task(scope.task_id)
+            except Exception as exc:  # noqa: BLE001
+                await scope.recorder.add(
+                    "fs_broker.release_failed", "complete",
+                    {"reason": f"{exc.__class__.__name__}: {exc}"},
+                )
 
 
 def _routing_summary(session: AgentSession) -> dict:

@@ -4,6 +4,9 @@
 
 ## 当前基线
 
+> **这一节是 2026-10-16 的快照**，只作历史起点用。下面「尚未达标」的多数条目后来已补齐，
+> 现状以「2026-10-16 实现审计」及其后各期交付记录为准；与现状不符的条目已就地标注。
+
 已经存在：
 
 - LangGraph 状态图：计划、执行、观察、验证、修复、总结
@@ -37,7 +40,10 @@
 仍未完成的生产门槛：
 
 - 当前 Worker 仍运行在 API 进程内，后台数据库扫描解决的是单机恢复，不是独立多副本 Worker 调度。
-- 工具大输出目前只做截断和证据摘要，还没有独立 artifact 存储与按需读取 API。
+- ~~工具大输出目前只做截断和证据摘要，还没有独立 artifact 存储与按需读取 API。~~
+  **此条已过期**：`services/api/src/blank_api/services/agent/artifacts.py` 有 `ArtifactStore`，
+  读取接口是 `GET /tasks/{task_id}/artifacts/{artifact_id}`（`api/routes/tasks.py`），
+  大输出按 `ToolCall.artifact_path` 落盘并按需取回。
 - 快照恢复、审批过期、跨进程恢复和模型 fallback 仍需要真实数据库、Docker 和多进程端到端评测作为发布门禁。
 - 固定评测集尚未形成自动化 CI 门禁。
 

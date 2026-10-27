@@ -62,21 +62,62 @@ async def claim_run(db: AsyncSession, run_id: str, worker_id: str, lease_seconds
     return result.rowcount == 1
 
 
-async def finish_run(db: AsyncSession, run_id: str, status: str) -> None:
-    await db.execute(
+async def finish_run(db: AsyncSession, run_id: str, status: str, worker_id: str) -> bool:
+    """写终态，但只允许仍然持有这条租约的 worker 写。
+
+    只按 run_id 更新会出这种事：A 的租约过期、B 接管（attempts 已经加到 2），
+    A 手上的活儿跑完照样把这条 run 写成 succeeded——界面上看到的是"B 在跑、
+    结果已就绪"，而 B 其实一步都还没走完。实测见 E:/tmp/m90/lease2-readings.txt 的 S3。
+    """
+    result = await db.execute(
         update(AgentRun)
-        .where(AgentRun.id == run_id)
-        .values(status=status, lease_expires_at=None)
+        .where(
+            AgentRun.id == run_id,
+            AgentRun.status == "running",
+            AgentRun.worker_id == worker_id,
+        )
+        .values(status=status, worker_id="", lease_expires_at=None)
     )
     await db.commit()
+    return result.rowcount == 1
+
+
+async def abandon_run(db: AsyncSession, run_id: str) -> bool:
+    """启动恢复"不再重试"那一路：把没人跑的 run 判死，但不得踩住一条正被跑着的。
+
+    这条路径没有 worker 身份可验（认领它的进程早没了），所以验租约：还新鲜就说明
+    有人正在跑，判死必须失败。
+    """
+    result = await db.execute(
+        update(AgentRun)
+        .where(
+            AgentRun.id == run_id,
+            or_(
+                AgentRun.status == "queued",
+                (AgentRun.status == "running")
+                & ((AgentRun.lease_expires_at.is_(None)) | (AgentRun.lease_expires_at < utc_now())),
+            ),
+        )
+        .values(status="failed", worker_id="", lease_expires_at=None)
+    )
+    await db.commit()
+    return result.rowcount == 1
 
 
 async def renew_run(db: AsyncSession, run_id: str, worker_id: str, lease_seconds: int = 90) -> bool:
     """Extend a lease only for its current owner; stale workers cannot revive a run."""
+    now = utc_now()
     result = await db.execute(
         update(AgentRun)
-        .where(AgentRun.id == run_id, AgentRun.status == "running", AgentRun.worker_id == worker_id)
-        .values(lease_expires_at=utc_now() + timedelta(seconds=lease_seconds))
+        .where(
+            AgentRun.id == run_id,
+            AgentRun.status == "running",
+            AgentRun.worker_id == worker_id,
+            # 过期即失去身份：否则旧 worker 抢在接管者之前把租约续上，接管窗口永远打开
+            AgentRun.lease_expires_at.is_not(None),
+            AgentRun.lease_expires_at > now,
+        )
+        .values(lease_expires_at=now + timedelta(seconds=lease_seconds))
     )
     await db.commit()
     return result.rowcount == 1

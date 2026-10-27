@@ -62,6 +62,21 @@ pnpm dev
 依次执行 `docker compose up -d --wait` → `alembic upgrade head` → uvicorn (:8000) → next dev (:3000)。
 打开 http://localhost:3000 ，顶栏健康指示灯变绿即代表后端与数据库连通。
 
+### 5.1 把执行挪到独立进程（可选）
+
+桌面单机默认由 API 进程内执行（`BLANK_INPROCESS_RUNNER=1`）。要让 API 与执行解耦：
+
+```bash
+BLANK_INPROCESS_RUNNER=0 uv run --project services/api python -m blank_api.worker
+```
+
+- API 只建 run 并返回 `queued`，启动恢复也不认领；worker 轮询 `queued` 与租约已过期的 run。
+- 同一条 run 只认一个 worker：租约 90 秒、心跳续租；失去租约的执行会被取消，终态只有持约人能写。
+- 进程被杀后，另一个 worker 等租约过期即接管；已完成的工具调用按 `tool.completed` 执行日志复用，
+  不会重复执行（设计与读数见 `docs/REA-WAVE4-CODEX-RUNTIME.md` §7.56）。
+- worker 与 API 必须共用同一个数据库与工作区根；`data/artifacts` 也要一起可见，否则接管时
+  取不回已完成的结果，只能再执行一次。
+
 ## 6. 沙箱执行环境（阶段6）
 
 Agent 的 shell 命令默认在一次性 Docker 容器里执行：工作区是唯一可写挂载点，默认无网络，

@@ -169,7 +169,9 @@ def test_the_drive_still_registers_every_step_once() -> None:
                       "76 网关拒 stream 时退回整包并把活干完", "77 两种形状都 429 时不许静默成功",
                       "78 模型太慢要按超时失败",
                       "81 429 退避一次后把活干完", "82 429 的 Retry-After 要算进等待",
-                      "83 压缩真发生且摘要那笔 429 听 Retry-After"):
+                      "83 压缩真发生且摘要那笔 429 听 Retry-After",
+                      "84 scope=tool 批准后下一条高风险命令仍要问",
+                      "85 只换载荷尾巴要重新挂卡且批准过的那条不再挂卡"):
         assert must_have in joined, must_have
 
 
@@ -250,11 +252,19 @@ def test_the_verdict_fails_loudly_when_any_cell_is_red() -> None:
 
     single_green = {"mysql": {"19": "PASS"}}
     rc, lines = device.verdict(single_green)
-    assert rc == 0 and any("只有一格" in x for x in lines), lines
+    # 对照格（sqlite）不在场 ⇒ 判据连成立的机会都没有：这不是"换库全绿"，是"今天没法判"。
+    # 2026-10-26 那一次 26 步红全在 sqlite 格，装置前提一崩就整格没跑——老口径在这里返回 0。
+    assert rc == 2 and any("对照格" in x and "缺席" in x for x in lines), lines
 
     single_red = {"mysql": {"19": "FAIL"}}
     rc, lines = device.verdict(single_red)
-    assert rc == 1 and any("只跑了一格" in x for x in lines), lines
+    assert rc == 2 and any("对照格" in x for x in lines), lines
+
+
+def test_the_control_cell_present_but_green_is_reported_as_one_cell() -> None:
+    """对照格在场、被测格缺席时才是「只有一格」：这一句和「没法判」是两种诚实。"""
+    rc, lines = device.verdict({"sqlite": {"19": "PASS"}})
+    assert rc == 0 and any("只有一格" in x for x in lines), lines
 
 
 def test_the_stub_only_switches_tools_on_the_probe_marker() -> None:

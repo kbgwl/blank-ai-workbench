@@ -32,6 +32,7 @@ from blank_api.services.permissions import (
     memoizable_prefix,
     parse_decision,
     prefix_rule,
+    tool_grant_too_wide,
 )
 from blank_api.services.tools.base import ToolDefinition, ok
 from blank_api.services.tools.gateway import ToolGateway
@@ -103,6 +104,25 @@ def test_irreversible_commands_are_flagged() -> None:
     assert is_irreversible("git status") is False
 
 
+def test_irreversible_covers_env_expanded_targets() -> None:
+    """目标由环境变量/主目录展开时，静态看不见具体路径。
+
+    这类删除落在工作区之外，快照赎不回来；判成「可逆」的后果不是多问一次，而是
+    guardian 在 auto 模式下可以代批、卡片还会给出「总是允许」。所以删除类动词
+    挂上 `%VAR%` / `$env:` / `$HOME` 一律按不可逆走。
+    """
+    assert is_irreversible(r"del /s /q %USERPROFILE%\Documents") is True
+    assert is_irreversible(r"rmdir /s /q %TEMP%\x") is True
+    assert is_irreversible(r"del /f /s /q %SystemDrive%\data") is True
+    assert is_irreversible(r"Remove-Item $env:USERPROFILE\Documents\old") is True
+    assert is_irreversible(r"Remove-Item $HOME\Documents\old") is True
+    # 负对照：读环境变量、删工作区内的相对路径都不许被这条规则连坐
+    assert is_irreversible(r"echo %USERPROFILE%") is False
+    assert is_irreversible(r"grep %PATH% notes.txt") is False
+    assert is_irreversible(r"del notes.txt") is False
+    assert is_irreversible(r"Get-ChildItem $env:TEMP") is False
+
+
 def test_parse_decision_accepts_bool_and_scoped_dict() -> None:
     assert parse_decision(True) == (True, SCOPE_ONCE)
     assert parse_decision(False) == (False, SCOPE_ONCE)
@@ -114,10 +134,31 @@ def test_parse_decision_accepts_bool_and_scoped_dict() -> None:
 
 
 def test_approval_options_list_scopes_for_shell() -> None:
-    scopes = [item["scope"] for item in approval_options("run_shell", "git push")]
-    assert scopes == [SCOPE_ONCE, SCOPE_PREFIX, SCOPE_TOOL]
-    # 非命令类工具没有"该前缀"这一档
-    assert [item["scope"] for item in approval_options("apply_patch")] == [SCOPE_ONCE, SCOPE_TOOL]
+    """#82：卡上的档位＝可记忆前缀 ＋（只有免问范围被参数框得住时）工具档。
+
+    这里按发卡方（网关与图）同一个组合调用，不是给 `approval_options` 单编一套口径：
+    两处发卡与写入侧共用 :func:`tool_grant_too_wide`，卡上才不会长出按不下去的钮。
+    """
+    command = "git push origin main"
+    scopes = [
+        item["scope"]
+        for item in approval_options(
+            "run_shell",
+            "git push",
+            tool_scope=not tool_grant_too_wide("run_shell", {"command": command}),
+        )
+    ]
+    assert scopes == [SCOPE_ONCE, SCOPE_PREFIX]
+    # 非命令类工具没有"该前缀"这一档；参数框住路径的工具才给得出工具档
+    patch_arguments = {"path": "src/a.py", "patch": "--- a\n+++ b\n"}
+    assert [
+        item["scope"]
+        for item in approval_options(
+            "apply_patch",
+            "",
+            tool_scope=not tool_grant_too_wide("apply_patch", patch_arguments),
+        )
+    ] == [SCOPE_ONCE, SCOPE_TOOL]
 
 
 def test_only_memoizable_prefixes_get_the_prefix_scope() -> None:
@@ -134,7 +175,12 @@ def test_only_memoizable_prefixes_get_the_prefix_scope() -> None:
     for dangerous in ("rm", "bash", "sh", "curl", "git", "powershell", "pwsh", "cmd"):
         memo = memoizable_prefix("run_shell", dangerous)
         assert memo == "", dangerous
-        scopes = [item["scope"] for item in approval_options("run_shell", memo)]
+        scopes = [
+            item["scope"]
+            for item in approval_options(
+                "run_shell", memo, tool_scope=not tool_grant_too_wide("run_shell", {"command": dangerous})
+            )
+        ]
         assert SCOPE_PREFIX not in scopes, dangerous
     assert memoizable_prefix("apply_patch", "git push") == ""
 
@@ -216,16 +262,32 @@ def test_session_prefix_memory_skips_the_next_ask() -> None:
     assert _decide(policy, "run_shell", {"command": "git reset --hard"}, "high").outcome == ASK
 
 
-def test_session_tool_memory_skips_the_next_ask() -> None:
+def test_session_tool_memory_does_not_cover_a_command_tool() -> None:
+    """#82：命令类工具的 `scope=tool` 不入账。
+
+    老语义——批一次 `curl https://a`，以后 `wget https://b` 也免问——正是这次要还的债：
+    用户点的是「这一条命令」，账本买的是「这个会话的任意命令」。工具档还在，只是只对
+    参数框得住免问范围的工具兑现（带 `path` 的 `apply_patch` 是活例子）。
+    不可逆命令排在工具档之前判定（#70 的裁决）这条改用操作者种子来量：写入侧已经不给
+    命令工具记宽档，只有种子还能记出一个裸 `run_shell` 授权。
+    """
     policy = PermissionPolicy()
     policy.remember("run_shell", {"command": "curl https://a"}, SCOPE_TOOL)
-    # 工具档覆盖该工具的所有参数组合——这正是 "本会话总是允许 run_shell" 的语义
-    assert _decide(policy, "run_shell", {"command": "curl https://b"}, "high").outcome == ALLOW
-    assert _decide(policy, "run_shell", {"command": "wget https://b"}, "high").outcome == ALLOW
-    # 但不会外溢到别的工具
-    assert _decide(policy, "apply_patch", {"path": ".env", "patch": "x"}, "high").outcome == ASK
-    # 不可逆命令仍在工具档之前判定，照样逐条确认（#70 的裁决）
-    override = _decide(policy, "run_shell", {"command": "git push --force origin main"}, "high")
+    assert policy.approved_tools == set()
+    assert _decide(policy, "run_shell", {"command": "curl https://b"}, "high").outcome == ASK
+
+    scoped = PermissionPolicy()
+    scoped.remember("apply_patch", {"path": ".env", "patch": "x"}, SCOPE_TOOL)
+    allowed = _decide(scoped, "apply_patch", {"path": ".env", "patch": "y"}, "high")
+    assert allowed.outcome == ALLOW
+    assert allowed.rule == f"tool:{scoped.sandbox_tier}:apply_patch"
+    # 免问按路径分桶：换个文件重新问
+    assert _decide(scoped, "apply_patch", {"path": "src/a.py", "patch": "y"}, "high").outcome == ASK
+    # 不会外溢到别的工具
+    assert _decide(scoped, "run_shell", {"command": "wget https://b"}, "high").outcome == ASK
+    # 裸种子仍然兑现，但不可逆命令排在它前面
+    seeded = PermissionPolicy.build(MODE_DEFAULT, approved_tools={"run_shell"})
+    override = _decide(seeded, "run_shell", {"command": "git push --force origin main"}, "high")
     assert override.outcome == ASK
     assert override.rule == "irreversible"
 
@@ -302,12 +364,13 @@ async def test_gateway_marks_irreversible_even_in_bypass(env, workspace: Path): 
     result = await gateway.execute(
         "run_shell", {"command": "rm -rf /tmp/x"}, context, "execute_action"
     )
-    # 不可逆命令即便全放行也转为待审批；而且 rm 不是可记忆前缀，只给"本次/该工具"两档
+    # 不可逆命令即便全放行也转为待审批；`rm` 不是可记忆前缀，命令类工具又不给工具档，
+    # 所以这张卡上只剩"仅本次允许"一颗钮（#82）。
     assert result["status"] == "awaiting_approval"
     assert result["data"]["permission_rule"] == "irreversible"
     assert result["data"]["command_prefix"] == "rm"
     assert result["data"]["suggested_prefix"] == ""
-    assert [item["scope"] for item in result["data"]["approval_options"]] == [SCOPE_ONCE, SCOPE_TOOL]
+    assert [item["scope"] for item in result["data"]["approval_options"]] == [SCOPE_ONCE]
     assert not (workspace / "ran.txt").exists()
 
 
@@ -348,10 +411,10 @@ async def test_prefix_scope_approval_survives_the_resume(env, workspace: Path): 
     assert len(approvals) == 1
     assert approvals[0]["suggested_prefix"] == "git push"
     assert approvals[0]["permission_mode"] == MODE_DEFAULT
+    # 命令类工具的卡上没有工具档（#82）：能按下去的只有"本次"与"这一条命令"
     assert [item["scope"] for item in approvals[0]["approval_options"]] == [
         SCOPE_ONCE,
         SCOPE_PREFIX,
-        SCOPE_TOOL,
     ]
 
     resp = await env.client.post(

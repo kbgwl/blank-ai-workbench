@@ -265,6 +265,18 @@ export type McpServerStatus = {
   /** 失败或跳过时后端给的中文原因，成功时为空 */
   error?: string;
   server?: string;
+  /** 连上时的边界事实：job_object / host_process_unbounded / remote */
+  boundary?: string;
+  /** 边界的诚实说明；没挂进 Job 时以 ⚠ 开头 */
+  boundary_note?: string;
+  /** 挂进 Job 时后端给的结构化读数；老服务没有这一块 */
+  enforcement?: {
+    memory_enforced?: boolean;
+    memory_bytes?: number;
+    pids_enforced?: boolean;
+    pids_limit?: number;
+    tree_kill_enforced?: boolean;
+  };
 };
 
 export type McpResponse = {

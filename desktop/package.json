@@ -1,12 +1,12 @@
 {
   "name": "blank-ai-workbench-desktop",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "private": true,
   "description": "空白格 AI 操作台的桌面壳",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "test": "node --test tests/gpu-guard.test.cjs tests/api-base.test.cjs",
+    "test": "node --test tests/gpu-guard.test.cjs tests/api-base.test.cjs tests/shell-policy.test.cjs tests/update-policy.test.cjs tests/main-wiring.test.cjs",
     "install:local": "node install-local.cjs",
     "dist": "electron-builder",
     "dist:portable": "electron-builder --win portable",
@@ -29,10 +29,15 @@
       "main.cjs",
       "api-base.cjs",
       "gpu-guard.cjs",
+      "shell-policy.cjs",
       "preload.cjs",
       "package.json"
     ],
     "extraResources": [
+      {
+        "from": "build/icon.ico",
+        "to": "shell/icon.ico"
+      },
       {
         "from": "../web/out",
         "to": "web"

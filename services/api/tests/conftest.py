@@ -20,6 +20,8 @@ os.environ.setdefault("BLANK_SETTINGS_FILE", f"{tempfile.mkdtemp(prefix='blank-s
 os.environ.setdefault("BLANK_APPROVALS_FILE", f"{tempfile.mkdtemp(prefix='blank-approvals-')}/approvals.json")
 # 子代理的隔离副本也放测试自己的目录：不往系统临时目录里堆，跑完自动随 basetemp 清理
 os.environ.setdefault("BLANK_WORKTREE_ROOT", tempfile.mkdtemp(prefix="blank-worktrees-"))
+# 工作区快照同样落临时目录：默认路径是仓库里的 data/snapshots。
+os.environ.setdefault("BLANK_SNAPSHOT_DIR", tempfile.mkdtemp(prefix="blank-snapshots-"))
 # 工具调用的审计账也落临时目录：每次网关调用都写一条 JSONL，留在仓库里就是脏数据
 os.environ.setdefault("BLANK_AUDIT_DIR", tempfile.mkdtemp(prefix="blank-audit-"))
 
@@ -54,6 +56,18 @@ from blank_api.db import Base, get_engine  # noqa: E402
 def _isolate_approvals_file(tmp_path, monkeypatch):
     """每个用例一份空的审批规则：上个用例批准过的前缀不该改变下个用例的判定。"""
     monkeypatch.setenv("BLANK_APPROVALS_FILE", str(tmp_path / "approvals.json"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_snapshot_dir(tmp_path, monkeypatch):
+    """每个用例一份快照目录：整树恢复会覆盖工作区，不能和别的用例共享落盘状态。"""
+    monkeypatch.setenv("BLANK_SNAPSHOT_DIR", str(tmp_path / "snapshots"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_permission_rules(tmp_path, monkeypatch):
+    """每个用例一份手写规则文件：仓库里或上个用例留下的 allow/deny 会改变判定。"""
+    monkeypatch.setenv("BLANK_PERMISSION_RULES", str(tmp_path / "permissions.rules"))
 
 
 @pytest.fixture

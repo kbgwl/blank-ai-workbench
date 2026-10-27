@@ -343,7 +343,14 @@ function BoundaryDetails({ boundaries }: { boundaries: Boundaries }) {
         tone={(boundaries.toolCalls.unattributed ?? 0) > 0 ? "warn" : undefined}
         title="每一笔工具调用落在哪一层边界里。未归属=当时没记边界，不猜成进程内"
       />
-      {mcpLine && <Row label="MCP" value={mcpLine} title="MCP 服务端在宿主进程里跑，不进任务沙箱" />}
+      {mcpLine && (
+        <Row
+          label="MCP"
+          value={mcpLine}
+          tone={boundaries.mcp.unboundedServers.length > 0 ? "warn" : undefined}
+          title="stdio 服务端尽量挂进 Job；没挂进去的按宿主权限运行。http 服务端的进程在远端"
+        />
+      )}
     </>
   );
 }
@@ -390,12 +397,16 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
   }, [taskId, evidence?.status]);
 
   async function restore(snapshot: TaskSnapshot) {
+    if (snapshot.restorable === false) return;
     if (!window.confirm("恢复此快照会覆盖工作区中的文件，确定继续吗？")) return;
     setRestoring(snapshot.id);
     setSnapshotError(null);
     try {
-      await restoreTaskSnapshot(taskId, snapshot.id);
-      setSnapshotError("已恢复工作区快照");
+      const result = await restoreTaskSnapshot(taskId, snapshot.id);
+      const skipped = result.skipped.length;
+      const head = `已恢复 ${result.restored.length} 个文件`;
+      setSnapshotError(skipped > 0 ? `${head}，跳过 ${skipped} 个：${result.skipped_reason || "原因未记录"}` : head);
+      void fetchTaskSnapshots(taskId).then(setSnapshots).catch(() => undefined);
     } catch (restoreError) {
       setSnapshotError(errorMessage(restoreError));
     } finally {
@@ -543,14 +554,24 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
       {snapshots.length > 0 && (
         <section className="flex flex-col gap-1.5 border-t border-line pt-3">
           <h4 className="font-mono text-[10px] tracking-wide text-faint uppercase">回滚点</h4>
-          {snapshots.map((snapshot) => (
-            <div key={snapshot.id} className="flex items-center justify-between gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-2">
-              <span className="min-w-0 truncate text-[11px] text-muted" title={snapshot.reason}>{snapshot.reason}</span>
-              <button type="button" disabled={restoring !== null} onClick={() => void restore(snapshot)} className="shrink-0 rounded border border-line px-2 py-1 text-[10px] text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50">
-                {restoring === snapshot.id ? "恢复中" : "恢复"}
-              </button>
-            </div>
-          ))}
+          {snapshots.map((snapshot) => {
+            const restorable = snapshot.restorable !== false;
+            return (
+              <div key={snapshot.id} className="flex flex-col gap-1 rounded-md border border-line bg-surface-2 px-2.5 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate text-[11px] text-muted" title={snapshot.reason}>{snapshot.reason}</span>
+                  <button type="button" disabled={restoring !== null || !restorable} title={restorable ? undefined : snapshot.skipped_reason} onClick={() => void restore(snapshot)} className="shrink-0 rounded border border-line px-2 py-1 text-[10px] text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50">
+                    {restoring === snapshot.id ? "恢复中" : restorable ? "恢复" : "仅清单"}
+                  </button>
+                </div>
+                {!restorable && (
+                  <p className="text-[10px] leading-relaxed text-faint">
+                    {snapshot.skipped_reason || "这份快照只记录了文件清单，没有复制文件内容，无法恢复。"}
+                  </p>
+                )}
+              </div>
+            );
+          })}
           {snapshotError && <p className="text-[11px] text-muted">{snapshotError}</p>}
         </section>
       )}

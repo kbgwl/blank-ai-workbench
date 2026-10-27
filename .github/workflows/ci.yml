@@ -122,3 +122,53 @@ jobs:
       - run: uv sync
         working-directory: services/api
       - run: node evals/team_e2e/run.mjs --skip-web
+
+  eval-gate:
+    # #104：评测集成功率进门禁。用脚本化桩（scripts/mock-model-server.mjs，不烧真模型、不调真实供应商）
+    # 跑 evals/task-samples.json 全集 32 例，读数装置是 evals/eval_gate.mjs——它自己那行「退出码=」才是判定：
+    #   0=成功率≥实测阈值；1=有格红；2=这一格今天没法判（结果缺失/样本不足/上一轮没跑完/有记录没判出）。
+    # 1 与 2 都会让这一步红：「今天没法判」绝不允许伪装成「通过」。阈值 0.938 的实测出处写在 evals/gate_config.json。
+    # 本 job 从未在 GitHub runner 上真跑过（同 team-e2e/api-dialect）；本地等价复现见 scripts/local_ci.mjs --job eval-gate。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: uv sync
+        working-directory: services/api
+      - name: 隔离库建库（这一格量的是产品链路，不是方言，SQLite 足够）
+        env:
+          BLANK_DATABASE_URL: sqlite+aiosqlite:////tmp/eval_gate.db
+        run: uv run alembic upgrade head
+        working-directory: services/api
+      - name: 起脚本化桩 + API（:8050 独立实例；姿态与桌面壳同款，无 docker 时沙箱默认开会把任务全挡死）
+        run: |
+          node scripts/mock-model-server.mjs > /tmp/mock.log 2>&1 &
+          cd services/api
+          BLANK_DATABASE_URL=sqlite+aiosqlite:////tmp/eval_gate.db \
+          BLANK_SETTINGS_FILE=/tmp/eval_gate_settings.json \
+          BLANK_SECRET_KEY_FILE=/tmp/eval_gate_secret.key \
+          BLANK_SANDBOX_ENABLED=false \
+          uv run uvicorn blank_api.app:app --host 127.0.0.1 --port 8050 > /tmp/api.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8050/api/v1/health | grep -q connected && exit 0
+            sleep 2
+          done
+          echo "::error::API :8050 没起来"
+          tail -50 /tmp/api.log
+          exit 1
+      - name: 注册脚本化桩供应商
+        env:
+          BLANK_API_BASE: http://127.0.0.1:8050/api/v1
+        run: |
+          node scripts/register_mock_provider.mjs http://127.0.0.1:8099/v1 \
+            | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s).id))" \
+            | xargs -I{} sh -c 'echo "PROVIDER_ID={}" >> "$GITHUB_ENV"'
+      - name: 评测全集 32 例（桩）
+        env:
+          BLANK_API_BASE: http://127.0.0.1:8050
+        run: node evals/run_evals.mjs --provider "$PROVIDER_ID" --concurrency 3
+      - name: 成功率门禁（只认 eval_gate 自己那行退出码）
+        run: node evals/eval_gate.mjs

@@ -51,6 +51,10 @@ class Task(Base):
     turn_index: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    # 这一轮被回退掉的时间。行本身留着——事件、工具调用、用量都挂在它上面，
+    # 删掉就等于毁掉审计材料；「不再属于对话」用这个标记表达。
+    # 可空而不是默认零值：没有回退过和"回退时间未知"是两件事。
+    rewound_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     goal: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=text("('')")

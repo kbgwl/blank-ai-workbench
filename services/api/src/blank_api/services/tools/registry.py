@@ -42,6 +42,10 @@ CORE_TOOLS = frozenset(
     {
         "tool_search",
         "update_plan",
+        # 进出计划模式与 update_plan 同属"规划"：lean 视图要成对带上它们，
+        # 而 lean 只许从核心集合里裁剪——留在核心集合外就破了那条不变量。
+        "enter_plan_mode",
+        "exit_plan_mode",
         "request_user_input",
         "read_file",
         "list_files",
@@ -61,6 +65,7 @@ DEFERRED_TOOLS = frozenset(
         "web_search",
         "web_fetch",
         "memory_search",
+        "memory_write",
         "spawn_agent",
         "spawn_agents",
     }
@@ -78,6 +83,7 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "web_search": ("联网", "上网", "搜索", "查资料", "资料", "网页", "search", "web", "internet"),
     "web_fetch": ("抓取", "上网", "网页", "链接", "抓", "fetch", "url", "http"),
     "memory_search": ("记忆", "历史", "上次", "以前", "memory", "recall"),
+    "memory_write": ("记住", "记忆", "长期记忆", "别忘", "remember", "memory"),
     "write_notes": ("笔记", "交接", "记录", "notes"),
     "read_notes": ("笔记", "交接", "notes"),
     "spawn_agent": ("子代理", "子任务", "委派", "并行", "subagent", "delegate"),
@@ -87,6 +93,8 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "search_code": ("搜索代码", "查找", "grep", "search"),
     "request_user_input": ("提问", "询问", "确认", "ask"),
     "update_plan": ("计划", "步骤", "plan", "todo"),
+    "enter_plan_mode": ("计划模式", "先调研", "只读", "plan mode", "enter plan"),
+    "exit_plan_mode": ("退出计划", "开始执行", "确认计划", "exit plan", "plan approved"),
 }
 
 MAX_SEARCH_RESULTS = 6
@@ -151,6 +159,9 @@ LEAN_TOOLS = frozenset(
         "search_code",
         "apply_patch",
         "run_shell",
+        # 进出计划模式必须成对出现：只给 enter 会让弱模型进去之后出不来。
+        "enter_plan_mode",
+        "exit_plan_mode",
     }
 )
 

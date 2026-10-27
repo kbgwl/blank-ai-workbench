@@ -29,6 +29,7 @@ from blank_api.services.permissions import (
     memoizable_prefix,
     prefix_rule,
     render_rule,
+    tool_grant_too_wide,
 )
 from blank_api.services.tools.base import ToolDefinition, ok
 from blank_api.services.tools.gateway import ToolGateway
@@ -71,16 +72,19 @@ def _decide(policy: PermissionPolicy, command: str, risk: str = "high"):
         ("python -c 'print(1)'", ("python", "-c", "print(1)")),
         ('python -c "print(1 + 2)"', ("python", "-c", "print(1 + 2)")),
         ("node -e 'console.log(1)'", ("node", "-e", "console.log(1)")),
-        ("python -m pytest -q", ("python", "-m", "pytest")),
+        # 解释器命令记的是整段 argv：载荷之后的尾巴会改变同一段代码的行为（sys.argv），
+        # 让它搭顺风车就是扩权（#87 实测，见 test_shell_quoting_v53.py 第 4 节）
+        ("python -m pytest -q", ("python", "-m", "pytest", "-q")),
         ("python -I -u -c 'print(1)'", ("python", "-I", "-u", "-c", "print(1)")),
-        ("python -u script.py --x", ("python", "-u", "script.py")),
+        ("python -u script.py --x", ("python", "-u", "script.py", "--x")),
         (r"C:\Python312\python.exe -c 'print(1)'", ("python", "-c", "print(1)")),
         ("py script.py", ("py", "script.py")),
         # 裸解释器不记：否则等于把任意载荷交给模型自选
         ("python", ()),
         ("node", ()),
-        # 原本就拒绝的裸可执行名，宽度不变
-        ("pwsh -Command 'Get-ChildItem'", ()),
+        # 本机默认壳是 PowerShell：`-Command` 的正文就是被执行的东西，必须能记下来
+        ("pwsh -Command 'Get-ChildItem'", ("pwsh", "-Command", "Get-ChildItem")),
+        # bash 不在这张表里：它的 `-lc` 正文可以是任意一条命令链，记成前缀等于放行整串
         ("bash -lc 'ls'", ()),
         ("rm -rf build", ()),
         # 构建/测试类工具与带子命令的普通命令照旧
@@ -109,7 +113,8 @@ def test_interpreter_path_is_normalized_to_basename() -> None:
 def test_inline_code_body_round_trips_through_render() -> None:
     rule = ("python", "-c", "print(1 + 2)")
     text = render_rule(rule)
-    assert text == "python -c 'print(1 + 2)'"
+    # 双引号包裹：载荷里 `print('x')` 这类单引号太常见，单引号包裹会写出读不回来的串（#87）
+    assert text == 'python -c "print(1 + 2)"'
     assert prefix_rule(text) == rule
 
 
@@ -140,14 +145,19 @@ def test_one_inline_body_does_not_cover_another() -> None:
 
 def test_irreversible_command_never_gets_a_memo() -> None:
     policy = PermissionPolicy()
-    verdict = _decide(policy, "git push origin main --force")
+    command = "git push origin main --force"
+    verdict = _decide(policy, command)
     assert verdict.outcome == ASK
     assert verdict.rule == "irreversible"
     assert verdict.memo == ""
-    assert [item["scope"] for item in approval_options("run_shell", verdict.memo)] == [
-        SCOPE_ONCE,
-        SCOPE_TOOL,
-    ]
+    # 不可逆 → 没有前缀档；命令类工具 → 也没有工具档（#82）：这张卡只剩"仅本次允许"。
+    assert tool_grant_too_wide("run_shell", {"command": command}) is True
+    assert [
+        item["scope"]
+        for item in approval_options(
+            "run_shell", verdict.memo, tool_scope=not tool_grant_too_wide("run_shell", {"command": command})
+        )
+    ] == [SCOPE_ONCE]
     # 即便前端硬传 scope=prefix，`git push` 也不会被记进账本
     policy.remember("run_shell", {"command": "git push origin main --force"}, SCOPE_PREFIX)
     assert not policy.approved_prefixes
@@ -159,23 +169,23 @@ def test_irreversible_command_never_gets_a_memo() -> None:
 # --------------------------------------------------------------------------- #
 def test_card_label_matches_the_ledger_rule() -> None:
     policy = PermissionPolicy()
-    decision = _decide(policy, 'python -c "print(1 + 2)"')
-    labels = {
-        item["scope"]: item["label"]
-        for item in approval_options("run_shell", decision.memo)
-    }
-    assert labels[SCOPE_PREFIX] == "本会话总是允许 python -c 'print(1 + 2)'"
-    # 工具档是会话级宽口径，必须把"不可逆仍逐条确认"写在同一张卡上（#70 的裁决）
-    tool_option = next(
-        item for item in approval_options("run_shell", decision.memo) if item["scope"] == SCOPE_TOOL
+    command = 'python -c "print(1 + 2)"'
+    decision = _decide(policy, command)
+    # 与发卡方（网关、图）同一个组合，不是给这张卡单编一套档位
+    options = approval_options(
+        "run_shell", decision.memo, tool_scope=not tool_grant_too_wide("run_shell", {"command": command})
     )
-    assert "不可逆命令仍逐条确认" in tool_option["warning"]
+    labels = {item["scope"]: item["label"] for item in options}
+    assert labels[SCOPE_PREFIX] == '本会话总是允许 python -c "print(1 + 2)"'
+    # #82：命令类工具的卡上不再出现工具档。#70 给那颗钮配的文案约束（"不可逆命令仍逐条确认"）
+    # 现在守在还发得出工具档的那张卡上——带 path 的 apply_patch，见 v52 的第二条用例。
+    assert SCOPE_TOOL not in labels
 
     policy.remember("run_shell", {"command": 'python -c "print(1 + 2)"'}, SCOPE_PREFIX)
     assert [render_rule(rule) for rule in policy.approved_prefixes] == [
-        "python -c 'print(1 + 2)'"
+        'python -c "print(1 + 2)"'
     ]
-    assert policy.snapshot()["approved_prefixes"] == ["python -c 'print(1 + 2)'"]
+    assert policy.snapshot()["approved_prefixes"] == ['python -c "print(1 + 2)"']
 
 
 def test_secret_bearing_rule_is_neither_offered_nor_remembered() -> None:
@@ -188,7 +198,14 @@ def test_secret_bearing_rule_is_neither_offered_nor_remembered() -> None:
     decision = _decide(policy, command)
     assert decision.outcome == ASK
     assert decision.memo == ""
-    assert SCOPE_PREFIX not in [item["scope"] for item in approval_options("run_shell", decision.memo)]
+    assert SCOPE_PREFIX not in [
+        item["scope"]
+        for item in approval_options(
+            "run_shell",
+            decision.memo,
+            tool_scope=not tool_grant_too_wide("run_shell", {"command": command}),
+        )
+    ]
 
     policy.remember("run_shell", {"command": command}, SCOPE_PREFIX)
     assert not policy.approved_prefixes
@@ -245,7 +262,6 @@ async def test_gateway_suggests_the_full_inline_body(env, workspace: Path):  # n
     assert [item["scope"] for item in result["data"]["approval_options"]] == [
         SCOPE_ONCE,
         SCOPE_PREFIX,
-        SCOPE_TOOL,
     ]
     assert result["data"]["approval_options"][1]["label"] == "本会话总是允许 python -c print(1)"
 
@@ -276,7 +292,7 @@ async def test_second_inline_body_asks_again_end_to_end(env, workspace: Path):  
     assert body["task"]["status"] == "waiting_approval"
     pending = body["evidence"]["pending_approvals"]
     assert len(pending) == 1
-    assert pending[0]["suggested_prefix"] == "python -c print(1)"
+    assert pending[0]["suggested_prefix"] == "python -c print(1) https://a.example"
 
     resp = await env.client.post(
         f"{API}/tasks/{task_id}/approval",
@@ -292,7 +308,8 @@ async def test_second_inline_body_asks_again_end_to_end(env, workspace: Path):  
     granted = [event for event in events if event["type"] == "approval.granted"]
     assert len(granted) == 1
     # 留痕说的是账本里真正记下的那条规则，不是命令首段
-    assert granted[0]["payload"]["prefix"] == "python -c print(1)"
+    # 尾巴一并入规则：批准的是"带这个 URL 的那一条"，换参数就该重新问（#87）
+    assert granted[0]["payload"]["prefix"] == "python -c print(1) https://a.example"
     assert granted[0]["payload"]["scope"] == SCOPE_PREFIX
 
     rules = [

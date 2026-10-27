@@ -1,0 +1,9 @@
+{
+  "_comment": "评测集成功率发布门禁配置（任务 #104）。读数装置：evals/eval_gate.mjs；退出码语义与 evals/dialect_e2e.py 同纪律：0=判据绿且前提全在场，1=有格红，2=这一格今天没法判（缺结果/样本不足/上一轮没跑完），「没法判」绝不伪装成「通过」。",
+  "min_success_rate": 0.938,
+  "min_success_rate_source": "实测（不是拍的）：2026-10-26 用仓库自带脚本化桩 scripts/mock-model-server.mjs（OpenAI 兼容本地桩，不烧真模型、不调 DeepSeek 真实供应商）跑 evals/run_evals.mjs 全集 32 例、并发 3、API 独立实例 127.0.0.1:8050（sqlite 隔离库）、provider=本地脚本化模型（注册脚本 scripts/register_mock_provider.mjs）。量得 success_rate=0.938（succeeded 28 + expected_denied 2 = 30/32；红 2 条 T07/T29 files_missing——桩不会合成多文件任务的第二份文件，属桩的确定形状，2026-10-15 的两次实测 results-2026-10-15T07-11-12-048Z.json / results-2026-10-15T08-02-51-392Z.json 红的是同样这两条）。原始读数落盘：evals/results/results-2026-10-26T04-24-16-705Z.json。阈值=实测值本身；若桩或产品链变化导致 T07/T29 转绿或新增红，必须重新实测改写这一行，不许顺手改数字。",
+  "min_samples": 30,
+  "min_samples_source": "与 run_evals.mjs:246 自带的「样例数量不足 30 直接拒跑」同一下界；本轮实测 total=32。",
+  "measured_at": "2026-10-26T04:24:16Z",
+  "measured_command": "node evals/run_evals.mjs --provider <本地脚本化模型 id> --concurrency 3（API http://127.0.0.1:8050，BLANK_SANDBOX_ENABLED=false 桌面壳同款姿态）"
+}

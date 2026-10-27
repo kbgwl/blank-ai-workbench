@@ -381,7 +381,8 @@ M2 只把**命令类工具**钉在档位上。M3 的退出判据是两句：**�
 - `sandbox_mode`：这次调用按哪一档跑（`off` / `workspace` / `workspace-net`）。
 - `boundary_kind`：这次调用实际落在哪一层——
   `in_process`（API 进程内，如文件读写）、`process`（我们起的子进程，受档位约束）、
-  `mcp_host_process`（外部 MCP 服务端，宿主进程，**不在任务边界内**）、
+  `mcp_host_process`（外部 MCP 服务端；#94 之前一律按宿主进程记账，之后 stdio 服务端
+  自身已挂进 Job，这个值只表示"调用走外部服务端"，见 §7.5）、
   `blocked`（档位不可用，没执行）。
 
 **档位只能收紧，不能变宽。** 排序 `off(2) > workspace-net(1) > workspace(0)` 落在
@@ -407,10 +408,13 @@ M2 只把**命令类工具**钉在档位上。M3 的退出判据是两句：**�
 事件与审计账可以逐条对账。键的语义沿用 M1：`sandbox_backend` 缺席=没起进程；
 值为 `null`=进程落在宿主上；`sandbox_blocked`=档位不可用未执行。
 
-**MCP 边界必须单独说。** `MCPStatus.as_dict()` / `MCPBundle.as_dict()` 给
-`boundary: host_process | none | unknown`（连上/跳过/失败三种事实，不许都写成宿主），
-连上时附诚实说明「MCP 服务端是宿主进程，不受任务沙箱档位约束」；`task.started.mcp`
-原样带走，供证据包读。工具名 `mcp__*` 的调用在事件里记 `mcp_host_process`。
+**MCP 边界必须单独说。** `MCPStatus.as_dict()` / `MCPBundle.as_dict()` 的 `boundary`
+在 #94 之后有四个真事实：`job_object`（stdio 服务端已挂进 Job）、
+`host_process_unbounded`（挂不进去，红字，仍可连接）、`remote`（HTTP 型，进程在远端）、
+`none`（没连上）/ `unknown`（连接失败，不知道在哪跑）。汇总取最坏一条，并给出
+`unbounded_servers` 与 `by_boundary`；`task.started.mcp` 原样带走，供证据包读。
+工具名 `mcp__*` 的调用在事件里仍记 `mcp_host_process`（调用走的是外部服务端，
+不等于它没进 Job）。详见 §7.5。
 
 **证据包新增 `boundaries`**：`sandbox`（档位/后端/强度/文件与网络是否强制/提示）、
 `mcp`（边界、说明、服务端清单、`calls` 计数）、`tool_calls` 按 `boundary_kind` 计数、
@@ -446,8 +450,9 @@ MCP 三态、用量账、迁移往返）；`test_team.py` 17 passed（含群档�
 
 - `in_process` 不经过 Job，路径边界仍靠 `SafetyPolicy` 的路径闸门与审批——这不是
   新漏洞，只是 M3 把它**记成了事实**，不再混进"没起进程所以没有边界"。
-- HTTP 型 MCP 的"进程"其实在远端；`host_process` 描述的是"不归本机任务边界管"这个
-  共同事实，不声称部署位置。
+- HTTP 型 MCP 的"进程"其实在远端；`remote` 描述的是"不归本机任务边界管"这个
+  共同事实，不声称部署位置。#94 之后 stdio 服务端不再是"一律宿主"：能挂进 Job 的
+  就是 `job_object`，挂不进去才是 `host_process_unbounded`（红字）。
 - `boundary_kind` 从 M3 起才有；老任务一律 `unattributed`，界面不得按工具名补猜。
 
 ### 7.4 M4 交付记录（2026-10-24）：把"我们说安全"变成"你自己跑一遍"
@@ -511,6 +516,124 @@ P-AUDIT 五种缺字段、退出码、本机八条对质、无后端时不硬跑
   账本说强制"，doctor 会报不一致并退出 1，需要人看报告而不是自动解释掉。
 - P-AUDIT 只对 M3 之后的任务成立；老任务的 `unattributed` 会让它红，这是有意的。
 
+### 7.5 #94 交付记录（2026-10-26）：MCP stdio 服务端进 Job，进不去的红字
+
+**缺口形状**：M3 把 MCP 调用记成 `mcp_host_process`，那只是"不归任务边界管"的记账，
+不是边界本身。stdio 服务端是我们自己 `create_subprocess_exec` 起来的进程，却没挂
+Job——内存、进程数、退出清理全都不由内核强制；状态与证据包只有 `host_process`
+一个词，连"能不能挂"都没回答。
+
+**落地**（`services/mcp/client.py`、`services/mcp/bridge.py`、`services/rea/adapter.py`）：
+
+- `StdioClient.start()` 在 spawn 之后、握手之前建 Job 并 `AssignProcessToJobObject`。
+  限额默认取 `SandboxPolicy`（`512m` / `128`），`mcp.json` 每个服务端可用
+  `memory` / `pids` 覆盖；认不出的单位退回默认值，**不许悄悄变成"不限"**。
+  握手失败、连接关闭都必须关 Job 句柄（`KILL_ON_JOB_CLOSE` 才会带走整棵树）。
+- 边界事实不是猜的：`IsProcessInJob` 直接问内核，结果连同
+  `job_created/job_assigned/job_error/memory_enforced/memory_bytes/pids_enforced/
+  pids_limit/tree_kill_enforced/note` 一起快照；关句柄之后快照不变，账上说的仍是
+  这次真实生效的边界。
+- 词表：`job_object` / `host_process_unbounded` / `remote` / `mixed` / `none` /
+  `unknown`。挂不进去**不拦任务**（坏服务端不该让整个任务起不来），但 note 以 `⚠`
+  开头，状态、汇总、证据包、界面一起标红；HTTP 型一律 `remote`，不许写成 Job。
+- 汇总取最坏：任一个服务端没进 Job，整包就是 `host_process_unbounded`，并列出
+  `unbounded_servers`；`by_boundary` 给分布。证据包 `boundaries.mcp` 原样带走，
+  REA adapter 也改读真实 facts（此前固定写"宿主进程"）。
+- **close 的顺序被钉住了**：先关 Job，再等进程。反过来先 `await process.wait()` 会
+  白等——`wait()` 要等所有 stdio 管道断开，而孙子进程可能正握着 stdout。实测旧顺序
+  每次都吃满 `KILL_GRACE=2.0s`，新顺序 0.00–0.03s。没进 Job 的服务端，其孙子不归
+  我们管，close 的等待有界，不许把收尾挂死。
+
+**判据与计数**：`tests/test_mcp_job_v94.py` **11 passed**（10 轮重跑 + warnings 升
+error 全绿，整文件 0.64s）；相关七套 **130 passed**；API 全量 **1314 passed /
+23 skipped**（2026-10-26，6 分 53 秒，rc=0）；web **194 passed**，`tsc --noEmit` rc=0。
+
+| 判据 | 阳性 | 阴性/对照 |
+|---|---|---|
+| 真的在 Job 里 | `IsProcessInJob(mcp pid)` 为 True | 同一时刻无关进程在同一 Job 上必须 False |
+| 限额由内核强制 | 768m 的 Job 里分配 256MB 返回 `hogged:268435456` | 128m 的 Job 里同一调用抛 `MCPError`，进程 rc≠0 且 stderr 含 `MemoryError` |
+| 关连接＝整棵树走 | 孙子在**工具调用里**出生，`IsProcessInJob` 为 True；close 后 5s 内死 | 孙子的出生点若在赋值窗口外，这条就退化成竞态，故不许在启动时派生 |
+| 挂不进去 | 注入 create/assign 失败后仍可 `list_tools` | facts/status/bundle/evidence 全是 `host_process_unbounded` + `⚠` + 注入原因 |
+| HTTP | `remote` + "进程在远端"说明 | 不许出现 `job_created=True` |
+| mcp.json 限额 | `memory=320m`、`pids=12` 落到真 Job facts | 垃圾单位读回空串＝用默认值 |
+
+**变异电池**（`E:/tmp/m94/mutate_mcp.py`：每条靶复制一份 `src`、改一处、
+`PYTHONPATH` 指副本并**先证明解释器加载的是副本**；对照轮不改字节；结束核对仓库
+源码 sha256 未变）。对照轮 11 passed / rc=0，9 条靶全部实测红，`check` 逐字比对后
+`[ALL-OK] … 源码未变`、rc=0：
+
+| 靶 | 实测红集合（与写死期望逐字相等） | 失败原因（实测） |
+|---|---|---|
+| M1 建 Job 不 assign、账上仍写已挂 | 清树、赋值失败标注、内存限额、Job 成员 | Job 成员断言（`inside is True`）变红；128m 下分配未失败（`DID NOT RAISE MCPError`） |
+| M2 关连接不关 Job 句柄 | 清树 | `close 吃满 2.02s 宽限期` |
+| M3 挂失败仍报 `job_object` | 创建失败、赋值失败 | `'job_object' == 'host_process_unbounded'` |
+| M4 HTTP 写成已挂 Job | HTTP 边界 | `'job_object' == 'remote'` |
+| M5 状态忽略客户端事实、按传输猜 | 管理器读数 | `'host_process_unbounded' == 'job_object'` |
+| M6 汇总忽略未进 Job 的服务端 | 汇总、证据、创建失败、赋值失败 | `'mixed' == 'host_process_unbounded'` |
+| M7 证据包丢掉未进 Job 名单 | 证据透传 | `[] == ['bad']` |
+| M8 无视 mcp.json 的 memory | 管理器、内存限额、Job 成员 | `536870912 == 268435456`（同理 320m） |
+| M9 先等进程再关 Job | 清树 | `close 吃满 2.00s 宽限期` |
+
+**真浏览器点验**（`E:/tmp/m94/settings_mcp_verify.mjs`，2026-10-26）：Chrome
+headless 1440x1000 打 `:3121/settings#tools`（前端 dev、代理到隔离实例 `:8061`），
+配置同时放 `fake-stdio`（`256m`/`32`，stdout 走 Job）与 `remote-stub`（HTTP）。
+12 条判定 **ALL PASS**，读数现取自 `GET /settings/mcp`（256MB、32 个进程、2 个已连接、
+5 个工具），不是写死的：
+
+- stdio 行：`fake-stdio 已连接 stdio 4 个工具 · fake 已挂 Job：内存 256 MB / 32 个进程 / 关连接带走整棵树`
+- remote 行：`remote-stub 已连接 http 1 个工具 · remote-stub 进程在远端，本机 Job 管不到；出站请求仍走审批与审计`
+- 负对照：remote 行不许出现「已挂 Job」；按不存在的名字定位必须找不到行（定位器自检）
+- **装置能红**：去掉 `boundary === "job_object"` 这个前置条件（让远端行也渲染 Job 行）后
+  恰好多出 1 条 FAIL（`负对照：remote 行不许出现「已挂 Job」`），rc=1；还原后复读
+  ALL PASS、rc=0。截图 `E:/tmp/m94/settings-mcp.png`。
+- 点验期间还发现 HTTP 桩自己的分帧缺陷：`http.server` 默认 HTTP/1.0，202 又没给
+  `content-length`，httpx 读成 `ReadError`——这是桩的问题，改成 HTTP/1.1 + 显式长度后
+  `remote` 行即正常；被测代码没有因此改动。
+
+**诚实的缺口**：
+
+- **赋值窗口消不掉**：spawn 之后才能挂 Job，窗口里已派生的孙子不在 Job。这与命令
+  沙箱同源（`windows_job.assign_pid` 的 docstring 写明了），本批只是把 stdio 服务端
+  也放进了这条路，没有声称严格。判据因此把孙子的出生点放进工具调用，避免用竞态
+  冒充证据。
+- `JOB_OBJECT_LIMIT_PROCESS_MEMORY` 是**每进程**上限，不是整个服务端树的总量；
+  服务端再派生多个子进程，每个各有一份。
+- Job 只提供内存/进程数/生命周期，**不是 AppContainer**：MCP 服务端的文件与网络
+  边界仍按宿主权限，和命令沙箱的三档不是一回事；界面文案不许写成"已沙箱"。
+- 挂不进去时服务端照常以宿主权限运行——这是产品选择（不因坏配置拦住任务），
+  红字是补偿，不是强制。
+- 边界外（`host_process_unbounded`）的孙子进程不归我们清理；close 有界返回，可能
+  留下未关闭的管道直到 GC。全量套件里既有的 fs-broker 传输告警与本套无关。
+
+### 7.6 #76 现状（2026-10-27）：第二台机器还没来，装置与基线先钉住
+
+**这条没完成，也不装完成。** #76 要的是另一台 Windows 机器上的真实报告；本机重跑
+多少次都不算——对账器自己会拒绝：两份报告的 `host.host_id` 相同就判 `same_host` 并
+返回 1。本轮把除"那台机器"以外的部分都做实了：
+
+- **机 A 基线**（`E:/tmp/m76/machine-a.json`，2026-10-27，非管理员，
+  `BLANK_SANDBOX_ALLOW_LOCAL=1`）：`schema=2`、`job_only`、`apparatus_ok=true`；
+  P-PROC / P-INHERIT **拦住**，P-READ / P-WRITE / P-ENV / P-NET / P-ESCAPE **未强制**，
+  P-AUDIT **未测**（未传 `--task`）；doctor 自身 rc=0（未测不算失败）。
+- **第二台机器的一键包**：`E:/tmp/m76/run-on-machine-b.ps1`（UTF-8 BOM，PowerShell 5.1
+  可解析）只做只读探针，打印提权状态、报告 sha256 和"把 JSON 拷回机 A"的提示；
+  用法与判据写在 `E:/tmp/m76/README-machine-b.md`。
+- **对账装置自检**（`E:/tmp/m76/compare-check.py`，用真实基线派生，5/5 PASS）：
+  1. 基线形状有效（schema≥2 / 装置可信 / 有 host_id / 八条探针）；
+  2. 同机两份 → `same_host` + rc=1（**不许把本机重跑冒充跨机**）；
+  3. 只换 host_id、事实全同 → `consistent` + rc=0 + 零差异（**不许凭空造差异**）；
+  4. host_id + `probe_enforcement.pids_enforced` + P-PROC 一起变 → `differences_explained`
+     + rc=0，P-PROC 归因到 `pids_enforced`（归因链真的接上）；
+  5. host_id + 只改 P-AUDIT（跑法标志不动）→ `unexplained_difference` + rc=1
+     （**装置必须能红**）。
+- **CLI 级复核**：用上面的 runner 在本机又跑了一遍（`same-machine-rerun.json`），
+  `doctor --compare machine-a.json same-machine-rerun.json` 输出 `same_host`、rc=1，
+  说明"换台机器才算数"这条不是只活在单测里。
+
+第二台机器到了以后，按 README 第 2 节对账，读数落进 §10 的复现命令；`consistent` 或
+`differences_explained` 且 rc=0 才能把 #76 收口，`unexplained_difference` 要补实测
+归因表，不能改期望迁就。
+
 ## 8. 明确不做
 
 - **不承诺"防恶意代码"**：AppContainer + 受限令牌防的是"模型犯错与越界"，不是防一个铁了心的本地 rootkit。
@@ -527,6 +650,8 @@ P-AUDIT 五种缺字段、退出码、本机八条对质、无后端时不硬跑
 2. `fs-broker` 子进程会让每次文件工具调用多一次 IPC。是否接受这个延迟换边界？
 3. MCP 强制进边界可能打断现有可用配置（第三方进程未必能在 AppContainer 里起）。
    是"进不去就禁用该 MCP 并说明"，还是"允许它留在宿主 + 面板红字标注"？
+   **#94 已按后者落地**：stdio 能挂 Job 就挂，挂不进去照常可用但状态/证据/界面标
+   `host_process_unbounded`；这条不再是未决项。
 4. 产品默认档：`workspace` 是默认，但今天桌面装机常态是 `off`（`safety.py:156-158`）。
    改默认会让既有用户的命令突然跑不通——需要一次显式的迁移与告知。
 5. **M0 之后的新问题（已在 M2 按 (a) 落地）**：本机只有 `job_only`。三选一——
@@ -596,4 +721,35 @@ cd services/api && PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m pytest tes
 # 安装包内的探针：打包后自检（缺 doctor.py 时 3b 段必须红）
 cd desktop && PATH="/e/env/node/node-v24.20.0-win-x64:$PATH" node node_modules/electron-builder/out/cli/cli.js --dir
 PATH="/e/env/node/node-v24.20.0-win-x64:$PATH" node verify-package.cjs
+
+# —— #94 复现（§7.5）：MCP stdio 服务端进 Job ——
+# 1) 11 条判据：内核成员（含阴性对照）、内存一红一绿、清树、挂失败红字、HTTP remote
+cd services/api && PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -X utf8 -m pytest \
+  tests/test_mcp_job_v94.py -q
+# 同样的 11 条在 warnings 升错误下重跑 10 轮，确认没有传输泄漏
+cd services/api && for i in $(seq 1 10); do PYTHONIOENCODING=utf-8 \
+  .venv/Scripts/python.exe -X utf8 -m pytest tests/test_mcp_job_v94.py -q \
+  -W error::pytest.PytestUnraisableExceptionWarning -W error::ResourceWarning \
+  -p no:cacheprovider || break; done
+# 2) 相关套件（MCP / 边界 / REA / doctor）
+cd services/api && PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -X utf8 -m pytest \
+  tests/test_mcp_job_v94.py tests/test_agent_boundary_m3_v46.py \
+  tests/test_rea_mcp_adapter_v108.py tests/test_mcp_tools.py \
+  tests/test_boundary_facts_v20.py tests/test_doctor_v47.py \
+  tests/test_doctor_compare_v49.py -q
+# 3) 前端：MCP 未进 Job 的警告文案 + 类型
+cd web && npm test && npx tsc --noEmit
+# 4) 变异电池：measure 先量红集合，check 逐字比对（对照轮必须 11 passed / rc=0）
+services/api/.venv/Scripts/python.exe -X utf8 E:/tmp/m94/mutate_mcp.py measure
+services/api/.venv/Scripts/python.exe -X utf8 E:/tmp/m94/mutate_mcp.py check
+# 5) 真浏览器点验：隔离实例 :8061（mcp.json 放 fake-stdio + remote-stub）→ 前端 :3121
+#    先起 HTTP 桩 E:/tmp/m94/http_mcp_stub.py（:8099），再重启 :8061 让 bundle 重连
+PATH="/e/env/node/node-v24.20.0-win-x64:$PATH" node E:/tmp/m94/settings_mcp_verify.mjs
+#    反证：把 mcp-panel.tsx 里 boundary === "job_object" 前置去掉 → 恰 1 条负对照 FAIL、rc=1
+# 6) #76 可交付部分（§7.6）：机 A 基线 + 对账装置自检（第二台机器仍需外部机器）
+cd services/api && PYTHONIOENCODING=utf-8 PYTHONPATH=src BLANK_SANDBOX_ALLOW_LOCAL=1 \
+  .venv/Scripts/python.exe -X utf8 -m blank_api.doctor --sandbox --json E:/tmp/m76/machine-a.json
+cd services/api && PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -X utf8 E:/tmp/m76/compare-check.py
+cd services/api && PYTHONPATH=src .venv/Scripts/python.exe -X utf8 -m blank_api.doctor \
+  --compare E:/tmp/m76/machine-a.json E:/tmp/m76/machine-a.json    # 必须 same_host、rc=1
 ```

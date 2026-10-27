@@ -33,11 +33,16 @@ from blank_api.schemas.thread import (
     ThreadCreate,
     ThreadDetailOut,
     ThreadOut,
+    ThreadRewindIn,
+    ThreadRewindOut,
+    ThreadRewindPointOut,
+    ThreadRewoundTurnOut,
     ThreadTurnIn,
     ThreadTurnOut,
 )
 from blank_api.services.agent.events import EventRecorder
-from blank_api.services.threads import thread_or_404, thread_turns
+from blank_api.services.sandbox import SnapshotNotRestorable, SnapshotStore
+from blank_api.services.threads import rewind_to_turn, thread_or_404, thread_turns
 
 router = APIRouter(tags=["threads"], dependencies=[Depends(require_token)])
 
@@ -186,3 +191,136 @@ async def archive_thread(thread_id: str, db: DbSession):
     thread.status = "archived"
     await db.commit()
     return None
+
+
+def _snapshots_by_task(store: SnapshotStore) -> dict[str, list[dict]]:
+    """一次扫盘按任务分组：列表接口要为每一轮查一次，逐轮扫盘会变成 N 次全目录遍历。"""
+    grouped: dict[str, list[dict]] = {}
+    for item in store.list():
+        grouped.setdefault(str(item.get("task_id") or ""), []).append(item)
+    return grouped
+
+
+def _restore_point(
+    store: SnapshotStore, grouped: dict[str, list[dict]], turns: list[Task]
+) -> tuple[str, dict]:
+    """取一份能把代码放回「这些轮次之前」的快照。
+
+    按时间正序找第一个有可恢复快照的轮次：它的快照拍在它自己写入之前，
+    也就是前一轮刚写完的样子。返回 ``(snapshot_id, meta)``，找不到时 id 为空。
+    """
+    for turn in turns:
+        for item in reversed(grouped.get(turn.id, [])):
+            snapshot_id = str(item.get("id") or "")
+            if not snapshot_id:
+                continue
+            ok, _ = store.restorable(snapshot_id)
+            if ok:
+                return snapshot_id, item
+    return "", {}
+
+
+@router.get("/threads/{thread_id}/rewind-points", response_model=list[ThreadRewindPointOut])
+async def list_rewind_points(thread_id: str, db: DbSession) -> list[ThreadRewindPointOut]:
+    thread = await thread_or_404(db, thread_id)
+    turns = await thread_turns(db, thread_id)
+    store = SnapshotStore()
+    grouped = _snapshots_by_task(store)
+    points: list[ThreadRewindPointOut] = []
+    for index, turn in enumerate(turns):
+        later = turns[index + 1 :]
+        snapshot_id, _ = _restore_point(store, grouped, later)
+        if snapshot_id:
+            reason = ""
+        elif not later:
+            reason = "已经是最后一轮，没有更晚的快照可用于恢复代码"
+        else:
+            reason = "这一轮之后没有可恢复的快照，代码回不到这一轮结束时的样子"
+        points.append(
+            ThreadRewindPointOut(
+                turn=int(turn.turn_index or 0),
+                task_id=turn.id,
+                title=turn.title,
+                status=turn.status,
+                created_at=turn.created_at,
+                restorable=bool(snapshot_id),
+                snapshot_id=snapshot_id,
+                skipped_reason=reason,
+            )
+        )
+    return points
+
+
+@router.post("/threads/{thread_id}/rewind", response_model=ThreadRewindOut)
+async def rewind_thread(thread_id: str, payload: ThreadRewindIn, db: DbSession) -> ThreadRewindOut:
+    """回退到第 ``turn`` 轮：对话截到这一轮，代码尽力回到这一轮结束时的样子。
+
+    两件事分开做、分开汇报：对话截断落库即生效；代码恢复取决于后面某一轮有没有
+    留下可恢复的快照，没有就明说没做（``atomic=false``）。把两件事绑成一个事务
+    只会让"快照缺失"连累用户本来就想做的对话截断。
+    """
+    thread = await thread_or_404(db, thread_id)
+    if thread.status != "active":
+        raise ApiError(code="thread_archived", message="该会话已归档，不能回退", status_code=409)
+
+    before = await thread_turns(db, thread_id)
+    target, doomed = await rewind_to_turn(db, thread, payload.turn)
+
+    store = SnapshotStore()
+    snapshot_id = ""
+    restored: list[str] = []
+    skipped: list[str] = []
+    skipped_reason = ""
+    project = await load_project(db, thread.project_id)
+    workspace = project.active_workspace
+    later = [item for item in before if int(item.turn_index or 0) > payload.turn]
+    if workspace is None:
+        skipped_reason = "项目尚未绑定工作区目录，代码未恢复"
+    else:
+        snapshot_id, _ = _restore_point(store, _snapshots_by_task(store), later)
+        if not snapshot_id:
+            skipped_reason = (
+                "已经是最后一轮，没有更晚的快照可用于恢复代码"
+                if not later
+                else "被回退的轮次里没有可恢复的快照，代码未恢复"
+            )
+        else:
+            try:
+                report = store.restore_report(snapshot_id, workspace.path, None)
+            except SnapshotNotRestorable as error:
+                # 选中的快照在两次检查之间被删掉/挪走：对话已经截断，这里只报代码没回来。
+                skipped_reason = f"快照 {snapshot_id} 在恢复时已不可用：{error.reason}"
+                snapshot_id = ""
+            else:
+                restored = list(report.get("restored") or [])
+                skipped = list(report.get("skipped") or [])
+                if skipped and not report.get("skipped_reason"):
+                    skipped_reason = f"{len(skipped)} 个文件不在快照副本里，保持原样"
+                else:
+                    skipped_reason = str(report.get("skipped_reason") or "")
+
+    await EventRecorder(get_session_factory(), target.id).add(
+        "thread.rewound",
+        "receive_task",
+        {
+            "thread": thread_id,
+            "turn": payload.turn,
+            "rewound": [item.id for item in doomed],
+            "snapshot_id": snapshot_id,
+            "restored": len(restored),
+            "skipped": len(skipped),
+            "skipped_reason": skipped_reason,
+        },
+    )
+    return ThreadRewindOut(
+        thread_id=thread_id,
+        turn=payload.turn,
+        rewound=[
+            ThreadRewoundTurnOut(id=item.id, turn=int(item.turn_index or 0)) for item in doomed
+        ],
+        snapshot_id=snapshot_id,
+        restored=restored,
+        skipped=skipped,
+        skipped_reason=skipped_reason,
+        atomic=False,
+    )

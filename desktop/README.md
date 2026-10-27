@@ -38,10 +38,18 @@ cd desktop && npm start
 ## 出包
 
 ```bash
+# 0) 先出前端静态产物——漏了这步，包里的 web/ 还是上一次的旧目录（从仓库根目录起）
+cd web
+BLANK_DESKTOP_BUILD=1 NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000 pnpm build
 cd desktop
+
 npm run dist            # 便携版 + 安装包
 npm run dist:portable   # 只要便携版
 ```
+
+`NEXT_PUBLIC_API_BASE` 不是可选项：静态导出没有服务器，rewrite 不生效，
+没有它烘焙进产物的是空串，界面会去 fetch 相对路径 `/api/v1`（`file://` 下必死），
+而打包日志一切正常。`npm run verify` 现在会按产物本身抓住这一条。
 
 产物在 `desktop/dist/`：
 
@@ -60,9 +68,12 @@ npm run dist:portable   # 只要便携版
 npm run verify
 ```
 
-检查项：包内 Python / 后端源码 / 前端静态站齐不齐、`site-packages` 里有没有
-`blank_api` 旧副本、`.pth` 指向对不对、用包内解释器真实 import 的落点、
-`settings` 路由是否注册、前端是不是最新版。任一项不过即 `exit 1`。
+检查项：包内 Python / 后端源码 / 前端静态站齐不齐、`app.asar` 里壳的五个 `.cjs`
+是否与仓库**逐字节一致**（包里是旧副本时这一条红）、把包内那份 `api-base.cjs` 抽出来
+**真跑**并与仓库对同一组 env 的解析结果、前端有没有烘焙绝对后端地址、
+前端 chunk 里是不是这一版的界面文案、包内后端 `permissions.py` 是不是这一版的档位与文案、
+`site-packages` 里有没有 `blank_api` 旧副本、`.pth` 指向对不对、用包内解释器真实 import 的落点、
+`settings` 路由是否注册、包内边界探针跑没跑全八条。任一项不过即 `exit 1`。
 
 > 为什么单独做这个脚本：用 `sys.path.insert(0, "api/src")` 去验证会强行指向源码，
 > 恰好盖住「包内实际加载旧副本」的问题 —— 0.4.0 就是这么带着 404 通过自检的。
@@ -140,6 +151,9 @@ printf '../../../api/src\n' > desktop/build/runtime/Lib/site-packages/blank_api.
 | `BLANK_BACKEND_HEALTH` | 覆盖健康检查地址 |
 | `BLANK_SETTINGS_FILE` | 运行时设置（含安全与权限）的位置。打包版自动指向用户数据目录 |
 | `BLANK_SHELL_ENABLED` | 临时覆盖「允许执行命令」这一项，便于排查；日常用设置页 |
+| `BLANK_TRAY` | 设为 `0` 时不建托盘，关窗行为退回退出（无托盘可隐藏，不能造出关不掉的窗口） |
+| `BLANK_HOTKEY` | 唤出/隐藏主窗口的全局快捷键，默认 `Control+Alt+B`；被占用时自动降级并写日志 |
+| `BLANK_UPDATE_FEED_URL` | 更新源 feed（JSON）。**不配则完全不碰网络**；配了也只取元数据做决策，骨架不下载、不安装 |
 
 > **GPU 自动降级**：应用启动前会在用户数据目录写 `gpu-state.json`（`ok:false`），
 > 真正打开窗口后才改写成 `ok:true`。如果上一次启动崩在显卡初始化（没有窗口、也没有日志），
@@ -173,14 +187,53 @@ printf '../../../api/src\n' > desktop/build/runtime/Lib/site-packages/blank_api.
 
 - `main.cjs` —— 主进程：`app://` 协议承载静态站（Next 导出的资源是绝对路径，
   `file://` 会解析到盘符根目录；客户端路由也需要兜底到对应 `.html`），带目录穿越防护；
-  后端守护（探测 → 迁移 → 拉起 → 健康检查 → 故障对话框 → 退出回收）；自检开关。
+  后端守护（探测 → 迁移 → 拉起 → 健康检查 → 故障对话框 → 退出回收）；自检开关；
+  单实例（`requestSingleInstanceLock`，第二实例让位并把已有窗口从最小化/托盘中唤回）、
+  托盘（显示主窗口 / 后端状态 / 退出；关窗默认进托盘，退出只走显式路径）、
+  全局快捷键（默认 `Control+Alt+B`，注册失败一律降级写日志）、自动更新骨架（见下）。
+- `shell-policy.cjs` —— 壳策略层：单实例唤回计划、关窗路由、快捷键规范化与三态注册结果、
+  更新决策（版本比较 + 元数据/签名校验，**每个分支 `install:false`**）。
+  纯函数、不 require electron，判定全部在 `tests/shell-policy.test.cjs` 与
+  `tests/update-policy.test.cjs` 里钉住；main.cjs 的**接线**由 `tests/main-wiring.test.cjs`
+  用假 Electron + 真 HTTP 驱动（见下）。
 - `preload.cjs` —— 沙箱模式下 preload 必须是 CommonJS；只暴露壳自身元信息。
 - `build/icon.svg` + `build/icon.ico` —— 品牌图标（藏青底 + 2×2 网格点亮一格）。
   `icon.ico` 由 `icon.svg` 渲染 9 个尺寸后打包而成，生成脚本见交付说明。
+  托盘运行期读它：开发态读 `build/`，打包态读 extraResources 的 `resources/shell/icon.ico`
+  （nativeImage 吃 asar 路径不可靠）。
+
+## 桌面壳四项（#107）：单实例 / 托盘 / 全局快捷键 / 自动更新骨架
+
+判定与执行的分层是刻意的：「怎么决定」全在 `shell-policy.cjs`（可单测），
+main.cjs 只做「读 Electron 状态 → 调策略 → 执行动作」。更新骨架**不接发布通道、
+不下载、不安装**：只有配了 `BLANK_UPDATE_FEED_URL` 才取一次 JSON 元数据，
+决策结果进日志和托盘一行状态。
+
+**接线装置**（`tests/main-wiring.test.cjs`）：把 `electron` 换成内存假实现（窗口、托盘、
+快捷键、生命周期都可观测），健康检查与更新源用 127.0.0.1 随机端口的**真 HTTP**，
+然后 require 真的 `main.cjs`——不建 GUI、不碰 :8000/:3000、不起后端进程。7 条判据钉住：
+第二实例在**建窗口/建托盘/探后端之前**退出；健康桩可达时复用而不是 spawn；第二实例信号与
+托盘双击都能把隐藏窗口 show+focus 唤回；托盘可用时 ✕ 被拦下、托盘「退出」后 ✕ 放行；
+托盘不可用时关窗退回退出；快捷键注册成功时回调真挂上并能隐藏/唤回，被占用/抛异常都降级；
+更新骨架只取一次元数据、**从不请求安装包**，500/读不懂/同版本/未配置四种形态各自有可读原因。
+变异电池 6/6：第二实例不让位、收到信号不唤回、关窗不路由、快捷键假注册成功、更新时真下载、
+托盘退出不置位——每条都至少让一条判据变红，红集合实测后写死（`E:/tmp/m92/battery-check.json`）。
+
+**仍需真机点验的**（装置给不了 GUI 观感与真实进程交互）：
+
+| 待人工点验 | 需要什么条件 | 红了长啥样 |
+|---|---|---|
+| 双实例真实启动：第二实例无窗闪现直接退，第一实例从最小化/托盘被唤回聚焦 | 一台能开 GUI 会话的 Windows，允许 `npm start` 两次 | 第二实例起了自己的窗口或后端 = 单实例失效 |
+| 托盘图标肉眼可见、深浅色任务栏下不糊；真实 ✕ 进托盘、托盘「退出」真退（后端被回收、无孤儿进程） | 同上；且包内 `resources/shell/icon.ico` 存在（`npm run verify` 第 1 节已断言） | ✕ 之后图标不在/窗口找不回/退出后 uvicorn 还活着 |
+| `Control+Alt+B` 真按唤出/隐藏；与另一热键助手撞车时日志出现「已被其他程序占用…降级」且应用照常可用 | 同上；撞车那条需故意先占住该组合 | 快捷键按了没反应且日志没有降级行 = 三态没收住 |
+| 后端起不来时的故障对话框（重试 / 复制日志并退出）与真实 spawn/回收 | 故意让解释器缺失或迁移失败，且允许起壳 | 白屏、无对话框，或退出后残留后端进程 |
 
 ## 尚未实现
 
-托盘、全局快捷键、单实例、自动更新、代码签名。见 APP-DESIGN 第 9、10 节。
+代码签名（见 APP-DESIGN 第 10.4 节）。单实例 / 托盘 / 全局快捷键 / 自动更新骨架已落在
+`shell-policy.cjs` + `main.cjs`（#107）：判定与 main.cjs 接线都已有可失败判据
+（`tests/main-wiring.test.cjs` + 变异电池 6/6），剩 GUI 观感与真实进程交互待点验（见上表）；
+自动更新的下载与安装**刻意不做**，等发布通道与签名定了再接 `electron-updater`。
 
 > 目前未配代码签名证书，打出来的 exe 会被 Windows SmartScreen 拦成"未知发布者"，
 > 用户需要点"仍要运行"。正式分发前要解决 —— 见 APP-DESIGN 第 10.4 节。

@@ -11,30 +11,65 @@ from blank_api.services.tools.paths import iter_text_files, resolve_existing
 from blank_api.services.workspace import list_tree, read_text_file
 
 MAX_MATCHES_DEFAULT = 50
+_INVALID_REGEX_TEMPLATE = "正则表达式无效：{exc}"
+
+
+def _broker():
+    """延迟导入：宿主路径不该为 broker 的存在付导入成本，也避开与 patch.py 的环。"""
+    from blank_api.services.tools import fs_broker
+
+    return fs_broker
 
 
 async def _list_files(context: ToolContext, arguments: dict) -> ToolOutcome:
     path = arguments.get("path", "")
     depth = int(arguments.get("depth", 3))
-    entries = list_tree(context.root, path, max_depth=depth)
+    broker = _broker()
+    marker: dict = {}
+    if broker.broker_enabled():
+        try:
+            envelope = await broker.call_broker(
+                context.root, context.task_id, "list_tree",
+                {"path": str(path), "depth": depth},
+            )
+        except broker.FsBrokerError as exc:
+            return broker.broker_failure_outcome("list_tree", exc)
+        entries = envelope["result"]["entries"]
+        marker = broker.broker_success_marker("list_tree", envelope)
+    else:
+        entries = [vars(entry) for entry in list_tree(context.root, path, max_depth=depth)]
     lines = [
-        f"{'  ' * (Path(entry.path).as_posix().count('/'))}{entry.name}{'' if entry.is_dir else f'  ({entry.size} 字节)'}"
+        f"{'  ' * (Path(entry['path']).as_posix().count('/'))}{entry['name']}{'' if entry['is_dir'] else f'  ({entry['size']} 字节)'}"
         for entry in entries
     ]
-    return ok("\n".join(lines) or "目录为空", files=[vars(entry) for entry in entries], count=len(entries))
+    return ok("\n".join(lines) or "目录为空", files=entries, count=len(entries), **marker)
 
 
 async def _read_file(context: ToolContext, arguments: dict) -> ToolOutcome:
-    payload = read_text_file(context.root, arguments["path"])
+    broker = _broker()
+    marker: dict = {}
+    if broker.broker_enabled():
+        try:
+            envelope = await broker.call_broker(
+                context.root, context.task_id, "read_text_file", {"path": arguments["path"]},
+            )
+        except broker.FsBrokerError as exc:
+            return broker.broker_failure_outcome("read_text_file", exc)
+        payload = envelope["result"]["payload"]
+        marker = broker.broker_success_marker("read_text_file", envelope)
+    else:
+        payload = read_text_file(context.root, arguments["path"])
     if payload["binary"]:
         return ToolOutcome(
-            ok=False, status="error", message=f"该文件是二进制文件，无法作为文本读取：{payload['path']}"
+            ok=False, status="error", message=f"该文件是二进制文件，无法作为文本读取：{payload['path']}",
+            data=marker,
         )
     return ok(
         payload["content"],
         path=payload["path"],
         size=payload["size"],
         truncated=payload["truncated"],
+        **marker,
     )
 
 
@@ -43,21 +78,39 @@ async def _search_code(context: ToolContext, arguments: dict) -> ToolOutcome:
     mode = arguments.get("mode", "literal")
     prefix = arguments.get("path", "")
     limit = int(arguments.get("max_matches", MAX_MATCHES_DEFAULT))
-    regex = None
-    if mode == "regex":
+    broker = _broker()
+    marker: dict = {}
+    if mode == "regex" and not broker.broker_enabled():
         try:
             regex = re.compile(pattern)
         except re.error as exc:
-            raise ValueError(f"正则表达式无效：{exc}") from exc
-    # 搜索是纯同步的文件遍历，必须下放线程：留在事件循环里时，一次全库搜索
-    # 就能让后端的 /health 也不回包，界面看起来是"应用卡死"。
-    matches = await asyncio.to_thread(_search_blocking, context.root, pattern, regex, prefix, limit)
+            raise ValueError(_INVALID_REGEX_TEMPLATE.format(exc=exc)) from exc
+    elif mode == "regex":
+        regex = None  # 正则编译放进 broker 里做，错误经 IPC 原样重建（同一句模板，两个口径不漂移）
+    else:
+        regex = None
+    if broker.broker_enabled():
+        # 开了 fs-broker：遍历与读取都在子进程边界里做，失败不回退宿主。
+        try:
+            envelope = await broker.call_broker(
+                context.root, context.task_id, "search",
+                {"pattern": pattern, "mode": mode, "path": str(prefix), "max_matches": limit},
+            )
+        except broker.FsBrokerError as exc:
+            return broker.broker_failure_outcome("search", exc)
+        matches = envelope["result"]["matches"]
+        marker = broker.broker_success_marker("search", envelope)
+    else:
+        # 搜索是纯同步的文件遍历，必须下放线程：留在事件循环里时，一次全库搜索
+        # 就能让后端的 /health 也不回包，界面看起来是"应用卡死"。
+        matches = await asyncio.to_thread(_search_blocking, context.root, pattern, regex, prefix, limit)
     rendered = "\n".join(f"{m['path']}:{m['line']}: {m['text']}" for m in matches)
     return ok(
         rendered or "未找到匹配结果",
         matches=matches,
         count=len(matches),
         truncated=len(matches) >= limit,
+        **marker,
     )
 
 

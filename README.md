@@ -3,7 +3,9 @@
 面向开发者的 AI 工程操作台：自然语言下达任务，Agent 读取和修改项目文件、执行命令与测试、
 展示 Diff，高风险操作需人工审批。完整方案见 [ai-workbench-plan.md](ai-workbench-plan.md)。
 
-当前进度：**v1.1（核心任务工作台 + 头脑风暴 + 按需功能中心 + CLI 骨架）**。REA Reverse Lab 已有独立入口，真实 REA 适配器仍在后续接入。界面是面向开发者的深色三栏操作台：
+当前进度：**v1.1（核心任务工作台 + 头脑风暴 + 按需功能中心 + CLI 骨架）**。REA Reverse Lab 已有独立入口，
+REA MCP Adapter 已接入 `/api/v1/reverse-lab`（4 个端点走 stdio 子进程里的 `blank_api.services.rea.mcp_server`，默认开着、`BLANK_REA_DISABLE=1` 可关）；
+界面还没消费这四个端点。stdio 服务端已挂 Windows Job（内存/进程数/生命周期由内核强制，见 `docs/SANDBOX-WINDOWS-DESIGN.md` §7.5），但 Job 不是文件/网络沙箱，这条链路仍不套任务的三档档位。界面是面向开发者的深色三栏操作台：
 顶栏 + 左侧导航 + 三栏工作区（项目/任务 · 执行时间线 · 终端与验收），窄屏退化为上下布局。
 没有场景选择器：用户只写要说的话，Agent 自己判这一句该直接回答、该只读看几处再给判断，
 还是该动手改。判据见 [docs/BOT-VS-AGENT.md](docs/BOT-VS-AGENT.md)，成本控制见 [docs/COST.md](docs/COST.md)。
@@ -134,7 +136,7 @@ uv run alembic revision --autogenerate -m "描述"
 | Codex 风格任务工作区 | ✅ | 全高任务页、右侧文件/Diff/终端/证明 Tab、低噪声布局 |
 | 头脑风暴入口 | ✅ | `/brainstorm` 已接真实模型生成、模板降级和转任务 |
 | 按需功能中心 | ✅ | `/features` 支持本机功能开关和依赖提示 |
-| Reverse Lab 入口 | 🟡 | `/reverse-lab` 已完成工作台入口和重建任务转换，REA MCP Adapter 尚未接入 |
+| Reverse Lab 入口 | 🟡 | 后端 4 个端点已接真 REA MCP Adapter（stdio 子进程，29 条判据全绿，见 `docs/REA-WAVE4-CODEX-RUNTIME.md` §7.51）；🟡 的两格是**界面尚未消费这些端点**、**Job 只管内存/进程数/生命周期，不提供文件与网络沙箱**（§7.59） |
 | CLI 基础入口 | ✅ | `blank init`、`blank doctor`、`blank add/remove`、本地工作区启动 |
 | Bot 团队 `/team` | ✅ | 群聊编排、上下文管家、主 Bot 的团队管理工具、跨群全文搜索与锚点跳转 |
 
@@ -188,6 +190,17 @@ uv run alembic revision --autogenerate -m "描述"
   0 失败。报告见 `evals/results/results-2026-10-22T07-43-54-994Z.json`。
 - 本机没有 `docker` 命令行，容器隔离这条路径当前无法就地复核；宿主退路（LocalSandbox）需要显式打开
   `SANDBOX_ALLOW_LOCAL`，且只保证时长与进程回收，不承诺隔离。
+- **数据库：普通用户什么都不用装。** 这里要说的是**服务端**：默认与桌面版都是单个 SQLite 文件（开发库
+  `sqlite+aiosqlite:///./data/blank_dev.db`；桌面包内由壳层把 `BLANK_DATABASE_URL` 指到数据目录下的
+  `blank.db`，见 `desktop/main.cjs`）。`MySQL` / `PostgreSQL` 是**可选部署形态**——形态的代价是服务端要你自己起。
+  驱动侧的实话分两句，按 0.8.5 包内运行时（`desktop/dist/win-unpacked/resources/backend/runtime/Lib/site-packages`）
+  实测：`pymysql` / `aiomysql` **不在包里**（挂在 `pyproject` 的 `mysql` extra，`uv sync` 默认不装）；
+  `asyncpg` **在包里**（它是核心依赖，`pyproject` 第 9 行）——装了驱动不等于用了它，产品默认连的还是那个
+  SQLite 文件，这一条只是「包里多一份没人调用的代码」。
+  这两种方言的迁移历史、两条建库路径的 schema 对账都实测过，真 HTTP 端到端装置在 MySQL / PostgreSQL
+  上各有 **83 步全绿**的实物（见 `docs/REA-WAVE4-CODEX-RUNTIME.md` §7.13–§7.29）；第 84 步（任务 #82 新增）
+  **目前只有 SQLite 一格跑过**，两种方言的那一格还没补。这些不改变一句实话：单机产品用不到它们。
+  方言兼容层自 2026-10-26 起**冻结**：只保留 CI 的 `api-dialect` 作为回归防线，不再开新批次。
 - 沙箱镜像带 Python/Node/Git，但没有预装各语言依赖，也没有 Go 工具链：需要 `npm install` 或 Go 的样例仍跑不出真实结果。
 - `.github/workflows/ci.yml` 已就位，但本机没有 `gh` 命令行，无法核对 Actions 是否真的跑过；仓库本身已是 git 仓库。
 - `services/api/tests/test_parallel_tools_v14.py::test_read_only_calls_overlap` 有墙钟依赖：它要求两个 0.25s 的

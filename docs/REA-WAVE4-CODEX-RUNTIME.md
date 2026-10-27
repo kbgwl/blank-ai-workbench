@@ -215,6 +215,7 @@ Docker / Hyper-V / Windows Sandbox 全部排除。Codex 在这台机器上实际
 | 内联解释器代码（`python -c "open(...).write(...)"`、`node -e`、`pwsh -Command`）算 medium，默认模式按 `risk:auto` **静默执行**，审批卡一次都不出现 | `assess_risk` 只认破坏性命令与联网；`risk_for` 把这类命令判成 medium，而 `PermissionPolicy.decide` 对非 high/critical 直接 `risk:auto`。这不是批准记忆放行，是根本没问 | **已实现**（任务 #69，见 §7.34）：`_has_inline_code()` 认解释器后的 `-c/-e/-Command/-EncodedCommand/cmd /c/bash -lc`（旗标必须在第一个非旗标参数之前，`-m 模块` 与脚本参数不算），命中即 high；复合命令任一段命中即 high。新用例 22 条，自然红 **14 failed / 8 passed**，4 靶变异红集合精确相等 |
 | 它的规则只记「这一条命令 / 这个前缀」，没有「整个工具本会话全放行」这一档；放行边界窄，卡片不需要解释例外 | 工具档比它宽：记住 `run_shell` 后普通命令不再问——但 `is_irreversible()` 排在工具档**之前**，`git push --force` / `drop table` 仍逐条问。卡片却只写「该工具在本会话内不再询问」，把「有例外」写没了 | **已实现**（任务 #70，见 §7.35）：文案改成「该工具在本会话内不再询问；不可逆命令仍逐条确认」，并补一条**能失败**的断言——工具档记住后不可逆命令仍必须 `ASK/irreversible`（把工具分支挪到不可逆判定之前即红）。判定逻辑零改动，57 条审批用例全绿 |
 | 它按 `turn_id` / `turn_attribution` 的字段名直接区分谁是谁，消费方不需要猜字符串形状 | `run_id` 一列混着四种实测形状（空串 / `team-…` / `task:<uuid>:attempt:N` / `agent_runs.id`），证据包 `turns` 只给原值；界面与外部消费者只能各自 `startswith` 或正则猜，猜错了也不报错 | **已实现**（任务 #71，见 §7.36）：`evidence.run_id_kind()` 在**读侧**定形状 `unrecorded/team/attempt/run`，`turns[].kind` 随每轮带出；存量值一个不改（空串仍是「当时没记」）。新用例 3 条 + v24 键集，自然红：v24 单跑 **1 failed / 12 passed**（`KeyError: 'kind'`）、v45 为 collection ImportError；4 靶变异红集合精确相等 |
+| 它的批准只落到「这一条完整 argv / 这个前缀」，`default.rules` 里没有「整个工具以后都不问」这一档 | 风险由参数算出来的工具（`run_shell`/`git`/`spawn_agents`）照旧下发「本会话总是允许该工具」，而命令类工具的参数里没有路径，`path_scope()` 恒空 → 入账的是 `(档位, 工具, '.')`，该档位下任意命令正文都免问；老客户端硬传 `scope=tool` 同样入账；后端算好的免问范围（`approval_options[].warning`）前端从不读，卡片只有按钮 | **已实现**（任务 #82，见 §7.43）：`tool_grant_too_wide()` 三道门槛（在表里 / 带命令 / `path_scope` 为空），发卡两处（gateway 与 graph 中断）各自按它决定下发哪几档，`remember()` 对过宽的直接不入账，`approval.granted.tool_grant_recorded` 如实写「没记」；前端把 `warning` 补进 `ApprovalGrant`，解析与建卡**两条通路各一条能失败的用例**，后端没写就留空串、不编造；工具档文案随分桶事实改成「本档位、这片路径内不再询问」，#70 那条「不可逆命令仍逐条确认」的哨兵迁到仍发得出工具档的卡上。新用例 16 条（HEAD 上整文件 ImportError），旧断言 4 条按新语义改写；后端 9 靶 + 前端 9 靶均按**实测**红集合命中 `[ALL-OK]`，真 Chrome 点验 16/16，装置 83 → **84 步**（`PROBE-TOOLGRANT-82` 独立正文；第 84 步第一版撞的是 #68 跨任务持久前缀，不是本批回归），SQLite 整格 84 步 0 失败、连接 56=服务 56，全量 **1145 passed / 23 skipped** rc=0 |
 
 ## 7. 本轮落地与其验证证据
 
@@ -2150,6 +2151,12 @@ Codex 的审批记忆落在 `~/.codex/rules/default.rules`：一条 `prefix_rule
   读回来逐字相等（不加引号会被切碎）。`Decision.memo` 携带这一串，`decide()` 只算一次；
   `approval_options(tool, memo)` 只在 memo 非空时追加前缀档；`remember()` / `forget()`
   对不可逆命令再自守一层，前端误传 scope 也记不出宽账。
+  > **本节的三条口径已被任务 #87（§7.47）实测取代**，照本节实现会留下真缺口：解释器规则「停在载荷上」
+  > 会漏掉载荷后面的尾巴（`python -c "print(1)" https://a.example` 被免问）；`render_rule` 只按空白加引号，
+  > 载荷里裸着 `|`（实测退出码 255，后一半被当成另一条命令）或 `&`（实测退出码 0 且**真的多跑了一条命令**）
+  > 时规则串在壳里就不是原来那一条；「对不可逆命令再自守一层」只排在匹配之前，
+  > 任何直接问 `memo_rule` 的调用点照样能算出前缀档。现在这三条分别由「记整段 argv + 载荷型规则要求等长」
+  > 「空白或 `;&|<>` 都包裹 + 渲染不回来的规则不记」「闸门移到 `memo_rule` 源头」钉住。
 - `graph.py`：中断值的 `suggested_prefix` 与 `approval_options` 都用 `decision.memo`；
   `approval.granted` / `approval.denied` 的 `prefix` 字段写 `learned = decision.memo`
   （`scope=prefix` 时），与账本同源。
@@ -4008,6 +4015,1073 @@ E1/E2/E3 带 `@needs_pymysql`：没装 `mysql` extra 的环境（CI 只跑 SQLit
 4. 上界到期这件事本身**不进 CI 的告警面**：CI 只跑 SQLite（`mysql` extra 没装），
    E1/E3 在有驱动的开发机上才是活的，CI 上会走 skip/不适用；哪天 CI 补上 MySQL job，这三条判定才真跑。
 
+## 7.43 任务 #82：`scope=tool` 按风险收窄——命令类工具的宽档发不出去，也记不进去
+
+**这批还的是 §7.35/#70 记下的那半笔债。** 当时只动了文案：卡片承认「不可逆命令仍逐条确认」，
+但「本会话总是允许该工具」这颗钮对**所有**工具照发。分桶本身（`档位, 工具, 路径前缀`）那时已经有了，
+问题在命令类工具：**`run_shell` 的参数里没有路径**，`path_scope()` 一律为空，于是批准一条命令之后
+入账的是 `(档位, run_shell, '.')`——该档位下**任意命令正文**从此免问。Codex 的对应面
+（§7.33/#68 引过）只有 `default.rules` 里的**完整 argv 前缀**，压根没有「整个工具以后都不问」这一档。
+这一批把两边对齐：宽档只对**参数框得住免问范围**的工具兑现；同时把后端早就算好的
+「这一档免问多大一片」（`approval_options[].warning`，#70 起就在算）端到卡片上——前端从来没读这个键。
+
+**后端三道门槛**（`services/permissions.py:463 tool_grant_too_wide()`）：
+
+1. 工具的风险由参数算出来——在 `ARGUMENT_SCOPED_TOOLS`（`permissions.py:58`：`run_shell`、`git`、
+   `apply_patch`、`spawn_agents`）里才谈过宽；不在表里一律照给工具档。**这条门槛管的是不收窄的方向**：
+   把 `read_file` 这种免问范围本来就等于全体的工具也登记进去，等于凭空少一颗用户看得见的按钮
+   （M3 靶量的是越界，不是欠收窄）。
+2. 这一次带的是**命令** → 判为过宽。挡的不是用户，是**模型多发的参数**：`run_shell` 的 schema 里没有
+   `path`，而 `validate_arguments` 不拒未知键，所以「带 `command` 也带 `path`」的调用是可达的；
+   让一个对命令正文毫无影响的参数决定分桶，等于用户批一次之后，模型只要在后续调用里重复那个 `path`，
+   任意命令正文都免问（M4 靶）。
+3. `path_scope()` 为空 → 过宽。活例子是 `apply_patch` 省略 `path`、从补丁头推断的那一次：
+   同一张卡、同一个按钮，免问范围会从「这个文件」悄悄变成「以后所有文件」。
+
+**发卡两处跟着收窄**：`tools/gateway.py:389` 与 `agent/graph.py:1604` 都用
+`tool_scope=not tool_grant_too_wide(...)` 决定这张卡下发哪几档。M6/M7 各打其中一处——只改一处时
+另一处仍发得出宽档，而实测红集合只点名对应那条用例，这正是「两处发卡必须分别有靶」的依据。
+
+**写入侧闸门 + 如实留痕**：`PermissionPolicy.remember()`（`permissions.py:534`）对过宽的 `scope=tool`
+直接 `return`——免问范围不能由一个客户端参数放大；老客户端硬传照样兑现**这一次**放行，只是不入账。
+`approval.granted` 新增 `tool_grant_recorded`（`graph.py:1628`），把「按了宽档但没记」如实写进事件：
+留痕不许谎称宽档已入账，否则审计里留下一条根本不存在的授权（M8 靶）。M5 靶管的是另一个方向——
+把**操作者种子**（`PermissionPolicy.build(approved_tools=…)`）也一起拒掉，那是把收窄越界到与
+`bypass` 同级的信任面；裸种子仍兑现，但不可逆命令排在它之前判定（#70 的裁决不变）。
+
+**前端：文案同步还包括后半句。** `warning` 补进 `ApprovalGrant`（`web/src/components/tasks/api.ts:510`），
+读入口两条通路各钉一条能失败的用例：解析侧 `normalizeApprovalScopes`（`api.ts:991`）与建卡侧
+`timeline.ts:639`——**卡片真正读的是后者**，接口层全对而丢掉建卡映射，界面照样什么都没有（W9 专打这条）。
+渲染在 `timeline-blocks.tsx:525` 与 `bot/turn.tsx:105`：非空 `warning` 原样念出并带档位前缀
+（「工具档：」「本会话档：」）；后端没写就是空串，**前端不编造免问范围**（W8 靶：替后端编一句，
+卡片说的就不再是账本记的）。类型上 `warning` 在入参侧可选、在输出侧必填，是老载荷形状与 `tsc` 都不红的
+前提——写死必填时首跑 11 处 `Property 'warning' is missing` 报错（`tsc-2.log` rc=2）。
+
+**工具档那句文案自己也过期了。** #70 写的是「该工具在**本会话**内不再询问」，而账本按
+`(档位, 工具, 路径前缀)` 分桶——换档位（尤其换到 `off`）或换路径都会重新问。本批改成
+「该工具在**本档位、这片路径**内不再询问；换档位、换路径或不可逆命令仍逐条确认」。
+`run_shell` 的卡上从此没有工具档，#70 给那颗钮配的约束（断言含「不可逆命令仍逐条确认」）
+随之迁到**仍发得出工具档**的那张卡上（带 `path` 的 `apply_patch`：
+`test_tool_grant_scope_v52.py::test_path_scoped_patch_card_keeps_the_tool_scope`，`:126`），
+原来那条 `test_approval_memo_v37.py::test_card_label_matches_the_ledger_rule` 就地改成断言
+「工具档根本不出现在这张卡上」（`assert SCOPE_TOOL not in labels`）——
+约束没有随按钮一起消失，这是本批最容易做错的一笔：删按钮顺手删断言，哨兵就无声退役了。
+
+**装置 83 → 84 步**（`evals/dialect_e2e.py`，`EXPECTED_STEPS=84`）：探针标记 `PROBE-TOOLGRANT-82`，
+两段各自独立的命令正文（`print(82)` / `print(182)`）。第一轮发卡 → 以 `scope=tool` 批准 → 断言
+**重新挂卡**、事件 `tool_grant_recorded=False`、`turn.context` 的 `approved_tools` 快照为空 → 第二轮按
+`once` 放行 → 跑到终态。第一版直接复用 #54 的探针正文，红在 `status=succeeded`——**那不是 #82 的回归，
+是 #68 的 `approvals.json` 跨任务持久前缀规则**把这条正文记住了（同一台机器上前序探针留下的账）。
+修法不只是换正文：批准前先钉住「这张卡指的是哪条命令」，探针之间互相污染从此从**隐形红**变成点名红。
+可控红实测（`mutate_step84.py`）：把正文换成 #69 那两段（`print(1)`/`print(2)`）→ 装置 rc=1，
+报错逐字是「第一张卡指向的不是本探针的第一段命令」，`[KILLED]`，`dialect_e2e.py` 逐字节还原。
+
+**证据**
+
+- 新用例 16 条：`tests/test_tool_grant_scope_v52.py`（HEAD 上整文件**收集期 ImportError**——
+  `ARGUMENT_SCOPED_TOOLS` 这个名称当时还不存在），改后 16 passed（`v52-green.log`）。
+- 收窄过程中**旧断言先红**：`affected-1.log` 4 failed / 53 passed。这 4 条断言的正是缺陷本体
+  （「批一次 `curl` 以后 `wget` 也免问」）；一条改名成
+  `test_session_tool_memory_does_not_cover_a_command_tool`，三条就地改成收窄后的预期，docstring 写明 #82。
+  复跑受影响那一片 146 passed rc=0（`affected-2.log`）。
+- 后端变异电池 9 条靶（M1–M9）：`--probe` 取实测红集合后逐字钉进 `EXPECTED`，判定轮基线 16/16 绿、
+  **9/9 `[ALL-OK]`**（`battery-judge-1.log`）；每条靶的锚点恰好命中 1 次（装置自检）。
+- 前端：自然红基线 9 例 **6 绿 / 3 红** rc=1（`web-red-baseline-1.log`，红的三条正是 `warning` 相关）→
+  补完 10/10（`web-green-2.log`）；变异电池 W1–W9 **9/9 `[ALL-OK]`**（基线 10/10，`battery-web-judge-2.log`）；
+  前端全量 **193/193** rc=0、`tsc` rc=0。
+- 真 Chrome 1440×900 点验 **16/16** rc=0（`ui-verify-3.log`）：P0a/P0b 先让后端自己立住
+  （`run_shell` 只下发 `once`+`prefix`、`apply_patch` 仍下发 `tool`），DOM 期望串全部从接口现取；
+  V2b/V4b 实测念出「本会话档：只免问这一条命令…」与「工具档：该工具在本档位、这片路径内不再询问…」；
+  V3 同时禁止按钮与说明行。**V6 首跑是假红**（`页面=[]`）：判据按第 0 张卡读，而 `print(1)` 那张批准后
+  仍以「已处理态、无按钮」留在时间线第 0 位——改成按命令正文筛 pending 卡，并补 V6a 计数判据后 16/16。
+- 装置：单步 [STEP-84 OK]（`step84-1.log`，桩自检 连接 4 / 服务 4 / 截断 0）；整格 SQLite **84 步 0 失败**，
+  连接 56 = 服务 56、服务日志里 SQL 相关 0 行、检查点 510 行（`device-sqlite-2.log` rc=0）。
+  仓库侧 `tests/test_dialect_device_v32.py` 同步把第 84 步点名进必查清单（19 passed），
+  与 v52 合跑 **35 passed rc=0**（`device-v32.log` / `v52-green.log`）。
+- 后端全量：**1145 passed / 23 skipped** rc=0，385.62s（`E:/tmp/m82/regression-full-1.log`）
+  = 上一批基线 1129 + 本批 16，计数自洽；装置与文档定稿后在**最终字节**复跑一轮，
+  仍 **1145 passed / 23 skipped** rc=0，380.99s（`regression-full-2.log`）。
+
+**诚实的缺口**
+
+1. **装置只跑了 SQLite 一格**（`device-sqlite-2.log` 末行自己就判了：「只有一格——两方言对照的判据不成立」）。
+   MySQL/PostgreSQL 两格要起库，属共享状态，等批准；本批改动全在审批判定与发卡路径，不在 SQL 层，
+   但「换库这一路仍没有第 84 步实物」这句话得留着。
+2. **真模型那一路没重跑**（:8061）。装置用的是测试桩；「真供应商会不会多发一个 `path` 键」这个可达性
+   只有 schema 与 `validate_arguments` 的静态依据（门槛 2 的推理来源），没有新烧的一次真调用。
+3. **`git` 与 `spawn_agents` 的工具档只被表登记与判定用例覆盖**，卡片文案没逐条对着用户视角量过：
+   真 Chrome 那 16 条里出现的两张卡是 `run_shell`（前缀档）与 `apply_patch`（工具档）。
+   `spawn_agents` 的免问范围对用户意味着什么，文案没写，本批也没验。
+4. 本批写这段时桌包里仍是改动前的 `web/out`；已由**任务 #83 重烧并重打**（见 §7.44），
+   当时留下的缺口是「包内界面没真启动点验」，不是「前端改动没进包」。
+5. 持久化的 `approvals.json`（#68）**只收 `scope=prefix`**，本批没有往里写工具档——这是刻意的
+   （跨任务记住一个裸工具名比会话内记住更危险），但也意味着「换任务后宽档会不会复活」这一格
+   目前靠的是「压根没落盘」这个构造性质，不是靠一条跨任务断言。
+6. ~~`approval_options(..., tool_scope: bool = True)` 的默认值是**开的**~~——**已由任务 #88 闭掉**
+   （§7.48）：改成必填关键字，漏传就是 `TypeError`；实际要动的测试调用点是 4 处，不是这里当初估的 7 处。
+
+## 7.44 任务 #83：桌包重打 + 按产物点验 `api-base.cjs`——「包里是刚打的代码」第一次被逐字节量到
+
+**#82 的缺口 4 说的那格。** `desktop/verify-package.cjs` 是这段的发源地（它的注释写着起因：
+包内 `site-packages` 曾带着一份旧 `blank_api` 副本，前端是新的、接口全 404，而打包日志一切正常），
+但它此前对壳的判断只到 **`asar` 目录头里有没有 `main.cjs`/`gpu-guard.cjs`/`preload.cjs` 这三个名字**——
+`api-base.cjs`（#72 的全部实体）连名字都不在检查清单里，而「有名字」也从来不等于「是这一版」。
+
+**先在旧包上量自然红**（`E:/tmp/m83/verify-red-baseline.log`，Oct 24 那份 win-unpacked）：
+新加的判定里 **2 条红、rc=1**——「前端是旧版本：chunk 里没有『本会话档：』」、
+「包内后端是旧版本：`permissions.py` 缺 `只免问这一条命令`、`ARGUMENT_SCOPED_TOOLS`、`tool_grant_too_wide`」。
+另外 **4 条逐字节对账在旧包上是绿的**，这是实情不是缺陷：壳的四个 `.cjs` 自 #72 起确实没再动过。
+它们的「能失败」不靠运气，靠下面的变异轮。
+
+**过程中自己踩实的一条配方缺陷**（这批最值钱的发现）：第一次重导只给了 `BLANK_DESKTOP_BUILD=1`，
+**漏了 README 里要求的 `NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000`**。静态导出没有服务器、rewrite 不生效，
+漏掉时烘焙进产物的是空串，界面会去 fetch 相对 `/api/v1`——`file://` 下这条路必死，
+而 `next build` 的日志照样全绿。实测：那一次产物里**含绝对地址的 chunk 数 = 0**（`grep -l` 现数）。
+于是补一条产物级判定「前端烘焙了绝对后端地址」，并把出包步骤的第 0 步写进 `desktop/README.md`。
+这条只钉「兜底那一份是绝对地址」，不替壳的运行态注入背书——注入另有对账。
+
+**新的四条包内判定**（各管一件事，不许互相顶）：
+
+1. `asar` 里 `api-base.cjs`/`gpu-guard.cjs`/`main.cjs`/`preload.cjs` 与仓库**逐字节一致**（旧副本 = 红）。
+2. 把包内那份 `api-base.cjs` 抽成临时文件、按应用真实 `require` 的方式**真跑**，
+   与仓库那份对同一组 6 种 env 逐条同解（默认 8000 / 换端口 / 显式地址优先 / 去尾斜杠 / 空串退端口 / 空白端口）。
+3. 默认值本身钉死 `http://127.0.0.1:8000`——这条不是「两份互相对账」，是钉**产物跑出来的值**，
+   所以两份一起变错它也红。
+4. 前端档位前缀与包内后端文案（上面那两条自然红就是它俩报的）。
+
+**asar 的读法不是推出来的**：文件区起点有四种候选口径，先在真包上实测（`api-base.cjs` 偏移 0、
+`gpu-guard.cjs` 660、`main.cjs` 3548、`preload.cjs` 28473）——只有 `16 + ceil(头 JSON 长度 / 4) * 4`
+让四份 `.cjs` 全部逐字节 MATCH；`package.json` 三种口径都不 MATCH，因为 electron-builder 会重写它，
+这一条反过来印证了偏移读对了（读错只会全拿不到对上）。判定自己就是自检：读错偏移，四条对账一起红。
+
+**发版号按仓库惯例进位**：`desktop/package.json` 0.8.4 → **0.8.5**。
+`dist/` 里 0.6.0→0.8.4 的历史 exe 全部并排留着，不升版重打会盖掉已交付的 0.8.4；
+新产物 `空白格-便携版-0.8.5.exe` 111,018,667 字节、`空白格-安装版-0.8.5.exe` 111,238,778 字节 + blockmap，
+`npm run dist` rc=0，旧的两份 0.8.4 mtime 未变。
+
+**证据**：`verify-package.cjs` 新包 **31 项全绿 rc=0**（`verify-green-1.log`），变异电池跑完之后的
+**最终字节复跑**仍 31 绿 rc=0（`verify-green-2.log`）；桌面壳自身单测 **15/15**（`desktop-unit-1.log`）；
+包检变异电池 **3/3 `[ALL-OK]`**（`judge-1.log`，探针轮 `probe-2.log` 先数实测红集合）：
+M1 只加一行注释 → 红集合恰为 {逐字节对账}（函数没变，真跑与默认值仍绿——证明这四条各管各的）；
+M2 改解析结果 → {逐字节对账, 与仓库解析结果不同}；
+M3 把读偏移改成 `16 + headerSize + 7` → 四份逐字节全红 + {加载或执行失败}（抽出来的是垃圾）。
+三条靶跑完均逐字节还原（电池还原失败即 abort），`api-base.cjs` 回到 660 字节、无残留注释。
+
+**装置自己的坑（记下来，因为它差点让判定自证）**：电池取红标签的正则写成 `FAIL\s+(\S+)`，
+标签里有单空格（`包内 api-base.cjs 是旧副本`），于是三条靶的实测红集合全被压成同一个词「包内」——
+照着它写 `EXPECTED` 就会拿错的期望过判定。改成按**两个空格**切标签与详情后重跑探针，
+M3 的实测也从我预期的「没法点验包内 api-base.cjs」变成「包内 api-base.cjs 加载或执行失败」，
+`EXPECTED` 按实测改，不按预期写。
+
+**诚实的缺口**
+
+1. **没有真启动包内应用**：壳会去探测/拉起 `127.0.0.1:8000`，而那个端口现在正跑着用户自己的后端
+   （另 :3000、:8061 也在跑）。包内界面渲染这一格靠的是 #82 的 dev 真 Chrome 点验 + 本批产物自检，
+   **不是**靠双击 exe。
+2. **没跑 `npm run install:local`**：它写的是 `D:\Softwares\kbg\blank-ai-workbench-desktop`（用户安装目录），
+   属需要点头的动作。装到机器上、以及告诉用户换包，仍待裁决。
+3. **便携版与安装包 exe 只核对了存在与字节数**，没再从 exe 里解一次 asar 对账——
+   `verify-package.cjs` 看的是 `win-unpacked`。同一次构建，但「同一次」这句话没有被量过。
+4. 「烘焙绝对后端地址」认的是字面量 `http://127.0.0.1:8000`，它是**配方哨兵**不是内容唯一性证明；
+   默认端口哪天改了，这条要一起改。
+5. **CI 里没有桌包 job**（`.github/workflows` 里 grep 不到 `desktop` / `verify-package`），
+   这 31 条只在开发机上跑；与 #85 同题，等 CI 那两条 job 一起处置。
+
+## 7.45 任务 #86：数据库口径收口——「能换 MySQL」从产品承诺降成可选形态，方言层冻结
+
+**这一批不是代码批，是两句用户质问逼出来的口径批**：「沙箱权限没有解决为什么还有装 mysql 呢」、
+「如果其他用户要用我们的软件不是也得装 mysql 么」。前一批批（#49–#64）把 MySQL / PostgreSQL 一路推到
+「迁移历史可跑 + 两条建库路径 schema 对账 + 真 HTTP 端到端 83 步」，代价是**读文档的人（包括我自己）
+把这些当成了产品对用户的义务**——于是一个只想在自己电脑上跑的人，被暗示要装数据库服务端。
+
+**定稿的三句口径**（写进 `README.md`「已知限制」与 `docs/CORE-RUNTIME-ROADMAP.md`）：
+
+1. 普通用户**什么都不用装**：默认与桌面版都是单个 SQLite 文件（开发库 `data/blank_dev.db`；
+   桌面包内由壳把 `BLANK_DATABASE_URL` 指到数据目录下的 `blank.db`，`desktop/main.cjs:259`）。
+2. `MySQL` / `PostgreSQL` 是**可选部署形态**，形态的代价（起服务端）由要它的人付。
+3. **方言兼容层自 2026-10-26 起冻结**：不再开新批次，只保留 CI 的 `api-dialect` 那条 job 当回归防线。
+   冻结不等于删掉——那 16 批量出来的分歧（外键级联、`TEXT` 默认值 1101、约束名、布尔默认值）
+   一旦失去对账就会长回来，留着 job 是留着一条会红的线。
+
+**顺带修掉的过期条目**（`docs/CORE-RUNTIME-ROADMAP.md`）：「当前基线」那节压了一句
+**这是 2026-10-16 的快照**，并把「工具大输出还没有独立 artifact 存储」划掉——实物是
+`services/agent/artifacts.py` 的 `ArtifactStore` 加读取接口 `GET /tasks/{task_id}/artifacts/{artifact_id}`
+（`api/routes/tasks.py:588`，按 `ToolCall.id` 取回）。这条过期口径在本批之前的每一批都曾被引用过，
+是「文档比代码旧」最典型的一处。
+
+**诚实的缺口（本批自己的）**
+
+1. **口径的三句话在写下时没有一句是量出来的**。「普通用户不用装」要靠一台干净机器上装完 0.8.5
+   双击能跑来证明，而那格要 `npm run install:local`（写用户的 `D:\Softwares\...`），未经点头没跑。
+   → 这一条在 #86 收尾时只做到了「读代码确认默认值指向 SQLite」（§7.46 记了随后实测出的
+   一句**写宽了的**驱动口径，那才是本批第一次拿到硬证据）。
+2. **MySQL / PostgreSQL 两格的第 84 步没跑**（#82 新增的那一步只在 SQLite 上绿过）：
+   跑它要起共享数据库实例。冻结决策把这条无限期挂起，README 里那句话因此是**带着缺口的**，
+   不是「三种方言都验到 84 步」。
+3. **没有把 `asyncpg` 从核心依赖移出去**：移走才算「形态可选」做得彻底，但那要同时改 CI 的
+   `--extra` 与打包脚本，属依赖降级动作，留给用户裁决。
+
+## 7.46 任务 #86（收尾）：包内驱动按实物复量——「换库只要改连接串」那句话错在哪
+
+§7.45 的缺口第 1 条欠的是一句**硬证据**，这里补上。量的对象不是文档，是 0.8.5 桌面包里
+那份自带运行时（`desktop/dist/win-unpacked/resources/backend/runtime/Lib/site-packages`，#83 打出来的实物）：
+
+| 驱动 | 包内实物 | 说明 |
+| --- | --- | --- |
+| `aiosqlite` | **在**（`aiosqlite-0.22.1.dist-info`） | 产品默认那一条连接用的就是它 |
+| `sqlalchemy` | **在** | 方言层所在 |
+| `asyncpg` | **在**（`asyncpg-0.32.0.dist-info`） | 核心依赖（`pyproject` 第 9 行），但没人调用 |
+| `pymysql` | **不在** | 挂在 `mysql` extra，`uv sync` 默认不装 |
+| `aiomysql` | **不在** | 同上 |
+
+于是「可选部署形态」在桌面上有两句实话，一句比一句难看：
+
+1. **MySQL 形态在桌包里不是"改个连接串"**——连驱动都没打进去，要换成 MySQL 得先往那个
+   运行时目录里装东西；这是「形态的代价由要它的人付」的具体形状，不是文档里的修辞。
+2. **PostgreSQL 的驱动在包里，但它带的是一份没人调用的代码**——「装了驱动」不等于「用了它」，
+   产品默认连的还是那个 SQLite 文件。这一条是 `asyncpg` 该不该移出核心依赖的依据（留给用户裁决，
+   §7.45 缺口第 3 条）。
+
+这两句按 2026-10-26 的包内目录复量，`ls` 就能重跑（§9）。**它证明不了**「普通用户装完双击就能跑」：
+那一格要 `npm run install:local` 起包内应用，未经点头没跑，仍是 §7.45 的缺口第 1 条。
+
+
+## 7.47 任务 #87：批准前缀在真宿主壳上的引号往返——改前，免问档位在本机默认壳上一条都发不出去
+
+**这批量的是 §7.19 那三条口径本身**。那三条写在纸上是自洽的，但它们全部由「我们自己的
+tokenize/render」证明过，一次都没有交给**真壳**跑过。而 `run_shell` 在 Windows 上走的是
+`shell=True` ⇒ 命令字符串怎么被拆成 argv，不是我们能定的（`shell_dialect()` 本机返回 `cmd`）。
+判据因此只有一条：**用户批准的那条命令与「本会话总是允许 X」里那个 X 重跑一遍，必须做同一件事**。
+
+**装置**（`E:/tmp/m87/shell_roundtrip.py`，15 条样本 × 改前/改后两份实现，同一进程内新旧同跑）：
+每条样本取 `memo_rule()` → `render_rule()`，把**原命令**与**渲染串**都交给真 `run_process(..., shell=True)`
+（与产品同一个执行函数），比退出码、stdout、stderr。装置自检两条：① `python -c "print(9007)"`
+必须在过滤后的 env 里真跑出 `9007`（第一版全 9009 就是栽在探针自己的 PATH 上，量不到产品）；
+② **改前基线必须红出一条同形缺陷**，否则这一支压根没在测东西。
+
+读数（`E:/tmp/m87/rt.json`，rc=0，`python_probe.exit=0/stdout=9007`）：
+
+| | 样本 | 记下来的 | 自家解析器切错 | 重跑走形（缺陷） | 重跑不同但属收紧 |
+| --- | --- | --- | --- | --- | --- |
+| 改前 | 15 | 9 | 1 | **2** | 1 |
+| 改后 | 15 | 13 | 0 | **0** | 1 |
+
+改前那两条是真缺口，形状是：
+
+- `python -c "print('a|b')"` → 渲染成 `python -c print('a|b')` → 真 cmd **退出码 255**
+  （`'b')' 不是内部或外部命令`）：卡片上的 X 压根跑不起来。
+- `python -c "print('文件名 含空格')"` → 渲染成 `python -c 'print('文件名 含空格')'` →
+  cmd 把它拆开后 python 收到 `'print('文件名`，**SyntaxError**；同时这条在我们自己的
+  `prefix_rule` 里就已经切错（表里「自家解析器切错」那 1 条就是它）。
+
+改前的「6 条记不下来」里，**5 条是 PowerShell 的形状**（`-Command "Write-Output 1"`、
+`-NoProfile -Command …`、`-Command "Write-Output 'a b'"`、管道载荷 `{$_*2}`、双写转义 `""danger""`），
+外加 `cmd /c "echo hello"` 一条——也就是说在用户默认用的这台壳上，免问档位**一次都发不出去**
+（卡片只有「仅本次」和「该工具本会话」两钮，而后者又被 #82 的闸门关掉）。改后这 6 条里 5 条能记下
+并逐条真壳重跑同结果，仍拒记的 2 条是：
+
+- `python -c 'print("a b")'`：token 里含双引号，`render_rule` 对含双引号的串**不加包裹**，
+  渲染回来的形状不等价 ⇒ 由 `_round_trips` 在入账前拒掉。宁可下次照样挂卡。
+- `powershell -Command "Write-Host ""danger"""`：双写转义在 tokenize 阶段就切残 ⇒ 同上拒记。
+
+**分隔符那一条按实测改写，不按推理**。§7.19 的原文写的是「`;` 会渲染成两条分段（实测 cmd.exe）」——
+那句是我没量就写进去的。`E:/tmp/m87/separator_probe.py` 在同一份过滤 env 上把每个分隔符的
+「裸写」与「带引号」各跑一遍（`E:/tmp/m87/separator-out.json`）：
+
+| 壳 | `;` | `|` | `&` |
+| --- | --- | --- | --- |
+| cmd | 裸写与带引号**一样**（都是 `1\r\n2`，退出码 0） | **不一样**：带引号 0/`a|b`，裸写 **255** | **不一样**：带引号 1/空，裸写 **0 且多跑了一条**（`1\r\nx`） |
+| PowerShell | 一样（`a\r\nb`） | 不一样：带引号 0/`2\r\n4`，裸写 255 | —（cmd 内联层的 `&` 一样） |
+
+所以 `_RULE_METACHARS = frozenset(";&|<>")` 的**一律包裹**不是赌气：三条里两条在这台机器上会真变，
+剩下的那条（cmd 不吃 `;`）只是「这台的壳恰好不吃」，换 PowerShell/换机器就变。注释与 §7.19 的
+前向 blockquote 都已按这张表改词。
+
+**顺带发现一条弱断言**：`test_rendered_rule_reexecutes_identically` 原有 6 条样本**全都不敏感**——
+把 `_RULE_METACHARS` 摘空，这 6 条的渲染串一字不变，测试照样绿。补进两条只带控制符、不带空白的
+样本（`print('a|b')` / `print('a&b')`）之后，同一变异实测 **2 failed, 30 passed**；还原后 sha256 一致。
+
+**真壳用例的平台门**：`test_shell_quoting_v53.py` 的两条真壳用例（共 32 条）加了
+`WIN_SHELL = pytest.mark.skipif(sys.platform != "win32")`——样本按 cmd.exe 语义写，
+Linux runner 上是**假红**，不是缺陷。代价写在这里：**POSIX 壳上这条判据至今没有证明过**。
+
+**还没覆盖的**
+
+1. 装置第 85 步（换载荷尾巴要重新挂卡 + 批准过的那条换任务重放不再挂卡）的读数已落盘，
+   见 §7.55：先量到这条判据自己的死期望（`E:/tmp/m96/device-sqlite-1.log:88` 红在
+   `prefix:persistent:`），修正后三格各 85 步 0 失败、退出码 0。
+2. 复合命令（`a && b`）只记首段：这是**收紧**不是扩权（重跑少执行了后半段），但卡片文案没告诉用户
+   「批准后免问的范围只覆盖 `&&` 左边」。
+3. PowerShell 在**产品真的把命令交给 pwsh 时**（用户把 shell 换掉）这一层没有实测过：
+   本批量的是本机默认方言 `cmd`。
+
+
+## 7.48 任务 #88：`approval_options` 的 `tool_scope` 改成必填——把一个 fail-open 换成一次 `TypeError`
+
+§7.43 欠账第 6 条（本节开头那条删除线）说得很直白：默认值 `True` 的失败方向不是「当场报错」，
+而是**界面给了个按了不留账的钮**。因为写入侧 `PermissionPolicy.remember()` 早就按
+`tool_grant_too_wide` 拒掉命令类工具的宽档，发卡侧的默认值却是「开」——两边不对称，
+漏传一个关键字的用户看到的是「本会话总是允许 run_shell」，按下后账上什么都没记，
+下一条命令照样挂卡，而他以为自己批过了。
+
+改动只有签名一行：`def approval_options(tool_name: str, memo: str = "", *, tool_scope: bool)`。
+两个生产发卡点（`services/agent/graph.py:1623`、`services/tools/gateway.py:388`）**本来就**显式传
+`tool_scope=not tool_grant_too_wide(name, arguments)`，所以产品行为一字未变——变的只是
+「第三个发卡点漏传」这件事从静默变成 `TypeError`。
+
+读数：
+
+- 四个审批相关测试文件合跑 **106 passed in 28.19s**；要动的测试调用点实测 **4 处**
+  （§7.43 当时估的是 7 处，估错了），另外新增一条可失败用例。
+- `tests/test_tool_grant_scope_v52.py::test_tool_scope_has_no_default` 钉两种漏传形状：
+  不传、以及把 `True` 按**位置**传（`tool_scope` 是 keyword-only，位置传照样 `TypeError`）。
+- 变异：把 `= True` 加回去，实测 **1 failed, 48 passed**，红的那条正是上面那条用例；
+  还原后 `permissions.py` sha256 一致。
+- `grep approval_options(` 全仓（含 `evals/`）除 `data/snapshots/20261018150237-c7579704/`
+  那份冻结旧副本外无遗漏调用点——快照目录是历史实物，不动。
+
+**没覆盖的**：漏传现在是运行时炸（发卡那一刻），不是启动期或类型检查期。真要提前，得给
+`approval_options` 配一份静态检查——本批判为够用的理由是：漏传只会发生在**新增发卡点**这种
+有人写代码的动作上，而那条代码路径在同批就要写用例，`TypeError` 在第一跑就撞上。
+
+
+## 7.49 任务 #89：`current_date` / `timezone` 进提示词——账本知道日期，模型不知道
+
+**缺口形状**：`turn_context` 从 §7.2 起就一直在记 `current_date` 与 `timezone`
+（`services/agent/governance.py`），证据包也把它端出来（`evidence.py:486` 的 `date` 列），
+但 `SYSTEM_PROMPT`（`services/agent/graph.py:114`）里**一个字都没提**——模型回答「今天是几号」
+只能凭训练记忆，而那条记忆通常停在权重发布日。用户看到的后果是「Agent 算错距今多久」。
+
+**实现**（两处，各一个落点）：
+
+- `governance.clock_fields(now=None)` 成为「今天几号、哪个时区」的**唯一口径**：只到天、
+  时区取本地名（`tzname()` 为空才退 `%z`）。`turn_context`、`world_state` 与提示词三处
+  都改成读它——原来这三处各写一遍 `strftime`，同格式各写两份在真实时钟下看不出分叉。
+- `graph.clock_note()` 拼一句「当前环境：今天是 2026-10-26，本机时区 中国标准时间。…
+  需要精确时刻先查，不要凭记忆推算」，并进**第一段 system 的末尾**（`graph.py:1010`）。
+  位置是量出来的，不是顺手写的：上下文管家压缩时留下的是「第一条 system + 当前目标」
+  （`context._split_prefix`），**另起一条 system 会在任务后半程被折掉**——表现成
+  「模型跑着跑着又不知道今天几号了」。这条对照格真跑过（§下面 M6）。
+- 只到天 + 任务开始时取一次：跨午夜不刷新。取舍写进了那句话本身（「这是任务开始时
+  后端读到的当天日期」），而不是留给模型猜。每步刷新的代价是第一段 system 天天不算、
+  步步都算——前缀缓存与快照去重同时失效。
+
+**读数**：
+
+- 新增 `tests/test_prompt_clock_v54.py` **8 passed**；相关 17 个文件（治理快照 / world_state /
+  压缩窗口 / 上下文配对 / 轮归属 / 指令分层 / 会话历史 / 附件 / 留存）**164 passed in 38.48s**，
+  提示词加一句没有把任何一处旧判据顶红。
+- 变异在**源码副本**上跑（装置正在跑真 HTTP 端到端，改一份 `graph.py` 的窗口虽小也是并发写同一棵树；
+  副本经 `PYTHONPATH` 优先加载，每条都回读 `graph.__file__` 确认「判据确实跑在变异上」）。
+  `E:/tmp/m89/mutations.json`：
+
+  | 变异 | 实测 | 红在哪 |
+  | --- | --- | --- |
+  | 基线（干净副本） | 8 passed | — |
+  | M1 撤掉注入（`system += clock_note()` 删掉） | **4 failed** | 同源 / 换钟 / 单条 system / 压缩存活 |
+  | M2 graph 自己 `strftime`（换成 `%Y/%m/%d`） | **7 failed** | 除「形状」条外全红——合成值跟不上，钉住的日期也对不上 |
+  | M3 提示词带上时分 | **1 failed** | 只由「唯一的数字来源」那条抓到（见下面那条教训） |
+  | M4 `turn_context` 退回自己 `strftime`（同格式两份） | **1 failed** | 同源条 |
+  | M5 `world_state` 退回自己 `strftime` | **1 failed** | 同源条 |
+  | M6 日期**另起一条 system** | **4 failed** | 单条 system 条 + 压缩存活条（对照格那半边）+ 另两条 |
+
+- **M3 这批最值钱的一课**：`test_note_stops_at_the_day` 钉的是**治理侧**的钟（monkeypatch
+  `governance.datetime`），而 M3 的走形在 **graph 侧**自己调 `datetime.now()`——那条判据的三种
+  禁写串是从被钉住的时刻算出来的，压根没出现在真实时刻拼出的句子里，于是它**不红**；
+  「同一分钟内两次逐字相同」也不红，因为两次真实读数只差几毫秒。补上
+  `test_note_has_no_third_source_of_digits`（把真源换成合成值后，摘掉日期与时区，句子里不该再有任何数字——
+  带 `%H:%M` 时这里剩 `0950`）才把 M3 单独钉红。**「钉住某一层的钟」只能证明那一层，
+  跨层的第三处时钟要用「值从哪来的」来判，不能用「时刻是什么」来判。**
+
+**还没覆盖的**
+
+1. **真实模型点验没做**：判据目前停在「提示词里带着与账本同一份的日期」，还没证明
+   「模型因此答对今天几号」。要在 :8061 重启后问一句「今天是几号，直接回答不要调工具」，
+   比对回答与 `clock_fields().current_date`。
+2. 子代理与团队成员的提示词是否同样带上这句：它们也走 `initial_messages`，但那是读代码得到的
+   结论，没实跑取证。
+3. 跨午夜的长任务里提示词仍是开工那天——这是刻意的取舍，但没有一条判据钉住「快照与提示词
+   不一致时以快照为准」；出问题时仍要人读两边。
+
+## 7.50 任务 #90/#102：运行租约的三段（认领 / 续租 / 收尾）——「写这条 run 的资格跟着租约走」
+
+**缺口形状**：`agent/queue.py` 的租约只做了一半。`claim_run`（:42）用一条带条件的 UPDATE
+加 `rowcount==1` 做原子认领，`renew_run`（:107）也验 owner；但读代码时发现两处对不上：
+`finish_run` 只按 `run_id` 更新，`renew_run` 的条件里没有"租约还没过期"。
+这不是风格问题——它的产品后果是**同一条 run 可以被两个人分别算账**，界面上表现为
+"B 正在跑，结果已经就绪"，而 B 一步都没走完。
+
+**先量再改**（两处探针，读数原样落盘）：
+
+- 跨进程认领：`E:/tmp/m90/claim_race.py` + `claim_child.py`（4 个独立进程同时抢同一条 queued
+  的 run）→ `E:/tmp/m90/race-3.log`：`winners=1`、`locked_errors=0`、`attempts=1`。
+  这一格本来就是对的，量它是为了让后面的红有对照。
+- 租约与收尾：`E:/tmp/m90/lease_probe.py` → `lease-readings.txt`。**第一版判据作废**：C 段想问
+  「租约已被 B 拿走的 A 能不能收尾」，但脚本让 A 先续了一次租——过期租约居然续成功了
+  （B2 行 `stale_renew=True`、`owner-B 接管=False`），于是 C 段量的是"owner 收尾"，
+  不是它声称的那一格。重写的 `lease_probe2.py` → `lease2-readings.txt` 才拿到真读数：
+
+  | 探针格 | 实测读数 | 含义 |
+  | --- | --- | --- |
+  | S1 A 认领（`lease_seconds=0`，落到库里即已过期） | `won=True` | 认领不校验"租约必须还没过期" |
+  | S2 B 接管已过期的 A | `won=True`、`attempts=2` | 接管窗口开着（这是应有行为） |
+  | S3 A 在 B 接管之后收尾 | 状态变 `succeeded`，`worker_id` 仍是 owner-B | **非 owner 改写了终态 = 缺陷成立** |
+  | S4 终态 run 被 C 抢 | `won=False` | 终态不可再认领（原有闸门，绿） |
+  | S5 过期后 A 自续 | `renew=True`，随后 S5b `B 接管=False` | **旧 owner 抢在接管者之前焊死窗口** |
+
+  S5 与 `renew_run` 自己的注释（"stale workers cannot revive a run"）直接矛盾：过期就是 stale。
+
+**实现**（四处，都在账的写入侧）：
+
+- `renew_run`（`queue.py:107`）补上 `lease_expires_at IS NOT NULL AND > now`：续租是给**还没到期**
+  的租约延长，不是给过期的租约复活。
+- `finish_run`（:65）改签名带 `worker_id`，条件为 `status=="running" AND worker_id==…`，返回 bool；
+  收尾同时清空 `worker_id` 与租约。调用方 `tasks.py:489` 现在读返回值：被拒就是"租约在这期间
+  被人拿走了"，只记一条 warning，**不再替接管者写终态**。
+- 新增 `abandon_run`（:85）给启动恢复"不再重试"那两路（`tasks.py:549/568`）：它没有 worker 身份
+  可验（认领它的进程早没了），改验租约——还新鲜就说明真有别的进程在跑，判死必须失败并留下
+  `跳过判死` 的日志。原来那两处直接 `finish_run(..., "failed")`，等于重启一次就可能踩掉一个正在跑的任务。
+- `_execute_claimed_run`（`tasks.py:452`）把执行装进独立 task，心跳发现续租失败时
+  `execute.cancel()`（:465）；心跳只停自己、活照干到底再收尾，是这套租约最坏的一种漏账。
+  顺带把心跳间隔从硬编码 30 秒提成 `LEASE_HEARTBEAT_SECONDS`（:56），并保证外部中止这一路时
+  执行 task 也被带走（:484）——改成子 task 之后不补这一刀，用户点"中止"就只中止了外壳。
+
+**读数**：
+
+- 新增 `tests/test_run_lease_v102.py` **6 passed**（`E:/tmp/m102`）。六格分别是：六路并发认领只有一个
+  赢家且 `attempts=1`；新鲜租约别人抢不走也续不了；过期租约旧 owner 续租必须失败；非 owner 收尾
+  必须被拒（**同一格带对照**：现役 owner 必须写得成、且租约随收尾清空）；启动恢复判死三格
+  （queued 可判 / 新鲜租约不可判 / 过期租约可判且清干净）；失去租约后执行收到 `CancelledError`
+  且这一行仍保持 `running / owner-A / attempts=1` 一字未动。
+- 变异电池 `E:/tmp/m90/mutate_lease.py` → `mutate-3.log`，五处撤闸门各自打红**实测过的那几格**，
+  红集合与期望逐字相等；每条变异跑完按 sha256 还原源文件，命中数不是恰好 1 就整格作废：
+
+  | 变异 | 实测红集合 |
+  | --- | --- |
+  | M1 撤掉续租的"过期即失效" | 过期续租条 + 心跳中止条（2 红） |
+  | M2 收尾退回只按 `run_id` 更新 | 非 owner 收尾条（1 红） |
+  | M3 判死撤掉"租约新鲜=有人在跑" | 恢复判死条（1 红） |
+  | M4 心跳失去租约后不中止执行 | 心跳中止条（1 红） |
+  | M5 认领撤掉"过期可被接管" | 非 owner 收尾条（1 红，因为它的前置就是接管要成立） |
+
+  M1 在写期望前重复跑过一次，两次读数一致（`mutate-2.log` 与 `mutate-3.log`）——期望集合是量出来的，
+  不是照着"应该红哪格"推出来的。M5 的红落在收尾那格而不是认领那格，恰好说明认领这一路
+  在仓库里还没有一条**单独**盯"过期可接管"的判据（见下面第 2 条）。
+
+**还没覆盖的**
+
+1. **#90 的另一半已补**（见 §7.56）：独立 Worker 入口 `python -m blank_api.worker` 与
+   `BLANK_INPROCESS_RUNNER=0` 的"API 只入队"姿态都在仓库里；跨进程"工具不重复执行"那一格
+   由 `E:/tmp/m90/worker/probe_worker.py` 量过（10/10，rc=0）。
+2. `claim_run` 的"过期可被接管"目前没有独立判据，只在 M5 里以别人的红间接显形；补它需要一格
+   「A 过期 → B 抢 → 断言 `attempts` 递增且 owner 换成 B」的正向用例。
+3. 端到端的"跑到一半被人抢走"已由 §7.56 的探针演过：A 挂在第二次模型调用里被杀，B 在租约过期后
+   接管同一 run（`attempts` 1→2、终态 `succeeded`）。"被抢时 A 还活着"那一种（不杀进程、只让
+   租约过期）仍是单测里的假 runtime，没有真两进程读数。
+4. 租约 90 秒、心跳 30 秒、`MAX_RECOVERY_ATTEMPTS=3` 仍是写死的常量，没进设置页，也没量过
+   慢机器（模型调用单步 > 90s 时会不会反复被接管）。
+
+## 7.51 任务 #95/#108：REA MCP Adapter 接进 `/reverse-lab`——三处装置缺陷 + 一处产品顺序缺陷
+
+**缺口形状**：README 版本验收表里唯一那格 🟡，原话是"REA 后端还没接真的 Adapter"。本批把它接上：
+4 个端点（`status` / `targets` / `strings` / `investigations`）都走 stdio 子进程里的
+`blank_api.services.rea.mcp_server`，授权根 = 项目的活动工作区（REA 服务端的 `--root` 就是它，
+不另开一条能读宿主的路）。
+
+**改前应红**（读数按时间顺序留档，不是一次跑绿的）：
+
+- `E:/tmp/m108/v108-1.log`：**3 failed / 7 passed / 19 errors**。PE 构造器要把 `e_lfanew` 写到 `0x3C`，
+  而 DOS 头只拼了 `b"MZ" + bytes(60)` = 62 字节 ⇒ `struct.error: pack_into requires a buffer of at
+  least 64 bytes`。夹具 `rea_root` 里就调它，于是 19 条用例连 setup 都没过。这份日志的价值是
+  "装置自己先红"：判据还没碰到被测对象就红了，红的是判据本身。
+- `E:/tmp/m108/v108-2.log`：**5 failed / 24 passed**，三件事各自的真相：
+  1. `clip.exe` 这个"段内容边界"反例**根本不报错**（`AssertionError: assert 'ok' == 'parse_failed'`）。
+     探针 `E:/tmp/m108/probe_clip.py` 打出真相：段头按 `<IIIIHHII>` 拼出来是 36 字节，而
+     `services/rea/artifact.py` 步骤 6 按 `sections*40` 读段表——段表整体错位，第 7 步拿到的
+     `raw_pointer/raw_size` 其实是隔壁字段的字节，正好落在合法区间里。改成 `<IIIIIIHHI>`（40 字节）
+     之后反例才落在预期的那一步。
+  2. `KeyError: 'counts'`：证据包边界区块的键是 `tool_calls`（`boundary_report()` 的形状是读出来的，
+     不是从字段名推的）。
+  3. 授权根被删之后 `/targets` 返回 **404 `not_found`「路径不存在：.」**，而这一格主张的是
+     "上游能力现在不在线"必须 503。
+- 第 3 件是**产品缺陷**，不是判据写错：四个端点里只有 `investigations` 先判能力在线
+  （`api/routes/reverse_lab.py:184`），`list_targets`、`read_strings` 都先 `resolve_inside`
+  （:129、:154）⇒ 整条链路坏了会被说成"用户挑错了文件"。新增 `_require_adapter`（:90），
+  两个只读端点把它放在路径校验之前（:126、:153）；`investigations` 保留自己那次检查
+  （响应体还要用 `status.as_dict()`），注释里写明"顺序与 `_require_adapter` 同一口径"。
+
+**判据**：`tests/test_rea_mcp_adapter_v108.py` **29 passed**，两次复跑读数一致
+（`v108-3.log` 14.06s、`v108-4.log` 14.37s，suite-rc 均 0）。本批新增两格：`/strings` 在链路断时
+同样 503 且 `code == rea_adapter_unavailable`（三个只读端点一个口径），`/targets` 指向不存在目录时
+是 404——越界 403 / 不存在 404 / 链路断 503 三种状态不许糊成一种。字节判据带装置自检：正样与
+七个反例的「第几步 + 步骤名 + 被解析对象」三件都由同一张 `COUNTER_EXAMPLES` 表定义，
+构造器算错偏移先在 `test_parser_happy_path_answers_are_known` 红，不会让反例"红得不对"。
+
+**变异电池** `E:/tmp/m108/mutate_lab.py` → `mutate-check.log`，battery-rc=0：
+
+| 变异 | 实测红集合 |
+| --- | --- |
+| M1 `/targets` 撤掉能力先判 | 链路断那格（1 红） |
+| M2 `/strings` 撤掉能力先判 | 链路断那格（1 红） |
+| M3 `/investigations` 撤掉能力先判 | partial 那格 + 链路断那格（2 红） |
+| M4 闸装了但形同虚设（`investigations` 永不拦） | partial 那格 + 链路断那格（2 红） |
+
+M3 与 M4 红集合相同但缺陷形状不同（M3 = 顺序漏了，M4 = 顺序对而闸门恒不拦），两条都留着。
+M3/M4 会连带红 partial 那格，是因为那格本来也要过这道闸——期望集合来自实测
+（`mutate-measure.log` 与 `mutate-measure2.log` 两轮读数一致），不是推出来的。
+
+**README 两处改写**（`README.md:6`、`README.md:139`）：后端已经接上、29 条判据全绿，
+所以黄项不再写"没接入"，只写剩下那两格真没做的事——**界面尚未消费这 4 个端点**、
+**这条链路的调用落在宿主进程、不进任务沙箱档位**。
+
+**还没覆盖的**
+
+1. 前端 `/reverse-lab` 页面用自己的数据结构，没读这 4 个端点（`web/src/app/reverse-lab/page.tsx`）。
+2. 调用在宿主子进程里跑，`boundary_kind` 记的是 `mcp_host_process`，不进任务的三档沙箱；
+   把它纳入同一执行边界是 #94/#106 那一格，本批没做。**#94 已完成（见 §7.59）**：
+   stdio 服务端已挂 Job，`mcp_host_process` 保留为"调用走外部服务端"的归类，边界
+   事实另由 `boundaries.mcp.boundary` 回答。
+3. 仓库里那份真实 `app.asar` / `elevate.exe` 的两条用例是"存在才跑"（`DESKTOP_RESOURCES`），
+   本机没解包时它们不执行，不能算绿。
+
+## 7.52 任务 #93/#105：fs-broker 的两条"没人守"的口径——电池先自曝，再补判据
+
+**缺口形状**：#93 早就落地了（文件工具走 stdio 长度前缀帧的 broker 子进程 + Job Object
+`KILL_ON_JOB_CLOSE`），仓库里也有 20 条判据。本批只做一件事：把它们逐条撤闸，看有没有人守。
+
+**第一轮读数 = 装置自曝**（`E:/tmp/m105/mutate-measure.log`，battery-rc=1）：
+
+- F3（`hard_stop` 里不关 Job）与 F5（`_roundtrip` 只等响应不等进程死亡）撤掉之后 **20 条全绿**
+  ⇒ "收尸靠内核"和"被杀不读成超时"这两条产品口径**没有判据**。
+- 更坏的一条：`test_a_killed_broker_fails_the_call_and_reincubates_in_a_child_never_the_host`
+  和 `test_releasing_a_task_takes_its_broker_with_it` 的 docstring 里各写着一种"缺陷红法"，
+  声称能抓 F3/F5——实测抓不到，那两句话是推出来的假话。已按事实改成指向下面两格。
+- F1 首轮是 **rc=4 + 空红集合**：变异把两行合成一行导致 `IndentationError`，pytest 收集中断。
+  这不能读成"该口径没人守"，是装置坏了；改成 `if False:` 形态保持语法合法后才拿到真读数。
+- F4 补丁点命中 0 次（漏了 except 块里的注释行）⇒ 整格作废、不记到产品头上；补齐上下文，并把
+  `self._clients.pop` 那行换成 `_last_used` 刷新，替换后的代码仍要语法合法。
+
+**补的两格**：
+
+- `test_a_kill_while_a_request_is_in_flight_is_named_killed_not_timeout`
+  （`tests/test_fs_broker_v93.py:558`）：`BLANK_FS_BROKER_TEST_DELAY_MS=5000` 配
+  `BLANK_FS_BROKER_TIMEOUT=30`，把一次读请求送进管道后**轮询 `client._pending` 确认它真的在飞**
+  （没进管道装置自己先红，不许把"来不及进管道"读成"被杀读成超时"），再点名 broker。
+  层的名字必须是 `killed`、reason 带 broker 退出码、`side_effects` 是 unknown、
+  `gateway._boundary_kind` 仍是 `fs_broker`、`_live_brokers()` 收尾为空。撤掉 F5 它红。
+- `test_the_kernel_kills_the_broker_not_our_own_fallback_kill`（:616）：让"收尸靠内核"这句可被证伪。
+  先断 `client.job_facts["job_tree_kill"] is True`，再把 `proc.kill` 换成记录探针，
+  `release_task()` 之后进程必须**自己**没了且探针一次都没被调用——若真是我们的兜底 kill 带走的，
+  删掉 `close_job` 那行也不会红，这一格就会红。撤掉 F3 它红。
+
+**读数**：**22 passed / 18 warnings in 30.76s**（`E:/tmp/m105/fsb-2.log`，suite-rc=0）。
+电池 `E:/tmp/m105/mutate_fsb.py` → `mutate-check.log`，battery-rc=0：
+
+| 变异 | 实测红集合 |
+| --- | --- |
+| F1 网关把 unknown 副作用的失败记成 blocked | 被杀那格 + 超时那格（2 红） |
+| F2 超时说成「什么都没发生」 | 超时那格（1 红） |
+| F3 收尸不关 Job（`KILL_ON_JOB_CLOSE` 成了文案） | 内核带走那格（1 红） |
+| F4 中毒的 broker 收进「还能用」 | 取消那格 + 重孵那格 + 超时那格（3 红） |
+| F5 只等响应不等进程死亡（被杀读成超时） | 被杀那格（1 红） |
+
+**IPC 延迟的先量后写**：`E:/tmp/m105/bench-run-1246.txt` 第 3 行
+`LATENCY {"samples": 65, "p50_ms": 0.646, "p95_ms": 1.951, "last_ms": 0.527}`，同日另一轮 65 样本
+p50=0.717 / p95=1.87；上界写成 40ms ≈ 实测 p95 的 20 倍（`tests/test_fs_broker_v93.py:68-69`），
+断言在 :279 那条 40 次真调用上。把延迟字段写死成常数 0 或 -1 的实现会在前一条判据（:252）当场红，
+不会靠"读不到就当通过"混过去。
+
+**生效姿态（不是缺漏，是产品默认）**：`fs_broker` 的 stage 是 BETA、`default is False`
+（:182 那条判据守着，转正必须全量回归 + 用户裁决）；关着时文件工具走宿主路径，
+`_boundary_kind` 如实记 `in_process`、载荷里不许长出 broker 键（:204）。
+
+**观察项（不当判定）**：`fsb-2.log:7`、`:51` 等 18 条 `PytestUnraisableExceptionWarning: unclosed transport`
+（`_ProactorBasePipeTransport.__del__` / `BaseSubprocessTransport.__del__`，最终都是
+`ValueError: I/O operation on closed pipe`）。产品的 `hard_stop` / `close_all_for_exit` 都调了
+`proc.close()`，疑点在装置不 release 与 `_reap_idle` 的 fire-and-forget。没有判据盯它，
+本批只登记——既不读成"没问题"，也不读成"句柄泄漏"。
+
+**还没覆盖的**
+
+1. 协议畸形只测了版本不匹配（v1 vs v999，`bench-run-1246.txt` 第 8 行）；半帧、超长前缀、
+   非 JSON 载荷这类畸形帧没有判据。
+2. broker 的 Job 限额（内存 / PID 上限）超限被杀那一格在 M1a 那批量过，#93 侧没有对应判据。
+3. "宿主进程整个没了 broker 也跟着没"（:650）用的是分离子进程探针，真装机（打包后的运行时）
+   上没演过。
+
+## 7.53 任务 #99：没有沙箱后端就拒绝一切任务（含只读）——三处撤闸各自红在哪
+
+**缺口形状**：一条产品事实一直没有能失败的用例守着——`SandboxPolicy` 的默认是"沙箱开着"
+（`services/sandbox/policy.py:44`），没有可用后端时 `resolve_tier(strict=True)` 得到
+`available=False`，装配层据此**整任务 409**（`services/agent/runtime.py:304`），连一条不执行
+任何命令的只读任务也不例外。起因是 #96/#97 那批方言端到端 85 步红了 26 步（症状写的是
+`status=draft`），顺着它才把这条事实量清楚：真因不在产品，在装置没钉自己的沙箱档位。
+
+**判据**：`tests/test_sandbox_refusal_v99.py` **4 passed / 2.16s**（`E:/tmp/m108/v99-1.log`，suite-rc=0）。
+四格各自守一件事：:53 默认姿态下只读任务 409 且**一步不走**（`task.started` 不许出现，
+除 `task.created` 外多一条事件就算有人放宽成"先跑起来再说"）；:74 拒绝的成因能单独查到
+（`/settings/safety/runtime` 的 `available` / `reason` / `docker_available` / `notice`，#96 的开场
+姿态自检读的就是这几个字段，改名或不再暴露这里先红）；:91 是**对照格**——同一条只读任务关掉
+沙箱必须跑到 `succeeded`，否则 :53 的红分不清是"档位拒绝"还是"只读任务本来就跑不动"；
+:105 把默认值本身当判据。"没有后端"是现场造出来的（:31 把 `runner.get_sandbox` 打成
+`SandboxUnavailable`），所以在装了 docker 的机器上这四格照样成立。
+
+**变异电池** `E:/tmp/m99/mutate_refuse.py` → `mutate-measure.log`（battery-rc=0）与
+`mutate-check.log`（写死期望后复跑，battery-rc=0）：
+
+| 变异 | 补丁点 | 实测红集合 |
+| --- | --- | --- |
+| N1 后端不可用也照样开跑（退回报宿主） | `runtime.py:304` `if not sandbox.available:` → `if False:` | 默认姿态那格（1 红） |
+| N2 产品默认改成「沙箱关」 | `policy.py:44` `"true"` → `"false"` | 默认值那格（1 红） |
+| N3 拒绝的话不说了（`notice` 退成空串） | `tiers.py:193` | 默认姿态那格 + 成因可查那格（2 红） |
+
+三份源文件换行风格不一致（`runtime.py`/`tiers.py` 是 CRLF，`policy.py` 是 LF），电池里加了
+`fit()` 按被改文件自己的换行重写补丁串——否则命中 0 次、整格作废。
+
+**还没覆盖的**
+
+1. 群那一侧的同一道闸在**建群时**（`team.py:330-335`，档位不可用就拒绝建群）已有判据
+   （`tests/test_team.py:342` 那条 409 + 群行没落库），但**群轮跑到一半成员任务被装配层拒绝**
+   之后群账留什么形状（半条轮记录？成员任务停在哪个状态？）没有判据——成员任务走的正是
+   `runtime._prepare` 这同一条路，这四格只演了单任务。
+2. 这四格的"没有后端"是 monkeypatch 现场造的（本机确实没装 docker）。所以**"探测到一个后端、
+   但所选档位仍不可用"**这一路不在 #99 里，它由 #73 的
+   `test_workspace_net_is_409_instead_of_silently_degrading`（`tests/test_sandbox_matrix_v21.py:284`，
+   走 `runtime._prepare`、断言 409 且"不会降级成 off"）覆盖；两批合起来才算完整，
+   单看 #99 会以为"拒绝只有无后端一种成因"。在真装了 docker 的机器上，这四格仍然只会走
+   `_no_backend` 那条补丁缝，不会替"docker 真起容器后又拒一条越界命令"作证。
+3. N1 只红了 1 格：409 这一路撤掉后，界面上的表现（任务卡在 draft）没有前端判据接住。
+
+## 7.54 全量回归收口：并行判据的绝对秒数上界是写窄了（不是产品缺陷）
+
+**现象**：本批第一次全量回归 `E:/tmp/m103/full-1.log` 只有一条红——
+`tests/test_parallel_tools_v14.py::test_read_only_calls_overlap`，0.4555s 对 `elapsed < 0.45`。
+同一份日志里 `trace.overlap(...)` 是成立的，也就是说**并发真的发生了**，红的是"机器没抖"。
+
+**先量**（三条读数，都是同一台机）：
+
+| 量法 | 并行（两次 0.25s） | 同参数串行基线 | 比值 |
+| --- | --- | --- | --- |
+| 空载 6 轮（`E:/tmp/m103/ratio-idle.log`） | 0.293–0.322s | 0.560–0.589s | 0.523–0.567 |
+| 6 个 CPU 忙循环压着再 6 轮（`ratio-load.log`） | 0.306–0.321s | 0.563–0.571s | 0.540–0.566 |
+| 全量回归期间（`full-1.log`） | 0.4555s | —（旧判据没有基线） | — |
+
+结论：绝对秒数在共享机上量的是**负载**，不是并行；原来的 0.45 只留下 0.20s 余量，
+而单次调度抖动就能吃掉它。相对判据两边同涨同落：设单次抖动为 e，比值
+`(0.31+e)/(0.57+e)` 要涨到 0.8 需要 `e > 0.73s`。
+
+**改法**（`tests/test_parallel_tools_v14.py:159`）：同一条用例里先关开关量一次串行基线、
+再开开关量并行，判据三条：交错日志成立、**对照格**（关着必须串行）、并行 < 串行 × 0.8。
+不再有绝对上界，也没有"读不到就算过"的退路。
+
+**电池** `E:/tmp/m103/par_battery.py` → `par-battery2.log`，rc=0，两条都实测：
+
+- M1 产品侧把 `asyncio.gather(...)` 换成逐个 `await`（源码副本 + `PYTHONPATH`，起跑先打印
+  `graph.py` 的 `__file__` 自检）→ **rc=1，红在 `assert parallel_overlap`**。
+  产品真撤并发时先红的是交错日志，比值根本没机会被问到——这是应有顺序。
+- **装置自检**：另造一份 handler，`enter` 之后抢一把 `asyncio.Lock` 再睡（交错日志仍成立、
+  执行被串行化）→ `overlap_parallel=True`、`ratio=0.960 / 0.978 / 0.984` 三次都 > 0.8。
+  这一格证明"进了锁但看起来并发"这种形状**只有比值判据抓得到**，交错日志会照旧放行；
+  这份临时用例跑完即删（电池 `finally` 里 `unlink`，跑后 `ls tests/_tmp_*` 为空）。
+
+**收口**：`E:/tmp/m103/full-2.log` —— **1295 passed / 23 skipped / 0 failed，suite-rc=0，434.43s**
+（36 warnings 全是 fs-broker 那批 `unclosed transport`，见 §7.52 观察项）。
+
+## 7.55 任务 #96/#97：方言装置先钉住自己的沙箱姿态，再谈换库——26 步全红的根因、一条死判据与三格重烧
+
+**现象**：`E:/tmp/m87/device-sqlite-1.log:2` 是「85 步，失败 26」，所有失败都停在
+`status=draft`（:21 / :63 / :72 起），看起来像 SQLite 方言问题，实际一步都没走到 SQL。
+根因在装置：`boot()` 把操作者的环境原样继承给实例，没有钉 `BLANK_SANDBOX_ENABLED`；
+本机没有 docker，产品按默认「沙箱开、不许退回宿主」装配，`resolve_tier(strict=True)` 判
+`available=False`，于是每次 `/run` 当场 409 `sandbox_tier_unavailable`，任务全停 draft。
+**红的是这一格的前提，不是换库。**
+
+**四处修（都在装置侧，产品一行没动）**：
+
+- `DEVICE_SANDBOX_ENABLED`（`evals/dialect_e2e.py:66`）默认 `false`，取与桌面壳
+  `desktop/main.cjs:309` 的 `BLANK_SANDBOX_ENABLED ?? "false"` 同款姿态；`boot()`（:694）
+  把它显式钉进实例 env，不再继承跑装置的人。要专门验收「紧」那一格，用装置自己的旋钮
+  `BLANK_E2E_SANDBOX_ENABLED=true`，不拿环境变量当漏勺。
+- `check_posture()`（:774）在第一步之前读 `/settings/safety/runtime`——那是任务装配时
+  **同一个** `resolve_tier` 的现场结果，不是装置另算一遍；姿态打进日志抬头，`available=False`
+  就抛 `PostureMissing`，这一格判「今天没法判」（rc=2），不混进 26 条步骤红。
+- `/run` 守卫（:843）对非 2xx 当场带 HTTP 码和响应体抛出。以前这条把 409 咽掉，读日志的人
+  只看得见 `status=draft`、看不见成因。
+- `verdict()`（:2312-2323）在对照格（sqlite）缺席时整条判定 rc=2，不允许拿单格清单冒充对照结论。
+
+**判据与电池**：`tests/test_dialect_posture_v96.py` 6 格 + `test_dialect_device_v32.py`
+既有格，共 **26 passed**。电池 `E:/tmp/m96/battery.py` 把 9 条靶打在装置源码上（测试文件
+一字不动，每条跑完按 sha256 逐字节还原），基线 rc=0，红集合与实测逐字相等、每条至少红一格：
+`battery-run2.log` → `battery-rc=0` / `[ALL-OK] 9 条靶全部按实测红集合命中，且每条都能失败`。
+期望来自探针轮 `battery-probe-2.log`（先量后写），不是按「应该红哪格」推的。
+
+| 靶 | 实测红集合 |
+| --- | --- |
+| R1 姿态不钉（删掉 `boot` 里那一项） | `default_is_the_desktop_shells_posture` + `knob_can_still_arm_the_tight_cell` |
+| R2 装置默认松成 `true` | `default_is_the_desktop_shells_posture` |
+| R3 退化成继承操作者 env | 同 R1 两条 |
+| R4 开场自检永不触发 | `posture_gate_reds_before_the_first_step` |
+| R5 开场自检永远拦 | `posture_gate_passes_when_the_boundary_exists` |
+| R6 守卫又把非 2xx 咽掉 | `a_refused_run_is_read_as_a_cause_not_a_symptom` |
+| R7 对照格缺席不再算没法判 | `control_cell_has_to_be_present` + `verdict_fails_loudly` |
+| R8 对照格缺席报成产品红（rc=1） | 同 R7 两条 |
+| R9 报错把成因念丢了 | `posture_gate_reds_before_the_first_step` |
+
+**第 85 步是一条死判据**：姿态修好后 `E:/tmp/m96/device-sqlite-1.log` 只剩 1 红
+（:88）：期望重放命中会话档串 `prefix:{rule}`，实测是
+`prefix:persistent:python -c print(87) https://tail-a.example`。这不是产品缺陷——重放走的是
+全新任务，`runtime.py` 每次都从请求带 `approved_prefixes`，新任务天然为空，跨任务重放**只能**
+命中落盘那一支。契约以 `test_approval_persist_v43.py:322` 与 `test_approval_card_v101.py:620`
+为准；期望已改成 `prefix:persistent:`（`evals/dialect_e2e.py:2231`），注释写明旧期望为什么
+永远绿不了。
+
+**三格重烧**（同一台机、同一驱动 85 步，装置自报退出码）：
+
+| 格 | 工件 | 实际跑的格 | 读数 |
+| --- | --- | --- | --- |
+| sqlite | `E:/tmp/m97/device-sqlite-2.log` | sqlite | 85 步失败 **0** · 退出码 **0** |
+| mysql | `E:/tmp/m97/device-mysql-2.log` | sqlite + mysql | 两格各 85/0 · 「每一格全绿：对照判据成立」· 退出码 **0**（`-1.log` 同读数） |
+| postgres | `E:/tmp/m98/device-pg-1.log` | sqlite + postgres | 两格各 85/0 · 同一句判定 · 退出码 **0** |
+
+每格抬头都是 `BLANK_E2E_SANDBOX_ENABLED=false · backend=none isolation=none tier=off strength=none docker=False available=True`；
+服务日志里 SQL 相关行 0；检查点见证三格一致 `agent_checkpoint_writes 593 行 / 387236 字节`——
+LangGraph 的二进制列在三种方言上都真写进去了。
+
+**「没法判」两条退路也在真进程上量过**（不是单测）：
+
+- 不给 PG URL：`E:/tmp/m98/probe-pg-absent.log` → `[SKIP]`、对照格缺席、退出码 **2**。
+- 旋钮 `true` 但本机无后端：`E:/tmp/m98/probe-tight-posture.log` → 姿态自检在第一步之前拦下，
+  退出码 **2**（`reason=sandbox_backend_unavailable`）。
+
+**还没覆盖的**
+
+1. 装置默认把沙箱钉成 `false`；「紧姿态 + 真库 + 85 步」这一组合没有读数，紧姿态只在开场
+   自检上验过（`probe-tight-posture.log`），因为本机没有可用后端。要补得换一台有 docker
+   （或别的可用档位）的机器。
+2. MySQL / PG 两格依赖操作者给的本机实例（`127.0.0.1:3307` / `127.0.0.1:5432`），CI 侧靠
+   `--require-mysql` / `--require-postgres` 把「没库」判成 rc=2；本批三格是手工实例读数，
+   没在 CI runner 上复跑。
+3. 第 85 步只覆盖 Python 内联命令的两段尾巴；其它解释器/壳换参的同款正反两方向判据没有。
+
+## 7.56 任务 #90：独立 Worker 入口与「崩溃续跑不重复执行」——检查点粒度不够，工具执行要自己记账
+
+**缺口形状**：§7.50 留下的那一半。产品形态仍是"API 进程内跑执行"；而只要让另一个进程接管
+一条死了的 run，就会撞上 LangGraph 的检查点粒度：检查点落在**节点边界**，`execute_action`
+却把「执行工具」和「问模型下一步」放在同一个节点里。进程死在两者之间时，
+`resume_crash` 从节点开头重放，工具就再执行一遍。
+
+**改前读数**（跨进程探针，第一版）：`E:/tmp/m90/worker/probe-1.log` —
+`progress_lines ["crash-probe","crash-probe"]`、`tool_rows 2`、`tool_completed_run_shell 2`；
+run 最终 `succeeded`，即"看起来成功、动作做了两次"。检查点只有节点边界（step -1..4），
+没有一条记录能说明工具已执行。
+
+**入口**（`services/api/src/blank_api/worker.py`）：
+
+- `python -m blank_api.worker` 轮询 `queued` 或 `running+租约过期` 的 run，`claim_run` 后调
+  `tasks._execute_claimed_run(..., crashed=attempts>0, lease_seconds=LEASE_SECONDS)`；
+  `BLANK_WORKER_ONCE=1` 扫一轮退出（探针与 CI 用），`BLANK_WORKER_LEASE_SECONDS` / `BLANK_WORKER_ID`
+  可钉。超过 `MAX_RECOVERY_ATTEMPTS` 走 `abandon_run` + `task.failed`，不留一条永远 `running` 的行。
+- API 侧开关 `BLANK_INPROCESS_RUNNER`（默认 1，桌面单机行为不变）：=0 时 `/run` 只建 run 返回
+  `queued`，启动恢复也不认领，执行权整个交给 worker。
+- `runtime.resume_crash()` 与审批恢复分开：不再传 `Command(resume=...)`，而是
+  `graph.ainvoke(None, config)`，并让 `task.resumed` 带 `crash_recovery: true`。
+
+**执行日志**（`graph.py`）：
+
+- `tool.completed` 增 `call_id`（模型给出的调用 id，`tool_call_id` 是网关账本 id，两者不同）与
+  `artifact_path`；重放时补一条 `tool.replayed` 作为证据。
+- `_replayed_tool_results()`（:1767）按 `task_id + payload.trace_id + call_id` 从 `tool.completed`
+  找本次已经完成、但检查点没记住的调用，正文从 `ArtifactStore` 取（事件里只有 500 字摘要）。
+  **只认带显式 id 的调用**：没有 id 时 `_call_key` 退回工具名，第二次 grep 会被对成第一次的结果，
+  那比多跑一次更糟。
+- 节点接线（:1845 起）：两道门只拿未执行过的调用（已完成的不会再弹审批/再问一遍）；命中的调用
+  不发 `tool.requested`、不跑 pre/post 钩子、不重复写 `tool.completed`/`file.changed`，只把结果
+  补回 `tool_results` 与模型上下文，`update_plan` 照常回写。
+
+**读数**（`E:/tmp/m90/worker/probe_worker.py`，两个真进程 + 真 HTTP 桩模型，A 挂在第二次模型调用里
+被 `TerminateProcess` 杀掉，4 秒租约过期后 B 接管）：
+
+| 判据 | 读数 |
+| --- | --- |
+| `worker_a_did_not_finish` | `running` / `attempts=1` |
+| `worker_b_claimed_the_same_run` | 运行中抓到 `running` + `worker-B` + `attempts=2`（终态会被 `finish_run` 清空 worker，故必须在跑的时候抓） |
+| `run_succeeded` / `worker_b_exited_zero` | `succeeded` / `succeeded`，rc **0** |
+| `tool_side_effect_once` | `progress_lines ["crash-probe"]` |
+| `tool_ledger_once` | `tool_rows 1`、`tool.completed(run_shell) 1` |
+| `tool_requested_once` | `1` |
+| `replayed_from_journal` | `tool.replayed` 恰 1 条（`call_id=call_fb6847e6`） |
+| `started_not_repeated` / `resumed_as_crash_recovery` | `task.started 1` / `crash_recovery=true` |
+
+10/10 PASS，rc=0，读数落盘 `E:/tmp/m90/worker/worker-probe-readings.json`。
+
+**变异**：把 `_replayed_tool_results` 短路成 `return {}`，同一装置重烧 → **4 红 6 绿、rc=1**，
+红集合恰为 `tool_side_effect_once / tool_ledger_once / tool_requested_once / replayed_from_journal`
+（读数：`progress_lines` 两行、`tool_rows 2`、`tool_requested 2`、`tool.replayed []`）；还原后
+复读 10/10、rc=0。一红一绿两次都是真进程读数，不是推断。
+
+**仓库判据**：
+
+- 新增 `tests/test_crash_replay_v90.py` **3 passed**：同一 call id 把节点再跑一遍只执行一次、
+  且模型上下文里拿到的 `ok/status/output/data` 是同一份；换一个 call id 必须真的再执行（对照格）；
+  没有 id 的调用永不重放。同一变异下 1 failed / 2 passed（对照两格按设计不红）。
+- 新增 `tests/test_worker_v90.py` **5 passed**：queued run 认领一次并正常跑完；第二次认领走
+  `resume_crash`（`attempts>0`）；新鲜租约不动；反复崩溃的 run 被判 `failed` 并留下 `task.failed`；
+  `BLANK_INPROCESS_RUNNER=0` 时 API 只入队（带默认开的对照格）。
+- 全量回归：**1303 passed / 23 skipped**（419.79s）。
+
+**还没覆盖的**
+
+1. worker 是单机轮询，没有多机 broker；租约比较用的是库里写的 naive UTC，跨机时钟偏差没量过。
+2. 重放读的是本地 artifact 文件；目录被清掉时按"宁可再执行一次"退化成重复执行（不会伪造结果）。
+   这一格没有判据演过——要造它得在崩溃后删 artifact 再让 B 接管。
+3. 子代理（`services/subagent.py` 自己的循环，不走图）不在重放语义里；它的事件也没有 `call_id`。
+4. 探针用 4 秒租约与脚本化桩模型；真实慢模型（单步 > 90 秒租约）下的接管频率没有读数。
+
+## 7.57 任务 #91：评测集成功率进发布门禁 + CI job 的本地等价装置
+
+**缺口形状**：`evals/run_evals.mjs` 跑完只把 `success_rate` 写进结果文件，没有任何东西在它掉下去时
+拦发布；而 `ci.yml` 里的真库/团队格又只有 GitHub runner 上才跑得到，本地无从复现——「CI 绿了」
+在这台机器上永远是一句转述。
+
+**门禁**（`evals/eval_gate.mjs` + `evals/gate_config.json`）：
+
+- 七格前提：`GATE-CONFIG`（阈值与样本下限可读）、`RESULTS-FILE`（结果文件在场且是 JSON）、
+  `RESULTS-INTACT`（记录数/整轮数/成功率三者自洽）、`FULL-RUN`（整轮 >= `min_samples`=30）、
+  `SAMPLES-COVERAGE`（样例库 32 例在结果里全部有记录）、`RECORD-JUDGED`（每条记录都有判定）、
+  `SUCCESS-RATE`。任一条前提缺席即 rc=2，**「今天没法判」不许伪装成「通过」**。
+- 阈值 `0.938` 是实测值本身，不是拍的：2026-10-26 用仓库自带脚本化桩（`scripts/mock-model-server.mjs`，
+  OpenAI 兼容本地桩，不烧真模型、不调 DeepSeek）跑全集 32 例、并发 3、API 独立实例 `:8050`、
+  sqlite 隔离库，得 `succeeded 28 + expected_denied 2 = 30/32 = 0.938`；红的两条 T07/T29 是桩不合成
+  多文件任务第二份文件的确定形状（2026-10-15 两次实测红的是同两条）。原始读数
+  `evals/results/results-2026-10-26T04-24-16-705Z.json`，出处整段写在 `gate_config.json` 的值里——
+  桩或产品链一变导致这两条转绿/新增红，就必须重测改写，不许顺手改数字。
+
+**CI job**（`.github/workflows/ci.yml` 的 `eval-gate`）：隔离 sqlite 建库 → 起桩与 API `:8050`
+（`BLANK_SANDBOX_ENABLED=false`，与桌面壳同款姿态；不钉它无 docker 时任务会被沙箱闸门全挡死，
+正是 §7.55 的坑）→ `register_mock_provider` → 全集 32 例 → `eval_gate.mjs`，
+判定**只认门禁自己那行「退出码=」**。
+
+**本地等价装置**（`scripts/local_ci.mjs`，根 `package.json` 的 `ci:local` / `eval:gate`）：
+
+- `--self-test` 先证明组合器本身可信：装置全绿但 PG 格缺席 → 2；装置自报 1 → 1（红优先于缺席）；
+  自报 2 → 2；全格在场全绿 → 0；读数行缺失 → 2 而不是 0；解析三形状（`退出码=0` / `=2` / 没有）→ 0/2/null。
+  **8/8 PASS，`自检判定 rc=0`**（`E:/tmp/m91/self-test.log`）。
+- `--job eval-gate` 复现 CI 那一 job 的判定：七格全 PASS、装置自报 `退出码=0`、
+  包装 rc 与之一致 → `job 判定 rc=0`（`E:/tmp/m91/eval-gate-local.log`）。
+- 门禁三种失败模式实跑（都在 `E:/tmp/m91/`）：`--min-success-rate 0.99` → `SUCCESS-RATE` 红，
+  带出 T07/T29 明细，`退出码=1`；`--results E:/tmp/m91/absent.json` → `RESULTS-FILE` SKIP、
+  `退出码=2`；`--results E:/tmp/m91/truncated.json`（结果文件截到 2000 字节）→ 读不出 JSON 按
+  「上一轮没跑完」处理、`退出码=2`。三份日志分别是 `gate-red.log` / `gate-absent.log` / `gate-truncated.log`。
+- `--job api-dialect` 在本机**落 `job 判定 rc=2`**：四格全 SKIP——「`KBGAI_MYSQL_ROOT_PASSWORD` 未注入、
+  `BLANK_E2E_MYSQL_URL` 未给」「本机无 docker、`127.0.0.1:5432` 无监听」（MySQL 两条建库路径对账、
+  PG 两条建库路径对账同因）。这是如实的「今天没法判」，不是通过
+  （`E:/tmp/m91/api-dialect-local.log`）。
+
+**还没覆盖的**
+
+1. `eval-gate`、`api-dialect`、`team-e2e` 三个 job 都**从未在 GitHub runner 上真跑过**；本机能给的
+   只是本地等价读数，不是 CI 绿。
+2. api-dialect 本地格要从 rc=2 变成真判定，必须操作者注入 MySQL 口令（`KBGAI_MYSQL_ROOT_PASSWORD`）
+   并且本机有 PG 监听/给 `BLANK_E2E_POSTGRES_URL`；这一步涉及共享库，未获批准不动。
+3. 阈值等于当前实测值：它能抓到「比现在更差」，但抓不到「本来就刚好卡在线上的能力下滑」；
+   等真模型链路稳定后应该改成带余量的下限，并把余量出处同样写进 `gate_config.json`。
+
+## 7.58 任务 #92：桌面壳四项的接线装置——判定早就有了，接线从没跑过
+
+**缺口形状**：单实例、托盘、全局快捷键、自动更新骨架在 #107 就落进了
+`shell-policy.cjs`（纯函数）+ `main.cjs`（执行），判定层有单测；但 `main.cjs` 里
+「读 Electron 状态 → 调策略 → 执行动作」这一段**一次也没被跑过**——代码注释里四处写着
+「本机不许启动壳，未验」。判定正确不等于接线正确：close 忘了 `preventDefault`、
+second-instance 忘了 `show`、快捷键回调没挂却报告注册成功、更新骨架偷偷 `fetch` 安装包，
+这四种都能在「策略层全绿」的情况下发生。
+
+**装置**（`desktop/tests/main-wiring.test.cjs`，7 条判据）：把 `electron` 换成内存假实现
+（窗口、托盘、快捷键、生命周期均可观测），健康检查与更新源用 127.0.0.1 随机端口的**真 HTTP**，
+然后 require 真的 `main.cjs`。全程不建 GUI、不碰 `:8000/:3000`、不起后端进程——
+启动路径上的「后端已可达」由本地健康桩满足，main.cjs 自己走「复用已有后端」那一支。
+
+| 判据 | 钉住的事 |
+| --- | --- |
+| 单实例 | 拿不到锁的第二实例在**建窗口/建托盘/探后端之前**退出：`quit=true`、窗口 0、托盘 0、`/health` 请求 0 |
+| 启动接线 | 建一个窗口、`app://bundle/` 加载、健康桩可达时复用（日志「检测到已有后端在运行」）、托盘菜单含「后端状态：运行中」与「更新：发现新版本 9.9.9」 |
+| 第二实例唤回 | 隐藏窗口收到 `second-instance` 后动作序列含 `show`+`focus` 且不建第二窗；托盘 `double-click` 走同一路径 |
+| 关窗路由 | 托盘可用时 ✕ 被 `preventDefault` 并 `hide`、`app.quit` 未被调用；托盘「退出」后第二次 ✕ 放行 |
+| 托盘不可用 | `nativeImage` 空图 → 日志「托盘创建失败」，✕ 直接放行并退出（不留看不见又关不掉的窗口） |
+| 全局快捷键 | 成功时 `register` 收到 `Control+Alt+B` 且回调真挂上（调用它可见→隐藏、再按→唤回）；被占用与抛异常都只降级、窗口照常、退出时仍 `unregisterAll` |
+| 更新骨架 | 只 GET 一次 `/feed`，**`/package` 请求恒为 0**；500 / 读不懂 / 同版本 / 未配置四种形态各自有可读原因与托盘文案，未配置时根本不发请求 |
+
+**读数**：基线 **7 passed / rc=0**（`E:/tmp/m92/tap-baseline.log`）。首次跑时我把「feed 形状
+不对」的日志期望写成 `更新元数据缺失`，实测是 `feed JSON 既不是条目数组`（`decideUpdate`
+把形状错误也归进 fetchError 分支）——按实测改正，没有反过来改装置去迁就猜测。
+
+**变异电池**（`E:/tmp/m92/mutate_shell.cjs`，6 条靶只改 `main.cjs` 接线、不碰策略层；
+每轮写完副本回读断言命中 1 次，结束删除副本并核对 `main.cjs` sha256 未变）：
+
+| 靶 | 实测红集合（与写死的期望逐字相等） |
+| --- | --- |
+| S1 第二实例不让位 | 单实例那条 |
+| S2 收到第二实例信号但不唤回 | 第二实例唤回那条 |
+| S3 关窗不路由到托盘（一律放行） | 关窗路由那条 |
+| S4 快捷键报告注册成功但回调没挂 | 全局快捷键那条 |
+| S5 更新骨架发现新版本时真去下载 | 启动接线那条（`/package` 请求 0→1） |
+| S6 托盘「退出」不置显式退出位 | 关窗路由那条（退出后 ✕ 仍被吞） |
+
+探针轮 `battery-measure.json` 先量，判定轮 `battery-check.json` 逐字比对，
+`[ALL-OK] 6 条靶全部按实测红集合命中，且每条都能失败` / `battery-rc=0`。
+桌面壳全套 **52 passed**（`E:/tmp/m92/desktop-suite.log`；原 45 + 新 7）。
+
+**还没覆盖的**
+
+1. 真 Electron + 真 GUI 的四件事仍需人工点验：双实例真实启动、托盘图标在深浅色任务栏下的
+   观感与真实 ✕/双击、真按组合键及与别的热键助手真实撞车、后端起不来时的故障对话框与
+   真实 spawn/回收（本装置走的是「健康桩已可达」一支，没起过后端）。
+2. 装置里的窗口/托盘是内存桩：Electron 版本升级改了某个 API 签名（如 `Tray.on` 的返回值），
+   假实现可能先绿；升级 Electron 时要人工跑一次 `npm start`。
+3. 没有把桌面壳测试挂进 `ci.yml`：现有 CI 没有 GUI 环境，且这个装置依赖真 HTTP 与本机
+   Node 24；本地入口是 `node --test`（根 `test:desktop` / `desktop/package.json` 的 `test`）。
+
+## 7.59 任务 #94：MCP 服务端进程进同一个 Job——「不归沙箱管」第一次变成可查询的内核事实
+
+**缺口形状**：M3 把 MCP 调用记成 `mcp_host_process`，读起来像"边界已经清楚"；实际
+只是"这笔调用走外部进程"的分类。stdio 型 MCP 是我们亲手 `create_subprocess_exec`
+起来的，却从没挂过 Job：内存、进程数、退出清理都没有内核兜底。状态接口给的
+`host_process` 既不能回答"挂没挂"，也不能区分"能挂"与"挂失败"；HTTP 型的进程在
+远端，更不该读成"本机宿主"。
+
+**落地**：`StdioClient.start()` 在 spawn 后、握手前建 Job 并 `AssignProcessToJobObject`；
+限额默认取 `SandboxPolicy`（512m / 128 个进程），`mcp.json` 的 `memory`/`pids` 可按
+服务端覆盖，认不出的单位退回默认值而不是"不限"。"进没进"不靠返回值自证：
+`windows_job.pid_in_job()` 用 `IsProcessInJob` 直接问内核，查不到返回 `None`（不知道），
+不猜成 `False`。事实在关句柄前快照，关完之后仍能回答"这次真实生效的边界是什么"。
+
+挂不进去**不拦任务**——坏 MCP 配置不该让整个任务起不来——但 facts 会变成
+`host_process_unbounded`，note 以 `⚠` 开头，状态、整包汇总、证据包与界面一起亮红；
+HTTP 型一律 `remote`；整包取最坏一条并列出 `unbounded_servers`/`by_boundary`。
+REA adapter 也改读同一份 facts，不再固定写"宿主进程"。
+
+**顺手抓到的两个真缺陷**（都不是文案问题）：
+
+1. **close 的顺序是反的。** 原实现先 `terminate()` + `await process.wait()`，最后才关
+   Job。`wait()` 要等**所有** stdio 管道断开，而服务端的孙子进程可能正握着 MCP 的
+   stdout；于是每关一次连接都白等满 `KILL_GRACE=2.0s` 才走 `kill()`。改成先关
+   Job（`KILL_ON_JOB_CLOSE` 带走整棵树）再等进程：探针实测 2.00–2.02s → 0.00–0.03s，
+   整文件测试 2.6s → 0.64s。没进 Job 的服务端，其孙子不归我们管，close 的等待有界，
+   不许把收尾挂死——这是"边界外"的直接后果，不是异常处理。
+2. **清树判据自带竞态。** fake server 原本在**启动时**派生孙子，而客户端是 spawn
+   之后才挂 Job；孙子可能出生在赋值窗口外，用例偶尔红（实测一次等满 5s 仍活着）。
+   这与 `assign_pid` docstring 早写明的窗口同源，不能靠重跑掩盖。把孙子的出生点挪进
+   `child_pid` 工具调用（必然在 Job 建立之后），并先用 `IsProcessInJob` 断言"它在里面"
+   再断言"关掉之后它死了"——两步都是内核事实，不再靠时序。
+
+**读数**：新套件 `tests/test_mcp_job_v94.py` **11 passed**；在
+`-W error::PytestUnraisableExceptionWarning -W error::ResourceWarning` 下整文件重跑
+**10 轮全绿**（0.59–0.78s，旧实现在此会间歇性红）；相关七套 **130 passed**；
+API 全量 **1314 passed / 23 skipped**（2026-10-26，6 分 53 秒，rc=0）；web **194 passed**，
+`tsc --noEmit` rc=0。
+
+| 判据 | 阳性（必须是真跑） | 阴性/对照（否则判据无效） |
+|---|---|---|
+| 在 Job 里 | `IsProcessInJob(mcp pid)=True`，facts 同值 | 同一 Job 上一个无关进程必须 `False` |
+| 限额是内核的 | 768m Job 里分配 256MB → `hogged:268435456` | 128m Job 里同一调用 `MCPError`，rc≠0，stderr 含 `MemoryError` |
+| 清树 | 孙子在工具调用里出生、`IsProcessInJob=True`；close 后 5s 内死 | close 本身必须 `< KILL_GRACE`（旧顺序必红） |
+| 挂失败 | 注入 create/assign 失败后仍能 `list_tools` | facts/status/bundle/evidence 全是 `host_process_unbounded` + `⚠` + 注入原因 |
+| HTTP | `remote` + "进程在远端"说明 | `job_created` 必须为 False |
+| 配置 | `memory=320m`、`pids=12` 落到真 Job facts | 垃圾单位读回空串＝默认值，不是"不限" |
+
+**变异电池**（`E:/tmp/m94/mutate_mcp.py`，9 条靶）：每条靶复制一份 `src`、只改一处、
+`PYTHONPATH` 指副本，并**先让解释器打印 `client.__file__` 证明副本真的被加载**，
+否则"靶没生效"会被误读成"判据牢固"；对照轮不改任何字节，必须 11 passed / rc=0；
+结束核对仓库 `src` 的 sha256 未变。第一次 measure 时 M1 与 M8 的实测红集合比预估
+各多一条（`M1` 还红在赋值失败标注、`M8` 还红在 Job 成员），按实测改写期望；第二轮
+又补了 M9 钉 close 顺序。终判 `[ALL-OK] 对照 11 passed；9 条靶全部按实测红集合命中，
+源码未变`，电池自身 rc=0。
+
+| 靶 | 实测红集合 | 失败原因（从日志取的原文） |
+|---|---|---|
+| M1 建 Job 不 assign | 清树、赋值失败、内存、成员 | Job 成员断言红；128m 分配未失败（`DID NOT RAISE`） |
+| M2 不关 Job 句柄 | 清树 | `close 吃满 2.02s 宽限期` |
+| M3 挂失败仍报 Job | 创建失败、赋值失败 | `'job_object' == 'host_process_unbounded'` |
+| M4 HTTP 写成 Job | HTTP | `'job_object' == 'remote'` |
+| M5 状态按传输猜 | 管理器读数 | `'host_process_unbounded' == 'job_object'` |
+| M6 汇总忽略未进 Job | 汇总、证据、创建失败、赋值失败 | `'mixed' == 'host_process_unbounded'` |
+| M7 证据丢名单 | 证据透传 | `[] == ['bad']` |
+| M8 无视配置限额 | 管理器、内存、成员 | `536870912 == 268435456`（320m 同理） |
+| M9 先等进程再关 Job | 清树 | `close 吃满 2.00s 宽限期` |
+
+**界面这一格也点验过**（`E:/tmp/m94/settings_mcp_verify.mjs`，Chrome headless
+1440x1000，真 HTTP）：设置页 `#tools` 同时挂 `fake-stdio`（256m/32，`job_object`）与
+`remote-stub`（HTTP，`remote`），12 条判定（含 2 条负对照）**ALL PASS**。读数从
+`GET /settings/mcp` 现取（256MB、32 个进程、2 个已连接、5 个工具），不是写死：
+
+- stdio 行：`已挂 Job：内存 256 MB / 32 个进程 / 关连接带走整棵树`
+- remote 行：`进程在远端，本机 Job 管不到；出站请求仍走审批与审计`，且**不许**出现
+  「已挂 Job」（去掉 `boundary === "job_object"` 前置即恰红这一条，rc=1；还原后绿）。
+- 点验途中抓到的是**桩自己的分帧缺陷**（`http.server` 默认 HTTP/1.0 + 202 无
+  `content-length`，httpx 报 `ReadError`），改成 HTTP/1.1 并给显式长度后才算"真链路"；
+  被测代码未因此改动。
+
+**没覆盖的**
+
+1. **赋值窗口仍在**：spawn 之后才能挂 Job，窗口里已派生的子进程不在 Job。这与命令
+   沙箱同源，本批没有消除，也不声称严密；测试把孙子的出生点放进工具调用，避免用
+   竞态冒充证据。
+2. `JOB_OBJECT_LIMIT_PROCESS_MEMORY` 是每进程上限，不是整棵服务端树的总量；服务端
+   再派生多个子进程，每个各有一份。pids 限制的是 Job 内活动进程数。
+3. Job 只给内存/进程数/生命周期，**不是 AppContainer**：MCP 服务端的文件与网络边界
+   仍按宿主权限，不能因为 `boundary=job_object` 就写成"已沙箱"。
+4. HTTP 型 `remote` 的进程行为本机无法核验，只保证每次出站请求仍走审批与审计。
+5. 挂不进去时服务端照常以宿主权限运行；红字是补偿不是强制，这是产品选择。
+
+## 7.60 不可逆闸门补上"环境变量展开的删除"——旧判定把工作区外的删除算成可逆
+
+这不是排期任务，是 #94 收口时读代码读出来的一个真实缺口，按"可逆"这条口径做了一次
+只收紧、不放宽的修复；改动只有正则的一条分支，随时可回退。
+
+**缺陷形状**：`IRREVERSIBLE` 只认字面路径（`del /s /q C:\...`）与 `-Recurse/-Force`，
+不认 `%USERPROFILE%` / `$env:` / `$HOME` 这类由壳展开的目标。于是
+`del /s /q %USERPROFILE%\Documents`、`rmdir /s /q %TEMP%\x`、
+`Remove-Item $env:USERPROFILE\Documents\old` 全被判成**可逆**。后果不是"少弹一次卡"，
+而是两条更硬的承诺被同时说谎：`graph.py:1567` 用它算 `reversible`，guardian 在
+auto 模式下据此**代批**；`memo_rule` 也就不会再挡前缀档。删除落在工作区之外，
+快照赎不回来——与"不可逆命令任何模式都不放行"直接矛盾。
+
+**改前应红**：`tests/test_permission_modes_v11.py::test_irreversible_covers_env_expanded_targets`
+首跑 `1 failed / 32 passed`，原文 `assert False is True ... 'del /s /q %USERPROFILE%\\Documents'`。
+修复只加一条分支，且只挂在删除类动词上（`echo %USERPROFILE%` 这类读操作不许被连坐）。
+
+**变异**：把分支里的 `%[a-z_]` 改成 `%[0-9]`（等价于"这条分支写着但不认任何真变量名"），
+复跑同一文件 `1 failed / 32 passed`、`rc=1`，红的正是新测试——判据能失败。
+
+**新旧同跑**（`E:/tmp/m76/old_new_classification.py`，7/7 PASS，rc=0）：
+
+| 正则 | `del /s /q %TEMP%\...` | decision.rule | `echo %OS%` |
+|---|---|---|---|
+| 修复前（摘掉环境变量分支） | False | `risk:ask` | False |
+| 修复后 | True | `irreversible` | False |
+
+装置自身先自曝过一次：源码是隐式字符串拼接、编译后的 pattern 只有一行，按行过滤
+会把整条 pattern 删成空串——空正则匹配一切，"旧版"那一列假绿（负对照也 True）。
+改成按子串摘除，并加两条自检（摘除后旧串非空且不含该分支；旧串对
+`git push --force` 仍判不可逆），才取得上表读数。
+
+**线上探针**（`E:/tmp/m76/irreversible_live_probe.py`，真 HTTP、真模型，8/8 PASS，rc=0）：
+在重启后的隔离实例 :8061 上让模型调用
+`run_shell("del /s /q %TEMP%\kbg_probe_9431_missing_target")`（目标不存在，即便漏批也无副作用），
+读数：
+
+- 停在 `waiting_approval`，命令逐字到达（探针自证：匹配器对原样命令为真、对近似写法为假）；
+- 证据包待审批项 `permission_rule="irreversible"`、`approval_options` 只有 `["once"]`
+  ——不可逆命令没有"总是允许"档；
+- 证据工具清单与审计账两侧都**没有** `run_shell` 执行行；驳回后任务收尾、无二次执行；
+- 负对照同场：`echo %OS%` 未被连坐（`irreversible` 为假），任务直接跑完（`run_shell` ok=1）。
+
+**回归**：`test_permission_modes_v11.py` 33 passed；权限/审批/guardian/执行边界 12 个文件
+合计 184 passed。后端改动后按约定重启 :8061 再点验，探针跑在重启后的进程上。
+
+**没覆盖的**：这条分支是静态匹配，认不出运行时才拼出来的目标（如
+`set T=%USERPROFILE%&&del /s /q %T%`）；这类命令仍在原有闸门（字面路径/`-Recurse`）
+覆盖范围内，不声称严密。
+
 ## 9. 复现命令
 
 ```bash
@@ -4191,3 +5265,152 @@ cd services/api && .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_mysq
 六条判据的期望值全部从 `/api/v1/tasks/{id}/evidence` 现取，V2 是装置自检——页签没点开、
 卡片没渲染，就一律算 FAIL 而不是"没读到所以通过"）。日志：
 `E:\tmp\m1b\world-mutate-4.log`、`world-mutate-web-2.log`、`world-verify-2.log`、`world-ui-1.log`。
+
+包内驱动复量这一批（#86 收尾，§7.46）：只看 0.8.5 那份自带运行时，不看文档、不看 `pyproject`：
+
+```bash
+SP=desktop/dist/win-unpacked/resources/backend/runtime/Lib/site-packages
+ls -d "$SP" && ls "$SP" | grep -iE "^(aiosqlite|asyncpg|pymysql|aiomysql|sqlalchemy)"   # aiosqlite-0.22.1 / asyncpg-0.32.0 在；pymysql、aiomysql 一条都没有
+```
+
+批准前缀的真壳往返这一批（#87，§7.47）：
+
+```bash
+cd services/api && .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_shell_quoting_v53.py                 # 32 passed（含两条真壳用例，非 Windows 上按 cmd 语义 skip）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m87/shell_roundtrip.py > E:/tmp/m87/rt.json                              # rc=0：pre 15 样本/记下 9/走形 2、post 15/13/0；post_defects=[] 且 baseline_defects 非空（正对照）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m87/separator_probe.py > E:/tmp/m87/separator-out.json                   # 分隔符实测：cmd 的 | 裸写 255、& 裸写多跑一条、; 与带引号一样
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_shell_quoting_v53.py                                    # 变异（把 _RULE_METACHARS 摘空）必须 2 failed——原 6 条样本对它不敏感，是本批补的两条让它能红
+```
+
+`tool_scope` 必填这一批（#88，§7.48）：
+
+```bash
+cd services/api && .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_tool_grant_scope_v52.py tests/test_approval_memo_v37.py tests/test_permission_modes_v11.py tests/test_shell_quoting_v53.py   # 106 passed
+# 变异：把 `*, tool_scope: bool` 改回 `= True` ⇒ 实测 1 failed（test_tool_scope_has_no_default），改回后 sha256 一致
+```
+
+日期进提示词这一批（#89，§7.49）：
+
+```bash
+cd services/api && .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_prompt_clock_v54.py                   # 8 passed
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_governance_snapshot_v16.py tests/test_world_state_v22.py tests/test_compaction_window_v23.py tests/test_context.py tests/test_context_compactor.py tests/test_context_layers_v12.py tests/test_context_pairing_v14.py tests/test_context_watermark_v13.py tests/test_turn_attribution_v24.py tests/test_origin_evidence_v42.py tests/test_phase2_context.py tests/test_instructions_layers.py tests/test_agent_roles.py tests/test_retention_v25.py tests/test_threads.py tests/test_uploads_v15.py   # 164 passed
+.venv/Scripts/python.exe -X utf8 E:/tmp/m89/clock_probe.py                                                       # 真钟/钉钟/空 tzname 三种形状，读到一个 `%z` 退路是 "+0800"
+.venv/Scripts/python.exe -X utf8 E:/tmp/m89/mutate_clock.py > E:/tmp/m89/mutate-run.log                           # 变异在源码副本上跑（PYTHONPATH 优先，每条回读 graph.__file__ 确认跑在变异上）：基线 8 passed / M1 4 / M2 7 / M3 1 / M4 1 / M5 1 / M6 4
+```
+
+运行租约这一批（#90/#102，§7.50）：
+
+```bash
+cd services/api && .venv/Scripts/python.exe -X utf8 E:/tmp/m90/claim_race.py                                       # 跨进程认领对照格：4 个独立进程抢同一条 queued run → race-3.log `winners=1 locked_errors=0 attempts=1`
+.venv/Scripts/python.exe -X utf8 E:/tmp/m90/lease_probe2.py                                                          # 改前量缺陷 → lease2-readings.txt：S3 非 owner 写得成终态、S5 过期租约还能自续（旧版 lease_probe.py 的读数作废，原因见 §7.50）
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_run_lease_v102.py                                           # 6 passed
+.venv/Scripts/python.exe -X utf8 E:/tmp/m90/mutate_lease.py                                                          # 变异电池 5/5，红集合与实测期望逐字相等（mutate-3.log；M1 红 2 条，M5 的红落在收尾那格）
+```
+
+独立 Worker 与崩溃续跑这一批（#90，§7.56）：
+
+```bash
+cd services/api && .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_worker_v90.py tests/test_crash_replay_v90.py  # 5 + 3 passed
+.venv/Scripts/python.exe -X utf8 E:/tmp/m90/worker/probe_worker.py                                                   # 两个真 worker 进程 + 真 HTTP 桩：10/10 PASS，rc=0（worker-probe-readings.json）
+# 旧读数留档：probe-1.log（改前）progress_lines 两行 / tool_rows 2；变异（_replayed_tool_results 短路成 {}）→ 4 红 6 绿、rc=1
+.venv/Scripts/python.exe -X utf8 -m pytest -q                                                                        # 全量 1303 passed / 23 skipped
+```
+
+评测门禁与 CI 本地等价装置这一批（#91，§7.57）：
+
+```bash
+cd E:/projects/kbgai/kbgai && export PATH="/e/env/node/node-v24.20.0-win-x64:$PATH"
+node scripts/local_ci.mjs --self-test                 # 8/8 PASS，`自检判定 rc=0`（E:/tmp/m91/self-test.log）
+node scripts/local_ci.mjs --job eval-gate             # 七格全 PASS，`退出码=0`，job 判定 rc=0（E:/tmp/m91/eval-gate-local.log）
+node evals/eval_gate.mjs --min-success-rate 0.99      # 失败模式：SUCCESS-RATE 红 + T07/T29 明细，rc=1（E:/tmp/m91/gate-red.log）
+node evals/eval_gate.mjs --results E:/tmp/m91/absent.json       # 结果缺席 → rc=2（E:/tmp/m91/gate-absent.log）
+node evals/eval_gate.mjs --results E:/tmp/m91/truncated.json    # 半截 JSON → rc=2（E:/tmp/m91/gate-truncated.log）
+node scripts/local_ci.mjs --job api-dialect           # 本机四格全 SKIP → job 判定 rc=2（E:/tmp/m91/api-dialect-local.log；不是通过）
+```
+
+桌面壳接线这一批（#92，§7.58）：
+
+```bash
+cd E:/projects/kbgai/kbgai && export PATH="/e/env/node/node-v24.20.0-win-x64:$PATH"
+node --test desktop/tests/main-wiring.test.cjs        # 7 passed / rc=0，不建 GUI、不碰 :8000/:3000（E:/tmp/m92/tap-baseline.log）
+node --test desktop/tests/gpu-guard.test.cjs desktop/tests/api-base.test.cjs desktop/tests/shell-policy.test.cjs desktop/tests/update-policy.test.cjs desktop/tests/main-wiring.test.cjs  # 52 passed（E:/tmp/m92/desktop-suite.log）
+node E:/tmp/m92/mutate_shell.cjs measure              # 探针轮：6 条靶的实测红集合（battery-measure.json）
+node E:/tmp/m92/mutate_shell.cjs check                # 判定轮：红集合逐字相等，battery-rc=0（battery-check.json）
+```
+
+README 的待人工点验项已收窄为真 GUI 的观感与真实进程交互（双实例真启动、托盘图标、
+真按键/撞车、后端故障对话框）；`main.cjs` 的接线由上面的装置钉住。
+
+审批卡文案与 `tool_scope` 线上核对这一批（#87/#88 → #101）：
+
+```bash
+cd services/api && .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_approval_card_v101.py                    # 40 passed（v101-2.log）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m101/mutate_gate.py                                                          # 变异电池 4/4，还原后干净复跑 40 passed（mutate-gate-3.log）
+```
+
+fs-broker 这两格新判据（#93/#105，§7.52）：
+
+```bash
+cd services/api && .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_fs_broker_v93.py                         # 22 passed / 18 warnings（fsb-2.log；18 条 unclosed transport 是登记项，不是判定）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m105/bench_fs_broker_scratch.py                                              # 现场读数 → bench-run-1246.txt：第 1 行 job_facts（含 job_tree_kill=True）、第 3 行 LATENCY 65 样本 p50=0.646/p95=1.951
+.venv/Scripts/python.exe -X utf8 E:/tmp/m105/mutate_fsb.py measure                                                   # 第一轮 = 自曝：F3/F5 撤掉后原 20 条全绿、F1 是 rc=4+空红集合（装置坏）、F4 命中 0 次（mutate-measure.log，battery-rc=1）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m105/mutate_fsb.py check                                                      # 补两格之后：5/5 红集合与实测期望逐字相等（mutate-check.log，battery-rc=0）
+```
+
+REA 接入 `/reverse-lab` 这一批（#95/#108，§7.51）：
+
+```bash
+cd services/api && .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_rea_mcp_adapter_v108.py                  # 29 passed（v108-3.log / v108-4.log 两次读数一致）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m108/probe_clip.py                                                            # 打出 clip.exe 反例"不报错"的真相：段头 36 字节 ≠ artifact.py 步骤 6 的 sections*40
+# 改前应红的两份留档：v108-1.log（3 failed / 7 passed / 19 errors，PE 构造器 DOS 头 62 字节装不下 0x3C）、v108-2.log（5 failed / 24 passed，含 /targets 的 404 应为 503）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m108/mutate_lab.py measure                                                    # 探针轮：M1–M4 各自的实测红集合（mutate-measure.log / mutate-measure2.log 两轮一致）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m108/mutate_lab.py check                                                      # 判定轮：4/4 与期望逐字相等（mutate-check.log，battery-rc=0）
+```
+
+无后端拒绝一切任务这一批（#99，§7.53）：
+
+```bash
+cd services/api && .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_sandbox_refusal_v99.py                   # 4 passed / 2.16s（E:/tmp/m108/v99-1.log）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m99/mutate_refuse.py measure                                                  # N1 红 1 / N2 红 1 / N3 红 2（mutate-measure.log，battery-rc=0）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m99/mutate_refuse.py check                                                    # 期望写死后复跑，红集合逐字相等（mutate-check.log，battery-rc=0）
+```
+
+**电池独占源码**：上面 `mutate_fsb.py` / `mutate_lab.py` / `mutate_refuse.py` / `mutate_lease.py`
+都不许与全量回归或另一条电池并行（源码副本 + `PYTHONPATH`，同批只跑一个）。
+
+并行判据的负载复量与电池（§7.54）：
+
+```bash
+cd services/api && .venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_parallel_tools_v14.py                  # 5 passed（改后空载 8 次全绿）
+PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -X utf8 E:/tmp/m103/load_probe.py                                   # 空载一轮 + 6 个 CPU 忙循环压着一轮，各 6 回合落盘：ratio-idle.log / ratio-load.log（比值 0.52–0.57）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m103/par_battery.py check                                                    # 撤并发红在交错日志；锁串行自检 ratio 0.96–0.98 > 0.8（par-battery2.log，rc=0）
+.venv/Scripts/python.exe -X utf8 -m pytest -q                                                                        # 全量 1295 passed / 23 skipped / 0 failed，rc=0（full-2.log，434.43s）
+```
+
+方言装置钉姿态与三格重烧（#96/#97，§7.55）：
+
+```bash
+cd E:/projects/kbgai/kbgai
+# 判据套件：姿态默认与桌面壳同款、开场自检、/run 成因、对照格缺席
+services/api/.venv/Scripts/python.exe -X utf8 -m pytest -q services/api/tests/test_dialect_posture_v96.py services/api/tests/test_dialect_device_v32.py   # 26 passed
+# 电池：9 条靶的红集合与实测逐字相等（battery-run2.log，battery-rc=0）
+services/api/.venv/Scripts/python.exe -X utf8 E:/tmp/m96/battery.py
+# 三格重烧（对照格 sqlite 与被测格同跑；实例由操作者提供）
+BLANK_E2E_SCRATCH=E:/tmp/m97 services/api/.venv/Scripts/python.exe -X utf8 evals/dialect_e2e.py --only sqlite                                    # 85 步失败 0，退出码 0（device-sqlite-2.log）
+BLANK_E2E_SCRATCH=E:/tmp/m97 BLANK_E2E_MYSQL_URL='mysql+aiomysql://root@127.0.0.1:3307/kbgai_e2e' services/api/.venv/Scripts/python.exe -X utf8 evals/dialect_e2e.py --only sqlite,mysql --require-mysql      # 两格各 85/0，退出码 0（device-mysql-2.log）
+BLANK_E2E_SCRATCH=E:/tmp/m98 BLANK_E2E_POSTGRES_URL='postgresql+asyncpg://postgres@127.0.0.1:5432/kbgai_e2e' services/api/.venv/Scripts/python.exe -X utf8 evals/dialect_e2e.py --only sqlite,postgres --require-postgres   # 两格各 85/0，退出码 0（device-pg-1.log）
+# 两条「今天没法判」的退路：各自 rc=2，不许被念成产品红
+BLANK_E2E_SCRATCH=E:/tmp/m98 services/api/.venv/Scripts/python.exe -X utf8 evals/dialect_e2e.py --only postgres                                   # 没给 URL：SKIP + 对照格缺席 → 退出码 2（probe-pg-absent.log）
+BLANK_E2E_SCRATCH=E:/tmp/m98 BLANK_E2E_SANDBOX_ENABLED=true services/api/.venv/Scripts/python.exe -X utf8 evals/dialect_e2e.py --only sqlite      # 紧姿态但无后端：开场自检拦下 → 退出码 2（probe-tight-posture.log）
+```
+
+
+不可逆闸门补环境变量分支（§7.60）：
+
+```bash
+cd E:/projects/kbgai/kbgai/services/api
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_permission_modes_v11.py                                     # 33 passed / 7.30s
+.venv/Scripts/python.exe -X utf8 -m pytest -q tests/test_permissions_v10.py tests/test_permission_profile_v48.py tests/test_approval_card_v101.py tests/test_approval_key.py tests/test_approval_memo_v37.py tests/test_approval_persist_v43.py tests/test_approval_v06.py tests/test_guardian_trail_v51.py tests/test_guardian_v12.py tests/test_shell_dialect.py tests/test_shell_quoting_v53.py tests/test_agent_boundary_m3_v46.py   # 184 passed / 34.40s
+PYTHONPATH=src .venv/Scripts/python.exe -X utf8 E:/tmp/m76/old_new_classification.py                                # 新旧同跑 7/7 PASS，rc=0（old: False/risk:ask；new: True/irreversible）
+.venv/Scripts/python.exe -X utf8 E:/tmp/m76/irreversible_live_probe.py                                             # 重启 :8061 后跑：8/8 PASS，rc=0；证据落 E:/tmp/m76/irreversible-live-*.json
+```

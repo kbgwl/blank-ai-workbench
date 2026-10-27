@@ -43,6 +43,44 @@ jobs:
           node --version
           npm --version
 
+      # —— 发布门禁（#104）：评测集成功率接进发布路径 ——
+      # 与 ci.yml 的 eval-gate job 同一条流水线：脚本化桩（不烧真模型、不调真实供应商）跑
+      # evals/task-samples.json 全集，evals/eval_gate.mjs 出判定。它自己那行「退出码=」才是读数：
+      #   1=成功率低于实测阈值；2=这一格今天没法判（结果缺失/样本不足/上一轮没跑完）。
+      # 1 与 2 一律拦住发布——「今天没法判」绝不允许伪装成「通过」；dry-run 也过闸，读数不掺水。
+      # 阈值 0.938 的实测出处写在 evals/gate_config.json。本 job 从未在 GitHub runner 上真跑过；
+      # 本地等价复现：node scripts/local_ci.mjs --job eval-gate --with-eval-run。
+      - uses: astral-sh/setup-uv@v5
+      - name: 门禁 · 后端依赖与隔离库
+        run: |
+          uv sync
+          BLANK_DATABASE_URL=sqlite+aiosqlite:////tmp/eval_gate.db uv run alembic upgrade head
+        working-directory: services/api
+      - name: 门禁 · 起脚本化桩 + API（:8050 独立实例）
+        run: |
+          node scripts/mock-model-server.mjs > /tmp/mock.log 2>&1 &
+          cd services/api
+          BLANK_DATABASE_URL=sqlite+aiosqlite:////tmp/eval_gate.db \
+          BLANK_SETTINGS_FILE=/tmp/eval_gate_settings.json \
+          BLANK_SECRET_KEY_FILE=/tmp/eval_gate_secret.key \
+          BLANK_SANDBOX_ENABLED=false \
+          uv run uvicorn blank_api.app:app --host 127.0.0.1 --port 8050 > /tmp/api.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8050/api/v1/health | grep -q connected && exit 0
+            sleep 2
+          done
+          echo "::error::API :8050 没起来"
+          tail -50 /tmp/api.log
+          exit 1
+      - name: 门禁 · 注册桩供应商、跑评测全集、出门禁判定
+        env:
+          BLANK_API_BASE: http://127.0.0.1:8050/api/v1
+        run: |
+          PROVIDER_ID=$(node scripts/register_mock_provider.mjs http://127.0.0.1:8099/v1 \
+            | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s).id))")
+          BLANK_API_BASE=http://127.0.0.1:8050 node evals/run_evals.mjs --provider "$PROVIDER_ID" --concurrency 3
+          node evals/eval_gate.mjs
+
       # 发布前拦一道：同名版本已存在时直接失败，避免"版本已存在"的噪音报错。
       - name: Guard against duplicate version
         working-directory: ${{ inputs.package }}

@@ -53,7 +53,9 @@ def test_search_does_not_need_english():
     gw = gateway()
     assert [t.name for t in gw.registry.search("查资料")[0]] == ["web_search"]
     assert [t.name for t in gw.registry.search("并行")[0]] == ["spawn_agents", "spawn_agent"]
-    assert [t.name for t in gw.registry.search("记忆")[0]] == ["memory_search"]
+    # 「记忆」现在对应一对工具：查旧账与记新账。两条都该被拉出来，
+    # 只给 search 会让模型看得见历史却没法把这次学到的东西留下来。
+    assert [t.name for t in gw.registry.search("记忆")[0]] == ["memory_search", "memory_write"]
 
 
 def test_noise_queries_return_nothing_instead_of_the_whole_catalog():

@@ -8,12 +8,15 @@
     "test": "pnpm -C services/api exec uv run pytest -q",
     "test:api": "pnpm -C services/api exec uv run pytest -q",
     "test:web": "pnpm -C web test",
+    "test:desktop": "node --test desktop/tests/gpu-guard.test.cjs desktop/tests/api-base.test.cjs desktop/tests/shell-policy.test.cjs desktop/tests/update-policy.test.cjs desktop/tests/main-wiring.test.cjs",
     "smoke:api": "uv run --project services/api python scripts/smoke_health.py",
     "build:web": "pnpm -C web build",
     "lint:web": "pnpm -C web lint",
     "typecheck:web": "pnpm -C web exec tsc --noEmit",
     "regression": "node scripts/regression.mjs",
     "evals": "node evals/run_evals.mjs",
+    "eval:gate": "node evals/eval_gate.mjs",
+    "ci:local": "node scripts/local_ci.mjs",
     "e2e:team": "node evals/team_e2e/run.mjs"
   }
 }

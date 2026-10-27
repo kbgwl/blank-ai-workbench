@@ -57,9 +57,17 @@ WS = SCRATCH / "ws"  # 给任务当工作区，只有两个小文件
 STUB_LOG_BASE = Path(os.environ.get("BLANK_E2E_STUB_LOG") or SCRATCH / "stub.log")
 STUB_LOG = STUB_LOG_BASE  # prepare() 每一格把它指到 stub-<engine>.log：上一批红了才发现轨迹被下一格删掉
 
+# 装置必须自己钉住「这台机器此刻靠什么隔离」这个前提，而不是继承跑它的人的环境变量。
+# 2026-10-26 实测：本机没有 docker，`boot()` 又没设这一项，实例就按裸 API 的产品默认
+# （沙箱开、不许退回宿主）装配，`resolve_tier(strict=True)` 判 available=False，
+# 于是 85 步里 26 步全红、任务一律停在 draft——红的全是装置前提，不是换库问题。
+# 默认取与桌面壳同款的姿态（`desktop/main.cjs`：`BLANK_SANDBOX_ENABLED ?? "false"`）。
+# 要专门验收紧那一格用装置自己的旋钮，别拿环境变量当漏勺：BLANK_E2E_SANDBOX_ENABLED=true
+DEVICE_SANDBOX_ENABLED = os.environ.get("BLANK_E2E_SANDBOX_ENABLED", "false")
+
 # 装置自己声明跑了多少步：`Drive.finish` 拿它对账，`tests/test_dialect_device_v32.py` 拿它当断言。
 # 加一步就改这里，别让"全绿"这句话悄悄变成"跑过的那几步全绿"。
-EXPECTED_STEPS = 83
+EXPECTED_STEPS = 85
 
 # 上传用的最小合法 PNG 头（签名 + IHDR 前缀）；写出来的字节和读回来的字节必须是同一份。
 PNG_B64 = "iVBORw0KGgoAAAANSUhEUg=="
@@ -140,7 +148,8 @@ PROBE_RATE_LIMIT_AFTER = "PROBE-RATELIMITAFTER-42"
 # 第一次回 429 + `Retry-After: 1`，把 #57 只在离线证明过的压缩退避搬到两种方言上。
 PROBE_COMPACT = "PROBE-COMPACT-42"
 # PROBE_CODE_SEQ（#54）：同一个任务里连抛两条内联解释器命令，正文不同。
-# 第一条批准时选「本会话总是允许 python -c print(1)」，第二条必须重新挂卡——
+# 第一条批准时选「本会话总是允许 python -c print(1) https://a.example」（#87 起规则带上整段尾巴），
+# 第二条必须重新挂卡——
 # 记忆的粒度若退回"裸 python"，第二条会被静默放行，这一格就红。
 # 两条都带 https:// 是为了让 run_shell 的风险判成 high（走审批门）；正文本身只打印。
 PROBE_CODE_SEQ = "PROBE-CODE-SEQ-42"
@@ -148,6 +157,35 @@ _CODE_FIRST = {"name": "run_shell", "arguments": json.dumps(
     {"command": 'python -c "print(1)" https://a.example'})}
 _CODE_SECOND = {"name": "run_shell", "arguments": json.dumps(
     {"command": 'python -c "print(2)" https://b.example'})}
+# PROBE_TOOL_GRANT（#82）：与 #54 同形状（同一任务连抛两条内联命令），但正文各不相同。
+# 不复用 print(1)/print(2) 是因为 #68 会把「本会话总是允许 python -c print(1)」落盘成
+# 跨任务的持久规则：同一实例里后跑的 84 步，第一张卡会被那条规则静默放行，
+# 判据读到的就成了别人的账（实测红在"批准后没重新挂卡、status=succeeded"）。
+PROBE_TOOL_GRANT = "PROBE-TOOLGRANT-82"
+_GRANT_FIRST = {"name": "run_shell", "arguments": json.dumps(
+    {"command": 'python -c "print(82)" https://grant-a.example'})}
+_GRANT_SECOND = {"name": "run_shell", "arguments": json.dumps(
+    {"command": 'python -c "print(182)" https://grant-b.example'})}
+_GRANT_COMMANDS = ('python -c "print(82)" https://grant-a.example',
+                   'python -c "print(182)" https://grant-b.example')
+# PROBE_TAIL_SWAP / PROBE_TAIL_REPLAY（#87）：两条命令的**内联正文完全相同**，只有载荷后面
+# 那段尾巴（`sys.argv`）不一样。旧口径把规则截成 `python -c print(87)`，第二段因此**搭了第一段
+# 的顺风车被免问**——这正是"记的比执行的窄、匹配却比记的宽"那一格。用 87 是为了与 82/1/2 的
+# 持久规则（#68 落盘跨任务）互不覆盖。
+# REPLAY 那一支只抛同一条命令一次，钉的是反方向：批准过的那条命令下次不许再挂卡
+# （只收紧匹配、不放宽规则会得到"批了没用"）。
+PROBE_TAIL_SWAP = "PROBE-TAILSWAP-87"
+PROBE_TAIL_REPLAY = "PROBE-TAILREPLAY-87"
+_TAIL_FIRST = {"name": "run_shell", "arguments": json.dumps(
+    {"command": 'python -c "print(87)" https://tail-a.example'})}
+_TAIL_SECOND = {"name": "run_shell", "arguments": json.dumps(
+    {"command": 'python -c "print(87)" https://tail-b.example'})}
+_TAIL_COMMANDS = ('python -c "print(87)" https://tail-a.example',
+                  'python -c "print(87)" https://tail-b.example')
+# 卡片与账本上那一串：`render_rule` 只给带空白或 `;&|<>` 的 token 加引号，这两段都不带，
+# 所以规则串是不加引号的四段——这条期望本身就是 #87 的判据（加错引号会渲染不回原串）。
+_TAIL_RULE_FIRST = "python -c print(87) https://tail-a.example"
+_TAIL_RULE_SECOND = "python -c print(87) https://tail-b.example"
 # PROBE_SLOW：桩睡到超过模型超时。守的是两层——设置项真的接到适配器（超时不生效时
 # 这一格永远绿），以及超时同样只退一次、退路也超时时要失败而不是无限等。
 PROBE_SLOW = "PROBE-SLOWREPLY-42"
@@ -245,6 +283,13 @@ class _Handler(BaseHTTPRequestHandler):
         if PROBE_CODE_SEQ in haystack:
             # 两条内联命令依次抛出：看到 0 条工具结果抛第一条，看到 1 条抛第二条，之后收尾。
             call = (_CODE_FIRST, _CODE_SECOND)[tool_turns] if tool_turns < 2 else None
+        elif PROBE_TOOL_GRANT in haystack:
+            call = (_GRANT_FIRST, _GRANT_SECOND)[tool_turns] if tool_turns < 2 else None
+        elif PROBE_TAIL_SWAP in haystack:
+            call = (_TAIL_FIRST, _TAIL_SECOND)[tool_turns] if tool_turns < 2 else None
+        elif PROBE_TAIL_REPLAY in haystack:
+            # 只抛一次同一条命令，第二轮就收尾：这一支量的是"批准过的那条下次不再挂卡"。
+            call = None if used_tool else _TAIL_FIRST
         elif PROBE_COMPACT in haystack:
             # 同一形状抛两次读取，第三轮收尾；不抛第二次就没有可折叠的历史。
             _Handler.compact_probe_armed = True
@@ -294,6 +339,7 @@ class _Handler(BaseHTTPRequestHandler):
         rid = f"resp-stub-{int(time.time() * 1000) % 100000}"
         if call is None or (
             used_tool and PROBE_CODE_SEQ not in haystack and PROBE_COMPACT not in haystack
+            and PROBE_TOOL_GRANT not in haystack and PROBE_TAIL_SWAP not in haystack
         ):
             content, tool_calls, finish = "看清了：工作区里有 README.md 与 notes.txt。", [], "stop"
         else:
@@ -490,6 +536,14 @@ class PostgresMissing(RuntimeError):
     """与 MySQLMissing 同义：PostgreSQL 这一格今天没法判。"""
 
 
+class PostureMissing(RuntimeError):
+    """装置的前提不成立（这台机器给不出任务要的那条边界）。
+
+    它必须红在开场、并且判成「今天没法判」（rc 2），不许混进步骤红里算成产品缺陷：
+    26 步红和 1 步红在日志里长得一样，但前者根本没走到被测的那一层。
+    """
+
+
 def _split_postgres_url(url: str):
     from sqlalchemy.engine import make_url
 
@@ -635,6 +689,9 @@ def boot(url: str, instance: Path) -> subprocess.Popen:
         BLANK_API_TOKEN=DEVICE_TOKEN,
         # 见 `PROBE_SLOW`：让"模型太慢"这一格在一轮里跑得完。
         BLANK_MODEL_TIMEOUT_SECONDS=DEVICE_MODEL_TIMEOUT,
+        # 姿态由装置自己钉死（见 `DEVICE_SANDBOX_ENABLED` 那段）：这一格量的是换库，
+        # 不是"这台机器的 docker 在不在"。
+        BLANK_SANDBOX_ENABLED=DEVICE_SANDBOX_ENABLED,
         PYTHONIOENCODING="utf-8",
     )
     log = (instance / "api.log").open("wb")
@@ -714,6 +771,29 @@ class Drive:
         return len(fails)
 
 
+def check_posture(d: Drive) -> dict:
+    """开场先问实例「这台机器此刻靠什么隔离」，把装置的前提当成一条判定来守。
+
+    读的是 `/settings/safety/runtime` 里那份**现场解析**的结果——任务起跑时装配层调用
+    的同一个 `resolve_tier`，不是装置另算一遍（另算就退化成"我以为环境是这样"）。
+    `available=False` 意味着每一条 `/run` 都会当场 409，85 步里有 26 步要红，
+    而红的成因跟换库无关，所以这里判「今天没法判」。
+    """
+    body = d.expect(d.c.get("/settings/safety/runtime"), (200,))
+    backend = body.get("backend") or {}
+    print(f"[姿态] 旋钮 BLANK_E2E_SANDBOX_ENABLED={DEVICE_SANDBOX_ENABLED} · "
+          f"backend={backend.get('backend')} isolation={backend.get('isolation')} "
+          f"tier={backend.get('tier')} strength={backend.get('strength')} "
+          f"docker={backend.get('docker_available')} available={backend.get('available')}")
+    if not backend.get("available", False):
+        raise PostureMissing(
+            f"沙箱档位 available=False：reason={backend.get('reason')}，"
+            f"notice={backend.get('notice')}。任务装配会当场拒绝每一次 /run，"
+            f"这一格还没走到被测的那一层（装置旋钮 BLANK_E2E_SANDBOX_ENABLED={DEVICE_SANDBOX_ENABLED}）"
+        )
+    return backend
+
+
 TRANSPORT_FLAKE_MARKERS = ("ReadError", "ConnectError", "ConnectTimeout", "PoolTimeout", "RemoteProtocolError")
 
 
@@ -756,6 +836,11 @@ def run_task_with_flake_guard(d: Drive, pid: str, *, task_key: str = "task",
             continue
         if resp.status_code >= 500:
             raise AssertionError(f"HTTP {resp.status_code}: {resp.text[:300]}")
+        if resp.status_code != 200:
+            # 非 2xx 当场念出来。2026-10-26 那批 26 步全红，症状却写成「status=draft」：
+            # `/run` 其实当场就 409（`sandbox_tier_unavailable`），被这条守卫咽掉以后，
+            # 读日志的人只看得见现象、看不见成因，只能重跑一遍才知道。
+            raise AssertionError(f"/run 没被受理：HTTP {resp.status_code}: {resp.text[:300]}")
         break
     deadline = time.time() + 180
     status = ""
@@ -972,6 +1057,11 @@ def drive(d: Drive) -> None:
     d.step("82 429 的 Retry-After 要算进等待", lambda: _assert_retry_after_honored(d))
     # ---- 压缩那一笔也要真发生（#58）：窗口链、替换引用、摘要退避都要在两种方言上亮出来 ----
     d.step("83 压缩真发生且摘要那笔 429 听 Retry-After", lambda: _assert_compaction_fold(d))
+    # ---- 免问范围不许由客户端参数放大（#82）：卡上没有的档位，账上也不记 ----
+    d.step("84 scope=tool 批准后下一条高风险命令仍要问", lambda: _assert_tool_scope_not_recorded(d))
+    # ---- 记下的规则必须「不多不少正好是执行的那一条」（#87）：两个方向同跑 ----
+    d.step("85 只换载荷尾巴要重新挂卡且批准过的那条不再挂卡",
+           lambda: _assert_tail_swap_and_replay(d))
 
 
 def _assert_cancelled(d: Drive) -> str:
@@ -1370,7 +1460,8 @@ def _resume_with_guard(d: Drive, path: str, payload: dict,
             break
         time.sleep(poll_seconds)
     if status not in terminal:
-        raise AssertionError(f"放行/作答后没跑到终态 {sorted(terminal)}（status={status}）")
+        raise AssertionError(
+            f"放行/作答后没跑到终态 {sorted(terminal)}（status={status}）{_why(d, task_id)}")
     return status, retries
 
 
@@ -1944,15 +2035,17 @@ def _assert_memo_card(d: Drive) -> str:
     card = (_pending(d, task).get("pending_approvals") or [{}])[0]
     if card.get("command_prefix") != "python":
         raise AssertionError(f"命令前缀应为 python，实际 {card.get('command_prefix')}")
-    if card.get("suggested_prefix") != "python -c print(1)":
+    if card.get("suggested_prefix") != "python -c print(1) https://a.example":
         raise AssertionError(
-            f"建议前缀没有带到正文：{card.get('suggested_prefix')!r}（旧口径会退成 'python'）")
+            f"建议前缀没有带到真正被执行的那一段：{card.get('suggested_prefix')!r}"
+            "（旧口径停在载荷、把尾巴截掉，会得到 'python -c print(1)'——换了尾巴也免问）")
     options = card.get("approval_options") or []
     scopes = [item.get("scope") for item in options]
-    if scopes != ["once", "prefix", "tool"]:
+    # #82：命令类工具的卡上没有工具档——「总是允许整个 shell」等于把整会话的任意代码执行交出去。
+    if scopes != ["once", "prefix"]:
         raise AssertionError(f"解释器命令的作用域档位不对：{scopes}")
     label = next(item.get("label") for item in options if item.get("scope") == "prefix")
-    if label != "本会话总是允许 python -c print(1)":
+    if label != "本会话总是允许 python -c print(1) https://a.example":
         raise AssertionError(f"卡片文案与账本规则不一致：{label!r}")
     return f"{detail}｜前缀={card.get('command_prefix')}｜建议={card.get('suggested_prefix')}｜{label}"
 
@@ -1973,14 +2066,14 @@ def _assert_memo_granularity(d: Drive) -> str:
     second = 'python -c "print(2)" https://b.example'
     if (card.get("arguments") or {}).get("command") != second:
         raise AssertionError(f"第二张卡指向的命令不对：{(card.get('arguments') or {}).get('command')!r}")
-    if card.get("suggested_prefix") != "python -c print(2)":
-        raise AssertionError(f"第二张卡的建议前缀没跟着正文走：{card.get('suggested_prefix')!r}")
+    if card.get("suggested_prefix") != "python -c print(2) https://b.example":
+        raise AssertionError(f"第二张卡的建议前缀没跟着正文与尾巴走：{card.get('suggested_prefix')!r}")
 
     granted = _events(d, task, "approval.granted")
     if len(granted) != 1:
         raise AssertionError(f"应当恰好一条 approval.granted，实际 {len(granted)} 条")
     payload = granted[0].get("payload") or {}
-    if payload.get("scope") != "prefix" or payload.get("prefix") != "python -c print(1)":
+    if payload.get("scope") != "prefix" or payload.get("prefix") != "python -c print(1) https://a.example":
         raise AssertionError(f"批准留痕与账本规则不一致：scope={payload.get('scope')} prefix={payload.get('prefix')!r}")
 
     status2, retries2 = _resume_with_guard(
@@ -1994,6 +2087,152 @@ def _assert_memo_granularity(d: Drive) -> str:
         raise AssertionError(f"两次执行都不是靠「仅本次」放行：{rules}")
     return (f"第二段重新挂卡｜留痕 prefix={payload.get('prefix')}｜规则={rules}"
             + (f"（脚手架抖动重试 {retries2} 次）" if retries2 else ""))
+
+
+def _assert_tool_scope_not_recorded(d: Drive) -> str:
+    """#82 在真 HTTP 上的那一格：老客户端硬传 `scope=tool`，宽档不许入账。
+
+    缺陷口径下（工具档照旧入账 `(档位, run_shell, "")`）第二段会被静默放行、任务直接
+    跑完，这一格红在"没重新挂卡"；留痕那一条也红——批准的人有权知道这条决定其实
+    什么都没记下。收尾用"仅本次"把第二段放行，任务必须真跑到 succeeded。
+    """
+    project, _provider = _probe_env(d, "grant")
+    goal = f"{PROBE_TOOL_GRANT} 依次跑两段内联脚本（工具档不入账）"
+    task = _probe_task(d, project, "grant_task", "工具档不入账探针", goal)
+    detail = run_task_with_flake_guard(
+        d, project, task_key="grant_task", goal=goal, title="工具档不入账探针",
+        wanted=frozenset({"waiting_approval"}))
+    card = (_pending(d, task).get("pending_approvals") or [{}])[0]
+    # 批准前先钉住"这张卡指的是哪条命令"：卡是被静默放行后新挂的那一张时，
+    # 后面的 scope=tool 批准与留痕断言全在读别人的账。
+    if (card.get("arguments") or {}).get("command") != _GRANT_COMMANDS[0]:
+        raise AssertionError(
+            f"第一张卡指向的不是本探针的第一段命令（前序探针的持久规则泄漏进这一格）："
+            f"{(card.get('arguments') or {}).get('command')!r}")
+    scopes = [item.get("scope") for item in (card.get("approval_options") or [])]
+    if scopes != ["once", "prefix"]:
+        raise AssertionError(f"命令类工具的卡上按不下去的钮还在：{scopes}")
+
+    status, retries = _resume_with_guard(
+        d, f"/tasks/{task}/approval", {"approve": True, "scope": "tool"},
+        terminal=frozenset({"waiting_approval"}))
+    if status != "waiting_approval":
+        raise AssertionError(f"scope=tool 批准后第二段没重新挂卡（status={status}）{_why(d, task)}")
+    second = (_pending(d, task).get("pending_approvals") or [{}])[0]
+    expected = _GRANT_COMMANDS[1]
+    if (second.get("arguments") or {}).get("command") != expected:
+        raise AssertionError(
+            f"第二张卡指向的命令不对：{(second.get('arguments') or {}).get('command')!r}")
+
+    granted = _events(d, task, "approval.granted")
+    if len(granted) != 1:
+        raise AssertionError(f"应当恰好一条 approval.granted，实际 {len(granted)} 条")
+    payload = granted[0].get("payload") or {}
+    if payload.get("scope") != "tool" or payload.get("tool_grant_recorded") is not False:
+        raise AssertionError(
+            f"留痕没有如实说出宽档没入账：scope={payload.get('scope')} "
+            f"recorded={payload.get('tool_grant_recorded')}"
+        )
+
+    snapshots = [
+        ((row.get("payload") or {}).get("permissions") or {}).get("approved_tools") or []
+        for row in _events(d, task, "turn.context")
+    ]
+    if not snapshots:
+        raise AssertionError("没有权限快照事件，最后一条判定成了空断言")
+    bare = [item for group in snapshots for item in group if str(item).endswith(":run_shell:.")]
+    if bare:
+        raise AssertionError(f"权限快照里出现了裸 run_shell 宽档：{bare}")
+
+    status2, retries2 = _resume_with_guard(
+        d, f"/tasks/{task}/approval", {"approve": True, "scope": "once"})
+    if status2 != "succeeded":
+        raise AssertionError(f"第二段按「仅本次」放行后没跑到 succeeded：{status2}{_why(d, task)}")
+    return (f"{detail}｜scope=tool 批准后重新挂卡｜recorded=False｜快照={snapshots[-1]}"
+            + (f"（脚手架抖动重试 {retries + retries2} 次）" if retries or retries2 else ""))
+
+
+def _assert_tail_swap_and_replay(d: Drive) -> str:
+    """#87 在真 HTTP 上的那一格：记下的规则**正好**是执行的那一条，两个方向同跑。
+
+    旧口径把解释器规则截成 ``python -c print(87)``（停在载荷），第二段只换了载荷后面的尾巴
+    （``sys.argv`` 里那个 URL）就搭上了第一段免问的顺风车 ⇒ 这一格红在"批准后没重新挂卡"。
+    只把匹配收紧成等长会得到反方向的缺陷：批准过的那条命令换个任务重跑照样挂卡，
+    对用户就是"批了没用"——所以同一格再用 REPLAY 探针把正方向钉一次。
+    两处期望（``suggested_prefix`` 与卡片 label）都取自同一串规则，不同源就红。
+    """
+    project, _provider = _probe_env(d, "tail")
+    goal = f"{PROBE_TAIL_SWAP} 依次跑两段尾巴不同的内联脚本"
+    task = _probe_task(d, project, "tail_task", "尾巴换参探针", goal)
+    detail = run_task_with_flake_guard(
+        d, project, task_key="tail_task", goal=goal, title="尾巴换参探针",
+        wanted=frozenset({"waiting_approval"}))
+    card = (_pending(d, task).get("pending_approvals") or [{}])[0]
+    # 批准前先钉住"这张卡指哪条命令"：读到别的探针泄漏进来的持久规则时，后面全在读别人的账。
+    if (card.get("arguments") or {}).get("command") != _TAIL_COMMANDS[0]:
+        raise AssertionError(
+            f"第一张卡指向的不是本探针的第一段命令（前序探针的持久规则泄漏进这一格）："
+            f"{(card.get('arguments') or {}).get('command')!r}")
+    if card.get("suggested_prefix") != _TAIL_RULE_FIRST:
+        raise AssertionError(
+            f"规则串没带上真正被执行的那段尾巴：{card.get('suggested_prefix')!r}")
+    label = next((item.get("label") for item in (card.get("approval_options") or [])
+                  if item.get("scope") == "prefix"), "")
+    if label != f"本会话总是允许 {_TAIL_RULE_FIRST}":
+        raise AssertionError(f"卡片文案与账本规则不同源：{label!r}")
+
+    status, retries = _resume_with_guard(
+        d, f"/tasks/{task}/approval", {"approve": True, "scope": "prefix"},
+        terminal=frozenset({"waiting_approval"}))
+    if status != "waiting_approval":
+        raise AssertionError(f"第二段只换了尾巴就被免问（status={status}）{_why(d, task)}")
+    second = (_pending(d, task).get("pending_approvals") or [{}])[0]
+    if (second.get("arguments") or {}).get("command") != _TAIL_COMMANDS[1]:
+        raise AssertionError(
+            f"第二张卡指向的命令不对：{(second.get('arguments') or {}).get('command')!r}")
+    if second.get("suggested_prefix") != _TAIL_RULE_SECOND:
+        raise AssertionError(f"第二张卡的规则串没跟着自己的尾巴走：{second.get('suggested_prefix')!r}")
+
+    granted = _events(d, task, "approval.granted")
+    if len(granted) != 1:
+        raise AssertionError(f"应当恰好一条 approval.granted，实际 {len(granted)} 条")
+    payload = granted[0].get("payload") or {}
+    if payload.get("scope") != "prefix" or payload.get("prefix") != _TAIL_RULE_FIRST:
+        raise AssertionError(
+            f"批准留痕与账本规则不一致：scope={payload.get('scope')} prefix={payload.get('prefix')!r}")
+
+    status2, retries2 = _resume_with_guard(
+        d, f"/tasks/{task}/approval", {"approve": True, "scope": "once"})
+    if status2 != "succeeded":
+        raise AssertionError(f"第二段按「仅本次」放行后没跑到 succeeded：{status2}{_why(d, task)}")
+
+    # 反方向：批准过的那条命令，换一条全新任务重跑也不许再挂卡。
+    replay_goal = f"{PROBE_TAIL_REPLAY} 重跑批准过的那条内联脚本"
+    replay_task = _probe_task(d, project, "tail_replay_task", "批准过不再挂卡", replay_goal)
+    replay_detail = run_task_with_flake_guard(
+        d, project, task_key="tail_replay_task", goal=replay_goal, title="批准过不再挂卡",
+        wanted=frozenset({"succeeded"}))
+    replay = _pending(d, replay_task)
+    if replay.get("pending_approvals"):
+        raise AssertionError(
+            f"批准过的那条命令换了任务还要重新挂卡——记下的规则比执行的窄，用户会觉得批了没用"
+            f"{_why(d, replay_task)}")
+    tools = [row for row in _events(d, replay_task, "tool.completed")
+             if (row.get("payload") or {}).get("tool") == "run_shell"]
+    if len(tools) != 1:
+        raise AssertionError(f"重放那一格应当恰好执行一条 run_shell，实际 {len(tools)} 条")
+    rules = [((row.get("payload") or {}).get("permission") or {}).get("rule") for row in tools]
+    # 重放走的是一条全新任务：会话规则 `approved_prefixes` 每次运行都从请求带进来（见
+    # `runtime.py` 的 `approved_prefixes=request.approved_command_prefixes`），新任务天然为空，
+    # 所以跨任务重放**只能**命中落盘那一支，念成 `prefix:persistent:`。
+    # 这里以前定期望 `prefix:{规则}`（会话支的串）——那是个永远绿不了的死判据：
+    # 2026-10-26 姿态修好、这一格第一次被真 HTTP 跑到，红在 `['prefix:persistent:python -c ...']`。
+    # 契约以仓库单测 `test_approval_persist_v43.py` 为准（同一支、同一个串）。
+    if rules != [f"prefix:persistent:{_TAIL_RULE_FIRST}"]:
+        raise AssertionError(f"重放那条不是靠落盘免问规则放行的：{rules}")
+    return (f"{detail}｜换尾巴重新挂卡｜留痕 prefix={payload.get('prefix')}｜"
+            f"{replay_detail}｜重放免问 rule={rules[0]}"
+            + (f"（脚手架抖动重试 {retries + retries2} 次）" if retries or retries2 else ""))
 
 
 def _sum_tokens(body: object) -> int:
@@ -2070,13 +2309,19 @@ def checkpoint_witness(engine: str, url: str, instance: Path) -> str:
 CONTROL = "sqlite"  # 对照格：它红了，两方言的对照结论就整条作废
 
 
-def verdict(totals: dict[str, dict[str, str]]) -> tuple[int, list[str]]:
+def verdict(totals: dict[str, dict[str, str]], skipped: dict[str, str] | None = None) -> tuple[int, list[str]]:
     """红了该算谁的——判据要求**每一格都绿**才成立。
 
     写成纯函数是有原因的：本机实测撞过"对照格红、被测格全绿"（`E:/tmp/m54/drive.log`），
     而老代码只在被测格红时置非 0——那种情况下退出码是 0，CI 会绿，
     而实际上这次连对照都没过不去，任何"换库没问题"的结论都不许从这次跑里念出来。
     """
+    if CONTROL not in totals:
+        # 对照格不在场（今天没法判）时，被测格再绿也支撑不了"换库没问题"这句话：
+        # 判据是"每格都绿"，而这一格压根没跑。红在开场，不许退化成 0。
+        why = (skipped or {}).get(CONTROL, "这一格没进 totals（没跑、跑一半退出，或开场姿态自检没过）")
+        return 2, [f"对照格（{CONTROL}）没跑成：{why}"
+                   "——判据要求每一格都在场且全绿，这一格今天缺席"]
     red = {engine: sorted(step for step, status in rows.items() if status == "FAIL")
            for engine, rows in totals.items()}
     red = {engine: steps for engine, steps in red.items() if steps}
@@ -2129,6 +2374,7 @@ def main() -> int:
     postgres_url = os.environ.get("BLANK_E2E_POSTGRES_URL", "").strip()
     start_stub()
     totals: dict[str, dict[str, str]] = {}
+    skipped: dict[str, str] = {}
     for engine in engines:
         if engine not in {"sqlite", "mysql", "postgres"}:
             print(f"[ABORT] 不认识这一格：{engine}")
@@ -2141,6 +2387,7 @@ def main() -> int:
                     print(f"[ABORT] CI 要求 MySQL 这一格必须跑，但起不来：{error}")
                     return 2
                 print(f"[SKIP] MySQL 这一格今天没法判：{error}")
+                skipped["mysql"] = str(error)
                 continue
         if engine == "postgres":
             try:
@@ -2150,6 +2397,7 @@ def main() -> int:
                     print(f"[ABORT] CI 要求 PostgreSQL 这一格必须跑，但起不来：{error}")
                     return 2
                 print(f"[SKIP] PostgreSQL 这一格今天没法判：{error}")
+                skipped["postgres"] = str(error)
                 continue
         try:
             url, instance = prepare(engine, mysql_url, postgres_url)
@@ -2160,10 +2408,18 @@ def main() -> int:
                 print(f"[ABORT] CI 要求 {engine} 这一格必须跑，但那台库起不来：{error}")
                 return 2
             print(f"[SKIP] {engine} 这一格今天没法判：{error}")
+            skipped[engine] = str(error)
             continue
         proc = boot(url, instance)
         try:
             d = Drive(f"http://127.0.0.1:{API_PORT}/api/v1")
+            try:
+                check_posture(d)
+            except PostureMissing as error:
+                # 前提不成立 ≠ 产品红：这一格整个不算进对照，退出码走「没法判」。
+                print(f"[SKIP] {engine} 这一格今天没法判：{error}")
+                skipped[engine] = str(error)
+                continue
             drive(d)
             d.finish(engine)
             totals[engine] = {name: status for name, status, _ in d.rows}
@@ -2192,7 +2448,7 @@ def main() -> int:
                 proc.wait(timeout=20)
             except subprocess.TimeoutExpired:
                 proc.kill()
-    rc, lines = verdict(totals)
+    rc, lines = verdict(totals, skipped)
     print("\n===== 方言对照判定 =====")
     for line in lines:
         print(line)

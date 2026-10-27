@@ -43,6 +43,10 @@ class SandboxPolicy:
     image: str = field(default_factory=lambda: _env("SANDBOX_IMAGE", "blank-sandbox:dev"))
     enabled: bool = field(default_factory=lambda: _env("SANDBOX_ENABLED", "true").lower() in {"1", "true", "yes"})
     allow_local: bool = field(default_factory=lambda: _env("SANDBOX_ALLOW_LOCAL", "false").lower() in {"1", "true", "yes"})
+    # 单次越界宿主执行的部署开关。默认关：模型传了也不执行，交给人工在部署时显式打开。
+    allow_host_bypass: bool = field(
+        default_factory=lambda: _env("SANDBOX_ALLOW_HOST_BYPASS", "false").lower() in {"1", "true", "yes"}
+    )
     cpus: float = field(default_factory=lambda: float(_env("SANDBOX_CPUS", "1.0")))
     memory: str = field(default_factory=lambda: _env("SANDBOX_MEMORY", "512m"))
     pids: int = field(default_factory=lambda: int(_env("SANDBOX_PIDS", "128")))
@@ -107,3 +111,8 @@ def _allowlist_from_env() -> tuple[str, ...]:
         return DEFAULT_ENV_ALLOWLIST
     extra = tuple(item.strip().upper() for item in raw.split(",") if item.strip())
     return tuple(dict.fromkeys(DEFAULT_ENV_ALLOWLIST + extra))
+
+
+def host_bypass_enabled(policy: SandboxPolicy | None = None) -> bool:
+    """单次越界宿主执行是否被部署显式打开。未打开时任何请求都必须拒绝执行。"""
+    return bool((policy or SandboxPolicy()).allow_host_bypass)

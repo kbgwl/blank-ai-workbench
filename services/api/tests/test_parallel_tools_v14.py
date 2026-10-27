@@ -157,17 +157,31 @@ def _enable(monkeypatch, on: bool) -> None:
 
 
 async def test_read_only_calls_overlap(seeded, tmp_path, monkeypatch):
-    _enable(monkeypatch, True)
-    trace = Trace()
-    session = _session(tmp_path, [_tool("read_file", trace, 0.25), _tool("search_code", trace, 0.25)])
+    """串行基线在同一次运行里现量：绝对秒数在共享机上量的是负载，不是并行。
 
-    started = time.perf_counter()
-    await _run(session, ["read_file", "search_code"])
-    elapsed = time.perf_counter() - started
+    实测：空载 6 轮并行 0.29–0.32s / 同参数串行 0.56–0.59s，比值 0.52–0.57；
+    另起 6 个 CPU 忙循环压着再跑 6 轮，比值仍是 0.54–0.57。原来那个 `elapsed < 0.45`
+    写死的是"机器别抖"：全量回归那一次并行读到 0.46s 就红了，而它其实在并行
+    （交错日志成立）。改成相对判据后两边同涨同落，负载只把比值往 1 推一点点。
+    """
+
+    async def measure(delay: float, flag: bool) -> tuple[float, bool]:
+        _enable(monkeypatch, flag)
+        trace = Trace()
+        session = _session(tmp_path, [_tool("read_file", trace, delay), _tool("search_code", trace, delay)])
+        started = time.perf_counter()
+        await _run(session, ["read_file", "search_code"])
+        return time.perf_counter() - started, trace.overlap("read_file", "search_code")
+
+    serial, serial_overlap = await measure(0.25, False)
+    parallel, parallel_overlap = await measure(0.25, True)
 
     # 交错日志是硬证据：串行的话必然是先 enter/leave 一个，再 enter/leave 另一个
-    assert trace.overlap("read_file", "search_code")
-    assert elapsed < 0.45, f"两个 0.25s 的只读工具串行跑完了（{elapsed:.2f}s），并行没生效"
+    assert parallel_overlap
+    assert not serial_overlap, "开关关掉的对照格必须先出现串行，否则这次比较没有基线"
+    # 相对判据：并行必须显著快于同一次运行里的串行基线（实测比值 ≈0.55，上界取 0.8；
+    # 进了锁但"看起来并发"的实现在这里比值 ≈1.0）
+    assert parallel < serial * 0.8, f"并行没比串行快多少：并行 {parallel:.2f}s / 串行 {serial:.2f}s"
 
 
 async def test_switch_off_keeps_the_old_serial_behaviour(seeded, tmp_path, monkeypatch):

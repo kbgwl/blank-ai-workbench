@@ -506,6 +506,9 @@ export type UsageInfo = {
 /** 审批作用域：仅本次 / 本会话该命令前缀 / 本会话该工具。 */
 export type ApprovalScope = "once" | "prefix" | "tool";
 
+/** 一档批准：文案与"这一档到底免问多大一片"的说明，两者都来自后端。 */
+export type ApprovalGrant = { scope: ApprovalScope; label: string; warning: string };
+
 export type PendingApproval = {
   toolCallId: string;
   tool: string;
@@ -515,7 +518,7 @@ export type PendingApproval = {
   /** 后端给出的前缀签名（"git push"），非命令类工具为空。 */
   prefix: string;
   /** 后端下发的可选作用域，前端不自己编造档位。 */
-  scopes: { scope: ApprovalScope; label: string }[];
+  scopes: ApprovalGrant[];
   mode: string;
   /** 独立审查员的话。undefined=这张卡是"审查进载荷之前"的老任务；null=记过了、当时审查关着。 */
   guardian?: GuardianVerdictInfo | null;
@@ -638,7 +641,14 @@ export type Boundaries = {
   filesystemEnforced: boolean | null;
   networkEnforced: boolean | null;
   notice: string;
-  mcp: { boundary: string; note: string; servers: string[]; calls: number | null };
+  mcp: {
+    boundary: string;
+    note: string;
+    servers: string[];
+    calls: number | null;
+    /** 没挂进 Job 的 stdio 服务端。非空＝这包里确实有进程不受内核限额，界面要标红。 */
+    unboundedServers: string[];
+  };
   toolCalls: {
     blocked: number | null;
     mcpHostProcess: number | null;
@@ -728,7 +738,7 @@ const EMPTY_BOUNDARIES: Boundaries = {
   filesystemEnforced: null,
   networkEnforced: null,
   notice: "",
-  mcp: { boundary: "", note: "", servers: [], calls: null },
+  mcp: { boundary: "", note: "", servers: [], calls: null, unboundedServers: [] },
   toolCalls: { blocked: null, mcpHostProcess: null, process: null, inProcess: null, unattributed: null },
   sandboxModes: [],
   profile: {
@@ -985,14 +995,59 @@ function normalizeUsage(container: unknown): UsageInfo {
   };
 }
 
-function normalizeApprovalScopes(source: unknown): { scope: ApprovalScope; label: string }[] {
+function normalizeApprovalScopes(source: unknown): ApprovalGrant[] {
   return arrayOf(source, "approval_options", "scopes", "options")
     .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
     .map((item) => ({
       scope: (textOf(item, "scope", "value") || "once") as ApprovalScope,
       label: textOf(item, "label", "title"),
+      warning: textOf(item, "warning", "hint"),
     }))
     .filter((item) => item.label !== "" || item.scope !== "once");
+}
+
+/** 审批卡上该给哪几个批准档位：后端下发什么就按什么按，前端不自己加档。
+ *
+ * `scope=tool`（"本会话总是允许这个工具"）从 #82 起不再对**所有**工具下发：
+ * run_shell 这类风险由参数算出来的工具，一次批准只代表看过的那一条命令，
+ * 后端因此不给这一档。界面自己补一个钮，就变成了"点了允许、账上没记"的空按钮，
+ * 所以连老载荷（没有 approval_options）也只补前端确定存在过的两档，绝不补工具档。
+ */
+export function approvalGrantOptions(approval: {
+  /** 档位表原样：后端可能不给 warning，界面自己也不补——所以这里 warning 是可选键。 */
+  scopes?: { scope: ApprovalScope; label: string; warning?: string }[];
+  prefix?: string;
+}): ApprovalGrant[] {
+  const offered = approval.scopes ?? [];
+  if (offered.length > 0) {
+    const seen = new Set<ApprovalScope>();
+    const options: ApprovalGrant[] = [];
+    for (const item of offered) {
+      if (seen.has(item.scope)) continue;
+      seen.add(item.scope);
+      options.push({
+        scope: item.scope,
+        label: item.label || scopeFallbackLabel(item.scope, approval.prefix),
+        warning: item.warning ?? "",
+      });
+    }
+    return options.some((item) => item.scope === "once")
+      ? options
+      : [{ scope: "once", label: scopeFallbackLabel("once", approval.prefix), warning: "" }, ...options];
+  }
+  const fallback: ApprovalGrant[] = [
+    { scope: "once", label: scopeFallbackLabel("once", approval.prefix), warning: "" },
+  ];
+  if (approval.prefix) {
+    fallback.push({ scope: "prefix", label: scopeFallbackLabel("prefix", approval.prefix), warning: "" });
+  }
+  return fallback;
+}
+
+function scopeFallbackLabel(scope: ApprovalScope, prefix?: string): string {
+  if (scope === "prefix") return `本会话总是允许 ${prefix ?? "这类操作"}`;
+  if (scope === "tool") return "本会话总是允许该工具";
+  return "允许这一次";
 }
 
 export function normalizeQuestions(container: unknown): PendingQuestion[] {
@@ -1219,6 +1274,9 @@ function normalizeBoundaries(source: unknown): Boundaries {
       note: textOf(mcp, "note"),
       servers: arrayOf(mcp, "servers").map((item) => (typeof item === "string" ? item : textOf(item, "name"))).filter(Boolean),
       calls: numOf(mcp, "calls"),
+      unboundedServers: arrayOf(mcp, "unbounded_servers")
+        .map((item) => (typeof item === "string" ? item : textOf(item, "name")))
+        .filter(Boolean),
     },
     toolCalls: {
       blocked: numOf(counts, "blocked"),
@@ -1558,14 +1616,28 @@ export function fetchEvidence(taskId: string): Promise<Evidence> {
   return request<unknown>(`${api}/tasks/${taskId}/evidence`, { cache: "no-store" }).then(normalizeEvidence);
 }
 
-export type TaskSnapshot = { id: string; reason: string; created_at: number; files: string[] };
+export type TaskSnapshot = {
+  id: string;
+  reason: string;
+  created_at: number;
+  files: string[];
+  /** 列表接口直接给出能否恢复：只记录清单、没复制内容的快照点了也恢复不了。 */
+  restorable?: boolean;
+  skipped_reason?: string;
+};
 
 export function fetchTaskSnapshots(taskId: string): Promise<TaskSnapshot[]> {
   return request<TaskSnapshot[]>(`${api}/tasks/${taskId}/snapshots`, { cache: "no-store" });
 }
 
-export function restoreTaskSnapshot(taskId: string, snapshotId: string): Promise<unknown> {
-  return request<unknown>(`${api}/tasks/${taskId}/snapshots/${snapshotId}/restore`, { method: "POST" });
+export type SnapshotRestoreResult = {
+  restored: string[];
+  skipped: string[];
+  skipped_reason: string;
+};
+
+export function restoreTaskSnapshot(taskId: string, snapshotId: string): Promise<SnapshotRestoreResult> {
+  return request<SnapshotRestoreResult>(`${api}/tasks/${taskId}/snapshots/${snapshotId}/restore`, { method: "POST" });
 }
 
 export type TreeEntry = { name: string; path: string; is_dir: boolean; size: number | null };

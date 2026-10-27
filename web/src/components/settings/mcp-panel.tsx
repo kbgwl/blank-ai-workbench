@@ -34,6 +34,18 @@ const TEMPLATE = `{
   }
 }`;
 
+function jobLimits(enforcement: McpServerStatus["enforcement"]): string {
+  const parts: string[] = [];
+  if (enforcement?.memory_enforced && enforcement.memory_bytes) {
+    parts.push(`内存 ${Math.round(enforcement.memory_bytes / (1024 * 1024))} MB`);
+  }
+  if (enforcement?.pids_enforced && enforcement.pids_limit) {
+    parts.push(`${enforcement.pids_limit} 个进程`);
+  }
+  if (enforcement?.tree_kill_enforced) parts.push("关连接带走整棵树");
+  return parts.length ? `已挂 Job：${parts.join(" / ")}` : "已挂 Job";
+}
+
 function ServerRow({ server }: { server: McpServerStatus }) {
   const style = STATE_STYLES[server.state] ?? STATE_STYLES.skipped;
   return (
@@ -57,6 +69,22 @@ function ServerRow({ server }: { server: McpServerStatus }) {
         // 原因要能一眼读完：用户下一步就是照着这句去改配置
         <p className="mt-1 font-mono text-[11px] leading-relaxed break-words text-danger/90">
           {server.error}
+        </p>
+      )}
+      {server.state === "ready" && server.boundary === "job_object" && (
+        <p className="mt-1 font-mono text-[10px] leading-relaxed break-words text-faint">
+          {jobLimits(server.enforcement)}
+        </p>
+      )}
+      {server.state === "ready" && server.boundary === "host_process_unbounded" && (
+        // 连上了不等于进了边界：没挂进 Job 的进程按宿主权限跑，必须红字说清。
+        <p className="mt-1 font-mono text-[11px] leading-relaxed break-words text-danger/90">
+          {server.boundary_note || "⚠ 没有 Job 事实：该服务端按宿主权限运行，未由内核强制"}
+        </p>
+      )}
+      {server.state === "ready" && server.boundary === "remote" && (
+        <p className="mt-1 font-mono text-[10px] leading-relaxed break-words text-faint">
+          进程在远端，本机 Job 管不到；出站请求仍走审批与审计
         </p>
       )}
     </div>

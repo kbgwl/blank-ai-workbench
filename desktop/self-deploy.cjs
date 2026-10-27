@@ -139,7 +139,7 @@ function syncShell(dir) {
     return;
   }
 
-  const entries = ["main.cjs", "api-base.cjs", "preload.cjs", "gpu-guard.cjs"];
+  const entries = ["main.cjs", "api-base.cjs", "preload.cjs", "gpu-guard.cjs", "shell-policy.cjs"];
   const sources = entries.map((name) => path.join(__dirname, name));
   for (const file of sources) {
     if (!fs.existsSync(file)) fail(`缺少壳入口源文件：${file}`);

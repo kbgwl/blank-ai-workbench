@@ -11,6 +11,7 @@ would let them show up in search results, diffs and snapshots.
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import os
 import shutil
@@ -19,6 +20,8 @@ import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from blank_api.services.hooks import HookResult, HookRunner
 
 COPY_IGNORE = {
     ".git",
@@ -131,6 +134,78 @@ def remove_worktree(tree: Worktree) -> None:
         if code == 0:
             return
     shutil.rmtree(tree.path, ignore_errors=True)
+
+
+async def create_worktree_with_hooks(
+    root: Path, *, label: str = "", hooks: HookRunner | None = None
+) -> tuple[Worktree, list[HookResult]]:
+    """建隔离副本：先问 ``worktree_create`` 钩子，再由默认路径兜底。
+
+    钩子是**可选实现**，不是权限关口：它说"副本在这条路径"，就用那条路径；
+    路径不可用（不存在、就是工作区本身）时退回 git / 整树复制，并把原因写进
+    ``notes``——静默换路会让钩子作者以为自己的实现生效了。显式 ``deny`` 是唯一的
+    硬拒绝：作者已经明确说不该建副本，这时不该由兜底逻辑替他改口。
+
+    默认路径的创建是同步文件 I/O，放线程里跑，避免大仓库复制卡住事件循环。
+    """
+    base = Path(root).resolve()
+    if not base.is_dir():
+        raise ValueError("工作区不存在，无法创建隔离副本")
+
+    results: list[HookResult] = []
+    hook_error = ""
+    if hooks is not None and hooks.enabled:
+        results = await hooks.run(
+            "worktree_create", "", {"root": str(base), "workspace": str(base), "label": label}
+        )
+        denied = next((item for item in results if item.denied), None)
+        if denied is not None:
+            raise ValueError(f"隔离钩子拒绝了副本创建：{denied.reason or denied.command}")
+        supplied = next((item for item in results if item.worktree_path), None)
+        if supplied is not None:
+            candidate = Path(supplied.worktree_path)
+            if not candidate.is_absolute():
+                candidate = base / candidate
+            candidate = candidate.resolve()
+            if candidate.is_dir() and candidate != base:
+                return (
+                    Worktree(
+                        path=candidate,
+                        mode="hook",
+                        base=base,
+                        name=candidate.name,
+                        notes=f"由钩子提供：{supplied.command}",
+                    ),
+                    results,
+                )
+            hook_error = f"隔离钩子返回的路径不可用：{supplied.worktree_path}"
+
+    tree = await asyncio.to_thread(create_worktree, base, label=label)
+    if hook_error:
+        tree.notes = f"{tree.notes}；{hook_error}" if tree.notes else hook_error
+    return tree, results
+
+
+async def remove_worktree_with_hooks(
+    tree: Worktree, *, hooks: HookRunner | None = None
+) -> list[HookResult]:
+    """先通知 ``worktree_remove`` 钩子，再删副本；钩子失败不影响清理。
+
+    钩子建的副本（``mode="hook"``）由我们负责删——它可能建在任意位置，
+    但清理契约仍应归调用方，否则子代理跑完就留下一份没人认领的目录。
+    """
+    results: list[HookResult] = []
+    if hooks is not None and hooks.enabled:
+        results = await hooks.run(
+            "worktree_remove",
+            "",
+            {"path": str(tree.path), "mode": tree.mode, "base": str(tree.base)},
+        )
+    if tree.mode == "hook":
+        shutil.rmtree(tree.path, ignore_errors=True)
+    else:
+        await asyncio.to_thread(remove_worktree, tree)
+    return results
 
 
 def _unified(old: str, new: str, path: str) -> str:

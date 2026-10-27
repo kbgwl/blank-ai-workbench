@@ -40,18 +40,30 @@ from blank_api.services.agent.live import LiveFeed
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.fork import FORK_EVENT, fork_thread
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
-from blank_api.services.agent.queue import claim_run, enqueue_run, finish_run, renew_run
+from blank_api.services.agent.queue import abandon_run, claim_run, enqueue_run, finish_run, renew_run
 from blank_api.services.agent.router import candidate_from_provider
 from blank_api.services.models.registry import build_adapter
 from blank_api.services.uploads import UploadStore, load_attachments_for
 from blank_api.services.models.routing import FallbackAdapter
-from blank_api.services.sandbox import SnapshotStore
+from blank_api.services.sandbox import SnapshotNotRestorable, SnapshotStore
 
 router = APIRouter(tags=["tasks"], dependencies=[Depends(require_token)])
 log = logging.getLogger(__name__)
 
 # 自动重排队的上限：超过就不再无限重试，避免一条坏 run 在后台反复空转。
 MAX_RECOVERY_ATTEMPTS = 3
+# 租约 90 秒，心跳 30 秒：允许一次心跳没写成，不让过期 worker 继续干活。
+LEASE_HEARTBEAT_SECONDS = 30
+
+
+def inprocess_runner_enabled() -> bool:
+    """API 进程是否自己执行 queued run。
+
+    单机桌面形态保持默认开启；多进程部署把它关掉，run 由
+    ``python -m blank_api.worker`` 领取，否则两边会抢同一条队列。
+    """
+    raw = (os.environ.get("BLANK_INPROCESS_RUNNER") or "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 # 事件流在没有持久事件时等多久去数据库补一次。实时增量会提前唤醒，所以这个值
 # 只影响"没有一场模型调用正在进行时"的延迟。
@@ -242,7 +254,16 @@ async def get_task_run(task_id: str, db: DbSession) -> dict:
 @router.get("/tasks/{task_id}/snapshots")
 async def list_task_snapshots(task_id: str, db: DbSession) -> list[dict]:
     await load_task(db, task_id)
-    return SnapshotStore().list(task_id)
+    store = SnapshotStore()
+    items = store.list(task_id)
+    # 「能不能恢复」是列表上就该看见的属性：等用户点下去才报错，等于把
+    # 一次可行的操作伪装成失败。文件清单型快照在按钮上直接标出来。
+    for item in items:
+        ok, reason = store.restorable(str(item.get("id") or ""))
+        item["restorable"] = ok
+        if not ok and not item.get("skipped_reason"):
+            item["skipped_reason"] = reason
+    return items
 
 
 @router.post("/tasks/{task_id}/snapshots/{snapshot_id}/restore")
@@ -255,13 +276,35 @@ async def restore_task_snapshot(task_id: str, snapshot_id: str, db: DbSession) -
     if snapshot is None:
         raise ApiError(code="snapshot_not_found", message="该任务没有找到对应快照", status_code=404)
     project = await load_project(db, task.project_id)
-    if project.active_workspace is None:
+    workspace = project.active_workspace
+    if workspace is None:
         raise ApiError(code="workspace_not_bound", message="该项目尚未绑定工作区目录", status_code=409)
-    restored = store.restore(snapshot_id, project.active_workspace, None)
+    try:
+        report = store.restore_report(snapshot_id, workspace.path, None)
+    except SnapshotNotRestorable as exc:
+        # 409 + 原因：这份快照当初就没复制（工作区过大/复制失败），恢复不了是
+        # 一个已知结果，不是服务端故障。500 会让用户以为重试有用。
+        raise ApiError(
+            code="snapshot_not_restorable",
+            message=f"这份快照无法恢复：{exc.reason}",
+            status_code=409,
+        ) from exc
     await EventRecorder(get_session_factory(), task_id).add(
-        "snapshot.restored", "complete", {"snapshot_id": snapshot_id, "files": restored}
+        "snapshot.restored",
+        "complete",
+        {
+            "snapshot_id": snapshot_id,
+            "files": report["restored"],
+            "skipped": report["skipped"],
+        },
     )
-    return {"task_id": task_id, "snapshot_id": snapshot_id, "restored": restored}
+    return {
+        "task_id": task_id,
+        "snapshot_id": snapshot_id,
+        "restored": report["restored"],
+        "skipped": report["skipped"],
+        "skipped_reason": report["skipped_reason"],
+    }
 
 
 async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: Request) -> RunRequest:
@@ -447,21 +490,44 @@ async def _record_run_failure(task_id: str, run_id: str, error: BaseException) -
         log.exception("更新任务失败状态出错 task=%s", task_id)
 
 
-async def _execute_claimed_run(run_id: str, worker_id: str, run_request: RunRequest) -> None:
-    """Run one claimed job and keep its database lease alive while it works."""
+async def _execute_claimed_run(
+    run_id: str,
+    worker_id: str,
+    run_request: RunRequest,
+    *,
+    crashed: bool = False,
+    lease_seconds: int = 90,
+) -> None:
+    """Run one claimed job and keep its database lease alive while it works.
+
+    ``crashed``：这条 run 之前已经被认领过（attempts>0），上次执行没写终态。
+    那种情况必须从检查点续跑，不能再开一个新 attempt 从头跑——工具已经执行过的
+    那一步会因此再执行一遍。
+    """
+    runtime = AgentRuntime(get_session_factory())
+    call = runtime.resume_crash(run_request) if crashed else runtime.run(run_request)
+    execute = asyncio.create_task(call, name=f"blank-run-{run_id}")
+    # 心跳跟着租约走：租约收紧（实测/短租约部署）时，30 秒一跳会让租约先过期，
+    # 别人接管时我还在跑。上限仍是原来的 30 秒。
+    heartbeat_seconds = min(LEASE_HEARTBEAT_SECONDS, max(0.5, lease_seconds / 3))
+
     async def heartbeat() -> None:
         while True:
-            await asyncio.sleep(30)
+            await asyncio.sleep(heartbeat_seconds)
             try:
                 async with get_session_factory()() as session:
-                    if not await renew_run(session, run_id, worker_id):
+                    if not await renew_run(
+                        session, run_id, worker_id, lease_seconds=lease_seconds
+                    ):
+                        # 租约不再属于我：接着跑下去就是和接管者同时往同一条 run 写账
+                        execute.cancel()
                         return
             except Exception:  # 续租失败不该把执行任务带走，下一轮再试
                 log.warning("续租失败 run=%s", run_id, exc_info=True)
 
     lease_task = asyncio.create_task(heartbeat(), name=f"blank-lease-{run_id}")
     try:
-        evidence = await AgentRuntime(get_session_factory()).run(run_request)
+        evidence = await execute
         status = str((evidence.get("task") or {}).get("status") or "succeeded")
     except asyncio.CancelledError:
         # Keep the row running so startup recovery can safely reclaim it.
@@ -472,14 +538,18 @@ async def _execute_claimed_run(run_id: str, worker_id: str, run_request: RunRequ
         await _record_run_failure(run_request.task_id, run_id, error)
     finally:
         lease_task.cancel()
-        await asyncio.gather(lease_task, return_exceptions=True)
+        if not execute.done():
+            execute.cancel()  # 外面中止这一路时，执行任务不会自己停
+        await asyncio.gather(lease_task, execute, return_exceptions=True)
 
-    async def finish() -> None:
+    async def finish() -> bool:
         async with get_session_factory()() as session:
-            await finish_run(session, run_id, status)
+            return await finish_run(session, run_id, status, worker_id)
 
     try:
-        await db_retry(finish)
+        if not await db_retry(finish):
+            # 收尾被拒=租约在这期间被人拿走了。这条 run 的账现在归接管者写，我闭嘴。
+            log.warning("收尾被拒（租约已失去）run=%s worker=%s", run_id, worker_id)
     except Exception as error:
         # 收尾失败会让任务永远停在 queued（界面一直转圈），必须留下痕迹并强行置终态
         log.exception("收尾写库失败 run=%s", run_id)
@@ -497,6 +567,10 @@ async def start_task(task_id: str, payload: TaskRunIn, request: Request, db: DbS
     run_request.run_id = run.id
     task.status = "queued"
     await db.commit()
+
+    if not inprocess_runner_enabled():
+        # 队列归独立 worker：这里只落库并返回，否则本进程会先抢走它。
+        return {"task_id": task_id, "run_id": run.id, "status": "queued"}
 
     async def runner() -> None:
         worker_id = f"{os.environ.get('COMPUTERNAME', 'worker')}-{uuid.uuid4().hex[:8]}"
@@ -521,11 +595,17 @@ async def start_task(task_id: str, payload: TaskRunIn, request: Request, db: DbS
 
 async def recover_pending_runs() -> int:
     """Requeue tasks left queued/running when the API process was restarted."""
+    if not inprocess_runner_enabled():
+        # 独立 worker 自己会扫这张表；API 再抢一次就是两个执行者。
+        return 0
+
     async def load():
         items: list[tuple[str, object]] = []
         async with get_session_factory()() as session:
             runs = (await session.execute(select(AgentRun).where(AgentRun.status.in_(("queued", "running"))))).scalars().all()
         for run in runs:
+            # 扫描时 attempts>0 = 上一次认领后没写终态（进程被杀/断电）。
+            crashed = int(run.attempts or 0) > 0
             async with get_session_factory()() as session:
                 task = await session.get(Task, run.task_id)
                 if task is None:
@@ -534,7 +614,10 @@ async def recover_pending_runs() -> int:
                     # 反复重排同一个 run 只会无限循环（上次收尾没写成就是这种表现）。
                     # 到这里就停手，把原因交给用户，让他决定是否重试。
                     async with get_session_factory()() as failed_session:
-                        await finish_run(failed_session, run.id, "failed")
+                        if not await abandon_run(failed_session, run.id):
+                            # 租约还新鲜=真有 worker 在跑（另一个进程），不能判它的死
+                            log.warning("跳过判死：run=%s 仍被现役 worker 持有", run.id)
+                            continue
                     await _record_run_failure(
                         run.task_id,
                         run.id,
@@ -550,15 +633,17 @@ async def recover_pending_runs() -> int:
                     request.run_id = run.id
                 except Exception:
                     async with get_session_factory()() as failed_session:
-                        await finish_run(failed_session, run.id, "failed")
+                        if not await abandon_run(failed_session, run.id):
+                            log.warning("跳过判死：run=%s 仍被现役 worker 持有", run.id)
+                            continue
                     continue
 
-                async def runner(run_id=run.id, request=request):
+                async def runner(run_id=run.id, request=request, crashed=crashed):
                     worker_id = f"recovery-{uuid.uuid4().hex[:8]}"
                     async with get_session_factory()() as claim_session:
                         if not await claim_run(claim_session, run_id, worker_id):
                             return
-                    await _execute_claimed_run(run_id, worker_id, request)
+                    await _execute_claimed_run(run_id, worker_id, request, crashed=crashed)
 
                 items.append((run.id, runner))
         return items

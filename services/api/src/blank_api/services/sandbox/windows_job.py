@@ -23,6 +23,7 @@ JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 PROCESS_SET_QUOTA = 0x00000100
 PROCESS_TERMINATE = 0x00000001
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
 @dataclass(slots=True)
@@ -102,6 +103,8 @@ if supported():
     _k32.SetInformationJobObject.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
     _k32.AssignProcessToJobObject.restype = ctypes.c_bool
     _k32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _k32.IsProcessInJob.restype = ctypes.c_bool
+    _k32.IsProcessInJob.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_bool)]
     _k32.OpenProcess.restype = ctypes.c_void_p
     _k32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_bool, ctypes.c_uint32]
     _k32.CloseHandle.restype = ctypes.c_bool
@@ -179,3 +182,26 @@ def close_job(job: Job) -> None:
     if job.handle:
         _k32.CloseHandle(job.handle)
         job.handle = 0
+
+
+def pid_in_job(job: Job, pid: int) -> tuple[bool | None, str]:
+    """这个 pid 此刻是否真的挂在该 Job 上。
+
+    为什么单开一条查询：``assign_pid`` 的返回值只说明"系统接受了这次赋值"，
+    证明不了随后的进程身份。验证装置必须能直接问内核，否则"已纳入边界"仍然只是
+    我们自己的说法。查询失败返回 ``None``，不猜成 False——查不到与不在里面是两件事。
+    """
+    if not supported():
+        return None, f"本平台不是 Windows（sys.platform={sys.platform!r}），没有 Job Object"
+    if not job.ok:
+        return None, job.error or "Job 句柄无效"
+    handle = _k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None, "OpenProcess(pid=%d) -> %s" % (pid, _err())
+    try:
+        inside = ctypes.c_bool(False)
+        if not _k32.IsProcessInJob(handle, job.handle, ctypes.byref(inside)):
+            return None, "IsProcessInJob(pid=%d) -> %s" % (pid, _err())
+        return bool(inside.value), ""
+    finally:
+        _k32.CloseHandle(handle)

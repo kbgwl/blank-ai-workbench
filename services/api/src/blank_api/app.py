@@ -65,6 +65,10 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
         from blank_api.services.mcp import manager as mcp_manager
 
         await mcp_manager().close()
+        # REA 那条线用的是自己的连接表（不进 mcp.json 的账），所以也要单独收
+        from blank_api.services.rea import adapter as rea_adapter
+
+        await rea_adapter.close_all()
 
 
 async def sweep_orphan_uploads() -> None:

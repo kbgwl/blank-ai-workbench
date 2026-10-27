@@ -50,7 +50,9 @@
     ".next-m80/types/**/*.ts",
     ".next-m80/dev/types/**/*.ts",
     ".next-m80r/types/**/*.ts",
-    ".next-m80r/dev/types/**/*.ts"
+    ".next-m80r/dev/types/**/*.ts",
+    ".next-m82/types/**/*.ts",
+    ".next-m82/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

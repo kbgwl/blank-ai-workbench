@@ -263,17 +263,47 @@ test("tool_calls 整块缺失时逐项按未记，绝不补 0", () => {
   assert.match(label, /未归属 未记/);
 });
 
-test("MCP 宿主进程这条事实要单独说出来，含服务数与调用数", () => {
+test("MCP 边界事实要单独说出来，含服务数与调用数", () => {
   const b = boundariesOf({
     boundaries: {
       ...realBoundaries(),
-      mcp: { boundary: "host", note: "MCP 服务端在宿主进程里跑，不进任务沙箱", servers: ["browser-use", "builtin"], calls: 4 },
+      mcp: { boundary: "job_object", note: "stdio 服务端进程已挂进 Windows Job Object", servers: ["browser-use", "builtin"], calls: 4 },
     },
   });
-  assert.equal(b.mcp.boundary, "host");
+  assert.equal(b.mcp.boundary, "job_object");
   assert.deepEqual(b.mcp.servers, ["browser-use", "builtin"]);
   assert.equal(b.mcp.calls, 4);
-  assert.equal(b.mcp.note, "MCP 服务端在宿主进程里跑，不进任务沙箱");
+  assert.equal(b.mcp.note, "stdio 服务端进程已挂进 Windows Job Object");
+  assert.deepEqual(b.mcp.unboundedServers, []);
+  assert.doesNotMatch(mcpBoundaryLabel(b), /未进 Job/);
+});
+
+test("没挂进 Job 的服务端要露出名字并触发警告；没有它时不许误报", () => {
+  const withUnbounded = boundariesOf({
+    boundaries: {
+      sandbox: { degraded: false, strength: "os_enforced" },
+      permission_profile: {},
+      mcp: {
+        boundary: "host_process_unbounded",
+        note: "⚠ 1 个服务端没能挂进 Job：按宿主权限运行",
+        servers: ["local"],
+        calls: 2,
+        unbounded_servers: ["local"],
+      },
+    },
+  });
+  assert.deepEqual(withUnbounded.mcp.unboundedServers, ["local"]);
+  assert.match(mcpBoundaryLabel(withUnbounded), /未进 Job：local/);
+  assert.equal(boundariesNeedWarn(withUnbounded), true, "有服务端没进 Job 必须触发边界警告");
+
+  const clean = boundariesOf({
+    boundaries: {
+      sandbox: { degraded: false, strength: "os_enforced" },
+      permission_profile: {},
+      mcp: { boundary: "job_object", servers: ["local"], calls: 2, unbounded_servers: [] },
+    },
+  });
+  assert.equal(boundariesNeedWarn(clean), false, "全部挂进 Job 时不许误报");
 });
 
 test("审阅轨迹缺键=这台后端还没记过，与记过但一次都没审是两个状态", () => {

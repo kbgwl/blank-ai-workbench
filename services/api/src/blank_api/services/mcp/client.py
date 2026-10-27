@@ -29,6 +29,7 @@ import asyncio
 import json
 import os
 import shutil
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,12 +45,20 @@ from blank_api.services.mcp.protocol import (
     parse_sse,
     request,
 )
+from blank_api.services.sandbox import windows_job
+from blank_api.services.sandbox.policy import SandboxPolicy
 
 # 握手不该等满一次工具调用的时长：连不上就该早说，别让任务开个头就卡住
 CONNECT_TIMEOUT = 15.0
 STDERR_TAIL = 4096
 KILL_GRACE = 2.0
 DEFAULT_TIMEOUT = 30.0
+
+# 边界事实的词表。stdio 服务端是我们亲手拉起的进程，能挂进 Job 就挂；
+# http 服务端的进程在远端，本机 Job 摸不到。三种事实不许互相冒充。
+BOUNDARY_JOB = "job_object"
+BOUNDARY_UNBOUNDED = "host_process_unbounded"
+BOUNDARY_REMOTE = "remote"
 
 
 class MCPError(Exception):
@@ -73,8 +82,20 @@ class ServerConfig:
     headers: dict[str, str] = field(default_factory=dict)
     timeout: float = DEFAULT_TIMEOUT
     risk: str = "high"
+    # 这两条跟着沙箱策略走：空串 / 0 表示用 SandboxPolicy 的默认值（512m / 128）。
+    # MCP 服务端是我们自己拉起的进程，没有理由让它比任务命令多一份不受限的内存与进程数。
+    memory: str = ""
+    pids: int = 0
     # 只给测试用：HTTP 传输要能塞一个 MockTransport 进来，否则验证协议就得真联网
     client_factory: Any = None
+
+
+def _job_limits(config: ServerConfig) -> tuple[int, int]:
+    """本次 stdio 服务端要设的 Job 限额。配置没写就用沙箱默认值，而不是"随便跑"。"""
+    policy = SandboxPolicy()
+    memory_bytes = windows_job.parse_size(config.memory or policy.memory)
+    pids = int(config.pids or policy.pids or 0)
+    return memory_bytes, max(0, pids)
 
 
 def _resolve_command(command: str) -> tuple[str, tuple[str, ...]]:
@@ -86,6 +107,47 @@ def _resolve_command(command: str) -> tuple[str, tuple[str, ...]]:
     if os.name == "nt" and resolved.lower().endswith((".cmd", ".bat")):
         return os.environ.get("COMSPEC", "cmd.exe"), ("/c", resolved)
     return resolved, ()
+
+
+def _job_facts(config: ServerConfig, job: windows_job.Job, assigned: bool,
+               assign_error: str) -> dict[str, Any]:
+    """把 stdio 服务端的边界算成结构化事实。挂不上就写挂不上的原因，不许默认成真。"""
+    applied = bool(job.ok and assigned)
+    memory_bytes = int(job.enforced.get("memory_bytes", 0)) if applied else 0
+    pids_limit = int(job.enforced.get("active_process_limit", 0)) if applied else 0
+    if applied:
+        limits = []
+        if memory_bytes:
+            limits.append(f"内存 {round(memory_bytes / 1024 / 1024, 1)}MB")
+        if pids_limit:
+            limits.append(f"活跃进程 {pids_limit} 个")
+        limit_text = "、".join(limits) or "没有可设的限额"
+        note = (
+            f"stdio 服务端进程已挂进 Windows Job Object：{limit_text}由内核强制，"
+            "关闭连接时整棵进程树一起被带走"
+        )
+        boundary = BOUNDARY_JOB
+    else:
+        reason = job.error or assign_error or "未知原因"
+        note = (
+            f"⚠ stdio 服务端没能挂进 Job（{reason}）：它按宿主权限运行，"
+            "内存上限、活跃进程数与退出清理都未由内核强制"
+        )
+        boundary = BOUNDARY_UNBOUNDED
+    return {
+        "transport": "stdio",
+        "boundary": boundary,
+        "limits_applied": applied,
+        "job_created": job.ok,
+        "job_assigned": assigned,
+        "job_error": job.error or assign_error or "",
+        "memory_enforced": applied and memory_bytes > 0,
+        "memory_bytes": memory_bytes,
+        "pids_enforced": applied and pids_limit > 0,
+        "pids_limit": pids_limit,
+        "tree_kill_enforced": applied and "kill_on_close" in job.enforced,
+        "note": note,
+    }
 
 
 class _JSONRPCClient:
@@ -108,6 +170,23 @@ class _JSONRPCClient:
 
     async def close(self) -> None:  # pragma: no cover - 由子类实现
         raise NotImplementedError
+
+    def boundary_facts(self) -> dict[str, Any]:
+        """连接落点的结构化事实。没连上时不许猜成任何具体边界。"""
+        return {
+            "transport": self.transport,
+            "boundary": "unknown",
+            "limits_applied": False,
+            "job_created": False,
+            "job_assigned": False,
+            "job_error": "",
+            "memory_enforced": False,
+            "memory_bytes": 0,
+            "pids_enforced": False,
+            "pids_limit": 0,
+            "tree_kill_enforced": False,
+            "note": "连接还没建立，没有边界事实可报",
+        }
 
     # -- 请求 ---------------------------------------------------------------
     def _track(self, method: str, params: dict | None) -> tuple[int, dict, asyncio.Future]:
@@ -239,8 +318,18 @@ class StdioClient(_JSONRPCClient):
         self._reader: asyncio.Task | None = None
         self._stderr: asyncio.Task | None = None
         self._stderr_tail = ""
+        self._job: windows_job.Job | None = None
+        # 关 Job 会把 handle 置 0，之后再读就永远是"没建成"。事实必须在关之前算好并留底，
+        # 否则一个真被内核限着的服务端会在账上变成"限额未强制"——反向说谎同样是谎。
+        self._job_facts: dict[str, Any] = {}
 
     async def start(self) -> None:
+        memory_bytes, pids = _job_limits(self.config)
+        job = windows_job.create_job(
+            "blank-mcp-" + uuid.uuid4().hex[:8],
+            memory_bytes=memory_bytes,
+            active_process_limit=pids,
+        )
         executable, prefix = _resolve_command(self.config.command)
         env = {**os.environ, **self.config.env}
         try:
@@ -255,12 +344,35 @@ class StdioClient(_JSONRPCClient):
                 env=env,
             )
         except (OSError, ValueError) as error:
+            windows_job.close_job(job)
             raise MCPError(
                 "mcp_spawn_failed", f"{self.config.name} 启动失败：{error}"
             ) from error
+        self._job = job
+        # 与命令沙箱同一段窗口：进程起来之后才能挂 Job，中间它已经派生的子进程
+        # 不在 active_process_limit 的账里（见 windows_job.assign_pid 的说明）。
+        assigned, assign_error = (False, job.error) if not job.ok else windows_job.assign_pid(job, self._process.pid)
+        self._job_facts = _job_facts(self.config, job, assigned, assign_error)
         self._stderr = asyncio.create_task(self._drain_stderr())
         self._reader = asyncio.create_task(self._read_stdout())
-        await self.handshake()
+        try:
+            await self.handshake()
+        except BaseException:
+            # 握手失败也要把进程与 Job 收干净：调用方可能只记住异常，不会再 close 一次。
+            # 这里不 await 任何东西——正在被取消时，任何 await 都会立刻再抛一次。
+            self._closed = True
+            self._close_job()
+            if self._process is not None and self._process.returncode is None:
+                try:
+                    self._process.kill()
+                except ProcessLookupError:
+                    pass
+            raise
+
+    def boundary_facts(self) -> dict[str, Any]:
+        if self._job_facts:
+            return dict(self._job_facts)
+        return super().boundary_facts()
 
     async def _send(self, message: dict) -> None:
         process = self._process
@@ -355,6 +467,12 @@ class StdioClient(_JSONRPCClient):
             reason = f"{reason}：{detail[-400:]}"
         return reason
 
+    def _close_job(self) -> None:
+        """关句柄＝这条边界结束。KILL_ON_JOB_CLOSE 会把还活着的整棵进程树一起带走。"""
+        job, self._job = self._job, None
+        if job is not None:
+            windows_job.close_job(job)
+
     async def close(self) -> None:
         self._closed = True
         for task in (self._reader, self._stderr):
@@ -366,21 +484,32 @@ class StdioClient(_JSONRPCClient):
         )
         process = self._process
         self._process = None
-        if process is None:
-            return
         try:
-            if process.stdin is not None:
-                process.stdin.close()
-            if process.returncode is None:
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=KILL_GRACE)
-                except asyncio.TimeoutError:
-                    process.kill()
-                    await process.wait()
-        except ProcessLookupError:
-            # 已经自己退了，这正是我们想要的结果
-            pass
+            # 先关 Job：KILL_ON_JOB_CLOSE 把整棵树带走。反过来先 await process.wait()
+            # 会白等——wait() 要等所有 stdio 管道断开，而孙子进程可能正握着 stdout。
+            self._close_job()
+            if process is None:
+                return
+            try:
+                if process.stdin is not None:
+                    process.stdin.close()
+                if process.returncode is None:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=KILL_GRACE)
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        await asyncio.wait_for(process.wait(), timeout=KILL_GRACE)
+            except ProcessLookupError:
+                # 已经自己退了（Job 关闭也会让它退），这正是我们想要的结果
+                pass
+            except asyncio.TimeoutError:
+                # 没进 Job 的服务端，它的孙子不归我们管，可能一直握着管道。
+                # close 是收尾路径，不许因此把任务无限期挂住。
+                pass
+        finally:
+            # 即便进程已经自己退出，句柄也必须关：孙子进程不一定跟着父进程走。
+            self._close_job()
 
 
 class HttpClient(_JSONRPCClient):
@@ -397,6 +526,26 @@ class HttpClient(_JSONRPCClient):
         factory = self.config.client_factory or httpx.AsyncClient
         self._client = factory(timeout=float(self.config.timeout or DEFAULT_TIMEOUT))
         await self.handshake()
+
+    def boundary_facts(self) -> dict[str, Any]:
+        """HTTP 服务端的进程在远端：本机 Job 管不到，也不许写成"已纳入边界"。"""
+        return {
+            "transport": "http",
+            "boundary": BOUNDARY_REMOTE,
+            "limits_applied": False,
+            "job_created": False,
+            "job_assigned": False,
+            "job_error": "",
+            "memory_enforced": False,
+            "memory_bytes": 0,
+            "pids_enforced": False,
+            "pids_limit": 0,
+            "tree_kill_enforced": False,
+            "note": (
+                "HTTP 型 MCP 的进程在远端：本机 Job Object 管不到它的内存、进程数与退出清理；"
+                "本机只保证每次出站请求走同一套审批与审计"
+            ),
+        }
 
     def _headers(self) -> dict:
         headers = {

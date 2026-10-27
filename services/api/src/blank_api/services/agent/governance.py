@@ -229,6 +229,21 @@ def permission_profile(
     }
 
 
+def clock_fields(now: datetime | None = None) -> dict[str, str]:
+    """「今天几号、在哪个时区」的唯一口径：提示词、`turn_context`、`world_state` 读同一个函数。
+
+    只到「天」的粒度、且用本地时区名：指纹里一旦混进秒级时钟，digest 每一步都变，
+    去重永不命中，等于每步重贴一遍同样的策略。
+    三处各写一遍 ``strftime`` 迟早会漂——漂移以后，「提示词里的今天」和「账本里的今天」
+    可以不一样，而模型恰恰是按提示词回答日期的。
+    """
+    moment = now or datetime.now().astimezone()
+    return {
+        "current_date": moment.strftime("%Y-%m-%d"),
+        "timezone": moment.tzname() or moment.strftime("%z"),
+    }
+
+
 def turn_context(
     *,
     node: str,
@@ -286,10 +301,8 @@ def turn_context(
         # `str(item)`，而 InstructionLayer 的 repr 含 content，实测一条快照 4145 字节，
         # 整份 AGENTS.md 连主机绝对路径一起进了事件流、证据包和全文索引。
         "instructions": [layer_ref(item) for item in (instruction_layers or [])],
-        # 对标 Codex 的 current_date / timezone。刻意只到「天」的粒度、且用本地时区名：
-        # 指纹里一旦混进秒级时钟，digest 每一步都变，去重永不命中，等于每步重贴一遍同样的策略。
-        "current_date": now.strftime("%Y-%m-%d"),
-        "timezone": now.tzname() or now.strftime("%z"),
+        # 对标 Codex 的 current_date / timezone（口径见 :func:`clock_fields`）。
+        **clock_fields(now),
         "sandbox": sandbox,
         # 对标 Codex：限制展开成逐条 ACE，而不是"用了哪个 profile"。与 sandbox 并列，
         # 因为路径闸门在关档时仍然生效——它不属于沙箱，属于安全策略。
@@ -379,8 +392,7 @@ def world_state(
                 "trigger_at": int(trigger_at or 0),
             },
             # 与 turn_context 同一口径：只到「天」。掺进秒级时钟就等于每步都宣称世界变了。
-            "current_date": now.strftime("%Y-%m-%d"),
-            "timezone": now.tzname() or now.strftime("%z"),
+            **clock_fields(now),
         },
     }
 

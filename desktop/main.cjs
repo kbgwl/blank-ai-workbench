@@ -9,7 +9,18 @@
  * 用 CommonJS 而不是 ESM：Electron 的 ESM 主进程在主进程侧拿不到 `electron` 的具名
  * 导出，且 sandbox 模式下 preload 只支持 CommonJS。CJS 是这两处都稳的选择。
  */
-const { app, BrowserWindow, dialog, ipcMain, protocol, shell } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  dialog,
+  globalShortcut,
+  ipcMain,
+  nativeImage,
+  protocol,
+  shell,
+  Tray,
+} = require("electron");
 const { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { readFile, writeFile } = require("node:fs/promises");
 const { spawn } = require("node:child_process");
@@ -17,6 +28,20 @@ const path = require("node:path");
 const process = require("node:process");
 const { readAttempts, shouldDowngrade, startingState, readyState } = require("./gpu-guard.cjs");
 const { resolveApiBase } = require("./api-base.cjs");
+const {
+  DEFAULT_HOTKEY,
+  buildTrayMenuModel,
+  decideUpdate,
+  decideWindowClose,
+  describeShortcutRegistration,
+  extractFeedEntries,
+  normalizeHotkey,
+  parseUpdateFeedUrl,
+  pickLatestEntry,
+  planHotkeyToggle,
+  planSecondInstanceReveal,
+  shouldAbortSecondaryInstance,
+} = require("./shell-policy.cjs");
 
 /**
  * 主进程日志落文件。
@@ -46,6 +71,35 @@ if (LOG_FILE) {
 }
 
 const PORT = String(process.env.BLANK_BACKEND_PORT ?? "").trim() || "8000";
+
+// ── 单实例 ──────────────────────────────────────────────────────────────────
+
+/**
+ * 同机只允许一个壳。拿不到锁的实例必须在建窗口、spawn 后端、写 GPU 启动标记
+ * 之前就让位（shouldAbortSecondaryInstance 的判定在 shell-policy.cjs，可单测）：
+ * - 写 gpu-state 都算副作用——第二实例那次 +1 会把「连续没就绪」的账记花；
+ * - 两份壳还会抢同一个后端端口、各 spawn 一个 uvicorn。
+ *
+ * ⚠️ 未验：本机不允许启动桌面壳（:8000/:3000 是用户的服务），
+ * 「双实例真实启动时第二个放弃并把第一个唤回」只测了纯函数层，需要人工按下面步骤点验：
+ *   1) 正常启动一个壳；2) 再启动一次；3) 第二个应无窗口闪现直接退出，
+ *   4) 把第一个关进托盘/最小化后再启动第二次，窗口应被唤回并聚焦。
+ */
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (shouldAbortSecondaryInstance(gotSingleInstanceLock)) {
+  console.log("[desktop] 已有实例在运行，本实例放弃启动（不建窗口、不拉后端）");
+  app.quit();
+}
+
+// 壳自身状态。显式退出只由 quitApplication() 或 before-quit 置位；
+// 「关窗口」永远不该把它置真——那就是「关窗=退出」复活的入口。
+const shellState = {
+  trayAvailable: false,
+  explicitQuit: false,
+  backendOnline: false,
+  hotkeyAccelerator: null,
+  update: null,
+};
 // preload 把这个值注入渲染进程；前端构建时烘焙的 NEXT_PUBLIC_API_BASE 只是兜底。
 const API_BASE = resolveApiBase(process.env);
 const HEALTH_URL = process.env.BLANK_BACKEND_HEALTH ?? `${API_BASE}/api/v1/health`;
@@ -126,7 +180,8 @@ if (process.env.BLANK_DISABLE_GPU === "1" || gpuUnstable) {
 }
 
 // 启动前先记「这次要试 GPU」，成功打开窗口后才改写成 ready。
-if (!process.env.BLANK_DISABLE_GPU && !gpuUnstable) {
+// 让位中的第二实例不写：它没有窗口，写了就是白记一次「未就绪」，会把降级计数记花。
+if (gotSingleInstanceLock && !process.env.BLANK_DISABLE_GPU && !gpuUnstable) {
   writeGpuState(startingState(previousGpuState));
 }
 
@@ -336,6 +391,8 @@ async function startBackend() {
   backend.on("exit", (code, signal) => {
     remember(`后端进程退出 code=${code} signal=${signal}`);
     backend = null;
+    shellState.backendOnline = false;
+    refreshTrayMenu();
   });
   backend.on("error", (error) => remember(`后端进程错误 ${error.message}`));
 
@@ -343,6 +400,8 @@ async function startBackend() {
   for (let i = 0; i < 60; i += 1) {
     if (await backendReachable()) {
       remember("后端就绪");
+      shellState.backendOnline = true;
+      refreshTrayMenu();
       return { ok: true };
     }
     await sleep(500);
@@ -353,6 +412,7 @@ async function startBackend() {
 async function ensureBackend() {
   if (await backendReachable()) {
     remember("检测到已有后端在运行，直接复用");
+    shellState.backendOnline = true;
     return { ok: true };
   }
   const spec = resolveBackendCommand();
@@ -361,6 +421,8 @@ async function ensureBackend() {
 }
 
 function stopBackend() {
+  shellState.backendOnline = false;
+  refreshTrayMenu();
   if (!backend) return;
   remember("回收后端进程");
   try {
@@ -423,6 +485,83 @@ ipcMain.handle("blank:pick-directory", async (event, payload) => {
 
 // ── 窗口 ────────────────────────────────────────────────────────────────────
 
+let mainWindow = null;
+let tray = null;
+
+/**
+ * 托盘图标。开发态读 desktop/build/icon.ico；打包态它不在 app.asar 里
+ * （asar 路径喂 nativeImage 不可靠），改从 extraResources 的 resources/shell/ 读。
+ *
+ * ⚠️ 未验：本机不许启动壳，托盘图标的实际观感（任务栏尺寸缩放、深浅色托盘背景）
+ * 需要在能启动 GUI 的会话里人工点验；图标读不到时 createFromPath 返回空图不抛异常，
+ * 这里用 isEmpty 判定并降级为「无托盘」，关窗行为退回退出，不会做出一个看不见又关不掉的窗口。
+ */
+const TRAY_ICON_PATH = app.isPackaged
+  ? path.join(process.resourcesPath, "shell", "icon.ico")
+  : path.join(__dirname, "build", "icon.ico");
+
+function refreshTrayMenu() {
+  if (!tray) return;
+  const actions = {
+    show: () => showMainWindow("托盘菜单「显示主窗口」"),
+    quit: () => quitApplication("托盘菜单「退出」"),
+  };
+  const template = buildTrayMenuModel({
+    backendOnline: shellState.backendOnline,
+    update: shellState.update,
+  }).map((item) => (item.id ? { ...item, click: actions[item.id] } : item));
+  tray.setContextMenu(Menu.buildFromTemplate(template));
+}
+
+function createTray() {
+  if (String(process.env.BLANK_TRAY ?? "") === "0") {
+    console.log("[desktop] BLANK_TRAY=0：不建托盘，关窗行为退回退出");
+    return;
+  }
+  try {
+    const image = nativeImage.createFromPath(TRAY_ICON_PATH);
+    if (image.isEmpty()) throw new Error(`图标读不到或为空：${TRAY_ICON_PATH}`);
+    tray = new Tray(image);
+    tray.setToolTip("空白格 AI 操作台");
+    shellState.trayAvailable = true;
+    refreshTrayMenu();
+    tray.on("double-click", () => showMainWindow("双击托盘图标"));
+    console.log(`[desktop] 托盘已就绪（${TRAY_ICON_PATH}）`);
+  } catch (error) {
+    shellState.trayAvailable = false;
+    console.error(`[desktop] 托盘创建失败，关窗将退回退出而不是隐藏：${error.message}`);
+  }
+}
+
+/** 把窗口唤回并聚焦：最小化、关进托盘、被别的窗口挡住三种形态都走这一条。 */
+function showMainWindow(via) {
+  const hasWindow = !!mainWindow && !mainWindow.isDestroyed();
+  const plan = planSecondInstanceReveal({
+    hasWindow,
+    minimized: hasWindow ? mainWindow.isMinimized() : false,
+    visible: hasWindow ? mainWindow.isVisible() : false,
+  });
+  console.log(`[desktop] 唤出主窗口（${via}）→ ${JSON.stringify(plan)}`);
+  if (plan.create) {
+    mainWindow = createWindow();
+    return;
+  }
+  if (plan.restore) mainWindow.restore();
+  if (plan.show) mainWindow.show();
+  if (plan.focus) mainWindow.focus();
+}
+
+/**
+ * 显式退出路径。托盘菜单、后端失败对话框之外的「退出」都走这里；
+ * before-quit 里也会补置一次，覆盖 app.quit() 被别处直接调用的情况（截图自检就是）。
+ * 没有这一位，「关窗进托盘」和「真的要退出」就分不开，托盘会把退出吞掉。
+ */
+function quitApplication(via) {
+  console.log(`[desktop] 显式退出（${via}）`);
+  shellState.explicitQuit = true;
+  app.quit();
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -451,7 +590,32 @@ function createWindow() {
     }
     win.show();
   });
-  win.on("closed", () => console.log("[desktop] 窗口被关闭"));
+
+  /**
+   * 关闭路由（判定在 shell-policy.cjs 的 decideWindowClose，可单测）：
+   * 托盘可用且不是显式退出 → 拦下关闭、藏进托盘；否则放行，走真的关闭。
+   * 「显式退出」的位只由 quitApplication / before-quit 置——这条是防
+   * 「关窗=退出」复活的闸：把它误接回 close，整个托盘就白做了。
+   * 用不了 app.isQuitting()：它不在这份 Electron（38）的公开 API 里，
+   * 所以退出意图必须由我们自己在 before-quit（app.quit() 会先于窗口 close 发出）置位。
+   *
+   * ⚠️ 未验：本机不许启动壳，✕ 键真实按压后进托盘、再从托盘唤回需在带 GUI 会话点验。
+   */
+  win.on("close", (event) => {
+    const decision = decideWindowClose({
+      explicitQuit: shellState.explicitQuit,
+      trayAvailable: shellState.trayAvailable,
+    });
+    if (decision === "hide") {
+      event.preventDefault();
+      win.hide();
+      console.log("[desktop] 点关闭：已藏进托盘（不是退出，后端继续运行）");
+    }
+  });
+  win.on("closed", () => {
+    if (mainWindow === win) mainWindow = null;
+    console.log("[desktop] 窗口被关闭");
+  });
   win.webContents.on("did-finish-load", () => console.log("[desktop] 页面加载完成"));
   win.webContents.on("did-fail-load", (_event, code, desc, url) => {
     console.error(`[desktop] 页面加载失败 ${code} ${desc} ${url}`);
@@ -493,7 +657,7 @@ async function reportBackendFailure(win, hint) {
     clipboard.writeText(backendLog.join("\n"));
     console.log("[desktop] 后端日志已复制到剪贴板");
   }
-  app.quit();
+  quitApplication("后端失败对话框退出");
 }
 
 /** 等前端真正渲染出内容（客户端组件需要时间挂载），再截图，避免拍到空白。 */
@@ -570,21 +734,145 @@ async function maybeScreenshot(win) {
   const image = await win.webContents.capturePage();
   await writeFile(target, image.toPNG());
   console.log(`[desktop] 截图已保存 ${target}`);
-  app.quit();
+  quitApplication("自检截图完成");
+}
+
+// ── 全局快捷键 ──────────────────────────────────────────────────────────────
+
+/**
+ * 注册唤出/隐藏组合（默认 Control+Alt+B，BLANK_HOTKEY 覆盖）。
+ * 三态都在 describeShortcutRegistration 里收成日志：registered / occupied（被别的
+ * 助手占了）/ error（register 抛了）。后两态一律**降级继续跑**——快捷键是锦上添花，
+ * 它起不来不该拖垮主进程，更不该让窗口打不开。
+ *
+ * ⚠️ 未验：本机不许启动壳，「真按组合键唤出/隐藏」与「真的和别的助手撞车」
+ * 需要在带 GUI 会话里人工点验；这里只钉住了判定与日志的可测部分。
+ */
+function registerGlobalShortcut() {
+  const normalized = normalizeHotkey(process.env.BLANK_HOTKEY || DEFAULT_HOTKEY);
+  if (!normalized.ok) {
+    shellState.hotkeyAccelerator = null;
+    console.error(`[desktop] ${normalized.reason}，降级：本次不启用全局快捷键，主流程不受影响`);
+    return;
+  }
+  const { accelerator } = normalized;
+  let outcome = null;
+  try {
+    // register 返回 false = 被占用；个别组合会直接抛，两者都不许冒到外层。
+    outcome = globalShortcut.register(accelerator, toggleMainWindowFromHotkey);
+  } catch (error) {
+    outcome = error;
+  }
+  const result = describeShortcutRegistration(accelerator, outcome);
+  console.log(`[desktop] ${result.message}`);
+  shellState.hotkeyAccelerator = result.status === "registered" ? accelerator : null;
+}
+
+function toggleMainWindowFromHotkey() {
+  const hasWindow = !!mainWindow && !mainWindow.isDestroyed();
+  const plan = planHotkeyToggle({
+    hasWindow,
+    visible: hasWindow ? mainWindow.isVisible() : false,
+    focused: hasWindow ? mainWindow.isFocused() : false,
+  });
+  if (plan.create) {
+    console.log("[desktop] 快捷键：窗口不存在，重建");
+    mainWindow = createWindow();
+    return;
+  }
+  if (plan.hide) {
+    console.log("[desktop] 快捷键：隐藏主窗口");
+    mainWindow.hide();
+    return;
+  }
+  showMainWindow("全局快捷键");
+}
+
+// ── 自动更新（骨架）──────────────────────────────────────────────────────────
+
+/**
+ * 只取元数据、只做决策、只写日志：**不下载、不安装、不接 electron-updater**。
+ * 决策函数 decideUpdate 是纯函数（shell-policy.cjs），所有失败形态
+ * （网络失败 / 元数据缺字段 / 签名摘要缺失或不对 / 版本号读不懂）都归成
+ * action=unavailable + 可读原因，且 install 恒为 false——这两条都有单测钉住。
+ *
+ * 默认不碰网络：必须显式配 BLANK_UPDATE_FEED_URL 才检查一次。
+ * ⚠️ 未验：真实 feed 的取回与解析没跑过（没有发布通道可指），拿到 feed 地址后要人工
+ * 复核一次日志里的 action/reason，并确认桌面端依旧什么都不下载。
+ */
+async function checkForUpdates() {
+  const feed = parseUpdateFeedUrl(process.env.BLANK_UPDATE_FEED_URL);
+  if (!feed.ok) {
+    console.log(`[desktop] 更新检查跳过：${feed.reason}`);
+    return null;
+  }
+  const current = app.getVersion();
+  let fetchError = "";
+  let entry = null;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(feed.url, { signal: controller.signal });
+      if (!response.ok) {
+        fetchError = `HTTP ${response.status}`;
+      } else {
+        const entries = extractFeedEntries(await response.json());
+        if (!entries) {
+          fetchError = "feed JSON 既不是条目数组也不是带 version 的单个条目";
+        } else {
+          entry = pickLatestEntry(entries);
+          if (!entry) fetchError = "feed 里没有任何版本可解析的条目";
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (error) {
+    fetchError = error?.name === "AbortError" ? "请求超时（8 秒）" : String(error?.message ?? error);
+  }
+  const decision = decideUpdate({ current, entry, fetchError });
+  shellState.update = decision;
+  console.log(`[desktop] 更新决策 action=${decision.action}｜${decision.reason}`);
+  refreshTrayMenu();
+  return decision;
 }
 
 // ── 生命周期 ────────────────────────────────────────────────────────────────
 
+/**
+ * 第二实例：放弃启动的一侧会调 app.quit()，但 whenReady 不保证因此不 resolve，
+ * 这里再挡一道——绝不能出现两个实例各 spawn 一个后端、各记一次 GPU 启动标记。
+ * 收到 signal 的一侧按 planSecondInstanceReveal 把已有窗口唤回：
+ * 最小化要 restore、藏进托盘要 show，最后 focus（这三态都由单测钉住）。
+ */
+app.on("second-instance", () => {
+  if (!gotSingleInstanceLock) return;
+  // 主实例还没 ready（正在跑迁移/拉后端）时窗口尚不存在，此刻 new BrowserWindow 会抛。
+  // 唤回没损失：ready 之后 whenReady 流程自己会把窗口开出来。
+  if (!app.isReady()) {
+    console.log("[desktop] 收到第二实例启动信号（主实例尚未就绪，窗口稍后自会打开）");
+    return;
+  }
+  console.log("[desktop] 收到第二实例启动信号");
+  showMainWindow("第二实例唤回");
+});
+
 app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) return;
   registerAppProtocol();
   console.log(`[desktop] 静态根目录 ${STATIC_ROOT}`);
   console.log(`[desktop] 后端源码目录 ${API_DIR}`);
   console.log(`[desktop] 数据目录 ${DATA_DIR}`);
 
+  // 托盘先建：后端首启可能要跑迁移（最长 30 秒），这期间图标就得在任务栏待着。
+  createTray();
+
   const started = await ensureBackend();
   console.log(`[desktop] 后端可达性 ${started.ok ? "正常" : "不可达"}`);
 
-  const win = createWindow();
+  mainWindow = createWindow();
+  const win = mainWindow;
 
   if (started.ok) {
     win.webContents.once("did-finish-load", () => {
@@ -596,8 +884,13 @@ app.whenReady().then(async () => {
     });
   }
 
+  registerGlobalShortcut();
+  // 更新检查只在配了 BLANK_UPDATE_FEED_URL 时真的发请求；不下载、不安装。
+  void checkForUpdates();
+
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) showMainWindow("activate");
+    else mainWindow?.show();
   });
 });
 
@@ -606,5 +899,19 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", stopBackend);
+app.on("before-quit", () => {
+  // 任何 app.quit()（截图自检、失败对话框、系统关机）都会先走到这里。
+  // 置位之后窗口 close 不再进托盘——否则退出会永远停在「隐藏最后一个窗口」上。
+  shellState.explicitQuit = true;
+  stopBackend();
+});
+
+app.on("will-quit", () => {
+  try {
+    globalShortcut.unregisterAll();
+  } catch (error) {
+    console.error(`[desktop] 注销全局快捷键失败（不影响退出）：${error.message}`);
+  }
+});
+
 process.on("exit", stopBackend);

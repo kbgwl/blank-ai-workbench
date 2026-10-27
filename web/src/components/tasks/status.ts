@@ -130,6 +130,11 @@ export type BoundaryFacts = {
   strength?: string;
   /** 关档（沙箱未启用）时是 false：连内存上限都没在执行 */
   limitsApplied?: boolean;
+  /**
+   * 这一次是**经人工批准的单次越界**（`sandbox_bypass=true`），不是"本来就没开沙箱"。
+   * 缺键 = 老任务没记过这一格，不许读成 false；false 才是"记了、没越界"。
+   */
+  bypassed?: boolean;
 };
 
 /**
@@ -140,6 +145,9 @@ export type BoundaryFacts = {
 export function boundaryLabel(boundary: string, facts: BoundaryFacts = {}): string {
   if (!boundary) return "";
   if (boundary === "host") {
+    // 越界与关档都是宿主执行，但前者是"人工批准后绕过沙箱"，必须单独说：
+    // 只写「宿主执行」会把一次显式授权读成"这台机器本来就没隔离"。
+    if (facts.bypassed === true) return "宿主执行（单次越界：已绕过沙箱）";
     return facts.limitsApplied === false ? "宿主执行（未隔离，限额未生效）" : "宿主执行（未隔离）";
   }
   if (boundary === "local") {
@@ -153,6 +161,8 @@ export function boundaryLabel(boundary: string, facts: BoundaryFacts = {}): stri
 
 /** 只有容器、或系统真的拒文件/网络时，这枚角标才不该是警告色。 */
 export function boundaryNeedsWarn(boundary: string, facts: BoundaryFacts = {}): boolean {
+  // 越界永远警告：这次命令确实没被沙箱约束，与它当时是什么档位无关。
+  if (facts.bypassed === true) return true;
   if (boundary === "host" || boundary === "local") return facts.strength !== "os_enforced";
   return false;
 }
@@ -444,6 +454,8 @@ export function sandboxTierLabel(boundaries: Boundaries): string {
 /** 该亮警告的三种情形：档位被部署策略降级、内核层没管到文件与网络、或压根没人强制写入。 */
 export function boundariesNeedWarn(boundaries: Boundaries): boolean {
   if (!boundaries.recorded) return false;
+  // 有 MCP 服务端没进 Job：它按宿主权限跑，限额与退出清理都不受内核管，必须提示。
+  if (boundaries.mcp.unboundedServers.length > 0) return true;
   if (boundaries.degraded === true) return true;
   if (boundaries.strength && boundaries.strength !== "os_enforced") return true;
   return boundaries.profile.entries.some((entry) => entry.enforcedBy === "none" && entry.access === "write");
@@ -589,7 +601,7 @@ export function permissionProfileTypeLabel(profile: PermissionProfile): string {
   return profile.type;
 }
 
-/** MCP 那一路走的是宿主进程、不进任务沙箱，所以它要单独成行，不混进调用归账。 */
+/** MCP 那一路的边界事实。挂进 Job 的 stdio、远端的 http、没挂进去的进程必须分开说。 */
 export function mcpBoundaryLabel(boundaries: Boundaries): string {
   const mcp = boundaries.mcp;
   if (!mcp.boundary && mcp.calls === null && mcp.servers.length === 0 && !mcp.note) return "";
@@ -598,6 +610,9 @@ export function mcpBoundaryLabel(boundaries: Boundaries): string {
     `服务端 ${mcp.servers.length} 个${mcp.servers.length > 0 ? `（${mcp.servers.join("、")}）` : ""}`,
     `调用 ${count(mcp.calls)} 次`,
   ];
+  if (mcp.unboundedServers.length > 0) {
+    parts.push(`⚠ 未进 Job：${mcp.unboundedServers.join("、")}（按宿主权限运行，未由内核强制）`);
+  }
   if (mcp.note) parts.push(mcp.note);
   return parts.join(" · ");
 }

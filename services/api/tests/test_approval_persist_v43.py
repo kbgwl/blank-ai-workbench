@@ -40,6 +40,8 @@ from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
 )
 
 RULE_INLINE = ("python", "-c", "print(1)")
+# 解释器命令记整段 argv（#87）：载荷之后的尾巴是这条命令的一部分，换参数要重新问。
+RULE_TAIL = ("python", "-c", "print(1)", "https://a.example")
 
 
 def _tool(name: str = "run_shell", risk: str = "high") -> ToolDefinition:
@@ -261,7 +263,7 @@ async def test_prefix_grant_persists_and_a_new_task_auto_approves(env, workspace
     project_id = await create_project(env, workspace)
     provider_id = await create_provider(env)
     first_task = await create_task(env, project_id, ["批准一次前缀"])
-    # 带 URL 才会被判高风险而挂卡；前缀规则本身只到内联正文为止。
+    # 带 URL 才会被判高风险而挂卡；前缀规则带上这一段尾巴（换参数就该重新问）。
     command = 'python -c "print(1)" https://a.example'
     env.mock.reset(
         [
@@ -288,10 +290,10 @@ async def test_prefix_grant_persists_and_a_new_task_auto_approves(env, workspace
     assert len(persisted) == 1, events
     payload = persisted[0]["payload"]
     assert payload["tool"] == "run_shell"
-    assert payload["prefix"] == render_rule(RULE_INLINE)
+    assert payload["prefix"] == render_rule(RULE_TAIL)
     assert payload["persisted"] is True
     rules = approval_rules.load_rules()
-    assert [tuple(item["tokens"]) for item in rules] == [RULE_INLINE]
+    assert [tuple(item["tokens"]) for item in rules] == [RULE_TAIL]
     assert rules[0]["source_task"] == first_task
 
     # 新任务：同一命令不再挂卡，追踪里念的是"落盘的规则"
@@ -317,7 +319,7 @@ async def test_prefix_grant_persists_and_a_new_task_auto_approves(env, workspace
         for event in events
         if event["type"] == "tool.completed" and event["payload"].get("tool") == "run_shell"
     ]
-    assert rules_seen == ["prefix:persistent:python -c print(1)"], rules_seen
+    assert rules_seen == [f"prefix:persistent:{render_rule(RULE_TAIL)}"], rules_seen
 
 
 async def test_tool_scope_is_never_persisted(env, workspace: Path):  # noqa: F811

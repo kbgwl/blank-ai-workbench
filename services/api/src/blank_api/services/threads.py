@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -40,23 +41,60 @@ async def thread_or_404(session: AsyncSession, thread_id: str) -> Thread:
 
 
 async def thread_turns(session: AsyncSession, thread_id: str) -> list[Task]:
-    """一条会话的全部轮次，按轮次序号正序。
+    """一条会话还在对话里的轮次，按轮次序号正序。
 
     排序不看 ``created_at``：SQLite 的 ``CURRENT_TIMESTAMP`` 只到秒，同一秒里连开
     两轮时它分不出先后，而顺序决定了历史里哪一句在前——排错了，模型读到的对话就是乱的。
     ``turn_index`` 为 0 的是没有走会话接口的老数据，退回按时间与 id 排。
+
+    被回退掉的轮次（``rewound_at`` 非空）不在此列：它们还在库里供审计，但
+    用户已经明确表示"从这里往后都不算数"，再带进下一轮的上下文就是没听懂。
     """
     return list(
         (
             await session.execute(
                 select(Task)
-                .where(Task.thread_id == thread_id)
+                .where(Task.thread_id == thread_id, Task.rewound_at.is_(None))
                 .order_by(Task.turn_index, Task.created_at, Task.id)
             )
         )
         .scalars()
         .all()
     )
+
+
+# 这三种状态的任务可能还在写文件。回退期间放任它们继续跑，等它们结束时会把
+# 改动写进一个"对话里已经不存在"的轮次，用户看到的是一份无主的改动。
+ACTIVE_TASK_STATUSES = ("queued", "running", "waiting_approval")
+
+
+async def rewind_to_turn(session: AsyncSession, thread: Thread, turn: int) -> tuple[Task, list[Task]]:
+    """把第 ``turn`` 轮之后的轮次标记为已回退，会话计数退回该轮。
+
+    只动「还在对话里」的行：之前回退过的行已经带着原始回退时间，再标一次会把它改掉。
+    代码回滚不在这里做——那一步需要工作区路径与快照存储，由路由层拼装并单独汇报，
+    因为它可能做不到（没有快照），而对话截断必须照常完成。
+    """
+    from blank_api.api.errors import ApiError
+
+    turns = await thread_turns(session, thread.id)
+    target = next((item for item in turns if int(item.turn_index or 0) == turn), None)
+    if target is None:
+        raise ApiError(code="turn_not_found", message=f"该会话没有第 {turn} 轮", status_code=404)
+    running = [item for item in turns if item.status in ACTIVE_TASK_STATUSES]
+    if running:
+        raise ApiError(
+            code="task_active",
+            message="还有轮次在执行，等它结束后才能回退",
+            status_code=409,
+        )
+    doomed = [item for item in turns if int(item.turn_index or 0) > turn]
+    stamp = datetime.utcnow()
+    for item in doomed:
+        item.rewound_at = stamp
+    thread.turn_count = turn
+    await session.commit()
+    return target, doomed
 
 
 def _clip(text: str, limit: int) -> str:

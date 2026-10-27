@@ -21,6 +21,7 @@ from blank_api.services.permissions import (
     ask,
     approve,
     deny,
+    tool_grant_too_wide,
 )
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key, validate_arguments
 from blank_api.services.tools.registry import ToolRegistry
@@ -70,15 +71,32 @@ def _sandbox_backend(outcome: ToolOutcome) -> tuple[str | None, bool]:
 # 边界种类：一次工具调用实际落在哪一层。"审批问没问"与"在哪执行"是两回事，
 # 证据里必须分得开——同一个工具在不同档位下可能落在完全不同的边界上。
 BOUNDARY_BLOCKED = "blocked"  # 档位不可用，没执行
-BOUNDARY_MCP_HOST = "mcp_host_process"  # 外部 MCP 服务端进程（宿主，不在任务边界内）
+BOUNDARY_MCP_HOST = "mcp_host_process"  # 调用走外部 MCP 服务端；stdio 服务端自 #94 起挂 Job，边界见 boundaries.mcp
 BOUNDARY_PROCESS = "process"  # 我们起的子进程（受沙箱档位约束）
 BOUNDARY_IN_PROCESS = "in_process"  # 在 API 进程内完成（文件读写、规划等）
+BOUNDARY_FS_BROKER = "fs_broker"  # 文件工具在 fs-broker 子进程里完成（#105，挂 Job Object）
+# broker 失败的副作用口径（本体在 fs_broker.SIDE_EFFECTS_*，这里镜像一次以免网关热路径依赖导入）：
+# 值必须与那边相等，由 tests/test_fs_broker_v93.py 的一条判据当场钉住。
+FS_SIDE_EFFECTS_UNKNOWN = "unknown"
 
 
 def _boundary_kind(name: str, outcome: ToolOutcome, ran_command: bool) -> str:
     data = outcome.data if isinstance(outcome.data, dict) else {}
     if data.get("tier_blocked"):
         return BOUNDARY_BLOCKED
+    fs_error = data.get("fs_broker_error")
+    if isinstance(fs_error, dict) and fs_error.get("layer"):
+        # broker 坏了。`blocked` 在这里的口径是"这次调用没有成功交付结果"，不是"磁盘上什么都没发生"：
+        # 请求已经进过 broker 的那些失败（超时/取消）side_effects=unknown——动作可能已经落盘，
+        # 把边界记成 blocked（"根本没执行"）就是替这次动作开脱，所以这类失败仍记在 fs_broker 边界上。
+        # 是哪一层坏的、动作发生没有，由 fs_broker_error 单独说，不混进 blocked 的文案里。
+        # 这里不 import fs_broker：每条工具调用都要过这个函数，网关不该在热路径上依赖 broker 可导入；
+        # 两个常量的相等由 test_fs_broker_v93 钉住（口径漂移当场就红）。
+        if str(fs_error.get("side_effects") or "") == FS_SIDE_EFFECTS_UNKNOWN:
+            return BOUNDARY_FS_BROKER
+        return BOUNDARY_BLOCKED
+    if data.get("fs_broker"):
+        return BOUNDARY_FS_BROKER
     if str(name or "").startswith("mcp__"):
         return BOUNDARY_MCP_HOST
     if ran_command:
@@ -123,6 +141,10 @@ def sandbox_backend_event_field(payload: dict) -> dict:
     kind = payload.get("boundary_kind")
     if isinstance(kind, str) and kind:
         out["boundary_kind"] = kind
+    # fs-broker 的两笔账与档位无关、与"这次调用落在哪一层边界"有关，跟着一起走。
+    for key in ("fs_broker_latency", "fs_broker_error"):
+        if isinstance(payload.get(key), dict):
+            out[key] = payload[key]
     if "sandbox_blocked" in payload:
         # 档位不可用：命令没起，但"为什么没起"必须进事件，否则界面只剩一条普通的 denied。
         out["sandbox_blocked"] = payload["sandbox_blocked"]
@@ -130,6 +152,11 @@ def sandbox_backend_event_field(payload: dict) -> dict:
         # 没起进程（只读工具、被拒的调用）：两条事实一起缺席，读的一侧不用分辨"缺一个还是缺两个"。
         return out
     out["sandbox_backend"] = payload["sandbox_backend"]
+    if payload.get("sandbox_bypass") is True:
+        # 越界与"跑在宿主上"是两个事实：关档（off）同样 sandbox_backend=null，
+        # 但那是本来的形态，不是绕过。缺这一键就不许在证据里说成越界。
+        out["sandbox_bypass"] = True
+        out["sandbox_bypass_reason"] = str(payload.get("sandbox_bypass_reason") or "")
     enforcement = _command_enforcement(payload)
     if enforcement:
         out["sandbox_enforcement"] = enforcement
@@ -180,7 +207,15 @@ def _audit(
                     # 审计账也要能和事件对得上：同一次调用在两处读出的档位/边界必须一致。
                     "sandbox_mode": str(context.sandbox_tier or ""),
                     "boundary_kind": _boundary_kind(name, outcome, ran_command),
+                    # fs-broker 那一层的事实同步进审计账：broker 失败时事件之外还要有一条能对质的。
+                    "fs_broker_layer": (
+                        "ok" if data.get("fs_broker")
+                        else str((data.get("fs_broker_error") or {}).get("layer") or "")
+                    ),
                     "message": outcome.message[:500],
+                    # 单次越界必须和“本来就没开沙箱”分开：审计账是第三处能对质的地方。
+                    "sandbox_bypass": bool(data.get("sandbox_bypass")),
+                    "sandbox_bypass_reason": str(data.get("bypass_reason") or ""),
                 },
                 exit_code=exit_code if isinstance(exit_code, int) else None,
                 duration_ms=duration_ms,
@@ -331,10 +366,20 @@ class ToolGateway:
         elif safe.data.get("tier_blocked"):
             facts = safe.data.get("enforcement") or {}
             payload["sandbox_blocked"] = facts.get("tier_notice") or "沙箱档位不可用，命令未执行"
+        # fs-broker 的两笔账提到顶层（与 sandbox_blocked 同一风格）：
+        # latency 回答"IPC 往返多慢"，error 回答"是哪一层坏了、为什么没执行"。
+        if isinstance(safe.data.get("fs_broker_latency"), dict):
+            payload["fs_broker_latency"] = safe.data["fs_broker_latency"]
+        if isinstance(safe.data.get("fs_broker_error"), dict):
+            payload["fs_broker_error"] = safe.data["fs_broker_error"]
         # 档位与边界种类对每次调用都写：面板/证据包按 tool.completed 就能还原
         # "这个动作当时被哪一层拦住、还是在宿主进程里跑的"。
         payload["sandbox_mode"] = str(context.sandbox_tier or "")
         payload["boundary_kind"] = _boundary_kind(name, safe, ran_command)
+        if ran_command and safe.data.get("sandbox_bypass") is True:
+            # 顶层写一次：事件读的是这里，证据包再把同一份贴回工具清单。
+            payload["sandbox_bypass"] = True
+            payload["sandbox_bypass_reason"] = str(safe.data.get("bypass_reason") or "")
         _audit(name, arguments, safe, context, node, duration_ms, backend, ran_command)
         return payload
 
@@ -384,7 +429,9 @@ class ToolGateway:
                 "permission_rule": decision.rule if decision is not None else "",
                 "command_prefix": raw_prefix,
                 "suggested_prefix": memo,
-                "approval_options": approval_options(tool.name, memo),
+                "approval_options": approval_options(
+                    tool.name, memo, tool_scope=not tool_grant_too_wide(tool.name, arguments)
+                ),
             },
         )
 

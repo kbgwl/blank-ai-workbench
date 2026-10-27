@@ -25,6 +25,7 @@ from typing import Any
 
 from blank_api.services.agent.context import ContextCompactor
 from blank_api.services.agent.usage import account_call, merge_usage
+from blank_api.services.hooks import HookRunner
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.permissions import MODE_ACCEPT_EDITS, MODE_DEFAULT, PermissionPolicy
 from blank_api.services.safety import SafetyPolicy
@@ -35,8 +36,9 @@ from blank_api.services.worktree import (
     Worktree,
     apply_changes,
     changed_files,
-    create_worktree,
+    create_worktree_with_hooks,
     remove_worktree,
+    remove_worktree_with_hooks,
     render_diff,
 )
 
@@ -62,6 +64,10 @@ MIN_TIMEOUT = 20.0
 # 并行编排上限：四个副本已经是"分头探索"的合理规模，再多就是烧钱而不是加速
 MAX_PARALLEL_AGENTS = 4
 DEFAULT_CONCURRENCY = 3
+# 后台句柄只在本进程内有效：重启后 task_output 会如实说"找不到"，而不是伪造一个结果。
+# 按任务分桶、键是 agent_id。放模块级而不是 runner 实例上，是因为审批恢复会重建
+# 一个 runner——句柄若绑在实例上，恢复之后 task_output 就再也找不到它了。
+_BACKGROUND: dict[str, dict[str, "_BackgroundAgent"]] = {}
 
 SUBAGENT_SYSTEM = (
     "你是一个受限的子代理，只负责完成交给你的单个子任务。\n"
@@ -102,6 +108,8 @@ class SubAgentResult:
     steps: int = 0
     depth: int = 1
     agent_path: str = ""
+    # 后台句柄：前台子代理也有，只是没人需要拿它去 task_output。
+    agent_id: str = ""
     worktree: dict = field(default_factory=dict)
     diff: str = ""
     error: str = ""
@@ -122,6 +130,7 @@ class SubAgentResult:
             "steps": self.steps,
             "depth": self.depth,
             "agent_path": self.agent_path,
+            "agent_id": self.agent_id,
             "usage": self.usage,
             "parallel_group": self.parallel_group,
             "thread_id": self.thread_id,
@@ -160,6 +169,34 @@ def render_merge(payload: dict) -> str:
         if isinstance(item, dict):
             parts.append(f"跳过 {item.get('path')}：{item.get('reason')}")
     return "；".join(parts) or "无改动"
+
+
+@dataclass
+class _PreparedSpawn:
+    """通过校验、已经分好 agent_path/agent_id 的一次派发。
+
+    前台 `__call__` 与后台 `spawn_background` 共用这一段：两条路如果各算各的
+    agent_path，同一个任务里会出现两条 `root/sub-1`，事件里就分不清谁是谁。
+    """
+
+    session: Any
+    request: SubAgentRequest
+    depth: int
+    agent_path: str
+    agent_id: str
+
+
+@dataclass
+class _BackgroundAgent:
+    agent_id: str
+    task_id: str
+    request: SubAgentRequest
+    agent_path: str
+    depth: int
+    started_at: float
+    task: asyncio.Task | None = None
+    result: SubAgentResult | None = None
+    error: str = ""
 
 
 class _Recorder:
@@ -276,6 +313,12 @@ async def run_subagent(
     watermark: dict | None = None,
     sandbox_tier: str = "workspace",
     parent_tier: str = "",
+    agent_id: str = "",
+    # 后台取消时由调用方按这个把手清副本：取消可能落在这条协程的任意一个 await 上，
+    # 连函数自己的 try 都还没进——清理责任只能交给包住它的那一层。
+    tracker: dict | None = None,
+    # 隔离副本的创建/删除钩子。为 None 时走默认的 git worktree / 整树复制。
+    hooks: HookRunner | None = None,
 ) -> SubAgentResult:
     request = request.normalized()
     if not request.goal:
@@ -291,21 +334,35 @@ async def run_subagent(
     isolated = request.isolate
     if isolated:
         try:
-            tree = create_worktree(run_root, label=request.label or "sub")
+            tree, hook_results = await create_worktree_with_hooks(
+                run_root, label=request.label or "sub", hooks=hooks
+            )
         except ValueError as exc:
             return SubAgentResult(
                 ok=False, error=str(exc), agent_path=agent_path, depth=depth
             )
         run_root = tree.path
-        await _Recorder(
+        if tracker is not None:
+            # 先登记再发事件：事件写库也是一个 await，取消落在这里时副本必须已可被找回。
+            tracker["tree"] = tree
+        worktree_log = _Recorder(
             recorder,
             agent_path=agent_path,
             depth=depth,
             parent_thread_id=parent_thread_id,
             root_thread_id=root_thread_id,
-        ).add(
-            "worktree.created", "subagent", tree.as_dict()
         )
+        if hook_results:
+            await worktree_log.add(
+                "hook.completed",
+                "subagent",
+                {
+                    "event": "worktree_create",
+                    "mode": tree.mode,
+                    "results": [item.as_dict() for item in hook_results],
+                },
+            )
+        await worktree_log.add("worktree.created", "subagent", tree.as_dict())
 
     gateway = ToolGateway(tools, defer=False)
     permissions = PermissionPolicy.build(
@@ -478,7 +535,18 @@ async def run_subagent(
             )
         else:
             await log.add("worktree.removed", "subagent", {"path": str(tree.path), "mode": tree.mode})
-            remove_worktree(tree)
+            removed_hooks = await remove_worktree_with_hooks(tree, hooks=hooks)
+            if removed_hooks:
+                await log.add(
+                    "hook.completed",
+                    "subagent",
+                    {
+                        "event": "worktree_remove",
+                        "results": [item.as_dict() for item in removed_hooks],
+                    },
+                )
+        if tracker is not None:
+            tracker.pop("tree", None)
 
     result = SubAgentResult(
         ok=not error,
@@ -486,6 +554,7 @@ async def run_subagent(
         steps=steps,
         depth=depth,
         agent_path=agent_path,
+        agent_id=agent_id,
         worktree=tree.as_dict() if tree else {},
         diff=diff,
         error=error,
@@ -502,6 +571,7 @@ async def run_subagent(
             "steps": result.steps,
             "summary": result.summary[:500],
             "error": result.error,
+            "agent_id": agent_id,
             "worktree_mode": tree.mode if tree else "",
             # 这一位花了多少、属于哪一批、是哪条线程——三个数原先只在 `model.usage` 里，
             # 批次要汇总就得先把整串事件按 trace_id 归堆；在这里直说一次，汇总才有可指认的来源。
@@ -525,15 +595,34 @@ class SubAgentRunner:
         self.session = session
         return self
 
-    async def __call__(self, request: SubAgentRequest) -> SubAgentResult:
+    def _prepare(self, request: SubAgentRequest, *, agent_id: str = "") -> _PreparedSpawn | SubAgentResult:
         session = self.session
         if session is None:
             return SubAgentResult(ok=False, error="子代理运行器尚未绑定会话")
         depth = int(getattr(session, "depth", 0)) + 1
         if depth > MAX_DEPTH:
             return SubAgentResult(ok=False, error="子代理不允许再嵌套子代理", depth=depth)
+        request = request.normalized()
+        if not request.goal:
+            return SubAgentResult(ok=False, error="子任务目标为空", depth=depth)
         self.spawned += 1
         agent_path = f"{getattr(session, 'agent_path', 'root')}/sub-{self.spawned}"
+        return _PreparedSpawn(
+            session=session,
+            request=request,
+            depth=depth,
+            agent_path=agent_path,
+            agent_id=agent_id or f"agent-{uuid.uuid4().hex[:8]}",
+        )
+
+    async def __call__(self, request: SubAgentRequest, *, agent_id: str = "") -> SubAgentResult:
+        prepared = self._prepare(request, agent_id=agent_id)
+        if isinstance(prepared, SubAgentResult):
+            return prepared
+        return await self._run_prepared(prepared)
+
+    async def _run_prepared(self, prepared: _PreparedSpawn, *, tracker: dict | None = None) -> SubAgentResult:
+        session, request = prepared.session, prepared.request
         # 根线程从父会话一路往下传：孙代理的根仍然是最初那条线程，不是它的父亲。
         root_thread_id = str(getattr(session, "root_thread_id", "") or session.trace_id)
         tier = str(getattr(session, "sandbox_tier", "") or "")
@@ -546,8 +635,9 @@ class SubAgentRunner:
                 "goal": request.goal[:500],
                 "isolate": request.isolate,
                 "max_steps": request.max_steps,
-                "agent_path": agent_path,
-                "depth": depth,
+                "agent_path": prepared.agent_path,
+                "agent_id": prepared.agent_id,
+                "depth": prepared.depth,
                 "parent_thread_id": session.trace_id,
                 "root_thread_id": root_thread_id,
                 "sandbox_tier": tier,
@@ -562,8 +652,8 @@ class SubAgentRunner:
             session_factory=session.session_factory,
             recorder=session.recorder,
             request=request,
-            agent_path=agent_path,
-            depth=depth,
+            agent_path=prepared.agent_path,
+            depth=prepared.depth,
             parent_thread_id=session.trace_id,
             root_thread_id=root_thread_id,
             provider_id=provider_id,
@@ -571,7 +661,212 @@ class SubAgentRunner:
             watermark=_inherited_watermark(session),
             sandbox_tier=tier,
             parent_tier=tier,
+            agent_id=prepared.agent_id,
+            tracker=tracker,
+            hooks=getattr(session, "hooks", None),
         )
+
+    # ------------------------------------------------------------------ #
+    # 后台句柄：spawn 立即返回 agent_id，结论后来再取
+    # ------------------------------------------------------------------ #
+    async def spawn_background(self, request: SubAgentRequest) -> tuple[str, SubAgentResult | None]:
+        """派一个后台子代理，返回 ``(agent_id, 立即失败结果)``。
+
+        不在这里 await 子代理：那正是「后台」要避免的事。返回得越早，父代理
+        越能继续做事；模型调用、副本创建都交给独立 Task。
+        """
+        prepared = self._prepare(request)
+        if isinstance(prepared, SubAgentResult):
+            return "", prepared
+        handle = _BackgroundAgent(
+            agent_id=prepared.agent_id,
+            task_id=str(prepared.session.context.task_id),
+            request=prepared.request,
+            agent_path=prepared.agent_path,
+            depth=prepared.depth,
+            started_at=time.perf_counter(),
+        )
+        _BACKGROUND.setdefault(handle.task_id, {})[handle.agent_id] = handle
+        try:
+            handle.task = asyncio.create_task(self._run_in_background(prepared, handle))
+        except RuntimeError as exc:  # 没有运行中的事件循环
+            _BACKGROUND.get(handle.task_id, {}).pop(handle.agent_id, None)
+            return "", SubAgentResult(
+                ok=False,
+                error=f"后台子代理启动失败：{exc}",
+                agent_path=prepared.agent_path,
+                depth=prepared.depth,
+            )
+        return handle.agent_id, None
+
+    async def _run_in_background(self, prepared: _PreparedSpawn, handle: _BackgroundAgent) -> None:
+        tracker: dict = {}
+        try:
+            handle.result = await self._run_prepared(prepared, tracker=tracker)
+        except asyncio.CancelledError:
+            # 取消点可能在 run_subagent 自己的 try 之前（比如刚建完副本），
+            # 所以收尸责任在这里：按 tracker 找回副本、删掉、留一条可查的取消记录。
+            await self._cleanup_cancelled(prepared, tracker)
+            raise
+        except Exception as exc:  # 子代理失败不能变成未处理异常
+            handle.error = f"{exc.__class__.__name__}: {exc}"
+
+    async def _cleanup_cancelled(self, prepared: _PreparedSpawn, tracker: dict) -> None:
+        tree = tracker.pop("tree", None)
+        recorder = prepared.session.recorder
+        if tree is not None:
+            try:
+                await asyncio.shield(
+                    recorder.add(
+                        "worktree.removed",
+                        "subagent",
+                        {"path": str(tree.path), "mode": tree.mode},
+                    )
+                )
+            except Exception:
+                pass
+            try:
+                await asyncio.shield(
+                    remove_worktree_with_hooks(
+                        tree, hooks=getattr(prepared.session, "hooks", None)
+                    )
+                )
+            except Exception:
+                remove_worktree(tree)
+        try:
+            await asyncio.shield(
+                recorder.add(
+                    "subagent.cancelled",
+                    "subagent",
+                    {
+                        "agent_id": prepared.agent_id,
+                        "agent_path": prepared.agent_path,
+                        "goal": prepared.request.goal[:300],
+                        "worktree_removed": tree is not None,
+                    },
+                )
+            )
+        except Exception:
+            pass
+
+    def _handle(self, agent_id: str) -> _BackgroundAgent | None:
+        session = self.session
+        if session is None or not agent_id:
+            return None
+        return _BACKGROUND.get(str(session.context.task_id), {}).get(agent_id)
+
+    async def output(self, agent_id: str, *, block: bool = True, timeout: float = 60.0) -> dict:
+        """取后台子代理的现状；``block`` 时最多等 ``timeout`` 秒。
+
+        等待用 ``asyncio.wait`` 而不是 ``wait_for``：后者的超时会取消被等的 Task，
+        那样「等一会儿没等到」就变成了「把子代理杀了」——两种完全不同的语义。
+        """
+        handle = self._handle(agent_id)
+        if handle is None:
+            return {
+                "ok": False,
+                "status": "not_found",
+                "agent_id": agent_id,
+                "message": f"没有找到子代理：{agent_id}（后台句柄只在本进程内有效）",
+            }
+        if block and handle.task is not None and not handle.task.done():
+            # 下限是 0，不是 1 秒：0 表示"只看一眼"，与 block=false 等价。
+            # 硬抬到 1 秒会让调用方以为自己在轮询，实际每次都被按住一秒。
+            wait_seconds = max(0.0, min(MAX_TIMEOUT, float(60 if timeout is None else timeout)))
+            await asyncio.wait({handle.task}, timeout=wait_seconds)
+        return self._snapshot(handle)
+
+    def _snapshot(self, handle: _BackgroundAgent) -> dict:
+        elapsed = round(time.perf_counter() - handle.started_at, 3)
+        base = {
+            "agent_id": handle.agent_id,
+            "agent_path": handle.agent_path,
+            "goal": handle.request.goal[:200],
+            "elapsed_seconds": elapsed,
+        }
+        task = handle.task
+        if task is not None and not task.done():
+            return {**base, "ok": True, "status": "running", "message": "子代理仍在运行"}
+        if task is not None and task.cancelled():
+            return {**base, "ok": False, "status": "cancelled", "message": "子代理已取消"}
+        result = handle.result
+        if result is None:
+            return {
+                **base,
+                "ok": False,
+                "status": "failed",
+                "message": handle.error or "子代理异常结束",
+            }
+        return {
+            **base,
+            "ok": result.ok,
+            "status": "completed" if result.ok else "failed",
+            "summary": result.summary,
+            "steps": result.steps,
+            "error": result.error,
+            "worktree": result.worktree,
+            "diff": result.diff,
+            "usage": result.usage,
+            "thread_id": result.thread_id,
+            "text": result.render(),
+        }
+
+    async def stop(self, agent_id: str) -> dict:
+        """取消一个后台子代理；已经结束的句柄照实返回它当初的结果，不谎报取消。"""
+        handle = self._handle(agent_id)
+        if handle is None:
+            return {
+                "ok": False,
+                "status": "not_found",
+                "agent_id": agent_id,
+                "message": f"没有找到子代理：{agent_id}（后台句柄只在本进程内有效）",
+            }
+        if handle.task is not None and not handle.task.done():
+            handle.task.cancel()
+            try:
+                await handle.task
+            except (asyncio.CancelledError, Exception):
+                pass
+        return self._snapshot(handle)
+
+    async def aclose(self, task_id: str = "", *, reason: str = "task_finished") -> int:
+        """任务收尾：取消仍在跑的后台子代理，并点名说明，返回取消的个数。
+
+        不取消它们，任务显示"已完成"之后模型调用还在继续花钱，事件也会写进一个
+        已经收尾的任务里——账和界面从此对不上。已完成但没人取过的句柄一并摘除：
+        结论已经写进 `subagent.completed` 事件，不需要一直占内存。
+        """
+        session = self.session
+        task_id = task_id or str(getattr(getattr(session, "context", None), "task_id", "") or "")
+        bucket = _BACKGROUND.pop(task_id, {})
+        if not bucket:
+            return 0
+        running = [handle for handle in bucket.values() if handle.task is not None and not handle.task.done()]
+        for handle in running:
+            handle.task.cancel()
+        for handle in bucket.values():
+            if handle.task is None:
+                continue
+            try:
+                await handle.task
+            except (asyncio.CancelledError, Exception):
+                pass
+        recorder = getattr(session, "recorder", None)
+        if recorder is not None:
+            try:
+                await recorder.add(
+                    "subagents.released",
+                    "subagent",
+                    {
+                        "reason": reason,
+                        "count": len(bucket),
+                        "cancelled": [handle.agent_id for handle in running],
+                        "finished": [handle.agent_id for handle in bucket.values() if handle not in running],
+                    },
+                )
+            except Exception:
+                pass
+        return len(running)
 
     async def fan_out(
         self,
@@ -698,7 +993,9 @@ class SubAgentRunner:
             await self._merge(results, group)
         for result in results:
             if result.tree is not None:
-                remove_worktree(result.tree)
+                await remove_worktree_with_hooks(
+                    result.tree, hooks=getattr(session, "hooks", None)
+                )
                 result.tree = None
         return list(results)
 

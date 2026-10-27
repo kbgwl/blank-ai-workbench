@@ -12,6 +12,7 @@ import {
   recordOf,
   textOf,
   type AgentEvent,
+  type ApprovalGrant,
   type ApprovalScope,
   type GuardianVerdictInfo,
   type PendingQuestion,
@@ -83,7 +84,7 @@ export type Block =
       message: string;
       /** 命令前缀签名（"git push"）：不为空才能提供「本会话总是允许该前缀」。 */
       prefix: string;
-      scopes: { scope: ApprovalScope; label: string }[];
+      scopes: ApprovalGrant[];
       state: "pending" | "granted" | "denied";
       /** 独立审查的意见。undefined=这张卡早于审查进载荷，null=审查关着，对象=审查员说了话。 */
       guardian?: GuardianVerdictInfo | null;
@@ -168,12 +169,17 @@ function eventBoundary(event: AgentEvent): string {
  * 键不存在就返回 undefined —— 拿默认值填一遍，"未知"就会在界面上长成"没强制"或"已强制"的样子。
  */
 function eventBoundaryFacts(event: AgentEvent): BoundaryFacts | undefined {
-  const raw = (event.payload || {}).sandbox_enforcement;
-  if (!raw || typeof raw !== "object") return undefined;
+  const payload = event.payload || {};
+  // 单次越界（#115）是事件顶层的独立事实，不在 enforcement 里：越界后 enforcement
+  // 只剩「限额全没生效」，光看它会把这笔执行读成关档。
+  const bypassed = payload.sandbox_bypass === true;
+  const raw = payload.sandbox_enforcement;
+  if (!raw || typeof raw !== "object") return bypassed ? { bypassed: true } : undefined;
   const value = raw as Record<string, unknown>;
   return {
     strength: typeof value.boundary_strength === "string" ? value.boundary_strength : undefined,
     limitsApplied: typeof value.limits_applied === "boolean" ? value.limits_applied : undefined,
+    ...(bypassed ? { bypassed: true } : {}),
   };
 }
 
@@ -296,6 +302,33 @@ function describeSystem(event: AgentEvent): { title: string; detail: string; ton
       textOf(payload, "model") ? `模型 ${textOf(payload, "model")}` : "",
     ].filter(Boolean);
     return { title: "开始执行", detail: parts.join(" · "), tone: "muted" };
+  }
+  // 权限模式切换：用户必须看见"从现在起只读/恢复写"，这比某一次工具结果重要。
+  if (type === "permission.mode_changed") {
+    const to = textOf(payload, "to");
+    const plan = textOf(payload, "plan");
+    if (!to) {
+      // 缺方向的老事件不能当作"退出"：那会把只读状态说成已恢复写。
+      return {
+        title: "权限模式已变化",
+        detail: clip(plan ? `计划：${plan}` : "", 180),
+        tone: "muted",
+      };
+    }
+    const entering = to === "plan";
+    return {
+      title: entering ? "已进入计划模式" : "已退出计划模式",
+      detail: clip(
+        [
+          entering ? "只读取证，不写文件、不执行命令" : "恢复默认权限，写操作按规则逐条确认",
+          plan ? `计划：${plan}` : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        180,
+      ),
+      tone: entering ? "muted" : "accent",
+    };
   }
   if (type === "validation.completed" || type.startsWith("validation")) {
     const command = textOf(payload, "command", "cmd");
@@ -635,6 +668,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
           .map((item) => ({
             scope: (textOf(item, "scope", "value") || "once") as ApprovalScope,
             label: textOf(item, "label", "title"),
+            warning: textOf(item, "warning", "hint"),
           })),
         state: "pending",
         guardian: guardianFromPayload(source),

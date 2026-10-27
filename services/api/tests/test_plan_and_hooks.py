@@ -19,12 +19,17 @@ from blank_api.services.tools.plan import normalize_steps, plan_tools, render_pl
 # ── update_plan ────────────────────────────────────────────────────────────
 
 def test_update_plan_registered_with_low_risk():
-    tools = plan_tools()
-    assert [tool.name for tool in tools] == ["update_plan"]
-    tool = tools[0]
+    tools = {tool.name: tool for tool in plan_tools()}
+    assert list(tools) == ["update_plan", "enter_plan_mode", "exit_plan_mode"]
+    tool = tools["update_plan"]
     assert tool.risk_level == "low"
     # 计划是纯状态更新，不该触发审批
     assert tool.requires_approval is False
+    # 模式开关也不靠 requires_approval 挂卡：退出是否需要人批由 permissions.decide
+    # 的 mode:switch 决定（那里能看见当前模式与会话记忆，工具定义看不见）。
+    for name in ("enter_plan_mode", "exit_plan_mode"):
+        assert tools[name].risk_level == "low"
+        assert tools[name].requires_approval is False
 
 
 def test_update_plan_schema_rejects_missing_steps():

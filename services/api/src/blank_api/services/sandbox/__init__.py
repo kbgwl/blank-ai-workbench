@@ -8,7 +8,7 @@ from blank_api.services.sandbox.runner import (
     cleanup_containers,
     get_sandbox,
 )
-from blank_api.services.sandbox.snapshot import SnapshotStore
+from blank_api.services.sandbox.snapshot import SnapshotNotRestorable, SnapshotStore
 
 __all__ = [
     "AuditLog",
@@ -18,6 +18,7 @@ __all__ = [
     "SandboxPolicy",
     "SandboxResult",
     "SandboxUnavailable",
+    "SnapshotNotRestorable",
     "SnapshotStore",
     "cleanup_containers",
     "get_sandbox",

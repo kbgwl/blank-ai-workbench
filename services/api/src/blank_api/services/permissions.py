@@ -20,7 +20,8 @@ from typing import TYPE_CHECKING, Any
 
 from blank_api.services.approvals import approval_key
 from blank_api.services.log_safety import contains_secret
-from blank_api.services.sandbox.tiers import DEFAULT_TIER, normalize_tier
+from blank_api.services.permission_rules import PermissionRuleset, empty_ruleset
+from blank_api.services.sandbox.tiers import DEFAULT_TIER, host_bypass_requested, normalize_tier
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型检查，运行时不会导入工具层（避免导入环）
     from blank_api.services.tools.base import ToolDefinition
@@ -47,6 +48,16 @@ SCOPE_PREFIX = "prefix"
 SCOPE_TOOL = "tool"
 SCOPES = (SCOPE_ONCE, SCOPE_PREFIX, SCOPE_TOOL)
 
+# 「本会话总是允许这个工具」把免问范围定在工具本身。这一档只有当工具的风险
+# 不由参数决定、或参数已经被路径前缀框住时才算说得出口：run_shell 的风险是
+# `assess_risk(命令正文)` 算出来的，卡片上看到的是**这一条命令**的风险，
+# 它替不了解释器收到的下一条（`-c` 换正文、`-m` 换模块、联网/破坏性词换掉）。
+# 实物对照（#54 量的 Codex `~/.codex/rules/default.rules` 与 Claude Code 的
+# `Bash(git push:*)`）：两边的免问粒度都落在「这一条命令」，没有「总是允许整个 shell」这种卡。
+# 登记制：带 `risk_for` 的工具必须显式进这张表，否则 `test_tool_grant_scope_v52.py`
+# 拿默认工具注册表逐条对账会红——漏登记在这条边界上是看得见的缺陷，不是静默放宽。
+ARGUMENT_SCOPED_TOOLS = frozenset({"run_shell", "git", "apply_patch", "spawn_agents"})
+
 # 计划模式唯一允许的一类工具：只看不写。
 READ_ONLY_TOOLS = frozenset(
     {
@@ -64,6 +75,10 @@ READ_ONLY_TOOLS = frozenset(
         "team_status",
         # 检索本身只读：计划模式要靠它把 git / 联网这些能力加载进来做只读取证
         "tool_search",
+        # 模式开关本身不是写操作：计划模式下必须能"退出"，否则模型会卡死在里面。
+        # 退出仍需人工批准，由 decide() 里的 mode:switch 特例负责。
+        "enter_plan_mode",
+        "exit_plan_mode",
     }
 )
 # "接受编辑"模式自动放行的工具：只含工作区内的文件写入（可回滚）。
@@ -80,6 +95,18 @@ IRREVERSIBLE = re.compile(
     r"|\btruncate\s+table\b"
     r"|\brm\s+-[a-z]*[rf][a-z]*\s+(/|~|\$HOME|\*|[a-z]:\\)"
     r"|\bdel\s+/[sfq]\s+[a-z]:\\"
+    # Windows 原生删除形状。本机默认壳就是 cmd / PowerShell，缺这一组时
+    # `powershell -Command "Remove-Item -Recurse C:\target"` 会被判成「可逆」——
+    # 于是它既写进免问规则，又对用户承诺「可靠快照回滚」。两者都是谎。
+    # 只认「动词 + 盘符路径」或「动词 + -Recurse/-Force」，不认裸 `*`：
+    # 后者会撞上 `grep foo *` 这类无害命令，把逐条确认变成常态噪音。
+    r"|\b(del|erase)\b\s+(?:/[a-z]+\s+)*[\"']?[a-z]:\\"
+    r"|\b(remove-item|ri|rd|rmdir)\b[^\n]*(?:-recurse|-force|[a-z]:\\)"
+    # 间接载荷：目标由环境变量/主目录展开，静态看不见具体路径。这类删除落在工作区
+    # 之外，快照赎不回来；判成"可逆"等于允许 guardian 代批并发放"总是允许"。
+    # 只挂在删除类动词上——`echo %USERPROFILE%` 这种读操作不许被连坐。
+    r"|\b(del|erase|rd|rmdir|remove-item|ri)\b[^\n]*(?:%[a-z_][^%\n]*%|\$env:|\$home\b)"
+    r"|\breg\s+delete\b"
     r"|\bgit\s+push\b[^\n]*--force"
     r"|\bdd\s+if="
     r"|\bchmod\s+-R\s+777\s+/"
@@ -89,6 +116,13 @@ IRREVERSIBLE = re.compile(
 
 # 命令分段符：只有整条命令的每一段都被前缀规则覆盖，才算命中。
 _SEGMENT_BREAKS = ("&&", "||", ";", "|", "\n", "&")
+# 规则串里必须带引号的字符：与分段符同源，另补重定向。
+# 真宿主壳实测（本机 run_shell 就是 cmd.exe，见 E:/tmp/m87/separator_probe.py）：
+# `|` 裸写 ⇒ 后一半被当成另一条命令，退出码 255；`&` 裸写 ⇒ 真的多跑了一条命令
+# （`python -c print(1)&echo x` 退出码 0 并把 x 打印出来）；`;` 在 cmd 这一层实测不分段
+# （PowerShell 的裸参数会被重新拼回一行，采到的形状里效果相同）。
+# 三条里两条会变、剩下的那条只是"这台机器的壳恰好不吃"——所以一律包裹，不赌。
+_RULE_METACHARS = frozenset(";&|<>")
 
 
 def is_irreversible(command: str) -> bool:
@@ -192,12 +226,44 @@ def prefix_rule(text: str) -> tuple[str, ...]:
 
 
 def render_rule(rule: tuple[str, ...]) -> str:
-    """规则串：带空格的 token 必须带引号，否则 `"a b"` 记下来再读回去会多出一段。"""
-    return " ".join(f"'{token}'" if any(char.isspace() for char in token) else token for token in rule)
+    """规则串：带空白或 shell 控制符的 token 必须带引号。
+
+    只按空白判断不够。真宿主壳实测（run_shell 在本机就是 cmd.exe）：
+    内联正文里带 ``|`` 时裸写会得到退出码 255（后一半被当成另一条命令），
+    带 ``&`` 时更糟——``python -c print(1)&echo x`` 退出码 0 且真的多跑了一条命令。
+    卡片上"总是允许 X"的 X、事件里留痕的那一串，都必须是能一字不差跑回来的东西。
+
+    用双引号而不是单引号：载荷里 `print('x')` 这种单引号很常见，
+    用单引号包裹会写出 `'print('x')'` 这种语法上不存在、也读不回来的串；
+    反过来 token 里已经带双引号时这里不再包裹（`"..."` 套 `"..."` 同样不存在），
+    这种规则靠 :func:`_round_trips` 在入账前拒掉——实测样本里就是
+    ``python -c 'print("a b")'`` 那一条，它记不下来，下次照样挂卡。
+    """
+    parts: list[str] = []
+    for token in rule:
+        if any(char.isspace() or char in _RULE_METACHARS for char in token) and '"' not in token:
+            parts.append(f'"{token}"')
+        else:
+            parts.append(token)
+    return " ".join(parts)
+
+
+def _round_trips(rule: tuple[str, ...]) -> bool:
+    """写出去还能一字不差读回来，才允许入账；读回来会变形的规则一律不记。
+
+    落盘用的是 token 数组（`approvals.json`），本来不经过这个串；但事件留痕与卡片
+    文案用的是它，任务级回放也按串解析。串一旦变形，「免问范围」就和用户批准的那条
+    不是同一件事了——宁可下次照样挂卡。
+    """
+    return prefix_rule(render_rule(rule)) == rule
 
 
 def _starts_with(argv: list[str], rule: tuple[str, ...]) -> bool:
     if len(argv) < len(rule):
+        return False
+    if _payload_terminated(rule) and len(argv) != len(rule):
+        # 规则已经带到载荷（正文 / 模块 / 脚本）的解释器命令，免问范围只能等于那条命令，
+        # 不能是「以它开头」：`python -c "…sys.argv[1]…"` 批准过一次，不该免问换参数的下一条。
         return False
     for index, token in enumerate(rule):
         if token == "*":
@@ -208,16 +274,42 @@ def _starts_with(argv: list[str], rule: tuple[str, ...]) -> bool:
     return True
 
 
-def covered_by_rules(command: str, rules) -> str | None:
+def _payload_terminated(rule: tuple[str, ...]) -> bool:
+    """这条规则是否已经覆盖到「真正执行的载荷」——是则要求整段 argv 等长。"""
+    return bool(rule) and len(rule) >= 2 and _basename(rule[0]).lower() in _CODE_EXECUTORS
+
+
+def _rule_admissible(rule: tuple[str, ...]) -> bool:
+    """这条规则配不配免问——写入侧拒收的形状，匹配侧同样不许放行。
+
+    闸门必须排在匹配之前：`approvals.json` 是给人手工编辑的文件，
+    :func:`memo_rule` 管不到它。没有这道闸，文件里一行 ``["powershell"]`` 就静默免问了
+    任意 `-Command` 正文，而 :data:`_CODE_EXECUTORS` 的契约写的恰恰是"裸解释器名
+    等于把整个会话的任意代码执行交给模型自选载荷"（见上面的注释块）。
+    """
+    if not rule:
+        return False
+    if _basename(rule[0]).lower() not in _CODE_EXECUTORS:
+        return True
+    if len(rule) < 2:
+        return False  # 裸解释器名：载荷完全交给模型
+    # 载荷是不可读文本（base64）的规则不认：批准它的人看不见自己签的是什么
+    return not any(token.lower() in _OPAQUE_CODE_FLAGS for token in rule[1:])
+
+
+def covered_by_rules(command: str, rules, *, refuse_inadmissible: bool = True) -> str | None:
     """整条命令的每个子命令都被规则覆盖时返回命中的规则串，否则返回 None。
 
     只覆盖第一段是不够的：``npm test && rm -rf src`` 若只对第一段放行，
     第二段就搭了顺风车。所以这里要求逐段命中。
+
+    `refuse_inadmissible` 只对**免问**（批准）那一路为真；驳回那一路传 False——
+    用户在本会话里明说"powershell 别问了"，一条不配免问的规则也得保住它的拒绝力。
     """
     segments = [tokenize(item) for item in split_segments(command)]
     if not segments or any(not segment for segment in segments):
         return None
-    usable = [rule for rule in rules if rule]
+    usable = [rule for rule in rules if rule and (not refuse_inadmissible or _rule_admissible(rule))]
     if not usable:
         return None
     hits: list[str] = []
@@ -276,24 +368,41 @@ def deny(risk: str, rule: str, reason: str, prefix: str = "", memo: str = "") ->
     return Decision(DENY, risk=risk, rule=rule, reason=reason, prefix=prefix, memo=memo)
 
 
-def approval_options(tool_name: str, memo: str = "") -> list[dict]:
+def approval_options(tool_name: str, memo: str = "", *, tool_scope: bool) -> list[dict]:
     """审批卡上的按钮数据：本次 / 这条命令（仅 run_shell 且粒度够细时）/ 该工具本会话。
 
     ``memo`` 传的是 :func:`memo_rule` 算出来的那一串，不是命令本身的首段——
     卡片上写的"总是允许 X"必须与真正写进会话账本的那条规则逐字一致，
     否则用户批的是 ``python -c print(1)``、账本上记的却是 ``python``。
+
+    ``tool_scope`` 取 :func:`tool_grant_too_wide` 的反面：**卡上只出现按得下去的钮**。
+    前端把这份列表当成唯一的档位来源，所以这里少给一档界面上就少一档，
+    不会留下"点了允许、账上却没记"的空按钮。
+
+    这一档是**必填**的（#88）：默认值一旦是"开"，任何一个新发卡点忘记传它就自动长出
+    工具档，而写入侧 :meth:`PermissionPolicy.remember` 照样拒记——
+    失败方向是"界面给了个按了不留账的钮"，不是"当场报错"。
+    现在漏传就是 ``TypeError``：把 fail-open 换成 fail-fast。
     """
     options = [{"scope": SCOPE_ONCE, "label": "仅本次允许"}]
     if memo:
-        options.append({"scope": SCOPE_PREFIX, "label": f"本会话总是允许 {memo}"})
-    options.append(
-        {
-            "scope": SCOPE_TOOL,
-            "label": f"本会话总是允许 {tool_name}",
-            # 工具档仍在不可逆判定之后生效：`git push --force` / `drop table` 照样逐条问。
-            "warning": "该工具在本会话内不再询问；不可逆命令仍逐条确认",
-        }
-    )
+        options.append(
+            {
+                "scope": SCOPE_PREFIX,
+                "label": f"本会话总是允许 {memo}",
+                "warning": "只免问这一条命令：换正文、换参数、换模块或换脚本路径都会重新挂卡",
+            }
+        )
+    if tool_scope:
+        options.append(
+            {
+                "scope": SCOPE_TOOL,
+                "label": f"本会话总是允许 {tool_name}",
+                # 工具档仍在不可逆判定之后生效：`git push --force` / `drop table` 照样逐条问。
+                # 免问还按档位与路径分桶：换档位（尤其换到 off）或换路径都要重新问。
+                "warning": "该工具在本档位、这片路径内不再询问；换档位、换路径或不可逆命令仍逐条确认",
+            }
+        )
     return options
 
 
@@ -330,47 +439,82 @@ MEMOIZABLE_EXES = frozenset(
 # 带到真正被执行的那一段（`-c` 的正文、`-m` 的模块名、脚本路径），只准收紧到
 # "这一条命令"，不准放宽到"这个解释器"。对照实物：Codex 落在
 # ~/.codex/rules/default.rules 的那条规则，正文 `-Command` 整段都在 pattern 里。
-_CODE_EXECUTORS = frozenset({"python", "python3", "py", "node", "nodejs"})
+#
+# 会把「一段文本当代码执行」的解释器。本机默认壳是 cmd / PowerShell，所以
+# powershell / pwsh / cmd 必须在表里：否则它们的 `-Command` 正文压根进不了免问判定，
+# 「这一条命令免问」在 Windows 形状的命令上永远发不出档位。
+_CODE_EXECUTORS = frozenset(
+    {"python", "python3", "py", "node", "nodejs", "powershell", "pwsh", "cmd"}
+)
 _INLINE_CODE_FLAGS = frozenset(
     {"-c", "-e", "--command", "-command", "-commands", "/c", "/e", "--eval", "--print"}
 )
 _MODULE_FLAGS = frozenset({"-m", "--module"})
+# 载荷是不可读文本（base64）的旗标：卡片上用户看到的是一串乱码，
+# 记进免问规则等于让他盲签——和含密钥的规则一样，宁可不记。
+_OPAQUE_CODE_FLAGS = frozenset({"-encodedcommand", "-enc", "/enc"})
+# 一层之外的引号形状：PowerShell 用 `""` 表示引号本身，posix / cmd 转义用 `\"`。
+_LOSSY_QUOTES = re.compile(r'""|\'\'|\\"')
 
 
 def memo_rule(command: str) -> tuple[str, ...]:
     """这次批准该记成什么规则；空元组＝不值得记（下次照样挂卡）。
 
-    规则必须覆盖到"真正被执行的那一段"：解释器取到 ``-c`` 的正文或脚本路径为止，
-    普通命令取 :func:`command_prefix`。含密钥形态的规则不记——卡片上它是打码的，
+    规则必须覆盖到"真正被执行的那一段"：解释器命令要认得出载荷（``-c`` 的正文、
+    ``-m`` 的模块名、脚本路径），并记下整段 argv；普通命令取
+    :func:`command_prefix`。含密钥形态的规则不记——卡片上它是打码的，
     让用户批准一条自己看不见全文的规则，等于把打码变成盲签。
     """
     segments = split_segments(command)
     if not segments:
         return ()
+    if is_irreversible(command):
+        # 不可逆的命令压根不配有一条"总是允许"：`git push --force` 的前缀是 `git push`，
+        # 记下来连正常推送也一起放行；`Remove-Item -Recurse` 更不可能靠快照回滚。
+        # 闸门锁在这一层（而不是只排在 decide 的匹配之前）：任何一个调用点直接问
+        # :func:`memoizable_prefix` 都不会给不可逆命令发出前缀档位。
+        return ()
     tokens = tokenize(segments[0])
     if not tokens:
+        return ()
+    if _LOSSY_QUOTES.search(segments[0]):
+        # tokenize() 只剥一层成对引号。PowerShell 的 `""` 与 posix 的 `\"` 这类转义它认不出来，
+        # 载荷会被切残：`powershell -Command "Write-Host ""x"""` 读回来只剩 `Write-Host `。
+        # 切残的规则比原命令更宽（不同的转义载荷会塌成同一条），所以宁可这条记不下来。
         return ()
     exe = _basename(tokens[0])
     rule: tuple[str, ...] = ()
     if exe.lower() in _CODE_EXECUTORS:
-        # 跳过解释器自己的旗标（`-u` / `-I` / `--inspect`），停在载荷那一段：
-        # 内联代码取到正文，`-m` 取到模块名，否则取到脚本路径。裸解释器不记。
+        # 跳过解释器自己的旗标（`-u` / `-I` / `--inspect`），先确认这一段里真有一个
+        # 会被执行的载荷（`-c` 的正文、`-m` 的模块名、脚本路径）：裸解释器、只有旗标的
+        # 调用（`python -V`）都不记——那等于把任意载荷交给模型自选。
+        # 载荷一旦确认，规则取**整段 argv**：载荷后面的尾巴（`sys.argv`、脚本参数）
+        # 会改变同一段代码的实际行为，让它搭顺风车就是扩权。实测形状：
+        #   python -c "print(1)"                 ← 批准这条
+        #   python -c "print(1)" https://a.example  旧实现把它一起免问了（截断成 3 段）
+        # 配套：`_starts_with` 对载荷型规则要求整段等长，两者必须同时成立——
+        # 只收紧匹配会得到「记下来的规则连批准它的那条命令都不覆盖」，下次照样挂卡。
         # 首段写 basename（与 command_prefix 一致），换一种路径写法也能命中。
         for index in range(1, len(tokens)):
             token = tokens[index]
             lowered = token.lower()
+            if lowered in _OPAQUE_CODE_FLAGS:
+                # `-EncodedCommand <base64>`：卡片上是串乱码，用户批的并不是他看见的东西。
+                return ()
             if lowered in _INLINE_CODE_FLAGS or lowered in _MODULE_FLAGS:
                 if index + 1 < len(tokens):
-                    rule = (exe,) + tuple(tokens[1 : index + 2])
+                    rule = (exe,) + tuple(tokens[1:])
                 break
             if not token.startswith("-"):
-                rule = (exe,) + tuple(tokens[1 : index + 1])
+                rule = (exe,) + tuple(tokens[1:])
                 break
     else:
         rule = prefix_rule(command_prefix(command))
         if rule and len(rule) < 2 and rule[0].lower() not in MEMOIZABLE_EXES:
             rule = ()
     if rule and contains_secret(render_rule(rule)):
+        return ()
+    if rule and not _round_trips(rule):
         return ()
     return rule
 
@@ -438,6 +582,29 @@ def render_tool_grant(grant: tuple[str, str, str]) -> str:
     return f"{tier}:{tool}:{prefix or '.'}"
 
 
+def tool_grant_too_wide(tool_name: str, arguments: dict | None) -> bool:
+    """这次批准能不能记成「这个工具以后都免问」。
+
+    三道门槛：工具在 :data:`ARGUMENT_SCOPED_TOOLS` 里（风险由参数算出来），
+    这次带的不是命令（命令类工具的免问粒度只能是那条命令，见 :func:`memo_rule`），
+    且这一次的参数被路径前缀框住（`path_scope` 为空＝免问范围是整个工具）。
+    ``apply_patch`` 是活例子：带 `path` 的批准只免问那片路径；
+    而 `path` 省略、从补丁头推断的那一次，账本上会落成"整个工具都免问"——
+    同一张卡、同一个按钮，免问范围却从「这个文件」悄悄变成「以后所有文件」。
+
+    命令这一条挡的是模型多发的参数：``run_shell`` 的 schema 里没有 ``path``，
+    ``validate_arguments`` 又不拒未知键，所以「带 command 也带 path」的调用是可达的。
+    让这样一个对命令正文毫无影响的参数决定分桶，等于用户批一次之后，
+    模型只要在后续调用里重复那个 ``path``，任意命令正文都免问。
+    """
+    if tool_name not in ARGUMENT_SCOPED_TOOLS:
+        return False
+    data = arguments if isinstance(arguments, dict) else {}
+    if str(data.get("command") or "").strip():
+        return True
+    return not path_scope(data)
+
+
 @dataclass
 class PermissionPolicy:
     """一次任务运行期间的权限状态。可变：批准与拒绝会就地写入，供后续步骤复用。"""
@@ -456,6 +623,9 @@ class PermissionPolicy:
     denied_prefixes: set[tuple[str, ...]] = field(default_factory=set)
     denied_actions: set[str] = field(default_factory=set)
     approve_high_risk: bool = False
+    # 人手写的 allow/deny 规则（permissions.rules）。与 approvals.json 分开：
+    # 前者只读、可写注释；后者由程序原子替换。文件写坏时整份停用。
+    ruleset: "PermissionRuleset" = field(default_factory=empty_ruleset)
 
     @classmethod
     def build(
@@ -491,9 +661,17 @@ class PermissionPolicy:
 
         前缀档记的是 :func:`memo_rule` 算出来的那一串（解释器类必须带到正文），
         不是命令首段——前端即使误传 scope=prefix，也记不出"整个 python"这种宽账。
+        工具档同理：给不起的工具（:func:`tool_grant_too_wide`）即使硬传
+        scope=tool 也不入账，免问范围不能由一个客户端参数放大。
         """
         self.approved_actions.add(approval_key(tool, arguments))
+        # 单次越界只认"这一次"：就算客户端硬传 scope=prefix/tool，也不许把
+        # 宿主执行记成会话级或工具级的免问范围。前缀档对它毫无意义。
+        if host_bypass_requested(tool, arguments):
+            return
         if scope == SCOPE_TOOL:
+            if tool_grant_too_wide(tool, arguments):
+                return
             # 记下"哪个档位、哪个工具、哪片路径"：档位换了就重新问，
             # 目标路径出了这片前缀也重新问。
             self.approved_tools.add((self.sandbox_tier, tool, path_scope(arguments)))
@@ -539,6 +717,9 @@ class PermissionPolicy:
             "approved_prefixes": sorted(render_rule(rule) for rule in self.approved_prefixes),
             "persistent_prefixes": sorted(render_rule(rule) for rule in self.persistent_prefixes),
             "denied_prefixes": sorted(render_rule(rule) for rule in self.denied_prefixes),
+            # 手写规则也进快照：规则文件坏了/被改过，是事后解释"当时为什么没问"
+            # 或"当时为什么被拒"的第一手材料。
+            "ruleset": self.ruleset.summary(),
         }
 
     # -- 判定 --------------------------------------------------------------
@@ -548,6 +729,55 @@ class PermissionPolicy:
         command = str((arguments or {}).get("command") or "")
         # 卡片上"总是允许 X"的 X 与账本里真正记下的那条规则必须是同一串，所以在这里算一次。
         memo = memoizable_prefix(name, command)
+
+        # 手写 deny 规则优先于一切：绕过模式、计划模式、会话里刚批过的动作都挡不住它。
+        # 这正是用户写 deny 的目的（例如「这个目录永远别碰」），也是它唯一有用的形状。
+        denied_rule = self.ruleset.match("deny", name, arguments or {})
+        if denied_rule is not None:
+            return deny(
+                risk,
+                "rule:deny",
+                f"权限规则拒绝了该操作：{denied_rule.render()}",
+                command_prefix(command),
+            )
+
+        # 单次越界的部署开关：关闭时连审批卡都不该出现——否则用户点了允许，
+        # 命令仍然不执行，卡片本身就在撒谎。这道判定排在手写 deny 之后，
+        # 让「永远别碰」的规则继续拿到它应有的归因。
+        if host_bypass_requested(name, arguments):
+            from blank_api.services.sandbox.policy import host_bypass_enabled
+
+            if not host_bypass_enabled():
+                return deny(
+                    risk,
+                    "sandbox:host_bypass_disabled",
+                    "单次越界宿主执行未开启（部署开关 BLANK_SANDBOX_ALLOW_HOST_BYPASS）："
+                    "该参数被忽略且命令不执行。",
+                    command_prefix(command),
+                )
+
+        # 计划模式的进出是方向相反的两个开关：
+        # * 进入只收紧（从什么模式进来都只可能更安全），不需要确认；
+        # * 退出会放宽，计划模式下必须经过人工批准——这是模型唯一能主动请求放宽的入口。
+        # 两条都排在计划模式闸门之前：否则 enter 会被当成普通写操作、exit 会被直接拒，
+        # 模型就再也出不来了。
+        if name == "enter_plan_mode":
+            return approve(risk, "mode:already_plan" if self.mode == MODE_PLAN else "mode:enter_plan")
+        if name == "exit_plan_mode":
+            if self.mode != MODE_PLAN:
+                return approve(risk, "mode:exit_noop")
+            key = approval_key(name, arguments)
+            if key in self.denied_actions:
+                return deny(risk, "action:denied", "退出计划模式已在本次会话中被拒绝。")
+            if key in self.approved_actions:
+                return approve(risk, "action:approved")
+            target = path_scope(arguments)
+            if any(
+                tier == self.sandbox_tier and granted_tool == name and _covers_path(prefix, target)
+                for tier, granted_tool, prefix in self.approved_tools
+            ):
+                return approve(risk, f"tool:{self.sandbox_tier}:{name}")
+            return ask(risk, "mode:switch")
 
         # 计划模式：只读取证，其余一律拒绝（不是询问——计划模式下不该有写动作的机会）。
         if self.mode == MODE_PLAN:
@@ -559,6 +789,19 @@ class PermissionPolicy:
                 f"计划模式只允许只读取证，已拒绝执行 {name}。切换到默认模式后可以执行。",
                 command_prefix(command),
             )
+
+        # 单次越界宿主执行：部署开关已开时也必须逐条人工批准。
+        # 它排在计划模式闸门之后（计划模式不允许执行命令）、不可逆闸门之前：
+        # 越界本身就是要用户看见的那件事，卡片归因不能被 `irreversible` 顶掉。
+        # 全放行模式与 approve_high_risk 都不代批——沙箱是能力边界，不是审批节奏。
+        # 会话前缀 / 落盘规则 / 工具档在这里一律不生效：越界只能一条一条批。
+        if host_bypass_requested(name, arguments):
+            key = approval_key(name, arguments)
+            if key in self.denied_actions:
+                return deny(risk, "action:denied", "该单次越界执行已在本次会话中被拒绝。")
+            if key in self.approved_actions:
+                return approve(risk, "sandbox:host_bypass", command_prefix(command))
+            return ask(risk, "sandbox:host_bypass", command_prefix(command), memo="")
 
         # 不可逆操作：任何模式、任何前缀规则都不放行，必须逐个确认。
         # 也不给"总是允许"这一档：`git push --force` 的前缀是 `git push`，记下来
@@ -580,11 +823,12 @@ class PermissionPolicy:
 
         if name == "run_shell" and command:
             prefix = command_prefix(command)
-            if covered_by_rules(command, self.denied_prefixes):
+            denied = covered_by_rules(command, self.denied_prefixes, refuse_inadmissible=False)
+            if denied:
                 return deny(
                     risk,
                     "prefix:denied",
-                    f"命令前缀已被本次会话拒绝：{covered_by_rules(command, self.denied_prefixes)}",
+                    f"命令前缀已被本次会话拒绝：{denied}",
                     prefix,
                 )
             hit = covered_by_rules(command, self.approved_prefixes)
@@ -595,6 +839,12 @@ class PermissionPolicy:
             durable = covered_by_rules(command, self.persistent_prefixes)
             if durable:
                 return approve(risk, f"prefix:persistent:{durable}", prefix)
+
+        # 手写 allow 规则排在会话驳回之后：用户刚刚点过"不"的那一条，不该被
+        # 一份通用规则立刻放行。它也不能越过上面的 IRREVERSIBLE 闸门。
+        allowed_rule = self.ruleset.match("allow", name, arguments or {})
+        if allowed_rule is not None:
+            return approve(risk, f"rule:allow:{allowed_rule.selector()}", command_prefix(command))
 
         target = path_scope(arguments)
         if any(
@@ -616,6 +866,7 @@ class PermissionPolicy:
 
 __all__ = [
     "ALLOW",
+    "ARGUMENT_SCOPED_TOOLS",
     "ASK",
     "DENY",
     "Decision",
@@ -645,4 +896,5 @@ __all__ = [
     "render_rule",
     "split_segments",
     "tokenize",
+    "tool_grant_too_wide",
 ]

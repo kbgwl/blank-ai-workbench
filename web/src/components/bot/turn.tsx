@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/projects/ui";
 import { formatDuration } from "../tasks/format";
 import { guardianReviewLabel } from "../tasks/status";
+import { approvalGrantOptions } from "../tasks/api";
 import type { AttachmentRef, PendingApproval, PendingQuestion } from "../tasks/api";
 import { MarkdownView } from "./markdown-view";
 import { StepView } from "./steps";
@@ -66,6 +67,7 @@ function ApprovalCard({
   busy: boolean;
 }) {
   const command = String(approval.args.command ?? approval.args.path ?? "");
+  const grants = approvalGrantOptions(approval);
   const reviewNote = guardianReviewLabel(approval.guardian);
   return (
     <div className="my-2 rounded-xl border border-warn/35 bg-warn/[0.04] p-3">
@@ -85,21 +87,28 @@ function ApprovalCard({
         </p>
       )}
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-        <Button variant="primary" disabled={busy} onClick={() => onDecide("approve", "once")}>
-          允许这一次
-        </Button>
-        {approval.prefix && (
-          <Button disabled={busy} onClick={() => onDecide("approve", "prefix")}>
-            本会话允许 {approval.prefix}
+        {grants.map((option) => (
+          <Button
+            key={option.scope}
+            variant={option.scope === "once" ? "primary" : undefined}
+            disabled={busy}
+            onClick={() => onDecide("approve", option.scope)}
+          >
+            {option.label}
           </Button>
-        )}
-        <Button disabled={busy} onClick={() => onDecide("approve", "tool")}>
-          本会话允许该工具
-        </Button>
+        ))}
         <Button variant="danger" disabled={busy} onClick={() => onDecide("deny", "once")}>
           拒绝
         </Button>
       </div>
+      {grants
+        .filter((option) => option.warning)
+        .map((option) => (
+          <p key={option.scope} className="mt-1 text-[11px] leading-relaxed text-muted">
+            {option.scope === "tool" ? "工具档：" : "本会话档："}
+            {option.warning}
+          </p>
+        ))}
     </div>
   );
 }

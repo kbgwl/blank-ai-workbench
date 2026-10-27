@@ -417,9 +417,30 @@ def audit_evidence(evidence: dict[str, Any]) -> tuple[str, str]:
         problems.append("有 MCP 调用，但证据包没写 MCP 边界")
     if tools and not boundaries.get("sandbox_modes"):
         problems.append("有工具调用，但没有任何 sandbox_mode")
+    # 单次越界（#115）：计数必须是证据包自己算出来的非负整数；形状不认识就归 unknown，
+    # 不能默认读成 0 —— 那会把"这一格坏了"说成"这次没越界"。
+    bypass_text = "单次越界未记（该证据包没有这一格）"
+    if "sandbox_bypass" in boundaries:
+        bypass = boundaries.get("sandbox_bypass")
+        if not isinstance(bypass, dict):
+            problems.append(f"单次越界计数不是对象：{bypass!r}")
+        else:
+            calls = bypass.get("calls")
+            ids = bypass.get("tool_call_ids")
+            if not isinstance(calls, int) or isinstance(calls, bool) or calls < 0:
+                problems.append(f"单次越界计数不是非负整数：{calls!r}")
+            elif not isinstance(ids, list) or any(not isinstance(item, str) for item in ids):
+                problems.append(f"单次越界的 tool_call_ids 形状不认识：{ids!r}")
+            else:
+                recorded = [item for item in ids if item]
+                if len(recorded) != len(set(recorded)):
+                    problems.append(f"单次越界的 tool_call_ids 有重复：{recorded!r}")
+                if len(recorded) > calls:
+                    problems.append(f"单次越界记了 {len(recorded)} 个 tool_call_id，多于 {calls} 次调用")
+                bypass_text = f"单次越界宿主执行 {calls} 次"
     if problems:
         return UNKNOWN, "证据链不成立：" + "；".join(problems[:5])
-    return VERIFIED, f"{len(tools)} 条工具调用都带边界字段，计数一致"
+    return VERIFIED, f"{len(tools)} 条工具调用都带边界字段，计数一致；{bypass_text}"
 
 
 def _fetch_evidence(api: str, task_id: str) -> dict[str, Any]:

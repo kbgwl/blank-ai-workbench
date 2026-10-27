@@ -24,6 +24,8 @@ TIER_WORKSPACE = "workspace"
 TIER_WORKSPACE_NET = "workspace-net"
 TIERS = (TIER_OFF, TIER_WORKSPACE, TIER_WORKSPACE_NET)
 DEFAULT_TIER = TIER_WORKSPACE
+# `run_shell(sandbox="host")` 的取值。它是一个**单次**请求，不改变任务档位。
+HOST_BYPASS = "host"
 
 # 这些 reasons 是稳定判据，界面与测试都读它，不读文案。
 REASON_OFF = "tier_off"
@@ -49,6 +51,18 @@ PERMISSIVENESS = {TIER_WORKSPACE: 0, TIER_WORKSPACE_NET: 1, TIER_OFF: 2}
 
 def permissiveness(tier: str) -> int:
     return PERMISSIVENESS.get(normalize_tier(tier), 0)
+
+
+def host_bypass_requested(tool_name: str, arguments: dict | None) -> bool:
+    """这次调用是不是在请求单次越界宿主执行。
+
+    只有 `run_shell` 有这个参数；判定必须在权限层、工具入口与执行层共用同一份，
+    否则一处认 `"HOST"`、另一处只认 `"host"`，就会出现"过了审批却没按越界记账"。
+    """
+    if tool_name != "run_shell":
+        return False
+    data = arguments if isinstance(arguments, dict) else {}
+    return str(data.get("sandbox") or "").strip().lower() == HOST_BYPASS
 
 
 def assert_not_looser(parent: str, child: str) -> str:
@@ -255,6 +269,7 @@ def resolve_tier(
 
 __all__ = [
     "DEFAULT_TIER",
+    "HOST_BYPASS",
     "PERMISSIVENESS",
     "REASON_BACKEND_UNAVAILABLE",
     "REASON_GLOBAL_DISABLED",
@@ -270,6 +285,7 @@ __all__ = [
     "TierResolution",
     "UnknownTier",
     "assert_not_looser",
+    "host_bypass_requested",
     "normalize_tier",
     "permissiveness",
     "policy_for",

@@ -158,6 +158,51 @@ test("限额压根没生效时不许显示成普通宿主执行", () => {
   assert.notEqual(boundaryLabel(off.boundary, off.boundaryFacts), "宿主执行（未隔离）");
 });
 
+test("经批准的单次越界要单独说出来，不能读成关档或普通宿主执行", () => {
+  // #115：越界后 enforcement 只剩「限额全没生效」，与关档同形；区分它的是事件顶层的
+  // sandbox_bypass=true。只说「宿主执行」会把一次显式授权读成机器本来就没隔离。
+  const block = toolBlock({
+    tool: "run_shell",
+    status: "ok",
+    sandbox_backend: null,
+    sandbox_bypass: true,
+    sandbox_bypass_reason: "经人工批准单次绕过沙箱（原档位 workspace），命令在宿主上执行",
+    sandbox_enforcement: { limits_applied: false, boundary_strength: "" },
+  });
+  assert.equal(block.boundary, "host");
+  assert.equal(block.boundaryFacts?.bypassed, true);
+  assert.equal(boundaryLabel(block.boundary, block.boundaryFacts), "宿主执行（单次越界：已绕过沙箱）");
+  assert.equal(boundaryNeedsWarn(block.boundary, block.boundaryFacts), true);
+  assert.notEqual(
+    boundaryLabel(block.boundary, block.boundaryFacts),
+    boundaryLabel(block.boundary, { limitsApplied: false })
+  );
+});
+
+test("没有越界事实的事件不许显示越界（缺键与 false 都不算）", () => {
+  // 缺键 = 老任务没记过；false = 记了、确实没越界。两者都不能长成「已绕过沙箱」。
+  const missing = toolBlock({ tool: "run_shell", status: "ok", sandbox_backend: null });
+  assert.equal(missing.boundaryFacts?.bypassed, undefined);
+  assert.doesNotMatch(boundaryLabel(missing.boundary, missing.boundaryFacts), /越界/);
+
+  const recorded = toolBlock({
+    tool: "run_shell",
+    status: "ok",
+    sandbox_backend: null,
+    sandbox_bypass: false,
+    sandbox_enforcement: { limits_applied: false, boundary_strength: "" },
+  });
+  assert.equal(recorded.boundaryFacts?.bypassed, undefined);
+  assert.doesNotMatch(boundaryLabel(recorded.boundary, recorded.boundaryFacts), /越界/);
+});
+
+test("越界事件即使没带 enforcement 也仍然要说越界", () => {
+  // 越界是独立事实，不该被 enforcement 的缺失吞掉。
+  const block = toolBlock({ tool: "run_shell", status: "ok", sandbox_backend: null, sandbox_bypass: true });
+  assert.deepEqual(block.boundaryFacts, { bypassed: true });
+  assert.match(boundaryLabel(block.boundary, block.boundaryFacts), /单次越界/);
+});
+
 test("事件没带强制事实时禁止编造档位", () => {
   // 老任务只有 sandbox_backend 没有 sandbox_enforcement。
   // 拿默认值补一个 strength 就把"未知"渲染成了"内核限额"——那是本立项要消灭的那类谎。
@@ -183,6 +228,47 @@ test("配对后完成事件的强制事实要留在卡片上", () => {
   assert.deepEqual(block.boundaryFacts, { strength: "job_only", limitsApplied: true });
   // 限额被内核拒的时候走的正是失败这一支，文案不能退化。
   assert.match(boundaryLabel(block.boundary, block.boundaryFacts), /内核限额/);
+});
+
+const modeChanged = (payload: Record<string, unknown>, seq = 5): AgentEvent => ({
+  seq,
+  node: "execute_action",
+  type: "permission.mode_changed",
+  payload,
+  createdAt: "2026-10-22T00:00:05+00:00",
+});
+
+test("进入计划模式要在对话流里说清从此只读", () => {
+  // 权限模式是整段会话的范围变化，比某一次工具结果重要：用户必须看得见
+  // "从现在起不写文件、不执行命令"，否则会以为任务卡住了。
+  const block = system(modeChanged({ tool: "enter_plan_mode", from: "default", to: "plan" }));
+  assert.equal(block.title, "已进入计划模式");
+  assert.equal(block.tone, "muted");
+  assert.match(block.detail, /只读取证/);
+  assert.doesNotMatch(block.detail, /计划：/);
+});
+
+test("退出计划模式带上批准的计划摘要", () => {
+  const block = system(
+    modeChanged({
+      tool: "exit_plan_mode",
+      from: "plan",
+      to: "default",
+      plan: "1. 改 core.py\n2. 跑 pytest -q",
+    })
+  );
+  assert.equal(block.title, "已退出计划模式");
+  assert.equal(block.tone, "accent");
+  assert.match(block.detail, /恢复默认权限/);
+  assert.match(block.detail, /计划：1\. 改 core\.py/);
+});
+
+test("缺方向字段的模式切换事件不许说成已退出", () => {
+  // 老事件或别的运行时写的记录可能没有 to。把缺失读成"退出" = 把只读状态
+  // 谎报成已恢复写，方向恰好反了。
+  const block = system(modeChanged({ tool: "enter_plan_mode" }));
+  assert.equal(block.title, "权限模式已变化");
+  assert.doesNotMatch(`${block.title}${block.detail}`, /退出|恢复默认权限/);
 });
 
 const compacted = (payload: Record<string, unknown>, seq = 7): AgentEvent => ({

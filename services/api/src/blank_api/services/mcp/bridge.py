@@ -32,6 +32,9 @@ from pathlib import Path
 from typing import Any
 
 from blank_api.services.mcp.client import (
+    BOUNDARY_JOB,
+    BOUNDARY_REMOTE,
+    BOUNDARY_UNBOUNDED,
     CONNECT_TIMEOUT,
     DEFAULT_TIMEOUT,
     MCPError,
@@ -45,6 +48,7 @@ from blank_api.services.mcp.protocol import (
     qualify,
     summarize_description,
 )
+from blank_api.services.sandbox import windows_job
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, fail
 
 # 连接超时之外再套一层：单个服务端再怎么慢，也不能把整次任务启动拖住
@@ -53,21 +57,39 @@ STATE_READY = "ready"
 STATE_FAILED = "failed"
 STATE_SKIPPED = "skipped"
 
-# MCP 服务端的执行边界：它们是我们拉起来的**宿主**进程，不进入任务沙箱档位。
-# 这件事必须写进状态与证据，否则「全 Agent 进边界」会变成一句只对自家工具成立的谎。
-BOUNDARY_HOST = "host_process"
-BOUNDARY_NONE = "none"
+# MCP 服务端的执行边界：stdio 是我们拉起来的**宿主**进程，但能挂进 Job 就必须挂；
+# 挂不进去是一等事实，要在状态与证据里红字说清。#94 之前这里只有 host_process，
+# 那句话在 stdio 真挂上 Job 之后就成了假话（"不受任何约束"并不成立）。
+BOUNDARY_HOST = BOUNDARY_UNBOUNDED  # 旧名保留：调用方读到的仍是"没进 Job 的宿主进程"
 BOUNDARY_UNKNOWN = "unknown"
-BOUNDARY_NOTE = "MCP 服务端是宿主进程，不受任务沙箱档位约束（stdio 由我们启动，http 在远端）"
+BOUNDARY_MIXED = "mixed"
+BOUNDARY_NOTE = "MCP 服务端按宿主权限运行，未纳入任务沙箱档位；stdio 服务端会尽量挂进 Job Object"
+BOUNDARY_NOTE_UNBOUNDED = "⚠ 没有 Job 事实：MCP 服务端按宿主权限运行，内存/进程数/退出清理都未由内核强制"
+BOUNDARY_NOTE_UNKNOWN = "没有已连接的 MCP 服务端，或连接失败，不知道工具在哪个边界执行"
 
 
-def mcp_boundary(state: str) -> str:
-    """按连接状态给边界事实：连上了就是宿主进程；跳过＝没起进程；失败＝不知道。"""
+def mcp_boundary(state: str, transport: str = "", boundary: str = "") -> str:
+    """按连接状态给边界事实。
+
+    连上时以客户端报来的事实为准：stdio 挂进 Job ＝ ``job_object``，挂不进 ＝
+    ``host_process_unbounded``（红字），http ＝ ``remote``（进程在远端）。
+    没有事实时不许默认成 ``job_object``——那会把"不知道"说成"已强制"。
+    """
     if state == STATE_READY:
-        return BOUNDARY_HOST
+        if boundary:
+            return boundary
+        return BOUNDARY_REMOTE if transport == "http" else BOUNDARY_UNBOUNDED
     if state == STATE_SKIPPED:
-        return BOUNDARY_NONE
+        return "none"
     return BOUNDARY_UNKNOWN
+
+
+def _ready_note(boundary: str) -> str:
+    if boundary == BOUNDARY_JOB:
+        return "stdio 服务端进程已挂进 Windows Job Object（内存/进程数/退出清理由内核强制）"
+    if boundary == BOUNDARY_REMOTE:
+        return "HTTP 型 MCP 的进程在远端，不归本机 Job 管；出站请求仍走审批与审计"
+    return BOUNDARY_NOTE_UNBOUNDED
 
 
 @dataclass
@@ -78,21 +100,28 @@ class MCPStatus:
     tools: int = 0
     error: str = ""
     server_info: str = ""
+    # 来自客户端的事实（``boundary_facts()``）。空串＝没有事实，按状态保守推断。
+    boundary: str = ""
+    boundary_note: str = ""
+    enforcement: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict:
+        boundary = self.boundary or mcp_boundary(self.state, self.transport)
         body = {
             "name": self.name,
             "transport": self.transport,
             "state": self.state,
             "tools": self.tools,
-            "boundary": mcp_boundary(self.state),
+            "boundary": boundary,
         }
         if self.error:
             body["error"] = self.error
         if self.server_info:
             body["server"] = self.server_info
         if self.state == STATE_READY:
-            body["boundary_note"] = BOUNDARY_NOTE
+            body["boundary_note"] = self.boundary_note or _ready_note(boundary)
+            if self.enforcement:
+                body["enforcement"] = dict(self.enforcement)
         return body
 
 
@@ -107,13 +136,50 @@ class MCPBundle:
     def ready(self) -> list[MCPStatus]:
         return [item for item in self.statuses if item.state == STATE_READY]
 
+    def _boundary_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for item in self.ready:
+            kind = item.boundary or mcp_boundary(item.state, item.transport)
+            counts[kind] = counts.get(kind, 0) + 1
+        return counts
+
     def as_dict(self) -> dict:
+        counts = self._boundary_counts()
+        unbounded = [
+            item.name
+            for item in self.ready
+            if (item.boundary or mcp_boundary(item.state, item.transport)) == BOUNDARY_UNBOUNDED
+        ]
+        if not counts:
+            boundary = "none"
+            note = "没有已连接的 MCP 服务端"
+        elif unbounded:
+            # 最坏的一条决定汇总口径：只要有服务端没进 Job，就不能把整包说成"已纳入边界"。
+            boundary = BOUNDARY_UNBOUNDED
+            note = (
+                f"⚠ {len(unbounded)} 个服务端（{'、'.join(unbounded)}）没能挂进 Job："
+                "按宿主权限运行，内存上限、进程数与退出清理都未由内核强制"
+            )
+        elif set(counts) == {BOUNDARY_JOB}:
+            boundary = BOUNDARY_JOB
+            note = "stdio 服务端进程已挂进 Windows Job Object（内存/进程数/退出清理由内核强制）"
+        elif set(counts) == {BOUNDARY_REMOTE}:
+            boundary = BOUNDARY_REMOTE
+            note = "HTTP 型 MCP 的进程在远端，不归本机 Job 管；出站请求仍走审批与审计"
+        else:
+            boundary = BOUNDARY_MIXED
+            note = (
+                "stdio 服务端已挂 Job、http 服务端在远端："
+                f"job_object {counts.get(BOUNDARY_JOB, 0)} 个 / remote {counts.get(BOUNDARY_REMOTE, 0)} 个"
+            )
         return {
             "tools": len(self.tools),
             "servers": [item.as_dict() for item in self.statuses],
-            # 汇总口径：只要有一个服务端连上，就有宿主进程在替我们执行工具。
-            "boundary": BOUNDARY_HOST if self.ready else BOUNDARY_NONE,
-            "boundary_note": BOUNDARY_NOTE if self.ready else "没有已连接的 MCP 服务端",
+            "boundary": boundary,
+            "boundary_note": note,
+            # 结构化账：界面与证据不用再按文案反推每种边界各有几个。
+            "by_boundary": counts,
+            "unbounded_servers": unbounded,
         }
 
 
@@ -143,6 +209,20 @@ def _as_timeout(raw: Any) -> float:
     except (TypeError, ValueError):
         return DEFAULT_TIMEOUT
     return max(1.0, min(300.0, value))
+
+
+def _as_pids(raw: Any) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(65535, value))
+
+
+def _as_memory(raw: Any) -> str:
+    """认不出来的内存写法退回空串（＝用沙箱默认值），不把垃圾值悄悄当成"不限"。"""
+    text = str(raw or "").strip()
+    return text if text and windows_job.parse_size(text) > 0 else ""
 
 
 def parse_servers(payload: dict) -> tuple[list[ServerConfig], list[MCPStatus]]:
@@ -217,6 +297,8 @@ def parse_servers(payload: dict) -> tuple[list[ServerConfig], list[MCPStatus]]:
                 headers={str(k): _expand(str(v)) for k, v in headers.items()} if isinstance(headers, dict) else {},
                 timeout=_as_timeout(entry.get("timeout")),
                 risk=risk,
+                memory=_as_memory(entry.get("memory") or entry.get("memory_limit")),
+                pids=_as_pids(entry.get("pids") or entry.get("pids_limit")),
             )
         )
     return servers, statuses
@@ -337,6 +419,11 @@ class MCPManager:
                 catalog = await asyncio.wait_for(client.list_tools(), timeout=CONNECT_TIMEOUT + 5)
                 status.state = STATE_READY
                 status.tools = len(catalog)
+                # 边界事实必须从客户端手里拿：只有它知道 Job 建没建成、进程挂没挂上。
+                facts = client.boundary_facts()
+                status.boundary = str(facts.get("boundary") or "")
+                status.boundary_note = str(facts.get("note") or "")
+                status.enforcement = facts
                 info = client.server_info or {}
                 status.server_info = str(info.get("name") or "")
                 return server, client, catalog, status

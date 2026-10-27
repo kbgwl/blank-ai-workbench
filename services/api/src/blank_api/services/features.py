@@ -140,6 +140,18 @@ _REGISTRY: tuple[FeatureFlag, ...] = (
             "已在流中收到内容出错则直接报错（重跑只会让用户看到两遍）。"
         ),
     ),
+    FeatureFlag(
+        name="fs_broker",
+        stage=BETA,
+        default=False,
+        summary=(
+            "fs-broker 执行边界：文件类工具（列目录/读/搜索/补丁）放进独立子进程执行，"
+            "子进程挂进 Job Object（内存/进程数/随主进程终止），每次调用记录 IPC 往返延迟。"
+            "默认关闭——这是一次行为变更：关着时文件工具照旧在 API 进程内跑（boundary_kind=in_process），"
+            "行为与不启用完全一致；开着时 broker 起不来/超时/被杀/协议不匹配都会让调用**失败并留痕**，"
+            "绝不静默回退宿主执行（设计稿 §9.2 的延迟换边界，先由实测数字裁决）。"
+        ),
+    ),
 )
 
 FEATURES: dict[str, FeatureFlag] = {flag.name: flag for flag in _REGISTRY}

@@ -213,10 +213,21 @@ def boundary_report(events: list[AgentEvent], started: dict) -> dict[str, Any]:
     它们的调用落进 `unattributed` —— 不猜成 `in_process`，也不从工具名反推：
     「当时没记」和「记了是进程内」是两件事。
     """
-    counts = {"blocked": 0, "mcp_host_process": 0, "process": 0, "in_process": 0, "unattributed": 0}
+    counts = {"blocked": 0, "mcp_host_process": 0, "process": 0, "in_process": 0, "fs_broker": 0,
+              "unattributed": 0}
     modes: set[str] = set()
     mcp_calls = 0
     profile: dict[str, Any] = {}
+    # 单次越界（#115）：宿主执行的调用里，哪些是“绕过沙箱”而不是“本来就没沙箱”。
+    # 计数与 tool_call_id 一起留，审计才能从证据包回到具体那一条命令。
+    bypass_calls = 0
+    bypass_tool_call_ids: list[str] = []
+    # fs-broker（#105）单独三笔账：成功次数、失败按层计数、IPC 延迟的样本数与最大 p95。
+    # 失败必须留层名（spawn/timeout/killed/protocol/...），"调用失败了"不够——要知道是哪一层坏的。
+    broker_calls = 0
+    broker_failures: dict[str, int] = {}
+    broker_unknown_effects = 0
+    broker_latency = {"samples": 0, "max_p95_ms": 0.0, "max_last_ms": 0.0}
     for event in events:
         if event.type == "turn.context" and isinstance(event.payload, dict):
             # 取最后一条治理快照的逐条授权：中途改过「仅限工作区」或换过档位，
@@ -237,6 +248,29 @@ def boundary_report(events: list[AgentEvent], started: dict) -> dict[str, Any]:
             modes.add(mode)
         if kind == "mcp_host_process":
             mcp_calls += 1
+        if event.payload.get("sandbox_bypass") is True:
+            bypass_calls += 1
+            call_id = str(event.payload.get("tool_call_id") or "")
+            if call_id:
+                bypass_tool_call_ids.append(call_id)
+        latency = event.payload.get("fs_broker_latency")
+        if isinstance(latency, dict):
+            broker_calls += 1
+            broker_latency["samples"] = max(broker_latency["samples"], int(latency.get("samples") or 0))
+            broker_latency["max_p95_ms"] = max(
+                broker_latency["max_p95_ms"], float(latency.get("p95_ms") or 0.0)
+            )
+            broker_latency["max_last_ms"] = max(
+                broker_latency["max_last_ms"], float(latency.get("last_ms") or 0.0)
+            )
+        error = event.payload.get("fs_broker_error")
+        if isinstance(error, dict):
+            layer = str(error.get("layer") or "unknown")
+            broker_failures[layer] = broker_failures.get(layer, 0) + 1
+            if str(error.get("side_effects") or "") == "unknown":
+                # 请求进过 broker 却没拿到响应：动作可能已经落盘。证据包必须单列这一格，
+                # 否则"broker 失败 = 这次什么都没干"会被读成结论。
+                broker_unknown_effects += 1
     sandbox = started.get("sandbox") if isinstance(started, dict) else {}
     sandbox = sandbox if isinstance(sandbox, dict) else {}
     mcp = started.get("mcp") if isinstance(started, dict) else {}
@@ -253,14 +287,33 @@ def boundary_report(events: list[AgentEvent], started: dict) -> dict[str, Any]:
             "notice": sandbox.get("notice", ""),
         },
         "mcp": {
-            # 连上的 MCP 服务端是宿主进程：它们的调用不进任务沙箱。证据包必须
-            # 单独把这条事实说出来，否则"所有工具都在边界内"就是一句假话。
+            # stdio 服务端尽量挂进 Job；挂不进去是必须红字说出来的事实。
+            # http 服务端的进程在远端。证据包把边界种类与未纳入的服务端都原样带走，
+            # 否则"所有工具都在边界内"就是一句假话。
             "boundary": mcp.get("boundary", ""),
             "note": mcp.get("boundary_note", ""),
             "servers": mcp.get("servers") or [],
             "calls": mcp_calls,
+            "by_boundary": mcp.get("by_boundary") or {},
+            "unbounded_servers": mcp.get("unbounded_servers") or [],
         },
         "tool_calls": counts,
+        # 单次越界宿主执行：只统计带 `sandbox_bypass=true` 的调用。缺这个键的老任务
+        # 一律按 0 读，绝不从 `sandbox_backend=null` 反推——那会把整档 off 也算成越界。
+        "sandbox_bypass": {
+            "calls": bypass_calls,
+            "tool_call_ids": bypass_tool_call_ids,
+        },
+        # fs-broker 汇总：延迟是实测出来的（samples/p95 来自每次调用带出的字段），
+        # 失败按层计数——"broker 坏了多少次、坏在哪一层"要能一眼回答。
+        "fs_broker": {
+            "calls": broker_calls,
+            "failures_by_layer": broker_failures,
+            # 失败里"请求已进 broker、响应没拿到"的次数：这些调用的磁盘动作不可知，
+            # 不能读成"没执行"。字面值与 fs_broker.SIDE_EFFECTS_UNKNOWN 同值，由测试钉住。
+            "failures_with_unknown_side_effects": broker_unknown_effects,
+            "latency": broker_latency,
+        },
         # 一次任务里出现过的档位。子代理/团队成员的档位继承由写入侧保证；
         # 这里读的是"事件实际写了哪些"，两者对不上就是继承链路断了。
         "sandbox_modes": sorted(modes),
@@ -439,7 +492,11 @@ async def build_evidence(
             k: v for k, v in (("sandbox_backend", payload.get("sandbox_backend")),
                               ("sandbox_enforcement", payload.get("sandbox_enforcement")),
                               ("sandbox_mode", payload.get("sandbox_mode")),
-                              ("boundary_kind", payload.get("boundary_kind")))
+                              ("sandbox_bypass", payload.get("sandbox_bypass")),
+                              ("sandbox_bypass_reason", payload.get("sandbox_bypass_reason")),
+                              ("boundary_kind", payload.get("boundary_kind")),
+                              ("fs_broker_latency", payload.get("fs_broker_latency")),
+                              ("fs_broker_error", payload.get("fs_broker_error")))
             if k in payload
         }
         for payload in (event.payload for event in events if event.type == "tool.completed")

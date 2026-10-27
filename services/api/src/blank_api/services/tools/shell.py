@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, ok
+from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key, ok
 from blank_api.services.workspace import mask_path
 
 DESTRUCTIVE = re.compile(
@@ -223,6 +223,7 @@ async def execute_command(
     env: dict[str, str] | None = None,
     safety=None,
     tier: str = "",
+    host_bypass: bool = False,
 ) -> dict:
     """按任务档位执行命令：沙箱 / 宿主直连 / 拒绝，三种结果都带同一本账。
 
@@ -233,16 +234,45 @@ async def execute_command(
     ``tier`` 只允许收紧，不可能把部署开关重新打开：`resolve_tier` 在开关关闭时
     会把它落成 off 并写明原因。`workspace-net` 在测不出网络强制的机器上直接拒绝，
     不会退回宿主执行。
+
+    ``host_bypass`` 是**已获批准**的单次越界：它只对这一条命令生效，不改任务档位，
+    也不会让“沙箱不可用”之外的路径悄悄放宽。调用方必须先过部署开关与审批，
+    这里只负责执行与记账；两个标记必须同时出现——「跑在宿主上」和「是不是越界」。
     """
     from blank_api.services.sandbox import get_sandbox
     from blank_api.services.sandbox.runner import limits_not_applied
-    from blank_api.services.sandbox.tiers import resolve_tier
+    from blank_api.services.sandbox.tiers import TIER_OFF, resolve_tier
 
     resolution = resolve_tier(tier)
     facts = resolution.as_dict()
     budget = float(timeout)
     if safety is not None:
         budget = min(budget, float(getattr(safety, "timeout_seconds", budget) or budget))
+    if host_bypass:
+        # 被绕过的不是“policy 对象”，而是此刻真正会生效的档位：off / 部署关闭时
+        # 本来就没有沙箱可绕，此时 sandbox_bypass 必须是 False，不能借参数造一次假越界。
+        active = resolution.policy.enabled and resolution.tier != TIER_OFF
+        if active:
+            reason = f"经人工批准单次绕过沙箱（原档位 {resolution.tier}），命令在宿主上执行"
+        else:
+            reason = "当前没有生效的沙箱（档位 off 或部署关闭），命令本就在宿主上执行"
+        result = await run_process(command, root, budget, shell=shell, env=env)
+        result["sandbox"] = None
+        result["tier"] = facts
+        result["sandbox_bypass"] = active
+        result["bypass_reason"] = reason
+        result["notes"] = [reason] + ([resolution.notice] if resolution.notice else [])
+        result["timeout_budget"] = budget
+        result["enforcement"] = _tier_enforcement(
+            facts,
+            {
+                **limits_not_applied(reason),
+                "host_execution": True,
+                "sandbox_bypassed": active,
+                "sandbox_bypass_reason": reason,
+            },
+        )
+        return result
     if not resolution.available:
         # 拒绝也是一种结果，而且必须与"跑在宿主上"长得不一样：起进程的键一个都不写。
         return {
@@ -330,12 +360,75 @@ def runs_in_docker(tier: str = "") -> bool:
     return get_sandbox(resolution.policy).name == "docker"
 
 
+async def _record_consumed(context: ToolContext, key: str) -> None:
+    """把「这次一次性批准已经被用掉」写进事件账。
+
+    只 discard 内存里的 approved_actions 是不够的：审批恢复会从 `approval.granted`
+    事件回放，把同一枚 key 重新写回来。于是「批准一次 → 执行一次 → 同样的命令再挂卡」
+    在跨 resume 后会变成「批准一次 → 执行两次」，用户的驳回也被回放掉的批准顶掉。
+    事件按 seq 回放，消费排在授权之后，先记后用，重启/恢复都不丢。
+    """
+    from blank_api.services.agent.events import EventRecorder
+
+    factory = getattr(context, "session_factory", None)
+    task_id = str(getattr(context, "task_id", "") or "")
+    if factory is None or not task_id:
+        return
+    recorder = EventRecorder(factory, task_id, trace_id=str(getattr(context, "trace_id", "") or ""))
+    await recorder.add(
+        "approval.consumed",
+        "execute_action",
+        {"tool": "run_shell", "approval_key": key, "reason": "sandbox:host_bypass"},
+    )
+
+
+def _bypass_data(result: dict) -> dict:
+    """越界执行的事实字段；没走过越界分支的调用不写，免得把"没越界"和"没记录"混在一起。"""
+    if "sandbox_bypass" not in result:
+        return {}
+    return {
+        "sandbox_bypass": bool(result.get("sandbox_bypass")),
+        "bypass_reason": str(result.get("bypass_reason") or ""),
+    }
+
+
 async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
     blocked = policy_gate(context, "run_shell", arguments)
     if blocked is not None:
         return blocked
     command = str(arguments["command"]).strip()
     timeout = float(arguments.get("timeout_seconds", 30))
+    from blank_api.services.sandbox.policy import host_bypass_enabled
+    from blank_api.services.sandbox.tiers import host_bypass_requested
+
+    requested = host_bypass_requested("run_shell", arguments)
+    approved = False
+    if requested:
+        # 这是入口的第二道闸：网关已经判过一次，但直接调 handler 的路径也必须守住。
+        if not host_bypass_enabled():
+            return ToolOutcome(
+                ok=False,
+                status="denied",
+                message=(
+                    "单次越界宿主执行未开启（部署开关 BLANK_SANDBOX_ALLOW_HOST_BYPASS），"
+                    "命令未执行。"
+                ),
+                data={"sandbox_bypass": False, "permission_rule": "sandbox:host_bypass_disabled"},
+            )
+        permissions = getattr(context, "permissions", None)
+        key = approval_key("run_shell", arguments)
+        if permissions is not None and key in permissions.approved_actions:
+            approved = True
+            # 越界是单次授权：用掉就销账，同一条命令再跑必须重新问。
+            permissions.approved_actions.discard(key)
+            await _record_consumed(context, key)
+    if requested and not approved:
+        return ToolOutcome(
+            ok=False,
+            status="denied",
+            message="单次越界宿主执行需要逐条人工批准，本次未获批准，命令未执行。",
+            data={"sandbox_bypass": False, "permission_rule": "sandbox:host_bypass"},
+        )
     # 有 shell 快照就用快照里的环境（含被前置的项目 venv），保证多步命令解析到同一个解释器
     snapshot = getattr(context, "shell", None)
     env = snapshot.env_for() if hasattr(snapshot, "env_for") else None
@@ -347,6 +440,7 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
         env=env,
         safety=safety,
         tier=getattr(context, "sandbox_tier", "") or "",
+        host_bypass=approved,
     )
     timeout = result.get("timeout_budget", timeout)
     stdout = truncate(mask_output(result["stdout"], context.root))[0]
@@ -362,6 +456,7 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
                 "tier": result.get("tier", {}),
                 "tier_blocked": True,
                 "enforcement": result["enforcement"],
+                **_bypass_data(result),
             },
         )
     if result["timed_out"]:
@@ -377,6 +472,7 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
                 "isolation": result["sandbox"] or "local",
                 "tier": result.get("tier", {}),
                 "enforcement": result["enforcement"],
+                **_bypass_data(result),
             },
         )
     combined = stdout if not stderr else f"{stdout}\n[stderr]\n{stderr}".strip()
@@ -399,6 +495,7 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
                 "tier": result.get("tier", {}),
                 # 限额被内核拒的时候走的正是这一支（非零退出码），账必须记在这里才看得见。
                 "enforcement": result["enforcement"],
+                **_bypass_data(result),
                 **({"hint": "windows_cmd_syntax"} if hint else {}),
             },
         )
@@ -413,6 +510,7 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
         isolation_notes=result["notes"],
         tier=result.get("tier", {}),
         enforcement=result["enforcement"],
+        **_bypass_data(result),
     )
 
 
@@ -474,6 +572,8 @@ def shell_mismatch_hint(command: str, stderr: str) -> str:
 
 
 def shell_tools() -> list[ToolDefinition]:
+    from blank_api.services.sandbox.tiers import HOST_BYPASS
+
     dialect = shell_dialect()
     syntax = (
         "当前 shell 是 Windows cmd.exe：用 dir / type / findstr / where / del，"
@@ -486,6 +586,8 @@ def shell_tools() -> list[ToolDefinition]:
             name="run_shell",
             description=(
                 f"在工作区根目录执行 Shell 命令，支持超时并回收进程，返回退出码与标准输出/错误。{syntax}"
+                "只有当沙箱导致命令无法完成、且确有必要时才传 sandbox=\"host\" 请求单次越界："
+                "该请求默认被拒绝，开启后也必须逐条人工批准，仅在宿主上执行这一次。"
             ),
             input_schema={
                 "type": "object",
@@ -493,6 +595,14 @@ def shell_tools() -> list[ToolDefinition]:
                 "properties": {
                     "command": {"type": "string", "description": "要执行的命令"},
                     "timeout_seconds": {"type": "number", "description": "超时秒数，默认 30"},
+                    "sandbox": {
+                        "type": "string",
+                        "enum": [HOST_BYPASS],
+                        "description": (
+                            "传 host 表示请求这条命令在宿主上执行（单次越界）："
+                            "默认关闭，需部署开关与逐条人工批准；不传则按任务档位执行。"
+                        ),
+                    },
                 },
             },
             risk_level="medium",

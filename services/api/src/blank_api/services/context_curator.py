@@ -68,7 +68,7 @@ def _memory_lines(hits: list[MemoryHit], used: int) -> list[str]:
         if used + len(hit.bullet) > DEFAULT_MAX_CHARS // 2:
             break
         where = hit.section or "未知时间"
-        lines.append(f"- [共享记忆·{hit.kind}｜{where}] {hit.bullet}")
+        lines.append(f"- [共享记忆·{hit.kind}·{hit.memory_type}｜{where}] {hit.bullet}")
         used += len(lines[-1])
     return lines
 

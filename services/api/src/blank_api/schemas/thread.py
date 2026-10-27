@@ -62,3 +62,56 @@ class ThreadTurnOut(BaseModel):
 
 class ThreadDetailOut(ThreadOut):
     turns: list[ThreadTurnOut] = Field(default_factory=list)
+
+
+class ThreadRewindIn(BaseModel):
+    """回退到第几轮（1 开始）。"""
+
+    turn: int = Field(ge=1)
+
+
+class ThreadRewindPointOut(BaseModel):
+    """一个可选的回退点。
+
+    ``restorable`` 说的是**代码**能不能回到这一轮结束时的样子：这需要这一轮
+    之后有某个轮次留下了可恢复的快照（快照拍在写入之前，所以第 M+1 轮的快照
+    正好是第 M 轮写完后的状态）。为 false 时 ``skipped_reason`` 必须说明原因——
+    只报一个 false 而不说为什么，用户不知道该等什么。
+    """
+
+    turn: int
+    task_id: str
+    title: str
+    status: str
+    created_at: datetime
+    restorable: bool
+    snapshot_id: str = ""
+    skipped_reason: str = ""
+
+    @field_serializer("created_at")
+    def _serialize_utc(self, value: datetime) -> str:
+        aware = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+        return aware.isoformat()
+
+
+class ThreadRewoundTurnOut(BaseModel):
+    id: str
+    turn: int
+
+
+class ThreadRewindOut(BaseModel):
+    """回退的结果：对话做了什么、代码做了什么，分开说。
+
+    ``atomic`` 恒为 false：对话截断先落库，代码恢复是随后的一次文件操作。
+    快照缺失或复制失败时对话框已经截断，不会回滚——把它说成一次原子操作，
+    用户会以为"要么都成、要么都没变"。
+    """
+
+    thread_id: str
+    turn: int
+    rewound: list[ThreadRewoundTurnOut] = Field(default_factory=list)
+    snapshot_id: str = ""
+    restored: list[str] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)
+    skipped_reason: str = ""
+    atomic: bool = False

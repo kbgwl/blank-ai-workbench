@@ -21,7 +21,7 @@ import type { HistoryRef } from "./status";
 import { ReplyView } from "./reply";
 import { describeTool, type ToolFact } from "./tool-display";
 import type { Block, TermLine } from "./timeline";
-import type { ApprovalScope } from "./api";
+import { approvalGrantOptions, type ApprovalScope } from "./api";
 import { BlockIcon } from "./bits";
 
 const toneClass: Record<TermLine["tone"], string> = {
@@ -464,6 +464,7 @@ function ApprovalCard({
   ) => void;
 }) {
   const decided = block.state !== "pending";
+  const grants = approvalGrantOptions(block);
   const reviewNote = guardianReviewLabel(block.guardian);
   return (
     <CardShell
@@ -505,19 +506,29 @@ function ApprovalCard({
           <Button variant="danger" disabled={busy} onClick={() => onDecide("deny", block)}>
             拒绝
           </Button>
-          <Button variant="primary" disabled={busy} onClick={() => onDecide("approve", block, "once")}>
-            {busy ? "提交中" : "批准并继续"}
-          </Button>
-          {block.prefix && (
-            <Button variant="ghost" disabled={busy} onClick={() => onDecide("approve", block, "prefix")}>
-              本会话总是允许 {block.prefix}
+          {grants.map((option) => (
+            <Button
+              key={option.scope}
+              variant={option.scope === "once" ? "primary" : "ghost"}
+              disabled={busy}
+              onClick={() => onDecide("approve", block, option.scope)}
+            >
+              {option.scope === "once" && busy ? "提交中" : option.label}
             </Button>
-          )}
+          ))}
           <span className="font-mono text-[10px] text-faint">
             {block.toolCallId ? `调用 ${block.toolCallId.slice(0, 8)}` : ""}
           </span>
         </div>
       )}
+      {grants
+        .filter((option) => option.warning)
+        .map((option) => (
+          <p key={option.scope} className="mt-1.5 text-[11px] leading-relaxed text-muted">
+            {option.scope === "tool" ? "工具档：" : "本会话档："}
+            {option.warning}
+          </p>
+        ))}
     </CardShell>
   );
 }

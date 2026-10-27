@@ -6,7 +6,8 @@ M2 把命令类工具钉在了三档沙箱上，但"M3 退出条件"要的是**�
 * 档位排序：子级/续跑只能收紧，不许变宽（`off > workspace-net > workspace`）；
 * 运行时入口：同一任务第二次运行换到更宽的档位必须 409，且不产生新的 `task.started`；
 * 子代理：`run_subagent(parent_tier=...)` 收到更宽的档位直接失败；用量行带父级档位；
-* MCP：桥接工具在宿主进程里执行，状态与证据包必须把这条边界说出来，不许混进"边界内"；
+* MCP：桥接工具的调用走外部服务端，状态与证据包必须把这条边界说出来，不许混进"边界内"；
+  （stdio 服务端自身的进程边界由 #94 的 `test_mcp_job_v94.py` 钉住，本文件只测调用归类）
 * 每个 `tool.completed` 都带 `sandbox_mode` 与 `boundary_kind`，证据包按种类计数；
 * 团队群档位落库并传给每个成员的 Task。
 """
@@ -336,14 +337,19 @@ async def test_evidence_rolls_up_boundaries_and_mcp_host_process(env, workspace)
     assert boundaries["sandbox"]["tier"] == "workspace"
     assert boundaries["sandbox"]["requested"] == "workspace-net"
     assert boundaries["sandbox"]["filesystem_enforced"] is False
-    assert boundaries["mcp"]["boundary"] == "host_process"
+    assert boundaries["mcp"]["boundary"] == "host_process_unbounded"
     assert boundaries["mcp"]["calls"] == 1
-    assert "宿主进程" in boundaries["mcp"]["note"]
+    # 桩里没有客户端事实：必须红字说"没有 Job 事实"，不许默认成已纳入边界。
+    assert "⚠" in boundaries["mcp"]["note"]
+    assert "未由内核强制" in boundaries["mcp"]["note"]
+    assert boundaries["mcp"]["unbounded_servers"] == ["demo"]
     assert boundaries["tool_calls"] == {
         "blocked": 1,
         "mcp_host_process": 1,
         "process": 0,
         "in_process": 1,
+        # fs-broker 是 #105 起第六种边界种类；这批桩没开开关，必须是 0 而不是缺席。
+        "fs_broker": 0,
         "unattributed": 0,
     }
     assert boundaries["sandbox_modes"] == ["workspace"]
@@ -358,15 +364,27 @@ async def test_evidence_rolls_up_boundaries_and_mcp_host_process(env, workspace)
 # --------------------------------------------------------------------------- #
 def test_mcp_status_reports_where_the_server_runs():
     ready = MCPStatus("demo", "stdio", STATE_READY, tools=3, server_info="demo-mcp").as_dict()
-    assert ready["boundary"] == "host_process"
-    assert "宿主进程" in ready["boundary_note"]
-    # 没起进程、起没起来不知道，是两种不同的事实，不许都写成 host_process。
+    # 没有客户端事实时，stdio 只能报"没进 Job"，不许默认成 job_object。
+    assert ready["boundary"] == "host_process_unbounded"
+    assert "⚠" in ready["boundary_note"]
+    # 没起进程、起没起来不知道，是两种不同的事实，不许都写成宿主进程。
     assert MCPStatus("off", "stdio", STATE_SKIPPED).as_dict()["boundary"] == "none"
     assert MCPStatus("bad", "stdio", STATE_FAILED).as_dict()["boundary"] == "unknown"
+    # http 的进程在远端：既不是 Job 也不是本机宿主进程。
+    remote = MCPStatus("remote", "http", STATE_READY).as_dict()
+    assert remote["boundary"] == "remote"
+    assert "远端" in remote["boundary_note"]
+    # 客户端报来的事实优先于传输方式的默认推断。
+    fact = MCPStatus(
+        "demo", "stdio", STATE_READY, boundary="job_object", boundary_note="已挂 Job"
+    ).as_dict()
+    assert fact["boundary"] == "job_object"
+    assert fact["boundary_note"] == "已挂 Job"
 
     bundle = MCPBundle(statuses=[MCPStatus("demo", "stdio", STATE_READY)]).as_dict()
-    assert bundle["boundary"] == "host_process"
-    assert bundle["servers"][0]["boundary"] == "host_process"
+    assert bundle["boundary"] == "host_process_unbounded"
+    assert bundle["servers"][0]["boundary"] == "host_process_unbounded"
+    assert bundle["unbounded_servers"] == ["demo"]
     empty = MCPBundle().as_dict()
     assert empty["boundary"] == "none"
 

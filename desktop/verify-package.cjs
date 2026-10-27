@@ -11,7 +11,7 @@
  * 用法：node verify-package.cjs
  */
 const { execFileSync } = require("node:child_process");
-const { closeSync, existsSync, openSync, readFileSync, readdirSync, readSync } = require("node:fs");
+const { closeSync, existsSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync, writeFileSync } = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -35,6 +35,9 @@ for (const [label, target] of [
   ["包内 Python", PYTHON],
   ["后端源码", path.join(API_DIR, "src", "blank_api", "app.py")],
   ["前端静态站", path.join(WEB_DIR, "index.html")],
+  // 托盘图标在 asar 外（extraResources）：nativeImage 吃 asar 路径不可靠，
+  // 漏打时壳的托盘整条挂掉，所以按产物断言它存在。
+  ["托盘图标", path.join(RESOURCES, "shell", "icon.ico")],
 ]) {
   existsSync(target) ? ok(label) : bad(label, `缺失 ${target}`);
 }
@@ -55,11 +58,95 @@ if (!existsSync(ASAR)) {
     readSync(fd, headerBuf, 0, headerSize, 16);
     closeSync(fd);
     const entries = Object.keys(JSON.parse(headerBuf.toString("utf8")).files ?? {});
-    for (const name of ["main.cjs", "gpu-guard.cjs", "preload.cjs"]) {
+    for (const name of ["main.cjs", "gpu-guard.cjs", "shell-policy.cjs", "preload.cjs"]) {
       entries.includes(name) ? ok(`asar 含 ${name}`) : bad(`asar 缺 ${name}`, "壳启动时会 require 失败");
     }
   } catch (error) {
     bad("app.asar 头解析失败", error.message);
+  }
+}
+
+// ── 1c. 壳里那几份 .cjs 必须与仓库逐字节一致 ────────────────────────────────
+// 「asar 含 main.cjs」只说明文件名在目录头里；装进包的若是改动前的旧副本，
+// 应用照跑、界面照开，缺陷只在真实行为上露头（这次是 #72 的后端地址解析）。
+// 偏移口径先在真包上量过：文件区紧跟在「16 + 头 JSON 长度（按 4 字节补齐）」之后，
+// 头里每个 offset 相对文件区。取出来的字节拿去和仓库原文件比——比上了才说明读对了偏移，
+// 读错只会拿到对不上的内容，这条判定自己就红，不需要另设自检。
+function asarFile(asarPath, name) {
+  const fd = openSync(asarPath, "r");
+  try {
+    const head = Buffer.alloc(16);
+    readSync(fd, head, 0, 16, 0);
+    const headerSize = head.readUInt32LE(12);
+    const headerBuf = Buffer.alloc(headerSize);
+    readSync(fd, headerBuf, 0, headerSize, 16);
+    const meta = JSON.parse(headerBuf.toString("utf8")).files?.[name];
+    if (!meta || meta.unpacked) return null;
+    const dataStart = 16 + Math.ceil(headerSize / 4) * 4;
+    const body = Buffer.alloc(Number(meta.size));
+    readSync(fd, body, 0, Number(meta.size), dataStart + Number(meta.offset));
+    return body;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+if (existsSync(ASAR)) {
+  for (const name of ["api-base.cjs", "gpu-guard.cjs", "shell-policy.cjs", "main.cjs", "preload.cjs"]) {
+    const packed = asarFile(ASAR, name);
+    const source = path.join(__dirname, name);
+    if (packed === null) {
+      bad(`asar 里没有 ${name}`);
+    } else if (!existsSync(source)) {
+      bad(`仓库里找不到 ${name}`, "没法对账，这条判定不能空过");
+    } else if (packed.equals(readFileSync(source))) {
+      ok(`包内 ${name} 与仓库逐字节一致`, `${packed.length} 字节`);
+    } else {
+      bad(`包内 ${name} 是旧副本`, `包里 ${packed.length} 字节 / 仓库 ${statSync(source).size} 字节`);
+    }
+  }
+}
+
+// ── 1d. 包内那份 api-base.cjs 真跑一遍 ──────────────────────────────────────
+// 逐字节一致仍然只是「形状对上了」：换端口这条判定的实体是一段函数的返回值。
+// 把包里那份抽成临时文件、按应用真实的 require 方式加载，与仓库那份对同一组 env
+// 逐条比答案——两边不同就是包里那份在骗人，两边相同才叫产物点验。
+const ENV_CASES = [
+  {},
+  { BLANK_BACKEND_PORT: "8123" },
+  { BLANK_API_BASE: "http://10.0.0.5:9000", BLANK_BACKEND_PORT: "8123" },
+  { BLANK_API_BASE: "http://127.0.0.1:8123///" },
+  { BLANK_API_BASE: "   ", BLANK_BACKEND_PORT: "8123" },
+  { BLANK_BACKEND_PORT: "  " },
+];
+if (existsSync(ASAR)) {
+  const packed = asarFile(ASAR, "api-base.cjs");
+  const tmp = path.join(os.tmpdir(), `blank-api-base-${process.pid}.cjs`);
+  if (packed === null) {
+    bad("没法点验包内 api-base.cjs", "asar 里取不出来");
+  } else {
+    try {
+      writeFileSync(tmp, packed);
+      const fromPackage = require(tmp).resolveApiBase;
+      const fromSource = require(path.join(__dirname, "api-base.cjs")).resolveApiBase;
+      const rows = ENV_CASES.map((env) => [JSON.stringify(env), fromPackage(env), fromSource(env)]);
+      const drift = rows.filter(([, packedValue, sourceValue]) => packedValue !== sourceValue);
+      if (drift.length) {
+        bad("包内 api-base.cjs 与仓库解析结果不同", drift.map(([env, a, b]) => `${env}→${a}|${b}`).join("、"));
+      } else {
+        ok("包内 api-base.cjs 真跑：六种 env 与仓库同解", rows.map(([, v]) => v).join(" "));
+      }
+      // 默认必须仍是本机 8000：这条钉的是「产物跑出来的值」，不是两份互相对账的一致性。
+      rows[0][1] === "http://127.0.0.1:8000"
+        ? ok("包内解析默认 8000")
+        : bad("包内 api-base.cjs 默认地址不对", rows[0][1]);
+    } catch (error) {
+      bad("包内 api-base.cjs 加载或执行失败", String(error.message).split("\n")[0]);
+    } finally {
+      try {
+        unlinkSync(tmp);
+      } catch {}
+    }
   }
 }
 
@@ -177,6 +264,42 @@ if (existsSync(chunksDir)) {
   hit ? ok("前端含会话条") : bad("前端是旧版本", "没有找到会话条文案");
 } else {
   bad("前端静态资源目录缺失", chunksDir);
+}
+
+// #82 把「这一档免问多大一片」端上卡片。可这张卡的两半分别住在包里两个地方：
+// 免问范围那句话是**后端算出来的**（`approval_options[].warning`），只会作为接口载荷出现，
+// 拿它扫前端 chunk 一定假红；界面上真正新增的实物只有档位前缀「本会话档：/工具档：」。
+// 所以两半各认一条，缺一条就是缺一条，不许互相顶。
+if (existsSync(chunksDir)) {
+  const hit = readdirSync(chunksDir)
+    .filter((name) => name.endsWith(".js"))
+    .some((name) => readFileSync(path.join(chunksDir, name), "utf8").includes("本会话档："));
+  hit ? ok("前端含审批档位前缀") : bad("前端是旧版本", "chunk 里没有「本会话档：」——免问范围那行上不了屏");
+}
+
+const packedPermissions = path.join(RESOURCES, "backend", "api", "src", "blank_api", "services", "permissions.py");
+if (existsSync(packedPermissions)) {
+  const py = readFileSync(packedPermissions, "utf8");
+  const missing = ["只免问这一条命令", "ARGUMENT_SCOPED_TOOLS", "tool_grant_too_wide"].filter((s) => !py.includes(s));
+  missing.length
+    ? bad("包内后端是旧版本", `permissions.py 缺 ${missing.join("、")}`)
+    : ok("包内后端含 #82 的窄档位与免问范围文案");
+} else {
+  bad("包内后端 permissions.py 缺失", packedPermissions);
+}
+
+// 桌面导出没有服务器，rewrite 不生效，README 要求构建时给
+// `NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000`。漏掉时烘焙进产物的是空串，
+// 界面会去 fetch 相对路径 `/api/v1`——`file://` 下这条路必死，而打包日志一切正常。
+// 壳的 preload 会在运行态注入覆盖它，所以这条只钉「兜底那一份是绝对地址」，
+// 不替运行态注入背书（注入本身另有 1d 的逐条对账）。
+if (existsSync(chunksDir)) {
+  const hit = readdirSync(chunksDir)
+    .filter((name) => name.endsWith(".js"))
+    .some((name) => readFileSync(path.join(chunksDir, name), "utf8").includes("http://127.0.0.1:8000"));
+  hit
+    ? ok("前端烘焙了绝对后端地址")
+    : bad("前端没烘焙后端地址", "构建时漏了 NEXT_PUBLIC_API_BASE，脱离壳注入就打不开接口");
 }
 
 // 0.8.0 起首页就是 bot 对话页。首页是唯一一个「换掉整套界面」的改动，

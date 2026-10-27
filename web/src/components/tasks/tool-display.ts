@@ -31,6 +31,8 @@ const TOOL_LABELS: Record<string, string> = {
   run_tests: "运行测试",
   git: "查看改动",
   update_plan: "更新步骤",
+  enter_plan_mode: "进入计划模式",
+  exit_plan_mode: "退出计划模式",
   memory_search: "查找记忆",
   read_notes: "读取笔记",
   write_notes: "记录笔记",

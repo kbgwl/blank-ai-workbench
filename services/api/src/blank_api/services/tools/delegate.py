@@ -81,6 +81,23 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
     if not request.goal.strip():
         return fail("error", "spawn_agent 需要具体的子任务目标")
 
+    if bool(arguments.get("background")):
+        if not hasattr(runner, "spawn_background"):
+            return fail("error", "当前运行时没有启用后台子代理")
+        agent_id, error_result = await runner.spawn_background(request)
+        if error_result is not None:
+            return fail("error", error_result.error or "后台子代理启动失败")
+        # 只给句柄，不给结论：结论要等 task_output。返回里写清"去哪儿取"，
+        # 否则模型会把"已派出"读成"已完成"。
+        return ok(
+            f"已在后台派出子代理 {agent_id}（{request.goal[:120]}）。"
+            f"它还在运行；用 task_output(agent_id=\"{agent_id}\") 取结论，"
+            f"不需要了用 task_stop(agent_id=\"{agent_id}\") 取消。",
+            agent_id=agent_id,
+            status="running",
+            goal=request.goal[:200],
+        )
+
     result = await runner(request)
     if not result.ok and not result.summary:
         return fail("error", result.error or "子代理执行失败")
@@ -91,10 +108,88 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
         steps=result.steps,
         depth=result.depth,
         agent_path=result.agent_path,
+        agent_id=result.agent_id,
         worktree=result.worktree,
         diff=result.diff[:20_000],
         error=result.error,
         usage=result.usage,
+    )
+
+
+async def _task_output(context: ToolContext, arguments: dict) -> ToolOutcome:
+    runner = getattr(context, "subagent_runner", None)
+    if runner is None or not hasattr(runner, "output"):
+        return fail("error", "当前运行时没有启用后台子代理")
+    agent_id = str(arguments.get("agent_id") or "").strip()
+    if not agent_id:
+        return fail("error", "task_output 需要 agent_id")
+    try:
+        timeout = float(arguments.get("timeout") or 60)
+    except (TypeError, ValueError):
+        timeout = 60.0
+    snapshot = await runner.output(agent_id, block=bool(arguments.get("block", True)), timeout=timeout)
+    status = str(snapshot.get("status") or "")
+    if status == "not_found":
+        return fail("error", str(snapshot.get("message") or "没有找到该子代理"))
+    data = {
+        key: snapshot[key]
+        for key in (
+            "agent_id",
+            "agent_path",
+            "goal",
+            "status",
+            "summary",
+            "steps",
+            "error",
+            "worktree",
+            "diff",
+            "usage",
+            "thread_id",
+            "elapsed_seconds",
+        )
+        if key in snapshot
+    }
+    if status == "running":
+        return ToolOutcome(ok=True, status="ok", output=str(snapshot.get("message") or ""), data=data)
+    output = str(snapshot.get("text") or snapshot.get("message") or "")
+    if status == "cancelled":
+        return ToolOutcome(
+            ok=False, status="error", output=output, data=data, message="子代理已取消"
+        )
+    if not snapshot.get("ok"):
+        return ToolOutcome(
+            ok=False,
+            status="error",
+            output=output,
+            data=data,
+            message=str(snapshot.get("error") or "子代理未能完成"),
+        )
+    return ToolOutcome(ok=True, status="ok", output=output, data=data)
+
+
+async def _task_stop(context: ToolContext, arguments: dict) -> ToolOutcome:
+    runner = getattr(context, "subagent_runner", None)
+    if runner is None or not hasattr(runner, "stop"):
+        return fail("error", "当前运行时没有启用后台子代理")
+    agent_id = str(arguments.get("agent_id") or "").strip()
+    if not agent_id:
+        return fail("error", "task_stop 需要 agent_id")
+    snapshot = await runner.stop(agent_id)
+    status = str(snapshot.get("status") or "")
+    if status == "not_found":
+        return fail("error", str(snapshot.get("message") or "没有找到该子代理"))
+    data = {
+        key: snapshot[key]
+        for key in ("agent_id", "agent_path", "goal", "status", "elapsed_seconds")
+        if key in snapshot
+    }
+    if status == "cancelled":
+        return ok(f"已取消子代理 {agent_id}，隔离副本已清理。", **data)
+    # 已经结束的句柄：停止是空操作，但要把"它其实已经跑完了"说清楚，
+    # 否则模型会以为取消成功、结论被丢弃了。
+    return ok(
+        f"子代理 {agent_id} 已经结束（{status}），没有需要取消的运行。",
+        **data,
     )
 
 
@@ -166,6 +261,8 @@ def delegate_tools() -> list[ToolDefinition]:
                 "把一个可以独立完成、边界清楚的子任务交给子代理，它会返回结论（可带隔离副本中的 diff）。"
                 "适合大范围侦察、反复试错、需要独立上下文的工作；简单一步就能做完的事不要用它。"
                 "isolate=true 时子代理在临时副本里工作，改动不会影响真实工作区。"
+                "background=true 时立即返回 agent_id，之后用 task_output 取结论、task_stop 取消——"
+                "需要同时推进别的事时用它；需要立刻拿到结论时不要用。"
                 "需要同时分头做几件事时改用 spawn_agents。"
             ),
             input_schema={
@@ -179,6 +276,10 @@ def delegate_tools() -> list[ToolDefinition]:
                     },
                     "max_steps": {"type": "integer", "description": "子代理最多几步，默认 4，上限 8"},
                     "label": {"type": "string", "description": "隔离副本的名字前缀，便于辨认"},
+                    "background": {
+                        "type": "boolean",
+                        "description": "true=立即返回 agent_id 在后台跑，之后用 task_output/task_stop；默认 false（等到结束）",
+                    },
                 },
             },
             risk_level="medium",
@@ -216,5 +317,41 @@ def delegate_tools() -> list[ToolDefinition]:
             risk_for=_spawn_agents_risk,
             handler=_spawn_agents,
             timeout_seconds=600.0,
+        ),
+        ToolDefinition(
+            name="task_output",
+            description=(
+                "取后台子代理（spawn_agent(background=true)）的结论。"
+                "block=true 时最多等 timeout 秒；等不到只表示它还在跑，不会因此取消它。"
+                "返回状态 completed / failed / cancelled / running，未知 agent_id 会如实报找不到。"
+            ),
+            input_schema={
+                "type": "object",
+                "required": ["agent_id"],
+                "properties": {
+                    "agent_id": {"type": "string", "description": "spawn_agent(background=true) 返回的句柄"},
+                    "block": {"type": "boolean", "description": "是否等待结束，默认 true"},
+                    "timeout": {"type": "number", "description": "最多等几秒，默认 60，上限 300"},
+                },
+            },
+            risk_level="low",
+            handler=_task_output,
+            timeout_seconds=330.0,
+        ),
+        ToolDefinition(
+            name="task_stop",
+            description=(
+                "取消一个仍在运行的后台子代理；它的隔离副本会一并删除，并留下 subagent.cancelled 记录。"
+                "已经结束的句柄照实返回它当初的状态，不会谎报取消。"
+            ),
+            input_schema={
+                "type": "object",
+                "required": ["agent_id"],
+                "properties": {
+                    "agent_id": {"type": "string", "description": "要停止的后台子代理句柄"},
+                },
+            },
+            risk_level="low",
+            handler=_task_stop,
         ),
     ]

@@ -40,6 +40,25 @@ TOOLS = [
     },
 ]
 
+# 只在对应模式下出现的工具：默认工具表不变，老断言（4 个工具）仍然成立。
+MODE_TOOLS = {
+    "hog": {
+        "name": "hog",
+        "description": "分配 256MB 并逐页触碰（验证 Job 的内存上限真的被内核强制）",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    "child": {
+        "name": "child_pid",
+        "description": "返回本进程派生的长命子进程 pid（验证关 Job 会带走整棵树）",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+}
+
+
+def _tools(mode: str) -> list[dict]:
+    extra = MODE_TOOLS.get(mode)
+    return [*TOOLS, extra] if extra else list(TOOLS)
+
 
 def _reply(message: dict, result: dict) -> None:
     body = {"jsonrpc": "2.0", "id": message.get("id"), "result": result}
@@ -47,13 +66,22 @@ def _reply(message: dict, result: dict) -> None:
     sys.stdout.flush()
 
 
-def _call(name: str, arguments: dict) -> dict:
+def _call(name: str, arguments: dict, child_pid: int = 0) -> dict:
     if name == "echo":
         return {"content": [{"type": "text", "text": "echo:" + str(arguments.get("text", ""))}]}
     if name == "boom":
         return {"content": [{"type": "text", "text": "服务端内部炸了"}], "isError": True}
     if name == "run shell":
         return {"content": [{"type": "text", "text": "这是外部服务的同名工具"}]}
+    if name == "hog":
+        size = 256 * 1024 * 1024
+        buffer = bytearray(size)
+        # 只分配不触碰时 Windows 可能不提交物理页，内存上限就测不出来；逐页写一次。
+        for offset in range(0, size, 4096):
+            buffer[offset] = 1
+        return {"content": [{"type": "text", "text": f"hogged:{size}"}]}
+    if name == "child_pid":
+        return {"content": [{"type": "text", "text": str(child_pid)}]}
     return {"content": []}
 
 
@@ -76,6 +104,20 @@ def main() -> int:
         for _ in range(2000):
             sys.stderr.write("debug: 正在连接上游服务 " + "x" * 64 + "\n")
         sys.stderr.flush()
+
+    child = None
+
+    def spawn_child() -> int:
+        # 长命孙子进程：关掉 MCP 连接时它必须跟着 Job 一起走。只 terminate 父进程
+        # 是带不走它的，这条就是 Job KILL_ON_JOB_CLOSE 的阳性对照。
+        # 出生点必须在工具调用里：客户端是 spawn 之后才挂 Job 的，启动时派生的孙子
+        # 可能落在赋值窗口外，那样这条用例就变成了竞态而不是判据。
+        nonlocal child
+        if child is None:
+            import subprocess
+
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+        return child.pid
 
     for line in sys.stdin:
         line = line.strip()
@@ -101,10 +143,15 @@ def main() -> int:
                 },
             )
         elif method == "tools/list":
-            _reply(message, {"tools": TOOLS})
+            _reply(message, {"tools": _tools(mode)})
         elif method == "tools/call":
             params = message.get("params") or {}
-            _reply(message, _call(str(params.get("name") or ""), params.get("arguments") or {}))
+            name = str(params.get("name") or "")
+            spawned = spawn_child() if mode == "child" and name == "child_pid" else 0
+            _reply(
+                message,
+                _call(name, params.get("arguments") or {}, child_pid=spawned),
+            )
         else:
             _reply(message, {})
     return 0

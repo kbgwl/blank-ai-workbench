@@ -6,6 +6,7 @@ from blank_api.api.routes import (
     observability,
     projects,
     providers,
+    reverse_lab,
     settings,
     skills,
     tasks,
@@ -43,3 +44,5 @@ api_router.include_router(observability.router)
 api_router.include_router(settings.router)
 api_router.include_router(threads.router)
 api_router.include_router(team.router)
+# REA 逆向线（#108）：/reverse-lab 的能力入口，走 MCP Adapter，不走模型
+api_router.include_router(reverse_lab.router)

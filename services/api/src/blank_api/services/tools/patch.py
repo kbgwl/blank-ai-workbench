@@ -200,20 +200,19 @@ def risky_patch_path(relative: str) -> bool:
     return ".git" in parts or BACKUP_DIRNAME in parts or "env" in parts or ".env" in parts
 
 
-async def _apply_patch(context: ToolContext, arguments: dict) -> ToolOutcome:
+def _patch_on_disk(root: Path, task_id: str, arguments: dict) -> dict:
+    """apply_patch 的**文件系统侧全部动作**：解析路径、读原文、算补丁、写备份、写目标、出 diff。
+
+    这是宿主路径与 fs-broker 子进程共享的唯一一份语义（#105）——broker 不另造一套补丁逻辑，
+    只是把同一个函数搬到子进程里执行。返回结构化结果而不是 ToolOutcome，
+    以便跨 IPC 原样带回；`ApiError`/`PatchError` 的抛出口径与旧 handler 一致。
+    """
     patch_text = str(arguments.get("patch") or "")
     # 路径可以省略：补丁头里通常已经写了，读出来比让模型再补一次便宜。
     relative = str(arguments.get("path") or "").strip() or infer_path(patch_text)
     if not relative:
-        return ToolOutcome(
-            ok=False,
-            status="error",
-            message=(
-                "没有文件路径：请在 path 参数里给工作区相对路径，"
-                "或在补丁开头加一行 `+++ b/相对路径`。"
-            ),
-        )
-    target = resolve_for_write(context.root, relative)
+        return {"missing_path": True}
+    target = resolve_for_write(root, relative)
     existed = target.exists()
     original = target.read_text(encoding="utf-8") if existed else ""
     try:
@@ -221,24 +220,75 @@ async def _apply_patch(context: ToolContext, arguments: dict) -> ToolOutcome:
     except PatchError as error:
         # 失败里带上真实上下文，模型下一次就能改对。只给"不匹配"三个字，
         # 它只能重读整个文件再盲猜一遍——那一步既是延迟也是成本。
-        return ToolOutcome(
-            ok=False,
-            status="error",
-            message=str(error),
-            output=str(error),
-            data={"path": relative, "near": error.near},
-        )
+        return {"patch_error": str(error), "near": error.near, "path": relative}
     if existed and patched == original:
-        return ToolOutcome(ok=False, status="error", message="补丁未产生任何变更")
+        return {"unchanged": True}
     backup_rel = ""
     if existed:
-        backup_rel = write_backup(context.root, context.task_id, relative, original.encode("utf-8"))
+        backup_rel = write_backup(root, task_id, relative, original.encode("utf-8"))
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(patched, encoding="utf-8")
     diff = unified_diff(original, patched, relative)
     if contains_secret(diff):
         # 明文密钥只留在用户批准的文件里，入库的 diff 与事件负载必须脱敏。
         diff = redact(diff)
+    changed_lines = len([line for line in diff.split("\n") if line[:1] in {"+", "-"} and line[1:2] not in {"+", "-"}])
+    return {
+        "path": relative,
+        "existed": existed,
+        "backup_path": backup_rel,
+        "diff": diff,
+        "changed_lines": changed_lines,
+    }
+
+
+async def _apply_patch(context: ToolContext, arguments: dict) -> ToolOutcome:
+    from blank_api.services.tools import fs_broker as broker
+
+    marker: dict = {}
+    if broker.broker_enabled():
+        # 开了 fs-broker：文件动作全在子进程边界里做。失败就是失败——
+        # 这里没有任何"回退宿主再试一次"的分支，一条也不许加。
+        try:
+            envelope = await broker.call_broker(
+                context.root, context.task_id, "patch",
+                {
+                    "path": str(arguments.get("path") or ""),
+                    "patch": str(arguments.get("patch") or ""),
+                    "task_id": context.task_id,
+                },
+            )
+        except broker.FsBrokerError as exc:
+            return broker.broker_failure_outcome("patch", exc)
+        # dispatch 给 patch 的返回是 {"result": <磁盘侧结果>}，envelope 又包一层：
+        result = envelope["result"]["result"]
+        marker = broker.broker_success_marker("patch", envelope)
+    else:
+        result = _patch_on_disk(context.root, context.task_id, arguments)
+    if result.get("missing_path"):
+        return ToolOutcome(
+            ok=False,
+            status="error",
+            message=(
+                "没有文件路径：请在 path 参数里给工作区相对路径，"
+                "或在补丁开头加一行 `+++ b/相对路径`。"
+            ),
+            **{"data": marker} if marker else {},
+        )
+    if "patch_error" in result:
+        return ToolOutcome(
+            ok=False,
+            status="error",
+            message=result["patch_error"],
+            output=result["patch_error"],
+            data={"path": result["path"], "near": result.get("near", ""), **marker},
+        )
+    if result.get("unchanged"):
+        return ToolOutcome(ok=False, status="error", message="补丁未产生任何变更", data=marker)
+    relative = result["path"]
+    existed = bool(result["existed"])
+    backup_rel = str(result["backup_path"])
+    diff = str(result["diff"])
     change_id = str(uuid.uuid4())
     async with context.session_factory() as session:
         session.add(
@@ -252,15 +302,15 @@ async def _apply_patch(context: ToolContext, arguments: dict) -> ToolOutcome:
             )
         )
         await session.commit()
-    changed_lines = len([line for line in diff.split("\n") if line[:1] in {"+", "-"} and line[1:2] not in {"+", "-"}])
     return ok(
-        f"已修改文件：{relative}（{changed_lines} 行变更）",
+        f"已修改文件：{relative}（{result['changed_lines']} 行变更）",
         path=relative,
         change_type="modified" if existed else "created",
         change_id=change_id,
         backup_path=backup_rel,
         reversible=bool(backup_rel) or not existed,
         diff=diff,
+        **marker,
     )
 
 

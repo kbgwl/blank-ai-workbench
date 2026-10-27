@@ -33,6 +33,15 @@ MAX_MEMORY_CHARS = 12_000
 MAX_BULLET_CHARS = 300
 MAX_BULLETS_PER_RUN = 12
 
+# 记忆类型对标 Claude Code 的四类：谁在什么时候需要它，决定了该不该带进上下文。
+#   user      用户是谁、怎么工作（长期）
+#   feedback  对工作方式的纠正与确认（长期）
+#   project   这个项目的事实、决定、坑（会随项目变化）
+#   reference 外部资源指针（看板、文档、工单系统）
+# 自动固化的旧条目没有类型标记，一律按 project 读——它们本来就是任务留下的项目知识。
+MEMORY_TYPES = ("user", "feedback", "project", "reference")
+DEFAULT_MEMORY_TYPE = "project"
+
 _HEADER = "# 项目长期记忆（自动固化）\n\n> 由空白格在任务成功后自动归纳。手动编辑安全，重跑只会追加新条目。\n"
 _WS = re.compile(r"\s+")
 
@@ -59,6 +68,12 @@ class MemoryHit:
     # 检索结果带上它，人和模型都能区分"哪句是结论、哪句只是过程记录"。
     kind: str = "记忆"
     task_id: str = ""
+    # user / feedback / project / reference。旧条目没有标记，读作 project。
+    memory_type: str = DEFAULT_MEMORY_TYPE
+
+    @property
+    def source_task(self) -> str:
+        return self.task_id
 
     def as_dict(self) -> dict:
         return {
@@ -66,9 +81,23 @@ class MemoryHit:
             "section": self.section,
             "score": self.score,
             "kind": self.kind,
+            "type": self.memory_type,
             "task_id": self.task_id,
+            "source_task": self.source_task,
             "source": "workspace",
         }
+
+
+# 模型写入的条目带显式类型标记；自动固化的条目保持旧格式，按 project 读。
+_TYPED_BULLET = re.compile(r"^\[(user|feedback|project|reference)\]\s+(.+)$", re.IGNORECASE)
+
+
+def _parse_bullet(text: str) -> tuple[str, str]:
+    """返回 (去掉标记的正文, 类型)。"""
+    match = _TYPED_BULLET.match(text)
+    if match:
+        return match.group(2).strip(), match.group(1).lower()
+    return text, DEFAULT_MEMORY_TYPE
 
 
 _KIND_PREFIXES = (
@@ -88,7 +117,9 @@ def _kind_of(bullet: str) -> str:
 
 
 def _task_of(section: str) -> str:
-    match = re.search(r"任务\s+([0-9a-f]{6,})", section or "")
+    # 任务 id 是 uuid4（含连字符）。旧文件里只有前 8 位，读出来就是 8 位——
+    # 那是当时真写下的事实，不补全、不编造；新条目写完整 id，审批/取证时能直接定位。
+    match = re.search(r"任务\s+([0-9a-fA-F][0-9a-fA-F-]{5,})", section or "")
     return match.group(1) if match else ""
 
 
@@ -204,17 +235,6 @@ class MemoryStore:
         source: str,
         at: datetime | None,
     ) -> ConsolidationResult:
-        try:
-            existing = _retry(lambda: path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, NotADirectoryError, UnicodeDecodeError):
-            existing = ""
-        # PermissionError / 其他 OSError 不能当成空文件：那会在读失败时用新内容
-        # 覆盖整个记忆文件，并发下表现为"部分任务凭空消失"。宁可让本次固化失败。
-        known = {
-            _fingerprint(line[2:]) for line in existing.splitlines() if line.startswith("- ")
-        }
-
-        stamp = (at or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
         heading = _normalize(title) or f"任务 {task_id[:8]}"
         bullets: list[str] = []
 
@@ -232,9 +252,75 @@ class MemoryStore:
             if len(cleaned) >= 4:
                 bullets.append(f"事实：{cleaned[:MAX_BULLET_CHARS]}")
 
+        # 完整 id 写进 heading：检索结果要能直接定位来源任务（旧文件只有前 8 位）。
+        origin = f" · 任务 {_normalize(task_id)}" if _normalize(task_id) else ""
+        if _normalize(source):
+            origin += f" · 来源 {_normalize(source)[:60]}"
+        return self._append_locked(
+            path,
+            heading=heading,
+            origin=origin,
+            bullets=bullets[:MAX_BULLETS_PER_RUN],
+            at=at,
+        )
+
+    def remember(
+        self,
+        workspace: str | Path,
+        *,
+        memory_type: str,
+        content: str,
+        task_id: str = "",
+        source: str = "",
+        at: datetime | None = None,
+    ) -> ConsolidationResult:
+        """模型显式写下的一条带类型记忆。
+
+        与自动固化共用同一份去重账本（按整条正文取指纹）与同一个字符上限：
+        同一句话第二次写只会记一笔，反复写也不会把文件撑大。
+        """
+        kind = str(memory_type or "").strip().lower()
+        if kind not in MEMORY_TYPES:
+            raise ValueError(f"未知的记忆类型：{memory_type}（可选 {', '.join(MEMORY_TYPES)}）")
+        body = _normalize(content)
+        if not body:
+            raise ValueError("记忆内容不能为空")
+        path = self.path_for(workspace)
+        origin = f" · 任务 {_normalize(task_id)}" if _normalize(task_id) else ""
+        if _normalize(source):
+            origin += f" · 来源 {_normalize(source)[:60]}"
+        with _lock_for(path):
+            return self._append_locked(
+                path,
+                heading="模型记忆",
+                origin=origin,
+                bullets=[f"[{kind}] {body[:MAX_BULLET_CHARS]}"],
+                at=at,
+            )
+
+    def _append_locked(
+        self,
+        path: Path,
+        *,
+        heading: str,
+        origin: str,
+        bullets: list[str],
+        at: datetime | None,
+    ) -> ConsolidationResult:
+        try:
+            existing = _retry(lambda: path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, NotADirectoryError, UnicodeDecodeError):
+            existing = ""
+        # PermissionError / 其他 OSError 不能当成空文件：那会在读失败时用新内容
+        # 覆盖整个记忆文件，并发下表现为"部分任务凭空消失"。宁可让本次固化失败。
+        known = {
+            _fingerprint(line[2:]) for line in existing.splitlines() if line.startswith("- ")
+        }
+
+        stamp = (at or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
         result = ConsolidationResult(path=str(path))
         fresh: list[str] = []
-        for bullet in bullets[:MAX_BULLETS_PER_RUN]:
+        for bullet in bullets:
             key = _fingerprint(bullet)
             if key in known:
                 result.skipped += 1
@@ -247,9 +333,6 @@ class MemoryStore:
             result.total_chars = len(existing)
             return result
 
-        origin = f" · 任务 {task_id[:8]}"
-        if _normalize(source):
-            origin += f" · 来源 {_normalize(source)[:60]}"
         section = (
             f"\n## {stamp} · {heading}{origin}\n"
             + "\n".join(f"- {item}" for item in fresh)
@@ -281,8 +364,21 @@ class MemoryStore:
         result.total_chars = len(merged)
         return result
 
-    def search(self, workspace: str | Path, query: str, limit: int = 5) -> list[MemoryHit]:
-        """Token-overlap retrieval over bullets, newest first on ties."""
+    def search(
+        self,
+        workspace: str | Path,
+        query: str,
+        limit: int = 5,
+        memory_type: str = "",
+    ) -> list[MemoryHit]:
+        """Token-overlap retrieval over bullets, newest first on ties.
+
+        ``memory_type`` 非空时只返回该类型；旧的无标记条目按 project 算——
+        自动固化的本来就是项目知识，不该因为它们写得早就不出现在 project 检索里。
+        """
+        wanted = str(memory_type or "").strip().lower()
+        if wanted and wanted not in MEMORY_TYPES:
+            raise ValueError(f"未知的记忆类型：{memory_type}（可选 {', '.join(MEMORY_TYPES)}）")
         tokens = tokenize(query)
         if not tokens:
             return []
@@ -298,7 +394,11 @@ class MemoryStore:
                 continue
             if not line.startswith("- "):
                 continue
-            body = line[2:].strip()
+            body, kind = _parse_bullet(line[2:].strip())
+            if not body:
+                continue
+            if wanted and kind != wanted:
+                continue
             value = text_score(body, tokens)
             if value:
                 hits.append(
@@ -308,6 +408,7 @@ class MemoryStore:
                         score=value,
                         kind=_kind_of(body),
                         task_id=_task_of(section),
+                        memory_type=kind,
                     )
                 )
         hits.sort(key=lambda item: item.score, reverse=True)

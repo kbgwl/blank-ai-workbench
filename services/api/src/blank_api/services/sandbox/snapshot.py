@@ -24,6 +24,20 @@ MAX_SNAPSHOT_BYTES = 200 * 1024 * 1024
 SCAN_BUDGET_SECONDS = 3.0
 
 
+class SnapshotNotRestorable(RuntimeError):
+    """这份快照只有清单、没有副本，恢复不了。
+
+    以前这种情况在 ``restore()`` 里抛 ``FileNotFoundError``，路由没接住，用户
+    看到 500 —— 与「快照不存在」和「服务坏了」两种事实都分不开。恢复不了本身
+    是正常结果（工作区过大时我们主动跳过整树复制），必须带着当初的原因返回。
+    """
+
+    def __init__(self, snapshot_id: str, reason: str = "") -> None:
+        super().__init__(reason or f"快照 {snapshot_id} 没有可恢复的文件副本")
+        self.snapshot_id = snapshot_id
+        self.reason = reason or "这份快照只记录了文件清单，没有复制文件内容"
+
+
 def _ignored(part: str) -> bool:
     """忽略口径与搜索共用一份（workspace.ignored_name），否则两处会各漏一半。"""
     return ignored_name(part) or part == ".git"
@@ -50,8 +64,13 @@ def _prune(directory: str, names: list[str]) -> set[str]:
 
 
 class SnapshotStore:
-    def __init__(self, root: Path | str = DEFAULT_SNAPSHOT_ROOT) -> None:
-        self.root = Path(root)
+    def __init__(self, root: Path | str | None = None) -> None:
+        # 显式传 root 优先（测试与工具都用它）；否则认 BLANK_SNAPSHOT_DIR，
+        # 再退回仓库内的 data/snapshots。测试不该往开发机的 data/ 里写快照。
+        if root is not None:
+            self.root = Path(root)
+        else:
+            self.root = Path(os.environ.get("BLANK_SNAPSHOT_DIR") or DEFAULT_SNAPSHOT_ROOT)
 
     def capture(self, workspace: str, *, reason: str, task_id: str | None = None,
                 rel_paths: list[str] | None = None) -> dict:
@@ -142,11 +161,59 @@ class SnapshotStore:
     def content(self, snapshot_id: str, relative: str) -> bytes:
         return (self.root / snapshot_id / "tree" / relative).read_bytes()
 
-    def restore(self, snapshot_id: str, workspace: str, relative: str | None = None) -> list[str]:
-        """relative 为空时整树回滚，否则只回滚单个文件；返回恢复的文件清单。"""
+    def restorable(self, snapshot_id: str) -> tuple[bool, str]:
+        """这份快照能不能恢复；不能时把当初跳过的原因带回来。
+
+        判据是 ``tree/`` 在不在，而不是 ``meta.copied``：复制失败、复制到一半被
+        外部删除，两种形状都要落在这里。``copied=true`` 但目录没了同样不可恢复。
+        """
         source = self.root / snapshot_id / "tree"
-        if not source.exists():
-            raise FileNotFoundError(f"快照不存在：{snapshot_id}")
+        if source.is_dir():
+            return True, ""
+        reason = ""
+        try:
+            reason = str(self.meta(snapshot_id).get("skipped_reason") or "")
+        except (FileNotFoundError, OSError, ValueError):
+            reason = ""
+        return False, reason or "这份快照只记录了文件清单，没有复制文件内容"
+
+    def restore_report(
+        self, snapshot_id: str, workspace: str, relative: str | None = None
+    ) -> dict:
+        """恢复并说清"哪些回来了、哪些没回来"。
+
+        与 :meth:`restore` 的区别是失败不再抛 ``FileNotFoundError``：
+        不能恢复时抛 :class:`SnapshotNotRestorable`，调用方据此回 409。
+        """
+        ok, reason = self.restorable(snapshot_id)
+        if not ok:
+            raise SnapshotNotRestorable(snapshot_id, reason)
+
+        source = self.root / snapshot_id / "tree"
+        record = self.meta(snapshot_id)
+        inventory = [str(item) for item in record.get("files") or []]
+        if relative is not None:
+            restored = self.restore(snapshot_id, workspace, relative)
+            # 单文件恢复只承诺这一个文件，其余文件"没动"是语义，不是跳过。
+            return {"restored": restored, "skipped": [], "skipped_reason": ""}
+
+        restored = self.restore(snapshot_id, workspace, None)
+        present = set(restored)
+        # 清单里有、副本里没有的文件：扫描时见到了，但复制被预算或权限挡掉。
+        # 这些文件保持原样，必须点名，不能混在「恢复成功」里。
+        skipped = [item for item in inventory if item not in present]
+        return {"restored": restored, "skipped": skipped, "skipped_reason": ""}
+
+    def restore(self, snapshot_id: str, workspace: str, relative: str | None = None) -> list[str]:
+        """relative 为空时整树回滚，否则只回滚单个文件；返回恢复的文件清单。
+
+        没有副本时抛 :class:`SnapshotNotRestorable`（带原因），不再是
+        ``FileNotFoundError`` —— 后者在路由层会被当成未捕获异常，变成 500。
+        """
+        ok, reason = self.restorable(snapshot_id)
+        source = self.root / snapshot_id / "tree"
+        if not ok or not source.exists():
+            raise SnapshotNotRestorable(snapshot_id, reason)
         target = Path(workspace)
         if relative is not None:
             shutil.copyfile(source / relative, target / relative)
