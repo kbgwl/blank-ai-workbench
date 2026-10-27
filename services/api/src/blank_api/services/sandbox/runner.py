@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from blank_api.services.log_safety import redact
-from blank_api.services.sandbox import boundary, windows_job
+from blank_api.services.sandbox import boundary, docker_probe, windows_job
 from blank_api.services.sandbox.policy import SandboxPolicy
 
 MAX_OUTPUT_CHARS = 20000
@@ -331,15 +331,29 @@ async def kill_process_tree(pid: int) -> None:
 
 
 def get_sandbox(policy: SandboxPolicy | None = None):
-    """按策略返回沙箱实现；生产配置不会静默降级到宿主机。"""
+    """按策略返回沙箱实现；生产配置不会静默降级到宿主机。
+
+    容器后端能不能用由现场探测决定，不看 PATH 里有没有那个文件：装了 Docker 但守护进程
+    没起来时返回 DockerSandbox，只会让每条命令各自撞一次墙（`docs/COST.md` 记的那条）。
+    """
     chosen = policy or SandboxPolicy()
     if not chosen.enabled:
         return LocalSandbox(chosen)
-    if shutil_which("docker") is None:
-        if chosen.allow_local:
-            return LocalSandbox(chosen)
-        raise SandboxUnavailable("Docker 沙箱不可用；如需开发机直连执行，请显式设置 BLANK_SANDBOX_ALLOW_LOCAL=1")
-    return DockerSandbox(chosen)
+    info = docker_probe.probe_for_decision()
+    if info.usable:
+        return DockerSandbox(chosen)
+    if info.state == docker_probe.STATE_PENDING:
+        # 还没探过（进程刚起来的瞬间、或探针没跑到的入口）。退回老口径：PATH 里有 docker
+        # 就当容器后端——宁可少拦一次，也不要在没测过的情况下宣称"不可用"而拦住正常机器。
+        if shutil_which("docker") is not None:
+            return DockerSandbox(chosen)
+    if chosen.allow_local:
+        return LocalSandbox(chosen)
+    raise SandboxUnavailable(
+        "Docker 沙箱不可用"
+        + docker_probe.notice_suffix(info)
+        + "；如需开发机直连执行，请显式设置 BLANK_SANDBOX_ALLOW_LOCAL=1"
+    )
 
 
 def shutil_which(name: str) -> str | None:

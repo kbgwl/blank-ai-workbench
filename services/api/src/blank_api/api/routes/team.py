@@ -326,6 +326,9 @@ async def create_group(payload: TeamGroupIn, db: DbSession) -> dict:
     # 群档位在这里解析一次：不可用就拒绝建群，而不是让成员任务跑到一半才发现。
     tier = normalize_tier(payload.sandbox_tier, strict=True) if payload.sandbox_tier else ""
     if tier:
+        from blank_api.services.sandbox import docker_probe
+
+        await docker_probe.ensure_fresh()
         resolution = resolve_tier(tier, strict=True)
         if not resolution.available:
             raise ApiError(

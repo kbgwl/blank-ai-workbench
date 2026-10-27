@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -405,6 +406,11 @@ class BackendInfo:
     detail: str
     platform: str = field(default_factory=lambda: os.name)
     docker_available: bool = False
+    # 「装了」与「能用」是两件事：读数由 docker_probe 现场探测给出，界面不许自己再推导。
+    docker_state: str = "pending"
+    docker_label: str = ""
+    docker_detail: str = ""
+    docker_age_seconds: float | None = None
     # 档位事实与后端名同源（resolve_tier），界面不必自己再推导一遍
     tier: str = ""
     strength: str = ""
@@ -420,6 +426,10 @@ class BackendInfo:
             "detail": self.detail,
             "platform": self.platform,
             "docker_available": self.docker_available,
+            "docker_state": self.docker_state,
+            "docker_label": self.docker_label,
+            "docker_detail": self.docker_detail,
+            "docker_age_seconds": self.docker_age_seconds,
             "tier": self.tier,
             "strength": self.strength,
             "available": self.available,
@@ -430,14 +440,19 @@ class BackendInfo:
 
 def backend_info() -> BackendInfo:
     """默认档 + 现场实测的诚实账。`off` 下必须写「无隔离」，不许伪装成受限执行。"""
-    from shutil import which
-
+    from blank_api.services.sandbox import docker_probe
     from blank_api.services.sandbox.tiers import resolve_tier
 
-    docker = which("docker") is not None
+    # 「PATH 里有 docker」不等于「容器可用」：装了但守护进程没应答是常态，
+    # 那一行读数由现场探测给出，这里只负责把它如实端给界面。
+    probe = docker_probe.probe_for_decision()
     resolution = resolve_tier("")
     facts = {
-        "docker_available": docker,
+        "docker_available": probe.usable,
+        "docker_state": probe.state,
+        "docker_detail": probe.detail,
+        "docker_label": probe.label,
+        "docker_age_seconds": round(time.time() - probe.measured_at, 1) if probe.measured_at else None,
         "tier": resolution.tier,
         "strength": resolution.strength,
         "available": resolution.available,
@@ -464,13 +479,19 @@ def backend_info() -> BackendInfo:
             **facts,
         )
     if not resolution.available:
+        # 「该做什么」按探测读数分开说：装了但守护进程没起来的人，你让他去装 Docker 是耍人。
+        remedy = (
+            "启动 Docker 守护进程（或装 Docker）"
+            if probe.state == docker_probe.STATE_DAEMON_UNREACHABLE
+            else "装 Docker"
+        )
         return BackendInfo(
             backend="none",
             isolation="none",
             label="沙箱后端不可用：命令会被拒绝",
             detail=(
                 resolution.notice
-                + "。装 Docker，或开发机显式设置 BLANK_SANDBOX_ALLOW_LOCAL=1。"
+                + f"。{remedy}，或开发机显式设置 BLANK_SANDBOX_ALLOW_LOCAL=1。"
             ),
             **facts,
         )

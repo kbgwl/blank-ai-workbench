@@ -4,9 +4,11 @@ import { useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
 import { Toggle } from "./bits";
 import {
+  dockerReadout,
   errorMessage,
   fetchAgentSettings,
   fetchSafetyRuntime,
+  reprobeSafetyRuntime,
   updateAgentSettings,
   type AgentSettings,
   type SafetyRuntime,
@@ -148,6 +150,7 @@ export function SafetyPanel() {
   const [error, setError] = useState("");
   const [timeoutDraft, setTimeoutDraft] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
+  const [reprobing, setReprobing] = useState(false);
 
   // 沿用 feature-flags-panel 的写法：用 token 触发刷新，避免在 effect 体内同步 setState。
   useEffect(() => {
@@ -185,6 +188,22 @@ export function SafetyPanel() {
       setError(errorMessage(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function reprobe() {
+    if (!runtime) return;
+    setReprobing(true);
+    setNotice("");
+    try {
+      const result = await reprobeSafetyRuntime();
+      setRuntime({ ...runtime, backend: result.backend });
+      setNotice(`执行后端重新探测完成：${dockerReadout(result.backend).text}`);
+      setError("");
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setReprobing(false);
     }
   }
 
@@ -237,9 +256,24 @@ export function SafetyPanel() {
             {backend?.platform === "nt" ? "Windows" : backend?.platform}
           </span>
           {backend && (
-            <span className="font-mono text-[10.5px] text-faint">
-              Docker {backend.docker_available ? "可用" : "未安装"}
+            <span
+              className={`font-mono text-[10.5px] ${
+                dockerReadout(backend).warn ? "text-warn" : "text-faint"
+              }`}
+              title={backend.docker_detail || undefined}
+            >
+              {dockerReadout(backend).text}
             </span>
+          )}
+          {backend && (
+            <button
+              type="button"
+              onClick={() => void reprobe()}
+              disabled={reprobing}
+              className="rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-[10.5px] text-muted transition-colors hover:border-line-strong hover:text-text disabled:opacity-50"
+            >
+              {reprobing ? "探测中…" : "重新探测"}
+            </button>
           )}
           <span className="ml-auto flex items-center gap-1.5 font-mono text-[10.5px] text-faint">
             执行能力

@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
-from blank_api.services.sandbox import boundary
+from blank_api.services.sandbox import boundary, docker_probe
 from blank_api.services.sandbox.policy import SandboxPolicy
 
 TIER_OFF = "off"
@@ -204,7 +204,10 @@ def resolve_tier(
             limits_enforced=False,
             filesystem_enforced=False,
             network_enforced=False,
-            notice="沙箱后端不可用：命令被拒绝，不会退回宿主执行",
+            notice=(
+                "沙箱后端不可用：命令被拒绝，不会退回宿主执行"
+                + docker_probe.notice_suffix()
+            ),
             reason=REASON_BACKEND_UNAVAILABLE,
             policy=chosen,
         )

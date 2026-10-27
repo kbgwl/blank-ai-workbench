@@ -51,12 +51,15 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 附件清理单独一个任务、而且不阻断启动：它要扫盘 + 查一遍引用，
     # 让 /health 等着它没有道理。
     sweep_task = asyncio.create_task(sweep_orphan_uploads(), name="blank-upload-sweep")
+    # 这台机器到底能不能真的起容器，是开机就该说清的事实：不能等每个任务各自撞一次墙。
+    # 单独一个任务，探测要起子进程（最坏等满超时），让 /health 陪它等没有道理。
+    probe_task = asyncio.create_task(probe_execution_backend(), name="blank-backend-probe")
     try:
         yield
     finally:
-        for task in (recovery_task, sweep_task):
+        for task in (recovery_task, sweep_task, probe_task):
             task.cancel()
-        await asyncio.gather(recovery_task, sweep_task, return_exceptions=True)
+        await asyncio.gather(recovery_task, sweep_task, probe_task, return_exceptions=True)
         orchestrator = getattr(app.state, "team_orchestrator", None)
         if orchestrator is not None:
             await orchestrator.shutdown()
@@ -100,6 +103,24 @@ async def sweep_orphan_uploads() -> None:
             print(f"[uploads] 清理孤儿附件 {removed} 个")
     except Exception:
         # 清理失败不该影响启动：磁盘上多几个文件，远好过服务起不来。
+        return
+
+
+async def probe_execution_backend() -> None:
+    """开机探一次执行后端并把读数念出来（`docs/COST.md` 记的那条「还没做」）。
+
+    只探一次不是"以后就不管了"：TTL 到点后任何一次装配或 `--reprobe` 都会补探。
+    探测本身坏掉（连对照进程都起不来）也不能挡住 API 启动——那时界面上看到的是
+    `probe_failed`，比服务起不来诚实得多。
+    """
+    from blank_api.services.sandbox import docker_probe
+
+    try:
+        info = await docker_probe.ensure_fresh()
+        # flush=True：stdout 被重定向到文件时是块缓冲的，实测这行在探测跑完后约 30 秒才落进日志。
+        # 开机这一行是给"服务起来了但沙箱用不上"的人看的，压着不放等于没有说。
+        print(f"[sandbox] 执行后端探测：{info.state}｜{info.detail}", flush=True)
+    except Exception:
         return
 
 

@@ -18,6 +18,8 @@ from blank_api.services import features as feature_registry
 from blank_api.services.guardian import MODES as GUARDIAN_MODES
 from blank_api.services.mcp import manager as mcp_manager
 from blank_api.services.permissions import MODE_LABELS, MODES as PERMISSION_MODES
+from blank_api.services.sandbox import docker_probe
+from blank_api.services.sandbox.policy import SandboxPolicy
 from blank_api.services.safety import SafetyPolicy, backend_info
 from blank_api.services.settings import (
     DEFAULTS,
@@ -133,6 +135,13 @@ async def read_safety_runtime() -> dict:
     """
     policy = SafetyPolicy.load()
     settings = SettingsStore().read()
+    # 「这一页不许回答尚未探测」只对**拿这个读数做决定的形态**成立。开了沙箱时不补探不行：
+    # `_backend()` 在读到 pending 时会按 PATH 兜底，实测那种情况下这一页在从没测过的机器上
+    # 报出 `isolation=container`——比少一行读数坏得多。
+    # 全局关着沙箱时读数只是资料（启动探测照样把它填上），为它把请求卡在启动路径上等一条
+    # 子进程不值得：实测 ENABLED=1 第一次 0.112s、ENABLED=0 第一次 0.034s（TTL 内第二次都 0.001s）。
+    if SandboxPolicy().enabled:
+        await docker_probe.ensure_fresh()
     return {
         "backend": backend_info().as_dict(),
         "policy": {
@@ -147,3 +156,14 @@ async def read_safety_runtime() -> dict:
         "default_mode": (settings.get("permissions") or {}).get("default_mode", "default"),
         "settings_path": str(SettingsStore().path),
     }
+
+
+@router.post("/safety/runtime/reprobe")
+async def reprobe_safety_runtime() -> dict:
+    """强制重探一次执行后端，把新读数原样端回去。
+
+    客户装完或刚启动 Docker 时不该被要求重启服务：这条把 TTL 跳过，重新起一次
+    `docker version`，界面上那行读数跟着换。
+    """
+    info = await docker_probe.refresh()
+    return {"probe": info.as_dict(), "backend": backend_info().as_dict()}

@@ -327,6 +327,11 @@ class AgentRuntime:
             (settings.get("sandbox") or {}).get("default_tier") or ""
         )
         try:
+            # 装配前保证后端读数不是"还没探过"：拿 pending 做拒绝/放行等于在赌。
+            # 缓存新鲜时这里不起进程，过期才补探一次（放线程里，不占事件循环）。
+            from blank_api.services.sandbox import docker_probe
+
+            await docker_probe.ensure_fresh()
             sandbox = resolve_tier(requested_tier, strict=True)
         except UnknownTier as exc:
             raise ApiError(code="sandbox_tier_invalid", message=str(exc), status_code=422) from None

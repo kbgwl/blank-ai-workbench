@@ -623,3 +623,90 @@ M25 每格 home 不分成同一份），登记换代为 `fixtures/battery-booked
 （同一 thread 在两台都出现过之类）装置不做；`SEED_HOME` 只在缺库时铺一次，主实例后来
 新增的行不会同步过去；同刻并跑的「同刻」是装置串行发三格请求，不是并发压测。
 
+## 16. #122 执行后端现场探测：六态读数、一台机器问一次
+
+`docs/COST.md` 把这条登记成「还没做」已经好几天了：老口径是
+`shutil.which("docker") is not None`，它只回答「这个文件名在不在 PATH 里」，
+而装了 Docker Desktop 但守护进程没起来是常态。那种机器上老口径一路把容器说成「可用」：
+界面写「可用」、任务照样起、然后每条命令各自撞一次墙。
+
+**六态，不是一个布尔。** `services/sandbox/docker_probe.py` 给
+`ready / not_installed / daemon_unreachable / timeout / probe_failed / pending`，
+文案由 `state_label()` 单处产出，后端与界面共用（界面上那句「可用」是 `usable and isolation`
+推出来的，不再自己写一遍——M41 钉这条）。判定顺序写在 `probe_once()` 里：
+超时 → 装置不可信 → 退 0 **且**输出里有 `Server Version` 那行才算 ready →
+退 0 但没看见守护进程那一行 = `daemon_unreachable` → 非零 = `daemon_unreachable` 并把 stderr 原样念出来。
+「退 0 不等于可用」是本批的正身，M27（撤掉标记检查）实测红 9 条。
+
+**三条铁律从 `services/sandbox/boundary.py` 借过来。** ① 判定必须带阳性对照：探针先用
+`sys.executable -c "print(...)"` 证明"这台机器起得了子进程、读得到它的输出"，对照失败时
+任何读数都只能写成 `probe_failed`——否则「这台机器没装 docker」是装置自己编的假事实（M29 红 1）；
+② 测不到就降级不猜（超时、异常都不许冒充「不可用」）；③ 结论带时间戳，`age_seconds`
+一路端到界面（「｜122.7s 前探测」），没探过的读数 `age_seconds` 是 `None` 而不是编一个 0。
+
+**超时那一档是实测出来的形状。** `subprocess.run(timeout=…)` 只杀直接子进程，然后照样等管道关；
+`docker.bat` 是 cmd 再拉一个孙进程的载体，孙进程占着管道就得白等。同一份桩（`ping -n 5` ≈4 秒）
+配 0.4 秒闸门，当刻重跑 3 次：那种写法 **4.06–4.08s**，改成 `Popen + communicate(timeout)` +
+`taskkill /PID /T /F` 杀整棵树 **0.63–0.65s**（工件 `E:/tmp/v122/rig/killtree_cost.py`，
+跑完 `tasklist` 里没有残留 ping）。判据 `test_探测超时既不算可用也要自己把进程带走` 钉的就是那个上界，
+M28 实测红 1。
+
+**缓存：一台机器问一次，但检查必须在锁内。** TTL 60s + `force` + `invalidate`。
+10 个并发 `ensure_fresh` 只起 **1** 条子进程、总耗时 0.098s（`E:/tmp/v122/rig/cost_final.py`）；
+把缓存检查挪到 `with _LOCK:` 外面就会变成各探各的——M44 实测红那一条正是并发用例。
+
+**一条撤回的错误结论，值得记下来。** 早前一版脚本打出「10 并发起了 10 条子进程、耗时 2.395s」，
+我据此判定决策点有并发风暴，并加了 `_IN_FLIGHT` 合用逻辑。更窄的装置复测**复现不出来**
+（起 1 条、0.077s），而"撤掉合用"那条变异在电池里 0 红 = 哑弹。两件事凑齐就判掉：
+那条缺陷不成立，代码回退，判据改成钉住真实形状（缓存检查在锁内），
+而不是钉一个我推测出来的机制。教训是**红集合必须实测**——先有实现再补的判据，很容易把
+"我以为的缺陷"写成永远绿的那一格。
+
+**决策点绝不在事件循环里同步起子进程。** `probe_for_decision()` 在循环里只读缓存，没缓存就返
+`pending`（`search_code` 那次把整个后端占死就是同步子进程独占循环，§早期批次记过）。
+真起进程那一下交给 `ensure_fresh` → `asyncio.to_thread`。M31 实测红 2。
+
+**pending 在决策点按 PATH 兜底，是刻意的。** 装完 Docker 没重启服务的窗口里，若把 `pending`
+当「不可用」，正常机器会被 fail-closed 拦死。代价是这一页在**从没测过**的机器上会报
+`isolation=container`。这就是两处补探的理由：
+① 设置页——闸门挂在**策略** `SandboxPolicy().enabled` 上而不是读数上（开着沙箱必须补探，
+关着时读数只是资料，不值得把客户点开设置那一下卡在一条子进程上；M45/M46 两个方向各红 1）；
+② 装配层——任务 `/run` 与团队建群前各补探一次（M47/M48 实测各红 1，
+`test_建群那一刻也先探一次` 是同一条里自带 ready 桩的对照格，防止红点落在「建群本来就不通」）。
+
+**开机那行读数要当场落盘。** lifespan 里挂了 `probe_execution_backend()`（M35 红 1；
+`test_应用启动装配里真的挂着那一次探测` 自己开 lifespan，因为 `ASGITransport` 不跑它）。
+真机 :8061 实测：stdout 重定向到文件时那行**约 30 秒才出现**——第一次读日志（启动后约 6 秒）
+只有 4 行 uvicorn 自己的日志，缓存里却已经躺着 `docker_age_seconds=56.4`，说明探测早跑完了、
+print 还压在块缓冲里。加上 `flush=True` 后重启，5 秒内那行就在文件里了：
+`[sandbox] 执行后端探测：not_installed｜PATH 里找不到 docker 可执行文件`
+（工件 `E:/tmp/realmodel/8061-v122b.log`）。探测自身炸了不许挡 API 启动（M36 红 1）。
+
+**代价（写进 `docs/COST.md`，不烧 token，只花墙钟）。** 单条 `docker version` 0.079–0.097s
+（闸门 5s）；设置页第一次读：开沙箱 0.112s、关沙箱 0.034s，TTL 内第二次都 0.001s；
+真机 :8061（沙箱关着）`GET /settings/safety/runtime` 首读 0.248s（age 56.4s）、
+`POST /safety/runtime/reprobe` 0.131s 换新读数（age 0.0）、紧接着再读 0.053s（age 0.1s，没再起进程）。
+
+**判据与电池。** 后端 26 条 `services/api/tests/test_backend_probe_v122.py`（6.4s 全绿），
+全部用 PATH 前置的**真桩**打出来（Windows `docker.bat` / POSIX shebang `docker`），
+不用假读数；前端 5 条 `web/src/components/settings/api.test.ts`（node:test，5 pass 0 fail）。
+变异电池 23 条（M26–M48），**0 哑弹**、逐字节还原校验通过，红集合当刻读数：
+M26 红 6、M27 红 9、M28 红 1、M29 红 1、M30 红 2、M31 红 2、M32 红 2、M33 红 3、M34 红 1、
+M35 红 1、M36 红 1、M37 红 1、M38 红 2、M39 红 1、M43 红 1、M44 红 1、M45 红 1、M46 红 1、
+M47 红 1、M48 红 1、M40/M41 红 2、M42 红 3（工件 `E:/tmp/v122/rig/battery-out6.txt`；
+电池是一次性装置，收尾删，红集合抄在这里）。
+
+**界面点验（真 Chrome，:3210 私有 dev 实例代理到 :8061，`:3000/:8000` 未碰）。**
+`#safety` 面板横幅渲染出
+`Docker 未安装：PATH 里没有 docker 可执行文件｜122.7s 前探测`（`text-warn` 档，
+`title` 里带成因），点「重新探测」后同一行换成 `｜0s 前探测`，并出现
+「执行后端重新探测完成：…」提示——指针点击在这台机器不可用，改用 `evaluate_script` 派发真 DOM 事件。
+
+**全量回归**：后端 `1546 passed / 23 skipped`（345.52s），前端 `205 pass / 0 fail`（node:test，rc=0），
+`tsc --noEmit` rc=0 且零输出。
+
+**这一批仍不覆盖**：`not_installed` 时到底该不该自动降成本机执行（默认档仍是产品裁决，没替客户改）；
+Docker 真装好的那台机器（本机没有容器可用，`ready` 一档只由桩证明）；
+Linux/macOS 上的探测只在 CI 的形状里，没在真 mac 上点过；
+`remote` 隔离形态完全没接；缓存是进程级的，多 worker 各探各的（本批只保证单进程内不重复）。
+

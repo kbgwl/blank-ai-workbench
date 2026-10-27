@@ -151,7 +151,13 @@ export type SafetyRuntime = {
     label: string;
     detail: string;
     platform: string;
+    /** 只在读数为 ready 时为真——"PATH 里有 docker"不再是"可用" */
     docker_available: boolean;
+    /** ready / not_installed / daemon_unreachable / timeout / probe_failed / pending */
+    docker_state?: string;
+    docker_label?: string;
+    docker_detail?: string;
+    docker_age_seconds?: number | null;
     tier?: string;
     strength?: string;
     available?: boolean;
@@ -162,6 +168,36 @@ export type SafetyRuntime = {
   default_mode: string;
   settings_path: string;
 };
+
+/** 后端那张状态表的本机副本：老后端没带 docker_label 时才用它。 */
+const DOCKER_STATE_LABEL: Record<string, string> = {
+  ready: "容器后端可用",
+  not_installed: "未安装",
+  daemon_unreachable: "已安装，但守护进程没应答",
+  timeout: "探测超时",
+  probe_failed: "探测装置自身不可信",
+  pending: "尚未探测",
+};
+
+/**
+ * 界面上那行 Docker 读数。
+ *
+ * 「装了」和「能用」是两件事：过去这一行只看 `docker_available`，而后端那个字段
+ * 其实是 PATH 查找的结果，于是 Docker Desktop 没启动的机器上一律显示"可用"，
+ * 用户直到命令失败才发现。现在读数来自现场探测，状态、成因和"几秒前探的"一起给。
+ */
+export function dockerReadout(backend?: SafetyRuntime["backend"] | null): {
+  text: string;
+  state: string;
+  warn: boolean;
+} {
+  const state =
+    backend?.docker_state || (backend?.docker_available ? "ready" : "not_installed");
+  const label = backend?.docker_label || DOCKER_STATE_LABEL[state] || state;
+  const age = backend?.docker_age_seconds;
+  const suffix = typeof age === "number" ? `｜${age}s 前探测` : "";
+  return { text: `Docker ${label}${suffix}`, state, warn: state !== "ready" };
+}
 
 const api = API_V1;
 
@@ -254,6 +290,11 @@ export function resetAgentSettings(): Promise<AgentSettings> {
 
 export function fetchSafetyRuntime(): Promise<SafetyRuntime> {
   return request<SafetyRuntime>(`${api}/settings/safety/runtime`, { cache: "no-store" });
+}
+
+/** 强制重探执行后端：装完/启动完 Docker 不必重启服务。 */
+export function reprobeSafetyRuntime(): Promise<{ probe: Record<string, unknown>; backend: SafetyRuntime["backend"] }> {
+  return request(`${api}/settings/safety/runtime/reprobe`, { method: "POST" });
 }
 
 /** 一个外部工具服务端此刻的状态。state：ready / failed / skipped。 */
