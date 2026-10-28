@@ -323,3 +323,106 @@ def test_姿态自检拒掉三种坏配置() -> None:
     missing["user_prompt_submit"][0]["command"] = '"python" "hooks/nope.py"'
     assert any("指向的夹具不存在" in line for line in
                HC.check(json.dumps(missing), str(VENV_PY), DEVICE / "hooks", with_submit=True))
+
+
+# ---------------------------------------------------------------- 5 团队入口（#131）
+
+# 实物：主格 :8061（群 0495a7da…，轮 completed，机器人答替代正文口令）与对照格 :8065
+# （群 478a6962…，同一条夹具发言，机器人没写出口令）。原件见夹具 provenance 里的工件路径。
+TEAM = json.loads((FIXTURES / "team-submit-v123-green.json").read_text(encoding="utf-8"))
+import team_submit_v123 as T  # noqa: E402
+
+
+def team_rows(name: str) -> tuple[list[dict], list[dict]]:
+    row = TEAM["rows"][name]
+    return copy.deepcopy(row["tasks"]), copy.deepcopy(row["state"]["messages"])
+
+
+def team_fails(tasks: list[dict], messages: list[dict]) -> list[str]:
+    rec = lib.Recorder()
+    J.judge_team_submit(rec, tasks, messages, SPEC)
+    return list(rec.fails)
+
+
+def test_团队入口主格实物五条判据全绿() -> None:
+    assert team_fails(*team_rows("main")) == []
+
+
+def test_团队入口对照格的红集合精确等于登记三条() -> None:
+    tasks, messages = team_rows("control")
+    rec = lib.Recorder()
+    J.judge_team_submit(rec, tasks, messages, SPEC)
+    assert T.control_red_exact(rec) is True
+    assert list(rec.fails) == list(J.CONTROL_123_TEAM_RED)
+
+
+def test_团队入口同一套对照判据打在带钩子的实物上不该全红() -> None:
+    """反向格：对照族的红只在「没钩子」那台上出现，否则它就是恒红死判据。"""
+    tasks, messages = team_rows("main")
+    rec = lib.Recorder()
+    J.judge_team_submit(rec, tasks, messages, SPEC)
+    assert T.control_red_exact(rec) is False
+
+
+def test_团队入口对照格的姿态闸门只放行_no_hooks() -> None:
+    """留痕缺失、坏 JSON 读成空、带钩子的那台——三种都不许当「大概没钩子」放过去。"""
+    assert T.control_posture_abort({"posture": "no-hooks"}, "http://127.0.0.1:8065") == ""
+    assert T.control_posture_abort(None, "http://127.0.0.1:8065")
+    assert T.control_posture_abort({}, "http://127.0.0.1:8065")
+    assert T.control_posture_abort({"posture": "hooks", "submit_hook": True}, "http://127.0.0.1:8061")
+    assert T.control_posture_abort({"posture": "hooks", "submit_hook": "true"}, "http://127.0.0.1:8061")
+
+
+def team_damage(name: str, *, target: str, value) -> tuple[list[dict], list[dict]]:
+    """按名字造一处损伤：`event` 改抑制事件的字段、`goal` 换任务账面、`bot` 改机器人发言。"""
+    tasks, messages = team_rows(name)
+    if target == "event":
+        key, value = value
+        for event in tasks[0]["events"]:
+            if event["type"] == "hook.prompt_substituted":
+                event["payload"][key] = value
+                break
+        else:
+            raise AssertionError(f"{name} 的实物里没有 hook.prompt_substituted")
+    elif target == "goal":
+        tasks[0]["task"]["goal"] = value
+    elif target == "bot":
+        bot = next(item for item in messages if item.get("role") == "bot")
+        bot["content"] = value
+    elif target == "tasks":
+        tasks = []
+    else:
+        raise AssertionError(f"未知损伤目标 {target}")
+    return tasks, messages
+
+
+TEAM_BATTERY = [
+    # 期望红集合全部来自实测（先跑占位符版本，把打印的红集合逐字抄回）。
+    ("任务行整个丢了", team_damage("main", target="tasks", value=None),
+     ["123 团队入口：至少一条成员任务进了群轮",
+      "123 团队入口：每条成员任务都留下 suppressed=true 的抑制事件",
+      "123 团队入口：成员任务的账面 goal 逐字等于用户发言（抑制的是上下文，不是账）"]),
+    ("删掉抑制事件", team_damage("main", target="event", value=("__drop__", None)),
+     ["123 团队入口：每条成员任务都留下 suppressed=true 的抑制事件"]),
+    ("抑制位写成字符串 true", team_damage("main", target="event", value=("suppressed", "true")),
+     ["123 团队入口：每条成员任务都留下 suppressed=true 的抑制事件"]),
+    ("账面 goal 被换成替代正文", team_damage("main", target="goal", value=SPEC["suppress_replacement"]),
+     ["123 团队入口：成员任务的账面 goal 逐字等于用户发言（抑制的是上下文，不是账）"]),
+    ("机器人没答替代正文口令", team_damage("main", target="bot", value="我读到的是一段改写后的任务说明。"),
+     ["123 团队入口：机器人发言里出现替代正文的口令"]),
+    ("机器人发言里带上了原文口令", team_damage("main", target="bot",
+                                             value=f"口令是{SPEC['suppress_marker']}"),
+     ["123 团队入口：机器人发言里出现替代正文的口令",
+      "123 团队入口：机器人发言里没有原文口令"]),
+]
+
+
+@pytest.mark.parametrize("damage_label,damaged,expected", TEAM_BATTERY)
+def test_团队入口每条损伤都红且只红该红的那几条(damage_label, damaged, expected) -> None:
+    tasks, messages = copy.deepcopy(damaged)
+    if damage_label == "删掉抑制事件":
+        tasks[0]["events"] = [e for e in tasks[0]["events"] if e["type"] != "hook.prompt_substituted"]
+    red = team_fails(tasks, messages)
+    if expected is None:
+        raise AssertionError(f"未登记期望红集合（{damage_label}）实测={json.dumps(red, ensure_ascii=False)}")
+    assert red == expected, f"{damage_label} 红集合漂移：实测={red} 登记={expected}"

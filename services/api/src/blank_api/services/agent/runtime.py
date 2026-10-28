@@ -549,6 +549,25 @@ class AgentRuntime:
                 },
             )
             return _PromptDecision(blocked=True, reason=reason, goal_for_model=goal)
+        asking = next((item for item in results if item.asks), None)
+        if asking is not None:
+            # 确认界面是工具档的事（审批卡），提交这一步没有：钩子要求"先问一声"时
+            # 只能按拒绝处理。静默放行等于把钩子写下的条件丢掉，而它自己以为问过了。
+            note = f"：{asking.reason}" if asking.reason else ""
+            reason = f"提交钩子要求先确认（ask），提交这一步没有确认界面，按拒绝处理{note}"[:300]
+            await recorder.add(
+                "hook.prompt_blocked",
+                "receive_task",
+                {
+                    "reason": reason,
+                    "decision": "ask",
+                    "original_chars": len(goal),
+                    "original_sha": _prompt_sha(goal),
+                    "exit_code": asking.exit_code,
+                    "sources": [mask_path(item.command)[:120] for item in results if item.asks],
+                },
+            )
+            return _PromptDecision(blocked=True, reason=reason, goal_for_model=goal)
         # 钩子只能收紧：任何一条要求"原文不进上下文"就抑制；替代正文按配置顺序拼接。
         notes = [item.additional_context.strip() for item in results if item.additional_context.strip()]
         replacement = "\n\n".join(notes)

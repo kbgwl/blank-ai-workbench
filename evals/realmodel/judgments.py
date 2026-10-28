@@ -325,3 +325,53 @@ def judge_submit_control(rec: Recorder, events: list[dict], task: dict, spec: di
     """同一套抑制判据打在没钩子的实例上，返回「该红的三条是否真红」。"""
     judge_submit_suppress(rec, events, task, spec)
     return all(name in rec.fails for name in CONTROL_123_RED)
+
+# 团队入口的对照格（不配钩子的那台）必须红的三条：没钩子时这三件事必然不成立。
+# 「账面 goal 仍是原文」在两边都成立（账本来就不受钩子影响），所以它不在这一组里。
+CONTROL_123_TEAM_RED = (
+    "123 团队入口：每条成员任务都留下 suppressed=true 的抑制事件",
+    "123 团队入口：机器人发言里出现替代正文的口令",
+    "123 团队入口：机器人发言里没有原文口令",
+)
+
+
+def judge_team_submit(rec: Recorder, tasks: list[dict], messages: list[dict], spec: dict) -> None:
+    """团队入口的提交钩子：成员任务的 goal 直接来自用户发言（services/team.py）。
+
+    `tasks` 每项是 `{"id", "task", "events"}`；`messages` 是这一轮的群消息。
+    成员任务按 `team.turn.started` 事件认（群轮只给被点到的成员发任务），
+    账面 goal 拿**用户发言原文**比——不能用「goal 含原文锚」来挑任务：
+    那样「账面被改写」的任务会直接从样本里消失，第三条判据就成了恒真。
+    只判「钩子真的作用在成员任务上」：每条成员任务都留下抑制事件、账面 goal 不动、
+    机器人发言里出现替代正文的口令且没有原文口令（没钩子时这三条必然不成立）。
+    """
+    marker, token = spec["suppress_marker"], spec["suppress_token"]
+    member = [row for row in tasks
+              if of_type(row.get("events") or [], "team.turn.started")]
+    user_texts = [str(item.get("content") or "") for item in messages
+                  if item.get("role") == "user"]
+    expected_goal = user_texts[-1] if user_texts else ""
+    substitutions = {str(row.get("id")): of_type(row.get("events") or [],
+                                                 "hook.prompt_substituted")
+                     for row in member}
+    misses = [
+        task_id for task_id, events in substitutions.items()
+        if not (events and events[0]["payload"].get("suppressed") is True)
+    ]
+    stray_goals = [
+        str(row.get("id")) for row in member
+        if str((row.get("task") or {}).get("goal") or "") != expected_goal
+    ]
+    rec.check("123 团队入口：至少一条成员任务进了群轮", bool(member),
+              f"tasks={len(tasks)} member={len(member)}")
+    rec.check("123 团队入口：每条成员任务都留下 suppressed=true 的抑制事件",
+              bool(member) and not misses, f"member={len(member)} misses={misses[:4]}")
+    rec.check("123 团队入口：成员任务的账面 goal 逐字等于用户发言（抑制的是上下文，不是账）",
+              bool(member) and bool(expected_goal) and not stray_goals,
+              f"member={len(member)} strays={stray_goals[:4]}")
+    bot_texts = [str(item.get("content") or "") for item in messages if item.get("role") == "bot"]
+    rec.check("123 团队入口：机器人发言里出现替代正文的口令",
+              any(token in text for text in bot_texts), f"bot_msgs={len(bot_texts)}")
+    rec.check("123 团队入口：机器人发言里没有原文口令",
+              all(marker not in text for text in bot_texts),
+              f"leaks={[text[:60] for text in bot_texts if marker in text][:1]}")

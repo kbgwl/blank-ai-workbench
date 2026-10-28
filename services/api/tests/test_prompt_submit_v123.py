@@ -328,3 +328,99 @@ async def test_团队入口的成员任务也过提交钩子(env, workspace: Pat
                 hits.append(item["payload"])
     assert hits, "团队入口没有触发提交钩子"
     assert all(payload["suppressed"] is True for payload in hits)
+
+
+async def test_钩子要求确认时按拒绝处理并说明(env, workspace: Path, tmp_path: Path, monkeypatch):  # noqa: F811
+    """ask 档在提交链路上没有确认界面：静默放行等于把钩子写下的条件丢掉。
+
+    工具档的 ask 会变成审批卡（#111），提交这一步没有对应界面，所以按拒绝处理——
+    判据同时钉住"一次模型调用都没发起"与"失败原因里念得出这是 ask"。
+    """
+    command = _script(
+        tmp_path,
+        "ask.py",
+        "sys.stdout.write(json.dumps({'decision': 'ask', 'reason': '先问一声再放行'}))\n",
+    )
+    _hooks(monkeypatch, command)
+    project_id = await create_project(env, workspace)
+    provider_id = await create_provider(env)
+    goal = f"请围绕 {MARKER} 写一份说明"
+    task_id = await create_task(env, project_id, ["给出结论"], goal=goal)
+    env.mock.reset(_steps())
+
+    resp = await env.client.post(f"{API}/tasks/{task_id}/run", json={"provider_id": provider_id})
+    assert resp.status_code == 200, resp.text
+    assert env.mock.requests == [], "钩子要求确认，却被静默放行去调模型了"
+
+    task = (await env.client.get(f"{API}/tasks/{task_id}")).json()
+    assert task["status"] == "failed", task
+    reason = task.get("failure_reason") or ""
+    assert "ask" in reason and "先问一声再放行" in reason, reason
+
+    events = await _events(env, task_id)
+    types = [item["type"] for item in events]
+    blocked = [item for item in events if item["type"] == "hook.prompt_blocked"]
+    assert blocked, events
+    payload = blocked[0]["payload"]
+    assert payload["decision"] == "ask", payload
+    assert payload["original_chars"] == len(goal), payload
+    assert MARKER not in json.dumps(payload, ensure_ascii=False), payload
+    assert "task.started" not in types, types
+    assert task.get("steps_used", 0) == 0
+
+
+async def test_续跑不发提交钩子且抑制从检查点延续(env, workspace: Path, tmp_path: Path, monkeypatch):  # noqa: F811
+    """提交钩子按"一次提交"建模：审批恢复没有新的提交，钩子不该再跑第二遍。
+
+    三条一起钉：① 钩子子进程在 run + approve 全程只执行一次（计数文件是装置自己的读数，
+    不靠事件反推）；② 续跑阶段发给模型的每个字节仍不含原文（抑制从检查点延续，没有侧门）；
+    ③ 账面 goal 仍是原文（抑制的是上下文，不是账）。
+    """
+    counter = tmp_path / "hook-runs.txt"
+    command = _script(
+        tmp_path,
+        "counted_suppress.py",
+        f"open({str(counter)!r}, 'a', encoding='utf-8').write('x')\n" + _emit(REPLACEMENT, suppress=True),
+    )
+    _hooks(monkeypatch, command)
+    project_id = await create_project(env, workspace)
+    provider_id = await create_provider(env)
+    goal = f"请围绕 {MARKER} 写一份说明"
+    task_id = await create_task(env, project_id, ["写入 .env 需人工审批"], goal=goal)
+    patch = "--- /dev/null\n+++ b/.env\n@@ -0,0 +1,1 @@\n+TOKEN=plain\n"
+    env.mock.reset(
+        [
+            {"content": "执行计划：\n1. 写入 .env"},
+            {"content": "写入 .env", "tool_calls": [call("apply_patch", {"path": ".env", "patch": patch})]},
+            {"content": ".env 已写入"},
+            {"content": "已完成 .env 写入"},
+        ]
+    )
+
+    resp = await env.client.post(f"{API}/tasks/{task_id}/run", json={"provider_id": provider_id})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["task"]["status"] == "waiting_approval", resp.json()["task"]
+    assert counter.read_text(encoding="utf-8").count("x") == 1, "首轮提交钩子没有跑，后面的判据无从谈起"
+    assert any(REPLACEMENT in text for text in _all_texts(env.mock)), "抑制格首轮就没读到替代正文"
+
+    resp = await env.client.post(
+        f"{API}/tasks/{task_id}/approval", json={"approve": True, "provider_id": provider_id}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["task"]["status"] != "waiting_approval", resp.json()["task"]
+
+    runs = counter.read_text(encoding="utf-8").count("x")
+    assert runs == 1, f"审批恢复又跑了一次提交钩子（{runs} 次）：同一份提交被改写了两次"
+    texts = _all_texts(env.mock)
+    assert all(MARKER not in text for text in texts), [text for text in texts if MARKER in text][:1]
+    assert any(REPLACEMENT in text for text in texts), "续跑阶段的模型请求里没有替代正文"
+
+    events = await _events(env, task_id)
+    submits = [
+        item for item in events
+        if item["type"] == "hook.completed" and item["payload"].get("event") == "user_prompt_submit"
+    ]
+    assert len(submits) == 1, f"提交钩子的审计记录有 {len(submits)} 条"
+    async with get_session_factory()() as session:
+        row = await session.get(Task, task_id)
+        assert MARKER in (row.goal or "")

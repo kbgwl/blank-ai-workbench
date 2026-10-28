@@ -11,17 +11,18 @@
 | --- | --- |
 | `async_hooks_v119.py` | 驱动：铺工作区、起任务、取事件、汇总三格读数、定退出码 |
 | `prompt_submit_v123.py` | #123 那一层的驱动：提交钩子的三道决定各占一格，四格 + 对照格，同刻并跑 |
+| `team_submit_v123.py` | #123 团队入口：#131 补的第二条入口——群发一条带抑制锚的发言，成员任务的 goal 也过提交钩子；`--control` 走无钩子那台 |
 | `judgments.py` | 判据本体，全是「事件流进、判定出」的纯函数，可离线喂实物自检 |
 | `lib.py` | 配置、HTTP 客户端、判定表、退出码纪律、取数小工具 |
 | `launch-instance.sh` | 起隔离实例（默认 :8061）；`--with-hooks` 是钩子姿态，后面再跟 `--with-submit-hook` 才挂提交钩子，不加是对照姿态。起之前必须过 `hooks_config.py --check`，不过就不起；同时把姿态写进 `instance-posture-<port>.json`（提交钩子在留痕里是**单独一个键** `submit_hook`） |
 | `hooks_config.py` | `BLANK_HOOKS` 的唯一来源与自检（`--print` 生成、`--check` 校验）。上一版这里是启动器用 `printf` 手拼的，引号没转义——见「姿态」一节 |
 | `hooks/*.py` | 四种钩子夹具：`post_tool_use`（异步、退出码 2、故意写 GBK 字节）、`worktree_create`、`worktree_remove`、`prompt_submit`（#123：同一枚夹具按 goal 里的锚给四种决定——拦下 / 抑制 / 补上下文 / 什么都不做） |
-| `fixtures/*.json` | 从实例原样取回的实物：修复前的负基线、编码格绿基线、**姿态修好后那轮的主格绿基线**、对照格、红集合登记表、变异电池登记；`*-v121` 是双实例同刻并跑那一轮（两台各有各的 base）；`prompt-submit-v123.json` 是**夹具与判据共读的那一份规格**（锚、正文、原因只写一处），`prompt-submit-v123-green.json` 是 #123 那轮五格实物 |
+| `fixtures/*.json` | 从实例原样取回的实物：修复前的负基线、编码格绿基线、**姿态修好后那轮的主格绿基线**、对照格、红集合登记表、变异电池登记；`*-v121` 是双实例同刻并跑那一轮（两台各有各的 base）；`prompt-submit-v123.json` 是**夹具与判据共读的那一份规格**（锚、正文、原因只写一处），`prompt-submit-v123-green.json` 是 #123 那轮五格实物，`team-submit-v123-green.json` 是团队入口两格实物（主格 + 无钩子对照格） |
 | `fixtures/wake-text.txt` | 唤醒正文的唯一来源（45 字），钩子和判据都读它，不许两处手抄 |
 | `mutation_battery.py` | 把装置本身改坏 25 种，看离线自检是否每条都红；期望按实测登记 |
 | `../services/api/tests/test_realmodel_device_v120.py` | 装置离线自检（70 条，不花钱） |
 | `../services/api/tests/test_realmodel_instances_v121.py` | 一格一实例那一层的自检（26 条，含双实例并跑实物的离线重放） |
-| `../services/api/tests/test_prompt_submit_device_v123.py` | #123 那一层的自检（38 条）：五格实物重放、对照格三条该红的逐字红、25 条变异电池、夹具过产品解析器、姿态闸门 |
+| `../services/api/tests/test_prompt_submit_device_v123.py` | #123 那一层的自检（48 条）：五格实物重放、对照格三条该红的逐字红、25 条变异电池、团队入口两格实物（5 条判据 + 6 条损伤）、夹具过产品解析器、姿态闸门 |
 
 ## 三格
 
@@ -163,6 +164,31 @@ RM123_TASK_PLAIN=<id> RM123_TASK_CTL=<id> 同上
 提交钩子挂在谁身上，谁的留痕就得写 `submit_hook: true`，闸门读不到就 rc 2，不会替猜。
 拦下格预算给 90 秒（它一次模型都不调，跑得久说明产品没拦住），其余四格 240 秒。
 
+### #123 团队入口（#131）
+
+群聊的成员任务是**第二条入口**：`services/team.py` 把用户发言直接当成员任务的 goal，
+所以提交钩子对它是真起作用的。这一支在两台上各跑一次（同一份夹具发言）：
+
+```bash
+export BLANK_REALMODEL_PROVIDER=<provider id>
+RM_BASE_MAIN=http://127.0.0.1:8061 RM_HOME_MAIN=E:/tmp/realmodel \
+  services/api/.venv/Scripts/python.exe -X utf8 evals/realmodel/team_submit_v123.py
+RM_BASE_MAIN=http://127.0.0.1:8065 RM_HOME_MAIN=E:/tmp/realmodel-ctl \
+  services/api/.venv/Scripts/python.exe -X utf8 evals/realmodel/team_submit_v123.py --control
+
+# 跑过的这一轮按 id 复用，不再花钱（主格与对照各一份）：
+RM123_TEAM_PROJECT=<project id> RM123_TEAM_GROUP=<group id> ... 同上
+```
+
+主格要求留痕 `submit_hook: true`，对照格要求 `posture == "no-hooks"`，不符即 rc 2。
+判据五条（`judgments.judge_team_submit`）：成员任务按 `team.turn.started` 事件认、
+每条都留下 `suppressed=true` 的抑制事件、**账面 goal 逐字等于用户发言**、
+机器人发言里出现替代正文口令、没有原文口令。对照格的红集合必须**精确等于**登记三条
+（`judgments.CONTROL_123_TEAM_RED`），多一条少一条都 rc 2。
+
+注意第三条不能用「goal 含原文锚」来挑样本——那样「账面被改写」的任务会直接从样本里消失，
+判据成了恒真。成员任务的识别靠 `team.turn.started`，期望 goal 取群里这一轮的用户发言。
+
 ## 退出码
 
 ```
@@ -182,7 +208,7 @@ services/api/.venv/Scripts/python.exe -X utf8 -m pytest \
   services/api/tests/test_realmodel_instances_v121.py -q      # 98 条，全绿约 1.2 秒
 services/api/.venv/Scripts/python.exe -X utf8 evals/realmodel/mutation_battery.py
 
-# #123 那一层：装置自检 38 条（含 25 条变异电池）+ 产品侧 13 条
+# #123 那一层：装置自检 48 条（含 25 条变异电池与 6 条团队入口损伤）+ 产品侧 15 条
 services/api/.venv/Scripts/python.exe -X utf8 -m pytest \
   services/api/tests/test_prompt_submit_device_v123.py \
   services/api/tests/test_prompt_submit_v123.py -q
@@ -241,6 +267,26 @@ M22–M25 是 #121 那四条：分组键改成常量（一台不再分两群）�
 改成明示「在你的回答里原样输出…不要写任何文件」后该格转绿；② 驱动把对照格的红并进主判定表，
 把三条之外的红也算成产品缺陷——改成对照格用自己那张表之后才是 rc=0。
 
+### 2026-10-28 08:53 团队入口两格（#131，主格 + 无钩子对照）
+
+主格 `E:/tmp/realmodel/team-submit-v123-20261028-085330.json`（仓库内留痕
+`fixtures/team-submit-v123-green.json`），群 `0495a7dac3a5432c9466305edb2fe133`，轮 `completed`，
+`usage.calls=1 / tokens=4437`：五条判据**零红**（`tasks=1 member=1`、`misses=[]`、
+账面 goal 逐字等于用户发言、`bot_msgs=1`、`leaks=[]`），成员任务 `8f08b858` 的事件里有
+`team.turn.started` → `hook.completed` → `hook.prompt_substituted` → `task.started`，
+机器人发言是 `改写版正文-7733`（替代正文里的口令）。`rc=0`。
+
+对照格 `E:/tmp/realmodel-ctl/team-submit-v123-control-20261028-085407.json`，群
+`478a69622e3240ecb560e4e6bb64184b`，同一份夹具发言，**红 3 / 判据 5** 且红集合与
+`CONTROL_123_TEAM_RED` 逐字相等（`[对照] 该红的三条 [...] 红了=True`）：没挂钩子时
+没有抑制事件；机器人复述的是提问里的「紫椒八十一号」（于是泄漏项红），没写替代正文口令
+（于是口令缺失项也红）。`rc=0`。
+
+这一对读数也暴露了判据第一版的一个真缺陷并已改掉：原来靠「goal 含原文锚」挑成员任务，
+「账面被改写」的损伤会让任务直接从样本里消失，第三条判据恒真。现在按 `team.turn.started`
+认任务、期望 goal 取用户发言原文；六条损伤（任务行整个丢了 / 删抑制事件 / 抑制位写成字符串 /
+账面换掉 / 机器人没答 / 机器人带上原文）的期望红集合都在装置自检里按实测登记。
+
 ### 2026-10-27 08:45 双实例同刻并跑（#121 结掉的那条欠账）
 
 `E:/tmp/realmodel/live-v121.out`：主格 + 编码格在 :8061（留痕 `hooks`）、对照格在 :8065
@@ -276,14 +322,26 @@ base，离线重放钉住红绿（`test_realmodel_instances_v121.py` §4）：�
   「注入块容得下原文 + 包装语」，逐字对不对由编码格在线上钉——两格合起来才是完整判据。
 - **带外审计文件**（`hook-events.log`）在装置目录之外，随 `BLANK_REALMODEL_HOME` 走；
   它的行按本轮副本路径核对，上一轮的同名行不算数。
-- **`decision: "ask"` 那一档的提交钩子**。#111 实现了工具档的 ask，提交档那一路
-  （`runtime.py:_submit_prompt`）只看 `denied` / `suppress_original` / `additional_context`，
-  `asks` 没有分支——它只随 `hook.completed` 的 `results` 记账，不会弹问用户；装置因此也不判它。
-- **`_resume` / 续跑那一路不发提交钩子**。`_submit_prompt` 在运行时里只有一个调用点
-  （`runtime.py:668`，首轮），钩子按「一次提交」建模，恢复执行没有新的提交，
-  所以恢复后的正文是否仍受抑制影响，这套装置测不到（#123 判据只覆盖首轮提交）。
-- **真模型上的团队入口**。成员任务的 goal 也过提交钩子，但这一条只有产品侧 mock 用例
-  （`test_prompt_submit_v123.py::test_团队入口的成员任务也过提交钩子`）钉着；装置四格走的是
-  `/threads/<id>/turns` 那条普通任务入口，:8061 上的团队链没在这批点验。
+- **`decision: "ask"` 那一档的提交钩子：现在按拒绝处理（fail-closed），没有确认界面。**
+  #111 的 ask 是工具档的（弹审批卡）；提交这一步没有确认界面，#129 起 `runtime.py:_submit_prompt`
+  对 `asks` 走**阻断**分支——事件记 `hook.prompt_blocked` 且 `decision="ask"`、任务以失败收场、
+  零步零调用，理由里明写「提交这一步没有确认界面，按拒绝处理」。产品侧用例
+  `test_prompt_submit_v123.py::test_钩子要求确认时按拒绝处理并说明` 钉住它（撤掉分支当刻红）。
+  所以「ask 能放行」这条路**不存在**，装置也就不判；哪天产品真做了提交期确认界面，再补一格。
+- **`_resume` / 续跑那一路不发提交钩子（这是设计），抑制从检查点延续。**
+  `_submit_prompt` 只有一个调用点（`runtime.py:668`，首轮），恢复执行没有新的提交。
+  用例 `test_续跑不发提交钩子且抑制从检查点延续` 跑真链路：钩子写抑制 → `apply_patch`
+  触发审批 → 待批 → 批准 → 续跑，断言钩子脚本只被执行一次、续跑的每一次请求含替代正文、
+  不含原文、`hook.completed(user_prompt_submit)` 恰一条、账面 goal 仍含原文。
+  仍不覆盖：**跨进程崩溃**后的恢复（检查点由被杀进程写下、新进程续跑），以及旧版本留下的
+  检查点被新版本接着跑。
+- **真模型上的团队入口：已在 :8061（带钩子）与 :8065（无钩子）各真跑一格（#131）。**
+  主格五条判据零红、对照格红集合精确等于登记三条，读数与工件见「线上读数」一节，
+  离线重放在 `test_prompt_submit_device_v123.py` §5（含 6 条损伤）。仍不覆盖：
+  多成员同一轮、`fan_out` 子代理那一路（子代理任务不从群发言取 goal），以及预算耗尽
+  中途截断时的成员任务。
+- **模型对改写/补充的语义反应**。判据钉的是「替代正文的口令进了输出、原文口令没进」
+  「原文与钩子补充都到得了输出」；模型有没有**照做**、有没有认出注入的指令串
+  （2026-10-27 那轮它自己拒绝了），机器判不了，要人读回放。
 - **付费**：三格真跑一轮是三次模型调用起（主格两轮）；#123 那五格是五次调用，
   其中拦下格一次都不调。判据改动先过离线自检和电池，别拿真模型试错。

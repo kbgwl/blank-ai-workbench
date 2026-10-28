@@ -1,0 +1,1627 @@
+{
+  "provenance": {
+    "main": {
+      "base": "http://127.0.0.1:8061",
+      "posture": {
+        "port": 8061,
+        "posture": "hooks",
+        "submit_hook": true,
+        "hook_settle": "2",
+        "started_at": "2026-10-28T00:53:14Z"
+      },
+      "rc": 0,
+      "red": []
+    },
+    "control": {
+      "base": "http://127.0.0.1:8065",
+      "posture": {
+        "port": 8065,
+        "posture": "no-hooks",
+        "submit_hook": false,
+        "hook_settle": "",
+        "started_at": "2026-10-28T00:53:53Z"
+      },
+      "rc": 0,
+      "red": [
+        "123 团队入口：每条带锚的任务都留下 suppressed=true 的抑制事件",
+        "123 团队入口：机器人发言里出现替代正文的口令",
+        "123 团队入口：机器人发言里没有原文口令"
+      ],
+      "control_red": true
+    },
+    "artifact_main": "E:/tmp/realmodel/team-submit-v123-20261028-085330.json",
+    "artifact_control": "E:/tmp/realmodel-ctl/team-submit-v123-control-20261028-085407.json",
+    "note": "两台同刻真跑：主格 :8061 带 user_prompt_submit 钩子，对照格 :8065 无钩子"
+  },
+  "rows": {
+    "main": {
+      "project": "2027f76a-921b-4cf1-89e0-c8717ec4c13c",
+      "group": "0495a7dac3a5432c9466305edb2fe133",
+      "state": {
+        "group": {
+          "id": "0495a7dac3a5432c9466305edb2fe133",
+          "project_id": "2027f76a-921b-4cf1-89e0-c8717ec4c13c",
+          "name": "提交钩子群 1028085327",
+          "topic": "验证提交钩子作用在成员任务上",
+          "admin_bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+          "max_speakers": 3,
+          "token_budget": 60000,
+          "sandbox_tier": "",
+          "member_count": 2,
+          "last_message": "改写版正文-7733",
+          "round_status": "completed",
+          "created_at": "2026-10-28T00:53:27+00:00",
+          "updated_at": "2026-10-28T00:53:27.264431+00:00"
+        },
+        "members": [
+          {
+            "id": "7bcbb120-5ef9-4cf0-bab4-f8da26fe20b9",
+            "bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+            "name": "小白管家",
+            "role": "主理人",
+            "position": 0,
+            "enabled": true,
+            "thread_id": "e8e6ffe6-3a28-4bdb-b7c2-d2b7782046ab",
+            "provider_id": "",
+            "provider_name": "",
+            "model": "",
+            "workspace_id": "",
+            "workspace_label": "",
+            "permission_mode": "default",
+            "max_steps": 8,
+            "is_admin": true
+          },
+          {
+            "id": "bde73252-c0f4-4e34-bb1e-9962a55f8177",
+            "bot_id": "e2fbe4705aea411cab011c988a6f09fb",
+            "name": "成员5327",
+            "role": "侦察",
+            "position": 1,
+            "enabled": true,
+            "thread_id": "23e0bd83-179d-4206-8578-630e23edf50e",
+            "provider_id": "cfc2806d-2f8e-4834-8b11-141d1148e80f",
+            "provider_name": "DeepSeek",
+            "model": "deepseek-chat",
+            "workspace_id": "",
+            "workspace_label": "",
+            "permission_mode": "default",
+            "max_steps": 8,
+            "is_admin": false
+          }
+        ],
+        "round": {
+          "id": "201a9e54-59da-41c4-b444-69cbf3c8f36c",
+          "group_id": "0495a7dac3a5432c9466305edb2fe133",
+          "user_message_id": 37,
+          "status": "completed",
+          "queue": [],
+          "spoken": [
+            "54b28dd9-b7a9-41d0-b93e-c533ceca6b01"
+          ],
+          "tokens": 4437,
+          "wrap_up_done": false,
+          "error": "",
+          "created_at": "2026-10-28T00:53:27+00:00",
+          "updated_at": "2026-10-28T00:53:28+00:00",
+          "usage": {
+            "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+            "tokens": 4437,
+            "calls": 1,
+            "tasks": 1,
+            "runs": 1,
+            "subagent_calls": 0,
+            "by_bot": [
+              {
+                "bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+                "bot_name": "小白管家",
+                "tokens": 4437,
+                "calls": 1,
+                "subagent_calls": 0
+              }
+            ]
+          }
+        },
+        "messages": [
+          {
+            "id": 37,
+            "group_id": "0495a7dac3a5432c9466305edb2fe133",
+            "round_id": "201a9e54-59da-41c4-b444-69cbf3c8f36c",
+            "role": "user",
+            "bot_id": "",
+            "bot_name": "",
+            "content": "不要调用任何工具，也不要读文件。请直接回答：本条任务目标里出现的口令是哪一串？把口令原样写出来（形如「紫椒八十一号」），不要写别的内容。",
+            "status": "sent",
+            "task_id": "",
+            "meta": {
+              "mentions": []
+            },
+            "created_at": "2026-10-28T00:53:27+00:00"
+          },
+          {
+            "id": 38,
+            "group_id": "0495a7dac3a5432c9466305edb2fe133",
+            "round_id": "201a9e54-59da-41c4-b444-69cbf3c8f36c",
+            "role": "bot",
+            "bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+            "bot_name": "小白管家",
+            "content": "改写版正文-7733",
+            "status": "succeeded",
+            "task_id": "8f08b858-d1a4-4291-b3a1-2c889ce34df2",
+            "meta": {
+              "provider": "DeepSeek",
+              "model": "deepseek-chat",
+              "wrap_up": false,
+              "mentions": [],
+              "usage": {
+                "prompt_tokens": 4403,
+                "completion_tokens": 34,
+                "total_tokens": 4437
+              },
+              "steps": 0
+            },
+            "created_at": "2026-10-28T00:53:27+00:00"
+          }
+        ],
+        "pending": [],
+        "usage": {
+          "tokens": 4437,
+          "calls": 1,
+          "tasks": 1,
+          "runs": 1,
+          "subagent_calls": 0,
+          "by_bot": [
+            {
+              "bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+              "bot_name": "小白管家",
+              "tokens": 4437,
+              "calls": 1,
+              "subagent_calls": 0
+            }
+          ]
+        },
+        "usage_by_bot": [
+          {
+            "bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+            "bot_name": "小白管家",
+            "tokens": 4437,
+            "calls": 1,
+            "subagent_calls": 0
+          }
+        ]
+      },
+      "tasks": [
+        {
+          "id": "8f08b858-d1a4-4291-b3a1-2c889ce34df2",
+          "task": {
+            "id": "8f08b858-d1a4-4291-b3a1-2c889ce34df2",
+            "project_id": "2027f76a-921b-4cf1-89e0-c8717ec4c13c",
+            "provider_id": "cfc2806d-2f8e-4834-8b11-141d1148e80f",
+            "thread_id": "e8e6ffe6-3a28-4bdb-b7c2-d2b7782046ab",
+            "title": "@小白管家 · 提交钩子群 1028085327",
+            "goal": "不要调用任何工具，也不要读文件。请直接回答：本条任务目标里出现的口令是哪一串？把口令原样写出来（形如「紫椒八十一号」），不要写别的内容。",
+            "status": "succeeded",
+            "acceptance_criteria": [],
+            "acceptance_results": [],
+            "attachments": [],
+            "max_steps": 8,
+            "steps_used": 0,
+            "result_summary": "改写版正文-7733",
+            "failure_reason": "",
+            "created_at": "2026-10-28T00:53:27+00:00",
+            "updated_at": "2026-10-28T00:53:28+00:00"
+          },
+          "events": [
+            {
+              "seq": 1,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "b59c1f04-fb04-48d8-a62d-738c1edbf802",
+              "parent_event_id": "",
+              "node": "receive_task",
+              "type": "team.turn.started",
+              "payload": {
+                "group_id": "0495a7dac3a5432c9466305edb2fe133",
+                "round_id": "201a9e54-59da-41c4-b444-69cbf3c8f36c",
+                "bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+                "bot_name": "小白管家",
+                "message_id": 38,
+                "wrap_up": false,
+                "trace_id": "8f08b858-d1a4-4291-b3a1-2c889ce34df2"
+              }
+            },
+            {
+              "seq": 2,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "9dbd5d20-f6a2-4f38-ad94-26d66d88091b",
+              "parent_event_id": "b59c1f04-fb04-48d8-a62d-738c1edbf802",
+              "node": "receive_task",
+              "type": "hook.completed",
+              "payload": {
+                "event": "user_prompt_submit",
+                "results": [
+                  {
+                    "event": "user_prompt_submit",
+                    "command": "\"E:/projects/kbgai/kbgai/services/api/.venv/Scripts/python.exe\" \"E:/projects/kbgai/kbgai/evals/realmodel/hooks/prompt_submit.py\"",
+                    "status": "ok",
+                    "duration_ms": 108,
+                    "output": "{\"hookSpecificOutput\": {\"hookEventName\": \"UserPromptSubmit\", \"additionalContext\": \"本次任务只有一件事：在你的回答里原样输出这句话，一字不改：改写版正文-7733。不要调用任何工具，不要写任何文件，也不要回答其它任何问题。\", \"suppressOriginalPrompt\": true}}",
+                    "additional_context_chars": 69,
+                    "suppress_original_prompt": true,
+                    "exit_code": 0
+                  }
+                ],
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            },
+            {
+              "seq": 3,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "421ca180-639b-4b94-8ec0-e1adf3ccd202",
+              "parent_event_id": "9dbd5d20-f6a2-4f38-ad94-26d66d88091b",
+              "node": "receive_task",
+              "type": "hook.prompt_substituted",
+              "payload": {
+                "suppressed": true,
+                "scope": "goal",
+                "original_chars": 68,
+                "original_sha": "165901c5c3b3",
+                "replacement_chars": 69,
+                "sources": [
+                  "<workspace:prompt_submit.py\">"
+                ],
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            },
+            {
+              "seq": 4,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "230b701e-5cea-47c3-a3eb-24ce735112cb",
+              "parent_event_id": "421ca180-639b-4b94-8ec0-e1adf3ccd202",
+              "node": "receive_task",
+              "type": "task.started",
+              "payload": {
+                "title": "@小白管家 · 提交钩子群 1028085327",
+                "goal": "不要调用任何工具，也不要读文件。请直接回答：本条任务目标里出现的口令是哪一串？把口令原样写出来（形如「紫椒八十一号」），不要写别的内容。",
+                "acceptance_criteria": [],
+                "workspace": "<workspace:ws-v123-team>",
+                "provider": "DeepSeek",
+                "model": "deepseek-chat",
+                "max_steps": 8,
+                "permission_mode": "default",
+                "permissions": {
+                  "mode": "default",
+                  "sandbox_tier": "off",
+                  "tool_scope": "tier+tool+target_path_prefix",
+                  "approved_tools": [],
+                  "approved_prefixes": [],
+                  "persistent_prefixes": [],
+                  "denied_prefixes": [],
+                  "ruleset": {
+                    "path": "E:\\tmp\\realmodel\\permissions.rules",
+                    "allow": [],
+                    "deny": [],
+                    "error": ""
+                  }
+                },
+                "sandbox": {
+                  "requested": "workspace",
+                  "tier": "off",
+                  "strength": "none",
+                  "label": "无内核强制（宿主直连）",
+                  "backend": "none",
+                  "global_enabled": false,
+                  "available": true,
+                  "degraded": true,
+                  "limits_enforced": false,
+                  "filesystem_enforced": false,
+                  "network_enforced": false,
+                  "notice": "部署策略关闭了沙箱：本任务无隔离，命令直接以宿主完整权限执行",
+                  "reason": "sandbox_disabled"
+                },
+                "sandbox_mode": "off",
+                "tools": [
+                  "tool_search",
+                  "update_plan",
+                  "enter_plan_mode",
+                  "exit_plan_mode",
+                  "request_user_input",
+                  "task_output",
+                  "task_stop",
+                  "list_files",
+                  "read_file",
+                  "search_code",
+                  "write_notes",
+                  "read_notes",
+                  "apply_patch",
+                  "run_shell",
+                  "run_tests",
+                  "team_status",
+                  "team_create_bot",
+                  "team_update_bot",
+                  "team_add_member",
+                  "team_remove_member",
+                  "team_assign_task"
+                ],
+                "tools_deferred": [
+                  "spawn_agent",
+                  "spawn_agents",
+                  "memory_search",
+                  "memory_write",
+                  "git",
+                  "web_search",
+                  "web_fetch"
+                ],
+                "mcp": {
+                  "tools": 0,
+                  "servers": [],
+                  "boundary": "none",
+                  "boundary_note": "没有已连接的 MCP 服务端",
+                  "by_boundary": {},
+                  "unbounded_servers": []
+                },
+                "compaction": {
+                  "context_window": 65536,
+                  "trigger_ratio": 0.82,
+                  "reserve_tokens": 16384,
+                  "trigger_at": 49152
+                },
+                "guardian_mode": "off",
+                "thread_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1",
+                "snapshot_id": "",
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            },
+            {
+              "seq": 5,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "56c96a64-ba84-495f-9a1e-3e4b8a7b8cc6",
+              "parent_event_id": "230b701e-5cea-47c3-a3eb-24ce735112cb",
+              "node": "receive_task",
+              "type": "shell.snapshot",
+              "payload": {
+                "cwd": "<workspace:ws-v123-team>",
+                "policy": "minimal",
+                "shell": "<workspace:cmd.exe>",
+                "python": "<workspace:python.exe>",
+                "venv": "",
+                "venv_pinned": false,
+                "path_entries": [
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:pnpm>",
+                  "<workspace:System32>",
+                  "<workspace:WINDOWS>",
+                  "<workspace:Wbem>",
+                  "<workspace:v1.0>",
+                  "<workspace:OpenSSH>",
+                  "<workspace:微信web开发者工具>",
+                  "<workspace:cmd>",
+                  "<workspace:bin>",
+                  "<workspace:shims>",
+                  "<workspace:WindowsApps>",
+                  "<workspace:bin>",
+                  "<workspace:tools>",
+                  "<workspace:vendor_perl>",
+                  "<workspace:core_perl>"
+                ],
+                "env_names": [
+                  "COMSPEC",
+                  "HOME",
+                  "LANG",
+                  "LC_ALL",
+                  "PATH",
+                  "PATHEXT",
+                  "PYTHONPATH",
+                  "SYSTEMROOT",
+                  "TEMP",
+                  "TMP",
+                  "USERPROFILE"
+                ],
+                "created_at": "2026-10-28T08:53:27",
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            },
+            {
+              "seq": 6,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "ea174107-7636-4486-b6b9-e18cbb22dc64",
+              "parent_event_id": "56c96a64-ba84-495f-9a1e-3e4b8a7b8cc6",
+              "node": "create_plan",
+              "type": "node.started",
+              "payload": {
+                "task_id": "8f08b858-d1a4-4291-b3a1-2c889ce34df2",
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            },
+            {
+              "seq": 7,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "9e353e3d-3b55-4f50-a1e4-8b9ae2e7995e",
+              "parent_event_id": "ea174107-7636-4486-b6b9-e18cbb22dc64",
+              "node": "create_plan",
+              "type": "turn.context",
+              "payload": {
+                "step": 0,
+                "node": "create_plan",
+                "role": "planner",
+                "model": "deepseek-chat",
+                "provider": "DeepSeek",
+                "reasoning_effort": "",
+                "verbosity": "",
+                "tier": "",
+                "permission_mode": "default",
+                "permissions": {
+                  "mode": "default",
+                  "sandbox_tier": "off",
+                  "tool_scope": "tier+tool+target_path_prefix",
+                  "approved_tools": [],
+                  "approved_prefixes": [],
+                  "persistent_prefixes": [],
+                  "denied_prefixes": [],
+                  "ruleset": {
+                    "path": "E:\\tmp\\realmodel\\permissions.rules",
+                    "allow": [],
+                    "deny": [],
+                    "error": ""
+                  }
+                },
+                "guardian_mode": "off",
+                "readonly": false,
+                "workspace": "<workspace:ws-v123-team>",
+                "max_steps": 8,
+                "token_budget": 1500000,
+                "depth": 0,
+                "agent_path": "root",
+                "instructions": [],
+                "current_date": "2026-10-28",
+                "timezone": "中国标准时间",
+                "sandbox": {
+                  "tier": "off",
+                  "tier_requested": "off",
+                  "tier_available": true,
+                  "tier_degraded": false,
+                  "tier_reason": "sandbox_disabled",
+                  "tier_notice": "部署策略关闭了沙箱：本任务无隔离，命令直接以宿主完整权限执行",
+                  "backend": "none",
+                  "enabled": false,
+                  "isolation": "host",
+                  "boundary_strength": "none",
+                  "boundary_strength_label": "无内核强制（宿主直连）",
+                  "boundary_measured_seconds_ago": 0.3,
+                  "boundary_apparatus_ok": true,
+                  "enforcement_source": "sandbox_disabled",
+                  "enforced": {
+                    "memory": false,
+                    "pids": false,
+                    "tree_kill": false,
+                    "cpu": false,
+                    "disk": false,
+                    "network": false,
+                    "filesystem": false
+                  },
+                  "filesystem_enforced": false,
+                  "network_enforced": false,
+                  "allow_local": false,
+                  "cpus": 1.0,
+                  "memory": "512m",
+                  "pids": 128,
+                  "tmpfs": "128m",
+                  "read_only_root": true,
+                  "network": false,
+                  "timeout_seconds": 120.0,
+                  "writable_root": "<workspace:ws-v123-team>",
+                  "denied": ""
+                },
+                "permission_profile": {
+                  "type": "managed",
+                  "enforced_by": "policy",
+                  "missing_path_behavior": "skip",
+                  "file_system": {
+                    "type": "restricted",
+                    "entries": [
+                      {
+                        "path": "<workspace:ws-v123-team>",
+                        "access": "write",
+                        "enforced_by": "policy"
+                      },
+                      {
+                        "path": "*",
+                        "access": "deny",
+                        "enforced_by": "policy"
+                      }
+                    ]
+                  },
+                  "network": {
+                    "requested": "none",
+                    "enforced_by": "policy",
+                    "command_gate": "deny"
+                  }
+                },
+                "features": {
+                  "tool_search": {
+                    "on": true,
+                    "source": "legacy"
+                  },
+                  "handoff_notes": {
+                    "on": true,
+                    "source": "default"
+                  },
+                  "prompt_cache": {
+                    "on": true,
+                    "source": "default"
+                  },
+                  "parallel_read_tools": {
+                    "on": false,
+                    "source": "default"
+                  },
+                  "model_routing": {
+                    "on": false,
+                    "source": "default"
+                  },
+                  "load_balance": {
+                    "on": false,
+                    "source": "default"
+                  },
+                  "tiered_tools": {
+                    "on": false,
+                    "source": "default"
+                  },
+                  "stream_output": {
+                    "on": true,
+                    "source": "default"
+                  },
+                  "fs_broker": {
+                    "on": false,
+                    "source": "default"
+                  }
+                },
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            },
+            {
+              "seq": 8,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "b9f094a6-0454-46df-80ba-2ee8a42575be",
+              "parent_event_id": "9e353e3d-3b55-4f50-a1e4-8b9ae2e7995e",
+              "node": "create_plan",
+              "type": "world.state",
+              "payload": {
+                "full": true,
+                "state": {
+                  "operating_mode": {
+                    "mode": "default",
+                    "model": "deepseek-chat",
+                    "provider": "DeepSeek",
+                    "readonly": false,
+                    "guardian_mode": "off",
+                    "instructions": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4"
+                  },
+                  "instructions": [],
+                  "environments": {
+                    "local": {
+                      "cwd": "<workspace:ws-v123-team>",
+                      "status": "captured",
+                      "shell": "cmd.exe",
+                      "os": "Windows 11",
+                      "machine": "AMD64",
+                      "python": "python.exe",
+                      "has_venv": false,
+                      "venv_pinned": false,
+                      "path_entries": 26,
+                      "env_names": [
+                        "COMSPEC",
+                        "HOME",
+                        "LANG",
+                        "LC_ALL",
+                        "PATH",
+                        "PATHEXT",
+                        "PYTHONPATH",
+                        "SYSTEMROOT",
+                        "TEMP",
+                        "TMP",
+                        "USERPROFILE"
+                      ]
+                    }
+                  },
+                  "context_window_guidance": {
+                    "context_window": 65536,
+                    "trigger_ratio": 0.82,
+                    "reserve_tokens": 16384,
+                    "trigger_at": 49152
+                  },
+                  "current_date": "2026-10-28",
+                  "timezone": "中国标准时间"
+                },
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            },
+            {
+              "seq": 9,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "8f6f02ae-8d1c-4bd0-9233-576e2b2577f6",
+              "parent_event_id": "b9f094a6-0454-46df-80ba-2ee8a42575be",
+              "node": "create_plan",
+              "type": "context.measured",
+              "payload": {
+                "active_context_tokens_before": 1972,
+                "active_context_tokens_after": 1972,
+                "tokens_saved": 0,
+                "micro": {
+                  "clipped": 0,
+                  "duplicates": 0,
+                  "base64_removed": 0,
+                  "chars_saved": 0
+                },
+                "folded": 0,
+                "boundary": 0,
+                "summary_chars": 0,
+                "covered": 0,
+                "context_window": 65536,
+                "trigger_at": 49152,
+                "water_ratio": 0.0301,
+                "calibration": 1.0,
+                "observed_tokens": 0,
+                "triggered_by": "",
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            },
+            {
+              "seq": 10,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "330aa6c6-47af-4f17-abce-4e4757428fbe",
+              "parent_event_id": "8f6f02ae-8d1c-4bd0-9233-576e2b2577f6",
+              "node": "create_plan",
+              "type": "model.streamed",
+              "payload": {
+                "chunks": 34,
+                "chars": 80,
+                "first_delta_ms": 969,
+                "model": "deepseek-flash",
+                "role": "planner",
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            },
+            {
+              "seq": 11,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "8a4e598d-2f98-4bbe-9174-5864dc92d5ca",
+              "parent_event_id": "330aa6c6-47af-4f17-abce-4e4757428fbe",
+              "node": "create_plan",
+              "type": "model.usage",
+              "payload": {
+                "role": "planner",
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1",
+                "depth": 0,
+                "agent_path": "root",
+                "attribution": {
+                  "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+                  "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+                  "thread_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1",
+                  "parent_thread_id": "",
+                  "root_thread_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1",
+                  "agent_path": "root",
+                  "depth": 0,
+                  "parallel_group": "",
+                  "sandbox_mode": "off"
+                },
+                "call": {
+                  "prompt_tokens": 4403,
+                  "completion_tokens": 34,
+                  "cached_tokens": 256,
+                  "cache_write_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "total_tokens": 4437,
+                  "calls": 1,
+                  "model": "deepseek-flash",
+                  "provider": "DeepSeek",
+                  "latency_ms": 1232,
+                  "status": "ok",
+                  "response_id": "34eaa75b-42fa-4b6a-afc4-2d03118d620b"
+                },
+                "turn": {
+                  "prompt_tokens": 4403,
+                  "completion_tokens": 34,
+                  "cached_tokens": 256,
+                  "cache_write_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "total_tokens": 4437,
+                  "calls": 1
+                },
+                "task": {
+                  "prompt_tokens": 4403,
+                  "completion_tokens": 34,
+                  "cached_tokens": 256,
+                  "cache_write_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "total_tokens": 4437,
+                  "latency_ms": 1232,
+                  "calls": 1
+                }
+              }
+            },
+            {
+              "seq": 12,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "c540b0f7-c490-4716-8fef-cd702b69505e",
+              "parent_event_id": "8a4e598d-2f98-4bbe-9174-5864dc92d5ca",
+              "node": "create_plan",
+              "type": "intent.classified",
+              "payload": {
+                "intent": "answer",
+                "note": "要求原样输出指定口令句",
+                "steps": [],
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            },
+            {
+              "seq": 13,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "e5654046-26c9-4cd1-8825-5741c712aa61",
+              "parent_event_id": "c540b0f7-c490-4716-8fef-cd702b69505e",
+              "node": "summarize_result",
+              "type": "node.started",
+              "payload": {
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            },
+            {
+              "seq": 14,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "a929f1ab-3416-4532-881a-1a2d565662ee",
+              "parent_event_id": "e5654046-26c9-4cd1-8825-5741c712aa61",
+              "node": "summarize_result",
+              "type": "delivery.recorded",
+              "payload": {
+                "mode": "answer",
+                "chars": 10,
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            },
+            {
+              "seq": 15,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "636dfbb4-fa62-48f1-9f34-5b0a1088bec4",
+              "parent_event_id": "a929f1ab-3416-4532-881a-1a2d565662ee",
+              "node": "complete",
+              "type": "task.completed",
+              "payload": {
+                "status": "succeeded",
+                "reason": "",
+                "summary": "改写版正文-7733",
+                "usage": {
+                  "prompt_tokens": 4403,
+                  "completion_tokens": 34,
+                  "cached_tokens": 256,
+                  "cache_write_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "total_tokens": 4437,
+                  "calls": 1
+                },
+                "validation": {},
+                "thread_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1",
+                "context_tokens": 1972,
+                "steer": {
+                  "count": 0,
+                  "steps": []
+                },
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            },
+            {
+              "seq": 16,
+              "run_id": "team-201a9e54-59da-41c4-b444-69cbf3c8f36c-38",
+              "origin_run_id": "team-round-201a9e54-59da-41c4-b444-69cbf3c8f36c",
+              "step_id": "c2ad3a71-8549-44fd-98a3-67e4ca03ec58",
+              "parent_event_id": "636dfbb4-fa62-48f1-9f34-5b0a1088bec4",
+              "node": "complete",
+              "type": "memory.consolidated",
+              "payload": {
+                "path": "E:\\tmp\\realmodel\\memory\\ws-v123-team-ae448ed8.md",
+                "added": 1,
+                "skipped": 0,
+                "dropped": 0,
+                "total_chars": 181,
+                "trace_id": "task:8f08b858-d1a4-4291-b3a1-2c889ce34df2:attempt:1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "control": {
+      "project": "59ff2863-b509-49d6-89bd-9611743c01c4",
+      "group": "478a69622e3240ecb560e4e6bb64184b",
+      "state": {
+        "group": {
+          "id": "478a69622e3240ecb560e4e6bb64184b",
+          "project_id": "59ff2863-b509-49d6-89bd-9611743c01c4",
+          "name": "提交钩子群 1028085403",
+          "topic": "验证提交钩子作用在成员任务上",
+          "admin_bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+          "max_speakers": 3,
+          "token_budget": 60000,
+          "sandbox_tier": "",
+          "member_count": 2,
+          "last_message": "任务目标里没有出现口令。原文只有「本条任务目标里出现的口令是哪一串」这一句提问，没有形如「紫椒八十一号」的口令串。",
+          "round_status": "completed",
+          "created_at": "2026-10-28T00:54:03+00:00",
+          "updated_at": "2026-10-28T00:54:03.933491+00:00"
+        },
+        "members": [
+          {
+            "id": "f19d4f6e-ed9c-44bd-a8e5-4d4db4a0c2ed",
+            "bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+            "name": "小白管家",
+            "role": "主理人",
+            "position": 0,
+            "enabled": true,
+            "thread_id": "e4c24da3-5df4-4a7a-9525-985f068503cd",
+            "provider_id": "",
+            "provider_name": "",
+            "model": "",
+            "workspace_id": "",
+            "workspace_label": "",
+            "permission_mode": "default",
+            "max_steps": 8,
+            "is_admin": true
+          },
+          {
+            "id": "947496ce-b69d-4841-a209-d2dc6aa32f4c",
+            "bot_id": "b737be87b8984d14b5c084b00cf472e0",
+            "name": "成员5403",
+            "role": "侦察",
+            "position": 1,
+            "enabled": true,
+            "thread_id": "f23120c2-b499-4538-871f-def579a48f76",
+            "provider_id": "cfc2806d-2f8e-4834-8b11-141d1148e80f",
+            "provider_name": "DeepSeek",
+            "model": "deepseek-chat",
+            "workspace_id": "",
+            "workspace_label": "",
+            "permission_mode": "default",
+            "max_steps": 8,
+            "is_admin": false
+          }
+        ],
+        "round": {
+          "id": "c5a8650d-1dec-4471-b0b6-60e51d991ece",
+          "group_id": "478a69622e3240ecb560e4e6bb64184b",
+          "user_message_id": 37,
+          "status": "completed",
+          "queue": [],
+          "spoken": [
+            "54b28dd9-b7a9-41d0-b93e-c533ceca6b01"
+          ],
+          "tokens": 4442,
+          "wrap_up_done": false,
+          "error": "",
+          "created_at": "2026-10-28T00:54:03+00:00",
+          "updated_at": "2026-10-28T00:54:05+00:00",
+          "usage": {
+            "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+            "tokens": 4442,
+            "calls": 1,
+            "tasks": 1,
+            "runs": 1,
+            "subagent_calls": 0,
+            "by_bot": [
+              {
+                "bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+                "bot_name": "小白管家",
+                "tokens": 4442,
+                "calls": 1,
+                "subagent_calls": 0
+              }
+            ]
+          }
+        },
+        "messages": [
+          {
+            "id": 37,
+            "group_id": "478a69622e3240ecb560e4e6bb64184b",
+            "round_id": "c5a8650d-1dec-4471-b0b6-60e51d991ece",
+            "role": "user",
+            "bot_id": "",
+            "bot_name": "",
+            "content": "不要调用任何工具，也不要读文件。请直接回答：本条任务目标里出现的口令是哪一串？把口令原样写出来（形如「紫椒八十一号」），不要写别的内容。",
+            "status": "sent",
+            "task_id": "",
+            "meta": {
+              "mentions": []
+            },
+            "created_at": "2026-10-28T00:54:03+00:00"
+          },
+          {
+            "id": 38,
+            "group_id": "478a69622e3240ecb560e4e6bb64184b",
+            "round_id": "c5a8650d-1dec-4471-b0b6-60e51d991ece",
+            "role": "bot",
+            "bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+            "bot_name": "小白管家",
+            "content": "任务目标里没有出现口令。原文只有「本条任务目标里出现的口令是哪一串」这一句提问，没有形如「紫椒八十一号」的口令串。",
+            "status": "succeeded",
+            "task_id": "6948088a-dfe0-4bf5-aacf-360cce5ef118",
+            "meta": {
+              "provider": "DeepSeek",
+              "model": "deepseek-chat",
+              "wrap_up": false,
+              "mentions": [],
+              "usage": {
+                "prompt_tokens": 4378,
+                "completion_tokens": 64,
+                "total_tokens": 4442
+              },
+              "steps": 0
+            },
+            "created_at": "2026-10-28T00:54:03+00:00"
+          }
+        ],
+        "pending": [],
+        "usage": {
+          "tokens": 4442,
+          "calls": 1,
+          "tasks": 1,
+          "runs": 1,
+          "subagent_calls": 0,
+          "by_bot": [
+            {
+              "bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+              "bot_name": "小白管家",
+              "tokens": 4442,
+              "calls": 1,
+              "subagent_calls": 0
+            }
+          ]
+        },
+        "usage_by_bot": [
+          {
+            "bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+            "bot_name": "小白管家",
+            "tokens": 4442,
+            "calls": 1,
+            "subagent_calls": 0
+          }
+        ]
+      },
+      "tasks": [
+        {
+          "id": "6948088a-dfe0-4bf5-aacf-360cce5ef118",
+          "task": {
+            "id": "6948088a-dfe0-4bf5-aacf-360cce5ef118",
+            "project_id": "59ff2863-b509-49d6-89bd-9611743c01c4",
+            "provider_id": "cfc2806d-2f8e-4834-8b11-141d1148e80f",
+            "thread_id": "e4c24da3-5df4-4a7a-9525-985f068503cd",
+            "title": "@小白管家 · 提交钩子群 1028085403",
+            "goal": "不要调用任何工具，也不要读文件。请直接回答：本条任务目标里出现的口令是哪一串？把口令原样写出来（形如「紫椒八十一号」），不要写别的内容。",
+            "status": "succeeded",
+            "acceptance_criteria": [],
+            "acceptance_results": [],
+            "attachments": [],
+            "max_steps": 8,
+            "steps_used": 0,
+            "result_summary": "任务目标里没有出现口令。原文只有「本条任务目标里出现的口令是哪一串」这一句提问，没有形如「紫椒八十一号」的口令串。",
+            "failure_reason": "",
+            "created_at": "2026-10-28T00:54:03+00:00",
+            "updated_at": "2026-10-28T00:54:05+00:00"
+          },
+          "events": [
+            {
+              "seq": 1,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "a8c2a293-e6d9-42c9-8c0a-fa33288447bb",
+              "parent_event_id": "",
+              "node": "receive_task",
+              "type": "team.turn.started",
+              "payload": {
+                "group_id": "478a69622e3240ecb560e4e6bb64184b",
+                "round_id": "c5a8650d-1dec-4471-b0b6-60e51d991ece",
+                "bot_id": "54b28dd9-b7a9-41d0-b93e-c533ceca6b01",
+                "bot_name": "小白管家",
+                "message_id": 38,
+                "wrap_up": false,
+                "trace_id": "6948088a-dfe0-4bf5-aacf-360cce5ef118"
+              }
+            },
+            {
+              "seq": 2,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "0af7faf7-3c8e-4979-84af-08056acff716",
+              "parent_event_id": "a8c2a293-e6d9-42c9-8c0a-fa33288447bb",
+              "node": "receive_task",
+              "type": "task.started",
+              "payload": {
+                "title": "@小白管家 · 提交钩子群 1028085403",
+                "goal": "不要调用任何工具，也不要读文件。请直接回答：本条任务目标里出现的口令是哪一串？把口令原样写出来（形如「紫椒八十一号」），不要写别的内容。",
+                "acceptance_criteria": [],
+                "workspace": "<workspace:ws-v123-team>",
+                "provider": "DeepSeek",
+                "model": "deepseek-chat",
+                "max_steps": 8,
+                "permission_mode": "default",
+                "permissions": {
+                  "mode": "default",
+                  "sandbox_tier": "off",
+                  "tool_scope": "tier+tool+target_path_prefix",
+                  "approved_tools": [],
+                  "approved_prefixes": [],
+                  "persistent_prefixes": [],
+                  "denied_prefixes": [],
+                  "ruleset": {
+                    "path": "E:\\tmp\\realmodel-ctl\\permissions.rules",
+                    "allow": [],
+                    "deny": [],
+                    "error": ""
+                  }
+                },
+                "sandbox": {
+                  "requested": "workspace",
+                  "tier": "off",
+                  "strength": "none",
+                  "label": "无内核强制（宿主直连）",
+                  "backend": "none",
+                  "global_enabled": false,
+                  "available": true,
+                  "degraded": true,
+                  "limits_enforced": false,
+                  "filesystem_enforced": false,
+                  "network_enforced": false,
+                  "notice": "部署策略关闭了沙箱：本任务无隔离，命令直接以宿主完整权限执行",
+                  "reason": "sandbox_disabled"
+                },
+                "sandbox_mode": "off",
+                "tools": [
+                  "tool_search",
+                  "update_plan",
+                  "enter_plan_mode",
+                  "exit_plan_mode",
+                  "request_user_input",
+                  "task_output",
+                  "task_stop",
+                  "list_files",
+                  "read_file",
+                  "search_code",
+                  "write_notes",
+                  "read_notes",
+                  "apply_patch",
+                  "run_shell",
+                  "run_tests",
+                  "team_status",
+                  "team_create_bot",
+                  "team_update_bot",
+                  "team_add_member",
+                  "team_remove_member",
+                  "team_assign_task"
+                ],
+                "tools_deferred": [
+                  "spawn_agent",
+                  "spawn_agents",
+                  "memory_search",
+                  "memory_write",
+                  "git",
+                  "web_search",
+                  "web_fetch"
+                ],
+                "mcp": {
+                  "tools": 0,
+                  "servers": [],
+                  "boundary": "none",
+                  "boundary_note": "没有已连接的 MCP 服务端",
+                  "by_boundary": {},
+                  "unbounded_servers": []
+                },
+                "compaction": {
+                  "context_window": 65536,
+                  "trigger_ratio": 0.82,
+                  "reserve_tokens": 16384,
+                  "trigger_at": 49152
+                },
+                "guardian_mode": "off",
+                "thread_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1",
+                "snapshot_id": "",
+                "trace_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1"
+              }
+            },
+            {
+              "seq": 3,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "793fe693-744e-4dc3-b4b1-5c428174d420",
+              "parent_event_id": "0af7faf7-3c8e-4979-84af-08056acff716",
+              "node": "receive_task",
+              "type": "shell.snapshot",
+              "payload": {
+                "cwd": "<workspace:ws-v123-team>",
+                "policy": "minimal",
+                "shell": "<workspace:cmd.exe>",
+                "python": "<workspace:python.exe>",
+                "venv": "",
+                "venv_pinned": false,
+                "path_entries": [
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:bin>",
+                  "<workspace:pnpm>",
+                  "<workspace:System32>",
+                  "<workspace:WINDOWS>",
+                  "<workspace:Wbem>",
+                  "<workspace:v1.0>",
+                  "<workspace:OpenSSH>",
+                  "<workspace:微信web开发者工具>",
+                  "<workspace:cmd>",
+                  "<workspace:bin>",
+                  "<workspace:shims>",
+                  "<workspace:WindowsApps>",
+                  "<workspace:bin>",
+                  "<workspace:tools>",
+                  "<workspace:vendor_perl>",
+                  "<workspace:core_perl>"
+                ],
+                "env_names": [
+                  "COMSPEC",
+                  "HOME",
+                  "LANG",
+                  "LC_ALL",
+                  "PATH",
+                  "PATHEXT",
+                  "PYTHONPATH",
+                  "SYSTEMROOT",
+                  "TEMP",
+                  "TMP",
+                  "USERPROFILE"
+                ],
+                "created_at": "2026-10-28T08:54:04",
+                "trace_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1"
+              }
+            },
+            {
+              "seq": 4,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "1f7bda57-3333-4389-b6a1-8f7af355e9c5",
+              "parent_event_id": "793fe693-744e-4dc3-b4b1-5c428174d420",
+              "node": "create_plan",
+              "type": "node.started",
+              "payload": {
+                "task_id": "6948088a-dfe0-4bf5-aacf-360cce5ef118",
+                "trace_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1"
+              }
+            },
+            {
+              "seq": 5,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "fe9bc813-e21b-4462-817b-36796722ddf5",
+              "parent_event_id": "1f7bda57-3333-4389-b6a1-8f7af355e9c5",
+              "node": "create_plan",
+              "type": "turn.context",
+              "payload": {
+                "step": 0,
+                "node": "create_plan",
+                "role": "planner",
+                "model": "deepseek-chat",
+                "provider": "DeepSeek",
+                "reasoning_effort": "",
+                "verbosity": "",
+                "tier": "",
+                "permission_mode": "default",
+                "permissions": {
+                  "mode": "default",
+                  "sandbox_tier": "off",
+                  "tool_scope": "tier+tool+target_path_prefix",
+                  "approved_tools": [],
+                  "approved_prefixes": [],
+                  "persistent_prefixes": [],
+                  "denied_prefixes": [],
+                  "ruleset": {
+                    "path": "E:\\tmp\\realmodel-ctl\\permissions.rules",
+                    "allow": [],
+                    "deny": [],
+                    "error": ""
+                  }
+                },
+                "guardian_mode": "off",
+                "readonly": false,
+                "workspace": "<workspace:ws-v123-team>",
+                "max_steps": 8,
+                "token_budget": 1500000,
+                "depth": 0,
+                "agent_path": "root",
+                "instructions": [],
+                "current_date": "2026-10-28",
+                "timezone": "中国标准时间",
+                "sandbox": {
+                  "tier": "off",
+                  "tier_requested": "off",
+                  "tier_available": true,
+                  "tier_degraded": false,
+                  "tier_reason": "sandbox_disabled",
+                  "tier_notice": "部署策略关闭了沙箱：本任务无隔离，命令直接以宿主完整权限执行",
+                  "backend": "none",
+                  "enabled": false,
+                  "isolation": "host",
+                  "boundary_strength": "none",
+                  "boundary_strength_label": "无内核强制（宿主直连）",
+                  "boundary_measured_seconds_ago": 0.2,
+                  "boundary_apparatus_ok": true,
+                  "enforcement_source": "sandbox_disabled",
+                  "enforced": {
+                    "memory": false,
+                    "pids": false,
+                    "tree_kill": false,
+                    "cpu": false,
+                    "disk": false,
+                    "network": false,
+                    "filesystem": false
+                  },
+                  "filesystem_enforced": false,
+                  "network_enforced": false,
+                  "allow_local": false,
+                  "cpus": 1.0,
+                  "memory": "512m",
+                  "pids": 128,
+                  "tmpfs": "128m",
+                  "read_only_root": true,
+                  "network": false,
+                  "timeout_seconds": 120.0,
+                  "writable_root": "<workspace:ws-v123-team>",
+                  "denied": ""
+                },
+                "permission_profile": {
+                  "type": "managed",
+                  "enforced_by": "policy",
+                  "missing_path_behavior": "skip",
+                  "file_system": {
+                    "type": "restricted",
+                    "entries": [
+                      {
+                        "path": "<workspace:ws-v123-team>",
+                        "access": "write",
+                        "enforced_by": "policy"
+                      },
+                      {
+                        "path": "*",
+                        "access": "deny",
+                        "enforced_by": "policy"
+                      }
+                    ]
+                  },
+                  "network": {
+                    "requested": "none",
+                    "enforced_by": "policy",
+                    "command_gate": "deny"
+                  }
+                },
+                "features": {
+                  "tool_search": {
+                    "on": true,
+                    "source": "legacy"
+                  },
+                  "handoff_notes": {
+                    "on": true,
+                    "source": "default"
+                  },
+                  "prompt_cache": {
+                    "on": true,
+                    "source": "default"
+                  },
+                  "parallel_read_tools": {
+                    "on": false,
+                    "source": "default"
+                  },
+                  "model_routing": {
+                    "on": false,
+                    "source": "default"
+                  },
+                  "load_balance": {
+                    "on": false,
+                    "source": "default"
+                  },
+                  "tiered_tools": {
+                    "on": false,
+                    "source": "default"
+                  },
+                  "stream_output": {
+                    "on": true,
+                    "source": "default"
+                  },
+                  "fs_broker": {
+                    "on": false,
+                    "source": "default"
+                  }
+                },
+                "trace_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1"
+              }
+            },
+            {
+              "seq": 6,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "9e92e15e-8c8a-4131-a14b-1756d53f9778",
+              "parent_event_id": "fe9bc813-e21b-4462-817b-36796722ddf5",
+              "node": "create_plan",
+              "type": "world.state",
+              "payload": {
+                "full": true,
+                "state": {
+                  "operating_mode": {
+                    "mode": "default",
+                    "model": "deepseek-chat",
+                    "provider": "DeepSeek",
+                    "readonly": false,
+                    "guardian_mode": "off",
+                    "instructions": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4"
+                  },
+                  "instructions": [],
+                  "environments": {
+                    "local": {
+                      "cwd": "<workspace:ws-v123-team>",
+                      "status": "captured",
+                      "shell": "cmd.exe",
+                      "os": "Windows 11",
+                      "machine": "AMD64",
+                      "python": "python.exe",
+                      "has_venv": false,
+                      "venv_pinned": false,
+                      "path_entries": 26,
+                      "env_names": [
+                        "COMSPEC",
+                        "HOME",
+                        "LANG",
+                        "LC_ALL",
+                        "PATH",
+                        "PATHEXT",
+                        "PYTHONPATH",
+                        "SYSTEMROOT",
+                        "TEMP",
+                        "TMP",
+                        "USERPROFILE"
+                      ]
+                    }
+                  },
+                  "context_window_guidance": {
+                    "context_window": 65536,
+                    "trigger_ratio": 0.82,
+                    "reserve_tokens": 16384,
+                    "trigger_at": 49152
+                  },
+                  "current_date": "2026-10-28",
+                  "timezone": "中国标准时间"
+                },
+                "trace_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1"
+              }
+            },
+            {
+              "seq": 7,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "f346b578-825a-4349-9224-4b15da34fb78",
+              "parent_event_id": "9e92e15e-8c8a-4131-a14b-1756d53f9778",
+              "node": "create_plan",
+              "type": "context.measured",
+              "payload": {
+                "active_context_tokens_before": 1928,
+                "active_context_tokens_after": 1928,
+                "tokens_saved": 0,
+                "micro": {
+                  "clipped": 0,
+                  "duplicates": 0,
+                  "base64_removed": 0,
+                  "chars_saved": 0
+                },
+                "folded": 0,
+                "boundary": 0,
+                "summary_chars": 0,
+                "covered": 0,
+                "context_window": 65536,
+                "trigger_at": 49152,
+                "water_ratio": 0.0294,
+                "calibration": 1.0,
+                "observed_tokens": 0,
+                "triggered_by": "",
+                "trace_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1"
+              }
+            },
+            {
+              "seq": 8,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "42734d66-992e-49ae-af4d-779f00ea41fd",
+              "parent_event_id": "f346b578-825a-4349-9224-4b15da34fb78",
+              "node": "create_plan",
+              "type": "model.streamed",
+              "payload": {
+                "chunks": 64,
+                "chars": 126,
+                "first_delta_ms": 1016,
+                "model": "deepseek-flash",
+                "role": "planner",
+                "trace_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1"
+              }
+            },
+            {
+              "seq": 9,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "ee78a2c6-41df-4306-ae53-1dbbb0919ff0",
+              "parent_event_id": "42734d66-992e-49ae-af4d-779f00ea41fd",
+              "node": "create_plan",
+              "type": "model.usage",
+              "payload": {
+                "role": "planner",
+                "trace_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1",
+                "depth": 0,
+                "agent_path": "root",
+                "attribution": {
+                  "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+                  "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+                  "thread_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1",
+                  "parent_thread_id": "",
+                  "root_thread_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1",
+                  "agent_path": "root",
+                  "depth": 0,
+                  "parallel_group": "",
+                  "sandbox_mode": "off"
+                },
+                "call": {
+                  "prompt_tokens": 4378,
+                  "completion_tokens": 64,
+                  "cached_tokens": 384,
+                  "cache_write_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "total_tokens": 4442,
+                  "calls": 1,
+                  "model": "deepseek-flash",
+                  "provider": "DeepSeek",
+                  "latency_ms": 1395,
+                  "status": "ok",
+                  "response_id": "1dddd1cd-0360-479a-adc1-0a0612c8934b"
+                },
+                "turn": {
+                  "prompt_tokens": 4378,
+                  "completion_tokens": 64,
+                  "cached_tokens": 384,
+                  "cache_write_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "total_tokens": 4442,
+                  "calls": 1
+                },
+                "task": {
+                  "prompt_tokens": 4378,
+                  "completion_tokens": 64,
+                  "cached_tokens": 384,
+                  "cache_write_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "total_tokens": 4442,
+                  "latency_ms": 1395,
+                  "calls": 1
+                }
+              }
+            },
+            {
+              "seq": 10,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "50d8c5ca-6e3c-4287-b9c1-c4bce09a9c56",
+              "parent_event_id": "ee78a2c6-41df-4306-ae53-1dbbb0919ff0",
+              "node": "create_plan",
+              "type": "intent.classified",
+              "payload": {
+                "intent": "answer",
+                "note": "复述任务目标里的口令",
+                "steps": [],
+                "trace_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1"
+              }
+            },
+            {
+              "seq": 11,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "0b41586d-954b-40ff-bdf7-96407f339d04",
+              "parent_event_id": "50d8c5ca-6e3c-4287-b9c1-c4bce09a9c56",
+              "node": "summarize_result",
+              "type": "node.started",
+              "payload": {
+                "trace_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1"
+              }
+            },
+            {
+              "seq": 12,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "a0d2027f-6ee6-475a-9f08-4d088d7e9867",
+              "parent_event_id": "0b41586d-954b-40ff-bdf7-96407f339d04",
+              "node": "summarize_result",
+              "type": "delivery.recorded",
+              "payload": {
+                "mode": "answer",
+                "chars": 57,
+                "trace_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1"
+              }
+            },
+            {
+              "seq": 13,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "243ef3c8-ad53-4751-8be6-b4b861050e3d",
+              "parent_event_id": "a0d2027f-6ee6-475a-9f08-4d088d7e9867",
+              "node": "complete",
+              "type": "task.completed",
+              "payload": {
+                "status": "succeeded",
+                "reason": "",
+                "summary": "任务目标里没有出现口令。原文只有「本条任务目标里出现的口令是哪一串」这一句提问，没有形如「紫椒八十一号」的口令串。",
+                "usage": {
+                  "prompt_tokens": 4378,
+                  "completion_tokens": 64,
+                  "cached_tokens": 384,
+                  "cache_write_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "total_tokens": 4442,
+                  "calls": 1
+                },
+                "validation": {},
+                "thread_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1",
+                "context_tokens": 1928,
+                "steer": {
+                  "count": 0,
+                  "steps": []
+                },
+                "trace_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1"
+              }
+            },
+            {
+              "seq": 14,
+              "run_id": "team-c5a8650d-1dec-4471-b0b6-60e51d991ece-38",
+              "origin_run_id": "team-round-c5a8650d-1dec-4471-b0b6-60e51d991ece",
+              "step_id": "3207545d-5fe4-4b3d-937e-ee91c62c13c8",
+              "parent_event_id": "243ef3c8-ad53-4751-8be6-b4b861050e3d",
+              "node": "complete",
+              "type": "memory.consolidated",
+              "payload": {
+                "path": "E:\\tmp\\realmodel-ctl\\memory\\ws-v123-team-ac2639c9.md",
+                "added": 1,
+                "skipped": 0,
+                "dropped": 0,
+                "total_chars": 228,
+                "trace_id": "task:6948088a-dfe0-4bf5-aacf-360cce5ef118:attempt:1"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

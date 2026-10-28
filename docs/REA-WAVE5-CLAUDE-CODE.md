@@ -767,13 +767,14 @@ mac/Linux 上那两条分支没实物点过；
 改成「对照格用自己那张判定表、只交一件事：那三条到底红没红」（`prompt_submit_v123.py:judge_cell`）
 之后才是 rc=0。
 
-**装置自检 38 条 + 25 条变异电池。** `services/api/tests/test_prompt_submit_device_v123.py`
+**装置自检 48 条 + 25 条变异电池。** `services/api/tests/test_prompt_submit_device_v123.py`
 拿五格实物重放判据，`test_同一套对照判据打在带钩子的实物上不该全红` 是反向格（防「对照判据写宽」），
 `test_锚与正文只写一处夹具里不许出现第二份抄本` 钉夹具与判据共读的那份规格
 （`fixtures/prompt-submit-v123.json`）。25 条电池把事件删掉、把长度改成 `None`、把 goal 换成
 抑制后的那份、把姿态留痕的 `true` 换成 `"true"`/缺键……每条的期望红集合**都来自实测**，
-红集合漂移即 `[ABORT]`。产品侧另有 13 条（`test_prompt_submit_v123.py`），含
-`test_团队入口的成员任务也过提交钩子`。合跑 51 passed。
+红集合漂移即 `[ABORT]`。产品侧另有 15 条（`test_prompt_submit_v123.py`），含
+`test_团队入口的成员任务也过提交钩子`、`test_钩子要求确认时按拒绝处理并说明`、
+`test_续跑不发提交钩子且抑制从检查点延续`。合跑 63 passed。
 
 **电池这一轮先把自己修好再交付。** 第一次完整跑停在 M5 `[ABORT] judgments.py 没回到原字节`：
 #123 的编辑让这个 CRLF 文件混进了裸 LF，而电池按它认到的那一种行尾写回，等于静默归一化——
@@ -782,7 +783,8 @@ mac/Linux 上那两条分支没实物点过；
 反证：把 `if crlf and bare:` 改成 `if False:`，`test_电池对混合行尾的文件拒绝动手` 当刻红
 （`1 failed, 1 passed`，rc=1），还原 sha256 一致。修好后整轮读数（`E:/tmp/v123/battery_full_v123.txt`）：
 基线 `rc=0 红=[]`、**25 条全 rc=1 且红集合与 `fixtures/battery-booked-v121.json` 逐字相等**、
-四文件逐字节还原、还原后复跑全绿 `[ALL-OK]`。
+四文件逐字节还原、还原后复跑全绿 `[ALL-OK]`。收尾这批（judgments.py 加团队判据之后）又跑了一轮
+`E:/tmp/v132_battery.txt`：25 条同样全红、红集合逐字相等、还原后复跑 `rc=0 红=[]`，`[ALL-OK]`。
 
 **界面三卡 + 反证（真 Chrome，:3100 私有 dev 代理到 :8061，`:3000/:8000` 未碰）。**
 `web/src/components/tasks/timeline.ts:286-329` 三张卡分别 `text-danger` / `text-warn` / muted，
@@ -796,13 +798,49 @@ sha256 还原）：`E:/tmp/v123/mut_ui_run4.txt` 读数与登记逐字相等，`
 性质移交能失败的那条单测（`三道决定的卡片只报读数：payload 里混进正文也不抄上屏`，
 用带 `goal`/`text`/`replacement` 字段的 payload 打）。
 
-**全量回归**：后端 `1597 passed / 23 skipped`（347.28s，`E:/tmp/v123/full_backend_final.txt`），
-前端 `211 pass / 0 fail`（node:test，864ms，rc=0），`tsc --noEmit` rc=0 且零输出。
+**#129 `decision: "ask"`：提交这一步没有确认界面，只能按拒绝处理。**
+钩子说「先问一声」时，工具档有审批卡可弹；提交这一步没有。#129 之前 `asks` 只随
+`hook.completed` 记账、正文照送——等于把钩子写下的条件静默丢掉。现在 `_submit_prompt`
+在 deny 分支之后接 ask：`hook.prompt_blocked` 带 `decision="ask"` 与钩子原因、
+`_finish(failed, steps=0)`、连 `task.started` 都不发。用例
+`test_钩子要求确认时按拒绝处理并说明`（stdout 给 `{"decision": "ask", "reason": "先问一声再放行"}`）
+断言模型零请求、失败原因含 ask 与那条原因、事件带长度不带原文。反证（一次性装置，已删）
+`E:/tmp/v123/redlock_ask.py` 把分支改成 `if False:`，目标用例当刻红（rc=1），还原 sha 一致。
+所以「ask 能放行」这条路在产品里不存在，装置不判它；哪天做了提交期确认界面再补一格。
+
+**#130 续跑：钩子只跑一次，抑制从检查点延续。**
+`_submit_prompt` 的唯一调用点在首轮，恢复执行没有新的提交。用例
+`test_续跑不发提交钩子且抑制从检查点延续` 跑真链路：夹具钩子每次被调用就往计数文件追一个字节、
+随后给抑制决定；`apply_patch` 写 `.env` 触发审批，任务进 `waiting_approval`（计数器=1、
+模型已见替代正文），批准后断言：计数器仍=1、续跑的每一次请求都不含原文、含替代正文、
+`hook.completed(user_prompt_submit)` 恰一条、账面 goal 仍含原文。反证（一次性装置，已删）
+`E:/tmp/v123/redlock_resume.py` 在 `_resume` 里插回 `await self._submit_prompt(scope)`，
+用例当刻红（`assert 2 == 1`），还原 sha 一致。仍不覆盖：跨进程崩溃后的恢复
+（检查点由被杀进程写下、新进程续跑）。
+
+**#131 团队入口：真模型两格。**
+群聊的成员任务 goal 直接由 `services/team.py` 从用户发言取，所以提交钩子对它是第二条入口。
+`evals/realmodel/team_submit_v123.py` 在两台上各跑一次同一份夹具发言：主格 :8061
+群 `0495a7dac3a5432c9466305edb2fe133`，成员任务 `8f08b858` 的事件是
+`team.turn.started → hook.completed → hook.prompt_substituted → task.started`，
+五条判据零红（`member=1 misses=[] bot_msgs=1 leaks=[]`、账面 goal 逐字等于用户发言），
+机器人答 `改写版正文-7733`，`rc=0`，工件
+`E:/tmp/realmodel/team-submit-v123-20261028-085330.json`；对照格 :8065
+群 `478a69622e3240ecb560e4e6bb64184b`，红 3 / 判据 5 且与 `CONTROL_123_TEAM_RED` 逐字相等
+（`[对照] 该红的三条 [...] 红了=True`），工件
+`E:/tmp/realmodel-ctl/team-submit-v123-control-20261028-085407.json`。两格实物进仓库
+`fixtures/team-submit-v123-green.json`，离线重放 3 条 + 6 条损伤（任务行整个丢了 / 删抑制事件 /
+抑制位写成字符串 / 账面换掉 / 机器人没答 / 机器人带上原文），期望红集合全部实测登记。
+判据改过一版：原先按「goal 含原文锚」挑成员任务，账面被改写的任务会直接从样本里消失、
+第三条判据成了恒真；现在按 `team.turn.started` 认任务、期望 goal 取这一轮用户发言原文，
+六条损伤各自打红对应那条。仍不覆盖：多成员同一轮、`fan_out` 子代理（不从群发言取 goal）、
+预算中途截断。
+
+**全量回归**：后端 `1611 passed / 23 skipped`（394.30s，`E:/tmp/v132_full_backend.txt`，rc=0），
+前端 `211 pass / 0 fail`（node:test，1019.52ms，rc=0），`tsc --noEmit` rc=0 且零输出。
 这一轮的账单也抄进 `docs/COST.md`（五格合计 251,713 token，其中**拦下格是 0**）。
 
-**这一批仍不覆盖**：`decision: "ask"` 那一档的提交钩子（`_submit_prompt` 只看
-`denied`/`suppress_original`/`additional_context`，`asks` 没有分支，只随 `hook.completed` 记账）；
-`_resume` / 崩溃恢复那一路**不发提交钩子**（唯一调用点 `:668` 在首轮），所以恢复后的正文是否仍受
-抑制影响测不到；真模型上的团队入口只有 mock 用例钉着，装置四格走的是 `/threads/<id>/turns`
-那条普通任务入口；模型看到补充后改不改道机器判不了（这一轮它自己拒了）。
+**这一批仍不覆盖**：模型看到改写/补充后改不改道机器判不了（2026-10-27 那轮补上下文格它自己拒了）；
+跨进程崩溃恢复的续跑；团队入口只跑了单成员单轮，子代理与预算截断两路未覆盖；
+`ask` 只有 fail-closed 一条路（提交期确认界面不存在，做了再补）。
 
