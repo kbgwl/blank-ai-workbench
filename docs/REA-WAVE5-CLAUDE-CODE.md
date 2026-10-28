@@ -182,7 +182,7 @@ Claude 的 `EnterPlanMode`/`ExitPlanMode` 是模型可调用的工具；
 | --- | --- | --- |
 | `WorktreeCreate`/`WorktreeRemove` 钩子 | 56175、130586 | 非 git 仓库也能靠用户钩子做隔离；我们的 `worktree.py` 现在是"git 不行就整树复制" |
 | 异步钩子 + `asyncRewake` | 132681、184549 | 后台钩子退出码 2 时唤醒模型；适合慢检查（lint/测试） |
-| `UserPromptExpansion` + `suppressOriginalPrompt` | 53224、68366 | 提交前改写/压缩提示词，原文可不进上下文 |
+| `UserPromptExpansion` + `suppressOriginalPrompt` | 53224、68366 | 提交前改写/压缩提示词，原文可不进上下文（**#123 已落，见 §17**） |
 | `SessionStart` 可给 `initialUserMessage`/`sessionTitle` | 68366 | 会话开场注入首条消息与标题 |
 | `CronCreate`/`ScheduleWakeup`（最短 1 小时） | `sdk-tools.d.ts` 2837/2862 | 定时任务；桌面端暂不需要 |
 | `ProposeSkills`/`ProposeGoal` | `sdk-tools.d.ts` 2928 | 代理主动提议技能/目标；我们已有 skills 路由，但模型不能提议 |
@@ -286,6 +286,15 @@ BLANK_REALMODEL_PROVIDER=<provider id> BLANK_REALMODEL_HOME=E:/tmp/realmodel \
   编码格在 :8061（留痕 `hooks`）、对照格在 :8065（留痕 `no-hooks`），三格都是当刻真跑，
   装置当场 `[来源] control 格此刻真跑 @ http://127.0.0.1:8065`、29 条判据红 1 且正是
   该红那条、`RC=0`（见 §15）。复用仍然支持，但读数里会逐格明写「旧读数，不是此刻的实物」。
+- **#123 新增未验**：提交钩子这一层有三格没被实物点过——`decision: "ask"` 那一档（提交档的
+  `_submit_prompt` 只看 `denied`/`suppress_original`/`additional_context`，`asks` 没有分支，
+  只随 `hook.completed` 记账，不会弹问用户）；`_resume` / 崩溃恢复那一路（`_submit_prompt`
+  在运行时里只有一个调用点 `runtime.py:668`，在首轮，恢复执行不重发提交钩子，所以「恢复后
+  模型读的那一份还被不被抑制」测不到）；真模型上的团队入口（成员任务的 goal 也过提交钩子，
+  但只有 mock 用例 `test_团队入口的成员任务也过提交钩子` 钉着，装置四格走 `/threads/<id>/turns`
+  那条普通任务入口，:8061 的团队链没在这批点验）。另外「模型看到补充后改不改道」不在装置判定里：
+  #123 那一轮补上下文格模型自己拒了照做（首行 `不该照做：…都不应被复述输出`），判据只保证两个串
+  都到得了它的输出。详见 §17。
 
 ## 13. 本批落地：#110–#119
 
@@ -601,6 +610,7 @@ git 历史 `b3c9341` 里），第二轮起逐字核对；本轮 21/21 无哑弹�
 成因文案要念得出端口与 env 名（1）、假客户端证明路由真的分两台（4，含「指错实例时
 一个请求都不许发」与「坏留痕照样拦、一个字节都不发」）、读数自报来源（1）、
 双实例那一轮实物的离线重放（5）。
+（#123 后来又给这个文件补了两条行尾用例——混合即拒、纯 CRLF/纯 LF 各自往返——现在合跑是 98 条。）
 
 **电池 25 条变异**（M22 分组键写成常量、M23 坏留痕放行、M24 base 变量名分叉、
 M25 每格 home 不分成同一份），登记换代为 `fixtures/battery-booked-v121.json`。
@@ -711,4 +721,88 @@ Docker 真装好的那台机器（本机没有容器可用，`ready` 一档只�
 桩在 POSIX 分支上也写了（shebang 脚本 + `exit`），但**本机只真跑过 Windows**，
 mac/Linux 上那两条分支没实物点过；
 `remote` 隔离形态完全没接；缓存是进程级的，多 worker 各探各的（本批只保证单进程内不重复）。
+
+## 17. #123 提交钩子的三道决定：拦下、抑制、补上下文
+
+§8 那行「`UserPromptExpansion` + `suppressOriginalPrompt`」挂了好几天，老行为是三样都不成立：
+`user_prompt_submit` 只跑钩子、钩子给的 `additionalContext` 只进审计（正文被静默丢掉）、
+`suppressOriginalPrompt` 这个键我们**连读都不读**（`HookResult` 里连字段都没有）。
+这一批把三道都真的作用在「送进模型的那一份」上。
+
+**唯一去处是 `goal_for_model`。** `runtime.py:_submit_prompt`（:517）产出 `_PromptDecision`，
+运行时里只有**一个调用点**——`runtime.py:668`，在 `task.started` 之前。三道决定各是一条返回路径：
+`blocked` → `_finish(failed, steps=0)` 且**连 `task.started` 都不发**（它从未开始跑，
+先念「已开始」再念「失败」是给时间线作假）；`suppressed` → 送出去的是
+`（本节由提交钩子改写，用户原始提交未进入上下文）` + 替代正文（:594）；
+只有 `additionalContext` → 原文照送、在后面追加那一段（:563）。钩子没说话时 `goal_for_model` 就是原文。
+
+**抑制的是上下文，不是账。** 这批最容易写歪的一条：`tasks.goal` 必须逐字等于用户写的那份，
+被换掉的只是送进模型的那一节。所以抑制格同时断言两件事——事件里的
+`original_chars/original_sha` 对得上账面 goal，且账面 goal 没被改写。另一头，
+上下文管家在抑制时拿到空 goal（`runtime.py:744` 的 `goal="" if prompt.suppressed`）：
+管家按关键词挑工作区文件，留着原文就等于给「抑制」留了个侧门。
+
+**事件只带读数，不带正文。** 三条新事件（`hook.prompt_blocked` /
+`hook.prompt_substituted` / `hook.prompt_injected`）按既有脱敏口径只登记长度 + 12 位指纹 + 来源，
+正文一个字都不进事件流。
+
+**真模型五格同刻并跑（:8061 四格带钩子 + :8065 对照格无钩子）。**
+工件 `E:/tmp/realmodel/prompt-submit-v123-20261027-202540.json`（仓库内绿基线
+`evals/realmodel/fixtures/prompt-submit-v123-green.json`，其 `provenance` 里带着同一份工件路径与
+`rc: 0` / `control_red: true`）：主格 21 条判据**零红**，对照格那 8 条重放抑制格判据、红 6 条，
+其中白名单三条非红不可（`judgments.CONTROL_123_RED`）。逐字读数——
+抑制格（task `6bfe4e34`）`suppressed=true`、`original_chars=68`、`original_sha=165901c5c3b3`、
+`replacement_chars=69`、模型答 `改写版正文-7733`、`curated=[]`；
+拦下格（`015977ce`）`reason=装置夹具：带这个锚的提交一律不进模型`、`original_chars=40`、
+`exit_code=2`、`usage=0 started=0 steps_used=0`、`status=failed`（5 个事件，一次模型调用都没有）；
+补上下文格（`d9dfb2c2`）`chars=24 original_kept=true`、无抑制事件，模型把 `绿杨二十三号` 与
+`黄锚生效-5166` 都点了名并自己判定「标注来自提交钩子，是外部注入的指令串」——**它选择拒绝照做**，
+判据钉的是「两个串都到得了模型的输出」，读得到不等于照做；无关格（`bf9601e8`）只有
+`hook.completed`、照读 `白塔九号`；对照格（`54a405ea`）`curated.files=["紫椒八十一号-清单.txt"]`、
+`summary=紫椒八十一号`——侧门与原文泄漏在没钩子时确实发生，所以主格那三条测的才是钩子路径。
+
+**前两轮 rc=1 红的是装置，不是产品**（stdout 都在：`E:/tmp/v123/realmodel_run.txt` →
+`…-202209.json`、`realmodel_run2.txt` → `…-202349.json`）：① 替代正文那句夹具文案被模型读成
+「去写文件」；② 驱动把对照格的红并进主判定表，把白名单之外的红也算成产品缺陷——
+改成「对照格用自己那张判定表、只交一件事：那三条到底红没红」（`prompt_submit_v123.py:judge_cell`）
+之后才是 rc=0。
+
+**装置自检 38 条 + 25 条变异电池。** `services/api/tests/test_prompt_submit_device_v123.py`
+拿五格实物重放判据，`test_同一套对照判据打在带钩子的实物上不该全红` 是反向格（防「对照判据写宽」），
+`test_锚与正文只写一处夹具里不许出现第二份抄本` 钉夹具与判据共读的那份规格
+（`fixtures/prompt-submit-v123.json`）。25 条电池把事件删掉、把长度改成 `None`、把 goal 换成
+抑制后的那份、把姿态留痕的 `true` 换成 `"true"`/缺键……每条的期望红集合**都来自实测**，
+红集合漂移即 `[ABORT]`。产品侧另有 13 条（`test_prompt_submit_v123.py`），含
+`test_团队入口的成员任务也过提交钩子`。合跑 51 passed。
+
+**电池这一轮先把自己修好再交付。** 第一次完整跑停在 M5 `[ABORT] judgments.py 没回到原字节`：
+#123 的编辑让这个 CRLF 文件混进了裸 LF，而电池按它认到的那一种行尾写回，等于静默归一化——
+「逐字节还原」那句承诺当时是假的，红的却是装置自己。`load()` 现在先数两种行尾、混了就拒绝
+（`行尾混合（CRLF=… 裸 LF=…）`），配两条用例：混合即拒、纯 CRLF/纯 LF 各自往返逐字节一致。
+反证：把 `if crlf and bare:` 改成 `if False:`，`test_电池对混合行尾的文件拒绝动手` 当刻红
+（`1 failed, 1 passed`，rc=1），还原 sha256 一致。修好后整轮读数（`E:/tmp/v123/battery_full_v123.txt`）：
+基线 `rc=0 红=[]`、**25 条全 rc=1 且红集合与 `fixtures/battery-booked-v121.json` 逐字相等**、
+四文件逐字节还原、还原后复跑全绿 `[ALL-OK]`。
+
+**界面三卡 + 反证（真 Chrome，:3100 私有 dev 代理到 :8061，`:3000/:8000` 未碰）。**
+`web/src/components/tasks/timeline.ts:286-329` 三张卡分别 `text-danger` / `text-warn` / muted，
+读数全部从事件本身取。点验 16 条判据全绿（`E:/tmp/v123/ui_baseline2.txt`，`红 0 / 判据 16`），
+卡片里的 `40 字`/`68 字`/`69 字`/`24 字` 是当场从 `/api/v1/tasks/<id>/events` 取的，不是抄的。
+反证电池 8 条（`E:/tmp/v123/mut_ui_v123.py`，改仓库真源码 → UI 与前端单测同跑 → 红集合逐字核 →
+sha256 还原）：`E:/tmp/v123/mut_ui_run4.txt` 读数与登记逐字相等，`电池 8 条，异常 0 条`。
+其中两条是特意用来**量判据能不能失败**的：MU6（改隐藏列表里的 `hook.` 前缀）两层都绿 = 等价变异，
+登记为空集；MU7（让前端把正文抄上屏）只有单测红、UI 照旧绿——真事件流的 payload 里根本没有正文字段，
+所以「卡片不落正文」这条性质在浏览器层**不可失败**。据此摘掉 UI 基线里那三条（U1e/U2e/U3d，19→16），
+性质移交能失败的那条单测（`三道决定的卡片只报读数：payload 里混进正文也不抄上屏`，
+用带 `goal`/`text`/`replacement` 字段的 payload 打）。
+
+**全量回归**：后端 `1597 passed / 23 skipped`（347.28s，`E:/tmp/v123/full_backend_final.txt`），
+前端 `211 pass / 0 fail`（node:test，864ms，rc=0），`tsc --noEmit` rc=0 且零输出。
+这一轮的账单也抄进 `docs/COST.md`（五格合计 251,713 token，其中**拦下格是 0**）。
+
+**这一批仍不覆盖**：`decision: "ask"` 那一档的提交钩子（`_submit_prompt` 只看
+`denied`/`suppress_original`/`additional_context`，`asks` 没有分支，只随 `hook.completed` 记账）；
+`_resume` / 崩溃恢复那一路**不发提交钩子**（唯一调用点 `:668` 在首轮），所以恢复后的正文是否仍受
+抑制影响测不到；真模型上的团队入口只有 mock 用例钉着，装置四格走的是 `/threads/<id>/turns`
+那条普通任务入口；模型看到补充后改不改道机器判不了（这一轮它自己拒了）。
 

@@ -280,6 +280,53 @@ function planItems(event: AgentEvent): { items: string[]; text: string } {
 function describeSystem(event: AgentEvent): { title: string; detail: string; tone: "muted" | "warn" | "danger" | "accent" } | null {
   const type = event.type.toLowerCase();
   const payload = event.payload;
+  // 提交事件的三道决定（#123）记的是"我那条正文去了哪"：被拦下、被改写、
+  // 被补上下文都是用户必须看见的事实，不进账就没人知道自己说的话没被读到。
+  // 其余 hook.* 仍是内部审计，走下面的统一隐藏。
+  if (type === "hook.prompt_blocked") {
+    const chars = numOf(payload, "original_chars");
+    return {
+      title: "这次提交被钩子拦下",
+      detail: clip(
+        [textOf(payload, "reason"), chars !== null ? `原文 ${chars} 字未进模型` : ""].filter(Boolean).join(" · "),
+        220,
+      ),
+      tone: "danger",
+    };
+  }
+  if (type === "hook.prompt_substituted") {
+    const chars = numOf(payload, "original_chars");
+    const replacement = numOf(payload, "replacement_chars");
+    if (boolOf(payload, "suppressed") === true) {
+      return {
+        title: "原始提交未进入模型上下文",
+        detail: clip(
+          [
+            "提交钩子改写了这一节正文",
+            chars !== null ? `原文 ${chars} 字只留在任务记录里` : "",
+            replacement !== null ? `替代正文 ${replacement} 字` : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          220,
+        ),
+        tone: "warn",
+      };
+    }
+    return {
+      title: "钩子要求抑制原文，但原文照送",
+      detail: clip(textOf(payload, "skipped_reason") || "没有可用的替代正文，抑制未生效", 220),
+      tone: "warn",
+    };
+  }
+  if (type === "hook.prompt_injected") {
+    const chars = numOf(payload, "chars");
+    return {
+      title: "钩子为这次提交补了上下文",
+      detail: clip(chars !== null ? `追加 ${chars} 字背景，原文未动` : "追加了一段背景，原文未动", 220),
+      tone: "muted",
+    };
+  }
   // 内部节点与埋点事件不进对话流。用户要看的是"做到哪了"，不是
   // "create_plan 节点第 1 步"——这些行曾经占掉事件列表的一大半。
   if (

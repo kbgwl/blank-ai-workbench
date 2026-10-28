@@ -30,11 +30,22 @@ export PYTHONPATH=src
 if [[ "${1:-}" == "--with-hooks" ]]; then
   # 钩子配置由 hooks_config.py 生成并自检：上一版在这里用 printf 手拼 JSON，
   # 引号没转义 → 产品按 fail-closed 读成「没有钩子」→ 三格白跑、钱白花。
-  if ! BLANK_HOOKS="$("$PY" -X utf8 -E "$HERE/hooks_config.py" --python "$PY" --dir "$HERE/hooks" --print)"; then
+  # 第二个可选开关 --with-submit-hook 只给 #123 的提交钩子加一格；不加时这份
+  # BLANK_HOOKS 与 #119 那批跑过的字节同形，不会污染已经登记在案的读数。
+  SUBMIT_FLAG=()
+  SUBMIT_HOOK=false
+  if [[ "${2:-}" == "--with-submit-hook" ]]; then
+    SUBMIT_FLAG=(--with-submit-hook)
+    SUBMIT_HOOK=true
+  elif [[ -n "${2:-}" ]]; then
+    echo "[ABORT] 不认识的启动参数：$2（可选：--with-submit-hook）" >&2
+    exit 2
+  fi
+  if ! BLANK_HOOKS="$("$PY" -X utf8 -E "$HERE/hooks_config.py" --python "$PY" --dir "$HERE/hooks" --print "${SUBMIT_FLAG[@]}")"; then
     echo "[ABORT] 生成钩子配置失败" >&2
     exit 2
   fi
-  if ! "$PY" -X utf8 -E "$HERE/hooks_config.py" --python "$PY" --dir "$HERE/hooks" --check; then
+  if ! "$PY" -X utf8 -E "$HERE/hooks_config.py" --python "$PY" --dir "$HERE/hooks" --check "${SUBMIT_FLAG[@]}"; then
     echo "[ABORT] 钩子姿态自检没过，实例不起（对照格请用不带 --with-hooks 的那一种）" >&2
     exit 2
   fi
@@ -42,7 +53,15 @@ if [[ "${1:-}" == "--with-hooks" ]]; then
   export BLANK_HOOK_SETTLE=2
   POSTURE=hooks
   echo "[launch] 钩子姿态：post_tool_use(async) + worktree_create + worktree_remove"
+  if [[ "$SUBMIT_HOOK" == true ]]; then
+    echo "[launch] 追加提交钩子：user_prompt_submit（#123 四格姿态）"
+  fi
 else
+  if [[ -n "${1:-}" ]]; then
+    echo "[ABORT] 不认识的启动参数：$1（可选：--with-hooks）" >&2
+    exit 2
+  fi
+  SUBMIT_HOOK=false
   POSTURE=no-hooks
   echo "[launch] 对照姿态：不配任何钩子（对照格用这一种）"
 fi
@@ -60,10 +79,10 @@ if [[ -n "${BLANK_REALMODEL_SEED_HOME:-}" && ! -f "$HOME_DIR/run.db" ]]; then
   done
   echo "[launch] 从 $BLANK_REALMODEL_SEED_HOME 铺了 run.db/secret.key/settings.json 到 $HOME_DIR"
 fi
-printf '{"port": %s, "posture": "%s", "hook_settle": "%s", "started_at": "%s"}\n' \
-  "$PORT" "$POSTURE" "${BLANK_HOOK_SETTLE:-}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+printf '{"port": %s, "posture": "%s", "submit_hook": %s, "hook_settle": "%s", "started_at": "%s"}\n' \
+  "$PORT" "$POSTURE" "$SUBMIT_HOOK" "${BLANK_HOOK_SETTLE:-}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   > "$HOME_DIR/instance-posture-$PORT.json"
-echo "[launch] 姿态留痕：$HOME_DIR/instance-posture-$PORT.json（posture=$POSTURE）"
+echo "[launch] 姿态留痕：$HOME_DIR/instance-posture-$PORT.json（posture=$POSTURE submit_hook=$SUBMIT_HOOK）"
 
 cd "$REPO/services/api"
 exec "$PY" -m uvicorn blank_api.app:app --host 127.0.0.1 --port "$PORT"

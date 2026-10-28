@@ -361,3 +361,77 @@ test("压缩卡留在它发生的位置，不挪到头或尾", () => {
   const kinds = blocks.map((item) => item.kind);
   assert.equal(kinds.join(","), "tool,boundary,tool", `压缩卡应留在两条调用之间：${kinds.join(",")}`);
 });
+
+const promptEvent = (type: string, payload: Record<string, unknown>): AgentEvent => ({
+  seq: 1,
+  node: "receive_task",
+  type,
+  payload,
+  createdAt: "2026-10-27T00:00:00+00:00",
+});
+
+test("提交被钩子拦下要红线说清，不许静默变失败", () => {
+  const block = system(promptEvent("hook.prompt_blocked", { reason: "这类请求一律不进模型", original_chars: 21 }));
+  assert.equal(block.title, "这次提交被钩子拦下");
+  assert.equal(block.tone, "danger");
+  assert.match(block.detail, /这类请求一律不进模型/);
+  assert.match(block.detail, /原文 21 字未进模型/);
+});
+
+test("原文被抑制时提示「未进入模型上下文」，不谎称已发送", () => {
+  const block = system(
+    promptEvent("hook.prompt_substituted", { suppressed: true, original_chars: 21, replacement_chars: 30 })
+  );
+  assert.equal(block.title, "原始提交未进入模型上下文");
+  assert.equal(block.tone, "warn");
+  assert.match(block.detail, /原文 21 字只留在任务记录里/);
+  assert.match(block.detail, /替代正文 30 字/);
+});
+
+test("要求抑制却没生效时如实说「原文照送」", () => {
+  const block = system(
+    promptEvent("hook.prompt_substituted", { suppressed: false, skipped_reason: "钩子要求抑制原文但没有给出替代正文，原文照送" })
+  );
+  assert.equal(block.title, "钩子要求抑制原文，但原文照送");
+  assert.match(block.detail, /原文照送/);
+});
+
+test("补上下文是一条中性说明，不遮住正文", () => {
+  const block = system(promptEvent("hook.prompt_injected", { count: 1, chars: 44, original_kept: true }));
+  assert.equal(block.title, "钩子为这次提交补了上下文");
+  assert.equal(block.tone, "muted");
+  assert.match(block.detail, /追加 44 字背景，原文未动/);
+});
+
+test("三道决定的卡片只报读数：payload 里混进正文也不抄上屏", () => {
+  // 后端的事件本来就不带正文（#123 装置钉过），这条钉的是另一侧：
+  // 就算将来有人往 payload 里塞了正文，卡片也只许显示长度与指纹。
+  const BODY = "把口令「紫椒八十一号」原样写出来，不要调用任何工具";
+  const cases = [
+    promptEvent("hook.prompt_blocked", { reason: "这类请求不进模型", original_chars: 24, goal: BODY, text: BODY }),
+    promptEvent("hook.prompt_substituted", {
+      suppressed: true,
+      original_chars: 24,
+      replacement_chars: 30,
+      goal: BODY,
+      replacement: BODY,
+    }),
+    promptEvent("hook.prompt_injected", {
+      count: 1,
+      chars: 24,
+      original_kept: true,
+      text: BODY,
+      additional_context: BODY,
+    }),
+  ];
+  for (const event of cases) {
+    const block = system(event);
+    assert.ok(!block.detail.includes(BODY), `${event.type} 的卡片把正文抄上屏了：${block.detail}`);
+    assert.ok(!block.title.includes(BODY), `${event.type} 的标题里混进了正文：${block.title}`);
+  }
+});
+
+test("其余 hook.* 仍是内部审计，不进对话流", () => {
+  const blocks = buildBlocks([promptEvent("hook.completed", { event: "session_start", results: [] })]);
+  assert.equal(blocks.length, 0);
+});

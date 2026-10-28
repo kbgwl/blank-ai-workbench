@@ -146,10 +146,20 @@ def load(path: Path) -> tuple[str, str]:
 
     上一版直接 `read_text` 读、`write_text` 写：Windows 上写出去会翻成 CRLF，
     LF 的文件跑完一轮电池就被无声改了行尾——「逐字节还原」那句承诺当时是假的。
+    现在改成按检测到的那一种行尾写回，但**混合行尾的文件它兜不住**：
+    `\r\n` 与裸 `\n` 同时存在时，还原会把裸 LF 那几行悄悄翻成 CRLF，
+    于是「没回到原字节」这一条检查红掉，而红的原因是电池自己改了行尾。
+    这种文件一律先拒绝，让人把行尾归一化之后再跑（别把产品的账记到装置头上）。
     """
     raw = path.read_bytes()
-    newline = "\r\n" if b"\r\n" in raw else "\n"
-    return raw.decode("utf-8").replace("\r\n", "\n"), newline
+    crlf = raw.count(b"\r\n")
+    bare = raw.count(b"\n") - crlf
+    if crlf and bare:
+        raise AssertionError(
+            f"{path.name} 行尾混合（CRLF={crlf} 裸 LF={bare}）："
+            "电池按单一行尾还原，会把另一种翻掉。先归一化再跑。"
+        )
+    return raw.decode("utf-8").replace("\r\n", "\n"), ("\r\n" if crlf else "\n")
 
 
 def save(path: Path, text: str, newline: str) -> None:

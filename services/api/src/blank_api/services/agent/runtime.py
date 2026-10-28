@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -192,6 +193,26 @@ class _RunScope:
     sandbox: dict = field(default_factory=dict)
     # 本轮的子代理运行器：收尾时要把仍在跑的后台子代理收走（见 _finish）。
     subagents: Any = None
+
+
+@dataclass
+class _PromptDecision:
+    """提交钩子对"这一条用户正文"的处置结果（#123）。
+
+    `goal_for_model` 是唯一去处：钩子没说话时它就是原文；说"补一段"时是原文加那一段；
+    说"原文别进上下文"时只剩那一段。`blocked` 为真时什么都不送，任务直接进终态。
+    原文与账是两件事——`tasks.goal` 永远是用户写的那份，这里改的只是送进模型的那一份。
+    """
+
+    blocked: bool = False
+    reason: str = ""
+    goal_for_model: str = ""
+    # 原文真的被抑制时才为真：管家检索的关键词通道随之关闭（见 run 里的 curate）。
+    suppressed: bool = False
+
+
+def _prompt_sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12] if text else ""
 
 
 class AgentRuntime:
@@ -493,6 +514,87 @@ class AgentRuntime:
                 {"event": event, "results": [item.as_dict() for item in results]},
             )
 
+    async def _submit_prompt(self, scope: _RunScope) -> _PromptDecision:
+        """提交那一刻的三道决定：补上下文、抑制原文、否决提交（#123）。
+
+        对标 Claude Code 的 `UserPromptSubmit` / `UserPromptExpansion`：钩子给的
+        `additionalContext` 过去只进审计、正文被静默丢掉，`suppressOriginalPrompt`
+        这个键我们连读都不读。现在三道都真的作用在"送进模型的那一份"上，
+        而 `tasks.goal` 里的原文一个字都不动——抑制的是上下文，不是账。
+        """
+        session, recorder = scope.session, scope.recorder
+        goal = session.goal or ""
+        results = await session.hooks.run(
+            "user_prompt_submit", "", {"goal": goal, "acceptance_criteria": session.acceptance_criteria}
+        )
+        if not results:
+            return _PromptDecision(goal_for_model=goal)
+        await recorder.add(
+            "hook.completed",
+            "receive_task",
+            {"event": "user_prompt_submit", "results": [item.as_dict() for item in results]},
+        )
+        denied = next((item for item in results if item.denied), None)
+        if denied is not None:
+            reason = (denied.reason or "钩子拒绝这次提交")[:300]
+            await recorder.add(
+                "hook.prompt_blocked",
+                "receive_task",
+                {
+                    "reason": reason,
+                    "original_chars": len(goal),
+                    "original_sha": _prompt_sha(goal),
+                    "exit_code": denied.exit_code,
+                    "sources": [mask_path(item.command)[:120] for item in results if item.denied],
+                },
+            )
+            return _PromptDecision(blocked=True, reason=reason, goal_for_model=goal)
+        # 钩子只能收紧：任何一条要求"原文不进上下文"就抑制；替代正文按配置顺序拼接。
+        notes = [item.additional_context.strip() for item in results if item.additional_context.strip()]
+        replacement = "\n\n".join(notes)
+        sources = [mask_path(item.command)[:120] for item in results]
+        if not any(item.suppress_original for item in results):
+            if replacement:
+                await recorder.add(
+                    "hook.prompt_injected",
+                    "receive_task",
+                    {"count": len(notes), "chars": len(replacement), "original_kept": True, "sources": sources},
+                )
+                return _PromptDecision(goal_for_model=f"{goal}\n\n{replacement}" if goal else replacement)
+            return _PromptDecision(goal_for_model=goal)
+        if not replacement:
+            # 要求抑制却没给替代正文 = 给模型一个空目标，比照送更糟。照送并说明。
+            await recorder.add(
+                "hook.prompt_substituted",
+                "receive_task",
+                {
+                    "suppressed": False,
+                    "scope": "goal",
+                    "original_chars": len(goal),
+                    "original_sha": _prompt_sha(goal),
+                    "replacement_chars": 0,
+                    "sources": sources,
+                    "skipped_reason": "钩子要求抑制原文但没有给出替代正文，原文照送",
+                },
+            )
+            return _PromptDecision(goal_for_model=goal)
+        await recorder.add(
+            "hook.prompt_substituted",
+            "receive_task",
+            {
+                "suppressed": True,
+                "scope": "goal",
+                "original_chars": len(goal),
+                "original_sha": _prompt_sha(goal),
+                "replacement_chars": len(replacement),
+                "sources": sources,
+            },
+        )
+        return _PromptDecision(
+            goal_for_model="（本节由提交钩子改写，用户原始提交未进入上下文）\n" + replacement,
+            suppressed=True,
+        )
+
     async def _close_hooks(self, scope: _RunScope) -> None:
         """任务收尾：给后台钩子一个有界窗口，并如实记下没等到 / 没送到的那些。
 
@@ -561,6 +663,14 @@ class AgentRuntime:
             await self._finish(scope, "cancelled", summary="", reason="任务已取消", steps=0)
             return await build_evidence(scope.store, request.task_id)
         await self._set_status(scope, "running")
+        # 提交钩子在这一刻决定"这条正文进不进模型"（#123）。拦下时连 task.started 都不发：
+        # 它从未开始跑，先念一句"已开始"再念一句"失败"是给时间线作假。
+        prompt = await self._submit_prompt(scope)
+        if prompt.blocked:
+            await self._finish(
+                scope, "failed", summary="", reason=f"提交被钩子拦下：{prompt.reason}", steps=0
+            )
+            return await build_evidence(scope.store, request.task_id)
         await recorder.add(
             "task.started",
             "receive_task",
@@ -594,16 +704,13 @@ class AgentRuntime:
                 "snapshot_id": session.snapshot_id,
             },
         )
-        # 会话生命周期钩子：对标 Codex 的 session_start/user_prompt_submit
+        # 会话生命周期钩子：对标 Codex 的 session_start。
+        # user_prompt_submit 不在这里——它在 task.started 之前就跑完了（#123），
+        # 因为它的决定是"这条正文进不进模型"，晚一步就已经进了。
         await self._fire_hooks(
             scope,
             "session_start",
             {"task_id": request.task_id, "thread_id": thread_id, "workspace": mask_path(session.context.root)},
-        )
-        await self._fire_hooks(
-            scope,
-            "user_prompt_submit",
-            {"goal": session.goal, "acceptance_criteria": session.acceptance_criteria},
         )
         # shell 快照与指令来源：出问题时能回答"当时是什么环境、读了哪些约定文件"
         if session.shell is not None:
@@ -630,7 +737,11 @@ class AgentRuntime:
         # 它不重复注入会话历史——history 已经作为消息对放在目标之前。
         curated = curate(
             root=session.context.root,
-            goal=request.goal or session.goal,
+            # 检索也用"送进模型的那一份"：钩子说"原文别进上下文"时，管家不能
+            # 换个侧门把原文的关键词抄进 system——实测候选文件名（含机密字样）
+            # 会原样列进 system（#123 的报文级断言守的就是这条）。抑制生效时
+            # 这条按关键词挑背景的通道整个停用，只保留历史轮数那句中性说明。
+            goal="" if prompt.suppressed else (prompt.goal_for_model or request.goal or session.goal),
             memory=session.memory,
             history=history,
         )
@@ -645,7 +756,8 @@ class AgentRuntime:
         state: dict[str, Any] = {
             "task_id": request.task_id,
             "messages": initial_messages(
-                session.goal,
+                # 送进模型的那一份由提交钩子决定（#123）；没钩子时就是原文，一个字节都不变。
+                prompt.goal_for_model or session.goal,
                 session.acceptance_criteria,
                 session.skill_instructions,
                 session.instruction_layers,

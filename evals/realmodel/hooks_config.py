@@ -31,6 +31,10 @@ FIXTURES = {
     "worktree_create": "worktree_create.py",
     "worktree_remove": "worktree_remove.py",
 }
+# #123 的提交钩子是**选装姿态**：默认那份 BLANK_HOOKS 必须与 #119 三格跑过的字节同形，
+# 否则「主格带提交钩子」会污染已经登记在案的那轮读数。要它就显式加 --with-submit-hook。
+SUBMIT_EVENT = "user_prompt_submit"
+SUBMIT_FIXTURE = "prompt_submit.py"
 
 
 def command_of(python_exe: str, script: Path) -> str:
@@ -38,17 +42,19 @@ def command_of(python_exe: str, script: Path) -> str:
     return f'"{Path(python_exe).as_posix()}" "{script.as_posix()}"'
 
 
-def hooks_json(python_exe: str, hooks_dir: Path) -> str:
+def hooks_json(python_exe: str, hooks_dir: Path, *, with_submit: bool = False) -> str:
     specs: dict[str, list[dict]] = {}
     for event, name in FIXTURES.items():
         spec: dict = {"command": command_of(python_exe, hooks_dir / name)}
         if event in ASYNC_EVENTS:
             spec["async"] = True
         specs[event] = [spec]
+    if with_submit:
+        specs[SUBMIT_EVENT] = [{"command": command_of(python_exe, hooks_dir / SUBMIT_FIXTURE)}]
     return json.dumps(specs, ensure_ascii=False)
 
 
-def check(raw: str, python_exe: str, hooks_dir: Path) -> list[str]:
+def check(raw: str, python_exe: str, hooks_dir: Path, *, with_submit: bool = False) -> list[str]:
     """返回问题清单，空表就是能起。真解析器那一关在测试里，这里只管形状与夹具。"""
     problems: list[str] = []
     try:
@@ -57,7 +63,8 @@ def check(raw: str, python_exe: str, hooks_dir: Path) -> list[str]:
         return [f"BLANK_HOOKS 不是合法 JSON：{exc}"]
     if not isinstance(parsed, dict):
         return [f"顶层要是对象，读到 {type(parsed).__name__}"]
-    for event in (*ASYNC_EVENTS, *SYNC_EVENTS):
+    events = (*ASYNC_EVENTS, *SYNC_EVENTS, *( (SUBMIT_EVENT,) if with_submit else () ))
+    for event in events:
         specs = parsed.get(event)
         if not isinstance(specs, list) or not specs:
             problems.append(f"缺事件 {event}")
@@ -81,8 +88,10 @@ def check(raw: str, python_exe: str, hooks_dir: Path) -> list[str]:
             problems.append(
                 f"{event} 的 async 应是 {wanted_async}，实际 {specs[0].get('async')!r}")
     for event in parsed:
-        if event not in FIXTURES:
+        if event not in FIXTURES and not (with_submit and event == SUBMIT_EVENT):
             problems.append(f"多出一个装置不认识的事件 {event}（读数会漏判）")
+    if not with_submit and SUBMIT_EVENT in parsed:
+        problems.append(f"{SUBMIT_EVENT} 只在 --with-submit-hook 姿态下允许出现")
     return problems
 
 
@@ -92,17 +101,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dir", required=True, type=Path)
     ap.add_argument("--print", dest="do_print", action="store_true")
     ap.add_argument("--check", dest="do_check", action="store_true")
+    ap.add_argument("--with-submit-hook", dest="with_submit", action="store_true",
+                    help="额外挂上 #123 的 user_prompt_submit 夹具（默认不挂，保持 #119 那批姿态字节同形）")
     args = ap.parse_args(argv)
-    raw = hooks_json(args.python, args.dir)
+    raw = hooks_json(args.python, args.dir, with_submit=args.with_submit)
     if args.do_print:
         print(raw)
     if args.do_check:
-        problems = check(raw, args.python, args.dir)
+        problems = check(raw, args.python, args.dir, with_submit=args.with_submit)
         if problems:
             for line in problems:
                 print(f"[ABORT] 钩子姿态坏了：{line}", file=sys.stderr)
             return 2
-        print("[OK] 三个事件齐、async 只在 post_tool_use、夹具都在", file=sys.stderr)
+        extra = f" + {SUBMIT_EVENT}" if args.with_submit else ""
+        print(f"[OK] 三个事件齐{extra}、async 只在 post_tool_use、夹具都在", file=sys.stderr)
     return 0
 
 

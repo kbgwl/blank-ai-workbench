@@ -14,6 +14,8 @@ REA 拆解证据（docs/REA-CODEX-CLAUDE.md）：Codex 与 Claude Code 都有几
 落地方式与两家一致：把事件以 JSON 写到子进程 stdin，读 stdout 的 JSON 决定是否干预。
 **默认关闭** —— 只有显式配置了 `BLANK_HOOKS` 才会执行任何外部命令。
 钩子失败一律 **fail-open**（坏钩子不能把任务搞挂），但每次执行都会留审计记录。
+例外是否决本身：阻断型事件（pre_tool_use / user_prompt_submit）上明确说"不"
+（deny 或退出码 2）就不许放行，跑坏、超时与非阻断型事件的"不表态"一样不拦。
 """
 
 from __future__ import annotations
@@ -41,7 +43,9 @@ HOOK_EVENTS = (
     "worktree_remove",
 )
 # 只有这些事件可以阻止后续动作；其余是通知性质。
-BLOCKING_EVENTS = frozenset({"pre_tool_use"})
+# 提交事件在 Claude 的阻断集合里（UserPromptSubmit/UserPromptExpansion 同一族）：
+# 它的价值就是"在送进模型之前拦下来或改写掉"，异步化等于放弃这个决定。
+BLOCKING_EVENTS = frozenset({"pre_tool_use", "user_prompt_submit"})
 DEFAULT_TIMEOUT = 10.0
 MAX_SNIPPET = 500
 # additionalContext 会进模型上下文：不设上限等于让一个坏钩子把窗口占满。
@@ -58,7 +62,8 @@ class HookSpec:
     match: str = ""
     timeout: float = DEFAULT_TIMEOUT
     # 配置里写 "async": true 时，钩子跑在后台，调用方不再等它。阻断型事件
-    # （pre_tool_use）例外：它的价值就在于"等结果再决定"，异步化等于放弃 veto。
+    # （pre_tool_use / user_prompt_submit）例外：它的价值就在于"等结果再决定"，
+    # 异步化等于放弃 veto。
     async_run: bool = False
 
     def applies(self, target: str) -> bool:
@@ -81,6 +86,9 @@ class HookResult:
     # WorktreeCreate 的返回值：钩子自己建好隔离副本，把路径告回来。
     # 没有这个字段时退回"git worktree / 整树复制"的默认路径。
     worktree_path: str = ""
+    # suppressOriginalPrompt：钩子要求"原文不进模型上下文"（#123）。
+    # 抑制的是上下文，不是账——tasks.goal 里那份原文一个字都不动。
+    suppress_original: bool = False
     # 这条结果是后台跑完的（配置里 async:true）。审计时读它，
     # 否则"钩子跑完了、但模型没等它"这件事在时间线上看不出来。
     background: bool = False
@@ -117,6 +125,8 @@ class HookResult:
             body["additional_context_chars"] = len(self.additional_context)
         if self.worktree_path:
             body["worktree_path"] = self.worktree_path
+        if self.suppress_original:
+            body["suppress_original_prompt"] = True
         if self.background:
             body["async"] = True
         if self.exit_code is not None:
@@ -200,6 +210,14 @@ def parse_hook_output(text: str) -> dict:
     )
     if isinstance(worktree, str) and worktree.strip():
         body_out["worktree_path"] = worktree.strip()[:1000]
+    # Claude 的 suppressOriginalPrompt（UserPromptSubmit/UserPromptExpansion 同族）：
+    # 只认真布尔 true——它自己的类型校验就是「非 true 即错型」。字符串 "true" 与 1
+    # 来自写错的钩子，把它读成"要抑制"等于让错型变成隐式放行的一种。
+    suppress = body.get("suppressOriginalPrompt")
+    if suppress is not True:
+        suppress = parsed.get("suppressOriginalPrompt")
+    if suppress is True:
+        body_out["suppress_original_prompt"] = True
     return body_out
 
 
@@ -514,6 +532,7 @@ class HookRunner:
             updated_input=parsed.get("updated_input"),
             additional_context=additional_context,
             worktree_path=str(parsed.get("worktree_path") or ""),
+            suppress_original=bool(parsed.get("suppress_original_prompt")),
             exit_code=exit_code,
         )
 

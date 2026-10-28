@@ -323,3 +323,36 @@ def test_并跑那轮的读数自证是两台实例() -> None:
     assert CONTROL_121["task_id"] != ENCODING_121["task_id"], "两台实例得是两个不同的任务"
     assert lib.of_type(ENCODING_121["events"], "hook.wakeup_delivered"), "编码格那台得是钩子姿态"
     assert not lib.of_type(CONTROL_121["events"], "hook.wakeup_delivered")
+
+
+def test_电池对混合行尾的文件拒绝动手(tmp_path: Path) -> None:
+    """电池的「逐字节还原」只兜得住单一行尾：混合行尾必须**拒绝跑**，不许悄悄归一化。
+
+    这条是 #123 真踩出来的：那次 `judgments.py` 里混进了几行裸 LF，电池按检测到的
+    CRLF 写回，把那些行翻成 CRLF，于是 M5 之后 `sha256` 对不上、电池停在半路——
+    红的是装置自己，却长得像产品缺陷。
+    """
+    import mutation_battery as BAT
+
+    mixed = tmp_path / "mixed.py"
+    mixed.write_bytes(b"a = 1\r\nb = 2\nc = 3\r\n")
+    try:
+        BAT.load(mixed)
+    except AssertionError as exc:
+        assert "行尾混合" in str(exc), str(exc)
+        assert "CRLF=2" in str(exc) and "裸 LF=1" in str(exc), str(exc)
+    else:
+        raise AssertionError("混合行尾的文件被电池放行了，它会静默改行尾")
+
+
+def test_电池按文件自己的行尾往返(tmp_path: Path) -> None:
+    """单一行尾（CRLF 或 LF）要能原样往返：读进来的正文拿去匹配锚点，写回的字节不变。"""
+    import mutation_battery as BAT
+
+    for name, raw in (("crlf.py", b"a = 1\r\nb = 2\r\n"), ("lf.py", b"a = 1\nb = 2\n")):
+        path = tmp_path / name
+        path.write_bytes(raw)
+        text, newline = BAT.load(path)
+        assert "\r" not in text and text.count("\n") == 2, text
+        BAT.save(path, text, newline)
+        assert path.read_bytes() == raw, f"{name} 往返后字节变了：{path.read_bytes()!r}"

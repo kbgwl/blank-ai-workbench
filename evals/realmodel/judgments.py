@@ -2,7 +2,7 @@
 
 分成两组：`judge_*` 只吃已经落盘的事件（可离线自检，见
 `services/api/tests/test_realmodel_device_v120.py`），驱动脚本
-`async_hooks_v119.py` 负责真跑与取数。判据名字是契约的一部分——
+`async_hooks_v119.py` / `prompt_submit_v123.py` 负责真跑与取数。判据名字是契约的一部分——
 装置自检按名字打红集合，改名就等于把一条判据悄悄删掉。
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from lib import AGENT_ID_RE, WAKE_WRAPPER, Recorder, arg_of, by_tool, of_type
+from lib import AGENT_ID_RE, SHA12_RE, WAKE_WRAPPER, Recorder, arg_of, by_tool, of_type
 
 # ---- #119 异步钩子 + 退出码 2 唤醒 ------------------------------------------
 
@@ -204,3 +204,124 @@ def judge_control(rec: Recorder, events: list[dict]) -> bool:
               f"count={len(async_done)}")
     rec.check("对照·没有唤醒事件（绿=符合）", len(wake) == 0, f"count={len(wake)}")
     return CONTROL_RED_NAME in rec.fails
+
+
+# ---- #123 提交钩子的三道决定（补上下文 / 抑制原文 / 拦下提交） -----------------
+# 这一组吃三份实物：事件流、任务行（`GET /tasks/{id}`）、夹具规格
+# （`fixtures/prompt-submit-v123.json`）。锚与正文只有夹具那一份，判据不许自己抄。
+
+
+def _prompt_reads(events: list[dict]) -> dict[str, list[dict]]:
+    return {
+        name: of_type(events, f"hook.{name}")
+        for name in ("prompt_blocked", "prompt_injected", "prompt_substituted")
+    }
+
+
+def judge_submit_suppress(rec: Recorder, events: list[dict], task: dict, spec: dict) -> None:
+    goal = str(task.get("goal") or "")
+    summary = str(task.get("result_summary") or "")
+    subs = of_type(events, "hook.prompt_substituted")
+    payload = subs[0]["payload"] if subs else {}
+    marker = spec["suppress_marker"]
+    side_door = spec["side_door_file"]
+    curated = json.dumps([e["payload"] for e in of_type(events, "context.curated")], ensure_ascii=False)
+    rec.check("123 抑制格留下 prompt_substituted 且 suppressed=true",
+              len(subs) >= 1 and payload.get("suppressed") is True,
+              f"count={len(subs)} payload={json.dumps(payload, ensure_ascii=False)[:200]}")
+    rec.check("123 抑制事件的原文读数对得上账（长度 + 12 位指纹）",
+              payload.get("original_chars") == len(goal)
+              and bool(SHA12_RE.match(str(payload.get("original_sha") or ""))),
+              f"original_chars={payload.get('original_chars')} goal_len={len(goal)} "
+              f"sha={payload.get('original_sha')!r}")
+    rec.check("123 替代正文长度逐字等于夹具文本",
+              payload.get("replacement_chars") == len(spec["suppress_replacement"]),
+              f"replacement_chars={payload.get('replacement_chars')} "
+              f"expected={len(spec['suppress_replacement'])}")
+    rec.check("123 事件里不落原文正文（只留长度与指纹）",
+              marker not in json.dumps(payload, ensure_ascii=False),
+              f"payload={json.dumps(payload, ensure_ascii=False)[:200]}")
+    rec.check("123 账面 goal 仍是用户写的那份（抑制的是上下文，不是账）",
+              marker in goal, f"goal={goal[:120]}")
+    rec.check("123 模型读的是替代正文",
+              spec["suppress_token"] in summary, f"summary={summary[:200]}")
+    rec.check("123 模型读数里不含原文口令",
+              marker not in summary, f"summary={summary[:200]}")
+    # 侧门：抑制时上下文管家拿不到原文关键词，工作区里那枚同名文件不该被带进 system。
+    rec.check("123 上下文管家的候选没被原文关键词带出来",
+              side_door not in curated and side_door not in summary,
+              f"curated={curated[:220]} summary={summary[:120]}")
+
+
+def judge_submit_blocked(rec: Recorder, events: list[dict], task: dict, spec: dict) -> None:
+    goal = str(task.get("goal") or "")
+    marker = spec["block_marker"]
+    blocked = of_type(events, "hook.prompt_blocked")
+    payload = blocked[0]["payload"] if blocked else {}
+    usage = of_type(events, "model.usage")
+    started = of_type(events, "task.started")
+    rec.check("123 拦下格留下 prompt_blocked 且带着阻断原因",
+              len(blocked) >= 1 and payload.get("reason") == spec["block_reason"],
+              f"count={len(blocked)} reason={payload.get('reason')!r}")
+    rec.check("123 拦下事件只登记长度与指纹，不落原文",
+              payload.get("original_chars") == len(goal)
+              and bool(SHA12_RE.match(str(payload.get("original_sha") or "")))
+              and marker not in json.dumps(payload, ensure_ascii=False),
+              f"payload={json.dumps(payload, ensure_ascii=False)[:200]}")
+    rec.check("123 拦下时一次模型调用都没发起（无用量、无 task.started、零步）",
+              not usage and not started and task.get("steps_used") == 0,
+              f"usage={len(usage)} started={len(started)} steps_used={task.get('steps_used')}")
+    rec.check("123 任务以失败收场且原因指向钩子",
+              task.get("status") == "failed" and "提交被钩子拦下" in str(task.get("failure_reason") or ""),
+              f"status={task.get('status')} reason={str(task.get('failure_reason'))[:160]}")
+    rec.check("123 拦下不改账（goal 仍是用户写的那份）", marker in goal, f"goal={goal[:120]}")
+
+
+def judge_submit_injected(rec: Recorder, events: list[dict], task: dict, spec: dict) -> None:
+    summary = str(task.get("result_summary") or "")
+    inj = of_type(events, "hook.prompt_injected")
+    payload = inj[0]["payload"] if inj else {}
+    rec.check("123 补上下文格留下 prompt_injected 且 original_kept=true",
+              len(inj) >= 1 and payload.get("original_kept") is True,
+              f"count={len(inj)} payload={json.dumps(payload, ensure_ascii=False)[:200]}")
+    rec.check("123 补的正文长度逐字等于夹具文本",
+              payload.get("chars") == len(spec["inject_text"]),
+              f"chars={payload.get('chars')} expected={len(spec['inject_text'])}")
+    rec.check("123 没要求抑制时不许冒出抑制事件",
+              not of_type(events, "hook.prompt_substituted"),
+              f"types={sorted({e['type'] for e in events if e['type'].startswith('hook.prompt')})}")
+    rec.check("123 补充正文不进事件（只带长度与来源）",
+              spec["inject_text"] not in json.dumps(payload, ensure_ascii=False),
+              f"payload={json.dumps(payload, ensure_ascii=False)[:200]}")
+    rec.check("123 模型既读得到原文口令、也读得到钩子补充",
+              spec["inject_marker"] in summary and spec["inject_token"] in summary,
+              f"summary={summary[:220]}")
+
+
+def judge_submit_plain(rec: Recorder, events: list[dict], task: dict, spec: dict) -> None:
+    summary = str(task.get("result_summary") or "")
+    completed = [e for e in of_type(events, "hook.completed")
+                 if e["payload"].get("event") == "user_prompt_submit"]
+    rec.check("123 无关提交上钩子仍然跑过并留审计", len(completed) >= 1,
+              f"count={len(completed)}")
+    rec.check("123 无关提交不产生任何改写事件",
+              not any(name in e["type"] for e in events for name in
+                      ("prompt_blocked", "prompt_injected", "prompt_substituted")),
+              f"types={sorted({e['type'] for e in events if e['type'].startswith('hook.')})}")
+    rec.check("123 无关提交的原文照送（模型读得到口令）",
+              spec["plain_marker"] in summary, f"summary={summary[:200]}")
+
+
+# 对照格（不配钩子的那台实例）必须红的三条：它们才是「主判据测的是钩子路径」的证据。
+# 这一组名字是实测登记的，任何一条在对照格上绿了，主格的读数就不能算数（rc 2）。
+CONTROL_123_RED = (
+    "123 抑制格留下 prompt_substituted 且 suppressed=true",
+    "123 模型读数里不含原文口令",
+    "123 上下文管家的候选没被原文关键词带出来",
+)
+
+
+def judge_submit_control(rec: Recorder, events: list[dict], task: dict, spec: dict) -> bool:
+    """同一套抑制判据打在没钩子的实例上，返回「该红的三条是否真红」。"""
+    judge_submit_suppress(rec, events, task, spec)
+    return all(name in rec.fails for name in CONTROL_123_RED)
