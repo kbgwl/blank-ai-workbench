@@ -189,11 +189,26 @@ async def active_round(session: AsyncSession, group_id: str) -> TeamRound | None
 
 
 async def latest_round(session: AsyncSession, group_id: str) -> TeamRound | None:
+    """这个群最近的一轮。
+
+    `team_rounds.created_at` 走服务端 `CURRENT_TIMESTAMP`：SQLite 上只到秒。同一秒里
+    先后开的两轮会并列，只按时间排序时 SQLite 会把**上一轮**读成当前轮——前端面板
+    于是显示旧轮的状态、队列与用量（真跑里就是这么露出来的）。消息 id 是群内自增序号，
+    用它兜底把并列拆开；`coalesce` 是为了让没有消息的轮在各方言下都排最后（PG 的
+    DESC 默认把 NULL 排最前）。
+    """
+    last_message_id = func.coalesce(
+        select(func.max(TeamMessage.id))
+        .where(TeamMessage.group_id == group_id, TeamMessage.round_id == TeamRound.id)
+        .correlate(TeamRound)
+        .scalar_subquery(),
+        0,
+    )
     return (
         await session.execute(
             select(TeamRound)
             .where(TeamRound.group_id == group_id)
-            .order_by(TeamRound.created_at.desc())
+            .order_by(TeamRound.created_at.desc(), last_message_id.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
@@ -355,11 +370,15 @@ async def create_user_round(
     picked_names = mentioned_names(text, list(by_name))
     picked_ids = [by_name[name].id for name in picked_names if by_name[name].id != admin.id]
 
+    cap = max(1, int(group.max_speakers or 5))
     queue = [admin.id]
     for bot_id in picked_ids:
         if bot_id not in queue:
             queue.append(bot_id)
-    queue = queue[: max(1, int(group.max_speakers or 5))]
+    # 超出上限的人不是"没被点名"，只是排不上：静默砍掉会让群看起来没听用户说话，
+    # 所以记下被挤掉的人，在建轮时补一句可核对的系统说明。
+    dropped = queue[cap:]
+    queue = queue[:cap]
 
     message = TeamMessage(
         group_id=group.id,
@@ -384,6 +403,22 @@ async def create_user_round(
     )
     session.add(round_row)
     message.round_id = round_row.id
+    if dropped:
+        names = {bot.id: bot.name for _, bot in rows}
+        session.add(
+            TeamMessage(
+                group_id=group.id,
+                round_id=round_row.id,
+                role="system",
+                bot_name="系统",
+                content=(
+                    f"本轮发言上限是 {cap} 次（主理人的开场也算在内），"
+                    + "、".join(f"@{names.get(bot_id, '某位成员')}" for bot_id in dropped)
+                    + " 这次没排上，需要时请下一轮再点名。"
+                ),
+                status="sent",
+            )
+        )
     group.updated_at = datetime.utcnow()
     await session.commit()
     return message, round_row
