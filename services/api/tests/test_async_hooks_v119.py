@@ -142,11 +142,14 @@ async def test_async_flag_is_ignored_on_blocking_events(tmp_path: Path):
 
 async def test_close_cancels_overdue_hooks_and_reports_abandoned(tmp_path: Path):
     marker = tmp_path / "should-not-exist.txt"
+    # 子进程睡 3s 再落标记：观察窗口必须比它长，否则「机器忙、kill 晚了几百毫秒」
+    # 会被读成「子进程活着」——全量回归里 0.6s/0.9s 这组就这么红过一次。
+    # 加宽窗口只是把噪声挪出判据，判据本身没收窄：窗口内任何时刻出现标记就红。
     command = _script(
         tmp_path,
         "slow.py",
         "import time\n"
-        "time.sleep(0.6)\n"
+        "time.sleep(3.0)\n"
         f"open({str(marker)!r}, 'w', encoding='utf-8').write('alive')\n",
     )
     runner = _runner(settle_timeout=0.1, post_tool_use=command)
@@ -158,9 +161,47 @@ async def test_close_cancels_overdue_hooks_and_reports_abandoned(tmp_path: Path)
     assert abandoned == [command], "没等到也没有被记下来，时间线上看不出这个钩子被丢下了"
     assert runner.pending == 0
 
-    # 取消必须真的杀掉子进程：再等一段超过钩子自身 sleep 的时间，标记文件不许出现。
-    await asyncio.sleep(0.9)
+    # 取消必须真的杀掉子进程：盯满整个窗口，标记一旦出现立刻判红。
+    deadline = time.perf_counter() + 3.6
+    while time.perf_counter() < deadline:
+        assert not marker.exists(), "收尾取消只取消了任务，子进程还在后台跑"
+        await asyncio.sleep(0.1)
     assert not marker.exists(), "收尾取消只取消了任务，子进程还在后台跑"
+
+
+async def test_cancel_during_spawn_still_kills_the_child(tmp_path: Path, monkeypatch):
+    """取消恰好落在「子进程创建途中」时，落地的那个进程照样得被杀。
+
+    收尾窗口只有几十毫秒，机器一忙 ``create_subprocess_shell`` 就可能还没返回；
+    旧实现在这里拿不到 process，CancelledError 分支只能干瞪眼，孙进程留到写标记。
+    """
+    marker = tmp_path / "spawn-window.txt"
+    command = _script(
+        tmp_path,
+        "slow_spawn.py",
+        "import time\n"
+        "time.sleep(1.0)\n"
+        f"open({str(marker)!r}, 'w', encoding='utf-8').write('alive')\n",
+    )
+    real_spawn = asyncio.create_subprocess_shell
+
+    async def slow_spawn(*args, **kwargs):
+        process = await real_spawn(*args, **kwargs)
+        await asyncio.sleep(0.4)  # 把「创建中」这一段拉到收尾窗口之外
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", slow_spawn)
+    runner = _runner(settle_timeout=0.05, post_tool_use=command)
+    await runner.run("post_tool_use", "demo", {})
+    completed, abandoned = await runner.close(timeout=0.05)
+    assert completed == []
+    assert abandoned == [command], "取消没被记成 abandoned"
+
+    deadline = time.perf_counter() + 1.6
+    while time.perf_counter() < deadline:
+        assert not marker.exists(), "取消落在创建途中，子进程成了孤儿"
+        await asyncio.sleep(0.05)
+    assert not marker.exists(), "取消落在创建途中，子进程成了孤儿"
 
 
 class _FakeAdapter:

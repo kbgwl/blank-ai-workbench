@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -535,17 +536,38 @@ def test_驱动里每条判据函数都还在被调用() -> None:
 
 # ---------------------------------------------------------------- 6 无凭据
 
+# `sk-` 是密钥前缀而不是整词：工件名 `…-ask-20261028-150443.json` 里就藏着 `sk-`，
+# 上一版按子串扫会把一份**没有密钥**的实物判成泄漏。真钥匙是 `sk-` + 一长串密钥字符，
+# 所以这里按「前缀 + 至少 20 位」认；两个方向各有一条用例钉着（真钥匙必须抓到、
+# 文件名必须放过），改宽改窄都会红。
+CREDENTIAL_PATTERNS = (
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"api_key="),
+    re.compile(r"Bearer "),
+    re.compile(r"ANTHROPIC_AUTH_TOKEN"),
+    re.compile(r"DEEPSEEK_API_KEY="),
+)
+
+
+def credential_hits(text: str) -> list[str]:
+    return [pattern.pattern for pattern in CREDENTIAL_PATTERNS if pattern.search(text)]
+
+
+def test_凭据扫描对真钥匙与文件名两头都判得准() -> None:
+    key = "sk-" + "0a1b2c3d4e5f" * 3
+    assert credential_hits(f"BLANK_API_KEY={key}") == ["sk-[A-Za-z0-9]{20,}"]
+    assert credential_hits('"artifact": "E:/tmp/x/team-submit-v123-ask-20261028-150443.json"') == []
+
 
 def test_装置目录里不许有凭据或密钥文件() -> None:
     banned_name = {"settings.json", "secret.key", "run.db", ".env", "id_rsa"}
-    banned_words = ("sk-", "api_key=", "Bearer ", "ANTHROPIC_AUTH_TOKEN", "DEEPSEEK_API_KEY=")
     files = [p for p in DEVICE.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     assert files, "装置目录空了"
     for path in files:
         assert path.name not in banned_name, path
         text = path.read_text(encoding="utf-8", errors="replace")
-        for word in banned_words:
-            assert word not in text, f"{path.name} 里出现了 {word}"
+        hits = credential_hits(text)
+        assert not hits, f"{path.name} 里出现了 {hits}"
     launch = (DEVICE / "launch-instance.sh").read_text(encoding="utf-8")
     assert "BLANK_SECRET_KEY_FILE" in launch, "启动器必须只给密钥文件路径，不给内容"
 

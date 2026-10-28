@@ -327,41 +327,78 @@ def test_姿态自检拒掉三种坏配置() -> None:
 
 # ---------------------------------------------------------------- 5 团队入口（#131）
 
-# 实物：主格 :8061（群 0495a7da…，轮 completed，机器人答替代正文口令）与对照格 :8065
-# （群 478a6962…，同一条夹具发言，机器人没写出口令）。原件见夹具 provenance 里的工件路径。
+# 实物：四格 × 主/对照，同一次真跑取回的任务行与群消息。原件路径记在
+# 夹具 `provenance[mode][side]["artifact"]` 里，这里只留判据要吃的那几段。
 TEAM = json.loads((FIXTURES / "team-submit-v123-green.json").read_text(encoding="utf-8"))
 import team_submit_v123 as T  # noqa: E402
 
+TEAM_MODES = ("suppress", "ask", "multi", "budget")
+# 名册 = 主理人开场 + 两位成员 + 主理人收尾。预算格用「成员任务数 < 名册」判「没有多派」。
+TEAM_ROSTER = 4
+TEAM_BUDGET = T.MODE_BUDGET["budget"]
 
-def team_rows(name: str) -> tuple[list[dict], list[dict]]:
-    row = TEAM["rows"][name]
-    return copy.deepcopy(row["tasks"]), copy.deepcopy(row["state"]["messages"])
+
+def team_rows(mode: str, side: str = "main") -> tuple[list[dict], list[dict], dict]:
+    row = TEAM["rows"][mode][side]
+    state = row["state"]
+    return (copy.deepcopy(row["tasks"]), copy.deepcopy(state.get("messages") or []),
+            copy.deepcopy(state.get("round") or {}))
 
 
-def team_fails(tasks: list[dict], messages: list[dict]) -> list[str]:
+def team_fails(mode: str, side: str = "main", *, tasks=None, messages=None,
+               round_row=None, roster: int = TEAM_ROSTER) -> list[str]:
+    """走装置自己的分派（`judge_mode`）：自检读的与真跑读出的是同一条判据链。"""
+    base_tasks, base_messages, base_round = team_rows(mode, side)
     rec = lib.Recorder()
-    J.judge_team_submit(rec, tasks, messages, SPEC)
+    T.judge_mode(
+        rec,
+        mode,
+        base_tasks if tasks is None else tasks,
+        base_messages if messages is None else messages,
+        base_round if round_row is None else round_row,
+        SPEC,
+        roster,
+    )
     return list(rec.fails)
 
 
-def test_团队入口主格实物五条判据全绿() -> None:
-    assert team_fails(*team_rows("main")) == []
+@pytest.mark.parametrize("mode", TEAM_MODES)
+def test_团队入口四格的主格实物全绿(mode: str) -> None:
+    assert team_fails(mode) == [], mode
 
 
-def test_团队入口对照格的红集合精确等于登记三条() -> None:
-    tasks, messages = team_rows("control")
+@pytest.mark.parametrize("mode", TEAM_MODES)
+def test_团队入口四格对照格的红集合精确等于登记的那一组(mode: str) -> None:
+    tasks, messages, round_row = team_rows(mode, "control")
     rec = lib.Recorder()
-    J.judge_team_submit(rec, tasks, messages, SPEC)
-    assert T.control_red_exact(rec) is True
-    assert list(rec.fails) == list(J.CONTROL_123_TEAM_RED)
+    T.judge_mode(rec, mode, tasks, messages, round_row, SPEC, TEAM_ROSTER)
+    expected = T.CONTROL_FOR.get(mode, T.CONTROL_DEFAULT)
+    assert T.control_red_exact(rec, mode) is True, list(rec.fails)
+    assert list(rec.fails) == list(expected)
 
 
-def test_团队入口同一套对照判据打在带钩子的实物上不该全红() -> None:
+@pytest.mark.parametrize("mode", TEAM_MODES)
+def test_团队入口同一套对照判据打在带钩子的实物上不该全红(mode: str) -> None:
     """反向格：对照族的红只在「没钩子」那台上出现，否则它就是恒红死判据。"""
-    tasks, messages = team_rows("main")
     rec = lib.Recorder()
-    J.judge_team_submit(rec, tasks, messages, SPEC)
-    assert T.control_red_exact(rec) is False
+    tasks, messages, round_row = team_rows(mode)
+    T.judge_mode(rec, mode, tasks, messages, round_row, SPEC, TEAM_ROSTER)
+    assert T.control_red_exact(rec, mode) is False
+
+
+def test_团队入口四格的来源与对照读数都记在夹具里() -> None:
+    """夹具自己得说清这八份实物各是哪台实例、跑出什么——不然读数无法追溯。"""
+    for mode in TEAM_MODES:
+        for side in ("main", "control"):
+            prop = TEAM["provenance"][mode][side]
+            assert prop["rc"] == 0, (mode, side, prop)
+            assert Path(prop["artifact"]).name.startswith(f"team-submit-v123-{mode}"), prop
+            if side == "main":
+                assert prop["red"] == [], (mode, prop["red"])
+                assert prop["control_red"] is None
+            else:
+                assert prop["control_red"] is True
+                assert prop["red"] == list(T.CONTROL_FOR.get(mode, T.CONTROL_DEFAULT)), (mode, prop)
 
 
 def test_团队入口对照格的姿态闸门只放行_no_hooks() -> None:
@@ -373,56 +410,237 @@ def test_团队入口对照格的姿态闸门只放行_no_hooks() -> None:
     assert T.control_posture_abort({"posture": "hooks", "submit_hook": "true"}, "http://127.0.0.1:8061")
 
 
-def team_damage(name: str, *, target: str, value) -> tuple[list[dict], list[dict]]:
-    """按名字造一处损伤：`event` 改抑制事件的字段、`goal` 换任务账面、`bot` 改机器人发言。"""
-    tasks, messages = team_rows(name)
-    if target == "event":
-        key, value = value
-        for event in tasks[0]["events"]:
-            if event["type"] == "hook.prompt_substituted":
-                event["payload"][key] = value
-                break
-        else:
-            raise AssertionError(f"{name} 的实物里没有 hook.prompt_substituted")
-    elif target == "goal":
-        tasks[0]["task"]["goal"] = value
-    elif target == "bot":
-        bot = next(item for item in messages if item.get("role") == "bot")
-        bot["content"] = value
-    elif target == "tasks":
+def _last_user(messages: list[dict]) -> str:
+    texts = [str(item.get("content") or "") for item in messages if item.get("role") == "user"]
+    return texts[-1] if texts else ""
+
+
+def _started_event(task: dict) -> dict:
+    for event in task.get("events") or []:
+        if event["type"] == "team.turn.started":
+            return event
+    raise AssertionError(f"任务 {task.get('id')} 没有 team.turn.started")
+
+
+def _member_tasks(tasks: list[dict]) -> list[dict]:
+    return [task for task in tasks
+            if any(e["type"] == "team.turn.started" for e in task.get("events") or [])]
+
+
+def _set_bots(messages: list[dict], text: str) -> None:
+    for item in messages:
+        if item.get("role") == "bot":
+            item["content"] = text
+
+
+def team_damage(mode: str, kind: str) -> tuple[list[dict], list[dict], dict]:
+    """按名字造一处损伤；标签就是契约的一部分，拼错的名字必须炸。"""
+    tasks, messages, round_row = team_rows(mode)
+    members = _member_tasks(tasks)
+    if kind == "任务行整个丢了":
         tasks = []
+    elif kind == "删掉抑制事件":
+        for task in tasks:
+            task["events"] = [e for e in task.get("events") or []
+                              if e["type"] != "hook.prompt_substituted"]
+    elif kind == "抑制位写成字符串 true":
+        for task in members:
+            for event in task["events"]:
+                if event["type"] == "hook.prompt_substituted":
+                    event["payload"]["suppressed"] = "true"
+    elif kind == "账面 goal 被换成替代正文":
+        members[0]["task"]["goal"] = SPEC["suppress_replacement"]
+    elif kind == "机器人没答替代正文口令":
+        _set_bots(messages, "我读到的是一段改写后的任务说明。")
+    elif kind == "机器人发言里带上了原文口令":
+        bot = next(item for item in messages if item.get("role") == "bot")
+        bot["content"] = f"口令是{SPEC['suppress_marker']}"
+    elif kind == "删掉阻断事件":
+        for task in tasks:
+            task["events"] = [e for e in task.get("events") or [] if e["type"] != "hook.prompt_blocked"]
+    elif kind == "阻断决定从 ask 改成 deny":
+        for task in members:
+            for event in task["events"]:
+                if event["type"] == "hook.prompt_blocked":
+                    event["payload"]["decision"] = "deny"
+    elif kind == "拦下之后还是发起了模型调用":
+        members[0]["events"].append({"type": "model.usage", "payload": {"total_tokens": 1}})
+    elif kind == "失败改成成功收场":
+        members[0]["task"]["status"] = "succeeded"
+        members[0]["task"]["failure_reason"] = ""
+    elif kind == "群里冒充模型答复":
+        _set_bots(messages, SPEC["ask_answer"])
+    elif kind == "收尾轮丢了":
+        # 摘掉收尾标记并把账面改成原文：只剩结构判据能发现「这一轮没收尾」。
+        for task in members:
+            started = _started_event(task)
+            if started["payload"].get("wrap_up"):
+                started["payload"]["wrap_up"] = False
+                task["task"]["goal"] = _last_user(messages)
+    elif kind == "同一轮只剩一位成员":
+        first = _started_event(members[0])["payload"]
+        for task in members[1:]:
+            payload = _started_event(task)["payload"]
+            payload["bot_id"] = first.get("bot_id")
+            payload["bot_name"] = first.get("bot_name")
+    elif kind == "多出一次收尾":
+        extra = next((task for task in members
+                      if not _started_event(task)["payload"].get("wrap_up")), members[0])
+        _started_event(extra)["payload"]["wrap_up"] = True
+        extra["task"]["goal"] = J.WRAP_UP_PREFIX + _last_user(messages)
+    elif kind == "群轮以失败收场":
+        round_row["status"] = "failed"
+    elif kind == "预算截断的系统消息丢了":
+        messages[:] = [m for m in messages if "达到预算上限" not in str(m.get("content") or "")]
+    elif kind == "本轮没有达到预算线":
+        round_row["tokens"] = TEAM_BUDGET - 1
+    elif kind == "轮合计与逐条用量对不上":
+        bot = next(item for item in messages if item.get("role") == "bot")
+        usage = dict((bot.get("meta") or {}).get("usage") or {})
+        usage["total_tokens"] = int(usage.get("total_tokens") or 0) + 1
+        bot.setdefault("meta", {})["usage"] = usage
+    elif kind == "截断之后又派了一条收尾":
+        task = members[-1]
+        _started_event(task)["payload"]["wrap_up"] = True
+        task["task"]["goal"] = J.WRAP_UP_PREFIX + _last_user(messages)
     else:
-        raise AssertionError(f"未知损伤目标 {target}")
-    return tasks, messages
+        raise AssertionError(f"未知损伤 {kind}")
+    return tasks, messages, round_row
 
 
 TEAM_BATTERY = [
-    # 期望红集合全部来自实测（先跑占位符版本，把打印的红集合逐字抄回）。
-    ("任务行整个丢了", team_damage("main", target="tasks", value=None),
-     ["123 团队入口：至少一条成员任务进了群轮",
-      "123 团队入口：每条成员任务都留下 suppressed=true 的抑制事件",
-      "123 团队入口：成员任务的账面 goal 逐字等于用户发言（抑制的是上下文，不是账）"]),
-    ("删掉抑制事件", team_damage("main", target="event", value=("__drop__", None)),
-     ["123 团队入口：每条成员任务都留下 suppressed=true 的抑制事件"]),
-    ("抑制位写成字符串 true", team_damage("main", target="event", value=("suppressed", "true")),
-     ["123 团队入口：每条成员任务都留下 suppressed=true 的抑制事件"]),
-    ("账面 goal 被换成替代正文", team_damage("main", target="goal", value=SPEC["suppress_replacement"]),
-     ["123 团队入口：成员任务的账面 goal 逐字等于用户发言（抑制的是上下文，不是账）"]),
-    ("机器人没答替代正文口令", team_damage("main", target="bot", value="我读到的是一段改写后的任务说明。"),
-     ["123 团队入口：机器人发言里出现替代正文的口令"]),
-    ("机器人发言里带上了原文口令", team_damage("main", target="bot",
-                                             value=f"口令是{SPEC['suppress_marker']}"),
-     ["123 团队入口：机器人发言里出现替代正文的口令",
-      "123 团队入口：机器人发言里没有原文口令"]),
+    # (格, 损伤名, 期望红集合)。期望全部来自实测：先跑占位符版本，把打印的红集合逐字抄回。
+    ('suppress', '任务行整个丢了', [
+        "123 团队入口：至少一条成员任务进了群轮",
+        "123 团队入口：每条成员任务都留下 suppressed=true 的抑制事件",
+        "123 团队入口：成员任务的账面 goal 逐字等于这一次提交的正文（收尾轮带前缀）",
+    ]),
+    ('suppress', '删掉抑制事件', [
+        "123 团队入口：每条成员任务都留下 suppressed=true 的抑制事件",
+    ]),
+    ('suppress', '抑制位写成字符串 true', [
+        "123 团队入口：每条成员任务都留下 suppressed=true 的抑制事件",
+    ]),
+    ('suppress', '账面 goal 被换成替代正文', [
+        "123 团队入口：成员任务的账面 goal 逐字等于这一次提交的正文（收尾轮带前缀）",
+    ]),
+    ('suppress', '机器人没答替代正文口令', [
+        "123 团队入口：机器人发言里出现替代正文的口令",
+    ]),
+    ('suppress', '机器人发言里带上了原文口令', [
+        "123 团队入口：机器人发言里没有原文口令",
+    ]),
+    ('ask', '任务行整个丢了', [
+        "123 团队入口 ask：至少一条成员任务进了群轮",
+        "123 团队入口 ask：每条成员任务都留下 decision=ask 的阻断事件",
+        "123 团队入口 ask：拦下时一条模型调用都没发起（无用量、无 task.started、零步）",
+        "123 团队入口 ask：任务以失败收场且原因写明按拒绝处理",
+        "123 团队入口 ask：账面 goal 逐字等于这一次提交的正文（收尾轮带前缀）",
+    ]),
+    ('ask', '删掉阻断事件', [
+        "123 团队入口 ask：每条成员任务都留下 decision=ask 的阻断事件",
+    ]),
+    ('ask', '阻断决定从 ask 改成 deny', [
+        "123 团队入口 ask：每条成员任务都留下 decision=ask 的阻断事件",
+    ]),
+    ('ask', '拦下之后还是发起了模型调用', [
+        "123 团队入口 ask：拦下时一条模型调用都没发起（无用量、无 task.started、零步）",
+    ]),
+    ('ask', '失败改成成功收场', [
+        "123 团队入口 ask：任务以失败收场且原因写明按拒绝处理",
+    ]),
+    ('ask', '群里冒充模型答复', [
+        "123 团队入口 ask：群里念得出拒绝原因、没有冒充模型答复",
+    ]),
+    ('ask', '账面 goal 被换成替代正文', [
+        "123 团队入口 ask：账面 goal 逐字等于这一次提交的正文（收尾轮带前缀）",
+    ]),
+    ('multi', '任务行整个丢了', [
+        "123 团队入口：至少一条成员任务进了群轮",
+        "123 团队入口：每条成员任务都留下 suppressed=true 的抑制事件",
+        "123 团队入口：成员任务的账面 goal 逐字等于这一次提交的正文（收尾轮带前缀）",
+        "123 团队多成员：同一轮里至少两位不同成员各有一条任务",
+        "123 团队多成员：收尾轮存在且只有一条",
+    ]),
+    ('multi', '同一轮只剩一位成员', [
+        "123 团队多成员：同一轮里至少两位不同成员各有一条任务",
+    ]),
+    ('multi', '收尾轮丢了', [
+        "123 团队多成员：收尾轮存在且只有一条",
+    ]),
+    ('multi', '多出一次收尾', [
+        "123 团队多成员：收尾轮存在且只有一条",
+    ]),
+    ('multi', '群轮以失败收场', [
+        "123 团队多成员：群轮以 completed 收场",
+    ]),
+    ('budget', '预算截断的系统消息丢了', [
+        "123 团队预算：这一轮确实在预算上限停下来",
+    ]),
+    ('budget', '本轮没有达到预算线', [
+        "123 团队预算：这一轮确实在预算上限停下来",
+        "123 团队预算：轮合计等于各条发言用量之和",
+    ]),
+    ('budget', '轮合计与逐条用量对不上', [
+        "123 团队预算：轮合计等于各条发言用量之和",
+    ]),
+    ('budget', '截断之后又派了一条收尾', [
+        "123 团队预算：停下来的那一步没有给后续成员派任务",
+    ]),
+    ('budget', '群轮以失败收场', [
+        "123 团队预算：轮以 completed 收场",
+    ]),
 ]
 
 
-@pytest.mark.parametrize("damage_label,damaged,expected", TEAM_BATTERY)
-def test_团队入口每条损伤都红且只红该红的那几条(damage_label, damaged, expected) -> None:
-    tasks, messages = copy.deepcopy(damaged)
-    if damage_label == "删掉抑制事件":
-        tasks[0]["events"] = [e for e in tasks[0]["events"] if e["type"] != "hook.prompt_substituted"]
-    red = team_fails(tasks, messages)
+def test_损伤名拼错时炸而不是静默跳过() -> None:
+    with pytest.raises(AssertionError):
+        team_damage("suppress", "这个名字不存在")
+
+
+@pytest.mark.parametrize("mode,damage_label,expected", TEAM_BATTERY)
+def test_团队入口每条损伤都红且只红该红的那几条(mode: str, damage_label: str, expected) -> None:
+    tasks, messages, round_row = team_damage(mode, damage_label)
+    red = team_fails(mode, tasks=tasks, messages=messages, round_row=round_row)
     if expected is None:
-        raise AssertionError(f"未登记期望红集合（{damage_label}）实测={json.dumps(red, ensure_ascii=False)}")
-    assert red == expected, f"{damage_label} 红集合漂移：实测={red} 登记={expected}"
+        raise AssertionError(
+            f"未登记期望红集合（{mode}/{damage_label}）实测={json.dumps(red, ensure_ascii=False)}")
+    assert red == expected, f"{mode}/{damage_label} 红集合漂移：实测={red} 登记={expected}"
+
+
+def test_驱动参数只认四种模式与对照开关() -> None:
+    """模式名是契约的一部分：拼错的参数不许悄悄落回默认格（那会拿真模型的钱跑错题）。"""
+    assert T.parse_args([]) == ("suppress", False)
+    assert T.parse_args(["--mode", "ask"]) == ("ask", False)
+    assert T.parse_args(["--mode=budget", "--control"]) == ("budget", True)
+    for bad in (["--mode", "nope"], ["--mode"], ["--wat"], ["--control=true"]):
+        with pytest.raises(SystemExit):
+            T.parse_args(bad)
+
+
+def test_对照红集合按模式分派且必须精确相等() -> None:
+    assert set(T.CONTROL_FOR["ask"]) == set(J.CONTROL_123_TEAM_ASK_RED)
+    assert T.CONTROL_FOR.get("suppress", T.CONTROL_DEFAULT) is J.CONTROL_123_TEAM_RED
+    for mode in ("suppress", "multi", "budget"):
+        assert T.CONTROL_FOR.get(mode, T.CONTROL_DEFAULT) is J.CONTROL_123_TEAM_RED, mode
+    rec = lib.Recorder()
+    for name in J.CONTROL_123_TEAM_ASK_RED:
+        rec.check(name, False, "")
+    assert T.control_red_exact(rec, "ask") is True
+    rec.check("多出来的一条", False, "")
+    assert T.control_red_exact(rec, "ask") is False
+
+
+def test_点名把成员放进用户发言() -> None:
+    """不点名时队列里只有主理人：多成员与收尾根本不会发生，判据也就没有多份样本。"""
+    assert T.compose_goal("正文", []) == "正文"
+    goal = T.compose_goal("正文", ["甲", "乙"])
+    assert goal.startswith("正文") and "@甲" in goal and "@乙" in goal
+
+
+def test_收尾前缀与产品里的那一句同字() -> None:
+    """装置按「前缀 + 原文」算收尾轮账面；产品改了前缀而这里没改，判据会静默变宽。"""
+    import blank_api.services.team as team
+
+    source = Path(team.__file__).read_text(encoding="utf-8")
+    assert f'f"{J.WRAP_UP_PREFIX}{{user_text}}"' in source, "team.py 的收尾前缀与装置登记的不一致"

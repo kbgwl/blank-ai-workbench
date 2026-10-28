@@ -173,12 +173,17 @@ async def test_read_only_calls_overlap(seeded, tmp_path, monkeypatch):
         await _run(session, ["read_file", "search_code"])
         return time.perf_counter() - started, trace.overlap("read_file", "search_code")
 
-    serial, serial_overlap = await measure(0.25, False)
-    parallel, parallel_overlap = await measure(0.25, True)
+    # 每侧取三轮最小值：单轮碰上调度抖动就整条判据失效（全量回归里读到并行 0.63s /
+    # 串行 0.71s，比值 0.89 而交错日志成立）。最小值只压噪声，压不动锁死的实现——
+    # 进了锁的话三轮都贴着串行基线。
+    serial_rounds = [await measure(0.25, False) for _ in range(3)]
+    parallel_rounds = [await measure(0.25, True) for _ in range(3)]
+    serial = min(elapsed for elapsed, _ in serial_rounds)
+    parallel = min(elapsed for elapsed, _ in parallel_rounds)
 
     # 交错日志是硬证据：串行的话必然是先 enter/leave 一个，再 enter/leave 另一个
-    assert parallel_overlap
-    assert not serial_overlap, "开关关掉的对照格必须先出现串行，否则这次比较没有基线"
+    assert all(overlap for _, overlap in parallel_rounds), "并行轮里有一轮没有交错"
+    assert not any(overlap for _, overlap in serial_rounds), "开关关掉的对照格必须先出现串行，否则这次比较没有基线"
     # 相对判据：并行必须显著快于同一次运行里的串行基线（实测比值 ≈0.55，上界取 0.8；
     # 进了锁但"看起来并发"的实现在这里比值 ≈1.0）
     assert parallel < serial * 0.8, f"并行没比串行快多少：并行 {parallel:.2f}s / 串行 {serial:.2f}s"

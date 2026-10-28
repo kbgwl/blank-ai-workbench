@@ -1,6 +1,6 @@
-"""提交钩子夹具：`user_prompt_submit` 的三道决定按 goal 里的锚分派。
+"""提交钩子夹具：`user_prompt_submit` 的四道决定按 goal 里的锚分派。
 
-一台实例、一份 `BLANK_HOOKS` 要同时喂四种格（抑制 / 拦下 / 补上下文 / 无关），
+一台实例、一份 `BLANK_HOOKS` 要同时喂五种格（抑制 / 拦下 / 补上下文 / 无关 / 先确认），
 而钩子配置是进程级、不按任务切换的，所以分派只能写在 goal 里。**锚与正文的唯一
 来源是 `fixtures/prompt-submit-v123.json`**——夹具与判据读同一份，两处不许各抄一份
 （#119 那批 `wake-text.txt` 立的同一条规矩）。
@@ -32,7 +32,10 @@ if SPEC["block_marker"] in goal:
     # 退出码 2 = 拦下这次提交（连一次模型调用都不该发起）。
     sys.stderr.write(SPEC["block_reason"])
     sys.exit(2)
-if SPEC["suppress_marker"] in goal:
+if SPEC["ask_marker"] in goal:
+    # 提交这一步没有确认界面：产品必须按拒绝处理（fail-closed），不许静默放行。
+    emit({"decision": "ask", "reason": SPEC["ask_reason"]})
+elif SPEC["suppress_marker"] in goal:
     emit({"additionalContext": SPEC["suppress_replacement"], "suppressOriginalPrompt": True})
 elif SPEC["inject_marker"] in goal:
     emit({"additionalContext": SPEC["inject_text"]})

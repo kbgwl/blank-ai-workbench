@@ -278,6 +278,37 @@ async def _kill_process(process: asyncio.subprocess.Process) -> None:
         pass
 
 
+async def _spawn_shell(command: str) -> asyncio.subprocess.Process:
+    """起钩子进程；创建途中被取消时，落地的那个进程也要杀。
+
+    收尾窗口只有几十毫秒，取消可能正好落在「子进程正在创建」这一段：那时
+    ``_execute`` 还没拿到 process，CancelledError 分支无从下手，孙进程就留在
+    机器上继续跑（全量回归里那条时序用例偶发红就是它）。用 shield 把创建
+    捂完整，拿到进程先杀再抛，取消语义不变。
+    """
+    spawn = asyncio.ensure_future(
+        asyncio.create_subprocess_shell(
+            command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    )
+    try:
+        return await asyncio.shield(spawn)
+    except asyncio.CancelledError:
+        while not spawn.done():
+            try:
+                await asyncio.shield(spawn)
+            except asyncio.CancelledError:
+                continue
+            except Exception:  # noqa: BLE001 - 起不来就没有进程可杀
+                break
+        if spawn.done() and not spawn.cancelled() and spawn.exception() is None:
+            await _kill_process(spawn.result())
+        raise
+
+
 class HookRunner:
     """按事件分发钩子。线程内单实例即可，状态只用于审计。"""
 
@@ -471,12 +502,7 @@ class HookRunner:
             return int((time.perf_counter() - started) * 1000)
 
         try:
-            process = await asyncio.create_subprocess_shell(
-                spec.command,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            process = await _spawn_shell(spec.command)
         except Exception as exc:  # 命令本身起不来
             return HookResult(
                 event=event,

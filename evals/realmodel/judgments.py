@@ -218,6 +218,12 @@ def _prompt_reads(events: list[dict]) -> dict[str, list[dict]]:
     }
 
 
+def _tool_actions(events: list[dict]) -> list[str]:
+    """这一条任务里有没有真的动过工具——注入正文说「不要调用任何工具」时，
+    照做与否会在这里留下可观察的痕迹（纯问答任务本不该有任何工具事件）。"""
+    return [str(e.get("type") or "") for e in events if str(e.get("type") or "").startswith("tool.")]
+
+
 def judge_submit_suppress(rec: Recorder, events: list[dict], task: dict, spec: dict) -> None:
     goal = str(task.get("goal") or "")
     summary = str(task.get("result_summary") or "")
@@ -251,6 +257,10 @@ def judge_submit_suppress(rec: Recorder, events: list[dict], task: dict, spec: d
     rec.check("123 上下文管家的候选没被原文关键词带出来",
               side_door not in curated and side_door not in summary,
               f"curated={curated[:220]} summary={summary[:120]}")
+    # 语义只判可观察的那一半：模型有没有把这句外部正文当成动作指令去执行。
+    # 「它心里怎么理解」不可判，但照做会留下工具事件，这里钉住「一个都没有」。
+    tools = _tool_actions(events)
+    rec.check("123 抑制格：替代正文没有引发任何工具动作", not tools, f"tools={tools[:4]}")
 
 
 def judge_submit_blocked(rec: Recorder, events: list[dict], task: dict, spec: dict) -> None:
@@ -296,6 +306,8 @@ def judge_submit_injected(rec: Recorder, events: list[dict], task: dict, spec: d
     rec.check("123 模型既读得到原文口令、也读得到钩子补充",
               spec["inject_marker"] in summary and spec["inject_token"] in summary,
               f"summary={summary[:220]}")
+    tools = _tool_actions(events)
+    rec.check("123 补上下文格：补充正文没有引发任何工具动作", not tools, f"tools={tools[:4]}")
 
 
 def judge_submit_plain(rec: Recorder, events: list[dict], task: dict, spec: dict) -> None:
@@ -334,44 +346,175 @@ CONTROL_123_TEAM_RED = (
     "123 团队入口：机器人发言里没有原文口令",
 )
 
+# 收尾轮不是「用户发言原文」：`team.py:764` 会加一句前缀再交给模型。
+# 账面口径按这一次提交的正文算，前缀只有这一份真源——装置自检钉住它和 team.py 同字，
+# 否则产品改了前缀、判据还按老样子判，绿的会是一条恒真判据。
+WRAP_UP_PREFIX = "请收尾本轮讨论。用户最初的要求："
+
+
+def expected_team_goal(started: dict, user_text: str) -> str:
+    return (WRAP_UP_PREFIX + user_text) if started.get("wrap_up") else user_text
+
+
+def _member_rows(tasks: list[dict]) -> list[tuple[dict, dict]]:
+    """成员任务 = 带 `team.turn.started` 的任务；返回 (任务行, 那条事件的 payload)。"""
+    rows: list[tuple[dict, dict]] = []
+    for row in tasks:
+        started = of_type(row.get("events") or [], "team.turn.started")
+        if started:
+            rows.append((row, started[0].get("payload") or {}))
+    return rows
+
+
+def _last_user_text(messages: list[dict]) -> str:
+    texts = [str(item.get("content") or "") for item in messages if item.get("role") == "user"]
+    return texts[-1] if texts else ""
+
 
 def judge_team_submit(rec: Recorder, tasks: list[dict], messages: list[dict], spec: dict) -> None:
     """团队入口的提交钩子：成员任务的 goal 直接来自用户发言（services/team.py）。
 
     `tasks` 每项是 `{"id", "task", "events"}`；`messages` 是这一轮的群消息。
     成员任务按 `team.turn.started` 事件认（群轮只给被点到的成员发任务），
-    账面 goal 拿**用户发言原文**比——不能用「goal 含原文锚」来挑任务：
-    那样「账面被改写」的任务会直接从样本里消失，第三条判据就成了恒真。
+    账面 goal 拿**这一次提交的正文**比——首轮就是用户发言原文，收尾轮是
+    `WRAP_UP_PREFIX + 原文`（team.py 自己加的那句）。不能用「goal 含原文锚」来挑任务：
+    那样「账面被改写」的任务会直接从样本里消失，判据就成了恒真。
     只判「钩子真的作用在成员任务上」：每条成员任务都留下抑制事件、账面 goal 不动、
     机器人发言里出现替代正文的口令且没有原文口令（没钩子时这三条必然不成立）。
     """
     marker, token = spec["suppress_marker"], spec["suppress_token"]
-    member = [row for row in tasks
-              if of_type(row.get("events") or [], "team.turn.started")]
-    user_texts = [str(item.get("content") or "") for item in messages
-                  if item.get("role") == "user"]
-    expected_goal = user_texts[-1] if user_texts else ""
+    members = _member_rows(tasks)
+    expected_goal = _last_user_text(messages)
     substitutions = {str(row.get("id")): of_type(row.get("events") or [],
                                                  "hook.prompt_substituted")
-                     for row in member}
+                     for row, _ in members}
     misses = [
         task_id for task_id, events in substitutions.items()
         if not (events and events[0]["payload"].get("suppressed") is True)
     ]
     stray_goals = [
-        str(row.get("id")) for row in member
-        if str((row.get("task") or {}).get("goal") or "") != expected_goal
+        str(row.get("id")) for row, started in members
+        if str((row.get("task") or {}).get("goal") or "") != expected_team_goal(started, expected_goal)
     ]
-    rec.check("123 团队入口：至少一条成员任务进了群轮", bool(member),
-              f"tasks={len(tasks)} member={len(member)}")
+    rec.check("123 团队入口：至少一条成员任务进了群轮", bool(members),
+              f"tasks={len(tasks)} member={len(members)}")
     rec.check("123 团队入口：每条成员任务都留下 suppressed=true 的抑制事件",
-              bool(member) and not misses, f"member={len(member)} misses={misses[:4]}")
-    rec.check("123 团队入口：成员任务的账面 goal 逐字等于用户发言（抑制的是上下文，不是账）",
-              bool(member) and bool(expected_goal) and not stray_goals,
-              f"member={len(member)} strays={stray_goals[:4]}")
+              bool(members) and not misses, f"member={len(members)} misses={misses[:4]}")
+    rec.check("123 团队入口：成员任务的账面 goal 逐字等于这一次提交的正文（收尾轮带前缀）",
+              bool(members) and bool(expected_goal) and not stray_goals,
+              f"member={len(members)} strays={stray_goals[:4]} wrap_ups="
+              f"{[started.get('wrap_up') for _, started in members]}")
     bot_texts = [str(item.get("content") or "") for item in messages if item.get("role") == "bot"]
     rec.check("123 团队入口：机器人发言里出现替代正文的口令",
               any(token in text for text in bot_texts), f"bot_msgs={len(bot_texts)}")
     rec.check("123 团队入口：机器人发言里没有原文口令",
               all(marker not in text for text in bot_texts),
               f"leaks={[text[:60] for text in bot_texts if marker in text][:1]}")
+
+
+# ask 档的对照格（不配钩子的那台）必须红的四条：没钩子时成员任务照常跑完。
+CONTROL_123_TEAM_ASK_RED = (
+    "123 团队入口 ask：每条成员任务都留下 decision=ask 的阻断事件",
+    "123 团队入口 ask：拦下时一条模型调用都没发起（无用量、无 task.started、零步）",
+    "123 团队入口 ask：任务以失败收场且原因写明按拒绝处理",
+    "123 团队入口 ask：群里念得出拒绝原因、没有冒充模型答复",
+)
+
+
+def judge_team_ask(rec: Recorder, tasks: list[dict], messages: list[dict], spec: dict) -> None:
+    """提交钩子要求先确认（ask）时，团队入口也必须按拒绝处理。
+
+    提交这一步没有确认界面（#129）：成员任务与收尾任务都是「一次提交」，
+    所以两者都该被拦下、一次模型调用都不发起，群里念的是拒绝原因而不是冒充的答复。
+    对照格上这四条必然不成立——`不该出现` 是 ask 格的 goal 里让模型回答的那句，
+    没钩子时它会原样出现在机器人发言里。
+    """
+    marker = spec["ask_marker"]
+    members = _member_rows(tasks)
+    expected_goal = _last_user_text(messages)
+    not_asked = [
+        str(row.get("id")) for row, _ in members
+        if not (of_type(row.get("events") or [], "hook.prompt_blocked")
+                and of_type(row.get("events") or [], "hook.prompt_blocked")[0]["payload"].get("decision") == "ask")
+    ]
+    calls = [
+        str(row.get("id")) for row, _ in members
+        if of_type(row.get("events") or [], "model.usage")
+        or of_type(row.get("events") or [], "task.started")
+        or int((row.get("task") or {}).get("steps_used") or 0) != 0
+    ]
+    not_failed = [
+        str(row.get("id")) for row, _ in members
+        if (row.get("task") or {}).get("status") != "failed"
+        or "提交被钩子拦下" not in str((row.get("task") or {}).get("failure_reason") or "")
+        or "按拒绝处理" not in str((row.get("task") or {}).get("failure_reason") or "")
+    ]
+    stray_goals = [
+        str(row.get("id")) for row, started in members
+        if str((row.get("task") or {}).get("goal") or "") != expected_team_goal(started, expected_goal)
+    ]
+    bot_texts = [str(item.get("content") or "") for item in messages if item.get("role") == "bot"]
+    honest = bool(bot_texts) and all("按拒绝处理" in text for text in bot_texts) and all(
+        spec["ask_answer"] not in text for text in bot_texts)
+
+    rec.check("123 团队入口 ask：至少一条成员任务进了群轮", bool(members),
+              f"tasks={len(tasks)} member={len(members)}")
+    rec.check("123 团队入口 ask：每条成员任务都留下 decision=ask 的阻断事件",
+              bool(members) and not not_asked, f"member={len(members)} misses={not_asked[:4]}")
+    rec.check("123 团队入口 ask：拦下时一条模型调用都没发起（无用量、无 task.started、零步）",
+              bool(members) and not calls, f"member={len(members)} calls={calls[:4]}")
+    rec.check("123 团队入口 ask：任务以失败收场且原因写明按拒绝处理",
+              bool(members) and not not_failed, f"member={len(members)} strays={not_failed[:4]}")
+    rec.check("123 团队入口 ask：账面 goal 逐字等于这一次提交的正文（收尾轮带前缀）",
+              bool(members) and bool(expected_goal) and not stray_goals,
+              f"member={len(members)} strays={stray_goals[:4]} marker={marker}")
+    rec.check("123 团队入口 ask：群里念得出拒绝原因、没有冒充模型答复", honest,
+              f"bot_msgs={len(bot_texts)} heads={[t[:40] for t in bot_texts][:3]}")
+
+
+def judge_team_multi(rec: Recorder, tasks: list[dict], messages: list[dict],
+                     round_row: dict) -> None:
+    """多成员同一轮：被点名的成员各自一条任务，收尾轮是主理人的第二次提交。
+
+    这一组与钩子无关（没钩子时同样成立），不进对照格红集合——它裁的是
+    「这一轮真的有多个人发言、收尾真的发生了」，钩子判据才有多个样本可判。
+    """
+    members = _member_rows(tasks)
+    bot_ids = {str(started.get("bot_id") or "") for _, started in members}
+    wrap_ups = [(row, started) for row, started in members if started.get("wrap_up")]
+    rec.check("123 团队多成员：同一轮里至少两位不同成员各有一条任务",
+              len(bot_ids) >= 2, f"bots={sorted(bot_ids)} tasks={len(members)}")
+    rec.check("123 团队多成员：收尾轮存在且只有一条", len(wrap_ups) == 1,
+              f"wrap_ups={[str(row.get('id')) for row, _ in wrap_ups]}")
+    rec.check("123 团队多成员：群轮以 completed 收场",
+              str(round_row.get("status")) == "completed",
+              f"status={round_row.get('status')} error={str(round_row.get('error'))[:120]}")
+
+
+def judge_team_budget(rec: Recorder, tasks: list[dict], messages: list[dict], round_row: dict,
+                      roster: int, budget: int = 0) -> None:
+    """预算耗尽中途截断：停下来之后不许再给谁派任务，账也要对得上。
+
+    这一组与钩子无关（没钩子时同样成立），所以它不进任何对照格的红集合——
+    裁的是「截断诚实」：真的到了预算线、没再多派任务（也没进收尾）、
+    轮以 completed 收场、轮合计等于逐条发言用量之和。
+    """
+    system = [str(item.get("content") or "") for item in messages if item.get("role") == "system"]
+    truncated = [text for text in system if "达到预算上限" in text]
+    members = _member_rows(tasks)
+    wrap_ups = [row for row, started in members if started.get("wrap_up")]
+    bot_msgs = [item for item in messages if item.get("role") == "bot"]
+    summed = sum(int(((item.get("meta") or {}).get("usage") or {}).get("total_tokens") or 0)
+                 for item in bot_msgs)
+    round_tokens = int(round_row.get("tokens") or 0)
+    rec.check("123 团队预算：这一轮确实在预算上限停下来",
+              bool(truncated) and round_tokens >= int(budget or 0),
+              f"system={[t[:60] for t in system][:3]} round_tokens={round_tokens} budget={budget}")
+    rec.check("123 团队预算：停下来的那一步没有给后续成员派任务",
+              bool(members) and len(members) < roster and not wrap_ups,
+              f"member={len(members)} roster={roster} wrap_ups={[str(r.get('id')) for r in wrap_ups]}")
+    rec.check("123 团队预算：轮以 completed 收场", str(round_row.get("status")) == "completed",
+              f"status={round_row.get('status')} error={str(round_row.get('error'))[:120]}")
+    rec.check("123 团队预算：轮合计等于各条发言用量之和",
+              bool(bot_msgs) and summed == round_tokens,
+              f"sum={summed} round_tokens={round_tokens} bots={len(bot_msgs)}")

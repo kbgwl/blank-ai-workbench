@@ -330,6 +330,112 @@ async def test_团队入口的成员任务也过提交钩子(env, workspace: Pat
     assert all(payload["suppressed"] is True for payload in hits)
 
 
+async def test_团队入口的ask档也按拒绝处理(env, workspace: Path, tmp_path: Path, monkeypatch):  # noqa: F811
+    """团队入口是第二条提交入口：ask 档在那里同样没有确认界面，必须按拒绝处理。
+
+    成员任务、主理人开场与收尾都是「一次提交」，所以每一条都该被拦下：一次模型调用
+    都不发起，群里念的是拒绝原因，而不是一张被静默放行的模型答复。
+    """
+    from tests.test_team import make_group, wait_round
+
+    command = _script(
+        tmp_path,
+        "team_ask.py",
+        "sys.stdout.write(json.dumps({'decision': 'ask', 'reason': '团队提交先确认'}))\n",
+    )
+    _hooks(monkeypatch, command)
+    project_id, _, group_id = await make_group(env, workspace, members=("后端",))
+    env.mock.reset(_steps())
+
+    resp = await env.client.post(
+        f"{API}/team/groups/{group_id}/messages",
+        json={"content": f"@后端 请把 {MARKER} 的事情办一下"},
+    )
+    assert resp.status_code in (200, 201), resp.text
+    state = await wait_round(env, group_id, ("completed", "failed", "waiting_approval"), timeout=40.0)
+    assert (state.get("round") or {}).get("status") == "completed", state.get("round")
+    assert env.mock.requests == [], "团队入口的 ask 档被静默放行去调模型了"
+
+    async with get_session_factory()() as session:
+        rows = (await session.execute(select(Task).where(Task.project_id == project_id))).scalars().all()
+    assert len(rows) >= 2, f"这一轮没有覆盖成员与收尾：{len(rows)} 条任务"
+    for task in rows:
+        assert task.status == "failed", (task.id, task.status)
+        reason = task.failure_reason or ""
+        assert "提交被钩子拦下" in reason and "按拒绝处理" in reason, reason
+        assert task.steps_used == 0, (task.id, task.steps_used)
+        events = await _events(env, task.id)
+        blocked = [item for item in events if item["type"] == "hook.prompt_blocked"]
+        assert blocked and blocked[0]["payload"].get("decision") == "ask", events
+        assert not [item for item in events if item["type"] == "model.usage"], events
+        assert not [item for item in events if item["type"] == "task.started"], events
+        assert MARKER not in json.dumps(blocked[0]["payload"], ensure_ascii=False)
+
+    bots = [item for item in state.get("messages") or [] if item.get("role") == "bot"]
+    assert bots and all("按拒绝处理" in (item.get("content") or "") for item in bots), bots
+
+
+async def test_fan_out子代理的goal来自模型而不是这次提交(env, workspace: Path, tmp_path: Path, monkeypatch):  # noqa: F811
+    """子代理不走 `AgentRuntime.run`：提交钩子作用在父任务的提交上，不会改写子代理 goal。
+
+    这是结构边界，不是漏洞：子代理的 goal 是模型在工具参数里写的，不是用户提交。
+    判据钉三件事：① 钩子只在父任务上跑一次；② 子代理读到的正是模型写的那份 goal
+    （逐字，不含替代正文、不含原文）；③ 父任务的模型请求里原文已被抑制。
+    """
+    command = _script(tmp_path, "fan_suppress.py", _emit(REPLACEMENT, suppress=True))
+    _hooks(monkeypatch, command)
+    project_id = await create_project(env, workspace)
+    provider_id = await create_provider(env)
+    task_id = await create_task(env, project_id, ["查清 main.py 的内容"], goal=f"请围绕 {MARKER} 查一下")
+    child_goal = "读取 main.py 并复述内容"
+    env.mock.reset(
+        [
+            {"content": "执行计划：\n1. 并行派子代理侦察"},
+            {"content": "派一个子代理",
+             "tool_calls": [call("spawn_agents", {"tasks": [child_goal]})]},
+            {"content": "main.py 里只有一行 print('hi')"},
+            {"content": "已完成"},
+        ]
+    )
+
+    resp = await env.client.post(f"{API}/tasks/{task_id}/run", json={"provider_id": provider_id})
+    assert resp.status_code == 200, resp.text
+
+    requests = list(env.mock.requests)
+    parent = [r for r in requests if "你是一个受限的子代理" not in json.dumps(r, ensure_ascii=False)]
+    child = [r for r in requests if "你是一个受限的子代理" in json.dumps(r, ensure_ascii=False)]
+    assert parent and child, (len(parent), len(child))
+    parent_texts = [t for r in parent for t in _all_texts_of(r)]
+    child_texts = [t for r in child for t in _all_texts_of(r)]
+    assert any(REPLACEMENT in text for text in parent_texts)
+    assert all(MARKER not in text for text in parent_texts)
+    assert all(REPLACEMENT not in text for text in child_texts), "替代正文被塞进了子代理上下文"
+    assert all(MARKER not in text for text in child_texts)
+    child_user = next(
+        item["content"] for r in child for item in r["messages"] if item.get("role") == "user"
+    )
+    assert child_user.split("\n（你在一个临时隔离副本里工作")[0] == child_goal, child_user
+
+    events = await _events(env, task_id)
+    submits = [item for item in events
+               if item["type"] == "hook.completed" and item["payload"].get("event") == "user_prompt_submit"]
+    assert len(submits) == 1, f"提交钩子跑了 {len(submits)} 次（子代理不该再触发一次提交）"
+    assert len([item for item in events if item["type"] == "hook.prompt_substituted"]) == 1
+    started = [item for item in events if item["type"] == "subagent.started"]
+    assert started and started[0]["payload"]["goal"] == child_goal, started
+
+
+def _all_texts_of(request: dict) -> list[str]:
+    texts: list[str] = []
+    for message in request.get("messages") or []:
+        content = message.get("content")
+        if isinstance(content, str):
+            texts.append(content)
+        elif isinstance(content, list):
+            texts.extend(str(block.get("text") or "") for block in content if isinstance(block, dict))
+    return texts
+
+
 async def test_钩子要求确认时按拒绝处理并说明(env, workspace: Path, tmp_path: Path, monkeypatch):  # noqa: F811
     """ask 档在提交链路上没有确认界面：静默放行等于把钩子写下的条件丢掉。
 
