@@ -655,14 +655,25 @@ def test_load_target_refuses_directories_and_escapes(rea_root: Path):
 # --------------------------------------------------------------------------- #
 @pytest.mark.skipif(not (DESKTOP_RESOURCES / "app.asar").exists(), reason="本机没有桌面包产物")
 def test_real_desktop_asar_answers_are_known():
-    """红于：解析器只对自己的合成样本成立，遇到真产物就报错。"""
+    """红于：解析器只对自己的合成样本成立，遇到真产物就报错。
+
+    字面量按 0.8.5 产物当刻量得（6 个文件，与 desktop/package.json 的 build.files 同集）；
+    壳文件增删会让这条红，是有意的。
+    """
     raw = (DESKTOP_RESOURCES / "app.asar").read_bytes()
     report = artifact.inspect_bytes("app.asar", raw)
     assert report["format"] == "asar"
     assert report["entry"]["main"] == "main.cjs"
     values = {item["kind"]: item["value"] for item in report["findings"]}
-    assert values["容器结构"] == "5 个文件 / 0 个子目录"
-    assert "main.cjs" in values["文件表"]
+    assert values["容器结构"] == "6 个文件 / 0 个子目录"
+    assert set(values["文件表"].split(", ")) == {
+        "api-base.cjs",
+        "gpu-guard.cjs",
+        "main.cjs",
+        "package.json",
+        "preload.cjs",
+        "shell-policy.cjs",
+    }
     assert values["包声明"].startswith("blank-ai-workbench-desktop")
 
 

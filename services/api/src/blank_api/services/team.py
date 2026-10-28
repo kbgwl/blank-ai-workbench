@@ -999,19 +999,51 @@ class TeamOrchestrator:
                 meta["mentions"] = picked
                 planned = len(spoken) + len(queue)
                 max_speakers = int(group.max_speakers or 5)
-                for name in picked:
+                dropped: list[str] = []
+                dropped_by = ""
+                for index, name in enumerate(picked):
                     target = by_name.get(name)
                     if target is None or target.id in spoken or target.id in queue:
                         continue
-                    if target.id == group.admin_bot_id:
-                        if round_row.wrap_up_done:
-                            continue
-                        round_row.wrap_up_done = True
+                    if target.id == group.admin_bot_id and round_row.wrap_up_done:
+                        continue
+                    # 排不下不是"没被点名"：记下是谁、被哪条闸挡住，末尾补一句可核对的话。
                     if planned >= max_speakers or len(queue) >= MAX_QUEUE_DEPTH:
+                        dropped_by = "speakers" if planned >= max_speakers else "queue"
+                        for rest in picked[index:]:
+                            other = by_name.get(rest)
+                            if other is None or other.id in spoken or other.id in queue:
+                                continue
+                            if other.id == group.admin_bot_id and round_row.wrap_up_done:
+                                continue
+                            if rest not in dropped:
+                                dropped.append(rest)
                         break
+                    if target.id == group.admin_bot_id:
+                        round_row.wrap_up_done = True
                     queue.append(target.id)
                     planned += 1
                 round_row.queue = queue
+                if dropped:
+                    reason = (
+                        f"本轮发言上限是 {max_speakers} 次（主理人的开场也算在内）"
+                        if dropped_by == "speakers"
+                        else f"这一轮的待发言队列最多 {MAX_QUEUE_DEPTH} 位"
+                    )
+                    session.add(
+                        TeamMessage(
+                            group_id=group.id,
+                            round_id=round_row.id,
+                            role="system",
+                            bot_name="系统",
+                            content=(
+                                f"{reason}，"
+                                + "、".join(f"@{name}" for name in dropped)
+                                + " 这次没排上，需要时请下一轮再点名。"
+                            ),
+                            status="sent",
+                        )
+                    )
             elif message.status == "pass":
                 meta["mentions"] = []
 

@@ -820,8 +820,8 @@ sha256 还原）：`E:/tmp/v123/mut_ui_run4.txt` 读数与登记逐字相等，`
 模型已见替代正文），批准后断言：计数器仍=1、续跑的每一次请求都不含原文、含替代正文、
 `hook.completed(user_prompt_submit)` 恰一条、账面 goal 仍含原文。反证（一次性装置，已删）
 `E:/tmp/v123/redlock_resume.py` 在 `_resume` 里插回 `await self._submit_prompt(scope)`，
-用例当刻红（`assert 2 == 1`），还原 sha 一致。仍不覆盖：跨进程崩溃后的恢复
-（检查点由被杀进程写下、新进程续跑）。
+用例当刻红（`assert 2 == 1`），还原 sha 一致。**跨进程崩溃后的恢复已由 #140 之三闭合**
+（两个真进程：检查点由被杀进程写下、新进程续跑，见本节末尾用例与变异电池）。
 
 **#131 团队入口：真模型两格 → 四格 × 主/对照（#134–#137）。**
 群聊的成员任务 goal 直接由 `services/team.py` 从用户发言取，所以提交钩子对它是第二条入口。
@@ -847,8 +847,9 @@ sha256 还原）：`E:/tmp/v123/mut_ui_run4.txt` 读数与登记逐字相等，`
 子请求两者都不含、子 messages 第一条 user 逐字等于 child_goal，钩子各恰一次），
 以及**抑制/注入格的「没有引发任何工具动作」判据**——语义反应里可观察的那一半成了机器判据。
 团队入口的 23 条损伤变异（抑制 6 / ask 7 / 多成员 5 / 预算 5）期望红集合全部实测登记。
-仍不覆盖：子代理该不该过钩子（现在的答案是「不该，goal 由模型写」）；群轮进行中的追加发言与
-队列重排；模型有没有照做（工具动作之外的部分）。
+仍不覆盖：子代理该不该过钩子（现在的答案是「不该，goal 由模型写」）；群轮进行中的**用户追加发言**
+与队列重排（#140 之二只钉了中途加人与改发言上限，同一轮里用户再发一条仍未验）；
+模型有没有照做（工具动作之外的部分）。
 
 **全量回归**：后端 `1647 passed / 23 skipped`（352.36s，`E:/tmp/v138_full_backend2.txt`，rc=0，
 含上面两条时序用例的修法与加宽），前端 `211 pass / 0 fail`（node:test，1015.99ms，rc=0），
@@ -919,9 +920,114 @@ sha256 还原）：`E:/tmp/v123/mut_ui_run4.txt` 读数与登记逐字相等，`
 按负载敏感的时序用例记录，没有放宽判据。前端 `node --test` 211 pass / 0 fail，`tsc --noEmit` rc=0。
 
 **这一批仍不覆盖**：模型看到改写/补充后改不改道，机器只判到「有没有引发工具动作」这一层，
-照没照做仍要人读回放；跨进程崩溃恢复的续跑；团队入口四格已覆盖多成员与预算截断；
-群轮中途的追加发言/停用/停止已覆盖，但 `_finalize_turn` 里因 `MAX_QUEUE_DEPTH` 或发言上限
-丢掉后续点名仍只有轮末的「达到上限」提示（没有逐人说明）；中途给群加人/改上限对当前轮
-是否生效未验证；`fan_out` 子代理的 goal 由模型写（现状即契约，用例钉的是它不过钩子也不泄漏）；
-`ask` 在产品里只有 fail-closed 一条路（提交期确认界面不存在，做了再补）。
+照没照做仍要人读回放；`fan_out` 子代理的 goal 由模型写
+（现状即契约，用例钉的是它不过钩子也不泄漏）；`ask` 在产品里只有 fail-closed 一条路
+（提交期确认界面不存在，做了再补）。
 
+**群轮中途丢点名补逐人说明（#140 之一）。**
+建轮时点满上限已有说明（上一批），但轮内 `_finalize_turn` 因发言上限或 `MAX_QUEUE_DEPTH`
+丢掉后续点名时，只有轮末一句「达到上限」，被丢的人静默消失。现在排不下时先归类被哪条闸
+挡住，再落一条 system 逐一念出名字：`本轮发言上限是 N 次（主理人的开场也算在内），@A、@B
+这次没排上，需要时请下一轮再点名。`；队列深度那条同理念「这一轮的待发言队列最多 4 位」。
+上限每次从 `group.max_speakers` 实时读，不缓存。
+用例 `services/api/tests/test_team_queue_v140.py`（2 passed）：发言上限丢人、队列深度丢人
+（4 名成员建群 + 第 5 人直插成员表，断言系统行含「运维」「没排上」「4」且 `round_id`
+属于当前轮）。变异电池 `E:/tmp/m141/battery_v140.py`（bytes 读写 + sha256 还原）实测：
+M1 删掉丢人说明 → 红 `test_mentions_dropped_at_the_speaker_cap_are_named` 与
+`test_mentions_dropped_by_queue_depth_say_so` 两条；M2 一律说成发言上限 → 只红队列深度那条；
+还原 sha256 一致，复跑 2 passed。
+
+**中途加人 / 改发言上限对当前轮是否生效（#140 之二）。**
+量清的三条口径：① 发言上限在 `_advance` 每次循环实时读，**调低立即收口、调高后本轮后续
+点名按新上限排得进**；② 队列在 `create_user_round` 时定格，中途进群的人不会被自动塞进当前
+轮，但被 @ 时可以上场；③ `PATCH /team/groups/{id}` 轮中允许改 `max_speakers`，改
+`member_ids` 回 409 `team_group_busy`，轮结束后同一请求 200。
+用例 `services/api/tests/test_team_midround_v141.py`（5 passed，连跑 5 次稳定）：降上限 5→2
+后只有主理人与评审发言、说明念出「2」；升上限 2→4 后评审收尾点名的两位按新上限入场且不再
+说「没排上」；中途用 `team_add_member`（高风险、走真实审批挂起）把运维拉进群，不被 @ 时不
+发言、被 @ 时发言；轮中改成员列表 409、轮后 200。装置自检会直接查库确认运维真的在轮次中途
+进了群，避免「人没进来所以没发言」的假绿。一个踩过的坑：**从 mock 模型 handler 里同步写
+sqlite 当同步点不可靠**（`database is locked`，或写成功但编排器读不到），改用真实审批挂起 +
+真实 PATCH / 工具调用做同步点后才稳定。
+变异电池 `E:/tmp/m141/battery_v141.py`（bytes 读写 + sha256 还原）实测红集合：
+M1 `_advance` 上限写死 5 → 红 `test_lowering_the_speaker_cap_mid_round_stops_at_the_new_value`；
+M2 `_finalize_turn` 上限写死 2 → 红 `test_raising_the_speaker_cap_mid_round_lets_later_mentions_in`；
+M3 点名只认开轮队列里的人 → 红 `test_a_member_added_mid_round_joins_when_named` 与
+`test_raising_the_speaker_cap_mid_round_lets_later_mentions_in`；
+M4 `_advance` 每次推进把未发言成员补进队列 → 红 `test_a_member_added_mid_round_is_not_queued_without_a_mention`；
+M5 取消轮中调整成员列表的 409 → 红 `test_member_list_cannot_change_while_a_round_is_running`。
+每条变异后逐字节还原并校验 sha256 一致，复跑 5 passed。
+
+
+**跨进程崩溃恢复的续跑（#140 之三）。**
+上一轮只有仓库外探针（`E:/tmp/m90/worker/probe_worker.py`）证明过「真杀进程、另一个进程
+从检查点续跑」，仓库里没有任何一条用例。现在落成
+`services/api/tests/test_crash_resume_cross_process_v142.py`：进程内起真 HTTP 桩模型，
+父进程建库/项目/供应商/任务与一条 queued run，启动真的 `python -m blank_api.worker`
+（`BLANK_WORKER_ONCE=1`、租约 2 s）；桩模型在「工具已执行、结果已回给模型」的那次调用上挂住，
+父进程确认 **检查点是被杀进程自己写下的**（`agent_checkpoints` 有行、run 为 running/attempts=1）
+后 `TerminateProcess`；租约过期再起第二个 worker，断言 run 变 succeeded/attempts=2、
+`progress.txt` 恰好一行、`run_shell` 工具账恰好一条、`task.started` 一条、
+`task.resumed` 一条且 `crash_recovery=True`。单跑 1 passed / 6.14 s，连跑三次 6.14/6.13/6.15 s。
+顺带把 `tests/conftest.py` 的主密钥固定成合成值（`BLANK_SECRET_KEY`）：默认落盘位置在
+`data/.blank_secret.key`，跨进程用例里父子 cwd 不同会各生成一份，存进去的 Key 直接解不开。
+变异电池 `E:/tmp/m141/battery_v142.py`（bytes 读写 + sha256 还原）实测红集合：
+M1 `crashed = attempts > 0` 改成 `False`（崩溃后当新任务重跑）→ 红在
+「工具应恰好执行一次：['crash-probe','crash-probe']」；
+M2 `resume_crash` 传 `crash_recovery=False` → 续跑路径当场失败，红在
+「run 应为 succeeded/attempts=2，实际 failed/2」；
+M3 事件载荷里 `crash_recovery` 写成 `False` → 红在「续跑必须标成崩溃恢复」。
+每条还原后 sha256 一致，复跑 1 passed。
+
+**`run_id` 四形状：裁决与写侧对齐（#141）。**
+待裁决项按“不统一写侧”收口：四种形状是**出处**而不是同一种东西的四种写法——空串=回合归属
+上线前没记，`team-<轮>-<消息>[-resume]`=群聊某成员的这次发言，`task:<uuid>:attempt:N`=
+同步入口兜底键，`agent_runs.id`（uuid）=排队入口真实运行。统一格式会丢掉「这一笔是谁引起的」，
+而读侧 `run_id_kind()` 已在 `usage.turns[].kind` 给出唯一命名；不做数据迁移。
+`services/api/tests/test_run_id_shapes_v143.py`（3 passed / 4.07 s）钉真实产出而不是构造函数：
+① 群聊一轮（含审批放行后的续跑）产出的每个 `run_id` 都被念成 `team`，普通键逐条指向真实消息，
+续跑键恰为 `team-<轮>-<该消息>-resume`；② 同步 `POST /tasks/{id}/run` 的账本键恰为
+`task:<task_id>:attempt:1`、念成 `attempt`；③ `BLANK_INPROCESS_RUNNER=0` 时
+`POST /tasks/{id}/start` 返回的 `run_id` 就是 `agent_runs.id`、念成 `run`。
+变异电池 `E:/tmp/m141/battery_v143.py` 实测红集合：M1 读侧不认 `team-` 前缀 → 红群聊那条；
+M2 群聊写侧改成 `team:` 前缀 → 红群聊那条；M3 attempt 键改成 `task-<uuid>-attempt-N`
+→ 红同步与群聊两条（团队成员任务同样走这个线程键）；M4 排队入口借 `team-` 前缀
+→ 红排队那条。还原 sha256 一致，复跑 3 passed。
+
+**0.8.5 打包与产物点验（#142）。**
+前端先过两道：`node --test` 211 pass / 0 fail，`tsc --noEmit` rc=0 且零输出；随后
+`BLANK_DESKTOP_BUILD=1 NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000 npx next build` 静态导出成功。
+第一次 `npm run dist` **失败**，不是代码问题：打包器要从 GitHub 取 Electron，
+`⨯ connect ETIMEDOUT 20.205.243.166:443`（本机没配代理）。绕行是拿本机缓存包
+`electron-v38.8.6-win32-x64.zip` 解压到 `E:/tmp/m141/electron`，改用
+`npx electron-builder --config.electronDist=E:/tmp/m141/electron` 重打，rc=0。
+产物（2026-10-28 18:27）：`空白格-便携版-0.8.5.exe` 111,188,892 字节、
+`空白格-安装版-0.8.5.exe` 111,409,001 字节、`空白格-安装版-0.8.5.exe.blockmap` 117,940 字节。
+`node verify-package.cjs` rc=0，**33 条** `ok` 全绿（壳文件逐字节一致、包内 api-base 六种 env
+同解、前端烘焙了绝对后端地址、含 /team 页与团队视图、包内源码无明文 Key 等）。
+「包内是老代码」这条判定不是靠命令成功推出来的，而是三样实物：
+① `diff -rq --exclude=__pycache__ services/api/src <包内>/resources/backend/api/src` 无差异（rc=0）；
+② 包内 `team.py` 与仓库 sha256 同为 `352d063e…c51429`（两侧 `grep -c` 都是 2 处「这次没排上」）；
+③ 对照格能红：`git show HEAD:…/team.py`（本批改动尚未提交的旧版）sha256 为 `13ab40da…5747c5`，
+`cmp` 对包内与仓库**都返回 1**——包若还是老代码，这两条判定当场红。
+没做、也不擅自做的两件：`npm run install:local` 会写用户本机的
+`D:\Softwares\kbg\blank-ai-workbench-desktop`，属仓库外写入，留给用户裁决；
+0.8.5 的「发布」（上传/分发/通告）同样没做，只产出并点验了本地产物。
+
+**重打包暴露的一条过期判据（#142 附带）。**
+全量回归红 1：`test_real_desktop_asar_answers_are_known` 断言「5 个文件」，0.8.5 产物答「6 个」。
+不是解析器退化——包内 asar 的条目是 `api-base.cjs / gpu-guard.cjs / main.cjs / package.json /
+preload.cjs / shell-policy.cjs`，与 `desktop/package.json` 的 `build.files` 逐项相同；
+`gpu-guard.cjs` 自 `a1aac25`（2026-10-21）起就在 files 里。这条用例写在 10-27，量的是当时 dist
+里的旧产物（上一轮全量回归它还是绿的，即旧 asar 确为 5 项），此后到这次重打包之间没有人再量过；
+旧产物少的是哪一个文件没有在旧包上复测（安装包是压缩的，字符串检索不可用），不猜。
+现在把字面量改成当刻实测的 6 个文件，并把「文件表」钉成精确集合（少一个、多一个、换一个都红）。
+单跑 1 passed / 0.08 s；修正前那次红就是这条判据的对照格（同一份产物、同一个 report）。
+
+**本批全量回归与提交。**
+修正前全量：`1 failed / 1663 passed / 23 skipped`（455.23 s，`E:/tmp/m141/full_backend_wave5.txt`），
+唯一红点就是上面那条 asar 过期判据；改完重跑：`1664 passed / 23 skipped`（432.96 s，rc=0，
+`E:/tmp/m141/full_backend_wave5b.txt`）。上一批记过偶发红的
+`test_run_lease_v102.py::test_a_non_owner_cannot_write_the_terminal_state` 在这两轮全量里都通过、
+没有复现——判据不放宽，根因仍按「未定论」记。前端同批 `node --test` 211 pass / 0 fail、
+`tsc --noEmit` rc=0。本批一批一提交、不 push。

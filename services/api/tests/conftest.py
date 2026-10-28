@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import tempfile
@@ -10,6 +11,11 @@ _TEST_DB = (Path(tempfile.mkdtemp(prefix="blank-db-")) / "test.db").as_posix()
 os.environ.setdefault("BLANK_DATABASE_URL", f"sqlite+aiosqlite:///{_TEST_DB}")
 # 默认让命令在宿主机跑，保持测试夹具与 Docker 无关；沙箱路由由 tests/test_sandbox_v07.py 用真实镜像验证。
 os.environ.setdefault("BLANK_SANDBOX_ENABLED", "0")
+# 主密钥用固定合成值：默认路径是 data/.blank_secret.key，测试跑在仓库里就会顺手留一份；
+# 而且跨进程用例里父子进程的 cwd 不同，落盘密钥会各生成一份、存进去的 Key 解不开。
+os.environ.setdefault(
+    "BLANK_SECRET_KEY", base64.urlsafe_b64encode(b"blank-test-only-key-0123456789ab").decode()
+)
 # 交接笔记与长期记忆落到临时目录：跑测试不该在仓库里留 data/notes、data/memory
 os.environ.setdefault("BLANK_NOTES_DIR", tempfile.mkdtemp(prefix="blank-notes-"))
 os.environ.setdefault("BLANK_MEMORY_DIR", tempfile.mkdtemp(prefix="blank-memory-"))
