@@ -40,7 +40,7 @@ jobs:
           --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3  # 该 action 不提供 v10 这种滚动大版本 tag，只能钉完整版本
       - name: build sandbox image
         run: docker build -t blank-sandbox:dev -f sandbox/Dockerfile sandbox
       - run: uv sync
@@ -84,7 +84,7 @@ jobs:
           --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3  # 该 action 不提供 v10 这种滚动大版本 tag，只能钉完整版本
       - run: uv sync --extra mysql
         working-directory: services/api
       - name: 三方言端到端对照（真 HTTP；步数由装置的 EXPECTED_STEPS 自查）
@@ -121,7 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3  # 该 action 不提供 v10 这种滚动大版本 tag，只能钉完整版本
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -148,11 +148,11 @@ jobs:
     # 1 与 2 都会让这一步红：「今天没法判」绝不允许伪装成「通过」。阈值 0.938 的实测出处写在 evals/gate_config.json。
     # 2026-10-29 首次在 GitHub runner 上真跑：门禁本身绿（success_rate 0.938 ≥ 0.938，32 例、
     # T07/T29 为桩的确定形状），红的是 setup-uv@v5 的 post 步骤 uv cache prune 退出码 2——
-    # 与门禁无关，已把四个 job 的 setup-uv 升到 v10。本地等价复现见 scripts/local_ci.mjs --job eval-gate。
+    # 与门禁无关，已把四个 job 的 setup-uv 升到 v10.3.3（该 action 只发完整版本 tag）。本地等价复现见 scripts/local_ci.mjs --job eval-gate。
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3  # 该 action 不提供 v10 这种滚动大版本 tag，只能钉完整版本
       - uses: actions/setup-node@v4
         with:
           node-version: 22
