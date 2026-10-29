@@ -522,7 +522,7 @@ async def collect(
             else:
                 reason = f"workspace 档不可用：{workspace_tier.notice}"
                 if workspace_tier.backend == "none" and shutil.which("docker") is None:
-                    reason += "；本机没有 Docker，要测 job_only 边界请设置 BLANK_SANDBOX_ALLOW_LOCAL=1 后重跑"
+                    reason += "；本机没有 Docker，而该部署要求容器隔离；要测 job_only 边界请设置 BLANK_SANDBOX_ALLOW_LOCAL=1 后重跑"
             for probe_id, title in (
                 ("P-READ", "读取工作区外文件"),
                 ("P-WRITE", "写入工作区外文件"),

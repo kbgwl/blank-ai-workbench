@@ -1031,3 +1031,68 @@ preload.cjs / shell-policy.cjs`，与 `desktop/package.json` 的 `build.files` �
 `test_run_lease_v102.py::test_a_non_owner_cannot_write_the_terminal_state` 在这两轮全量里都通过、
 没有复现——判据不放宽，根因仍按「未定论」记。前端同批 `node --test` 211 pass / 0 fail、
 `tsc --noEmit` rc=0。本批一批一提交、不 push。
+
+## 18. #144 沙箱默认档：Docker 是可选的加固档，不是安装前提
+
+**问题（用户原话）**：「为什么还有docker  那别人用我们的软件还要再装个docker   哪家产品是这样做的呢？？」
+
+量清的事实：
+- 桌面壳 `desktop/main.cjs:309` 注入 `BLANK_SANDBOX_ENABLED=false`：装桌面版的用户本来就不需要 Docker。
+- 只有裸 API 的默认组合踩了坑：`SANDBOX_ENABLED` 默认开 + 本机没有 Docker + `SANDBOX_ALLOW_LOCAL`
+  默认关 → `runner.get_sandbox` 抛 `SandboxUnavailable`，`runtime.py:360-364` 与
+  `team.py:334-339` 把**每个任务（含只读）**409 掉。`test_sandbox_refusal_v99.py` 当时把这条
+  fail-closed 默认钉成了「产品行为」，等于承认了「想用就得先装 Docker」。
+
+**改法（三处默认 + 一处文案，开关仍是显式的）**
+- `services/api/src/blank_api/services/sandbox/policy.py`：`SANDBOX_ENABLED` 默认保持 true；
+  `SANDBOX_ALLOW_LOCAL` 默认由 false 改成 **true**——没有可用容器后端时退回本机 Job 受限执行
+  （内存/进程数/进程树由内核强制，文件与网络边界如实标注「未由系统强制」）。
+- `runner.py` / `tiers.py` / `safety.py` / `doctor.py`：只有**显式**设置
+  `BLANK_SANDBOX_ALLOW_LOCAL=0` 才拒绝任务；拒绝文案写明「本部署要求容器隔离」与退路。
+  本机档的 detail 补一句「装了 Docker 并启动守护进程后会自动改用容器隔离，不用改任何配置」。
+- 桌面壳本批不动（它本来就是 false）。为一个用户可见行为去改打包链，单独排期。
+
+**判据（`tests/test_sandbox_refusal_v99.py` 重写，6 passed）**
+1. 没 Docker 的默认姿态：只读任务 200 + succeeded，且有 `task.started`；
+   对照格 `BLANK_SANDBOX_ENABLED=0` 同一条任务同样跑完——证明 200 不是「沙箱被整个删了」。
+2. 默认读数：`available=True`、`backend=local`、`tier=workspace`、`docker_available=False`、
+   `reason` 以 `measured_` 开头；若 filesystem 未强制则 notice 必须含「未由系统强制」；
+   detail 含「自动改用容器隔离」且不含「或装 Docker」。
+3. 严格部署（`ALLOW_LOCAL=0`）：409 + `sandbox_tier_unavailable` + 「不会退回宿主执行」，
+   事件只有 `task.created`。
+4. 拒绝原因可以在跑任务之前查询（不需要先撞一次 409 才知道）。
+5. 关沙箱的对照格。
+6. 产品默认值本身：`SandboxPolicy().enabled is True` 且 `allow_local is True`。
+
+`test_backend_probe_v122.py` 里 5 处原先靠「默认不许本机」成立的用例改成显式
+`BLANK_SANDBOX_ALLOW_LOCAL=0`；其中一条改名
+`test_守护没应答时严格部署在装配层就拒且一步没走`——它钉的已是「部署选择」，不再是「产品默认」。
+
+**变异电池（bytes 读写 + sha256 还原，实测红集合）**
+M1 `allow_local` 默认改回 false → 3 红：默认姿态跑通、默认读数、产品默认值；
+M2 `runner.py` 拒绝分支改成无条件 `raise`（忽略 allow_local）→ 1 红：默认姿态；
+M3 `tiers.py` 的 notice 去掉「不会退回宿主执行」→ 1 红：严格部署那条。
+每条还原后 sha256 一致。
+
+**全量回归暴露的真缺陷：租约到期那一拍不算过期（#144 附带）**
+上一批把 `test_a_non_owner_cannot_write_the_terminal_state` 的偶发红按「负载敏感的时序用例」
+记成未定论。这一批量出了根因：本机同一拍连续两次 `utc_now()` 相等 **200/200**
+（`E:/tmp/kbg144/clock_probe.py`）。`claim_run`/`abandon_run`/`worker._candidates` 用的是
+`lease_expires_at < now`，A 以 `lease_seconds=0` 认领后租约恰好等于 `now`，B 在同一拍永远接不了手。
+不是负载敏感，是时钟刻度。探针复现：50 次 lease0→接管有 1~2 次被拒
+（`MISS #4: internal now == lease`）。
+- 修法：三处统一成 `<= now`，与 `renew_run` 的 `> now` 同一条所有权边界：
+  lease 严格大于 now 才算持约，等于就算过期。
+- 新判据：`test_a_lease_expiring_at_this_instant_is_already_takeoverable`、
+  `test_giving_up_at_the_expiry_instant_clears_the_row`（冻结 `queue.utc_now`，
+  同一拍上接管/判死必须成立）、`test_a_lease_expiring_exactly_now_is_scanned_for_takeover`
+  （冻结 `worker.utc_now`，worker 扫描必须认）。
+- 变异 M4 只把 `claim_run` 改回 `<`：恰 1 红；M5 只把 `abandon_run` 改回 `<`：恰 1 红；
+  M6 只把 `worker._candidates` 改回 `<`：恰 1 红。还原后 sha256 一致；
+  lease+worker 两个文件连跑 8 次，每次 14 passed。
+- 修正前全量：`1 failed / 1665 passed / 23 skipped`（381.79 s，`E:/tmp/kbg144/full_backend_144.txt`），
+  红的正是这条；修正后全量：`1669 passed / 23 skipped`（380.19 s，rc=0，
+  `E:/tmp/kbg144/full_backend_144b.txt`）。
+
+**仍不覆盖**：真 Docker 后端 `ready` 档的端到端（本机只量到「没装」与「装了没起」两态）；
+非 Windows 分支；桌面壳 env 裁剪与宿主路径的行为差异（本批未改壳，按原样）。

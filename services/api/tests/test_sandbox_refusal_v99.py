@@ -1,24 +1,30 @@
-"""#99：无 docker 的裸 API 默认形态会拒绝**每一个**任务——这条产品事实钉进仓库。
+"""#99 → #144：无 docker 的裸 API 默认形态**不再拒绝任务**，Docker 变成可选加固档。
 
-起因：2026-10-26 那批方言端到端 85 步红了 26 步，症状写的是「status=draft」。真因不在产品，
-在装置没钉自己的沙箱档位；但顺着它量出来一条**产品事实**，一直没有判据守着：
+#99 当时钉住的产品事实是「沙箱开着 + 没有后端 ⇒ 连只读任务也在装配层 409」，并写明那条
+收紧是设计认可的。用户随后当面否掉了它的前提：哪家产品要求客户先装 Docker 才能用？
+#144 把默认改成：探测不到可用容器后端时退回本机 Job 受限执行（内存/进程数/进程树由内核
+强制，文件与网络边界如实标注未强制）；要求「只准容器」的部署显式设置
+`BLANK_SANDBOX_ALLOW_LOCAL=0`，那时才保留原来的 fail-closed。
 
-* `SandboxPolicy` 的产品默认是「沙箱开着」，设置页默认档 `workspace`；
-* 没有可用后端（本机没装 docker）时 `resolve_tier(strict=True)` 得到 `backend="none"`、
-  `available=False`；
-* 装配层（`runtime._prepare` 与 `team.py` 同一处）据此**整任务 409**——连一条不会执行
-  任何命令的只读任务也不例外，界面上就是"任务起了但一步没走"。
+所以这里守四条判据：
 
-这条收紧是设计文档认可的（SANDBOX-WINDOWS-DESIGN.md：不给"先跑起来再说"的机会），
-所以这里守的是**它必须继续成立、且拒绝必须念得出成因**；哪天有人把它放宽成"退回报宿主"，
-第 2、3 条会当场红。第 4 条是对照格：把沙箱关掉后同一条只读任务必须能跑到终态——
-否则第 2 条的红分不清是"档位拒绝"还是"只读任务压根跑不动"。
+1. 默认档（不设 ALLOW_LOCAL、没有 docker）必须把只读任务跑到终态，读数是 `local`；
+   界面上的文案必须说清哪几条没被系统强制，并且不许再让用户去装 Docker。
+2. 严格部署（ALLOW_LOCAL=0）仍整任务 409、一步没走——#99 那条判据原样保留，
+   只是从"产品默认"降级成"部署选择"。
+3. 拒绝成因能在运行时安全面单独查到（#122 的开场自检读的就是这里的字段）。
+4. 对照格：把沙箱整个关掉，同一条只读任务也必须能跑到终态——否则第 1 条绿了也分不清
+   是"退回本机成功了"还是"只读任务本来就跑不动"。
 """
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
+from blank_api.services.sandbox import docker_probe
+from blank_api.services.sandbox.policy import SandboxPolicy
 from tests.test_agent_v04 import create_project, create_provider, create_task, env  # noqa: F401
 
 API = "/api/v1"
@@ -28,42 +34,99 @@ REFUSED_CODE = "sandbox_tier_unavailable"
 REASON = "sandbox_backend_unavailable"
 
 
-def _no_backend(monkeypatch) -> None:
-    """把"这台机器没有可用沙箱后端"变成一个现场事实，而不是依赖本机装没装 docker。
+@pytest.fixture(autouse=True)
+def _fresh_probe_cache():
+    """探针缓存是进程级的：不清空就会拿上一条用例的读数冒充这一条。"""
+    docker_probe.invalidate()
+    yield
+    docker_probe.invalidate()
 
-    `_backend()` 用函数内 import 取 `get_sandbox`，所以补丁打在 runner 的模块属性上就是
-    装配层真正走的那一条缝；换成 docker 真在的机器上跑，这条判据仍然成立。
+
+def _no_docker(monkeypatch) -> None:
+    """把「这台机器没有可用容器后端」变成一个现场事实，而不是依赖本机装没装 docker。
+
+    读数打在 `probe_once` 上：`ensure_fresh`（装配层）与 `probe_for_decision`（决策点）
+    都经过它，所以这正是产品真正走的那一条缝；`shutil.which` 一并置空，免得
+    `pending` 分支的 PATH 兜底在别的机器上把这格变成另一种读数。
     """
-    from blank_api.services.sandbox import runner
+    probe = docker_probe.DockerProbe(
+        state=docker_probe.STATE_NOT_INSTALLED,
+        detail="PATH 里找不到 docker 可执行文件（用例模拟）",
+        control_ok=True,
+        measured_at=time.time(),
+    )
+    monkeypatch.setattr(docker_probe, "probe_once", lambda **_: probe)
+    monkeypatch.setattr("shutil.which", lambda *_: None)
 
-    def _raise(policy):
-        raise runner.SandboxUnavailable("模拟：本机探测不到 docker")
 
-    monkeypatch.setattr(runner, "get_sandbox", _raise)
-
-
-async def _readonly_task(env, workspace, monkeypatch, *, enabled: str):
+async def _readonly_task(env, workspace, monkeypatch, *, enabled: str, allow_local: str | None):
     monkeypatch.setenv("BLANK_SANDBOX_ENABLED", enabled)
+    if allow_local is None:
+        monkeypatch.delenv("BLANK_SANDBOX_ALLOW_LOCAL", raising=False)
+    else:
+        monkeypatch.setenv("BLANK_SANDBOX_ALLOW_LOCAL", allow_local)
     project = await create_project(env, workspace)
     provider = await create_provider(env)
     task = await create_task(env, project, ["列出文件即可"], title="只读取证", goal=READ_ONLY_GOAL)
     return project, provider, task
 
 
-async def test_the_default_posture_refuses_even_a_readonly_task(env, workspace, monkeypatch) -> None:
-    """沙箱开着 + 没有后端 ⇒ 只读任务也在装配层 409，且念得出成因、一步没走。"""
-    _no_backend(monkeypatch)
-    _project, provider, task = await _readonly_task(env, workspace, monkeypatch, enabled="1")
+async def test_without_docker_the_default_posture_runs_the_readonly_task(env, workspace, monkeypatch) -> None:
+    """默认档 + 没有 docker ⇒ 退回本机受限执行，只读任务必须跑到终态（不再是 409）。"""
+    _no_docker(monkeypatch)
+    _project, provider, task = await _readonly_task(env, workspace, monkeypatch, enabled="1", allow_local=None)
+
+    resp = await env.client.post(f"{API}/tasks/{task}/run", json={"provider_id": provider})
+    assert resp.status_code == 200, resp.text
+    status = (resp.json().get("task") or {}).get("status")
+    assert status == "succeeded", f"没有 Docker 时默认档仍没跑到终态：{status}"
+
+    events = (await env.client.get(f"{API}/tasks/{task}/events")).json()
+    assert "task.started" in {row.get("type") for row in events}, f"任务根本没开跑：{events}"
+
+
+async def test_the_default_readout_is_local_and_says_what_is_not_enforced(env, monkeypatch) -> None:
+    """界面读数：后端是 local、可用，且必须说清文件和网络没被系统强制，不许让人去装 Docker。"""
+    _no_docker(monkeypatch)
+    monkeypatch.setenv("BLANK_SANDBOX_ENABLED", "1")
+    monkeypatch.delenv("BLANK_SANDBOX_ALLOW_LOCAL", raising=False)
+
+    resp = await env.client.get(f"{API}/settings/safety/runtime")
+    assert resp.status_code == 200, resp.text
+    backend = resp.json().get("backend") or {}
+    assert backend.get("available") is True, backend
+    assert backend.get("backend") == "local", backend
+    assert backend.get("tier") == "workspace", backend
+    assert backend.get("docker_available") is False, backend
+    # reason 是稳定判据（界面/自检读它，不读文案）：本机能力测出来是什么就报什么。
+    assert str(backend.get("reason", "")).startswith("measured_"), backend
+    # 诚实文案：文件和网络没被系统强制时，notice 必须这么说，不许写成"已隔离"
+    if not backend.get("filesystem_enforced"):
+        assert "未由系统强制" in backend.get("notice", ""), backend
+    # Docker 是可选升级项，不是安装前提：这页不许再出现"去装 Docker"这种补救指引
+    assert "自动改用容器隔离" in backend.get("detail", ""), backend
+    assert "或装 Docker" not in backend.get("detail", ""), backend
+
+
+async def test_strict_container_only_deployments_still_refuse_every_task(env, workspace, monkeypatch) -> None:
+    """`BLANK_SANDBOX_ALLOW_LOCAL=0` = 只准容器：没有后端时仍整任务 409、一步没走。
+
+    这是 #99 那条判据的去处：它没有消失，只是从产品默认降级成部署选择。
+    """
+    _no_docker(monkeypatch)
+    _project, provider, task = await _readonly_task(env, workspace, monkeypatch, enabled="1", allow_local="0")
 
     resp = await env.client.post(f"{API}/tasks/{task}/run", json={"provider_id": provider})
     assert resp.status_code == 409, resp.text
     body = resp.json()
     assert (body.get("error") or {}).get("code") == REFUSED_CODE, body
+    message = (body.get("error") or {}).get("message", "")
     # 只有码没有话不行：操作者在界面上读的是 message，它必须说明"被拒了、没退回宿主"
-    assert NOTICE in (body.get("error") or {}).get("message", ""), body
+    assert NOTICE in message, body
+    assert "不会退回宿主执行" in message, body
+    assert "BLANK_SANDBOX_ALLOW_LOCAL=0" in message, body
 
     events = (await env.client.get(f"{API}/tasks/{task}/events")).json()
-    assert isinstance(events, list), events
     types = {row.get("type") for row in events}
     assert "task.started" not in types, f"409 之前就已经开跑了：{types}"
     # `task.created` 是建任务时就写的，与本轮无关；除此之外一条都不许有——
@@ -72,13 +135,14 @@ async def test_the_default_posture_refuses_even_a_readonly_task(env, workspace, 
 
 
 async def test_the_refusal_reason_is_queryable_without_running_a_task(env, monkeypatch) -> None:
-    """拒绝的成因必须能单独查到：409 只带文案，`reason` 住在运行时安全面。
+    """严格部署下拒绝的成因必须能单独查到：409 只带文案，`reason` 住在运行时安全面。
 
     这一条守的是"装置/前端能不能不问就判"：#96 的开场姿态自检读的就是这里的
     `available` 与 `reason`，字段哪天改名或不再暴露，自检会瞎，这里先红。
     """
-    _no_backend(monkeypatch)
+    _no_docker(monkeypatch)
     monkeypatch.setenv("BLANK_SANDBOX_ENABLED", "1")
+    monkeypatch.setenv("BLANK_SANDBOX_ALLOW_LOCAL", "0")
     resp = await env.client.get(f"{API}/settings/safety/runtime")
     assert resp.status_code == 200, resp.text
     backend = resp.json().get("backend") or {}
@@ -86,15 +150,17 @@ async def test_the_refusal_reason_is_queryable_without_running_a_task(env, monke
     assert backend.get("reason") == REASON, backend
     assert backend.get("docker_available") is False, backend
     assert NOTICE in backend.get("notice", ""), backend
+    # 补救路径必须在页面上念得出来：否则操作者只知道"被拒"，不知道是自己的选择造成的
+    assert "BLANK_SANDBOX_ALLOW_LOCAL" in backend.get("detail", ""), backend
 
 
 async def test_turning_the_sandbox_off_lets_the_same_readonly_task_finish(env, workspace, monkeypatch) -> None:
     """对照格：同一条只读任务，关掉沙箱就必须能跑到终态。
 
-    没有这一格，上面那条 409 的红分不清是"档位拒绝"还是"只读任务本来就跑不动"。
+    没有这一格，第 1 条的红分不清是"退回本机失败"还是"只读任务本来就跑不动"。
     """
-    _no_backend(monkeypatch)
-    _project, provider, task = await _readonly_task(env, workspace, monkeypatch, enabled="0")
+    _no_docker(monkeypatch)
+    _project, provider, task = await _readonly_task(env, workspace, monkeypatch, enabled="0", allow_local=None)
 
     resp = await env.client.post(f"{API}/tasks/{task}/run", json={"provider_id": provider})
     assert resp.status_code == 200, resp.text
@@ -102,12 +168,14 @@ async def test_turning_the_sandbox_off_lets_the_same_readonly_task_finish(env, w
     assert status == "succeeded", f"关掉沙箱后仍没跑到终态：{status}"
 
 
-async def test_the_product_default_keeps_the_sandbox_on(monkeypatch) -> None:
-    """默认值本身就是判据：谁把产品默认调成"沙箱关"，这条立刻红。
+def test_the_product_default_is_local_fallback_not_docker_only(monkeypatch) -> None:
+    """默认值本身就是判据：谁把产品默认调回"只准容器"，这条立刻红。
 
-    裸 API 的用户面对的就是这个默认；它一旦变松，前面三条量的就不再是真实形态。
+    裸 API 的用户面对的就是这个默认；它一旦变回 fail-closed，没装 Docker 的机器上
+    每一个任务都会在装配层被拒——那正是用户否掉的产品形态。
     """
-    from blank_api.services.sandbox.policy import SandboxPolicy
-
     monkeypatch.delenv("BLANK_SANDBOX_ENABLED", raising=False)
-    assert SandboxPolicy().enabled is True, "产品默认被改松了：裸 API 用户会以为命令在沙箱里跑"
+    monkeypatch.delenv("BLANK_SANDBOX_ALLOW_LOCAL", raising=False)
+    policy = SandboxPolicy()
+    assert policy.enabled is True, "沙箱默认被关掉了：内核限额白做"
+    assert policy.allow_local is True, "默认被改成「只准容器」：没装 Docker 的用户又用不了"

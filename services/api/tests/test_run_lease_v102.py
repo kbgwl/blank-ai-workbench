@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -23,6 +24,7 @@ from blank_api.db import Base, get_engine, get_session_factory
 from blank_api.models.project import Project
 from blank_api.models.run import AgentRun
 from blank_api.models.task import Task
+from blank_api.services.agent import queue as queue_mod
 from blank_api.services.agent.queue import abandon_run, claim_run, finish_run, renew_run
 from blank_api.services.agent.runtime import RunRequest
 
@@ -108,6 +110,47 @@ async def test_an_expired_lease_is_not_the_old_owners_anymore() -> None:
     assert row["lease"] is not None and row["lease"] <= _now(), row
     async with get_session_factory()() as session:
         assert not await renew_run(session, run_id, "owner-A", lease_seconds=90), await _row(run_id)
+
+
+async def test_a_lease_expiring_at_this_instant_is_already_takeoverable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """边界钉死：lease_expires_at == now 的那一拍就算过期，接管必须成立。
+
+    冻结 queue.utc_now 是为了让这一格真的能失败：本机同一拍连续两次 utc_now()
+    相等 200/200（E:/tmp/kbg144/clock_probe.py），不冻结的话两次 claim 之间可能
+    跨过一个时钟刻度，`<` 与 `<=` 都能过——全量回归里没有冻结的
+    test_a_non_owner_cannot_write_the_terminal_state 就真的红过一次
+    （E:/tmp/kbg144/full_backend_144.txt）。所有权边界只有一条：lease_expires_at
+    严格大于 now 才算持约（renew_run 用的正是 >），所以等于 now 时必须能接管。
+    """
+    frozen = datetime(2026, 10, 29, 0, 0, 0, 500000)
+    monkeypatch.setattr(queue_mod, "utc_now", lambda: frozen)
+    _, run_id = await _new_run()
+    async with get_session_factory()() as session:
+        assert await claim_run(session, run_id, "owner-A", lease_seconds=0)
+    async with get_session_factory()() as session:
+        assert not await renew_run(session, run_id, "owner-A", lease_seconds=90), await _row(run_id)
+    async with get_session_factory()() as session:
+        assert await claim_run(session, run_id, "owner-B", lease_seconds=90), await _row(run_id)
+    row = await _row(run_id)
+    assert (row["status"], row["worker_id"], row["attempts"]) == ("running", "owner-B", 2), row
+    assert row["lease"] == frozen + timedelta(seconds=90), row
+
+
+async def test_giving_up_at_the_expiry_instant_clears_the_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同一拍上 abandon_run 也必须认这条租约已过期，否则启动恢复会把它永远留在 running。"""
+    frozen = datetime(2026, 10, 29, 0, 0, 0, 500000)
+    monkeypatch.setattr(queue_mod, "utc_now", lambda: frozen)
+    _, run_id = await _new_run()
+    async with get_session_factory()() as session:
+        assert await claim_run(session, run_id, "owner-A", lease_seconds=0)
+    async with get_session_factory()() as session:
+        assert await abandon_run(session, run_id), await _row(run_id)
+    row = await _row(run_id)
+    assert (row["status"], row["lease"], row["worker_id"]) == ("failed", None, ""), row
 
 
 async def test_a_non_owner_cannot_write_the_terminal_state() -> None:

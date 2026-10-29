@@ -205,7 +205,8 @@ def resolve_tier(
             filesystem_enforced=False,
             network_enforced=False,
             notice=(
-                "沙箱后端不可用：命令被拒绝，不会退回宿主执行"
+                "沙箱后端不可用：本部署要求容器隔离（BLANK_SANDBOX_ALLOW_LOCAL=0），"
+                "命令被拒绝，不会退回宿主执行"
                 + docker_probe.notice_suffix()
             ),
             reason=REASON_BACKEND_UNAVAILABLE,

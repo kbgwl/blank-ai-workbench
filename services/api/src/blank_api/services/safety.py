@@ -491,7 +491,8 @@ def backend_info() -> BackendInfo:
             label="沙箱后端不可用：命令会被拒绝",
             detail=(
                 resolution.notice
-                + f"。{remedy}，或开发机显式设置 BLANK_SANDBOX_ALLOW_LOCAL=1。"
+                + f"。{remedy}；或把 BLANK_SANDBOX_ALLOW_LOCAL 设成 1（删掉该变量），"
+                "改回本机受限额执行。"
             ),
             **facts,
         )
@@ -502,6 +503,7 @@ def backend_info() -> BackendInfo:
         detail=(
             resolution.notice
             + "。工作目录钉在工作区、环境变量走白名单、超时后回收整棵进程树——这些是策略级约束。"
+            "装了 Docker 并启动守护进程后会自动改用容器隔离，不用改任何配置。"
         ),
         **facts,
     )

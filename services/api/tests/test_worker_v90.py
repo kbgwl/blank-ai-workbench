@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime
 
 import pytest
 from sqlalchemy import select
@@ -128,6 +129,29 @@ async def test_a_fresh_lease_is_left_to_its_owner(executed) -> None:
     assert executed == []
     row = await _row(run_id)
     assert (row["status"], row["worker_id"]) == ("running", "someone-else"), row
+
+
+async def test_a_lease_expiring_exactly_now_is_scanned_for_takeover(
+    executed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """租约到期这一拍：扫描必须认它已过期，否则 worker 整整一拍扫不到、白等一个轮询。
+
+    冻结 worker 的时钟让这一格能失败：不冻结时两次 utc_now() 之间可能跨过一个刻度，
+    `<` 与 `<=` 都能过。本机同拍相等 200/200（E:/tmp/kbg144/clock_probe.py）。
+    """
+    frozen = datetime(2026, 10, 29, 0, 0, 0, 500000)
+    _, run_id = await _new_run(attempts=1, status="running")
+    async with get_session_factory()() as session:
+        run = await session.get(AgentRun, run_id)
+        assert run is not None
+        run.lease_expires_at = frozen
+        await session.commit()
+    monkeypatch.setattr(worker_module, "utc_now", lambda: frozen)
+
+    assert await worker_module.run_once("w-5") == 1
+    assert len(executed) == 1 and executed[0]["crashed"] is True, executed
+    row = await _row(run_id)
+    assert (row["status"], row["worker_id"], row["attempts"]) == ("running", "w-5", 2), row
 
 
 async def test_a_run_that_kept_crashing_is_stopped_with_a_reason(executed) -> None:

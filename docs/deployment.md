@@ -92,7 +92,8 @@ docker build --pull=false --build-arg BASE_IMAGE=postgres:16-alpine -t blank-san
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `BLANK_SANDBOX_ENABLED` | `true` | 关闭后退回本机子进程，仅适合开发机 |
+| `BLANK_SANDBOX_ENABLED` | `true` | 只关掉整个沙箱档：命令在宿主上跑、不挂 Job（仅适合开发机） |
+| `BLANK_SANDBOX_ALLOW_LOCAL` | `true` | 没有可用容器后端时退回本机 Job 受限执行；设 `0` = 只准容器，无容器则整任务 409 |
 | `BLANK_SANDBOX_IMAGE` | `blank-sandbox:dev` | 沙箱镜像 |
 | `BLANK_SANDBOX_CPUS` | `1.0` | CPU 上限 |
 | `BLANK_SANDBOX_MEMORY` | `512m` | 内存上限，同时禁止 swap |

@@ -286,10 +286,13 @@ def test_docker_available不再等于PATH里有没有那个文件(monkeypatch, t
 
 
 def test_装了但没起的人被告知去启动守护进程(monkeypatch, tmp_path) -> None:
-    """指路必须跟着读数走：这机器上装是装好了的，你让他「装 Docker」是耍人。"""
+    """指路必须跟着读数走：这机器上装是装好了的，你让他「装 Docker」是耍人。
+
+    严格部署（ALLOW_LOCAL=0）下没有容器后端才需要补救指引——默认档会退本机，不在这里。
+    """
     _stub(tmp_path, monkeypatch, out=["Client Version: 24.0.0"], rc=0)
     monkeypatch.setenv("BLANK_SANDBOX_ENABLED", "1")
-    monkeypatch.delenv("BLANK_SANDBOX_ALLOW_LOCAL", raising=False)
+    monkeypatch.setenv("BLANK_SANDBOX_ALLOW_LOCAL", "0")
     info = backend_info()
     assert info.docker_state == docker_probe.STATE_DAEMON_UNREACHABLE, info
     assert "启动 Docker 守护进程" in info.detail, info.detail
@@ -299,7 +302,7 @@ def test_真没装的人只被告知要装什么(monkeypatch, tmp_path) -> None:
     """对照格：上一条的红句在这条里必须不出现，否则两条测的是同一句话。"""
     _no_stub(monkeypatch, tmp_path)
     monkeypatch.setenv("BLANK_SANDBOX_ENABLED", "1")
-    monkeypatch.delenv("BLANK_SANDBOX_ALLOW_LOCAL", raising=False)
+    monkeypatch.setenv("BLANK_SANDBOX_ALLOW_LOCAL", "0")
     info = backend_info()
     assert info.docker_state == docker_probe.STATE_NOT_INSTALLED, info
     assert "装 Docker" in info.detail, info.detail
@@ -309,7 +312,7 @@ def test_真没装的人只被告知要装什么(monkeypatch, tmp_path) -> None:
 async def test_运行时安全面把状态成因与年龄一起端出去(env, monkeypatch, tmp_path) -> None:  # noqa: F811
     _stub(tmp_path, monkeypatch, out=["Client Version: 24.0.0"], rc=0)
     monkeypatch.setenv("BLANK_SANDBOX_ENABLED", "1")
-    monkeypatch.delenv("BLANK_SANDBOX_ALLOW_LOCAL", raising=False)
+    monkeypatch.setenv("BLANK_SANDBOX_ALLOW_LOCAL", "0")
     resp = await env.client.get(f"{API}/settings/safety/runtime")
     assert resp.status_code == 200, resp.text
     backend = resp.json().get("backend") or {}
@@ -356,11 +359,14 @@ async def test_重新探测让装好之后的机器换到新读数(env, monkeypa
     assert second.json()["backend"]["docker_available"] is True, second.text
 
 
-async def test_守护没应答时任务在装配层就被拒且一步没走(env, workspace, monkeypatch, tmp_path) -> None:
-    """把 #99 那条产品事实推到新的成因上：拒绝发生在装配层，且成因念得出守护进程。"""
+async def test_守护没应答时严格部署在装配层就拒且一步没走(env, workspace, monkeypatch, tmp_path) -> None:
+    """把 #99 那条产品事实推到新的成因上：拒绝发生在装配层，且成因念得出守护进程。
+
+    #144 之后这是**部署选择**（ALLOW_LOCAL=0 只准容器），不是产品默认；默认档会退本机受限执行。
+    """
     _stub(tmp_path, monkeypatch, out=["Client Version: 24.0.0"], rc=0)
     monkeypatch.setenv("BLANK_SANDBOX_ENABLED", "1")
-    monkeypatch.delenv("BLANK_SANDBOX_ALLOW_LOCAL", raising=False)
+    monkeypatch.setenv("BLANK_SANDBOX_ALLOW_LOCAL", "0")
     project = await create_project(env, workspace)
     provider = await create_provider(env)
     task = await create_task(env, project, ["列出文件即可"], title="探测取证", goal="只列文件不要改")
@@ -399,9 +405,10 @@ async def test_建群那一刻也先探一次(env, workspace, monkeypatch, tmp_p
     这条钉 `team.py` 建群前那次补探。撤掉它，读数停在 pending，而 pending 在决策点按 PATH 兜底
     给容器后端：桩只答 `Client Version`（守护没应答），群照样建成功，要到成员任务跑起来才撞墙。
     对照格写在同一条里——换成真能用的桩必须回 201，红点才只可能落在"建群前没探"那一格。
+    严格部署（ALLOW_LOCAL=0）才在这里被拒；默认档会退本机，探不探都不影响建群。
     """
     monkeypatch.setenv("BLANK_SANDBOX_ENABLED", "1")
-    monkeypatch.delenv("BLANK_SANDBOX_ALLOW_LOCAL", raising=False)
+    monkeypatch.setenv("BLANK_SANDBOX_ALLOW_LOCAL", "0")
     project = await create_project(env, workspace)
     body = {"project_id": project, "sandbox_tier": "workspace"}
 

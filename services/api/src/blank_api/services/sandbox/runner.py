@@ -2,7 +2,9 @@
 
 DockerSandbox 把命令放进一次性容器执行：工作区是唯一可写挂载点，默认无网络，
 CPU/内存/进程数/文件大小/时长都有上限，超时后强制删除容器以清干净进程树。
-Docker 不可用时默认拒绝执行；只有显式开启 SANDBOX_ALLOW_LOCAL 才允许本地开发回退。
+Docker 是可选加固档：探测不到可用容器后端时默认退回 LocalSandbox（Job Object 强制
+内存/进程数/进程树，文件与网络边界如实标注未强制）。要求"只准容器"的部署设
+BLANK_SANDBOX_ALLOW_LOCAL=0，那时没有容器就拒绝执行。
 """
 
 from __future__ import annotations
@@ -335,6 +337,8 @@ def get_sandbox(policy: SandboxPolicy | None = None):
 
     容器后端能不能用由现场探测决定，不看 PATH 里有没有那个文件：装了 Docker 但守护进程
     没起来时返回 DockerSandbox，只会让每条命令各自撞一次墙（`docs/COST.md` 记的那条）。
+    探测不到可用容器就退 LocalSandbox（产品默认）；`allow_local=False` 才是"只准容器"的
+    部署选择，那种情况下没有容器只能拒绝。
     """
     chosen = policy or SandboxPolicy()
     if not chosen.enabled:
@@ -352,7 +356,8 @@ def get_sandbox(policy: SandboxPolicy | None = None):
     raise SandboxUnavailable(
         "Docker 沙箱不可用"
         + docker_probe.notice_suffix(info)
-        + "；如需开发机直连执行，请显式设置 BLANK_SANDBOX_ALLOW_LOCAL=1"
+        + "；本部署要求容器隔离（BLANK_SANDBOX_ALLOW_LOCAL=0）；"
+        "如需本机受限额执行，请设置 BLANK_SANDBOX_ALLOW_LOCAL=1 或删除该变量"
     )
 
 

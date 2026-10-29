@@ -47,8 +47,13 @@ async def claim_run(db: AsyncSession, run_id: str, worker_id: str, lease_seconds
             AgentRun.id == run_id,
             or_(
                 AgentRun.status == "queued",
+                # 到期这一拍就算别人的了：所有权边界只有一条，lease_expires_at 严格大于 now
+                # 才算持约（renew_run 用的正是 >）。写成 < 时，本机同一拍两次 utc_now()
+                # 200/200 相等（E:/tmp/kbg144/clock_probe.py），A 认领 lease_seconds=0 后
+                # B 在同一拍永远接不了手，租约成了永久锁。MySQL 的 DATETIME 只到秒，
+                # 边界差一拍就是整整一秒。
                 (AgentRun.status == "running")
-                & ((AgentRun.lease_expires_at.is_(None)) | (AgentRun.lease_expires_at < now)),
+                & ((AgentRun.lease_expires_at.is_(None)) | (AgentRun.lease_expires_at <= now)),
             ),
         )
         .values(
@@ -86,7 +91,7 @@ async def abandon_run(db: AsyncSession, run_id: str) -> bool:
     """启动恢复"不再重试"那一路：把没人跑的 run 判死，但不得踩住一条正被跑着的。
 
     这条路径没有 worker 身份可验（认领它的进程早没了），所以验租约：还新鲜就说明
-    有人正在跑，判死必须失败。
+    有人正在跑，判死必须失败。边界与 claim_run 同一条：等于 now 就算过期。
     """
     result = await db.execute(
         update(AgentRun)
@@ -95,7 +100,7 @@ async def abandon_run(db: AsyncSession, run_id: str) -> bool:
             or_(
                 AgentRun.status == "queued",
                 (AgentRun.status == "running")
-                & ((AgentRun.lease_expires_at.is_(None)) | (AgentRun.lease_expires_at < utc_now())),
+                & ((AgentRun.lease_expires_at.is_(None)) | (AgentRun.lease_expires_at <= utc_now())),
             ),
         )
         .values(status="failed", worker_id="", lease_expires_at=None)

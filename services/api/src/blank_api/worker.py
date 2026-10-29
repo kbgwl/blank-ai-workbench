@@ -56,7 +56,8 @@ async def _candidates() -> list[tuple[str, str, int]]:
                         (AgentRun.status == "running")
                         & (
                             (AgentRun.lease_expires_at.is_(None))
-                            | (AgentRun.lease_expires_at < now)
+                            # 与 claim_run 同一条边界：等于 now 就算过期，否则这一拍扫不到它
+                            | (AgentRun.lease_expires_at <= now)
                         ),
                     )
                 )

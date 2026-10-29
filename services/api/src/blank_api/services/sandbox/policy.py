@@ -42,7 +42,10 @@ def _env(name: str, default: str) -> str:
 class SandboxPolicy:
     image: str = field(default_factory=lambda: _env("SANDBOX_IMAGE", "blank-sandbox:dev"))
     enabled: bool = field(default_factory=lambda: _env("SANDBOX_ENABLED", "true").lower() in {"1", "true", "yes"})
-    allow_local: bool = field(default_factory=lambda: _env("SANDBOX_ALLOW_LOCAL", "false").lower() in {"1", "true", "yes"})
+    # Docker 是可选的加固档，不是安装前提：没有可用容器后端时默认退回本机 Job 受限执行
+    # （内存/进程数/进程树由内核强制，文件与网络边界如实标注未强制）。要"只准容器"的
+    # 部署显式设 BLANK_SANDBOX_ALLOW_LOCAL=0，那种情况下没有容器就整任务拒绝。
+    allow_local: bool = field(default_factory=lambda: _env("SANDBOX_ALLOW_LOCAL", "true").lower() in {"1", "true", "yes"})
     # 单次越界宿主执行的部署开关。默认关：模型传了也不执行，交给人工在部署时显式打开。
     allow_host_bypass: bool = field(
         default_factory=lambda: _env("SANDBOX_ALLOW_HOST_BYPASS", "false").lower() in {"1", "true", "yes"}

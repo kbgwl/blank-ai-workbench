@@ -20,7 +20,8 @@ node packages/cli/src/index.mjs doctor --compare 本机.json 另一台.json
 
 `doctor --sandbox` 会用后端 Python 真跑八条边界探针（读/写越界、注册表、出网、
 进程数、自放大、进程树继承、证据包同源），并把结果和这次执行的账本逐条对质。
-本机没有 Docker 时，要测 `job_only` 边界需设置 `BLANK_SANDBOX_ALLOW_LOCAL=1`。
+没有 Docker 时默认就用本机 Job 受限执行测 `job_only` 边界；只有把
+`BLANK_SANDBOX_ALLOW_LOCAL` 设成 `0`（只准容器）时才会退化成全部 `not_tested`。
 
 `doctor --compare` 对账两份 `--json` 报告：每条结论差异必须归因到实测过的机器维度
 （边界强度、AppContainer、受限令牌、是否提权、Job、沙箱后端、账本强制标记），归因不出

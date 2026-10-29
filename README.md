@@ -73,7 +73,13 @@ node scripts/register_mock_provider.mjs   # 写入「本地脚本化模型（演
 默认连接 Docker PostgreSQL：`postgresql+asyncpg://blank:blank_dev_password@localhost:5432/blank`；
 不想起 Docker 时可改用 `sqlite+aiosqlite:///./data/blank_dev.db`。
 
-命令执行默认走 Docker 沙箱（`BLANK_SANDBOX_ENABLED` 默认为 true），首次需要构建镜像：
+命令执行默认走沙箱，但 **Docker 是可选的加固档，不是安装前提**：探测不到可用容器后端时退回本机执行
+（Windows 上由 Job Object 强制内存上限、活跃进程数上限与整棵进程树回收；文件与网络边界在设置页和
+证据包里如实标注「未由系统强制」）。装了 Docker 并启动守护进程后会自动改用容器隔离，不用改配置。
+要"只准容器"的部署设置 `BLANK_SANDBOX_ALLOW_LOCAL=0`——那种情况下没有容器就整任务拒绝（409，
+`error.code = sandbox_tier_unavailable`），不会退回宿主执行。
+
+想用容器档时，镜像需要先构建一次：
 
 ```bash
 docker build --build-arg BASE_IMAGE=node:24-alpine -t blank-sandbox:dev sandbox
@@ -81,9 +87,9 @@ docker build --build-arg BASE_IMAGE=node:24-alpine -t blank-sandbox:dev sandbox
 
 沙箱策略：工作区是唯一可写挂载点，默认 `--network none`，CPU/内存/PID/文件大小/时长均有上限，
 超时立即 `docker rm -f` 回收整棵进程树，环境变量按白名单透传且带 KEY/TOKEN/SECRET 等特征的一律拒绝进入。
-其余可调项：`BLANK_SANDBOX_IMAGE`、`BLANK_SANDBOX_CPUS/MEMORY/PIDS`、`BLANK_SANDBOX_NETWORK`、
-`BLANK_SANDBOX_TIMEOUT`、`BLANK_SANDBOX_MAX_FILE_KB`、`BLANK_SANDBOX_TMPFS`、`BLANK_SANDBOX_READ_ONLY_ROOT`、
-`BLANK_SANDBOX_ENV_ALLOWLIST`。
+其余可调项：`BLANK_SANDBOX_IMAGE`、`BLANK_SANDBOX_ALLOW_LOCAL`、`BLANK_SANDBOX_CPUS/MEMORY/PIDS`、
+`BLANK_SANDBOX_NETWORK`、`BLANK_SANDBOX_TIMEOUT`、`BLANK_SANDBOX_MAX_FILE_KB`、`BLANK_SANDBOX_TMPFS`、
+`BLANK_SANDBOX_READ_ONLY_ROOT`、`BLANK_SANDBOX_ENV_ALLOWLIST`。
 
 Windows 注意：`uvicorn --reload` 的监视器在本机偶发停止热重载，改代码后若行为没变请重启进程；
 子进程事件循环已用线程兜底（`services/tools/shell.py`），不要再依赖 Selector 循环。
@@ -168,7 +174,7 @@ uv run alembic revision --autogenerate -m "描述"
 - **但真实模型这一轮评测里，一行自动化测试都没跑成**：32 个样例的 `validation.status` 全是 `skipped`
   （28 个「命令执行未获授权」、4 个「没改动文件」）。原因是本机没有 Docker、`SANDBOX_ALLOW_LOCAL` 默认关闭，
   `run_shell`/`run_tests` 一律被策略拒掉。所以 `success_rate 1.0` 只能读成「任务收尾且产物文件存在」，
-  不等于「测试通过」。
+  不等于「测试通过」。这一轮读数照原样保留；#144 之后默认会退回本机受限执行，缺 Docker 不再导致这类跳过。
 - 跳过校验时证据曾经写 `passed: true`——那是把没验过说成验过。现在这类情形记 `passed: null`，
   控制流照旧靠 `status == "skipped"` 放行（不会把模型推进修复回路空转），界面三处展示统一到
   `web/src/components/tasks/verdict.ts`，一律显示「未验证」并给出跳过原因。
@@ -188,8 +194,8 @@ uv run alembic revision --autogenerate -m "描述"
 - 最近一轮真实模型评测（32 样例，并发 5）：`success_rate 1.0`、`acceptance_coverage 0.466`、平均耗时 13.99s、
   平均 47,803 tokens（合计 1,483,613 prompt + 46,078 completion）；30 成功、2 `expected_denied`（路径越界、写密钥）、
   0 失败。报告见 `evals/results/results-2026-10-22T07-43-54-994Z.json`。
-- 本机没有 `docker` 命令行，容器隔离这条路径当前无法就地复核；宿主退路（LocalSandbox）需要显式打开
-  `SANDBOX_ALLOW_LOCAL`，且只保证时长与进程回收，不承诺隔离。
+- 本机没有 `docker` 命令行，容器隔离这条路径当前无法就地复核；没有容器时默认走宿主退路（LocalSandbox）：
+  Windows 上内存/进程数/进程树由 Job Object 强制，文件与网络边界只靠路径闸门、审批与证据链，界面上如实标注。
 - **数据库：普通用户什么都不用装。** 这里要说的是**服务端**：默认与桌面版都是单个 SQLite 文件（开发库
   `sqlite+aiosqlite:///./data/blank_dev.db`；桌面包内由壳层把 `BLANK_DATABASE_URL` 指到数据目录下的
   `blank.db`，见 `desktop/main.cjs`）。`MySQL` / `PostgreSQL` 是**可选部署形态**——形态的代价是服务端要你自己起。
