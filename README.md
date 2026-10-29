@@ -222,10 +222,14 @@ uv run alembic revision --autogenerate -m "描述"
   干净 clone 上没有"或"本机姿势与 runner 姿势不同"：`typecheck:web` 依赖 Next 生成物、
   `sandbox/Dockerfile` 写死 uid 1000 撞上 `node:24-alpine` 自带的 `node` 用户、`../evals/` 少一级、
   `--skip-web` 的退出码 3 被当成失败、`setup-uv@v5` 的 post 步骤 `uv cache prune` 挂掉。
-  修完这几条后 web / team-e2e / eval-gate 已绿；`api` 在 Linux 上接着量出 23 failed / 1601 passed
-  （三处产品缺陷 + 一处路径泄漏 + 一批只在 Windows 上成立的判据，见
-  `docs/REA-WAVE5-CLAUDE-CODE.md` §21）；`api-dialect` 的三方言 e2e 在 Linux 上还有 4 格没绿
-  （第 80/83/84/85 步，与审批挂卡的终态判定有关），这一项仍开着。
+  修完这几条后 web / team-e2e / eval-gate / api 四格已绿；`api` 那格在 Linux 上接着量出
+  23 failed / 1601 passed——其中**三处真缺陷**（POSIX 钩子取消只杀外层 `sh`、事件 `seq` 并发撞号、
+  MCP 服务端秒退时 stderr 被跳过）、**一处用户名泄漏**（路径掩码只认本平台分隔符），
+  其余是只在 Windows 上成立、缺 `skipif` 的判据；修完这些 runner 上 `api` 转为全绿
+  （1611 passed / 83 skipped）。细节见 `docs/REA-WAVE5-CLAUDE-CODE.md` §21。
+- `api-dialect`（三方言端到端，83 步 × 三方言，一轮约 40 分钟）在 Linux 上仍红 4 步
+  （第 80/83/84/85 步，形状是「审批卡没被收尾而任务已 `succeeded`」）。这一项**仍开着**，
+  是当前唯一没绿的 CI 格。
 - `services/api/tests/test_parallel_tools_v14.py::test_read_only_calls_overlap` 有墙钟依赖：它要求两个 0.25s 的
   只读工具在 0.45s 内跑完。electron-builder 正在压 `7za` 的那一轮全量里它红过一次，同一份代码空机重跑两次
   都绿、单跑也绿（695 passed / 14 skipped）。当时截了 `tail`，断言原文没留下，所以**这条偶发的根因没有定论**。
