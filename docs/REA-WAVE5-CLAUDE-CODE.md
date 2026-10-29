@@ -1185,3 +1185,60 @@ investigation 是 POST + snake_case、四种适配器状态落三档色调（不
 | 批次事件按本批筛，且本批恰好一条 | `test_parallel_budget_v26.py` |
 | 真壳重放不要求宿主预装 PATH | `test_shell_quoting_v53.py::_host_env` |
 | 前端四个端点的 URL/字段/读法 | `web/src/components/reverse-lab/api.test.ts`（8 例） |
+
+## 20. #145 附带：本机档用 POSIX 规则拼 argv，cmd.exe 把整条命令当成文件名
+
+这条不是设计出来的用例，是**真模型跑评测时撞出来的**。修完 #19 的三条之后重跑评测，
+样例 T01（"为文本工具增加 truncate 函数"）在 `complete` 节点判 failed，
+证据包里的验证结论是：
+
+```json
+{"command": "E:\\projects\\kbgai\\kbgai\\services\\api\\.venv\\Scripts\\python.exe -m pytest -q",
+ "passed": false, "status": "failed", "exit_code": 1,
+ "output_tail": "[stderr]\n文件名、目录名或卷标语法不正确。"}
+```
+
+同一个工作区里 T03 的 `npm test` 却 `exit 0` 且 3 passed。**同一层壳，一半能跑一半不能**。
+
+**根因。** `run_tests` 识别出 pytest 后给出的是 argv（`[sys.executable, "-m", "pytest", "-q"]`），
+`runner.LocalSandbox.run` 收下之后自己拼成一行：
+
+```python
+script = command if isinstance(command, str) else shlex.join(command)
+```
+
+`shlex.join` 是 **POSIX** 规则：遇到含反斜杠的 token 就加**单引号**——
+`'E:\projects\...\python.exe' -m pytest -q`。`cmd.exe` 不认单引号，
+于是整条命令被当成一个文件名去找，回一句「文件名、目录名或卷标语法不正确」。
+`npm test` 两个 token 都不需要引用，所以它毫无症状。
+
+**改法。** 三条：
+
+1. `runner.py` 新增 `join_for_shell`：Windows 走 `subprocess.list2cmdline`（与 CreateProcess
+   的解析规则一致），其他平台走 `shlex.join`；调用方已经拼好的字符串原样透传。
+   `LocalSandbox.run` 改用它；`DockerSandbox.run` 保持 `shlex.join`（容器里跑的是 `sh -c`）。
+2. `tools/shell.py` **不再在调用方提前拼串**，直接把 argv 交给 `get_sandbox(policy).run()`——
+   谁知道自己跑在哪种壳里，谁自己拼。调用方提前拼等于把一种壳的规则硬塞给另一种。
+3. 判据 `tests/test_host_shell_argv_v145.py`（4 例）：
+   - 规则本身：Windows 上等于 `list2cmdline` 且**不含单引号**；POSIX 上等于 `shlex.join`。
+   - 纯字符串透传：`npm test` 与 `python -c "print(1)"` 不被改写——改了就等于替用户改了命令。
+   - 真跑：`LocalSandbox` 起一次绝对路径解释器 + `print('argv-survived')`，必须拿回那句话。
+   - **对照格**（`skipif not win32`）：换回 `shlex.join` 必须 `exit != 0` 且拿不到那句话。
+     没有它，别人会怀疑"上面那条在验一个不存在的问题"。
+
+**实测对照（真模型，DeepSeek，隔离库 :8060，同一份样例 T01）**
+
+| | 修复前 | 修复后 |
+| --- | --- | --- |
+| 任务状态 | `failed`（complete 节点） | `succeeded` |
+| `validation.status` | `failed` / `exit_code 1` | `ok` / `exit_code 0` |
+| `output_tail` | `[stderr] 文件名、目录名或卷标语法不正确。` | `7 passed in 0.03s` |
+| `acceptance_coverage` | 0.857（两例平均） | 1.0 |
+
+**影响面**：所有经本机档执行的 argv 命令，只要参数里有反斜杠路径或空格就会中招——
+`run_tests` 是最高频的一个（它总把解释器换成本机绝对路径），`run_shell` 传 argv 时同理。
+容器档不受影响（Linux 下 `shlex.join` 本来就是对的）。
+
+**这一批仍不覆盖**：Docker `ready` 档的同一条路径（容器里 `sh -c` + `list2cmdline` 不会
+交叉，但本机没有容器可验）；`shell=True` 的用户手写命令串不做二次转义（那是用户自己的
+引号，改了就变成替他改命令）。

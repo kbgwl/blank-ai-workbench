@@ -255,6 +255,18 @@ const teamChunk = existsSync(chunksDir)
     .some((name) => readFileSync(path.join(chunksDir, name), "utf8").includes("Bot 名册"));
 teamChunk ? ok("前端含团队视图") : bad("前端是旧版本", "没有找到团队页文案");
 
+// 逆向实验室三栏（#145）同理只认 chunk 里独有的一句。挑的是右栏那句边界说明：
+// 它在页面文案里唯一，且只有真的调了四个端点的那一版才会渲染出来。
+// 抽样文案别选版本号或「REVERSE LAB」这类会随改版过期/别处也有的字样。
+if (existsSync(chunksDir)) {
+  const labChunk = readdirSync(chunksDir)
+    .filter((name) => name.endsWith(".js"))
+    .some((name) => readFileSync(path.join(chunksDir, name), "utf8").includes("候选实物"));
+  labChunk ? ok("前端含逆向实验室三栏") : bad("前端是旧版本", "没有找到逆向实验室左栏的文案");
+} else {
+  bad("前端静态资源目录缺失", chunksDir);
+}
+
 // 会话条的文案打包后落在 JS chunk 里，页面 HTML 上看不到，只能扫 chunk。
 // 抽样一句只有会话条才有的文案，避免"前端是上一版、界面看起来正常但点不出会话"。
 if (existsSync(chunksDir)) {

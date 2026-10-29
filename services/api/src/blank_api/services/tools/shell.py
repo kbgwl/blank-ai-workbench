@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -289,8 +288,10 @@ async def execute_command(
         }
     policy = resolution.policy
     if policy.enabled:
-        script = command if isinstance(command, str) else shlex.join(command)
-        result = await get_sandbox(policy).run(script, workspace=str(root), timeout_seconds=budget)
+        # 不在这一层拼串：容器档跑在 `sh -c` 里（POSIX 引号），本机档跑在 cmd.exe 里
+        # （CreateProcess 规则）。谁知道自己跑在哪种壳里，谁就自己拼——调用方提前
+        # 用 shlex.join 拼好，等于把 POSIX 规则硬塞给 cmd（#145 的真缺陷）。
+        result = await get_sandbox(policy).run(command, workspace=str(root), timeout_seconds=budget)
         enforcement = getattr(result, "enforcement", {}) or {}
         if not enforcement:
             enforcement = _engine_enforcement(facts)

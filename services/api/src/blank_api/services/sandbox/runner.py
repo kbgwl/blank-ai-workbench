@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
+import subprocess
 import sys
 import time
 import uuid
@@ -22,6 +23,24 @@ from blank_api.services.sandbox import boundary, docker_probe, windows_job
 from blank_api.services.sandbox.policy import SandboxPolicy
 
 MAX_OUTPUT_CHARS = 20000
+
+
+def join_for_shell(command: str | list[str]) -> str:
+    """把 argv 拼成"这层壳自己看得懂"的一行。
+
+    本机档走的是 `create_subprocess_shell`，Windows 上就是 `cmd.exe`（由 COMSPEC 决定）。
+    而 `shlex.join` 用的是 POSIX 引号规则：`E:\\app\\python.exe` 会被包成**单引号**，
+    cmd 不认单引号，于是整条命令被当成一个文件名，回一句「文件名、目录名或卷标语法
+    不正确」。实测（#145）：真模型跑评测样例 T01，验证命令是
+    `python -m pytest -q`，解释器被换成本机 venv 的绝对路径后就撞上这条；
+    而 T03 的 `npm test` 两个 token 都不需要引用，反而正常——**同一层壳，一半能跑一半不能**。
+    Windows 上必须用 `subprocess.list2cmdline`，它与 CreateProcess 的解析规则一致。
+    """
+    if isinstance(command, str):
+        return command
+    if sys.platform == "win32":
+        return subprocess.list2cmdline(list(command))
+    return shlex.join(command)
 
 
 class SandboxUnavailable(RuntimeError):
@@ -183,7 +202,7 @@ class LocalSandbox:
         env: dict[str, str] | None = None,
         timeout_seconds: float | None = None,
     ) -> SandboxResult:
-        script = command if isinstance(command, str) else shlex.join(command)
+        script = join_for_shell(command)
         timeout = timeout_seconds or self.policy.timeout_seconds
         base = {key: value for key, value in os.environ.items() if key in self.policy.env_allowlist}
         base.update(self.policy.filter_env(env or {}))

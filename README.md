@@ -172,10 +172,18 @@ uv run alembic revision --autogenerate -m "描述"
   （`team_create_bot` → `team_add_member` → `team_assign_task`），放行后成员名单真的变成
   `小白管家 / 工程 / 评审`、轮次末态 `completed`；写文件是磁盘上核对的（`file.changed` 事件 + 读回内容），
   全文检索命中成员产出，重名建 Bot 被拦截。注意这批判定用的是**新建的隔离库**，不代表用户 :8000 的数据。
-- **但真实模型这一轮评测里，一行自动化测试都没跑成**：32 个样例的 `validation.status` 全是 `skipped`
-  （28 个「命令执行未获授权」、4 个「没改动文件」）。原因是本机没有 Docker、`SANDBOX_ALLOW_LOCAL` 默认关闭，
-  `run_shell`/`run_tests` 一律被策略拒掉。所以 `success_rate 1.0` 只能读成「任务收尾且产物文件存在」，
-  不等于「测试通过」。这一轮读数照原样保留；#144 之后默认会退回本机受限执行，缺 Docker 不再导致这类跳过。
+- **真实模型评测的「校验全是 skipped」已经关闭**（2026-10-29，`results-2026-10-29T03-16-11-053Z.json`）：
+  同一份 32 样例、DeepSeek、隔离库 :8060，`validation.status` 变成 **23 ok / 5 skipped / 4 未走到验证**，
+  `success_rate 0.903`、`acceptance_coverage 0.84`。5 个 skipped 各有明确理由：T11/T28 要 Go 工具链
+  （本机没有，见下一条），T18 是被正确拒绝后本来就没有改动，T20/T26 是纯查询样例。
+  历史那条「32 个全 skipped」的口径作废，读数保留在 `results-2026-10-22T07-43-54-994Z.json`。
+  这一轮还顺带量出一条真缺陷并修掉：本机档用 POSIX 规则拼 argv，`cmd.exe` 不认单引号，
+  `python -m pytest -q` 这类带绝对路径的命令一律报「文件名、目录名或卷标语法不正确」——
+  T01 修复前 `validation.passed=false`，修复后 `exit 0 / 7 passed`（见 `docs/REA-WAVE5-CLAUDE-CODE.md` §20）。
+  跑法有讲究：**别加 `--approve-high`**，它会把 T18/T19 两个「期望被拒」样例直接放行，
+  `not_denied` 会看起来像安全缺口（本轮实测过一次）。标准口径是让它挂起、由判据驳回。
+- **T23 / T32 仍停在 `waiting_approval`**：模型用 `request_user_input` 提问，而评测装置不会回答，
+  这不是产品缺陷，是装置缺一环（要等用户答）。T16 同样因模型自问自答收尾而记 `error`。
 - 跳过校验时证据曾经写 `passed: true`——那是把没验过说成验过。现在这类情形记 `passed: null`，
   控制流照旧靠 `status == "skipped"` 放行（不会把模型推进修复回路空转），界面三处展示统一到
   `web/src/components/tasks/verdict.ts`，一律显示「未验证」并给出跳过原因。
