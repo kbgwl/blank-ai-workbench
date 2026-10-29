@@ -220,7 +220,7 @@ function WorldDetails({ evidence }: { evidence: Evidence }) {
   const world = evidence.world;
   const current = world.current;
   if (!current) {
-    return <p className="font-mono text-[10px] text-faint">这类快照上线之前的任务，环境没有记账（不是"环境为空"）。</p>;
+    return <p className="font-mono text-[10px] text-faint">这类快照上线之前的任务，环境没有记账（不是「环境为空」）。</p>;
   }
   const shifted = world.changes.length > 0;
   return (

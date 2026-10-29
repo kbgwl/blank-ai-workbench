@@ -309,17 +309,14 @@ export function TeamView() {
   }, [state?.messages.length, activeGroupId]);
 
   // 搜索防抖：每敲一次字都发请求只会让结果闪烁，300ms 足够区分"还在输入"和"想搜了"。
+  // 空串时那三份读数的归零放在事件里做（见 resetSearchReadout），effect 里只跑真有
+  // 查询的那条路——在 effect 体内同步 setState 会多渲染一轮，规则也是这么要求的。
   useEffect(() => {
     const query = searchQuery.trim();
-    if (!query) {
-      setSearchResult(null);
-      setSearchError("");
-      setSearching(false);
-      return;
-    }
+    if (!query) return;
     let cancelled = false;
-    setSearching(true);
     const timer = window.setTimeout(async () => {
+      if (!cancelled) setSearching(true);
       try {
         const next = await searchTeamChat(query, { limit: 20 });
         if (cancelled) return;
@@ -341,16 +338,29 @@ export function TeamView() {
   }, [searchQuery]);
 
   // 状态里出现目标消息后再滚动：切换群时 DOM 还没渲染，提前找必然找不到。
+  // 这一拍只碰 DOM 这个外部系统，改状态挪到下一帧——在 effect 体内同步 setState
+  // 会多渲染一轮，也会让高亮抢在滚动之前出现。
   useEffect(() => {
     if (!jump || !state || state.group.id !== jump.groupId) return;
     const element = document.getElementById(`team-message-${jump.messageId}`);
     if (!element) return;
     stick.current = false;
-    setJump(null);
-    setHighlightId(jump.messageId);
+    const target = jump.messageId;
     element.scrollIntoView({ block: "center", behavior: "smooth" });
-    window.setTimeout(() => setHighlightId(0), 2600);
+    const frame = window.requestAnimationFrame(() => {
+      setJump(null);
+      setHighlightId(target);
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [jump, state]);
+
+  // 高亮淡出的计时器单独挂：跟着 highlightId 走，清理时只清自己那一个，
+  // 不会被轮询刷新（state 变）顺手清掉而让高亮一直留着。
+  useEffect(() => {
+    if (!highlightId) return;
+    const timer = window.setTimeout(() => setHighlightId(0), 2600);
+    return () => window.clearTimeout(timer);
+  }, [highlightId]);
 
   // 兜底：消息可能已被清理（或 around 窗口没取到），不能一直停在等待态。
   useEffect(() => {
@@ -398,10 +408,21 @@ export function TeamView() {
     setActiveGroupId(groupId);
   }
 
-  function openSearchHit(hit: ChatSearchHit) {
-    setSearchQuery("");
+  // 清空搜索框时把三份读数一起归零。放在事件里做，而不是靠 effect 监听空串——
+  // 那样每次清空都要多一次渲染，且 effect 体内的同步 setState 会被规则拦下。
+  function resetSearchReadout() {
     setSearchResult(null);
     setSearchError("");
+    setSearching(false);
+  }
+
+  function clearSearch() {
+    setSearchQuery("");
+    resetSearchReadout();
+  }
+
+  function openSearchHit(hit: ChatSearchHit) {
+    clearSearch();
     if (hit.source === "task") {
       // 任务结论没有群内消息可定位，直接打开任务详情。
       if (hit.task_id) window.location.assign(`/tasks/detail?id=${encodeURIComponent(hit.task_id)}`);
@@ -567,9 +588,13 @@ export function TeamView() {
                   </svg>
                   <input
                     value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setSearchQuery(next);
+                      if (!next.trim()) resetSearchReadout();
+                    }}
                     onKeyDown={(event) => {
-                      if (event.key === "Escape") setSearchQuery("");
+                      if (event.key === "Escape") clearSearch();
                     }}
                     aria-label="搜索聊天与结论"
                     placeholder="搜索所有群与结论"
@@ -579,7 +604,7 @@ export function TeamView() {
                     <button
                       type="button"
                       aria-label="清空搜索"
-                      onClick={() => setSearchQuery("")}
+                      onClick={clearSearch}
                       className="absolute top-1/2 right-1.5 grid size-5 -translate-y-1/2 place-items-center rounded text-faint hover:bg-surface-3 hover:text-text"
                     >
                       ×
