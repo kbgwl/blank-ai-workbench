@@ -111,7 +111,7 @@ def _is_summary_request(messages: list[dict]) -> bool:
     )
 
 
-def _envelope(call: dict) -> dict:
+def _envelope(call: dict, call_id: str) -> dict:
     """把一个函数调用装进 OpenAI 的 `tool_calls` 信封。
 
     流式与非流式两条分支必须共用这一个构造函数：#52 第一批实测到，只给 `{"name",
@@ -119,8 +119,14 @@ def _envelope(call: dict) -> dict:
     走非流式整包，产品读的是 `call["function"]["arguments"]`，裸形状读出空参数
     ——于是探针变成"缺少必填参数：patch"的 error 调用，风险退成 medium、按 risk:auto
     放行，卡一张都不挂。红的全是装置自己，与被测产品无关。
+
+    ``call_id`` 必须**每轮各不相同**：这里长期写死 ``call_1``，于是"同一任务连抛两条命令"
+    的那四个探针（第 80/83/84/85 步）在装置上退化成"两条调用共用一个 id"。产品按 id
+    从执行日志里认回上次的结果，第二条就被当成第一条的重放吞掉——不执行、不挂卡、任务
+    succeeded。四个探针红的成因一模一样，读数却长得像"审批记忆太宽"（2026-10-29 定位）。
+    OpenAI 的契约里同一次会话的调用 id 唯一，桩不该在这里造一个假方言。
     """
-    return {"id": "call_1", "type": "function", "function": call}
+    return {"id": call_id, "type": "function", "function": call}
 
 # 探针标记：任务 goal 会原样进模型消息，桩据此在这一轮换抛哪个工具调用。
 # 选这种"产品提示词里绝不会出现"的字串——认错一次，整格就都在演审批。
@@ -280,17 +286,25 @@ class _Handler(BaseHTTPRequestHandler):
         if _is_summary_request(messages):
             self._answer_summary()
             return
-        if PROBE_CODE_SEQ in haystack:
+        # 这一轮属于哪个探针：先认出来再分派，轨迹里才写得出"哪一格抛了什么"。
+        # 顺序即优先级（同一个 haystack 里理论上只会命中一个，但优先级要能读）。
+        probe = next(
+            (token for token in (PROBE_CODE_SEQ, PROBE_TOOL_GRANT, PROBE_TAIL_SWAP,
+                                 PROBE_TAIL_REPLAY, PROBE_COMPACT)
+             if token in haystack),
+            "",
+        )
+        if probe == PROBE_CODE_SEQ:
             # 两条内联命令依次抛出：看到 0 条工具结果抛第一条，看到 1 条抛第二条，之后收尾。
             call = (_CODE_FIRST, _CODE_SECOND)[tool_turns] if tool_turns < 2 else None
-        elif PROBE_TOOL_GRANT in haystack:
+        elif probe == PROBE_TOOL_GRANT:
             call = (_GRANT_FIRST, _GRANT_SECOND)[tool_turns] if tool_turns < 2 else None
-        elif PROBE_TAIL_SWAP in haystack:
+        elif probe == PROBE_TAIL_SWAP:
             call = (_TAIL_FIRST, _TAIL_SECOND)[tool_turns] if tool_turns < 2 else None
-        elif PROBE_TAIL_REPLAY in haystack:
+        elif probe == PROBE_TAIL_REPLAY:
             # 只抛一次同一条命令，第二轮就收尾：这一支量的是"批准过的那条下次不再挂卡"。
             call = None if used_tool else _TAIL_FIRST
-        elif PROBE_COMPACT in haystack:
+        elif probe == PROBE_COMPACT:
             # 同一形状抛两次读取，第三轮收尾；不抛第二次就没有可折叠的历史。
             _Handler.compact_probe_armed = True
             _Handler.compact_calls += 1
@@ -298,7 +312,8 @@ class _Handler(BaseHTTPRequestHandler):
                     if _Handler.compact_calls <= len(_COMPACT_READS) else None)
         else:
             call = _READ if used_tool else _next_call(haystack)
-        self._trace(f"stream={int(want_stream)} 已见工具结果={tool_turns} 消息数={len(messages)}"
+        self._trace(f"probe={probe or '普通'} stream={int(want_stream)}"
+                    f" 已见工具结果={tool_turns} 消息数={len(messages)}"
                     f" 这轮抛={call['name'] if call else '收尾'}")
         if PROBE_RATE_LIMIT_RETRY in haystack:
             # 只拒第一次：这是"过一会儿就好了"的限流。产品若照旧直接判失败，
@@ -343,7 +358,8 @@ class _Handler(BaseHTTPRequestHandler):
         ):
             content, tool_calls, finish = "看清了：工作区里有 README.md 与 notes.txt。", [], "stop"
         else:
-            content, tool_calls, finish = "", [_envelope(call)], "tool_calls"
+            # 一次请求一个 id：同一轮里流式帧与非流式整包共用它，跨轮必须换。
+            content, tool_calls, finish = "", [_envelope(call, f"call_{_Handler.served}")], "tool_calls"
         usage = {"prompt_tokens": 610, "completion_tokens": 42, "total_tokens": 652}
         if want_stream:
             frames = [{"choices": [{"index": 0, "delta": {"role": "assistant"}}]}]
@@ -357,7 +373,7 @@ class _Handler(BaseHTTPRequestHandler):
                                     "tool_calls": [
                                         {
                                             "index": 0,
-                                            **_envelope(call),
+                                            **_envelope(call, f"call_{_Handler.served}"),
                                         }
                                     ]
                                 },
@@ -721,6 +737,14 @@ def boot(url: str, instance: Path) -> subprocess.Popen:
 # --------------------------------------------------------------------------- #
 
 
+def _trace_lines() -> list[str]:
+    """桩的逐次轨迹。读不到就当没有——取证通道不许把自己变成第二个失败点。"""
+    try:
+        return STUB_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+
+
 class Drive:
     def __init__(self, base: str) -> None:
         # 令牌在这里，而不是逐步传：漏传一步只会红成"装置自己没带头"，
@@ -738,13 +762,21 @@ class Drive:
         self.state: dict[str, str] = {}
 
     def step(self, name: str, fn) -> None:
+        offset = len(_trace_lines())
         try:
             detail = fn() or ""
             self.rows.append((name, "PASS", str(detail)[:200]))
         except Exception as error:  # noqa: BLE001 — 驱动就是要接住一切，再按引擎对照
             # 红的那一步存全文：判据（尤其是"失败原因"）一句往往比一句长，
             # 在记录时就裁掉等于每轮都要重跑一遍才能看见下一句。
-            self.rows.append((name, "FAIL", f"{type(error).__name__}: {error}"))
+            detail = f"{type(error).__name__}: {error}"
+            # 桩的轨迹以前只落盘，CI 上红了只能读到一句"去看 /tmp/…/stub-*.log"——
+            # 而 runner 一收工那个文件就没了。红这一步期间发生过哪几次模型调用、
+            # 每轮看到几条工具结果，恰恰是"产品错还是装置错"唯一能分开的读数。
+            tail = _trace_lines()[offset:]
+            if tail:
+                detail += "\n｜桩轨迹（这一步的模型调用，一行一次）\n｜　" + "\n｜　".join(tail[-12:])
+            self.rows.append((name, "FAIL", detail))
 
     def expect(self, resp: httpx.Response, codes: tuple[int, ...]) -> object:
         if resp.status_code not in codes:

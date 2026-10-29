@@ -2024,7 +2024,9 @@ async def _execute_all(
     return payloads
 
 
-async def _replayed_tool_results(session: "AgentSession", calls: list[dict]) -> dict[str, dict]:
+async def _replayed_tool_results(
+    session: "AgentSession", calls: list[dict], messages: list[dict] | None = None
+) -> dict[str, dict]:
     """崩溃续跑时找回本轮已经执行完的工具结果。
 
     ``execute_action`` 把「执行工具」和「问模型下一步」放在同一个节点里，
@@ -2036,12 +2038,26 @@ async def _replayed_tool_results(session: "AgentSession", calls: list[dict]) -> 
     只认同一 trace（同一个 attempt）：用户重新发起会换 thread，不能把上一轮
     同 id 的工具结果拿来顶掉这一轮。只认带显式 id 的调用——没有 id 时
     ``_call_key`` 退回工具名，拿它当键会把「第二次 grep」对成「第一次 grep 的结果」。
+
+    还有一格：**对话里已经带着某条调用的结果**。那种情况下它已经落过地，再"认回"
+    一次就是让模型看见同一次执行的两份结果，而这一轮真正要跑的那条调用被整条吞掉。
+    这不是理论风险：供应商只要复用 tool_call id（方言端到端第 80/83/84/85 步的桩
+    每轮都发 ``call_1``），第二条命令就既不执行也不挂卡，任务直接 succeeded——
+    用户的批准被"替"了，命令一条没跑（2026-10-29 实测读数）。检查点只落在节点边界，
+    「结果已在对话里、pending 还挂着同一条」这种形状不会由崩溃产生，所以这条排除
+    不会削弱上面那道保护。
     """
     from sqlalchemy import select
 
     from blank_api.models.task import AgentEvent
 
     keys = {str(call.get("id")) for call in calls if call.get("id")}
+    answered = {
+        str(item.get("tool_call_id") or "")
+        for item in (messages or [])
+        if str(item.get("role") or "") == "tool"
+    }
+    keys -= answered
     if not keys:
         return {}
     async with session.session_factory() as db:
@@ -2102,7 +2118,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     # 崩溃续跑：本节点上次已经把工具跑完、只是死在"问模型下一步"之前。检查点落后于
     # 事实，照着重跑会重复执行（写入类工具是用户能看见的重复：多追加一行、多提交一次）。
     # 以 tool.completed 事件为执行日志把这一批结果找回来，后面只补事件与上下文。
-    replayed = await _replayed_tool_results(session, pending)
+    replayed = await _replayed_tool_results(session, pending, messages)
     live_pending = [call for call in pending if _call_key(call) not in replayed]
     # 先问、再批：问题门在前，恢复时两道门各占一个中断位，恢复值按位置回放不会串味。
     # 已经执行过的那些不再过门：门是"要不要执行"的判断，而它们已经执行完了。

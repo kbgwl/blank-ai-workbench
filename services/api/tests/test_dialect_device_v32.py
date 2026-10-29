@@ -493,14 +493,34 @@ def test_both_stub_branches_use_the_openai_tool_call_envelope() -> None:
 
     device = _load_device()
     for call in (device._APPROVAL_CALL, device._QUESTION_CALL, device._READ):
-        enveloped = device._envelope(call)
+        enveloped = device._envelope(call, "call_2")
+        assert enveloped["id"] == "call_2"
         assert tool_call_name(enveloped) == call["name"]
         assert tool_call_args(enveloped), f"{call['name']} 的参数在产品侧读不出来"
-    patch = tool_call_args(device._envelope(device._APPROVAL_CALL))["patch"]
+    patch = tool_call_args(device._envelope(device._APPROVAL_CALL, "call_3"))["patch"]
     assert device.PROBE_PATH in patch and "api_key" in patch, patch
     # 裸形状读得出工具名、读不出参数：这就是那一步不报错、只静默放行的原因
     assert tool_call_name(device._APPROVAL_CALL) == "apply_patch"
     assert tool_call_args(device._APPROVAL_CALL) == {}
+
+
+def test_stub_call_ids_are_per_request_not_one_fixed_id() -> None:
+    """桩不许每一轮都发同一个调用 id。
+
+    写死 `call_1` 会让"同一任务连抛两条命令"的那几格探针退化：产品按 id 从执行日志里
+    认回上次的结果，第二条就被当成第一条的重放——不执行、不挂卡、任务 succeeded。
+    方言端到端第 80/83/84/85 步那四格红就是这样长出来的（2026-10-29 定位）。
+
+    这条判据盯的是装置自身：`_respond` 喂给 `_envelope` 的 id 必须带当次请求序号，
+    而信封本身必须把 id 当参数收（留一个默认值就等于给写死留了后门）。
+    """
+    import inspect
+
+    device = _load_device()
+    respond = inspect.getsource(device._Handler._respond)
+    assert 'f"call_{_Handler.served}"' in respond, respond
+    signature = inspect.signature(device._envelope)
+    assert signature.parameters["call_id"].default is inspect.Parameter.empty, signature
 
 
 class _FakeOut:

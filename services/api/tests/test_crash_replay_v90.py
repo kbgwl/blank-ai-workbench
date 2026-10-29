@@ -190,3 +190,35 @@ async def test_a_call_without_an_id_is_never_replayed(seeded, tmp_path):
 
     assert counter.runs == ["run_shell", "run_shell"], counter.runs
     assert await _events(seeded, "tool.replayed") == []
+
+
+async def test_a_new_call_reusing_an_answered_id_is_not_swallowed(seeded, tmp_path):
+    """供应商复用 tool_call id：第二条是新调用，不许拿第一条的结果把它顶掉。
+
+    形状取自方言端到端第 80/83/84/85 步（桩那时每轮都发 ``call_1``）：第一条命令执行完、
+    结果已经进了上下文，模型在这一步的基础上又点了**第二条**命令，id 仍是 ``call_1``。
+    旧口径只按 id 认执行日志，于是第二条被当成第一条的重放——工具不执行、审批卡不挂、
+    任务直接 succeeded。对用户就是"点了批准、命令一条没跑、它说干完了"。
+
+    判据看两头：工具真的执行了两次，且上下文里两条命令各有一份自己的结果。
+    """
+    counter = Counter()
+    session = _session(tmp_path, seeded, counter)
+    call = _call("run_shell", "call-same")
+
+    first = await execute_action_node(_state(call), session)
+    # 第二次进来时，对话里已经带着第一条的结果——这正是"模型据此点出下一条"的那一刻。
+    state = {
+        "messages": list(first["messages"]) + [{"role": "assistant", "content": "", "tool_calls": [call]}],
+        "steps": 1,
+        "pending": [call],
+    }
+    second = await execute_action_node(state, session)
+
+    assert counter.runs == ["run_shell", "run_shell"], counter.runs
+    assert len(await _events(seeded, "tool.completed")) == 2
+    assert await _events(seeded, "tool.replayed") == []
+    contents = [_json(m["content"]) for m in second["messages"] if m.get("role") == "tool"]
+    assert len(contents) == 2, contents
+    # 两次执行的结果必须各是各的（Counter 的 output 里带着第几次），不能是同一条抄两遍
+    assert {item.get("output") for item in contents} == {"run_shell run #1", "run_shell run #2"}, contents
