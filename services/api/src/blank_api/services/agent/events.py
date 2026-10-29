@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import uuid
 from typing import Any
 
@@ -36,6 +37,13 @@ class EventRecorder:
         # 放在记录器上（而不是会话字段上）的理由：子代理共用父记录器，
         # 孙辈因此天然知道自己是被哪一轮引起的，不必再传一次、也不必自己猜。
         self.origin_run_id = origin_run_id or run_id
+        # seq 是「读最大值再插一条」，同一记录器上的并发写会读到同一个号。捕获
+        # IntegrityError 重试能兜住，但十二个协程同时重试时是**齐步走**的：大家在同一拍
+        # 重读、同一拍再撞，几轮下来仍然有事件写不进去，而写不进去的事件是静默消失的
+        # （时间线是唯一能拿给用户看的证据）。所以进程内先串行，跨进程/跨记录器再靠重试。
+        # 2026-10-29 Linux runner 全量里 `test_parallel_children_do_not_lose_events_to_the_seq_race`
+        # 报的就是 `UNIQUE constraint failed: agent_events.task_id, agent_events.seq`。
+        self._seq_lock = asyncio.Lock()
 
     async def add(self, event_type: str, node: str = "", payload: dict[str, Any] | None = None) -> int:
         # 时间线是这条链路上唯一"写进库又端给用户"的边界：审批卡的参数、工具摘要、
@@ -46,40 +54,45 @@ class EventRecorder:
         # 也不动用户批准之后落到工作区的文件。
         event_payload = mask_deep(dict(payload or {}))
         event_payload.setdefault("trace_id", self.trace_id)
-        last_error: IntegrityError | None = None
-        for _ in range(MAX_SEQ_ATTEMPTS):
-            try:
-                async with self.session_factory() as session:
-                    previous = (
-                        await session.execute(
-                            select(AgentEvent)
-                            .where(AgentEvent.task_id == self.task_id)
-                            .order_by(AgentEvent.seq.desc())
-                            .limit(1)
+        # 串行段只包住「读最大值 + 插一条 + commit」：打码与拼载荷在锁外做，
+        # 免得一次耗时的 mask 把整条时间线堵住。
+        async with self._seq_lock:
+            last_error: IntegrityError | None = None
+            for attempt in range(MAX_SEQ_ATTEMPTS):
+                try:
+                    async with self.session_factory() as session:
+                        previous = (
+                            await session.execute(
+                                select(AgentEvent)
+                                .where(AgentEvent.task_id == self.task_id)
+                                .order_by(AgentEvent.seq.desc())
+                                .limit(1)
+                            )
+                        ).scalar_one_or_none()
+                        last = previous.seq if previous is not None else 0
+                        event_id = str(uuid.uuid4())
+                        seq = int(last or 0) + 1
+                        session.add(
+                            AgentEvent(
+                                id=event_id,
+                                task_id=self.task_id,
+                                run_id=self.run_id,
+                                origin_run_id=self.origin_run_id,
+                                step_id=event_id,
+                                parent_event_id=previous.id if previous is not None else "",
+                                seq=seq,
+                                node=node,
+                                type=event_type,
+                                payload=event_payload,
+                            )
                         )
-                    ).scalar_one_or_none()
-                    last = previous.seq if previous is not None else 0
-                    event_id = str(uuid.uuid4())
-                    seq = int(last or 0) + 1
-                    session.add(
-                        AgentEvent(
-                            id=event_id,
-                            task_id=self.task_id,
-                            run_id=self.run_id,
-                            origin_run_id=self.origin_run_id,
-                            step_id=event_id,
-                            parent_event_id=previous.id if previous is not None else "",
-                            seq=seq,
-                            node=node,
-                            type=event_type,
-                            payload=event_payload,
-                        )
-                    )
-                    await session.commit()
-                return seq
-            except IntegrityError as exc:
-                # 丢事件比丢一次写入更糟：时间线是唯一的证据来源。重读最大值再来一次。
-                last_error = exc
-                await asyncio.sleep(0)
-        assert last_error is not None
-        raise last_error
+                        await session.commit()
+                    return seq
+                except IntegrityError as exc:
+                    # 丢事件比丢一次写入更糟：时间线是唯一的证据来源。重读最大值再来一次。
+                    # 重试之间加一点随机退避：跨进程撞号时（另一个进程也在写同一个 task），
+                    # 齐步走的 sleep(0) 会让两边的重读永远落在同一拍上。
+                    last_error = exc
+                    await asyncio.sleep(0.005 * (attempt + 1) * (0.5 + random.random()))
+            assert last_error is not None
+            raise last_error

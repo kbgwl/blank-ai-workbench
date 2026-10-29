@@ -239,11 +239,16 @@ async def _assert_unbounded_but_usable(monkeypatch, kind: str):
     assert client._process is None
 
 
+@needs_windows
 async def test_job_creation_failure_is_marked_unbounded(monkeypatch):
     await _assert_unbounded_but_usable(monkeypatch, "create")
 
 
+@needs_windows
 async def test_job_assignment_failure_is_marked_unbounded(monkeypatch):
+    # 判的是「建 Job 成了、往里 assign 失败」这条分支。Linux 上没有 Job Object，
+    # 走的是另一条短路（产品如实报 job_created=False），断言里的注入文案永远不出现——
+    # 2026-10-29 Linux 全量里这一条就是这么红的，同组另一条只是碰巧文案一样才没红。
     await _assert_unbounded_but_usable(monkeypatch, "assign")
 
 

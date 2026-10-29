@@ -574,7 +574,10 @@ def test_装置目录里不许有凭据或密钥文件() -> None:
 
 # ---------------------------------------------------------------- 7 姿态：花钱之前先钉死
 
-VENV_PY = REPO / "services/api/.venv/Scripts/python.exe"
+# 解释器用"正在跑测试的这个"：写死 .venv/Scripts/python.exe 只在 Windows 上存在，
+# Linux runner 上那个目录叫 .venv/bin/python——2026-10-29 CI 首次真跑就撞在这里。
+_VENV_PY = REPO / "services/api/.venv/Scripts/python.exe"
+VENV_PY = _VENV_PY if _VENV_PY.exists() else Path(sys.executable)
 HOOK_POSTURE = {"port": "8061", "posture": "hooks"}
 PLAIN_POSTURE = {"port": "8061", "posture": "no-hooks"}
 # 上一版启动器实际交出去的那串：`printf` 手拼，命令里的引号没转义

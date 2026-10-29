@@ -36,7 +36,10 @@ import prompt_submit_v123 as D  # noqa: E402
 from blank_api.services.hooks import HookRunner, parse_hook_output  # noqa: E402
 
 SPEC = json.loads((FIXTURES / "prompt-submit-v123.json").read_text(encoding="utf-8"))
-VENV_PY = REPO / "services/api/.venv/Scripts/python.exe"
+# 解释器用"正在跑测试的这个"：写死 .venv/Scripts/python.exe 只在 Windows 上存在，
+# Linux runner 上那个目录叫 .venv/bin/python——2026-10-29 CI 首次真跑就撞在这里。
+_VENV_PY = REPO / "services/api/.venv/Scripts/python.exe"
+VENV_PY = _VENV_PY if _VENV_PY.exists() else Path(sys.executable)
 # 实物：主格四格（带提交钩子）+ 对照格（没钩子）。原件见 E:/tmp/realmodel/
 # prompt-submit-v123-20261027-*.json，两份由同一次真跑写出。
 GREEN = json.loads((FIXTURES / "prompt-submit-v123-green.json").read_text(encoding="utf-8"))

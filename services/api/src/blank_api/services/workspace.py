@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,10 +44,22 @@ class FileEntry:
 
 
 def mask_path(absolute: str | Path) -> str:
-    """Hide host absolute paths unless the operator explicitly exposes them."""
+    """Hide host absolute paths unless the operator explicitly exposes them.
+
+    只留叶子名，不留任何上级目录。两种分隔符都算边界——理由不是"防御"，是实测：
+    审计快照里出现的路径可能来自另一种平台的写法（Linux 进程读到 Windows 风格的
+    配置、或反过来），只按 ``Path(...).name`` 切的话整条 ``C:\\Users\\<用户名>\\…``
+    会被当成一个名字**原样回显**，用户名就这么进了事件流。2026-10-29 在 Linux
+    runner 上跑全量时，`test_handoff_v12` / `test_world_state_v22` /
+    `test_permission_profile_v48` 五条一起把这个回显钉了出来。
+    """
     if get_settings().expose_workspace_paths:
         return str(absolute)
-    return f"<workspace:{Path(str(absolute)).name or 'root'}>"
+    text = str(absolute).rstrip("/\\")
+    if not text:
+        return "<workspace:root>"
+    leaf = re.split(r"[\\/]", text)[-1]
+    return f"<workspace:{leaf or 'root'}>"
 
 
 def validate_workspace_path(raw: str) -> Path:

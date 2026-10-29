@@ -376,8 +376,14 @@ class StdioClient(_JSONRPCClient):
 
     async def _send(self, message: dict) -> None:
         process = self._process
-        if process is None or process.stdin is None or process.returncode is not None:
+        if process is None or process.stdin is None:
             raise MCPError("mcp_closed", f"{self.config.name} 的进程不在运行")
+        if process.returncode is not None:
+            # 进程在握手之前就退了（缺配置、脚本第一行就崩）：这时最有用的是它自己打的那句
+            # stderr，不是"进程不在运行"。跟下面写失败那条分支走同一个出口——先 settle 再拼原因。
+            # 2026-10-29 Linux runner 上 `test_crashed_server_reports_its_stderr` 就是这么红的：
+            # 子进程退得比 Windows 快，`returncode` 在第一次 send 前就非空了，那句 stderr 被跳过。
+            raise MCPError("mcp_closed", await self._exit_reason_soon())
         line = (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
         try:
             process.stdin.write(line)

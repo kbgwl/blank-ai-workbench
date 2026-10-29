@@ -86,6 +86,16 @@ def _pid_alive(pid: int) -> bool:
     return str(pid) in (out.stdout or b"").decode("utf-8", "ignore")
 
 
+# 这一组判的是**内核真的动手了**：broker 挂在 Windows Job Object 上、"没了"要靠
+# `tasklist` 观察。Linux 上没有 Job Object，产品那条路会如实报 job_created=False，
+# 于是这些断言在这里永远不成立——不是产品坏了，是判据要求的观察手段在这个平台不存在。
+# 2026-10-29 CI 首次在 Linux 上跑全量时，这七条一起红成了 tasklist/Job Object 的形状。
+needs_windows_boundary = pytest.mark.skipif(
+    os.name != "nt",
+    reason="这一条靠 Windows Job Object + tasklist 判「broker 是不是真的没了」，Linux 上没有这两样",
+)
+
+
 @pytest.fixture(autouse=True)
 def _clean_broker_managers():
     """每个用例前后各收一次尸。
@@ -455,6 +465,7 @@ async def test_a_protocol_mismatch_names_both_sides_and_refuses_to_fall_back(
     assert _boundary_kind("apply_patch", outcome, False) == BOUNDARY_BLOCKED
 
 
+@needs_windows_boundary
 async def test_a_killed_broker_fails_the_call_and_reincubates_in_a_child_never_the_host(
     env, workspace: Path, monkeypatch  # noqa: F811
 ):
@@ -496,6 +507,7 @@ async def test_a_killed_broker_fails_the_call_and_reincubates_in_a_child_never_t
     assert new_pid != old_pid and new_pid > 0, (new_pid, old_pid)
 
 
+@needs_windows_boundary
 async def test_a_timeout_says_which_layer_and_refuses_to_claim_nothing_happened(
     env, workspace: Path, monkeypatch  # noqa: F811
 ):
@@ -532,6 +544,7 @@ async def test_a_timeout_says_which_layer_and_refuses_to_claim_nothing_happened(
     assert _live_brokers() == [], "中毒的 broker 还被留在手里（下一个调用会撞上半截响应）"
 
 
+@needs_windows_boundary
 async def test_a_cancelled_call_raises_cancellation_and_takes_the_broker_with_it(
     env, workspace: Path, monkeypatch  # noqa: F811
 ):
@@ -555,6 +568,7 @@ async def test_a_cancelled_call_raises_cancellation_and_takes_the_broker_with_it
     assert _live_brokers() == []
 
 
+@needs_windows_boundary
 async def test_a_kill_while_a_request_is_in_flight_is_named_killed_not_timeout(
     env, workspace: Path, monkeypatch  # noqa: F811
 ):
@@ -596,6 +610,7 @@ async def test_a_kill_while_a_request_is_in_flight_is_named_killed_not_timeout(
 # --------------------------------------------------------------------------- #
 # 5. 随任务终止：Job 的 KILL_ON_JOB_CLOSE 不是文案，是 tasklist 读数
 # --------------------------------------------------------------------------- #
+@needs_windows_boundary
 async def test_releasing_a_task_takes_its_broker_with_it(env, workspace: Path, monkeypatch):  # noqa: F811
     """任务终止后 broker 不该还活着：KILL_ON_JOB_CLOSE 是这条边界的收尾承诺。
 
@@ -613,6 +628,7 @@ async def test_releasing_a_task_takes_its_broker_with_it(env, workspace: Path, m
     assert fs_broker.manager()._clients == {}, "释放任务后 manager 还留着这枚 client"
 
 
+@needs_windows_boundary
 async def test_the_kernel_kills_the_broker_not_our_own_fallback_kill(
     env, workspace: Path, monkeypatch  # noqa: F811
 ):
@@ -647,6 +663,7 @@ async def test_the_kernel_kills_the_broker_not_our_own_fallback_kill(
     assert called == [], f"是我们自己 kill 掉的（{called}），不是 Job 的 KILL_ON_JOB_CLOSE"
 
 
+@needs_windows_boundary
 async def test_the_broker_dies_when_the_owning_process_dies_without_cleanup(workspace: Path, tmp_path):
     """宿主急死（os._exit：没有 finally、没有 atexit、没有 GC）之后 broker 也必须消失。
 

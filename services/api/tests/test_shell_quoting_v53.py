@@ -374,6 +374,10 @@ def test_real_host_argv_equals_the_memorized_rule() -> None:
     assert covered_by_rules(other_tail, [rule]) is None
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="样本按 cmd.exe 的语法写（cmd /c、powershell -NoProfile 那几条），POSIX 壳上重跑没有可比性",
+)
 def test_rendered_rule_reexecutes_identically() -> None:
     """卡片/账本上的那一串重新跑一遍，必须与用户批准的那条产生同一个结果。
 

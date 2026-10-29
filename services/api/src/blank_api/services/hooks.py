@@ -24,6 +24,7 @@ import asyncio
 import json
 import locale
 import os
+import signal
 import time
 from dataclasses import dataclass
 
@@ -250,7 +251,14 @@ def _decode(raw: bytes) -> str:
 
 
 async def _kill_process(process: asyncio.subprocess.Process) -> None:
-    """杀掉钩子。shell 模式起的是 cmd/sh 再派生子进程，只 kill 外层会留下孤儿。"""
+    """杀掉钩子。shell 模式起的是 cmd/sh 再派生子进程，只 kill 外层会留下孤儿。
+
+    Windows 用 ``taskkill /T`` 连子孙一起收；POSIX 没有等价开关，得靠
+    ``start_new_session``（见 ``_spawn_shell``）把钩子放进自己的进程组，再对整组发信号。
+    只喊 ``process.kill()`` 的话杀的是 ``sh``，``sh`` 派生的 python 继续跑——2026-10-29
+    Linux runner 上 ``test_async_hooks_v119`` 那两条就是这么红的：取消回来了，标记文件
+    三秒后照样出现。
+    """
     if process.returncode is not None:
         return
     if os.name == "nt":
@@ -266,6 +274,11 @@ async def _kill_process(process: asyncio.subprocess.Process) -> None:
             )
             await killer.wait()
         except Exception:  # noqa: BLE001 - taskkill 不可用时退回单进程 kill
+            pass
+    else:
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
             pass
     if process.returncode is None:
         try:
@@ -292,6 +305,9 @@ async def _spawn_shell(command: str) -> asyncio.subprocess.Process:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # POSIX 上让钩子自成进程组，这样收尾取消能对整组发信号（见 _kill_process）。
+            # Windows 上没有这个概念，靠 taskkill /T 收树，不传这个参数。
+            **({"start_new_session": True} if os.name != "nt" else {}),
         )
     )
     try:

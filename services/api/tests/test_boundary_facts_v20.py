@@ -320,6 +320,11 @@ async def test_windows_job_limits_reach_the_event(seeded, workspace, monkeypatch
     assert set(sandbox_backend_event_field(payload)["sandbox_enforcement"]) <= EVENT_KEYS
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="判的是 Windows Job Object 那一档（boundary_strength=job_only、来源 measured_job_object）；"
+    "Linux 上没有 Job Object，探针会如实报成别的档——2026-10-29 首次 Linux 全量就红在这里",
+)
 async def test_governance_snapshot_uses_the_same_source(seeded, tmp_path, cap, monkeypatch):
     """治理快照里的 enforced 与事件里的 enforcement 走同一个函数，档位由现场决定。
 
