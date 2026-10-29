@@ -1,6 +1,6 @@
 {
   "name": "blank-ai-workbench-desktop",
-  "version": "0.8.12",
+  "version": "0.8.13",
   "private": true,
   "description": "空白格 AI 操作台的桌面壳",
   "main": "main.cjs",

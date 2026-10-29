@@ -132,6 +132,11 @@ def test_file_is_written_atomically_as_utf8(store: SettingsStore):
 # --------------------------------------------------------------------------- #
 async def test_settings_route_round_trip(client, store, monkeypatch):  # noqa: F811
     monkeypatch.setenv("BLANK_SETTINGS_FILE", str(store.path))
+    # 先把目标文件写成默认值，让「搬迁老位置」那条路无从发生。
+    # `_path()` 在目标不存在时会把 cwd/data/settings.json 搬过来（桌面版升级不丢设置的正路），
+    # 于是这台机器上跑过桌面版之后，下面那条 `== "off"` 就会读到别人配的 auto。
+    # 这条用例量的是「路由往返」，不是「搬迁」，所以先落一份默认值再发请求。
+    SettingsStore(store.path).reset()
     initial = await client.get("/api/v1/settings/agent")
     assert initial.status_code == 200
     assert initial.json()["guardian"]["mode"] == "off"

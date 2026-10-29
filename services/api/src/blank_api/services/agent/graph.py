@@ -53,6 +53,10 @@ from blank_api.services.agent.context import (
 )
 from blank_api.services.agent.router import LIGHT, TIER_LABELS, Router
 from blank_api.services.agent.payload import render
+from blank_api.services.agent.placeholders import (
+    describe as describe_placeholders,
+    scan_messages as scan_placeholder_messages,
+)
 from blank_api.services.agent.usage import account_call, accumulate_usage, merge_usage
 from blank_api.services import approval_rules
 from blank_api.services.features import is_enabled as feature_enabled
@@ -126,6 +130,20 @@ def tool_profile(tier: str) -> str:
 
 SYSTEM_PROMPT = (
     "你是空白格 AI 操作台的执行 Agent，工作在受限工作区内。\n"
+    # 先问再干排在最前：这一行里最贵的浪费不是"每步多花一点"，是猜错了整段重做。
+    # 这段不编号，是为了不打乱后面 1-16 的编号——插一条就得全体重排，
+    # 重排一次就会出现"改了编号忘了引用"的死链。
+    "先问再干（优先于下面的执行规则）：\n"
+    "· 交付物依赖只有用户才知道的信息时（叫什么名字、给谁看、要哪些栏目、联系方式、"
+    "接哪个服务、放在哪个目录），先用 request_user_input 一次问清再动手：1-3 个问题，"
+    "每题给 2-4 个选项，用户点一下就能答。\n"
+    "· 不许用占位内容顶替这些信息。example.com、138-0000-0000、lorem ipsum、"
+    "「示例公司」「待填写」都算占位；交付里出现它们，说明该问的时候没问。\n"
+    "· 只问「要什么」，不问「怎么做」：技术方案、目录结构、命名、实现细节自己定，"
+    "读一遍工作区就能查到的也自己查。问一句显而易见的事，和猜错一样费时间。\n"
+    "· 已经问过的不要再问。用户答了什么就按什么做，剩下的自己定。\n"
+    "· 同一个障碍试了两次还过不去（命令跑不起来、环境不可用、依赖装不上），"
+    "停下来问一句，或者用一句话说清卡在哪；不要绕过去，更不要把「没做成」写成「做完了」。\n"
     "做事规则：\n"
     "1. 只能通过工具读写工作区，路径一律使用工作区相对路径，禁止绝对路径与 ..。\n"
     "2. 按已确认的步骤调用工具执行，每次拿到结果再决定下一步。\n"
@@ -2713,6 +2731,18 @@ async def review_result_node(state: AgentState, session: AgentSession) -> AgentS
         # 修复预算必须与验证回路共用同一个计数器：两个独立计数器会把"最多 3 轮自动修复"
         # 实际放大到 6~8 轮，既费钱也违背验收口径。
         total_repairs = int(state.get("repair_rounds") or 0) + (0 if review["approved"] else 1)
+        # 占位审计：模型没问就自己编，是这一行最常见的"假完成"。只在**没问过用户**时算——
+        # 问过之后那些值就是用户给的，再报"这是占位"是冤枉它。
+        # 不据此把 approved 打回 false：占位不等于实现缺陷，模板类任务本来就要占位；
+        # 该做的是让它**显形**（依据条可见 + 交付正文里说一句），而不是烧一轮修复预算。
+        hits = [] if session.recorded_questions else scan_placeholder_messages(state.get("messages") or ())
+        if hits:
+            review["placeholder_hits"] = hits
+            tokens = "、".join(dict.fromkeys(str(item["token"]) for item in hits))[:120]
+            review["findings"] = [
+                f"用了占位值（{tokens}）：这些信息只有用户能提供，应当先问再写",
+                *review["findings"],
+            ][:12]
         await session.recorder.add(
             "review.completed", node, {**review, "round": rounds, "repair_rounds": total_repairs}
         )
@@ -2790,6 +2820,20 @@ def _first_answer_text(messages: list[dict], min_chars: int = 60) -> str:
         if len(text) >= min_chars:
             return text
     return ""
+
+
+def _with_placeholder_note(report: str, session: AgentSession, state: AgentState) -> str:
+    """交付正文末尾补一句确定性的缺口说明（模型改不掉这句话）。
+
+    提示词要求"信息不足先问"，但它会漏；漏了还不说，用户就得自己翻四个文件才发现
+    名字、电话、邮箱全是编的。这一句是兜底的事实陈述，不是指控，也不占正文的篇幅。
+    """
+    if session.recorded_questions:
+        return report
+    note = describe_placeholders(scan_placeholder_messages(state.get("messages") or ()))
+    if not note:
+        return report
+    return f"{report}\n\n{note}" if report.strip() else note
 
 
 async def summarize_result_node(state: AgentState, session: AgentSession) -> AgentState:
@@ -2872,7 +2916,7 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
                 )
             await session.recorder.add("delivery.recorded", node, {"mode": "report", "chars": len(report)})
             return {
-                "summary": report,
+                "summary": _with_placeholder_note(report, session, state),
                 "acceptance_results": results,
                 "usage": merge_usage(state.get("usage") or {}, ask["usage"]),
             }
@@ -2883,7 +2927,10 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
             ]
             report = as_report(raw)
             await session.recorder.add("delivery.recorded", node, {"mode": "fallback", "chars": len(report)})
-            return {"summary": report, "acceptance_results": results}
+            return {
+                "summary": _with_placeholder_note(report, session, state),
+                "acceptance_results": results,
+            }
 
     prompt = REPORT_INSTRUCTION + (f"\n本次执行摘要（仅供参考，不要照抄）：{hint}" if hint else "")
     try:
@@ -2896,7 +2943,11 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
         usage = state.get("usage") or {}
         mode = "fallback"
     await session.recorder.add("delivery.recorded", node, {"mode": mode, "chars": len(report)})
-    return {"summary": report, "acceptance_results": results, "usage": usage}
+    return {
+        "summary": _with_placeholder_note(report, session, state),
+        "acceptance_results": results,
+        "usage": usage,
+    }
 
 
 def route_after_plan(state: AgentState, session: AgentSession) -> str:
