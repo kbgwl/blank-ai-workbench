@@ -18,7 +18,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm test:web
-      - run: pnpm typecheck:web
+      - name: 类型检查（先 typegen：干净 clone 上没有 next-env.d.ts 与 .next/types）
+        # layout.tsx 用了 Next 16 生成的全局类型 LayoutProps。这些产物在 .gitignore 里，
+        # 本地因为跑过 build/dev 一直存在，所以这一格只在干净树上才红——2026-10-29 首次真跑就红了。
+        # 修法是把生成那一步显式接在 tsc 前面（root 的 typecheck:web 已经带上）。
+        run: pnpm typecheck:web
       - run: pnpm lint:web
       - run: pnpm build:web
 
@@ -36,7 +40,7 @@ jobs:
           --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
       - name: build sandbox image
         run: docker build -t blank-sandbox:dev -f sandbox/Dockerfile sandbox
       - run: uv sync
@@ -80,7 +84,7 @@ jobs:
           --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
       - run: uv sync --extra mysql
         working-directory: services/api
       - name: 三方言端到端对照（真 HTTP；步数由装置的 EXPECTED_STEPS 自查）
@@ -89,8 +93,10 @@ jobs:
         env:
           BLANK_E2E_MYSQL_URL: mysql+aiomysql://root:ci_only_root_pw@127.0.0.1:3306/kbgai_e2e
           BLANK_E2E_POSTGRES_URL: postgresql+asyncpg://postgres:ci_only_pg_pw@127.0.0.1:5432/kbgai_e2e
+        # 装置在仓库根的 evals/ 下：这里的工作目录是 services/api，要往上两级。
+        # 2026-10-29 首次真跑发现写成 ../evals 指到了 services/evals（不存在），直接退出码 2。
         run: >-
-          uv run --extra mysql python ../evals/dialect_e2e.py
+          uv run --extra mysql python ../../evals/dialect_e2e.py
           --only sqlite,mysql,postgres --require-mysql --require-postgres
         working-directory: services/api
       - name: PG 两条建库路径对账（alembic vs create_all）
@@ -115,24 +121,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: uv sync
         working-directory: services/api
-      - run: node evals/team_e2e/run.mjs --skip-web
+      - name: 团队链路后端阶段（退出码 3 = 有阶段被显式跳过，这里属预期）
+        # run.mjs 用 3 表示"跑了但有阶段没跑"，好让"少跑一半"不和"全绿"同一个信号；
+        # CI 没有 Chrome 才传 --skip-web，所以这一格把 3 认下来，1（有阶段红）仍然照红。
+        run: |
+          set +e
+          node evals/team_e2e/run.mjs --skip-web
+          code=$?
+          set -e
+          if [ "$code" -eq 3 ]; then
+            echo "退出码 3：浏览器点验被 --skip-web 显式跳过，其余阶段全绿"
+            exit 0
+          fi
+          exit "$code"
 
   eval-gate:
     # #104：评测集成功率进门禁。用脚本化桩（scripts/mock-model-server.mjs，不烧真模型、不调真实供应商）
     # 跑 evals/task-samples.json 全集 32 例，读数装置是 evals/eval_gate.mjs——它自己那行「退出码=」才是判定：
     #   0=成功率≥实测阈值；1=有格红；2=这一格今天没法判（结果缺失/样本不足/上一轮没跑完/有记录没判出）。
     # 1 与 2 都会让这一步红：「今天没法判」绝不允许伪装成「通过」。阈值 0.938 的实测出处写在 evals/gate_config.json。
-    # 本 job 从未在 GitHub runner 上真跑过（同 team-e2e/api-dialect）；本地等价复现见 scripts/local_ci.mjs --job eval-gate。
+    # 2026-10-29 首次在 GitHub runner 上真跑：门禁本身绿（success_rate 0.938 ≥ 0.938，32 例、
+    # T07/T29 为桩的确定形状），红的是 setup-uv@v5 的 post 步骤 uv cache prune 退出码 2——
+    # 与门禁无关，已把四个 job 的 setup-uv 升到 v10。本地等价复现见 scripts/local_ci.mjs --job eval-gate。
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
       - uses: actions/setup-node@v4
         with:
           node-version: 22

@@ -12,7 +12,7 @@
     "smoke:api": "uv run --project services/api python scripts/smoke_health.py",
     "build:web": "pnpm -C web build",
     "lint:web": "pnpm -C web lint",
-    "typecheck:web": "pnpm -C web exec tsc --noEmit",
+    "typecheck:web": "pnpm -C web exec next typegen && pnpm -C web exec tsc --noEmit",
     "regression": "node scripts/regression.mjs",
     "evals": "node evals/run_evals.mjs",
     "eval:gate": "node evals/eval_gate.mjs",
