@@ -1242,3 +1242,56 @@ script = command if isinstance(command, str) else shlex.join(command)
 **这一批仍不覆盖**：Docker `ready` 档的同一条路径（容器里 `sh -c` + `list2cmdline` 不会
 交叉，但本机没有容器可验）；`shell=True` 的用户手写命令串不做二次转义（那是用户自己的
 引号，改了就变成替他改命令）。
+
+---
+
+## 21. #146 CI 第一次在 runner 上真跑：五个 job 全红，红的全是装置
+
+前二十节的所有"绿"都是在本机量的。2026-10-29 把 0.8.7 推上去，`ci.yml` 的五个 job
+（web / api / api-dialect / team-e2e / eval-gate）第一次一起在 GitHub runner 上跑，
+结果是 **5 个全红**，而逐条查日志后，没有一条是产品缺陷——全是"本地有、干净树上没有"
+或者"本机姿势与 runner 姿势不同"。
+
+### 21.1 五条红与各自的根因
+
+| job | 红的步骤 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| web | `typecheck:web` | `layout.tsx` 用了 Next 16 生成的全局类型 `LayoutProps`，而 `next-env.d.ts` 与 `.next/types/**` 都在 `.gitignore` 里，本地跑过 build 就一直有 | 根 `typecheck:web` 改成 `next typegen && tsc --noEmit` |
+| api | `build sandbox image` | `adduser: uid '1000' in use`——`node:24-alpine` 自带 uid 1000 的 `node` 用户 | 先试 1000，撞了让 `adduser` 自己挑下一个空闲 uid |
+| api-dialect | 三方言对照 | 工作目录是 `services/api`、装置在仓库根，`../evals` 指到了 `services/evals`（不存在） | 改成 `../../evals/dialect_e2e.py` |
+| team-e2e | `run.mjs --skip-web` | 判定项 24/24 全过，但退出码 3 被当成失败 | CI 侧认 3（"有阶段被显式跳过"），1 仍照红；**不改脚本语义** |
+| eval-gate | `Post Run setup-uv` | 门禁本身绿（0.938 ≥ 0.938），红的是 `uv cache prune` 退出码 2——`setup-uv@v5` 落后当前 v10.3.3 五个大版本 | 四个 job 的 `setup-uv` 统一升到 `@v10` |
+
+### 21.2 为什么这些红一个月都没被发现
+
+`ci.yml` 里写着五个 job，但**从来没在 runner 上跑过**（上一次推送之后没有 observe）。
+本机每次都是"跑 pytest、跑 tsc、跑 build、打包、装机"，全部通过——因为本机是**脏树**：
+
+- `next-env.d.ts` 与 `.next/` 在本地一直存在（跑过 dev/build），干净 clone 上没有；
+- 本机有 docker 也不跑 `sandbox/Dockerfile`（本机档根本不用镜像）；
+- 本机从不执行 `ci.yml` 里的那行 `../evals/dialect_e2e.py`（`scripts/local_ci.mjs` 用的是
+  `path.join("evals", ...)`，从仓库根起的，所以本机复现脚本反而是对的）。
+
+**教训**：判据"绿"必须绑定在**将要跑它的那个环境**上。"我本机跑过"不是证据，
+"我在干净 clone 上跑过"才是。这一轮之后，凡是 `ci.yml` 里出现的路径/账号/动作版本，
+都以 runner 的读数为准。
+
+### 21.3 顺带发现的两个真问题（不是 CI 装置）
+
+1. **`pnpm lint:web` 从来没绿过**。`eslint src` 有 4 个 error：
+   - `evidence-panel.tsx`：JSX 正文里的直引号 → `react/no-unescaped-entities`；
+   - `team-view.tsx` 两处 effect 体内同步 `setState` → `react-hooks/set-state-in-effect`。
+   修法都不是关规则：直引号改成「」；搜索框空串的归零从 effect 挪进 onChange/Esc/清空
+   按钮，`setSearching(true)` 挪进防抖回调；跳转定位那一拍只碰 DOM（`scrollIntoView`），
+   `setJump/setHighlightId` 挪到 `requestAnimationFrame`，高亮淡出的计时器单独挂一个
+   跟着 `highlightId` 走的 effect（否则轮询刷新 state 时会把它顺手清掉，高亮一直留着）。
+2. **`team-view.tsx` 的高亮计时器原本没有清理**：`window.setTimeout` 直接在 effect 体内
+   点火、没有返回值清理，组件卸载或下一轮跳转时旧计时器仍会改状态。这次一并收进
+   `[highlightId]` 依赖的独立 effect。
+
+### 21.4 现在的读数
+
+- 本地（对应 runner 的姿势）：`next typegen && tsc --noEmit` rc=0（**清空 `.next` 与
+  `next-env.d.ts` 之后验的**，不 typegen 必红）；`next build` rc=0；`eslint src` 0 error
+  （余 3 条既有 warning）；前端 219 例全过。
+- runner：见下一次推送的 run（`ccf300b`）。镜像那一条只有它能证。
