@@ -317,10 +317,14 @@ if (existsSync(chunksDir)) {
 // 0.8.0 起首页就是 bot 对话页。首页是唯一一个「换掉整套界面」的改动，
 // 出问题时的表现是「能打开、但看到的是上一版操作台」——和正常只差一眼，
 // 装完最容易漏。所以单独认一句只有输入框才有的文案。
+//
+// 0.8.12 起要认两句：静态导出的首屏里项目还没读回来，占位文案渲染的是
+// "正在读取项目…"；数据回来之后才是"说点什么…"。两句都只出现在 bot 输入框上，
+// 旧的操作台一句都不会有，判据一样能拦住"装成上一版"。
 const homeHtml = path.join(WEB_DIR, "index.html");
 if (existsSync(homeHtml)) {
   const html = readFileSync(homeHtml, "utf8");
-  html.includes("说点什么")
+  html.includes("说点什么") || html.includes("正在读取项目")
     ? ok("首页是 bot 对话页")
     : bad("首页还是旧界面", "index.html 没有 bot 输入框文案");
 } else {

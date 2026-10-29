@@ -942,7 +942,21 @@ async def cancel_task(task_id: str, db: DbSession) -> TaskOut:
     # 与 skills.py 同一形状：updated_at 带 onupdate，提交后不读回来就出参会在
     # 同步上下文里触发惰性加载（MissingGreenlet → 500）。
     await db.refresh(task)
-    await EventRecorder(get_session_factory(), task_id).add(
+    recorder = EventRecorder(get_session_factory(), task_id)
+    await recorder.add(
         "task.cancel_requested", "receive_task", {"status": "cancelled"}
     )
+    # 取消是终态，必须当场落一条终态事件。
+    #
+    # 以前的形状只写 cancel_requested，真正的 task.cancelled 留给运行时收尾去写。
+    # 可运行时不一定还能走到收尾：模型调用挂在那儿、任务已经被别处标记结束、
+    # 或者进程已经退出，就没有人再补那一条。界面靠终态事件判断"这一轮结束了"，
+    # 于是一直显示"进行中"、一直把用户的输入当成"插话"发给一个已结束的任务，
+    # 全部被打回 409"任务已结束，无法插话"——用户看到的就是彻底不能用。
+    if not await recorder.has_terminal():
+        await recorder.add(
+            "task.cancelled",
+            "receive_task",
+            {"status": "cancelled", "reason": "用户取消了这一轮"},
+        )
     return TaskOut.model_validate(task)

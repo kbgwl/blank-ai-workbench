@@ -1069,7 +1069,12 @@ class AgentRuntime:
         routing = _routing_summary(scope.session)
         if routing:
             payload["routing"] = routing
-        await scope.recorder.add(event_type, "complete", payload)
+        # 取消端点会当场写一条 task.cancelled：界面靠它立刻解锁，不用等运行时
+        # 走到收尾（模型调用挂着时那一步可能永远不到）。这里再写一条不会让界面
+        # 更早解锁，只会让"这一轮结束了几次"变成需要解释的问题，所以先问一句。
+        skip_terminal = status in ("succeeded", "failed", "cancelled", "paused") and await scope.recorder.has_terminal()
+        if not skip_terminal:
+            await scope.recorder.add(event_type, "complete", payload)
         if status in ("succeeded", "failed", "cancelled"):
             # fs-broker（#105）：任务走到终点，它那一枚 broker 随任务收走——
             # 关 Job 句柄由内核带走整棵进程树（M0 P6.7 实测生效）。收尸失败不改判任务，

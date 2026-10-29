@@ -237,13 +237,27 @@ export function turnReply(events: readonly RawEvent[]): { text: string; status: 
   return { text, status, reason };
 }
 
-/** 一轮是否还在跑：有终态事件或任务状态是终态都算结束。 */
+/**
+ * 一轮是否还在跑：有终态事件或任务状态是终态都算结束。
+ *
+ * `task.cancel_requested` 也算结束：它是"已经在取消"的确证，此时再把这句输入
+ * 当插话发过去，后端只会回 409「任务已结束」。用户想说的是下一句，不是往
+ * 一个已经停下的轮次里塞话。
+ */
 export function isTurnRunning(status: string, events: readonly RawEvent[]): boolean {
   const normalized = status.toLowerCase();
   if (["succeeded", "failed", "cancelled", "canceled", "error", "completed"].includes(normalized)) return false;
   return !events.some((event) => {
     const type = event.type.toLowerCase();
-    return type === "task.completed" || type === "task.failed" || type === "task.cancelled" || type === "task.canceled";
+    return (
+      type === "task.completed" ||
+      type === "task.failed" ||
+      type === "task.cancelled" ||
+      type === "task.canceled" ||
+      // paused 不在这里：驳回高风险操作后这一轮还能接着聊（后端 steer 也收它），
+      // 当成结束会让"接着说一句"变成"另开一轮"。
+      type === "task.cancel_requested"
+    );
   });
 }
 

@@ -5,6 +5,7 @@ import {
   archiveThread,
   answerTask,
   decideApproval,
+  errorCode,
   errorMessage,
   fetchEvidence,
   fetchTask,
@@ -157,6 +158,8 @@ export function BotApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProject?.workspaces, projectId, recentVersion]);
   const canPickWorkspace = canPickDirectory();
+  /** 项目和目录是否已读回来。首屏为 false，此时"没有目录"只是还没读到。 */
+  const workspaceReady = boot !== null;
 
   // ── 启动：项目与供应商 ────────────────────────────────────────────────
   useEffect(() => {
@@ -228,6 +231,28 @@ export function BotApp() {
       .catch(() => undefined);
     return () => {
       alive = false;
+    };
+  }, [activeTaskId, running]);
+
+  // 跑着的时候也要定期核对任务状态。
+  //
+  // 事件流只带时间线，不带任务状态；而"停"的判据以前完全依赖终态事件。一旦
+  // 状态在别处被改（用户点了停止、队列把它标成失败、后端重启），就没有人会
+  // 补那条事件，界面会永久停在"进行中"：输入被当成插话、全部打回 409。
+  // 4 秒一次很便宜——一次任务通常几十秒，多这十几次请求换来的是"永远不会卡住"。
+  useEffect(() => {
+    if (!activeTaskId || !running) return;
+    let alive = true;
+    const timer = window.setInterval(() => {
+      fetchTask(activeTaskId)
+        .then((task) => {
+          if (alive && task) setLiveTask(task);
+        })
+        .catch(() => undefined);
+    }, 4000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
     };
   }, [activeTaskId, running]);
 
@@ -482,6 +507,16 @@ export function BotApp() {
     const ready = images.filter((item) => item.id && !item.uploading && !item.error);
     // 只有图没有字是合法的；两样都空就不发——否则会建出一条没有目标的空轮次。
     if ((!text && ready.length === 0) || sending || !projectId) return;
+    // 没有工作目录就别把请求发出去。
+    //
+    // 后端会回 409「该项目尚未绑定工作区目录」，而那时任务已经建出来了：
+    // 界面上多一条永远停在 queued 的轮次，用户看到的是"发不出去、也说不清为什么"。
+    // 在本地拦住，顺手把系统目录框弹出来——这一步本来就是"选个目录"能解决的。
+    if (workspaceReady && workspaces.length === 0) {
+      setSendError("这个项目还没有工作目录。先选一个，它才知道在哪儿读代码、改文件。");
+      if (canPickWorkspace) void pickWorkspace();
+      return;
+    }
     setSending(true);
     setSendError(null);
     setActionError(null);
@@ -537,14 +572,23 @@ export function BotApp() {
     } finally {
       setSending(false);
     }
-  }, [clearImages, conv, draft, images, projectId, providerId, sending]);
+  }, [clearImages, conv, draft, images, projectId, providerId, sending, workspaceReady, workspaces.length, canPickWorkspace, pickWorkspace]);
 
   const stop = useCallback(() => {
     if (!activeTaskId) return;
     setActionBusy(true);
     stopTask(activeTaskId)
       .catch((error: unknown) => setActionError(errorMessage(error)))
-      .finally(() => setActionBusy(false));
+      .finally(() => {
+        setActionBusy(false);
+        // 取消完立刻把状态读回来：界面必须马上回到"可以再发一句"，
+        // 而不是等 SSE 推下一条事件（任务卡住时那条可能永远不到）。
+        fetchTask(activeTaskId)
+          .then((task) => {
+            if (task) setLiveTask(task);
+          })
+          .catch(() => undefined);
+      });
   }, [activeTaskId]);
 
   /**
@@ -561,8 +605,21 @@ export function BotApp() {
         setDraft("");
         setComposerHint(result.queued ? "已经排上了，从它下一次想想的时候开始生效。" : "后端没有确认排队，这句话可能没生效。");
       })
-      .catch((error: unknown) => setSendError(errorMessage(error)));
-  }, [activeTaskId, draft]);
+      .catch((error: unknown) => {
+        if (errorCode(error) !== "task_not_steerable") {
+          setSendError(errorMessage(error));
+          return;
+        }
+        // 这一轮其实已经结束了，只是界面状态慢了一拍（或者状态在别处被改过）。
+        // 用户按回车是想说下一句，不是往一个停下的轮次里塞话——直接当新的一轮发出去。
+        // 只留一句红字把他挡在门外，等于把"状态没同步"变成"这个功能废了"。
+        //
+        // 提示写在 send() 之后：send 一进去就会清掉上一条 hint，先设等于白设。
+        void send().then(() => {
+          setComposerHint("上一轮已经结束，这句话作为新的一轮发出。");
+        });
+      });
+  }, [activeTaskId, draft, send]);
 
   const decide = useCallback(
     (approval: PendingApproval, decision: "approve" | "deny", scope: ApprovalScope) => {
@@ -777,6 +834,7 @@ export function BotApp() {
             startNew();
           }}
           workspaces={workspaces}
+          workspaceReady={workspaceReady}
           canPickWorkspace={canPickWorkspace}
           onActivateWorkspace={(id) => void activateWorkspaceById(id)}
           onPickWorkspace={() => void pickWorkspace()}

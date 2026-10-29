@@ -17,6 +17,14 @@ export type ComposerProps = {
   onProjectChange: (id: string) => void;
   /** 当前项目已绑定的目录。空数组表示还没绑——这时候一眼就能看出来"没地方干活"。 */
   workspaces: Workspace[];
+  /**
+   * 项目与目录是否已经读回来。
+   *
+   * 静态导出的首屏里 boot 还是空的，`workspaces.length === 0` 只是"还没读到"，
+   * 不是"这个项目没绑"。拿它写占位文案会让首屏先喊一句"还没有工作目录"，
+   * 数据回来又改口——用户看到的是自己的目录被否认了一次。
+   */
+  workspaceReady?: boolean;
   /** 切到另一个已绑定的目录。 */
   onActivateWorkspace: (id: string) => void;
   /** 弹目录选择框并绑定。桌面壳里才有系统对话框，浏览器里由上层决定怎么降级。 */
@@ -159,9 +167,13 @@ export function Composer(props: ComposerProps) {
             placeholder={
               props.disabled
                 ? "先选一个项目"
-                : props.running
-                  ? "它正在做，可以插一句话调整方向…（Enter 发送）"
-                  : "说点什么，或者直接贴张图/丢个文件进来…（Enter 发送，Shift+Enter 换行）"
+                : props.workspaceReady === false
+                  ? "正在读取项目…"
+                  : props.workspaces.length === 0
+                    ? "还没有工作目录：点下面的「未绑定目录」选一个，它才知道在哪儿干活"
+                    : props.running
+                      ? "它正在做，可以插一句话调整方向…（Enter 发送）"
+                      : "说点什么，或者直接贴张图/丢个文件进来…（Enter 发送，Shift+Enter 换行）"
             }
             className="block max-h-[262px] min-h-[88px] w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] leading-[1.75] text-text placeholder:text-faint focus:outline-none"
           />

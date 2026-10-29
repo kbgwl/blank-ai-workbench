@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import uuid
 from typing import Any
@@ -17,6 +18,19 @@ from blank_api.services.log_safety import mask_deep
 # 事件序号是"读最大值再插一条"，并行子代理共用一个记录器时两个协程会读到同一个 seq。
 # 撞一次就重读再来；四次还不够说明系统真的在过载，那时把错误如实抛出去。
 MAX_SEQ_ATTEMPTS = 5
+
+log = logging.getLogger(__name__)
+
+# 终态事件：时间线上"这一轮已经结束"的唯一凭据。前端靠它停止轮询、解锁输入框，
+# 台账靠它算一次任务的终点。写第二条不会让前端更早解锁，只会让"一轮结束了几次"
+# 变成需要解释的问题，所以收尾前要先查有没有。
+TERMINAL_EVENT_TYPES = (
+    "task.completed",
+    "task.failed",
+    "task.cancelled",
+    "task.canceled",
+    "task.paused",
+)
 
 
 class EventRecorder:
@@ -44,6 +58,32 @@ class EventRecorder:
         # 2026-10-29 Linux runner 全量里 `test_parallel_children_do_not_lose_events_to_the_seq_race`
         # 报的就是 `UNIQUE constraint failed: agent_events.task_id, agent_events.seq`。
         self._seq_lock = asyncio.Lock()
+
+    async def has_terminal(self) -> bool:
+        """这一轮是否已经有终态事件。
+
+        取消走的是「先改任务状态、再补一条事件」——改状态这一步运行时看不到，
+        只有事件是双方都能读到的凭据。取消端点因此必须先落终态事件，否则界面
+        会一直以为它还在跑；而运行时收尾时也要先问一句，避免同一轮结束两次。
+        """
+        # 查不到就按"还没有"处理：多写一条终态事件顶多让时间线多一行，
+        # 而收尾路径上抛异常会让任务收不干净——两害相权，取前者。
+        try:
+            async with self.session_factory() as session:
+                row = (
+                    await session.execute(
+                        select(AgentEvent.id)
+                        .where(
+                            AgentEvent.task_id == self.task_id,
+                            AgentEvent.type.in_(TERMINAL_EVENT_TYPES),
+                        )
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+            return row is not None
+        except Exception:  # noqa: BLE001
+            log.exception("读取终态事件失败 task=%s", self.task_id)
+            return False
 
     async def add(self, event_type: str, node: str = "", payload: dict[str, Any] | None = None) -> int:
         # 时间线是这条链路上唯一"写进库又端给用户"的边界：审批卡的参数、工具摘要、

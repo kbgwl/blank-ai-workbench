@@ -26,7 +26,7 @@ from sqlalchemy import select
 
 from blank_api.db import get_engine, get_session_factory
 from blank_api.models.skill import Skill
-from blank_api.models.task import Task
+from blank_api.models.task import AgentEvent, Task
 
 API = "/api/v1"
 
@@ -104,6 +104,33 @@ async def test_cancel_a_task_that_never_ran(client) -> None:
     async with get_session_factory()() as session:
         row = (await session.execute(select(Task.status).where(Task.id == task_id))).scalar_one()
     assert row == "cancelled"
+
+
+async def test_cancel_writes_a_terminal_event_right_away(client) -> None:
+    """取消必须当场落一条终态事件。
+
+    界面靠"这一轮有没有终态事件"判断它结没结束：有就解锁输入框、下次输入开新一轮；
+    没有就一直当它在跑，把用户的每句话都当插话发给一个已经结束的任务，全部打回
+    409「任务已结束，无法插话」——用户看到的就是"一点不能用"。
+
+    以前取消端点只写 `task.cancel_requested`，真正的 `task.cancelled` 留给运行时收尾。
+    可运行时不一定还走得到收尾：模型调用挂在半路、任务已经被别处标记结束、进程已经退出，
+    就没人再补那一条。这条闸门量的是时间线本身，而不是"取消接口返回了什么"。
+    """
+    project_id = await _project(client)
+    resp = await client.post(f"{API}/projects/{project_id}/tasks", json={"title": "取消后立刻是终态", "goal": "g"})
+    assert resp.status_code == 201, resp.text
+    task_id = resp.json()["id"]
+    assert (await client.post(f"{API}/tasks/{task_id}/cancel", json={})).status_code == 200
+    async with get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                select(AgentEvent.type).where(AgentEvent.task_id == task_id).order_by(AgentEvent.seq)
+            )
+        ).scalars().all()
+    assert "task.cancel_requested" in rows, rows
+    # 恰好一条：收尾时再写一条会让"这一轮结束了几次"变成需要解释的问题。
+    assert rows.count("task.cancelled") == 1, rows
 
 
 async def test_cancel_a_finished_task_is_still_409(client) -> None:

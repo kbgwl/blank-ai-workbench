@@ -139,6 +139,17 @@ test("跑没跑完：终态事件与终态状态都算结束", () => {
   assert.equal(isTurnRunning("running", [ev(1, "task.failed", { reason: "x" })]), false);
 });
 
+test("取消请求也算结束：这时候再输入该开新一轮，不该往停下的那一轮里塞", () => {
+  // 用户点停止后，后端可能还没走到收尾（模型调用挂着就永远走不到）。
+  // 若这里仍判"在跑"，输入会被当成插话发给一个已结束的任务，全部打回
+  // 409「任务已结束，无法插话」——界面看起来就是彻底不能用。
+  assert.equal(isTurnRunning("running", [ev(1, "task.cancel_requested", { status: "cancelled" })]), false);
+  assert.equal(isTurnRunning("cancelled", []), false);
+  // 驳回高风险操作后还能接着说一句，所以 paused 不算结束。
+  assert.equal(isTurnRunning("paused", []), true);
+  assert.equal(isTurnRunning("waiting_approval", []), true);
+});
+
 test("会话标题取第一行、削 markdown 前缀、按字符截断", () => {
   assert.equal(threadTitleFrom("# 修一下登录接口\n多的不要"), "修一下登录接口");
   assert.equal(threadTitleFrom("- 帮我看看这个 bug"), "帮我看看这个 bug");

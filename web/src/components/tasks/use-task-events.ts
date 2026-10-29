@@ -22,6 +22,9 @@ const TERMINAL_EVENT_HINTS = [
   "task.failed",
   "task.cancelled",
   "task.canceled",
+  // 取消请求本身就是终态：再轮询下去也不会等来新东西，只会每 1.5 秒问一次
+  // 一个已经停下的任务。真正的 task.cancelled 由后端在取消时补写。
+  "task.cancel_requested",
   "result.succeeded",
   "result.failed",
   "result.completed",
