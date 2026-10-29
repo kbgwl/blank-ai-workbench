@@ -27,12 +27,22 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from pymysql import converters
 
 from blank_api import db
 from blank_api.db import ensure_mysql_driver_compat
 
 SENTINEL = "DO NOT IMPORT THIS!!!"
+
+# 两个驱动都在 `mysql` extra 里，默认 `uv sync` 不装（CI 的 api job 就是这种环境）。
+# 所以 import 本身要能失败——否则 skipif 还没来得及生效，收集阶段就因
+# ModuleNotFoundError 把整个 pytest 打断（2026-10-29 CI 首次真跑就这么红的）。
+try:
+    from pymysql import converters
+
+    HAS_PYMYSQL = True
+except ImportError:
+    converters = None
+    HAS_PYMYSQL = False
 
 try:
     import aiomysql.connection
@@ -41,7 +51,9 @@ try:
 except ImportError:  # 没装 MySQL 驱动的环境（CI 只跑 SQLite）没什么可验
     HAS_AIOMYSQL = False
 
-pytestmark = pytest.mark.skipif(not HAS_AIOMYSQL, reason="本机没有 aiomysql，MySQL 驱动兼容不适用")
+pytestmark = pytest.mark.skipif(
+    not (HAS_AIOMYSQL and HAS_PYMYSQL), reason="本机没装 pymysql/aiomysql（mysql extra 未装），MySQL 驱动兼容不适用"
+)
 
 
 @pytest.fixture

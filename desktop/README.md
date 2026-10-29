@@ -51,6 +51,33 @@ npm run dist:portable   # 只要便携版
 没有它烘焙进产物的是空串，界面会去 fetch 相对路径 `/api/v1`（`file://` 下必死），
 而打包日志一切正常。`npm run verify` 现在会按产物本身抓住这一条。
 
+### 从沙箱/精简 PATH 里出包时的两个环境变量
+
+electron-builder 出包中途要跑一次 `npm list --json` 收集依赖树；这个调用是经 cmd 拉起
+`.CMD` 的，而**精简过 PATH 的 shell（WorkBuddy 的 bash、某些 CI 容器）里没有
+`SystemRoot` 与 `PATHEXT`**，于是 `.CMD` 一声不响地不产出任何东西，报错长这样：
+
+```
+⨯ No JSON content found in output
+```
+
+再往前一步，如果连 `WindowsPowerShell\v1.0` 都不在 PATH 里，报的是：
+
+```
+⨯ Node module collector spawn (…\npm.CMD […]) failed: spawn powershell.exe ENOENT
+```
+
+两种都不是包的问题，补上就行（Git Bash 里）：
+
+```bash
+export SystemRoot='C:\Windows' SYSTEMROOT='C:\Windows' windir='C:\Windows'
+export PATHEXT='.COM;.EXE;.BAT;.CMD'
+export PATH="/c/Windows/System32:/c/Windows/System32/WindowsPowerShell/v1.0:/c/Windows:$PATH"
+```
+
+注意 `WindowsPowerShell` 在 **`System32` 下面**，写成 `/c/Windows/WindowsPowerShell/v1.0`
+是不存在的路径——2026-10-29 就是这一级写错，白查了两轮。
+
 产物在 `desktop/dist/`：
 
 | 文件 | 说明 |
