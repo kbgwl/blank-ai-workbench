@@ -213,8 +213,8 @@ uv run alembic revision --autogenerate -m "描述"
   `asyncpg` **在包里**（它是核心依赖，`pyproject` 第 9 行）——装了驱动不等于用了它，产品默认连的还是那个
   SQLite 文件，这一条只是「包里多一份没人调用的代码」。
   这两种方言的迁移历史、两条建库路径的 schema 对账都实测过，真 HTTP 端到端装置在 MySQL / PostgreSQL
-  上各有 **83 步全绿**的实物（见 `docs/REA-WAVE4-CODEX-RUNTIME.md` §7.13–§7.29）；第 84 步（任务 #82 新增）
-  **目前只有 SQLite 一格跑过**，两种方言的那一格还没补。这些不改变一句实话：单机产品用不到它们。
+  上各有 **85 步全绿**的实物（83 步那一版的读数见 `docs/REA-WAVE4-CODEX-RUNTIME.md` §7.13–§7.29；
+  2026-10-29 CI 五格全绿那一轮，三方言各自 85 步 0 失败）。这些不改变一句实话：单机产品用不到它们。
   方言兼容层自 2026-10-26 起**冻结**：只保留 CI 的 `api-dialect` 作为回归防线，不再开新批次。
 - 沙箱镜像带 Python/Node/Git，但没有预装各语言依赖，也没有 Go 工具链：需要 `npm install` 或 Go 的样例仍跑不出真实结果。
 - `.github/workflows/ci.yml` 的五个 job **2026-10-29 才第一次在 GitHub runner 上真跑**（本机没有 `gh`,
@@ -227,9 +227,12 @@ uv run alembic revision --autogenerate -m "描述"
   MCP 服务端秒退时 stderr 被跳过）、**一处用户名泄漏**（路径掩码只认本平台分隔符），
   其余是只在 Windows 上成立、缺 `skipif` 的判据；修完这些 runner 上 `api` 转为全绿
   （1611 passed / 83 skipped）。细节见 `docs/REA-WAVE5-CLAUDE-CODE.md` §21。
-- `api-dialect`（三方言端到端，83 步 × 三方言，一轮约 40 分钟）在 Linux 上仍红 4 步
-  （第 80/83/84/85 步，形状是「审批卡没被收尾而任务已 `succeeded`」）。这一项**仍开着**，
-  是当前唯一没绿的 CI 格。
+- `api-dialect`（三方言端到端，**85 步** × 三方言）**2026-10-29 在 runner 上转绿**：
+  判定行是「每一格全绿：对照判据成立」，sqlite / mysql / postgres 各 85 步 0 失败。
+  它此前红的 4 步（第 80/83/84/85 步）**不是方言差异**，是"桩每轮都发同一个 `call_1`，
+  而产品按调用 id 从执行日志里认回上次结果"叠出来的真缺陷：同一任务的第二条命令被当成
+  第一条的重放吞掉——不执行、不进审批门、任务还回 `succeeded`。产品与装置两侧都改了，
+  根因与读数见 `docs/REA-WAVE5-CLAUDE-CODE.md` §21.7。
 - `services/api/tests/test_parallel_tools_v14.py::test_read_only_calls_overlap` 有墙钟依赖：它要求两个 0.25s 的
   只读工具在 0.45s 内跑完。electron-builder 正在压 `7za` 的那一轮全量里它红过一次，同一份代码空机重跑两次
   都绿、单跑也绿（695 passed / 14 skipped）。当时截了 `tail`，断言原文没留下，所以**这条偶发的根因没有定论**。

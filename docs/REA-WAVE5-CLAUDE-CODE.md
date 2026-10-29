@@ -1419,3 +1419,13 @@ Windows 快，第一次 `send` 之前就退了，而最有用的那句话还躺�
 
 **变异验证**：把 `keys -= answered` 注释掉，`test_a_new_call_reusing_an_answered_id_is_not_swallowed`
 立刻红成 `counter.runs == ['run_shell']`（第二条被吞）——用例不是摆设。
+
+**CI 复核（run `40830593634`，提交 `622ba01`）**：五格全绿，`api-dialect` 第一次在 runner
+上通过。判定行是「每一格全绿：对照判据成立」，三方言各 85 步 0 失败，第 80/83/84/85 步在
+sqlite / mysql / postgres 上的读数**逐字相同**（`第二段重新挂卡` / `压缩 2 窗…成功工具 2 个` /
+`waiting_approval｜recorded=False` / `status=waiting_approval｜换尾巴重新挂卡`）——
+这反过来又证了一次：那 4 格从头到尾与方言无关。
+
+工时口径也顺带纠正了一条旧说法：这一格"一轮 40 分钟"的旧估读只对**红的时候**成立——
+`faad8fb` 那一轮 05:19:34 起、05:48:46 收尾，约 29 分钟，多出来的时间正是四步各自
+白等满 180 秒终态窗口（×三方言）。全绿这一轮整格 2 分 21 秒（含 checkout 与 uv sync）。
