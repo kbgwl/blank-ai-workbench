@@ -222,8 +222,19 @@ async def test_fan_out_emits_one_batch_event_naming_every_child(seeded, tmp_path
     「这批合计多少」原先没有任何一行直接答得出。
     """
     _, results = await _fan_out(tmp_path, count=3)
-    batch = (await _events("subagents.completed"))[0]["payload"]
-    assert batch["group"] == results[0].parallel_group
+    group = results[0].parallel_group
+    # 只认本批，不认"全表第一条"：别的用例留下的批次事件同样落在这个库里，
+    # 按序号取第一条就等于让"谁先写"决定这条判据的结果（全量跑时红过一次，
+    # 单跑永远绿——正是取 [0] 的后果）。顺带把"本批恰好一条"也钉住：
+    # 同一批发两条，前端和证据包都会把合计加两遍。
+    emitted = [
+        event["payload"]
+        for event in await _events("subagents.completed")
+        if event["payload"].get("group") == group
+    ]
+    assert len(emitted) == 1, f"本批应当恰好一条批次事件，实际 {len(emitted)} 条"
+    batch = emitted[0]
+    assert batch["group"] == group
     assert batch["count"] == 3 and batch["succeeded"] == 3
     children = batch["children"]
     assert len(children) == 3

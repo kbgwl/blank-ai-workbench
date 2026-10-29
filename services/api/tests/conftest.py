@@ -76,6 +76,18 @@ def _isolate_permission_rules(tmp_path, monkeypatch):
     monkeypatch.setenv("BLANK_PERMISSION_RULES", str(tmp_path / "permissions.rules"))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_upload_root(tmp_path, monkeypatch):
+    """每个用例一份附件目录。
+
+    默认根 `data/uploads` 是相对 cwd 的，全进程只有一个：用例之间互相看得见对方的上传，
+    而删任务时那句"还有谁引用这份附件"是查同一个库里的全部 `Task.attachments`——
+    只要别人的任务行还没被清掉，本用例的附件就被判成"仍被引用"，删不掉。
+    症状是全量跑到第 15 分钟才红一次、单跑永远绿（顺序敏感）。
+    """
+    monkeypatch.setenv("BLANK_UPLOAD_ROOT", str(tmp_path / "uploads"))
+
+
 @pytest.fixture
 async def client():
     app = create_app()

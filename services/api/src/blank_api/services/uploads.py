@@ -18,12 +18,25 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_UPLOAD_ROOT = Path("data/uploads")
+
+
+def upload_root() -> Path:
+    """附件根目录：``BLANK_UPLOAD_ROOT`` 优先，缺省是相对 cwd 的 ``data/uploads``。
+
+    为什么要能在运行时改：默认值绑定在 import 时算的相对路径上，于是"所有调用方"
+    在同一个进程里共用一个目录。测试之间因此互相看得见对方的上传——删任务时那句
+    "还有谁引用这份附件"会读到别的用例留下的行，判据随执行顺序飘。部署侧同样需要
+    它：桌面版把数据目录放在安装目录下，服务端部署则多半要指到一块独立磁盘。
+    """
+    override = os.environ.get("BLANK_UPLOAD_ROOT", "").strip()
+    return Path(override) if override else DEFAULT_UPLOAD_ROOT
 
 IMAGE_MIME = "image"
 
@@ -158,8 +171,9 @@ def _mime_for_stored(ext: str) -> str:
 
 
 class UploadStore:
-    def __init__(self, root: Path | str = DEFAULT_UPLOAD_ROOT) -> None:
-        self.root = Path(root)
+    def __init__(self, root: Path | str | None = None) -> None:
+        # None 才代表"用默认根"，空串/空 Path 是调用方明确给的一个位置
+        self.root = Path(root) if root is not None else upload_root()
 
     def project_dir(self, project_id: str) -> Path:
         return self.root / project_id

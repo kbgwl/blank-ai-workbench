@@ -1096,3 +1096,92 @@ M3 `tiers.py` 的 notice 去掉「不会退回宿主执行」→ 1 红：严格�
 
 **仍不覆盖**：真 Docker 后端 `ready` 档的端到端（本机只量到「没装」与「装了没起」两态）；
 非 Windows 分支；桌面壳 env 裁剪与宿主路径的行为差异（本批未改壳，按原样）。
+
+## 19. #145 三条欠账：全量绿的前提、逆向实验室的最后一公里、装置自身要能跑
+
+三件事，性质各不相同：一条是"判据绑在共享状态上"，一条是"后端做完了前端没接"，
+还有一条是"测试装置要求运行环境替它准备好 PATH"。
+
+### 19.1 全量的红点在不同轮次换人：两类脆弱点，不是一个 bug
+
+先量清事实。同一份代码（`9853e64`，0.8.5）连跑三次全量，红点各不相同：
+
+| 轮次 | 读数 | 红点 |
+| --- | --- | --- |
+| 第一次（未清环境变量） | `66 failed / 1207 passed / 398 errors` | teardown 里 `SystemExit: 1`：`[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED]` |
+| 第二次（清干净） | `1667 passed / 2 failed` | `attachment_flow_v15::test_a_task_deleted_takes_its_uploads_out_of_reach`、`shell_quoting_v53::test_rendered_rule_reexecutes_identically` |
+| 第三次（`-x` 早停） | `1 failed / 742 passed` | `parallel_budget_v26::test_fan_out_emits_one_batch_event_naming_every_child` |
+
+第一轮的 398 个 `ERROR` 是**运行环境**给的：WorkBuddy 的安全删除守卫不止挂 Node，还通过
+`PYTHONPATH` 注入一个 `sitecustomize.py` 给 `shutil.rmtree` 打补丁，删满 50 个文件即
+`SystemExit(1)`；发生在 fixture teardown 上就会连锁成一整片 ERROR。跑测试前清三个变量：
+`env -u PYTHONPATH -u NODE_OPTIONS -u CODEBUDDY_SAFE_DELETE_BULK_GUARD`。
+
+剩下两类是**判据自身**的脆弱点，与业务代码无关：
+
+**其一：附件落在全进程共用的一个目录里。** `DEFAULT_UPLOAD_ROOT = Path("data/uploads")`
+在 import 时求值，`UploadStore.__init__(root=DEFAULT_UPLOAD_ROOT)` 又把它冻成默认参数，
+于是 `BLANK_*` 里改不动、测试隔离不了。删任务那句「还有谁引用这份附件」查的是同一个库里
+全部 `Task.attachments`——只要盘上还有别的用例的痕迹，本用例的附件就被判成"仍被引用"，
+`remove()` 拿到空集合直接返回，文件留着，`GET /uploads/{id}` 于是 200（断言要的是 404）。
+改法是把根目录变成运行时可读的 `upload_root()`（`BLANK_UPLOAD_ROOT` 优先），
+`conftest.py` 加一条 autouse 夹具把每个用例指到自己的 `tmp_path/uploads`。
+这一条同时给部署开了口子：桌面版与服务端的附件目录本来就该能分开指。
+
+**其二：判据读"全表第一条"。** `test_fan_out_emits_one_batch_event_naming_every_child`
+拿 `(await _events("subagents.completed"))[0]`——谁先写谁上榜。同一个库里有别的批次事件时，
+断言 `batch["group"] == results[0].parallel_group` 就会红，而"到底有没有为本批发事件"这件事
+根本没被验到。改成按本批 `group` 过滤，并把「本批恰好一条」也钉住（同一批发两条，
+前端与证据包都会把合计加两遍）。这是**收紧**而不是放宽：原来那条判据在任何别的批次先到时
+都会给出与事实无关的结论。
+
+**其三：装置要求 PATH 里有 `powershell`。** 这条从便携 shell 里跑 pytest 时必红，而且报错
+长得像"引号写错了"：`'powershell' 不是内部或外部命令`（GBK 中文）→ `text=True` 按 utf-8 解码
+→ `UnicodeDecodeError` → rc=1。改成两处：`_host_env()` 把 `System32` 与
+`System32\WindowsPowerShell\v1.0` 补进子进程 PATH（存在才补），`subprocess.run` 加
+`errors="replace"`。断言一个字没动——"原始命令必须 rc=0"这条装置自检仍然在，
+只是不再要求宿主替它把 PATH 装好。
+
+**读数**：修正后 `1669 passed / 23 skipped`（429.64 s，rc=0，`E:/tmp/kbg-read/full-3.txt`）；
+前端 `node --test` 219 pass / 0 fail；`tsc --noEmit` 零输出。
+
+**这一批仍不覆盖**：三次全量的红点身份不同，说明还有别的负载敏感判据没被逐条量过。
+本批只把**已经红过的那三处**改成了不依赖共享状态与时序，没有做一遍全文扫描。
+真 Docker `ready` 档仍无读数（本机只有「没装」「装了没起」两态）。
+
+### 19.2 逆向实验室：后端四个端点接上了，界面还在说"待接入"
+
+`/reverse-lab` 页面 59 行，三栏里两栏是硬编码文案，按钮写着「安装 REA Adapter 后将执行真实分析」，
+正中的状态徽标是「REA Adapter 待接入」——而后端 `api/routes/reverse_lab.py` 的四个端点早已接真
+MCP Adapter、29 条判据全绿。这是典型的"最后一公里"：能力在，用户摸不到。
+
+现在三栏各对一个动作，全部真调：
+
+- 左：`GET /targets` → `scan_targets`。子目录可填，超出上限时如实说「另有 N 个没列举」；
+  每行副标题是「格式 · 大小 · 像是可执行」——措辞用"像是"，因为格式是幻数猜的（前 16 字节）。
+- 中：点目标 → `GET /strings` → `find_strings`，按 `0x0000001a` 的偏移列表；空结果读
+  `empty_reason`（"前导区间里没有可读串" ≠ "目标没有内容"）。
+  「开始调查」→ `POST /investigations`，结论逐条带 `evidence_id`。
+- 右：授权根 / 服务端 / 工具表（`tools_count / expected`）/ 连接耗时 / 边界原文；
+  调查产出工具名、`tool_call_id`、耗时、任务状态与「打开任务 →」。
+  末尾一句是 README 里那条实情：这条链路调的是宿主进程里的 REA 子进程，**不套任务的沙箱档位**，
+  边界靠「授权根 + 路径闸门」，不靠容器。
+
+两条界面的硬口径：适配器不在线时**照抄服务端那句话**（`error` / `hint` / 缺哪几个工具），
+并把扫描与调查按钮禁掉——不给一个点了必然失败的按钮；换项目时把上一份读数一次作废（`chooseProject`），
+不在 effect 里同步 setState（`react-hooks/set-state-in-effect` 也不允许）。
+
+策略层测试 `web/src/components/reverse-lab/api.test.ts`（8 例）：status 的 `refresh` 只在为真时发、
+空子目录不塞 `path=`、`strings` 用下划线参数名且目标必须被百分号编码（`build%2F...`）、
+investigation 是 POST + snake_case、四种适配器状态落三档色调（不认识的状态按"不能用"）、
+不可用时照抄原话、字节/偏移读法、`targetHint` 的措辞。
+
+### 19.3 这一批的判据清单
+
+| 判据 | 位置 |
+| --- | --- |
+| 每个用例一份附件目录（不再共用 `data/uploads`） | `tests/conftest.py::_isolate_upload_root` |
+| 根目录可在运行期指定 | `services/uploads.py::upload_root` |
+| 批次事件按本批筛，且本批恰好一条 | `test_parallel_budget_v26.py` |
+| 真壳重放不要求宿主预装 PATH | `test_shell_quoting_v53.py::_host_env` |
+| 前端四个端点的 URL/字段/读法 | `web/src/components/reverse-lab/api.test.ts`（8 例） |

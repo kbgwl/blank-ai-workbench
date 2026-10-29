@@ -302,11 +302,25 @@ _BODY_A = "import sys;print('A');print(len(sys.argv));print('|'.join(sys.argv[1:
 
 
 def _host_env() -> dict:
-    """让 `python` 这个裸名在 cmd 里也解析得到：与后端跑命令时同一个 PATH 思路。"""
+    """让 `python` / `powershell` 这两个裸名在 cmd 里也解析得到。
+
+    与后端跑命令时同一个 PATH 思路：这个测试进程未必继承完整系统 PATH
+    （从便携 shell 里启动 pytest 时就没有 `System32\\WindowsPowerShell\\v1.0`），
+    缺了它那条 powershell 样例会以「'powershell' 不是内部或外部命令」失败，
+    看起来像引号写错了，其实是装置没装齐。
+    """
     import os
 
-    extra = str(Path(sys.executable).parent)
-    return {**os.environ, "PATH": extra + os.pathsep + os.environ.get("PATH", "")}
+    extra = [str(Path(sys.executable).parent)]
+    if os.name == "nt":
+        root = Path(os.environ.get("SystemRoot") or r"C:\Windows")
+        for folder in (
+            root / "System32",
+            root / "System32" / "WindowsPowerShell" / "v1.0",
+        ):
+            if folder.is_dir():
+                extra.append(str(folder))
+    return {**os.environ, "PATH": os.pathsep.join(extra + [os.environ.get("PATH", "")])}
 
 
 def _host_report(command: str) -> tuple[str, int, list[str]]:
@@ -318,7 +332,7 @@ def _host_report(command: str) -> tuple[str, int, list[str]]:
     import subprocess
 
     out = subprocess.run(
-        command, capture_output=True, text=True, shell=True, env=_host_env(), timeout=120  # noqa: S602
+        command, capture_output=True, text=True, errors="replace", shell=True, env=_host_env(), timeout=120  # noqa: S602
     )
     assert out.returncode == 0, f"{command} -> rc={out.returncode} {out.stderr}"
     marker, count, *rest = out.stdout.splitlines()
@@ -388,10 +402,10 @@ def test_rendered_rule_reexecutes_identically() -> None:
         assert rule, command
         rendered = render_rule(rule)
         original = subprocess.run(
-            command, capture_output=True, text=True, shell=True, env=_host_env(), timeout=120  # noqa: S602
+            command, capture_output=True, text=True, errors="replace", shell=True, env=_host_env(), timeout=120  # noqa: S602
         )
         replay = subprocess.run(
-            rendered, capture_output=True, text=True, shell=True, env=_host_env(), timeout=120  # noqa: S602
+            rendered, capture_output=True, text=True, errors="replace", shell=True, env=_host_env(), timeout=120  # noqa: S602
         )
         assert original.returncode == 0, (command, original.stderr)
         assert replay.returncode == original.returncode, (command, rendered, replay.stderr)

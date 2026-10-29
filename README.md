@@ -4,8 +4,9 @@
 展示 Diff，高风险操作需人工审批。完整方案见 [ai-workbench-plan.md](ai-workbench-plan.md)。
 
 当前进度：**v1.1（核心任务工作台 + 头脑风暴 + 按需功能中心 + CLI 骨架）**。REA Reverse Lab 已有独立入口，
-REA MCP Adapter 已接入 `/api/v1/reverse-lab`（4 个端点走 stdio 子进程里的 `blank_api.services.rea.mcp_server`，默认开着、`BLANK_REA_DISABLE=1` 可关）；
-界面还没消费这四个端点。stdio 服务端已挂 Windows Job（内存/进程数/生命周期由内核强制，见 `docs/SANDBOX-WINDOWS-DESIGN.md` §7.5），但 Job 不是文件/网络沙箱，这条链路仍不套任务的三档档位。界面是面向开发者的深色三栏操作台：
+REA MCP Adapter 已接入 `/api/v1/reverse-lab`（4 个端点走 stdio 子进程里的 `blank_api.services.rea.mcp_server`，默认开着、`BLANK_REA_DISABLE=1` 可关），
+`/reverse-lab` 页面已消费这四个端点（适配器状态 / 候选目标 / 字符串线索 / 带台账的调查，见 `web/src/app/reverse-lab/page.tsx`）。
+stdio 服务端已挂 Windows Job（内存/进程数/生命周期由内核强制，见 `docs/SANDBOX-WINDOWS-DESIGN.md` §7.5），但 Job 不是文件/网络沙箱，这条链路仍不套任务的三档档位。界面是面向开发者的深色三栏操作台：
 顶栏 + 左侧导航 + 三栏工作区（项目/任务 · 执行时间线 · 终端与验收），窄屏退化为上下布局。
 没有场景选择器：用户只写要说的话，Agent 自己判这一句该直接回答、该只读看几处再给判断，
 还是该动手改。判据见 [docs/BOT-VS-AGENT.md](docs/BOT-VS-AGENT.md)，成本控制见 [docs/COST.md](docs/COST.md)。
@@ -142,7 +143,7 @@ uv run alembic revision --autogenerate -m "描述"
 | Codex 风格任务工作区 | ✅ | 全高任务页、右侧文件/Diff/终端/证明 Tab、低噪声布局 |
 | 头脑风暴入口 | ✅ | `/brainstorm` 已接真实模型生成、模板降级和转任务 |
 | 按需功能中心 | ✅ | `/features` 支持本机功能开关和依赖提示 |
-| Reverse Lab 入口 | 🟡 | 后端 4 个端点已接真 REA MCP Adapter（stdio 子进程，29 条判据全绿，见 `docs/REA-WAVE4-CODEX-RUNTIME.md` §7.51）；🟡 的两格是**界面尚未消费这些端点**、**Job 只管内存/进程数/生命周期，不提供文件与网络沙箱**（§7.59） |
+| Reverse Lab 入口 | ✅ | 后端 4 个端点已接真 REA MCP Adapter（stdio 子进程，29 条判据全绿，见 `docs/REA-WAVE4-CODEX-RUNTIME.md` §7.51）；前端 `/reverse-lab` 三栏真调这四个端点（挑目标 / 抽线索 / 出结论 + 台账），策略层 8 例见 `web/src/components/reverse-lab/api.test.ts`。🟡 仅剩一格：**Job 只管内存/进程数/生命周期，不提供文件与网络沙箱**（§7.59），界面右下角如实标注 |
 | CLI 基础入口 | ✅ | `blank init`、`blank doctor`、`blank add/remove`、本地工作区启动 |
 | Bot 团队 `/team` | ✅ | 群聊编排、上下文管家、主 Bot 的团队管理工具、跨群全文搜索与锚点跳转 |
 
