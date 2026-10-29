@@ -43,23 +43,29 @@ class FileEntry:
     size: int | None
 
 
+def leaf_name(value: str | Path) -> str:
+    """取路径的最后一段。两种分隔符都算边界。
+
+    审计视图要的是"解释器叫什么""壳叫什么"，不是主机路径。判断一段字符串的末段时
+    不能只按本平台的 ``os.sep``：快照里出现另一种平台的写法是常态（Linux 进程读到
+    Windows 风格的配置、或反过来），只认 ``/`` 的话整条 ``C:\\Users\\<用户名>\\…``
+    会被当成一个名字原样回显——2026-10-29 Linux runner 上 ``test_world_state_v22``
+    与 ``test_handoff_v12`` 就是这么红的。
+    """
+    text = str(value).rstrip("/\\")
+    if not text:
+        return ""
+    return re.split(r"[\\/]", text)[-1]
+
+
 def mask_path(absolute: str | Path) -> str:
     """Hide host absolute paths unless the operator explicitly exposes them.
 
-    只留叶子名，不留任何上级目录。两种分隔符都算边界——理由不是"防御"，是实测：
-    审计快照里出现的路径可能来自另一种平台的写法（Linux 进程读到 Windows 风格的
-    配置、或反过来），只按 ``Path(...).name`` 切的话整条 ``C:\\Users\\<用户名>\\…``
-    会被当成一个名字**原样回显**，用户名就这么进了事件流。2026-10-29 在 Linux
-    runner 上跑全量时，`test_handoff_v12` / `test_world_state_v22` /
-    `test_permission_profile_v48` 五条一起把这个回显钉了出来。
+    只留叶子名，不留任何上级目录。分隔符口径见 ``leaf_name``。
     """
     if get_settings().expose_workspace_paths:
         return str(absolute)
-    text = str(absolute).rstrip("/\\")
-    if not text:
-        return "<workspace:root>"
-    leaf = re.split(r"[\\/]", text)[-1]
-    return f"<workspace:{leaf or 'root'}>"
+    return f"<workspace:{leaf_name(absolute) or 'root'}>"
 
 
 def validate_workspace_path(raw: str) -> Path:

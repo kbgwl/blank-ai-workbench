@@ -23,7 +23,7 @@ from blank_api.services.instructions import content_sha
 from blank_api.services.sandbox import boundary
 from blank_api.services.sandbox.runner import SandboxUnavailable, get_sandbox
 from blank_api.services.sandbox.tiers import resolve_tier
-from blank_api.services.workspace import mask_path
+from blank_api.services.workspace import leaf_name, mask_path
 
 
 def sandbox_boundary(writable_root: str = "", tier: str = "") -> dict[str, Any]:
@@ -335,8 +335,8 @@ def environment_snapshot(shell: Any = None, workspace_root: str = "") -> dict[st
         return {"local": local}
     local["status"] = "captured"
     local["cwd"] = local["cwd"] or mask_path(getattr(shell, "cwd", "") or "")
-    local["shell"] = Path(str(getattr(shell, "shell", "") or "")).name
-    local["python"] = Path(str(getattr(shell, "python", "") or "")).name
+    local["shell"] = leaf_name(getattr(shell, "shell", "") or "")
+    local["python"] = leaf_name(getattr(shell, "python", "") or "")
     local["has_venv"] = bool(getattr(shell, "venv", ""))
     local["venv_pinned"] = bool(getattr(shell, "venv_pinned", False))
     local["path_entries"] = len(list(getattr(shell, "path_entries", ()) or ()))

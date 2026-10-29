@@ -28,6 +28,7 @@ from blank_api.services.shell_env import (
     capture,
     filter_env,
 )
+from blank_api.services.workspace import mask_path
 
 
 # --------------------------------------------------------------------------- #
@@ -268,14 +269,23 @@ def test_snapshot_records_shape_not_secrets(tmp_path: Path) -> None:
     snapshot = capture(tmp_path, env=env, policy=POLICY_MINIMAL)
     view = snapshot.as_dict()
     # 审计视图给的是「形状」：变量名、PATH 条数、解释器叫什么，一条主机绝对路径都不给。
-    # 这里刻意用一份像真机器的 PATH（C:\Users\<用户名>\...）——`/a`、`/b` 看不出泄漏，
-    # 而这条断言要拦的正是用户名进事件流那种事。
-    host_path = r"C:\Users\linprivate\AppData\Local\Programs\Python"
-    env2 = {"PATH": sep.join([host_path, r"C:\Windows\system32"]), "HOME": "/home/x"}
+    # 这里刻意给一份像真机器的 PATH——`/a`、`/b` 看不出泄漏，而这条断言要拦的正是
+    # 用户名进事件流那种事。条目必须按**本平台**的写法给：Windows 路径里的盘符冒号在
+    # POSIX 上正好是 pathsep，混着写会被切出 "C" 这种假条目（2026-10-29 Linux 上就这么红过）。
+    if os.name == "nt":
+        host_path, system_path = r"C:\Users\linprivate\AppData\Local\Programs\Python", r"C:\Windows\system32"
+        expected = ["<workspace:Python>", "<workspace:system32>"]
+    else:
+        host_path, system_path = "/home/linprivate/AppData/Local/Programs/Python", "/usr/lib/systemd"
+        expected = ["<workspace:Python>", "<workspace:systemd>"]
+    env2 = {"PATH": sep.join([host_path, system_path]), "HOME": "/home/x"}
     view2 = capture(tmp_path, env=env2, policy=POLICY_MINIMAL).as_dict()
     assert "linprivate" not in repr(view2)
     assert ":\\" not in repr(view2).replace("\\\\", "\\")
-    assert view2["path_entries"] == ["<workspace:Python>", "<workspace:system32>"]
+    assert view2["path_entries"] == expected
+    # 另一种平台的写法也不能整条回显：掩码按两种分隔符都切（口子只有 workspace 那一处）。
+    assert mask_path(r"C:\Users\linprivate\bin") == "<workspace:bin>"
+    assert mask_path("/home/linprivate/bin") == "<workspace:bin>"
     assert "API_KEY" not in view["env_names"]
     # 掩码后仍然数得出条数、认得出目录名——审计要的「当时有几个可执行入口」没丢。
     assert view["path_entries"] == ["<workspace:a>", "<workspace:b>"]
