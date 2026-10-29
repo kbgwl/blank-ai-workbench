@@ -217,7 +217,15 @@ uv run alembic revision --autogenerate -m "描述"
   **目前只有 SQLite 一格跑过**，两种方言的那一格还没补。这些不改变一句实话：单机产品用不到它们。
   方言兼容层自 2026-10-26 起**冻结**：只保留 CI 的 `api-dialect` 作为回归防线，不再开新批次。
 - 沙箱镜像带 Python/Node/Git，但没有预装各语言依赖，也没有 Go 工具链：需要 `npm install` 或 Go 的样例仍跑不出真实结果。
-- `.github/workflows/ci.yml` 已就位，但本机没有 `gh` 命令行，无法核对 Actions 是否真的跑过；仓库本身已是 git 仓库。
+- `.github/workflows/ci.yml` 的五个 job **2026-10-29 才第一次在 GitHub runner 上真跑**（本机没有 `gh`,
+  此前只有"已就位"没有"跑过"）。首轮五个全红，逐条查日志后没有一条是产品缺陷——全是"本地脏树有、
+  干净 clone 上没有"或"本机姿势与 runner 姿势不同"：`typecheck:web` 依赖 Next 生成物、
+  `sandbox/Dockerfile` 写死 uid 1000 撞上 `node:24-alpine` 自带的 `node` 用户、`../evals/` 少一级、
+  `--skip-web` 的退出码 3 被当成失败、`setup-uv@v5` 的 post 步骤 `uv cache prune` 挂掉。
+  修完这几条后 web / team-e2e / eval-gate 已绿；`api` 在 Linux 上接着量出 23 failed / 1601 passed
+  （三处产品缺陷 + 一处路径泄漏 + 一批只在 Windows 上成立的判据，见
+  `docs/REA-WAVE5-CLAUDE-CODE.md` §21）；`api-dialect` 的三方言 e2e 在 Linux 上还有 4 格没绿
+  （第 80/83/84/85 步，与审批挂卡的终态判定有关），这一项仍开着。
 - `services/api/tests/test_parallel_tools_v14.py::test_read_only_calls_overlap` 有墙钟依赖：它要求两个 0.25s 的
   只读工具在 0.45s 内跑完。electron-builder 正在压 `7za` 的那一轮全量里它红过一次，同一份代码空机重跑两次
   都绿、单跑也绿（695 passed / 14 skipped）。当时截了 `tail`，断言原文没留下，所以**这条偶发的根因没有定论**。

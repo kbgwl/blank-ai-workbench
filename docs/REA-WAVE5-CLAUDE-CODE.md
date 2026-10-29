@@ -1295,3 +1295,49 @@ script = command if isinstance(command, str) else shlex.join(command)
   `next-env.d.ts` 之后验的**，不 typegen 必红）；`next build` rc=0；`eslint src` 0 error
   （余 3 条既有 warning）；前端 219 例全过。
 - runner：见下一次推送的 run（`ccf300b`）。镜像那一条只有它能证。
+
+### 21.5 修完装置之后，Linux 上的 `api` job 量出 23 条红
+
+pytest 在 Linux 上第一次跑完，读数是 **23 failed / 1601 passed / 72 skipped**（Windows 上是
+1673 passed / 23 skipped）。逐条分完只有三件是产品的事，其余是判据本身只在 Windows 上成立。
+
+**真缺陷一：POSIX 上钩子取消只杀外层 `sh`，孙进程活下来。**
+`hooks._kill_process` 在 Windows 用 `taskkill /T` 收整棵树，POSIX 分支直接 `process.kill()`——
+杀的是 `sh`，`sh` 派生的 python 三秒后照样写出标记文件。它自己的 docstring 就写着
+"只 kill 外层会留下孤儿"，只是没在 POSIX 上治。改法：POSIX 起进程时
+`start_new_session=True`，收尾对整组 `os.killpg(SIGKILL)`。
+
+**真缺陷二：事件 `seq` 并发撞号，落不下的那条是静默消失的。**
+`EventRecorder.add` 是"读最大值再插一条"，只有 `IntegrityError` 重试兜底，而重试之间是
+`sleep(0)`：十二个协程齐步走，同一拍重读、同一拍再撞，五轮下来仍有事件写不进去。
+时间线是唯一能端给用户的证据，丢事件比慢一点糟得多。改法：进程内按记录器加锁串行
+（锁只包住读+插+commit），重试之间加随机退避（跨进程撞号时不再齐步走）。
+
+**真缺陷三：MCP 服务端秒退时，它自己打的 stderr 被跳过。**
+`StdioClient._send` 看到 `returncode` 非空就直接报"进程不在运行"。Linux 上子进程退得比
+Windows 快，第一次 `send` 之前就退了，而最有用的那句话还躺在 stderr 管道里。改成跟
+写失败那条分支同一个出口：先 settle stderr 再拼原因。
+
+**一处泄漏：`mask_path` 只按本平台的分隔符切。**
+`Path("C://Users//<用户名>//…).name` 在 Linux 上是**整串**——审计快照里用户名就原样露了。
+改成两种分隔符都算边界。连带修好 `handoff` / `world_state` / `permission_profile` 五条判据。
+
+**剩下的都是判据缺守卫**（观察手段在这个平台不存在，不是产品问题）：
+`fs_broker` 七条靠 Windows Job Object + `tasklist`、`mcp_job` 两条判 "Job 建成了但 assign 失败"
+那条分支、`boundary_facts` 一条期望 `job_only` 这一档、`shell_quoting` 一条按 `cmd.exe` 语法写样本、
+两处 `VENV_PY` 写死 `.venv/Scripts/python.exe`。全部加显式 `skipif` 并写明理由——不删判据、不关规则。
+
+### 21.6 还开着的：`api-dialect` 的三方言 e2e 有 4 格没绿
+
+路径修好之后这一格第一次真跑起来（83 步 × 三方言，40 分钟一轮），Linux 上红了 4 步：
+
+| 步 | 判据 | 读数 |
+| --- | --- | --- |
+| 80 | 换一段正文必须重新挂卡 | `status=succeeded`，但待办里仍有 `waiting_approval` |
+| 83 | 压缩真发生且摘要那笔 429 听 Retry-After | 应当 2 次成功读取，实际 1 次 |
+| 84 | `scope=tool` 批准后下一条高风险命令仍要问 | 同 80 |
+| 85 | 只换载荷尾巴要重新挂卡、批准过的那条不再挂 | 同 80 |
+
+这三条的共同形状是"挂上的审批卡没有被收尾"，而任务本身已经 `succeeded`。是方言差异
+（MySQL/PG 下待办状态没被清）、还是 Linux 下的时序差异，**这一轮没有定论**——
+每验一次要 40 分钟，且需要先把桩侧与产品侧的账分开量。这一项作为已知红留着，不假装绿。
