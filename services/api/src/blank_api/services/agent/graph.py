@@ -57,6 +57,14 @@ from blank_api.services.agent.placeholders import (
     describe as describe_placeholders,
     scan_messages as scan_placeholder_messages,
 )
+from blank_api.services.agent.unknowns import (
+    corpus as facts_corpus,
+    decide as decide_fact,
+    explain as explain_unknowns,
+    facts_of_arguments,
+    questions_for as questions_for_unknowns,
+    unverified,
+)
 from blank_api.services.agent.usage import account_call, accumulate_usage, merge_usage
 from blank_api.services import approval_rules
 from blank_api.services.features import is_enabled as feature_enabled
@@ -139,6 +147,8 @@ SYSTEM_PROMPT = (
     "每题给 2-4 个选项，用户点一下就能答。\n"
     "· 不许用占位内容顶替这些信息。example.com、138-0000-0000、lorem ipsum、"
     "「示例公司」「待填写」都算占位；交付里出现它们，说明该问的时候没问。\n"
+    "· 电话、邮箱、地址这类具体事实，只写用户给过的。写页面前先问清楚——服务端会在"
+    "落盘前拦下没有出处的号码，硬写只会白跑一步。\n"
     "· 只问「要什么」，不问「怎么做」：技术方案、目录结构、命名、实现细节自己定，"
     "读一遍工作区就能查到的也自己查。问一句显而易见的事，和猜错一样费时间。\n"
     "· 已经问过的不要再问。用户答了什么就按什么做，剩下的自己定。\n"
@@ -265,6 +275,13 @@ class AgentSession:
     turn_usage: dict = field(default_factory=dict)
     # 已经被记录过的问题调用：节点会因中断被重放，不记账就会重复写 question.* 事件。
     recorded_questions: set[str] = field(default_factory=set)
+    # 「写之前先确认」的三本账（见 agent/unknowns.py）：
+    #   asked_facts   —— 已经就哪些值问过用户，同一处不反复问（问了没用也得记住）；
+    #   allowed_facts —— 用户确认过"这个值就是真的"，之后不再拦；
+    #   confirmed_text—— 用户给的具体值，进"已知事实"语料，免得刚给的号码下一步又被当成编的。
+    asked_facts: set[str] = field(default_factory=set)
+    allowed_facts: set[str] = field(default_factory=set)
+    confirmed_text: list[str] = field(default_factory=list)
     # 中途插话（steer）的度量：次数与生效步，用来说明人机接力是否真的省事。
     steer_metrics: dict = field(default_factory=lambda: {"count": 0, "steps": []})
     # 已经消费到的 steer 事件 seq，防止同一条插话被反复注入
@@ -1682,11 +1699,22 @@ async def drain_steer(session: AgentSession, node: str, step: int = 0) -> list[d
     ]
 
 
-async def _question_gate(session: AgentSession, node: str, pending: list[dict]) -> dict[str, str]:
+async def _question_gate(
+    session: AgentSession,
+    node: str,
+    pending: list[dict],
+    *,
+    extra_questions: list[dict] | None = None,
+) -> dict[str, str]:
     """Agent 主动提问：一次中断带走本步的所有问题，恢复后按问题 id 落答案。
 
     与审批共用同一条中断通道，所以传输层与 UI 不需要第二套机制；区别只在
     ``kind`` 字段，以及恢复值是一份答案而不是批准决定。
+
+    ``extra_questions`` 是**服务端**自己生成的问题（``_plan_fact_gate``：这一处
+    事实没有出处）。它必须走同一个中断位置，不能另开一个：LangGraph 按位置回放
+    恢复值，多开一个口子会让后续的中断与恢复值错位——那会表现成"答案张冠李戴"，
+    排查起来比不问还糟。
     """
     asked: list[dict] = []
     call_key = ""
@@ -1698,6 +1726,9 @@ async def _question_gate(session: AgentSession, node: str, pending: list[dict]) 
             continue
         asked.extend(questions)
         call_key = call_key or _call_key(call)
+    if extra_questions:
+        asked.extend(extra_questions)
+        call_key = call_key or "server:unknown_facts"
     if not asked:
         return {}
 
@@ -2119,6 +2150,105 @@ async def _replayed_tool_results(
     return journal
 
 
+@dataclass
+class _FactGate:
+    """"写之前先确认"的判定结果：哪些调用要拦、每个问题问的是哪个值。"""
+
+    # call_key -> 这次调用里没有出处的事实值
+    findings: dict[str, list] = field(default_factory=dict)
+    # question_id -> 归一化后的事实键（答案要能对回具体那一处）
+    key_by_qid: dict[str, str] = field(default_factory=dict)
+
+    def blocked(self) -> set[str]:
+        return set(self.findings)
+
+
+def _plan_fact_gate(
+    session: AgentSession, state: AgentState, pending: list[dict], *, readonly: bool
+) -> tuple[_FactGate, list[dict]]:
+    """挑出"要写进去但没有出处"的事实值，并为它们生成问题。
+
+    没有出处 = 用户没说过、工作区里没有、本会话也没确认过。模型只能靠猜来填它，
+    而猜出来的电话和邮箱与真的**长得一模一样**——交付出去以后，用户是那个要接到
+    电话的人。所以这一层做的不是"提醒模型别编"，是**不让它写进去**。
+
+    这个函数必须是纯的（只读 session、不改它）：节点会因中断被整体重放，重放那一趟
+    如果算出不一样的问题集合，中断位置就错位了。记账（asked/allowed）放在
+    ``_settle_fact_gate`` 里，答案是拿到之后才发生的事。
+    """
+    gate = _FactGate()
+    if readonly:
+        return gate, []
+    known = ""
+    questions: list[dict] = []
+    for call in pending:
+        found = facts_of_arguments(tool_call_name(call), tool_call_args(call))
+        if not found:
+            continue
+        if not known:
+            # 工作区扫描只在这个任务**真的**要写事实值时才做：空仓库是零成本，
+            # 大仓库也就读前 1MB——不值得为一句"你好"去做。
+            known = facts_corpus(
+                session.context.root,
+                state.get("messages") or (),
+                extra=session.confirmed_text,
+            )
+        missing = unverified(found, known, allowed=session.allowed_facts)
+        if not missing:
+            continue
+        gate.findings[_call_key(call)] = missing
+        for item in missing:
+            if item.key in session.asked_facts:
+                continue
+            index = len(gate.key_by_qid) + 1
+            gate.key_by_qid[f"fact_{index}"] = item.key
+            questions.extend(questions_for_unknowns([item], start=index))
+    return gate, questions
+
+
+def _settle_fact_gate(
+    session: AgentSession, gate: _FactGate, answers: dict[str, str]
+) -> dict[str, str]:
+    """把用户的回答落成"放行 / 留空 / 给了别的值"，并产出每条调用被拒的理由。
+
+    放行的只有"用户确认这个值是真的"这一种。用户给了别的值不算放行：模型原来那个
+    仍然是编的，它得按用户给的重写——理由里带着那个值，它下一轮照着写就行。
+    """
+    if not gate.findings:
+        return {}
+    given: dict[str, str] = {}
+    kinds: dict[str, str] = {}
+    for qid, value in (answers or {}).items():
+        key = gate.key_by_qid.get(qid)
+        if not key:
+            continue
+        item = next(
+            (hit for group in gate.findings.values() for hit in group if hit.key == key),
+            None,
+        )
+        if item is None:
+            continue
+        kind = decide_fact(item, str(value))
+        kinds[key] = kind
+        session.asked_facts.add(key)
+        if kind in ("value", "blank") and str(value).strip():
+            given[key] = str(value).strip()
+        if kind == "value":
+            # 用户给的具体值就是"后来能查到出处"的东西：写进语料，下一步不再被拦。
+            session.confirmed_text.append(str(value).strip())
+        if kind == "allow":
+            session.allowed_facts.add(key)
+    # 没答的也要记成"问过了"：否则下一步还是同一个值、又生成同一张卡，用户按掉一次
+    # 就得按第二次。问过就不再问，但值照样拦——没有答案不等于可以编。
+    session.asked_facts.update(gate.key_by_qid.values())
+    blocked: dict[str, str] = {}
+    for call_key, missing in gate.findings.items():
+        remaining = [item for item in missing if item.key not in session.allowed_facts]
+        if remaining:
+            blocked[call_key] = explain_unknowns(remaining, given, kinds)
+    return blocked
+
+
 async def execute_action_node(state: AgentState, session: AgentSession) -> AgentState:
     node = "execute_action"
     if await session.is_cancelled():
@@ -2140,14 +2270,23 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     live_pending = [call for call in pending if _call_key(call) not in replayed]
     # 先问、再批：问题门在前，恢复时两道门各占一个中断位，恢复值按位置回放不会串味。
     # 已经执行过的那些不再过门：门是"要不要执行"的判断，而它们已经执行完了。
-    answers = await _question_gate(session, node, live_pending)
+    # 「写之前先确认」必须排在审批之前：先问清楚这一处事实从哪来，再谈准不准写。
+    # 顺序反过来，用户会先看到一张"要不要写文件"的审批卡，批准之后才被追问电话号码，
+    # 而那时候文件已经写下去了。
+    fact_gate, fact_questions = _plan_fact_gate(session, state, live_pending, readonly=readonly)
+    answers = await _question_gate(
+        session, node, live_pending, extra_questions=fact_questions
+    )
+    fact_blocked = _settle_fact_gate(session, fact_gate, answers)
+    # 被事实闸门拦下的调用不进钩子与审批：它们这一次不会执行，弹卡只是多按一次。
+    approvable = [call for call in live_pending if _call_key(call) not in fact_blocked]
     # 钩子必须在审批门之前跑完：updatedInput 改写后的参数要同时进审批卡与执行，
     # ask 也要变成一次真正的中断。顺序反过来，卡片上放行的参数与实际执行的参数就会分叉。
-    hook_plan = await _scan_pre_tool_hooks(session, node, live_pending, answers, readonly)
+    hook_plan = await _scan_pre_tool_hooks(session, node, approvable, answers, readonly)
     denied, guardian_blocked = await _approval_gate(
         session,
         node,
-        live_pending,
+        approvable,
         rewritten=hook_plan.arguments,
         forced_asks=hook_plan.asked,
         hook_allowed=hook_plan.allowed,
@@ -2202,8 +2341,15 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
             )
             continue
 
+        fact_reason = fact_blocked.get(key)
         hook_reason = hook_plan.denied.get(key)
-        if hook_reason is not None:
+        if fact_reason:
+            # 拦的是"这一处值"，不是"这个文件"：理由里带着用户给的真实值，
+            # 模型下一步按真实值重写就能过。
+            planned.append(
+                _PlannedCall(call, name, arguments, "refuse", reason=fact_reason)
+            )
+        elif hook_reason is not None:
             planned.append(
                 _PlannedCall(
                     call,
