@@ -2974,7 +2974,10 @@ def _with_placeholder_note(report: str, session: AgentSession, state: AgentState
     提示词要求"信息不足先问"，但它会漏；漏了还不说，用户就得自己翻四个文件才发现
     名字、电话、邮箱全是编的。这一句是兜底的事实陈述，不是指控，也不占正文的篇幅。
     """
-    if session.recorded_questions:
+    # 问过用户就不再"提醒这是占位"——那些值已经是用户给的，再说一遍是冤枉。
+    # 但**事实闸门**问过不算：它问的结果常常是"先留空/你看着办"，那几处仍然是空的，
+    # 这时候把提示压掉，用户拿到的就是一页「待补充」加一句"做完了"。
+    if session.recorded_questions and not getattr(session, "asked_facts", None):
         return report
     note = describe_placeholders(scan_placeholder_messages(state.get("messages") or ()))
     if not note:

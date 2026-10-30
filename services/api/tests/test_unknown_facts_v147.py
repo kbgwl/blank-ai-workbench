@@ -263,3 +263,40 @@ def test_the_refusal_reason_tells_the_model_what_to_do() -> None:
     # 三种出口都写清楚，模型才不会拿"我假设了一下"糊过去。
     assert "不要填" in text
     assert "待补充" in text
+
+
+def test_the_delivery_still_says_what_is_missing_after_the_gate_asked() -> None:
+    """闸门问过又怎样：用户答"先留空"，交付里那句"这几处还是空的"必须留着。
+
+    问过用户就闭嘴这条老规则，在事实闸门这里是反的——它问的结果常常是"先留空"。
+    压掉提示的后果是：页面上一片「待补充」，正文却说"做完了"。
+    """
+    from types import SimpleNamespace as NS
+
+    from blank_api.services.agent.graph import _with_placeholder_note
+
+    state = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "write_file",
+                            "arguments": json.dumps(
+                                {"path": "a.html", "content": "电话：待补充"}, ensure_ascii=False
+                            ),
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    asked_by_model = NS(recorded_questions={"call_1"})
+    asked_by_gate = NS(recorded_questions={"server:unknown_facts"}, asked_facts={"13812345678"})
+
+    assert _with_placeholder_note("做完了", asked_by_model, state) == "做完了"
+    assert "占位" in _with_placeholder_note("做完了", asked_by_gate, state)
