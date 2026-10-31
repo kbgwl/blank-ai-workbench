@@ -26,7 +26,13 @@ from blank_api.services.agent.checkpoints import (
 from blank_api.services.agent.context import ContextCompactor
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.evidence import build_evidence
-from blank_api.services.agent.graph import AgentSession, build_agent_graph, initial_messages
+from blank_api.services.agent.graph import (
+    AgentSession,
+    _with_delivery_notes,
+    assumption_ledger,
+    build_agent_graph,
+    initial_messages,
+)
 from blank_api.services.agent.loadstats import recent_load
 from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agent.store import SerializedSessionFactory
@@ -42,6 +48,7 @@ from blank_api.services.instructions import load_layers, provenance
 from blank_api.services.context_curator import curate
 from blank_api.services.mcp import manager as mcp_manager
 from blank_api.services.memory import MemoryStore
+from blank_api.services.plan import plan_fingerprint
 from blank_api.services.notes import NoteStore
 from blank_api.services.safety import SafetyPolicy
 from blank_api.services.settings import SettingsStore
@@ -82,6 +89,12 @@ def _attempt(thread_id: str) -> int:
         return int(str(thread_id).rsplit(":", 1)[1])
     except (IndexError, ValueError):
         return 0
+
+
+def _plan_signature(steps: list[dict] | None) -> tuple:
+    """计划的"有没有变过"指纹。真源在 services.plan.plan_fingerprint，
+    这里只留个别名——版本号判定必须和手工改计划那条路径用同一套口径。"""
+    return plan_fingerprint(steps)
 
 
 def _token_budget() -> int:
@@ -138,6 +151,9 @@ class RunRequest:
     title: str = ""
     goal: str = ""
     acceptance_criteria: Sequence[str] = ()
+    # 验收条件与计划步骤的对应关系 [{id, criterion, milestone_id, step_ids}]。
+    # 有了它，验收失败能指到具体是哪一步没做完，而不是只知道"整体没过"。
+    acceptance_links: Sequence[dict] = ()
     max_steps: int = 8
     approve_high_risk: bool = False
     approved_tools: set[str] | None = None
@@ -312,6 +328,40 @@ class AgentRuntime:
             return ""
         return str(sandbox.get("requested") or "")
 
+    async def _stored_info(self, task_id: str) -> dict:
+        """一次查询拿到 mode 与 tier_requested，避免 _stored_mode + _stored_tier
+        各自开启独立 session 带来的重复 DB 往返。"""
+        mode = ""
+        tier = ""
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(AgentEvent.type, AgentEvent.payload)
+                    .where(
+                        AgentEvent.task_id == task_id,
+                        AgentEvent.type.in_(
+                            ("task.started", "permission.mode_changed")
+                        ),
+                    )
+                    .order_by(AgentEvent.seq.desc())
+                    .limit(2)
+                )
+            ).all()
+        for kind, payload in rows:
+            data = payload if isinstance(payload, dict) else {}
+            if kind == "permission.mode_changed" and not mode:
+                mode = str(data.get("to") or "")
+            elif kind == "task.started":
+                if not mode:
+                    mode = str(data.get("permission_mode") or "")
+                if not tier:
+                    sandbox = data.get("sandbox")
+                    if isinstance(sandbox, dict):
+                        tier = str(sandbox.get("requested") or "")
+            if mode and tier:
+                break
+        return {"mode": mode, "tier": tier}
+
     async def _guard_tier_change(self, request: RunRequest) -> None:
         """同一个任务不许换到更宽的档位继续跑。
 
@@ -461,6 +511,7 @@ class AgentRuntime:
             skill_instructions=[str(item) for item in request.skill_instructions],
             system_instructions=[str(item) for item in request.system_instructions],
             acceptance_criteria=[str(item) for item in request.acceptance_criteria or ()],
+            acceptance_links=[dict(item) for item in request.acceptance_links or () if isinstance(item, dict)],
             max_steps=max(1, int(request.max_steps)),
             # 模型看不懂图时一张都不挂：挂了就是 400，用户看到的是"传了图就发不出去"。
             # 降级的说法已经写进 initial_messages 的提示里了。
@@ -846,10 +897,13 @@ class AgentRuntime:
         crash_recovery: bool,
     ) -> dict[str, Any]:
         thread_id = await latest_thread_id(self.session_factory, request.task_id)
+        # 空串＝这次恢复没指定模式，读回任务首次运行记下的那一档。
+        # 判据只能是 request.permission_mode 本身：审批恢复时前端常常不重发模式，
+        # 拿默认值顶上就等于把 workspace 静默换成 off（或反之）。
         if not request.permission_mode:
-            request.permission_mode = await self._stored_mode(request.task_id) or MODE_DEFAULT
-        if not request.sandbox_tier:
-            request.sandbox_tier = await self._stored_tier(request.task_id)
+            info = await self._stored_info(request.task_id)
+            request.permission_mode = info["mode"] or MODE_DEFAULT
+            request.sandbox_tier = info["tier"]
         else:
             await self._guard_tier_change(request)
         scope = await self._prepare(request, thread_id)
@@ -915,6 +969,11 @@ class AgentRuntime:
                 reason="等待用户回答问题" if waiting_for_input else "存在待审批的高风险操作",
                 acceptance=result.get("acceptance_results"),
                 steps=int(result.get("steps") or 0),
+                # 等审批时要先把计划存下来：用户回来看到的第一屏就是"做到哪了"，
+                # 而这一步往往停在计划刚更新完、还没往下跑的位置。
+                plan_steps=result.get("plan_steps"),
+                milestones=result.get("milestones"),
+                goal_spec=result.get("goal_spec"),
                 extra={"thread_id": scope.thread_id, "interrupt": payload},
             )
             return await build_evidence(scope.store, task_id)
@@ -923,8 +982,7 @@ class AgentRuntime:
         validation = result.get("validation") or {}
         reason = ""
         if status == "failed":
-            detail = "测试未能执行" if validation.get("status") == "error" else "测试未通过"
-            reason = f"{detail}：{validation.get('command') or 'run_tests'}"
+            reason = _failure_reason(validation)
         elif status == "cancelled":
             reason = "任务已取消"
         elif status == "paused":
@@ -936,6 +994,9 @@ class AgentRuntime:
             reason=reason,
             acceptance=result.get("acceptance_results"),
             steps=int(result.get("steps") or 0),
+            plan_steps=result.get("plan_steps"),
+            milestones=result.get("milestones"),
+            goal_spec=result.get("goal_spec"),
             extra={
                 "usage": result.get("usage") or {},
                 "validation": validation,
@@ -1036,6 +1097,9 @@ class AgentRuntime:
         reason: str,
         acceptance: list[dict] | None = None,
         steps: int | None = None,
+        plan_steps: list[dict] | None = None,
+        milestones: list[dict] | None = None,
+        goal_spec: dict | None = None,
         extra: dict | None = None,
     ) -> None:
         # 任务走到终点时仍在跑的后台子代理必须收走：否则任务已经显示"完成"，
@@ -1048,13 +1112,45 @@ class AgentRuntime:
             if task is None:
                 return
             task.status = status
-            if summary:
-                task.result_summary = summary
+            # 「替你定的」从事件流重放而不是读内存：用户答完之后是另一个回合，
+            # 新建的 session 里那本账已经不在了，事件流才是跨回合的唯一事实来源。
+            answered_events = (
+                (
+                    await session.execute(
+                        select(AgentEvent).where(
+                            AgentEvent.task_id == scope.task_id,
+                            AgentEvent.type == "question.answered",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assumptions = assumption_ledger(list(answered_events))
+            delivered = (
+                _with_delivery_notes(summary, scope.session, {}, assumptions=assumptions)
+                if (summary or assumptions)
+                else ""
+            )
+            if delivered:
+                task.result_summary = delivered
             task.failure_reason = reason if status != "succeeded" else ""
             if acceptance is not None:
                 task.acceptance_results = acceptance
             if steps is not None:
                 task.steps_used = steps
+            # 计划落库。之前只活在图状态里，任务一结束就沉底：新任务从空白纸开始，
+            # 同一会话下一轮问"做到哪了"也答不出来。
+            if plan_steps is not None:
+                # 只在内容真的变了才加版本号——每轮收尾都 +1 会让这个数变成"跑了几次"，
+                # 而不是"计划改过几次"。
+                if _plan_signature(plan_steps) != _plan_signature(task.plan_steps or []):
+                    task.plan_revision = int(task.plan_revision or 0) + 1
+                task.plan_steps = plan_steps
+            if milestones is not None:
+                task.milestones = milestones
+            if goal_spec:
+                task.goal_spec = goal_spec
             await session.commit()
         event_type = {
             "succeeded": "task.completed",
@@ -1098,6 +1194,28 @@ def _routing_summary(session: AgentSession) -> dict:
         return router.summary()
     except Exception:  # 记账失败绝不能影响任务收尾
         return {}
+
+
+def _failure_reason(validation: dict) -> str:
+    """失败原因必须与证据一致。
+
+    以前这里只有两句：`status == "error"` 说"测试未能执行"，其余一律说"测试未通过"。
+    于是两种完全不同的情况被写成同一句话：本次**压根没跑**（被跳过、等审批、环境不可用）
+    和**反复跑同一条必败命令被拦下**。用户看到"测试未通过"就会去翻代码，而真正该做的
+    是看审批卡或看清楚自己卡在哪一步上——真实台账里那个烧掉 713 万 token 的任务，
+    失败原因写的就是"测试未通过"，而它的 run_tests 一次都没真正执行。
+    """
+    command = str(validation.get("command") or "run_tests")
+    state = str(validation.get("status") or "")
+    if not validation:
+        return "没有拿到测试结论，任务未完成"
+    if state == "skipped":
+        return f"任务未完成：{validation.get('skipped_reason') or '本次没有执行自动化校验'}"
+    if state == "blocked":
+        return f"反复执行同一条命令没产生新结果，已停止：{command}"
+    if state == "error":
+        return f"测试未能执行：{command}"
+    return f"测试未通过：{command}"
 
 
 def resolve_status(result: dict) -> str:

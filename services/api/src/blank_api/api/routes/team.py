@@ -29,7 +29,12 @@ from blank_api.schemas.team import (
     TeamGroupUpdate,
     TeamMessageIn,
 )
-from blank_api.services.agent.evidence import approval_is_expired, build_evidence
+from blank_api.services.agent.evidence import (
+    approval_is_expired,
+    build_evidence,
+    questions_can_default,
+)
+from blank_api.services.agent.vision import supports_vision
 from blank_api.services.chat_index import delete_group_docs, search_chat
 from blank_api.services.sandbox.tiers import normalize_tier, resolve_tier
 from blank_api.services.team import (
@@ -171,7 +176,7 @@ async def bootstrap(db: DbSession) -> dict:
                 "kind": provider.kind,
                 "model": provider.default_model,
                 "supports_tools": bool(provider.supports_tools),
-                "supports_vision": bool(provider.supports_vision),
+                "supports_vision": supports_vision(bool(provider.supports_vision), provider.default_model),
                 "enabled": bool(provider.enabled),
             }
             for provider in providers
@@ -494,7 +499,9 @@ async def answer_message(
     if payload.answer.strip():
         answers.setdefault(str(questions[0].get("id") or ""), payload.answer.strip()[:4000])
     if not answers:
-        raise ApiError(code="answer_empty", message="答案为空，至少回答一个问题", status_code=422)
+        # 同 tasks 路由：只有每题都有推荐项（偏好题）才允许空答案，事实题必须明说。
+        if not questions_can_default(questions):
+            raise ApiError(code="answer_empty", message="答案为空，至少回答一个问题", status_code=422)
     _reject_expired(evidence.get("question_expires_at"), what="question")
     _spawn_resume(_orchestrator(request), message_id, "answer", {"answers": answers})
     return {"accepted": True, "message_id": message_id, "action": "answer"}

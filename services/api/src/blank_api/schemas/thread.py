@@ -33,6 +33,9 @@ class ThreadOut(BaseModel):
     status: str
     forked_from: str | None
     turn_count: int
+    # 最后一轮的状态（draft/running/succeeded/failed/cancelled），会话列表靠它画状态点。
+    # 空串表示"这条会话还没有任何一轮"，与"跑完了"必须能区分：前者不该画点。
+    last_turn_status: str = ""
     created_at: datetime
     updated_at: datetime
 
@@ -62,6 +65,13 @@ class ThreadTurnOut(BaseModel):
 
 class ThreadDetailOut(ThreadOut):
     turns: list[ThreadTurnOut] = Field(default_factory=list)
+
+
+class ThreadUpdate(BaseModel):
+    """PATCH /threads/:id — 只更新传了的字段。"""
+
+    title: str | None = Field(default=None, max_length=200)
+    status: str | None = None  # "active" | "archived"
 
 
 class ThreadRewindIn(BaseModel):

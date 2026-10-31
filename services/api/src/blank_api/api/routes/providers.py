@@ -6,7 +6,7 @@ from collections.abc import Callable
 import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from blank_api.api.auth import require_token
@@ -292,3 +292,73 @@ async def usage_summary(db: DbSession) -> dict:
         ) if rows else 0,
         "total_cost": {"amount": round(grand_cost, 6), "currency": currency},
     }
+
+
+@router.post("/providers/defaults")
+async def seed_default_providers(db: DbSession) -> dict:
+    """一键写入所有国产默认平台配置（API key 留空，用户后续填入即可）。"""
+    existing = {row[0] for row in (await db.execute(select(ModelProvider.name))).all()}
+    created: list[str] = []
+    skipped: list[str] = []
+    for key, preset in PROVIDER_PRESETS.items():
+        name = preset.get("label", key)
+        if name in existing:
+            skipped.append(name)
+            continue
+        provider = ModelProvider(
+            id=str(uuid.uuid4()),
+            name=name,
+            kind=preset["kind"],
+            base_url=preset["base_url"],
+            api_key_encrypted="",  # 用户后续填入
+            default_model=preset["model"],
+            temperature=0.2,
+            max_tokens=8192,
+            context_window=preset.get("context_window", 128000),
+            supports_tools=preset.get("supports_tools", False),
+            supports_vision=preset.get("supports_vision", False),
+            enabled=True,
+        )
+        db.add(provider)
+        created.append(name)
+    await db.commit()
+    return {"created": created, "skipped": skipped}
+
+
+async def seed_empty_providers() -> int:
+    """启动时为新空库初始化默认平台（幂等：已有配置不覆盖）。
+
+    调用方不传 session —— 自己创建并管理。
+    """
+    from blank_api.db import get_session_factory
+    from uuid import uuid4 as _uuid4
+
+    async with get_session_factory()() as session:
+        existing_cnt = (await session.execute(select(func.count()).select_from(ModelProvider))).scalar() or 0
+        if existing_cnt > 0:
+            return 0
+        existing_names = {row[0] for row in (await session.execute(select(ModelProvider.name))).all()}
+        created = 0
+        for key, preset in PROVIDER_PRESETS.items():
+            name = preset.get("label", key)
+            if name in existing_names:
+                continue
+            session.add(ModelProvider(
+                id=str(_uuid4()),
+                name=name,
+                kind=preset["kind"],
+                base_url=preset["base_url"],
+                api_key_encrypted="",
+                default_model=preset["model"],
+                temperature=0.2,
+                max_tokens=8192,
+                context_window=preset.get("context_window", 128000),
+                supports_tools=preset.get("supports_tools", False),
+                supports_vision=preset.get("supports_vision", False),
+                enabled=True,
+            ))
+            created += 1
+        await session.commit()
+        if created:
+            print(f"[providers] 初始化 {created} 个默认模型厂商（全新空库）")
+        return created

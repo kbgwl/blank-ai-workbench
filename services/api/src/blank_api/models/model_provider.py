@@ -12,13 +12,48 @@ PROVIDER_KINDS = ("openai_compatible", "openai_responses", "anthropic", "ollama"
 PROVIDER_GONE = "供应商已删除"
 
 PROVIDER_PRESETS: dict[str, dict] = {
-    "openai": {"kind": "openai_compatible", "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini", "supports_tools": True},
+    # ----- 海外 ------------------------------------------------------------------
+    "openai": {"kind": "openai_compatible", "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini", "supports_tools": True, "supports_vision": True},
     # Responses 与 chat/completions 是两套协议：新模型走这条才能用上推理档位与提示词缓存
-    "openai_responses": {"kind": "openai_responses", "base_url": "https://api.openai.com/v1", "model": "gpt-4.1", "supports_tools": True},
-    "deepseek": {"kind": "openai_compatible", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat", "supports_tools": True},
-    "qwen": {"kind": "openai_compatible", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus", "supports_tools": True},
-    "anthropic": {"kind": "anthropic", "base_url": "https://api.anthropic.com", "model": "claude-3-5-sonnet-latest", "supports_tools": True},
-    "ollama": {"kind": "ollama", "base_url": "http://localhost:11434", "model": "qwen2.5-coder:7b", "supports_tools": True},
+    "openai_responses": {"kind": "openai_responses", "base_url": "https://api.openai.com/v1", "model": "gpt-4.1", "supports_tools": True, "supports_vision": True},
+    "anthropic": {"kind": "anthropic", "base_url": "https://api.anthropic.com", "model": "claude-3-5-sonnet-latest", "supports_tools": True, "supports_vision": True},
+    # ----- 国产（deepseek-compat）----------------------------------------------
+    "deepseek": {"kind": "openai_compatible", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat", "supports_tools": True, "supports_vision": False},
+    "deepseek_reasoner": {"kind": "openai_compatible", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-reasoner", "supports_tools": False, "supports_vision": False},
+    # 阿里云百炼 - 通义千问系列
+    "qwen": {"kind": "openai_compatible", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus", "supports_tools": True, "supports_vision": False},
+    "qwen_turbo": {"kind": "openai_compatible", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-turbo", "supports_tools": True, "supports_vision": False},
+    "qwen_max": {"kind": "openai_compatible", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-max", "supports_tools": True, "supports_vision": False},
+    "qwen_long": {"kind": "openai_compatible", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-long", "supports_tools": False, "supports_vision": False, "context_window": 10_000_000},
+    "qwen_vl": {"kind": "openai_compatible", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-vl-plus", "supports_tools": False, "supports_vision": True},
+    "qwen_coder": {"kind": "openai_compatible", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-coder-plus", "supports_tools": True, "supports_vision": False},
+    # 智谱 AI - GLM 系列
+    "zhipu": {"kind": "openai_compatible", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4-flash", "supports_tools": True, "supports_vision": False},
+    "zhipu_plus": {"kind": "openai_compatible", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4-plus", "supports_tools": True, "supports_vision": False},
+    "zhipu_long": {"kind": "openai_compatible", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4-long", "supports_tools": False, "supports_vision": False, "context_window": 1_000_000},
+    "zhipu_vision": {"kind": "openai_compatible", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4v-plus", "supports_tools": False, "supports_vision": True},
+    # 月之暗面 - Moonshot / Kimi
+    "moonshot": {"kind": "openai_compatible", "base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k", "supports_tools": True, "supports_vision": False},
+    "moonshot_128k": {"kind": "openai_compatible", "base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-128k", "supports_tools": True, "supports_vision": False, "context_window": 128_000},
+    "kimi_k2": {"kind": "openai_compatible", "base_url": "https://api.moonshot.cn/v1", "model": "kimi-k2-0711-preview", "supports_tools": True, "supports_vision": False, "context_window": 128_000},
+    # 字节豆包 / 火山引擎
+    "doubao": {"kind": "openai_compatible", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-pro-32k", "supports_tools": True, "supports_vision": False},
+    "doubao_lite": {"kind": "openai_compatible", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-lite-32k", "supports_tools": True, "supports_vision": False},
+    "doubao_vision": {"kind": "openai_compatible", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-vision-pro-32k", "supports_tools": False, "supports_vision": True},
+    # 阶跃星辰 - Step
+    "step": {"kind": "openai_compatible", "base_url": "https://api.stepfun.com/v1", "model": "step-2-16k", "supports_tools": True, "supports_vision": False},
+    "step_vision": {"kind": "openai_compatible", "base_url": "https://api.stepfun.com/v1", "model": "step-1v-8k", "supports_tools": False, "supports_vision": True},
+    # 零一万物 - Yi
+    "yi": {"kind": "openai_compatible", "base_url": "https://api.lingyiwanwu.com/v1", "model": "yi-large", "supports_tools": True, "supports_vision": False},
+    "yi_vision": {"kind": "openai_compatible", "base_url": "https://api.lingyiwanwu.com/v1", "model": "yi-vision", "supports_tools": False, "supports_vision": True},
+    # 百川智能
+    "baichuan": {"kind": "openai_compatible", "base_url": "https://api.baichuan-ai.com/v1", "model": "Baichuan4", "supports_tools": True, "supports_vision": False},
+    # MiniMax
+    "minimax": {"kind": "openai_compatible", "base_url": "https://api.minimax.chat/v1", "model": "abab6.5s-chat", "supports_tools": True, "supports_vision": False},
+    # 腾讯混元（通过 LKEAP 或公有云；多数用户走公有云 open-api 兼容入口）
+    "hunyuan": {"kind": "openai_compatible", "base_url": "https://api.hunyuan.cloud.tencent.com/v1", "model": "hunyuan-lite", "supports_tools": True, "supports_vision": False},
+    # ----- 本地 ------------------------------------------------------------------
+    "ollama": {"kind": "ollama", "base_url": "http://localhost:11434", "model": "qwen2.5-coder:7b", "supports_tools": True, "supports_vision": False},
 }
 
 
@@ -40,8 +75,11 @@ class ModelProvider(Base):
     temperature: Mapped[float] = mapped_column(
         Float, nullable=False, default=0.2, server_default="0.2"
     )
+    # 8192 而不是 2048：2048 会静默截断输出，表现为"工具参数偶尔是空的"——
+    # 流式 JSON 被切在中途，参数解析成空对象，用户只看到它反复重来。
+    # 与迁移 0027 保持一致；两条建库路径（迁移 / create_all）必须是同一个值。
     max_tokens: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=2048, server_default="2048"
+        Integer, nullable=False, default=8192, server_default="8192"
     )
     context_window: Mapped[int] = mapped_column(
         Integer, nullable=False, default=128000, server_default="128000"

@@ -20,29 +20,51 @@ from blank_api.deps import DbSession
 from blank_api.models.model_provider import ModelProvider
 from blank_api.models.checkpoint import AgentCheckpoint, AgentCheckpointWrite
 from blank_api.models.model_provider import ModelUsage
+from blank_api.models.plan_template import PlanTemplate
 from blank_api.models.task import AgentEvent, FileChange, Task, ToolCall
 from blank_api.models.run import AgentRun
 from blank_api.models.skill import Skill
 from blank_api.schemas.task import (
     EventOut,
+    GoalUpdateIn,
+    PlanProgressOut,
+    PlanUpdateIn,
     TaskAnswerIn,
     TaskApprovalIn,
     TaskCreate,
     TaskForkIn,
     TaskOut,
+    TaskPlanOut,
     TaskRunIn,
     TaskSteerIn,
 )
-from blank_api.services.agent.evidence import approval_is_expired, build_evidence, load_task
+from blank_api.services.agent.evidence import (
+    approval_is_expired,
+    build_evidence,
+    load_task,
+    questions_can_default,
+)
 from blank_api.services.agent.artifacts import ArtifactStore
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.live import LiveFeed
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
+from blank_api.services.agent.vision import supports_vision
 from blank_api.services.fork import FORK_EVENT, fork_thread
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
 from blank_api.services.agent.queue import abandon_run, claim_run, enqueue_run, finish_run, renew_run
 from blank_api.services.agent.router import candidate_from_provider
 from blank_api.services.models.registry import build_adapter
+from blank_api.services.plan import (
+    criteria_text,
+    link_milestones,
+    normalize_criteria,
+    normalize_goal,
+    normalize_milestones,
+    normalize_steps,
+    plan_fingerprint,
+    plan_progress,
+    resolve_milestone_status,
+)
 from blank_api.services.uploads import UploadStore, load_attachments_for
 from blank_api.services.models.routing import FallbackAdapter
 from blank_api.services.sandbox import SnapshotNotRestorable, SnapshotStore
@@ -120,6 +142,33 @@ async def persist_task(
         ref.as_dict()
         for ref in UploadStore().resolve(project_id, [item.model_dump() for item in payload.attachments])
     ]
+    # 验收条件与目标在这里归一化，而不是等 Agent 去猜：
+    # 建行这一刻就把形状定下来，后面验收循环、证据页、前端读到的才是同一份东西。
+    criteria = normalize_criteria(payload.acceptance_criteria)
+    goal_spec = normalize_goal(payload.goal_spec, fallback=payload.goal or payload.title)
+
+    # 套用计划模板：步骤原样带过来，但状态一律重置为 pending。
+    # 模板是"怎么做事"，不是"做到哪了"——把完成态一起带过来会显示一份假进度。
+    plan_steps: list[dict] = []
+    milestones: list[dict] = []
+    if payload.plan_template_id:
+        template = await db.get(PlanTemplate, payload.plan_template_id)
+        if template is None or template.project_id != project_id:
+            raise ApiError("plan_template_not_found", "计划模板不存在", 404)
+        plan_steps = [
+            {**step, "status": "pending", "evidence": ""}
+            for step in (template.steps or [])
+            if isinstance(step, dict)
+        ]
+        milestones = [
+            {**item, "status": "pending"}
+            for item in (template.milestones or [])
+            if isinstance(item, dict)
+        ]
+        if not payload.goal_spec and template.goal_spec:
+            goal_spec = normalize_goal(template.goal_spec, fallback=payload.goal or payload.title)
+        template.usage_count = int(template.usage_count or 0) + 1
+
     task = Task(
         id=str(uuid.uuid4()),
         project_id=project_id,
@@ -127,8 +176,11 @@ async def persist_task(
         title=payload.title,
         goal=payload.goal or payload.title,
         status="draft",
-        acceptance_criteria=payload.acceptance_criteria,
+        acceptance_criteria=criteria,
         acceptance_results=[],
+        goal_spec=goal_spec,
+        plan_steps=plan_steps,
+        milestones=milestones,
         attachments=attachments,
         max_steps=payload.max_steps,
         thread_id=thread_id,
@@ -174,6 +226,124 @@ async def list_tasks(
 @router.get("/tasks/{task_id}", response_model=TaskOut)
 async def get_task(task_id: str, db: DbSession) -> TaskOut:
     return TaskOut.model_validate(await load_task(db, task_id))
+
+
+@router.get("/tasks/{task_id}/plan", response_model=TaskPlanOut)
+async def get_task_plan(task_id: str, db: DbSession) -> TaskPlanOut:
+    """读计划。任务结束后仍然可读——这是"下一轮问做到哪了"能答上来的依据。"""
+    task = await load_task(db, task_id)
+    steps = list(task.plan_steps or [])
+    milestones = list(task.milestones or [])
+    return TaskPlanOut(
+        task_id=task.id,
+        goal=task.goal,
+        goal_spec=dict(task.goal_spec or {}),
+        steps=steps,
+        milestones=milestones,
+        progress=PlanProgressOut(**plan_progress(steps, milestones)),
+        revision=int(task.plan_revision or 0),
+    )
+
+
+@router.patch("/tasks/{task_id}/plan", response_model=TaskPlanOut)
+async def update_task_plan(task_id: str, payload: PlanUpdateIn, db: DbSession) -> TaskPlanOut:
+    """手工改计划。
+
+    存在的理由：模型给的计划不一定对。用户看着「第 3 步其实是两步」时，
+    不该为了改一行字去重跑一整轮——那既费钱，又会让已经做完的步骤状态重来。
+    """
+    task = await load_task(db, task_id)
+    previous = list(task.plan_steps or [])
+
+    if payload.steps is not None:
+        # 整份替换。传上来的项按 id / 文本认领上一版，状态与引用因此能保住。
+        steps = normalize_steps([item.model_dump(exclude_none=True) for item in payload.steps], previous=previous)
+    elif payload.patch:
+        by_id = {str(step.get("id") or ""): dict(step) for step in previous}
+        for item in payload.patch:
+            target = by_id.get(item.id)
+            if target is None:
+                # 按 id 改却找不到：直接报错，不要静默新增一条——
+                # 前端拿的是旧列表时静默新增会让计划越改越长。
+                raise ApiError("plan_step_not_found", f"计划里没有这一步：{item.id}", 404)
+            for key in ("step", "status", "milestone_id", "evidence"):
+                value = getattr(item, key)
+                if value is not None:
+                    target[key] = value
+        steps = normalize_steps(list(by_id.values()), previous=previous)
+    else:
+        steps = normalize_steps(previous, previous=previous)
+
+    milestones = (
+        normalize_milestones(payload.milestones)
+        if payload.milestones is not None
+        else list(task.milestones or [])
+    )
+    milestones = resolve_milestone_status(link_milestones(steps, milestones), steps)
+
+    # 手改也算一次改版：下一次模型 update_plan 时能看出"人动过这份计划"。
+    if plan_fingerprint(steps) != plan_fingerprint(previous):
+        task.plan_revision = int(task.plan_revision or 0) + 1
+    task.plan_steps = steps
+    task.milestones = milestones
+    await db.commit()
+    await db.refresh(task)
+
+    progress = plan_progress(steps, milestones)
+    await EventRecorder(get_session_factory(), task.id).add(
+        "plan.updated",
+        "manual",
+        {
+            "steps": steps,
+            "milestones": milestones,
+            "progress": progress,
+            "total": progress["total"],
+            "completed": progress["completed"],
+            "source": "user",
+            "explanation": payload.explanation[:300],
+        },
+    )
+    return TaskPlanOut(
+        task_id=task.id,
+        goal=task.goal,
+        goal_spec=dict(task.goal_spec or {}),
+        steps=steps,
+        milestones=milestones,
+        progress=PlanProgressOut(**progress),
+        revision=int(task.plan_revision or 0),
+    )
+
+
+@router.patch("/tasks/{task_id}/goal", response_model=TaskPlanOut)
+async def update_task_goal(task_id: str, payload: GoalUpdateIn, db: DbSession) -> TaskPlanOut:
+    """改结构化目标。只覆盖传了的字段，没传的保持原样。"""
+    task = await load_task(db, task_id)
+    current = normalize_goal(task.goal_spec or {}, fallback=task.goal)
+    merged = dict(current)
+    for key in ("objective", "done_when", "constraints", "out_of_scope"):
+        value = getattr(payload, key)
+        if value is not None:
+            merged[key] = value if key != "objective" else str(value)[:1000]
+    spec = normalize_goal(merged, fallback=task.goal)
+
+    task.goal_spec = spec
+    await db.commit()
+    await db.refresh(task)
+
+    steps = list(task.plan_steps or [])
+    milestones = list(task.milestones or [])
+    await EventRecorder(get_session_factory(), task.id).add(
+        "goal.updated", "manual", {**spec, "source": "user"}
+    )
+    return TaskPlanOut(
+        task_id=task.id,
+        goal=task.goal,
+        goal_spec=spec,
+        steps=steps,
+        milestones=milestones,
+        progress=PlanProgressOut(**plan_progress(steps, milestones)),
+        revision=int(task.plan_revision or 0),
+    )
 
 
 async def _drop_unused_uploads(db: DbSession, project_id: str, ids: set[str]) -> None:
@@ -382,11 +552,16 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         "root": workspace.path,
         "title": task.title,
         "goal": task.goal,
-        "acceptance_criteria": list(task.acceptance_criteria or []),
+        "acceptance_criteria": criteria_text(task.acceptance_criteria),
+        # 结构化的一份单独带过去：会话主体只吃字符串，但收尾判定要知道
+        # 每条验收对应哪几步——这个映射不能靠再回表读一次。
+        "acceptance_links": normalize_criteria(task.acceptance_criteria),
         "max_steps": int(task.max_steps),
         "images": bundle.images,
         "texts": bundle.texts,
-        "supports_vision": bool(provider.supports_vision),
+        # 能不能看图取决于模型名，不只看那个开关：把模型换成 glm-4.5v 之后，
+        # 开关不会自己变，图会被静默降级。见 services/agent/vision.py。
+        "supports_vision": supports_vision(bool(provider.supports_vision), provider.default_model),
         "skill_instructions": [str(item) for item in active_skills],
         # 会话上下文由运行时自己读：这里只告诉它"这一轮属于哪条会话"。
         "thread_ref": task.thread_id or "",
@@ -603,49 +778,57 @@ async def recover_pending_runs() -> int:
         items: list[tuple[str, object]] = []
         async with get_session_factory()() as session:
             runs = (await session.execute(select(AgentRun).where(AgentRun.status.in_(("queued", "running"))))).scalars().all()
+        # 一次批量加载所有关联 task，避免循环内 N+1。
+        task_ids = {run.task_id for run in runs}
+        task_map: dict[str, Task] = {}
+        if task_ids:
+            async with get_session_factory()() as session:
+                existing = await session.execute(select(Task).where(Task.id.in_(task_ids)))
+                for t in existing.scalars():
+                    task_map[t.id] = t
         for run in runs:
             # 扫描时 attempts>0 = 上一次认领后没写终态（进程被杀/断电）。
             crashed = int(run.attempts or 0) > 0
-            async with get_session_factory()() as session:
-                task = await session.get(Task, run.task_id)
-                if task is None:
-                    continue
-                if run.attempts >= MAX_RECOVERY_ATTEMPTS:
-                    # 反复重排同一个 run 只会无限循环（上次收尾没写成就是这种表现）。
-                    # 到这里就停手，把原因交给用户，让他决定是否重试。
-                    async with get_session_factory()() as failed_session:
-                        if not await abandon_run(failed_session, run.id):
-                            # 租约还新鲜=真有 worker 在跑（另一个进程），不能判它的死
-                            log.warning("跳过判死：run=%s 仍被现役 worker 持有", run.id)
-                            continue
-                    await _record_run_failure(
-                        run.task_id,
-                        run.id,
-                        RuntimeError(
-                            f"这条任务连续 {run.attempts} 次没能正常启动（上一次执行没有正常收尾），"
-                            "已停止自动重试。请点「重试」重新发起。"
-                        ),
-                    )
-                    continue
-                try:
-                    request_payload = TaskRunIn.model_validate(run.request_payload or {})
-                    request = await _run_request(session, task, request_payload, None)
-                    request.run_id = run.id
-                except Exception:
-                    async with get_session_factory()() as failed_session:
-                        if not await abandon_run(failed_session, run.id):
-                            log.warning("跳过判死：run=%s 仍被现役 worker 持有", run.id)
-                            continue
-                    continue
+            task = task_map.get(run.task_id)
+            if task is None:
+                continue
+            if run.attempts >= MAX_RECOVERY_ATTEMPTS:
+                # 反复重排同一个 run 只会无限循环（上次收尾没写成就是这种表现）。
+                # 到这里就停手，把原因交给用户，让他决定是否重试。
+                async with get_session_factory()() as failed_session:
+                    if not await abandon_run(failed_session, run.id):
+                        # 租约还新鲜=真有 worker 在跑（另一个进程），不能判它的死
+                        log.warning("跳过判死：run=%s 仍被现役 worker 持有", run.id)
+                        continue
+                await _record_run_failure(
+                    run.task_id,
+                    run.id,
+                    RuntimeError(
+                        f"这条任务连续 {run.attempts} 次没能正常启动（上一次执行没有正常收尾），"
+                        "已停止自动重试。请点「重试」重新发起。"
+                    ),
+                )
+                continue
+            try:
+                request_payload = TaskRunIn.model_validate(run.request_payload or {})
+                async with get_session_factory()() as req_session:
+                    request = await _run_request(req_session, task, request_payload, None)
+                request.run_id = run.id
+            except Exception:
+                async with get_session_factory()() as failed_session:
+                    if not await abandon_run(failed_session, run.id):
+                        log.warning("跳过判死：run=%s 仍被现役 worker 持有", run.id)
+                        continue
+                continue
 
-                async def runner(run_id=run.id, request=request, crashed=crashed):
-                    worker_id = f"recovery-{uuid.uuid4().hex[:8]}"
-                    async with get_session_factory()() as claim_session:
-                        if not await claim_run(claim_session, run_id, worker_id):
-                            return
-                    await _execute_claimed_run(run_id, worker_id, request, crashed=crashed)
+            async def runner(run_id=run.id, request=request, crashed=crashed):
+                worker_id = f"recovery-{uuid.uuid4().hex[:8]}"
+                async with get_session_factory()() as claim_session:
+                    if not await claim_run(claim_session, run_id, worker_id):
+                        return
+                await _execute_claimed_run(run_id, worker_id, request, crashed=crashed)
 
-                items.append((run.id, runner))
+            items.append((run.id, runner))
         return items
 
     return await run_manager.recover(load)
@@ -839,7 +1022,10 @@ async def answer_question(
         first = str(questions[0].get("id") or "")
         answers.setdefault(first, payload.answer.strip()[:4000])
     if not answers:
-        raise ApiError(code="answer_empty", message="答案为空，至少回答一个问题", status_code=422)
+        # 空答案有两种含义，方向相反：偏好题是「你看着办」，事实题是「这处留空」。
+        # 只有每道题都有推荐项时才放行——默认值由执行图补齐并记账，账只记在一处。
+        if not questions_can_default(questions):
+            raise ApiError(code="answer_empty", message="答案为空，至少回答一个问题", status_code=422)
 
     expires_at = evidence.get("question_expires_at") or ""
     if expires_at:

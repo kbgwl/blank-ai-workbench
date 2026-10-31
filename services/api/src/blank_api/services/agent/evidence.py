@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from blank_api.api.errors import ApiError
 from blank_api.models.model_provider import ModelProvider, ModelUsage
 from blank_api.models.task import AgentEvent, FileChange, Task, ToolCall
+from blank_api.services.plan import normalize_criteria
 
 
 async def load_task(session: AsyncSession, task_id: str) -> Task:
@@ -327,6 +328,26 @@ def boundary_report(events: list[AgentEvent], started: dict) -> dict[str, Any]:
     }
 
 
+def questions_can_default(questions: object) -> bool:
+    """空答案能不能放行：**每道题**都得有推荐项。
+
+    只有偏好题有推荐项。事实题（真实电话、邮箱）没有，所以空答案必须被拒——
+    否则「用户没填」会被读成「这处留空」，而服务器替用户编一个号码是更坏的结果。
+    混合场景（一题有默认、一题没有）也不放行：漏掉的那题正是不能猜的那题。
+    """
+    if not questions or not isinstance(questions, list):
+        return False
+    for question in questions:
+        if not isinstance(question, dict):
+            return False
+        options = question.get("options") or []
+        if not isinstance(options, list):
+            return False
+        if not any(isinstance(option, dict) and option.get("recommended") for option in options):
+            return False
+    return True
+
+
 async def build_evidence(
     session_factory: async_sessionmaker[AsyncSession], task_id: str
 ) -> dict[str, Any]:
@@ -374,10 +395,20 @@ async def build_evidence(
         )
 
     acceptance = list(task.acceptance_results or [])
-    criteria = list(task.acceptance_criteria or [])
+    # 验收条件可能已经是结构化字典（{id, criterion, step_ids}）：这里只取文字，
+    # 但要连引用一起带上——证据页据此能把"没通过"指到具体步骤。
+    criteria = normalize_criteria(task.acceptance_criteria)
     if criteria and not acceptance:
         acceptance = [
-            {"criterion": item, "covered": False, "evidence": "任务未产出验收结论"} for item in criteria
+            {
+                "criterion": item["criterion"],
+                "covered": False,
+                "evidence": "任务未产出验收结论",
+                "criterion_id": item["id"],
+                "milestone_id": item["milestone_id"],
+                "step_ids": item["step_ids"],
+            }
+            for item in criteria
         ]
     validation = _latest_validation(events)
     # 审批请求里的权限上下文（模式 / 命中规则 / 建议前缀 / 作用域选项）在中断事件里；

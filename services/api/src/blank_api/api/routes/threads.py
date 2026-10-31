@@ -19,6 +19,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from blank_api.api.auth import require_token
 from blank_api.api.errors import ApiError
@@ -33,6 +34,7 @@ from blank_api.schemas.thread import (
     ThreadCreate,
     ThreadDetailOut,
     ThreadOut,
+    ThreadUpdate,
     ThreadRewindIn,
     ThreadRewindOut,
     ThreadRewindPointOut,
@@ -59,8 +61,32 @@ def _turn_out(task: Task) -> ThreadTurnOut:
     )
 
 
-async def _detail(db: DbSession, thread: Thread) -> ThreadDetailOut:
+async def _latest_turn_status(db: AsyncSession, thread_ids: list[str]) -> dict[str, str]:
+    """每条会话最后一轮的状态，供侧栏画状态点。
+
+    被回退掉的轮不算：``rewound_at`` 非空的那几轮已经不属于这条对话，
+    拿它当"最后状态"会让一条明明跑完的会话永远显示"失败"。
+
+    一次查询换一次遍历，不在列表里逐条查：会话列表是首屏，N+1 直接变成首屏卡顿。
+    """
+    if not thread_ids:
+        return {}
+    rows = await db.execute(
+        select(Task.thread_id, Task.status)
+        .where(Task.thread_id.in_(thread_ids), Task.rewound_at.is_(None))
+        .order_by(Task.turn_index.asc(), Task.created_at.asc())
+    )
+    latest: dict[str, str] = {}
+    for thread_id, status in rows.all():
+        # 升序遍历，同一个 thread 最后写进去的就是 turn_index 最大的那一轮。
+        if thread_id:
+            latest[thread_id] = str(status or "")
+    return latest
+
+
+async def _detail(db: AsyncSession, thread: Thread) -> ThreadDetailOut:
     turns = await thread_turns(db, thread.id)
+    latest = await _latest_turn_status(db, [thread.id])
     # 逐字段传，不先 model_dump 再解回来：那条路会把 datetime 序列化成字符串
     # 再解析一遍，绕一圈只为了丢掉时区信息。
     return ThreadDetailOut(
@@ -70,6 +96,7 @@ async def _detail(db: DbSession, thread: Thread) -> ThreadDetailOut:
         status=thread.status,
         forked_from=thread.forked_from,
         turn_count=int(thread.turn_count or 0),
+        last_turn_status=latest.get(thread.id, ""),
         created_at=thread.created_at,
         updated_at=thread.updated_at,
         turns=[_turn_out(task) for task in turns],
@@ -116,7 +143,11 @@ async def list_threads(
             .limit(limit)
         )
     ).scalars().all()
-    return [ThreadOut.model_validate(row) for row in rows]
+    latest = await _latest_turn_status(db, [row.id for row in rows])
+    return [
+        ThreadOut.model_validate(row).model_copy(update={"last_turn_status": latest.get(row.id, "")})
+        for row in rows
+    ]
 
 
 @router.get("/threads/{thread_id}", response_model=ThreadDetailOut)
@@ -191,6 +222,51 @@ async def archive_thread(thread_id: str, db: DbSession):
     thread.status = "archived"
     await db.commit()
     return None
+
+
+@router.delete("/threads/{thread_id}/permanent", status_code=204)
+async def delete_thread(thread_id: str, db: DbSession):
+    """物理删除会话及其所有关联任务。
+
+    轮次任务（thread_id 指向这条会话）一并删除；引用链上的事件/运行记录/检查点
+    由外键 CASCADE 联动删除。不可恢复，前端须弹出二次确认。
+    """
+    from sqlalchemy import delete as sa_delete
+    from blank_api.models.run import AgentRun, AgentEvent, AgentCheckpoint
+    from blank_api.models.search import ChatMessage
+
+    thread = await thread_or_404(db, thread_id)
+
+    tasks = (await db.execute(select(Task).where(Task.thread_id == thread_id))).scalars().all()
+    for task in tasks:
+        await db.execute(sa_delete(AgentEvent).where(AgentEvent.task_id == task.id))
+        await db.execute(sa_delete(AgentRun).where(AgentRun.task_id == task.id))
+        await db.execute(sa_delete(AgentCheckpoint).where(AgentCheckpoint.task_id == task.id))
+        await db.execute(sa_delete(ChatMessage).where(ChatMessage.thread_id == thread_id))
+        await db.delete(task)
+
+    await db.delete(thread)
+    await db.commit()
+    return None
+
+
+@router.patch("/threads/{thread_id}")
+async def update_thread(thread_id: str, payload: ThreadUpdate, db: DbSession):
+    """更新会话的字段（title 或 status）。
+
+    刻意不做全字段更新：这里只有 title 和 status 两个可变字段，
+    其他属性（project_id、forked_from 等）是一次创建就不再改的。
+    """
+    thread = await thread_or_404(db, thread_id)
+    if payload.status is not None:
+        if payload.status not in ("active", "archived"):
+            raise ApiError(code="invalid_status", message="状态只能是 active 或 archived", status_code=422)
+        thread.status = payload.status
+    if payload.title is not None:
+        thread.title = payload.title.strip() or "未命名会话"
+    await db.commit()
+    await db.refresh(thread)
+    return thread
 
 
 def _snapshots_by_task(store: SnapshotStore) -> dict[str, list[dict]]:

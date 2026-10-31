@@ -27,6 +27,18 @@ def _role(node: str) -> str:
 # 会得到 "None/模型名"，既读不出含义，又会把孤儿当成一家供应商。
 
 
+@router.get("/ledger")
+async def observability_ledger(db: DbSession, days: int = 7) -> dict:
+    """用量台账：钱换成了产物、判断，还是废纸。
+
+    与 ``/summary`` 分开是有意的：那个回答「谁在花」，这个回答「花得值不值」。
+    放进同一张表会让两个问题互相稀释。
+    """
+    from blank_api.services.usage_ledger import build_ledger
+
+    return await build_ledger(db, days=max(1, min(int(days), 90)))
+
+
 @router.get("/summary")
 async def observability_summary(db: DbSession) -> dict:
     model_rows = (

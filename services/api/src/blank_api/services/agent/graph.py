@@ -30,6 +30,7 @@ from blank_api.services.agent.artifacts import ArtifactStore
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent import governance
 from blank_api.services.agent.live import OutputRelay
+from blank_api.services.agent.stall import StallBreaker, signature as _stall_signature
 from blank_api.services.agent.intent import (
     ADVISE_INSTRUCTION,
     INTENT_ACT,
@@ -71,6 +72,7 @@ from blank_api.services.features import is_enabled as feature_enabled
 from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import HookRunner
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
+from blank_api.services.plan import normalize_goal, normalize_steps, plan_progress
 from blank_api.services.permissions import (
     MODE_DEFAULT,
     READ_ONLY_TOOLS,
@@ -85,7 +87,12 @@ from blank_api.services.permissions import (
     tool_grant_too_wide,
 )
 from blank_api.services.sandbox.tiers import host_bypass_requested
-from blank_api.services.tools.ask import normalize_questions, parse_answers, render_answers
+from blank_api.services.tools.ask import (
+    fill_defaults,
+    normalize_questions,
+    parse_answers,
+    render_answers,
+)
 from blank_api.services.tools.base import (
     ToolContext,
     ToolDefinition,
@@ -115,6 +122,9 @@ READONLY_TOOLS = frozenset(
         "web_search",
         "tool_search",
         "update_plan",
+        # 结构化目标不写工作区。只读调研恰恰最需要它：先把"算不算做完"定下来，
+        # 后面的建议才有落点，否则给完判断用户还得自己再问一遍标准。
+        "set_goal",
         "request_user_input",
     }
 )
@@ -142,9 +152,16 @@ SYSTEM_PROMPT = (
     # 这段不编号，是为了不打乱后面 1-16 的编号——插一条就得全体重排，
     # 重排一次就会出现"改了编号忘了引用"的死链。
     "先问再干（优先于下面的执行规则）：\n"
-    "· 交付物依赖只有用户才知道的信息时（叫什么名字、给谁看、要哪些栏目、联系方式、"
-    "接哪个服务、放在哪个目录），先用 request_user_input 一次问清再动手：1-3 个问题，"
-    "每题给 2-4 个选项，用户点一下就能答。\n"
+    "先把未知分成两类，处理方式相反：\n"
+    "· 能查到的（工作区文件里、命令输出里、代码里读得到的）：自己去查，不许拿去问人。\n"
+    "· 只有用户才知道的（叫什么名字、给谁看、要哪些栏目、联系方式、接哪个服务、"
+    "放在哪个目录）：先用 request_user_input 一次问清再动手：1-3 个问题，每题 2-4 个选项，"
+    "用户点一下就能答。\n"
+    "· 偏好题要有默认值：把最合适的那一项标 recommended=true（每题最多一个），"
+    "它就是这道题的推荐项。用户不答（关掉卡片、超时）就按它继续，"
+    "你会被记一笔「替你定的」，并在交付里说明这是他没答、你替他定的。\n"
+    "· 事实题（电话、邮箱、具体地址）不要标 recommended：这类没有默认值，"
+    "用户不答的含义是「这处留空」。替他编一个等于造假。\n"
     "· 不许用占位内容顶替这些信息。example.com、138-0000-0000、lorem ipsum、"
     "「示例公司」「待填写」都算占位；交付里出现它们，说明该问的时候没问。\n"
     "· 电话、邮箱、地址这类具体事实，只写用户给过的。写页面前先问清楚——服务端会在"
@@ -180,6 +197,19 @@ SYSTEM_PROMPT = (
     "自检：写完后删掉所有「我做了什么」的句子，剩下的如果是空的，说明这一轮没什么要说的，不要硬写。"
 )
 
+# 表达风格。从 SYSTEM_PROMPT 里拆出来单独维护：规则层（做什么、不许做什么）改起来
+# 要格外谨慎，风格层（怎么说）可以随时调，两者混在同一个常量里时没人敢动前者。
+# 这里只讲措辞与篇幅，不重复上面第 9-14 条的行为约定——重复的规则等于两条都可以被忽略。
+STYLE_PROMPT = (
+    "表达风格：\n"
+    "· 用中文，说人话。术语可以留英文原词（commit、token、schema），不要生造译名。\n"
+    "· 有判断就给判断，不要两边都说。「看情况」后面必须跟一句「什么情况看什么」。\n"
+    "· 不确定就说不确定，并说清是缺证据还是缺能力——这两件事用户能做的事完全不同。\n"
+    "· 需要用户动手时用祈使句：「重跑一次」「把 key 填上」。不要用「您可以考虑」。\n"
+    "· 中文里不塞空格，句末用句号。代码、命令、路径放进反引号。\n"
+    "· 不写「首先/其次/最后」这类结构词，段落之间的逻辑靠内容接住，不靠序号。"
+)
+
 
 class AgentState(TypedDict, total=False):
     task_id: str
@@ -201,6 +231,11 @@ class AgentState(TypedDict, total=False):
     budget_exhausted: bool
     # update_plan 写回的结构化计划（plan 保留为步骤文本，向后兼容）。
     plan_steps: list[dict]
+    # 里程碑：[{id, title, status, step_ids}]。和 plan_steps 一起构成"做到哪了"的完整答案。
+    milestones: list[dict]
+    # 结构化目标 {objective, done_when, constraints, out_of_scope}。
+    # 与 plan 的分工：goal 是判据，plan 是路径。收尾时拿 done_when 逐条对。
+    goal_spec: dict
     # 模型判定这次不用动工作区，直接回答了（闲聊/概念提问），执行回合整段跳过。
     direct_answer: bool
     # 只读调研（征求意见类）：允许看，不允许改。执行节点据此把写类工具全部拒掉，
@@ -251,6 +286,10 @@ class AgentSession:
     # 恒为 full 档，与裁剪功能上线前逐字节一致。
     tiered_tools: bool = False
     acceptance_criteria: list[str] = field(default_factory=list)
+    # 每条验收条件对应的计划步骤 [{id, criterion, milestone_id, step_ids}]，与上一行同序。
+    # 收尾判定时把步骤进度一并发给模型：它才知道"这条验收依赖的第 3 步根本没做"，
+    # 而不是照着交付文本自己猜。
+    acceptance_links: list[dict] = field(default_factory=list)
     max_steps: int = DEFAULT_MAX_STEPS
     # 用户这一轮贴的图片，形如 [{"name", "media_type", "data"(base64)}]。
     # 刻意不放进 state 的 messages：state 会被写进检查点，一张 8MB 的图 base64 之后
@@ -273,8 +312,16 @@ class AgentSession:
     # 单次/回合/线程三个口径，为的是"这一轮花了多少"和"这个任务累计花了多少"
     # 都是查出来的事实，而不是读出时求和推出来的。
     turn_usage: dict = field(default_factory=dict)
+    # 空转断路器：这一回合已经试过哪些调用、失败成什么样。判的是"重复"，不是"能力"，
+    # 所以只活在内存里，不跨进程也不跨轮（见 agent/stall.py 的口径说明）。
+    stall: StallBreaker = field(default_factory=StallBreaker)
     # 已经被记录过的问题调用：节点会因中断被重放，不记账就会重复写 question.* 事件。
     recorded_questions: set[str] = field(default_factory=set)
+    # 「替你定的」账本：用户没答、按推荐默认值走下去的偏好题。交付正文要据此说明，
+    # 否则用户会把服务器替他做的选择当成自己的选择。同一道题只留最后一次结论。
+    assumptions: list[dict] = field(default_factory=list)
+    # 本次回答里被代答的问题 id 与值，供 _dispatch 标出「用户没答」。
+    question_defaults: list[dict] = field(default_factory=list)
     # 「写之前先确认」的三本账（见 agent/unknowns.py）：
     #   asked_facts   —— 已经就哪些值问过用户，同一处不反复问（问了没用也得记住）；
     #   allowed_facts —— 用户确认过"这个值就是真的"，之后不再拦；
@@ -1087,7 +1134,7 @@ def initial_messages(
 ) -> list[dict]:
     from blank_api.services.instructions import compose
 
-    system = SYSTEM_PROMPT
+    system = SYSTEM_PROMPT + "\n" + STYLE_PROMPT
     active_skills = [str(item).strip() for item in skills or [] if str(item).strip()]
     if active_skills:
         system += (
@@ -1456,9 +1503,16 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
 
     if steps:
         await session.recorder.add("plan.created", node, {"plan": steps, "text": result["text"][:2000]})
+    # 开局就把步骤转成结构化计划落进状态：后面 update_plan 才有"上一版"可以继承，
+    # 收尾时也才有东西可落库——否则第一轮结束任务行上的 plan_steps 永远是空的。
+    initial_steps = normalize_steps(steps) if steps else []
+    initial_goal = normalize_goal({"objective": parsed.get("objective") or ""}, fallback=raw_goal)
     return {
         "messages": result["messages"],
         "plan": steps,
+        "plan_steps": initial_steps,
+        "milestones": [],
+        "goal_spec": initial_goal,
         "usage": usage,
         "pending": result["tool_calls"],
         "status": "running",
@@ -1699,6 +1753,96 @@ async def drain_steer(session: AgentSession, node: str, step: int = 0) -> list[d
     ]
 
 
+def _assumption_key(item: dict) -> tuple[str, str]:
+    """一道题的身份：id + 题面。
+
+    只按 id 去重会踩到模型的老毛病——两次提问都叫 ``q1``。题面不同就是两道题，
+    互相顶掉会让前一个默认值凭空消失。
+    """
+    return (str(item.get("id") or ""), str(item.get("question") or ""))
+
+
+def _remember_assumptions(
+    session: "AgentSession", questions: list[dict], answers: dict[str, str], defaulted: list[dict]
+) -> None:
+    """把「替你定的」记进账本；用户真答了就把这一条的旧账抹掉。
+
+    同一道题只留最后一次结论：先按默认「简约」、后来用户改口「商务」，
+    再说「替你定的是简约」就是撒谎。
+    """
+    ledger = getattr(session, "assumptions", None)
+    if ledger is None:
+        ledger = []
+        session.assumptions = ledger
+    by_id = {str(item.get("id") or ""): item for item in defaulted or []}
+    for question in questions or []:
+        qid = str(question.get("id") or "")
+        if not qid:
+            continue
+        key = _assumption_key(question)
+        ledger[:] = [item for item in ledger if _assumption_key(item) != key]
+        if qid in by_id:
+            ledger.append(
+                {
+                    "id": qid,
+                    "header": str(question.get("header") or ""),
+                    "question": str(question.get("question") or ""),
+                    "value": str(by_id[qid].get("value") or ""),
+                }
+            )
+
+
+def assumption_ledger(events: list) -> list[dict]:
+    """从事件流重放「替你定的」账本。
+
+    交付文本产生在另一个进程回合里（用户答完 → resume → 新 session），内存里那本账
+    已经不在了。事件流是唯一的跨回合事实来源，所以这里按同一套规则重放一遍。
+    """
+    ledger: list[dict] = []
+    for event in events or []:
+        if getattr(event, "type", "") != "question.answered":
+            continue
+        payload = getattr(event, "payload", None) or {}
+        defaulted = [item for item in payload.get("defaulted") or [] if isinstance(item, dict)]
+        for item in defaulted:
+            key = _assumption_key(item)
+            ledger[:] = [entry for entry in ledger if _assumption_key(entry) != key]
+            ledger.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "header": str(item.get("header") or ""),
+                    "question": str(item.get("question") or ""),
+                    "value": str(item.get("value") or ""),
+                }
+            )
+        defaulted_ids = {str(item.get("id") or "") for item in defaulted}
+        for qid in payload.get("answered_ids") or []:
+            if str(qid) in defaulted_ids:
+                continue
+            ledger[:] = [entry for entry in ledger if str(entry.get("id")) != str(qid)]
+    return ledger
+
+
+def _with_delivery_notes(
+    text: str,
+    session: "AgentSession",
+    state: dict | None = None,
+    *,
+    assumptions: list[dict] | None = None,
+) -> str:
+    """交付正文末尾补一句「替你定的」——真发生过才加，没发生一个字都不加。"""
+    ledger = assumptions if assumptions is not None else getattr(session, "assumptions", None)
+    rows = [
+        f"· {item.get('header')}：{item.get('value')}" if item.get("header") else f"· {item.get('value')}"
+        for item in (ledger or [])
+        if str(item.get("value") or "").strip()
+    ]
+    if not rows:
+        return text
+    note = "替你定的（用户没答，按推荐默认值继续）：\n" + "\n".join(rows)
+    return f"{text}\n\n{note}" if text else note
+
+
 async def _question_gate(
     session: AgentSession,
     node: str,
@@ -1744,6 +1888,11 @@ async def _question_gate(
         }
     )
     answers = parse_answers(answer, asked)
+    # 用户没答（关掉卡片/超时）不等于任务停摆：偏好题按推荐项继续，事实题留在空里。
+    answers, defaulted = fill_defaults(asked, answers)
+    _remember_assumptions(session, asked, answers, defaulted)
+    session.question_defaults = defaulted
+    supplied = {qid for qid in answers if qid not in {item["id"] for item in defaulted}}
     if call_key not in session.recorded_questions:
         session.recorded_questions.add(call_key)
         await session.recorder.add(
@@ -1752,7 +1901,14 @@ async def _question_gate(
         await session.recorder.add(
             "question.answered",
             node,
-            {"answers": answers, "answered": len(answers), "questions": [q["id"] for q in asked]},
+            {
+                "answers": answers,
+                # 「答了几题」只数用户真给的：把代答也算进去，事后没人分得清哪些是他定的。
+                "answered": len(supplied),
+                "answered_ids": sorted(supplied),
+                "defaulted": defaulted,
+                "questions": [q["id"] for q in asked],
+            },
         )
     return answers
 
@@ -2004,28 +2160,51 @@ class _PlannedCall:
     arguments: dict
     # "question"（用户已答，走 settle）| "refuse"（钩子/审查/驳回）| "execute"
     # | "replay"（崩溃续跑：上次已执行完，复用事件日志里的结果，不再执行）
+    # | "blocked"（空转拦截：这一步不会带来新信息，既不执行也不冒充"被驳回"）
     mode: str
     reason: str = ""
     # 被 pre_tool_use 钩子拦下的调用不跑 post_tool_use：它压根没执行，
     # 报一次"执行完成"会让钩子作者以为自己的前置判断没生效。
     hook_blocked: bool = False
     answers: dict = field(default_factory=dict)
+    # 被代答的问题（用户没答、按推荐默认值走）。渲染时要标出来，否则模型会把它
+    # 当成用户的要求，交付里也就不会说明是替用户定的。
+    defaulted: list[dict] = field(default_factory=list)
+    # 空转断路器给这步的提示（"这一步刚失败过一次，下一步是 X"）。放行时才带，
+    # 拦截时不走这里——被拦的调用根本没有回执可挂。
+    note: str = ""
 
 
 def _parallel_ok(enabled: bool, item: _PlannedCall) -> bool:
     return enabled and item.mode == "execute" and item.name in PARALLEL_SAFE_TOOLS
 
 
+def _tool_schema(session: "AgentSession", name: str) -> dict | None:
+    """取工具的入参 schema，给"缺参数"回执配一句"这个工具到底要什么"。
+
+    拿不到就返回 None：断路器的 `_schema_hint` 对 None 有兜底文案，
+    宁可少说一句，也不要为了凑提示在别处再写一份 schema。
+    """
+    tool = session.gateway.get(name)
+    return getattr(tool, "input_schema", None) if tool is not None else None
+
+
 async def _dispatch(session: "AgentSession", node: str, item: _PlannedCall) -> dict:
     """把一条计划变成网关返回的 payload。三条分支都不执行写操作以外的东西。"""
     if item.mode == "question":
         questions = normalize_questions(item.arguments)
-        first = questions[0]["id"] if questions else ""
-        if first and item.answers.get(first):
+        answers = dict(item.answers or {})
+        assumed = {str(entry.get("id")) for entry in item.defaulted or []}
+        if answers:
             outcome = ToolOutcome(
                 ok=True,
-                output=render_answers(questions, item.answers),
-                data={"questions": questions, "answers": item.answers, "answered": True},
+                output=render_answers(questions, answers, assumed),
+                data={
+                    "questions": questions,
+                    "answers": answers,
+                    "answered": True,
+                    "defaulted": list(item.defaulted or []),
+                },
             )
         else:
             outcome = ToolOutcome(
@@ -2040,6 +2219,16 @@ async def _dispatch(session: "AgentSession", node: str, item: _PlannedCall) -> d
     if item.mode == "refuse":
         return await session.gateway.refuse(
             item.name, item.arguments, session.context, node, reason=item.reason
+        )
+    if item.mode == "blocked":
+        # 空转拦截**不能**借用 refused 那条路：`refused` 在整条链上的意思都是
+        # "用户/策略不许做这件事"（模板文案、证据里的"被驳回"、终态判定都这么读）。
+        # 用它来装"没必要重做"，会推出两个都错结论——用户以为是自己拒的，
+        # 而收尾把"没跑"当成"没获批"跳过校验，任务反而被判成功。
+        # 所以单独一种终结方式：真的没执行，理由写在 message 里。
+        outcome = ToolOutcome(ok=False, status="blocked", message=item.reason)
+        return await session.gateway.settle(
+            item.name, item.arguments, outcome, session.context, node, rule="stall:blocked"
         )
     return await session.gateway.execute(item.name, item.arguments, session.context, node)
 
@@ -2310,7 +2499,14 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
 
         if name == "request_user_input" and answers:
             planned.append(
-                _PlannedCall(call, name, arguments, "question", answers=answers)
+                _PlannedCall(
+                    call,
+                    name,
+                    arguments,
+                    "question",
+                    answers=answers,
+                    defaulted=list(session.question_defaults or []),
+                )
             )
             continue
 
@@ -2381,11 +2577,52 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 )
             )
         else:
-            planned.append(_PlannedCall(call, name, arguments, "execute"))
-            if name == "enter_plan_mode":
-                enters_plan = True
+            # 空转断路器是执行前的最后一关：前面几道门判的是"准不准做"，它判的是
+            # "这一步会不会带来新信息"。位置必须在所有既有规则之后——策略判断比重复判断硬。
+            verdict = session.stall.verdict(name, arguments, _tool_schema(session, name))
+            if verdict.block:
+                session.stall.blocked += 1
+                await session.recorder.add(
+                    "tool.blocked",
+                    node,
+                    {
+                        "tool": name,
+                        "call_id": _call_key(call),
+                        "kind": verdict.kind,
+                        # 参数只记指纹：拦截理由里已经有"第几次同样的调用"，
+                        # 再把参数正文抄一遍就是把省下的上下文换个地方存回来。
+                        "signature": _stall_signature(name, arguments),
+                        "reason": verdict.reason,
+                    },
+                )
+                planned.append(
+                    _PlannedCall(
+                        call,
+                        name,
+                        arguments,
+                        "blocked",
+                        reason=f"空转拦截（本次未执行）：{verdict.note()}",
+                    )
+                )
+            else:
+                planned.append(
+                    _PlannedCall(call, name, arguments, "execute", note=verdict.note())
+                )
+                if name == "enter_plan_mode":
+                    enters_plan = True
 
     # 第二段：执行。只读且连续的可以并发，其余串行。已执行过的那批不进去。
+    # 执行前把当前计划塞进工具上下文：update_plan 需要"上一版步骤"才能沿用原 id，
+    # 否则每次重新提交都会换一批 id，里程碑与验收条件按 id 建的引用全部指空。
+    # ToolContext 是 frozen 的，只能原地改容器内部——这也是它给成 dict 而非标量的原因。
+    session.context.plan_state.clear()
+    session.context.plan_state.update(
+        {
+            "steps": list(state.get("plan_steps") or []),
+            "milestones": list(state.get("milestones") or []),
+            "goal": dict(state.get("goal_spec") or {}),
+        }
+    )
     live_planned = [item for item in planned if item.mode != "replay"]
     live_payloads = await _execute_all(session, node, live_planned)
     payloads: list[dict] = []
@@ -2393,8 +2630,22 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     for item in planned:
         payloads.append(replayed[_call_key(item.call)] if item.mode == "replay" else next(live_iter))
 
+    # 记账 + 挂提示。记账必须在这里（结果已知、还没进上下文）：断路器的下一次判定
+    # 靠的就是这一条。提示只在放行时挂——被拦的调用根本没有回执可挂。
+    for index, (item, payload) in enumerate(zip(planned, payloads)):
+        if item.mode != "execute":
+            continue
+        session.stall.record(item.name, item.arguments, payload)
+        if item.note:
+            merged = dict(payload)
+            message = str(merged.get("message") or "").strip()
+            merged["message"] = f"{message}\n【下一步】{item.note}".strip() if message else f"【下一步】{item.note}"
+            payloads[index] = merged
+
     # 第三段：收尾。全部按模型给出的顺序写事件与消息，前端看到的次序与串行时一致。
     plan_update: list[dict] | None = None
+    milestone_update: list[dict] | None = None
+    goal_update: dict | None = None
     for item, payload in zip(planned, payloads):
         name = item.name
         if item.mode == "question":
@@ -2441,7 +2692,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                     "tool_call_id": payload.get("tool_call_id"),
                 },
             )
-        elif not item.hook_blocked:
+        elif item.mode != "blocked" and not item.hook_blocked:
             post_results = await session.hooks.run(
                 "post_tool_use",
                 name,
@@ -2489,9 +2740,23 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         # update_plan：计划是可更新对象，工具结果直接落回图状态
         # 注意别把外层计数器 steps（int）覆盖掉，否则后面算预算时 int - list 直接崩
         if name == "update_plan" and payload.get("ok"):
-            plan_steps = (payload.get("data") or {}).get("steps")
+            data = payload.get("data") or {}
+            plan_steps = data.get("steps")
             if isinstance(plan_steps, list) and plan_steps:
                 plan_update = plan_steps
+            raw_milestones = data.get("milestones")
+            if isinstance(raw_milestones, list):
+                milestone_update = raw_milestones
+        # set_goal：目标是判据，单独落——用户要能看见"按什么算做完"，不能被计划覆盖掉
+        if name == "set_goal" and payload.get("ok"):
+            data = payload.get("data") or {}
+            if data.get("objective"):
+                goal_update = {
+                    "objective": str(data.get("objective") or ""),
+                    "done_when": list(data.get("done_when") or []),
+                    "constraints": list(data.get("constraints") or []),
+                    "out_of_scope": list(data.get("out_of_scope") or []),
+                }
         if item.mode != "replay":
             await session.recorder.add(
                 "tool.completed",
@@ -2585,15 +2850,29 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
 
     plan_patch: dict = {}
     if plan_update:
+        merged_milestones = milestone_update if milestone_update is not None else list(
+            state.get("milestones") or []
+        )
+        progress = plan_progress(plan_update, merged_milestones)
         await session.recorder.add(
             "plan.updated",
             node,
-            {"steps": plan_update, "total": len(plan_update)},
+            {
+                "steps": plan_update,
+                "milestones": merged_milestones,
+                "progress": progress,
+                "total": progress["total"],
+                "completed": progress["completed"],
+            },
         )
         plan_patch = {
             "plan": [str(step.get("step") or "") for step in plan_update],
             "plan_steps": plan_update,
+            "milestones": merged_milestones,
         }
+    if goal_update:
+        await session.recorder.add("goal.updated", node, goal_update)
+        plan_patch["goal_spec"] = goal_update
 
     if denied:
         reason = f"已驳回高风险操作：{', '.join(sorted(denied))}，该步骤未执行"
@@ -3034,14 +3313,56 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
     # 有验收条件时把验收判断并进同一次调用，省一轮往返也省一次费用。
     hint = raw.strip()[:1200]
     if session.acceptance_criteria:
+        # 把计划进度一并给它：验收不通过时最常见的形态是"某一步压根没做"，
+        # 而交付文本里那种空洞的"已完成"看不出来。给了步骤状态它才对得上。
+        plan_steps = list(state.get("plan_steps") or [])
+        plan_block = ""
+        if plan_steps:
+            plan_block = "\n当前计划进度（用来判断验收条件是否真的满足）：\n" + "\n".join(
+                f"- [{step.get('status')}] {step.get('step')}"
+                + (f"（证据：{step.get('evidence')}）" if step.get("evidence") else "")
+                for step in plan_steps
+            )
+        links_block = ""
+        linked = [
+            item for item in session.acceptance_links if isinstance(item, dict)
+        ]
+        if linked:
+            by_field = {str(item.get("id") or ""): item for item in linked}
+            lines = []
+            for index, criterion in enumerate(session.acceptance_criteria, start=1):
+                ref = next(
+                    (item for item in by_field.values() if item.get("criterion") == criterion),
+                    None,
+                )
+                step_ids = [str(sid) for sid in ((ref or {}).get("step_ids") or [])]
+                if not step_ids:
+                    continue
+                names = [
+                    str(step.get("step") or "")
+                    for step in plan_steps
+                    if str(step.get("id") or "") in step_ids
+                ]
+                if names:
+                    lines.append(f"- 验收 {index}「{criterion}」依赖步骤：{'；'.join(names)}")
+            if lines:
+                links_block = "\n验收条件与步骤的对应关系：\n" + "\n".join(lines)
+
         prompt = (
             REPORT_INSTRUCTION
             + "\n同时逐项判断验收条件是否已验证。只输出 JSON："
             + '{"report": "按上面三段写的交付说明", "acceptance": [{"criterion": "原文", "covered": true, "evidence": "证据"}]}'
             + "\n验收条件：\n"
             + "\n".join(f"- {item}" for item in session.acceptance_criteria)
+            + plan_block
+            + links_block
             + (f"\n本次执行摘要（仅供参考，不要照抄）：{hint}" if hint else "")
         )
+        link_by_criterion = {
+            str(item.get("criterion") or ""): item
+            for item in session.acceptance_links
+            if isinstance(item, dict)
+        }
         try:
             ask = await session.ask(state, prompt, node)
             parsed = _extract_json(ask["text"])
@@ -3056,11 +3377,16 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
                 match = by_text.get(criterion.strip()) or next(
                     (item for text, item in by_text.items() if criterion.strip() in text), None
                 )
+                link = link_by_criterion.get(criterion) or {}
                 results.append(
                     {
                         "criterion": criterion,
                         "covered": bool(match and match.get("covered")),
                         "evidence": str((match or {}).get("evidence") or ""),
+                        # 把引用带回去：验收没过时界面能直接指到"第 3 步"，而不是干巴巴一句失败。
+                        "criterion_id": str(link.get("id") or ""),
+                        "milestone_id": str(link.get("milestone_id") or ""),
+                        "step_ids": [str(sid) for sid in (link.get("step_ids") or [])],
                     }
                 )
             await session.recorder.add("delivery.recorded", node, {"mode": "report", "chars": len(report)})
