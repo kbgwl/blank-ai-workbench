@@ -9,6 +9,7 @@ import { LiveBadge, StatusBadge } from "./bits";
 import { formatDateTime, relativeTime } from "./format";
 import { buildBlocks, type Block } from "./timeline";
 import { TimelineBlock } from "./timeline-blocks";
+import { PlanPanel } from "./plan-panel";
 import type { LiveMode } from "./use-task-events";
 
 type Props = {
@@ -197,6 +198,10 @@ export function TaskConsole({
             </>
           )}
         </div>
+
+        {/* 计划放在任务描述之后、时间线之前：用户先看"要做什么"，再看"打算怎么做"，
+            最后才是"实际做了什么"。顺序反过来就成了先读流水账。 */}
+        <PlanPanel task={task} />
 
         <div className="flex flex-wrap items-center gap-2">
           {FILTERS.map((item) => {

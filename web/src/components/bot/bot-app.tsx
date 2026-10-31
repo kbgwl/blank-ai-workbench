@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   archiveThread,
+  deleteThread,
+  updateThread,
   answerTask,
   decideApproval,
   errorCode,
@@ -659,6 +661,20 @@ export function BotApp() {
     [activeTaskId, live],
   );
 
+  const onDelete = useCallback(
+    (thread: Thread) => {
+      const ok = window.confirm('删除「' + thread.title + '」？删除后不可恢复！');
+      if (!ok) return;
+      deleteThread(thread.id)
+        .then(() => {
+          if (conv?.thread.id === thread.id) startNew();
+          setThreadsNonce((value) => value + 1);
+        })
+        .catch((error: unknown) => setActionError(errorMessage(error)));
+    },
+    [conv?.thread.id, startNew],
+  );
+
   const archive = useCallback(
     (thread: Thread) => {
       const ok = window.confirm(`归档「${thread.title}」？\n\n它不再接受新的一轮，已有的轮次全部保留。`);
@@ -673,6 +689,26 @@ export function BotApp() {
     [conv?.thread.id, startNew],
   );
 
+
+  const rename = useCallback(
+    (thread: Thread) => {
+      const next = window.prompt('新标题', thread.title);
+      if (!next || next.trim() === '' || next.trim() === thread.title) return;
+      updateThread(thread.id, { title: next.trim() })
+        .then(() => setThreadsNonce((value) => value + 1))
+        .catch((error: unknown) => setActionError(errorMessage(error)));
+    },
+    [],
+  );
+
+  const unarchive = useCallback(
+    (thread: Thread) => {
+      updateThread(thread.id, { status: 'active' })
+        .then(() => setThreadsNonce((value) => value + 1))
+        .catch((error: unknown) => setActionError(errorMessage(error)));
+    },
+    [],
+  );
   const retry = useCallback(() => {
     const last = conv?.turns[conv.turns.length - 1];
     if (!last) return;
@@ -727,6 +763,9 @@ export function BotApp() {
         onNew={startNew}
         onSelect={openThread}
         onArchive={archive}
+        onRename={rename}
+        onUnarchive={unarchive}
+        onDelete={onDelete}
       />
 
       <main className="flex min-w-0 flex-1 flex-col">
@@ -766,8 +805,8 @@ export function BotApp() {
             )}
             {currentTurnView.length === 0 && !loadingConv && (
               <div className="flex min-h-[56vh] flex-col items-center justify-center text-center">
-                <span className="grid size-12 place-items-center rounded-2xl bg-[#1b2a4a]">
-                  <span className="size-4 rounded-[4px] bg-[#5eead4]" />
+                <span className="grid size-12 place-items-center rounded-2xl bg-logo-bg">
+                  <span className="size-4 rounded-[4px] bg-logo-accent" />
                 </span>
                 <h2 className="mt-5 text-[24px] font-semibold tracking-tight">今天想做点什么？</h2>
                 <p className="mt-2 max-w-lg text-[13.5px] leading-relaxed text-muted">
@@ -872,6 +911,8 @@ export function BotApp() {
           steps={lastTurn.steps}
           changes={activeEvidence?.changes ?? evidence?.changes ?? []}
           usage={activeEvidence?.usage ?? evidence?.usage ?? null}
+          acceptance={activeEvidence?.acceptance ?? evidence?.acceptance ?? []}
+          test={activeEvidence?.test ?? evidence?.test ?? null}
           onClose={() => setPanelOpen(false)}
         />
       )}

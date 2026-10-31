@@ -453,8 +453,8 @@ export function Workbench() {
       {/* ── 左栏 ── */}
       <aside className="flex min-h-0 flex-col border-r border-line bg-sidebar">
         <div className="flex items-center gap-2 px-3 pt-3 pb-2">
-          <span className="grid size-6 place-items-center rounded-[7px] bg-[#1b2a4a]">
-            <span className="size-2.5 rounded-[2px] bg-[#5eead4]" />
+          <span className="grid size-6 place-items-center rounded-[7px] bg-logo-bg">
+            <span className="size-2.5 rounded-[2px] bg-logo-accent" />
           </span>
           <span className="text-[13.5px] font-semibold tracking-tight">空白格</span>
         </div>

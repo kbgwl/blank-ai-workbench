@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import type { ChangeItem, UsageInfo } from "../tasks/api";
+import type { AcceptanceItem, ChangeItem, TestInfo, UsageInfo } from "../tasks/api";
 import { formatDuration } from "../tasks/format";
+import { TEST_LABEL, testState } from "../evidence/format";
+import { activityRows, TONE_CLASS } from "./panel-activity";
 import type { BotStep } from "./turns";
 import { turnEvidence } from "./turns";
 
@@ -66,17 +68,25 @@ export type TaskPanelProps = {
   steps: BotStep[];
   changes: ChangeItem[];
   usage: UsageInfo | null;
+  /** 验收条件与测试结论。缺省表示这一轮没有证据（老任务、或还没跑到验证）。 */
+  acceptance?: AcceptanceItem[];
+  test?: TestInfo | null;
   onClose: () => void;
 };
 
+type PanelTab = "changes" | "evidence" | "activity";
+
 /**
- * 右侧面板：只回答"这一轮到底动了什么"。
+ * 右侧面板：变更 / 证据 / 活动，三件事分三栏看。
  *
- * 刻意不把过程再抄一遍——过程在对话里已经按发生顺序展开了，在这里再列一次
- * 会让人分不清哪份是实时的。这里给的是**结果**：改了哪些文件、花了多少。
+ * 合在一起时最长的那一栏（改动文件）会把另外两项挤到看不见，用户于是永远只看到
+ * "改了什么"，看不到"凭什么说改对了"。分栏之后每一项都有固定入口。
+ *
+ * 概览那四格留在栏外：它回答"这一轮花了多少"，三个栏都要用到。
  */
 export function TaskPanel(props: TaskPanelProps) {
   const [openPath, setOpenPath] = useState<string | null>(null);
+  const [tab, setTab] = useState<PanelTab>("changes");
   // 和对话里那条依据条用同一个函数算。两处数字必须同源——左边说改了 3 个文件、
   // 右边说 4 个，用户就没有理由相信任何一个。耗时优先用模型侧统计，缺了回落到
   // 工具耗时之和（离线跑、老事件里没有 usage 时就是这种情形）。
@@ -90,6 +100,17 @@ export function TaskPanel(props: TaskPanelProps) {
           return rows;
         }, []);
   const latency = props.usage?.latencyMs || evidence.durationMs;
+
+  const acceptance = props.acceptance ?? [];
+  const testInfo = props.test ?? null;
+  const testRow = testState(testInfo);
+  const activity = activityRows(props.steps);
+  // 计数写在标签上：不点开也知道哪一栏有东西，避免"点进去才发现是空的"。
+  const tabs: { key: PanelTab; label: string; count: number }[] = [
+    { key: "changes", label: "变更", count: files.length },
+    { key: "evidence", label: "证据", count: acceptance.length + (testRow === "none" ? 0 : 1) },
+    { key: "activity", label: "活动", count: activity.length },
+  ];
 
   return (
     <aside className="flex w-[320px] shrink-0 flex-col border-l border-line bg-canvas">
@@ -113,6 +134,27 @@ export function TaskPanel(props: TaskPanelProps) {
           </svg>
         </button>
       </header>
+
+      <div role="tablist" aria-label="本轮详情" className="flex shrink-0 items-center gap-0.5 border-b border-line px-2 py-1.5">
+        {tabs.map((item) => {
+          const active = tab === item.key;
+          return (
+            <button
+              key={item.key}
+              type="button"
+              aria-selected={active}
+              role="tab"
+              onClick={() => setTab(item.key)}
+              className={`flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] transition-colors ${
+                active ? "bg-surface-3 font-medium text-text" : "text-muted hover:bg-surface-2 hover:text-text"
+              }`}
+            >
+              {item.label}
+              <span className="font-mono text-[9.5px] text-faint">{item.count}</span>
+            </button>
+          );
+        })}
+      </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
         <section>
@@ -149,47 +191,128 @@ export function TaskPanel(props: TaskPanelProps) {
           </dl>
         </section>
 
-        <section>
-          <p className="mb-1.5 font-mono text-[10px] tracking-wide text-faint uppercase">改动的文件</p>
-          {files.length === 0 && <p className="px-1 py-2 text-[11.5px] text-faint">这一轮没有改文件。</p>}
-          <div className="space-y-1">
-            {files.map((file) => {
-              const open = openPath === file.path;
-              return (
-                <div key={file.path} className="overflow-hidden rounded-lg border border-line bg-surface">
-                  {/* 没有 diff 也要能点开：以前这里 disabled，行看着是按钮，
-                      点下去一点反应都没有，用户只会怀疑整个面板坏了。
-                      现在点开至少说明"这一轮没有记录 diff"。 */}
-                  <button
-                    type="button"
-                    aria-expanded={open}
-                    onClick={() => setOpenPath(open ? null : file.path)}
-                    title={file.diff ? "展开看改动" : "这一轮没有记录 diff"}
-                    className="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
+        {tab === "changes" && (
+          <section>
+            <p className="mb-1.5 font-mono text-[10px] tracking-wide text-faint uppercase">改动的文件</p>
+            {files.length === 0 && <p className="px-1 py-2 text-[11.5px] text-faint">这一轮没有改文件。</p>}
+            <div className="space-y-1">
+              {files.map((file) => {
+                const open = openPath === file.path;
+                return (
+                  <div key={file.path} className="overflow-hidden rounded-lg border border-line bg-surface">
+                    {/* 没有 diff 也要能点开：以前这里 disabled，行看着是按钮，
+                        点下去一点反应都没有，用户只会怀疑整个面板坏了。
+                        现在点开至少说明"这一轮没有记录 diff"。 */}
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() => setOpenPath(open ? null : file.path)}
+                      title={file.diff ? "展开看改动" : "这一轮没有记录 diff"}
+                      className="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
+                    >
+                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text" title={file.path}>
+                        {file.path}
+                      </span>
+                      <span className={`shrink-0 font-mono text-[9.5px] ${CHANGE_TONE[file.changeType] ?? "text-muted"}`}>
+                        {CHANGE_LABEL[file.changeType] ?? file.changeType}
+                      </span>
+                    </button>
+                    {open && (
+                      <div className="border-t border-line p-1.5">
+                        {file.diff ? (
+                          <DiffText diff={file.diff} />
+                        ) : (
+                          <p className="px-1 py-1 text-[11px] text-faint">
+                            这一轮只记录了文件路径，没有留下 diff（历史轮次或改动未落盘）。
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {tab === "evidence" && (
+          <section className="space-y-3">
+            <div>
+              <p className="mb-1.5 font-mono text-[10px] tracking-wide text-faint uppercase">验收条件</p>
+              {acceptance.length === 0 && (
+                <p className="px-1 py-2 text-[11.5px] text-faint">这一轮没有验收条件。</p>
+              )}
+              <ul className="space-y-1">
+                {acceptance.map((item, index) => (
+                  <li key={index} className="flex items-start gap-1.5 text-[11.5px] leading-relaxed">
+                    <span
+                      className={
+                        item.covered === true ? "text-accent" : item.covered === false ? "text-danger" : "text-faint"
+                      }
+                      title={item.covered === true ? "已覆盖" : item.covered === false ? "没覆盖" : "未判定"}
+                    >
+                      {item.covered === true ? "✓" : item.covered === false ? "✗" : "?"}
+                    </span>
+                    <span className="min-w-0 flex-1 text-muted">
+                      {item.criterion}
+                      {item.note && <span className="text-faint"> · {item.note}</span>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div>
+              <p className="mb-1.5 font-mono text-[10px] tracking-wide text-faint uppercase">测试</p>
+              {testRow === "none" ? (
+                <p className="px-1 py-2 text-[11.5px] text-faint">这一轮没有跑测试。</p>
+              ) : (
+                <div className="rounded-lg border border-line bg-surface px-2 py-1.5">
+                  <p
+                    className={`text-[11.5px] ${
+                      testRow === "passed"
+                        ? "text-accent"
+                        : testRow === "failed"
+                          ? "text-danger"
+                          : "text-muted"
+                    }`}
                   >
-                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text" title={file.path}>
-                      {file.path}
-                    </span>
-                    <span className={`shrink-0 font-mono text-[9.5px] ${CHANGE_TONE[file.changeType] ?? "text-muted"}`}>
-                      {CHANGE_LABEL[file.changeType] ?? file.changeType}
-                    </span>
-                  </button>
-                  {open && (
-                    <div className="border-t border-line p-1.5">
-                      {file.diff ? (
-                        <DiffText diff={file.diff} />
-                      ) : (
-                        <p className="px-1 py-1 text-[11px] text-faint">
-                          这一轮只记录了文件路径，没有留下 diff（历史轮次或改动未落盘）。
-                        </p>
-                      )}
-                    </div>
+                    {testInfo?.skippedReason ? `${TEST_LABEL[testRow]}：${testInfo.skippedReason}` : TEST_LABEL[testRow]}
+                  </p>
+                  {testInfo?.command && (
+                    <p className="mt-1 truncate font-mono text-[10.5px] text-faint" title={testInfo.command}>
+                      $ {testInfo.command}
+                    </p>
                   )}
                 </div>
-              );
-            })}
-          </div>
-        </section>
+              )}
+            </div>
+          </section>
+        )}
+
+        {tab === "activity" && (
+          <section>
+            <p className="mb-1.5 font-mono text-[10px] tracking-wide text-faint uppercase">这一轮做了什么</p>
+            {activity.length === 0 && <p className="px-1 py-2 text-[11.5px] text-faint">还没有记录。</p>}
+            <ol className="space-y-1">
+              {activity.map((row) => (
+                <li key={row.key} className="flex items-start gap-2">
+                  <span className={`mt-1 size-1.5 shrink-0 rounded-full ${TONE_CLASS[row.tone]}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[11.5px] text-text" title={row.label}>
+                      {row.label}
+                    </span>
+                    {row.detail && (
+                      <span className="block truncate font-mono text-[10px] text-faint" title={row.detail}>
+                        {row.detail}
+                      </span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
       </div>
     </aside>
   );

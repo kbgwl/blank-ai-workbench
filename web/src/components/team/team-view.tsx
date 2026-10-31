@@ -75,7 +75,7 @@ function Avatar({ name, admin = false, size = "md" }: { name: string; admin?: bo
   return (
     <span
       className={`grid ${box} shrink-0 place-items-center rounded-lg font-semibold tracking-wide ${
-        admin ? "bg-[#1b2a4a] text-[#5eead4]" : "bg-surface-3 text-muted"
+        admin ? "bg-logo-bg text-logo-accent" : "bg-surface-3 text-muted"
       }`}
     >
       {initials(name)}
@@ -547,8 +547,8 @@ export function TeamView() {
     <div className="flex h-full min-h-0 bg-bg">
       <aside className="flex w-[286px] shrink-0 flex-col border-r border-line bg-sidebar">
         <div className="flex items-center gap-2 px-3 pt-3 pb-2">
-          <span className="grid size-6 place-items-center rounded-md bg-[#1b2a4a]">
-            <span className="size-2 rounded-[2px] bg-[#5eead4]" />
+          <span className="grid size-6 place-items-center rounded-md bg-logo-bg">
+            <span className="size-2 rounded-[2px] bg-logo-accent" />
           </span>
           <span className="text-[13px] font-semibold tracking-tight">Bot 团队</span>
           <span className="rounded bg-surface-3 px-1 py-0.5 font-mono text-[9px] tracking-wide text-muted uppercase">
@@ -921,8 +921,8 @@ function roundChipClass(status: string): string {
 function EmptyTeam({ onCreate }: { onCreate: () => void }) {
   return (
     <div className="flex flex-col items-center text-center">
-      <span className="grid size-12 place-items-center rounded-2xl bg-[#1b2a4a]">
-        <span className="size-4 rounded-[4px] bg-[#5eead4]" />
+      <span className="grid size-12 place-items-center rounded-2xl bg-logo-bg">
+        <span className="size-4 rounded-[4px] bg-logo-accent" />
       </span>
       <h2 className="mt-5 text-[22px] font-semibold tracking-tight">组一个能自己干活的 Bot 团队</h2>
       <p className="mt-2 max-w-md text-[13px] leading-relaxed text-muted">

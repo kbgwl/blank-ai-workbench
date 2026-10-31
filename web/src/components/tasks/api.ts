@@ -12,6 +12,17 @@ import {
 
 export { ApiError, errorCode, errorMessage };
 
+// 计划解析放在 plan.ts（时间线、侧栏、任务面板共用一份），这里只做接线。
+// 两者互相 import 是安全的：用到的都是函数声明，调用发生在模块初始化之后。
+import {
+  type MilestoneView,
+  type PlanProgressView,
+  type PlanStepView,
+  parseMilestones,
+  parsePlanSteps,
+  parseProgress,
+} from "./plan";
+
 const api = API_V1;
 
 // ---------------------------------------------------------------------------
@@ -141,6 +152,13 @@ export type Task = {
   failureReason: string;
   stepsUsed: number | null;
   maxSteps: number | null;
+  /** 结构化目标 {objective, done_when, constraints, out_of_scope}。 */
+  goalSpec: Record<string, unknown>;
+  /** 持久化的执行计划。任务结束后仍然可读——这是"跨轮看见做到哪了"的依据。 */
+  planSteps: PlanStepView[];
+  milestones: MilestoneView[];
+  planProgress: PlanProgressView;
+  planRevision: number;
   /** 所属会话（多轮对话）；独立任务为空串。空串而不是 null，是为了让调用处少一层判空。 */
   threadId: string;
   /** 会话内第几轮，独立任务为 0。 */
@@ -170,6 +188,14 @@ export function normalizeTask(source: unknown): Task | null {
     failureReason: textOf(raw, "failure_reason", "reason", "error"),
     stepsUsed: numOf(raw, "steps_used", "steps"),
     maxSteps: numOf(raw, "max_steps"),
+    goalSpec: (raw.goal_spec && typeof raw.goal_spec === "object" ? raw.goal_spec : {}) as Record<string, unknown>,
+    planSteps: parsePlanSteps(raw.plan_steps ?? raw.planSteps ?? []),
+    milestones: parseMilestones(raw.milestones ?? []),
+    planProgress: parseProgress(
+      raw.plan_progress ?? raw.planProgress,
+      parsePlanSteps(raw.plan_steps ?? raw.planSteps ?? []),
+    ),
+    planRevision: numOf(raw, "plan_revision", "planRevision") ?? 0,
     threadId: textOf(raw, "thread_id"),
     turnIndex: numOf(raw, "turn_index") ?? 0,
     createdAt: textOf(raw, "created_at", "createdAt"),
@@ -207,6 +233,11 @@ export type Thread = {
   status: string;
   forkedFrom: string;
   turnCount: number;
+  /**
+   * 最后一轮的状态，侧栏靠它画状态点。空串 = 这条会话还没有任何一轮，
+   * 与"跑完了"不是一回事——前者不画点，后者画绿点。
+   */
+  lastTurnStatus: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -247,6 +278,7 @@ export function normalizeThread(source: unknown): Thread | null {
     status: textOf(raw, "status") || "active",
     forkedFrom: textOf(raw, "forked_from"),
     turnCount: numOf(raw, "turn_count") ?? 0,
+    lastTurnStatus: textOf(raw, "last_turn_status"),
     createdAt: textOf(raw, "created_at"),
     updatedAt: textOf(raw, "updated_at"),
   };
@@ -350,6 +382,182 @@ export function forkThread(threadId: string, title = ""): Promise<Thread> {
 /** 归档，不是删除：删会话会把那些轮次任务的 thread_id 置空，它们就再也串不回去了。 */
 export function archiveThread(threadId: string): Promise<void> {
   return request<void>(`${api}/threads/${threadId}`, { method: "DELETE" });
+}
+
+/** 更新会话的 title 或 status（取消归档等）. */
+/** 物理删除会话及其所有关联任务。不可恢复。 */
+export function deleteThread(threadId: string): Promise<void> {
+  return request<void>(`${api}/threads/${threadId}/permanent`, { method: "DELETE" });
+}
+
+export function updateThread(threadId: string, fields: { title?: string; status?: string }): Promise<unknown> {
+  return request<unknown>(`${api}/threads/${threadId}`, {
+    method: "PATCH",
+    body: JSON.stringify(fields),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 计划 / 目标 / 里程碑
+//
+// 计划落库了才有这些接口。它们存在的理由不是"顺便补个 CRUD"：
+// 模型给的计划不一定对，用户看着「第 3 步其实是两步」时不该为了改一行字重跑一整轮。
+// ---------------------------------------------------------------------------
+
+export type TaskPlan = {
+  taskId: string;
+  goal: string;
+  goalSpec: Record<string, unknown>;
+  steps: PlanStepView[];
+  milestones: MilestoneView[];
+  progress: PlanProgressView;
+  revision: number;
+};
+
+function normalizePlan(source: unknown): TaskPlan {
+  const raw = (source ?? {}) as Record<string, unknown>;
+  const steps = parsePlanSteps(raw.steps ?? raw.plan_steps ?? []);
+  return {
+    taskId: textOf(raw, "task_id", "taskId"),
+    goal: textOf(raw, "goal"),
+    goalSpec: (raw.goal_spec && typeof raw.goal_spec === "object" ? raw.goal_spec : {}) as Record<string, unknown>,
+    steps,
+    milestones: parseMilestones(raw.milestones ?? []),
+    progress: parseProgress(raw.progress, steps),
+    revision: numOf(raw, "revision") ?? 0,
+  };
+}
+
+export async function getTaskPlan(taskId: string): Promise<TaskPlan> {
+  return normalizePlan(await request<unknown>(`${api}/tasks/${taskId}/plan`));
+}
+
+export type PlanStepPatch = {
+  id: string;
+  step?: string;
+  status?: "pending" | "in_progress" | "completed";
+  milestone_id?: string;
+  evidence?: string;
+};
+
+/**
+ * 改计划。两种改法二选一：
+ * - `steps` 整份替换（同 id 的步骤保住状态与引用）；
+ * - `patch` 按 id 逐条改，适合"把这个勾上"这种单点动作。
+ */
+export async function updateTaskPlan(
+  taskId: string,
+  payload: {
+    steps?: PlanStepPatch[];
+    milestones?: Record<string, unknown>[];
+    patch?: PlanStepPatch[];
+    explanation?: string;
+  },
+): Promise<TaskPlan> {
+  return normalizePlan(
+    await request<unknown>(`${api}/tasks/${taskId}/plan`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+/** 勾选 / 取消勾选一步。单点动作走 patch，避免整份替换带来的竞态。 */
+export async function togglePlanStep(
+  taskId: string,
+  stepId: string,
+  completed: boolean,
+): Promise<TaskPlan> {
+  return updateTaskPlan(taskId, {
+    patch: [{ id: stepId, status: completed ? "completed" : "pending" }],
+    explanation: completed ? "手动标记完成" : "手动取消完成",
+  });
+}
+
+export async function updateTaskGoal(
+  taskId: string,
+  fields: {
+    objective?: string;
+    done_when?: string[];
+    constraints?: string[];
+    out_of_scope?: string[];
+  },
+): Promise<TaskPlan> {
+  return normalizePlan(
+    await request<unknown>(`${api}/tasks/${taskId}/goal`, {
+      method: "PATCH",
+      body: JSON.stringify(fields),
+    }),
+  );
+}
+
+// —— 计划模板（跨任务复用）——
+
+export type PlanTemplate = {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string;
+  steps: PlanStepView[];
+  milestones: MilestoneView[];
+  usageCount: number;
+  sourceTaskId: string;
+  raw: Record<string, unknown>;
+};
+
+function normalizeTemplate(source: unknown): PlanTemplate {
+  const raw = (source ?? {}) as Record<string, unknown>;
+  return {
+    id: textOf(raw, "id"),
+    projectId: textOf(raw, "project_id", "projectId"),
+    name: textOf(raw, "name", "title") || "未命名计划",
+    description: textOf(raw, "description", "summary"),
+    steps: parsePlanSteps(raw.steps ?? []),
+    milestones: parseMilestones(raw.milestones ?? []),
+    usageCount: numOf(raw, "usage_count", "usageCount") ?? 0,
+    sourceTaskId: textOf(raw, "source_task_id", "sourceTaskId"),
+    raw,
+  };
+}
+
+export async function listPlanTemplates(projectId: string): Promise<PlanTemplate[]> {
+  const rows = await request<unknown>(`${api}/projects/${projectId}/plan-templates`);
+  return (Array.isArray(rows) ? rows : []).map(normalizeTemplate).filter((item) => item.id);
+}
+
+export async function createPlanTemplate(
+  projectId: string,
+  payload: {
+    name: string;
+    description?: string;
+    goal_spec?: Record<string, unknown>;
+    steps?: Record<string, unknown>[];
+    milestones?: Record<string, unknown>[];
+  },
+): Promise<PlanTemplate> {
+  return normalizeTemplate(
+    await request<unknown>(`${api}/projects/${projectId}/plan-templates`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+/** 把某条任务当前的计划存成模板。这是模板的主要来源：跑通了一次，以后都按这个来。 */
+export async function saveTaskPlanAsTemplate(
+  taskId: string,
+  payload: { name?: string; description?: string },
+): Promise<PlanTemplate> {
+  return normalizeTemplate(
+    await request<unknown>(`${api}/tasks/${taskId}/plan-template`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function deletePlanTemplate(templateId: string): Promise<void> {
+  return request<void>(`${api}/plan-templates/${templateId}`, { method: "DELETE" });
 }
 
 // ---------------------------------------------------------------------------
@@ -538,7 +746,9 @@ export type PendingQuestion = {
   id: string;
   question: string;
   header: string;
-  options: { label: string; description: string }[];
+  // recommended 决定界面上标不标"默认值"。丢了它用户看不见哪个是默认，
+  // 却又会被告知"不选就按默认继续"——等于让他盲签。
+  options: { label: string; description: string; recommended: boolean }[];
   multiSelect: boolean;
   allowFreeText: boolean;
 };
@@ -1059,10 +1269,15 @@ export function normalizeQuestions(container: unknown): PendingQuestion[] {
       header: textOf(item, "header", "title"),
       options: arrayOf(item, "options", "choices")
         .map((option) => {
-          if (typeof option === "string") return { label: option, description: "" };
+          if (typeof option === "string") {
+            return { label: option, description: "", recommended: false };
+          }
           return {
             label: textOf(option, "label", "value", "title"),
             description: textOf(option, "description", "detail", "note"),
+            // 显式给 false 而不是省略键：界面要统一按布尔判断"标不标默认"，
+            // undefined 会让每个读者各自决定缺省值，最后总有一处猜成"是默认"。
+            recommended: boolOf(option, "recommended", "is_default", "isDefault") === true,
           };
         })
         .filter((option) => option.label !== ""),

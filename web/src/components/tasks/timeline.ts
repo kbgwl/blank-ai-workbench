@@ -25,6 +25,14 @@ import {
   type HistoryRef,
 } from "./status";
 import { verdictOf } from "./verdict";
+import {
+  type MilestoneView,
+  type PlanProgressView,
+  type PlanStepView,
+  parseMilestones,
+  parseProgress,
+  parsePlanSteps,
+} from "./plan";
 
 export type TermLine = { text: string; tone: "cmd" | "out" | "err" | "warn" };
 
@@ -36,6 +44,11 @@ export type Block =
       node: string;
       at: string;
       items: string[];
+      /** 结构化步骤。老事件只有 items，这里为空数组，渲染时退回纯文本列表。 */
+      steps: PlanStepView[];
+      milestones: MilestoneView[];
+      /** 后端算好的进度；事件里没带就用本地算的。 */
+      progress: PlanProgressView;
       text: string;
     }
   | {
@@ -614,10 +627,23 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
 
     if (rawType.startsWith("plan")) {
       const { items, text } = planItems(event);
+      const steps = parsePlanSteps(event.payload);
+      const milestones = parseMilestones(event.payload);
       // 这次没有计划（直接回答）：不建卡，答案由最终结果块呈现。
       // 空卡片会渲染成「暂无计划条目」，纯噪音。
-      if (items.length === 0) return;
-      push({ kind: "plan", key, seq: event.seq, node: event.node, at: event.createdAt, items, text });
+      if (items.length === 0 && steps.length === 0) return;
+      push({
+        kind: "plan",
+        key,
+        seq: event.seq,
+        node: event.node,
+        at: event.createdAt,
+        items,
+        steps,
+        milestones,
+        progress: parseProgress(event.payload?.progress, steps.length ? steps : []),
+        text,
+      });
       return;
     }
 

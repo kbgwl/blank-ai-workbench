@@ -6,16 +6,19 @@ import { Button, Notice, Spinner, StateLine } from "@/components/projects/ui";
 import {
   deleteProvider,
   errorMessage,
+  fetchLedger,
   fetchPresets,
   fetchProviders,
   fetchUsage,
   testProvider,
+  type Ledger,
   type PresetsResponse,
   type Provider,
   type TestResult,
   type UsageSummary,
 } from "./api";
 import { StatusLine as TestSummary } from "./bits";
+import { LedgerPanel } from "./ledger-panel";
 import { ProviderCreateForm } from "./provider-create-form";
 import { ProviderList, type TestState } from "./provider-list";
 import { ProviderEditPanel } from "./provider-edit-panel";
@@ -29,9 +32,28 @@ export function ProvidersView() {
   const [presetError, setPresetError] = useState<string | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [usageError, setUsageError] = useState<string | null>(null);
+  const [ledger, setLedger] = useState<Ledger | null>(null);
+  const [ledgerError, setLedgerError] = useState<string | null>(null);
+  const [ledgerDays, setLedgerDays] = useState(7);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [tests, setTests] = useState<Record<string, TestState>>({});
+
+  const refreshLedger = useCallback(
+    (days: number) => {
+      return fetchLedger(days)
+        .then((rows) => {
+          setLedger(rows);
+          setLedgerError(null);
+        })
+        .catch((caught: unknown) => setLedgerError(errorMessage(caught)));
+    },
+    [],
+  );
+
+  useEffect(() => {
+    void refreshLedger(ledgerDays);
+  }, [ledgerDays, refreshLedger]);
 
   const refreshUsage = useCallback(() => {
     return fetchUsage()
@@ -215,6 +237,16 @@ export function ProvidersView() {
 
         <Panel title="Token 用量" hint={usage ? `共 ${usage.total_calls} 次调用` : "载入中"}>
           <UsagePanel summary={usage} error={usageError} onRetry={() => void refreshUsage()} />
+        </Panel>
+
+        <Panel title="花得值不值" hint="按任务把 token 归到产物 / 判断 / 废纸">
+          <LedgerPanel
+            ledger={ledger}
+            error={ledgerError}
+            days={ledgerDays}
+            onDays={setLedgerDays}
+            onRetry={() => void refreshLedger(ledgerDays)}
+          />
         </Panel>
       </div>
     </div>

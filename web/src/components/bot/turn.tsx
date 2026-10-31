@@ -123,6 +123,10 @@ function QuestionCard({
   busy: boolean;
 }) {
   const [draft, setDraft] = useState<Record<string, string>>({});
+  // 每题都有推荐项才允许「按默认继续」：事实题没有默认值，放空等于让服务器替用户编。
+  const canDefault =
+    questions.length > 0 &&
+    questions.every((question) => question.options.some((option) => option.recommended));
   return (
     <div className="my-2 rounded-xl border border-brand/30 bg-brand/[0.03] p-3">
       <p className="text-[12.5px] font-medium text-brand">它想先问你一句</p>
@@ -145,6 +149,9 @@ function QuestionCard({
                     }`}
                   >
                     {option.label}
+                    {option.recommended && (
+                      <span className="ml-1 text-[10px] text-brand/70">默认</span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -160,14 +167,20 @@ function QuestionCard({
           </div>
         ))}
       </div>
-      <Button
-        variant="primary"
-        className="mt-2.5"
-        disabled={busy || Object.values(draft).every((value) => !value?.trim())}
-        onClick={() => onAnswer(draft)}
-      >
-        回答并继续
-      </Button>
+      <div className="mt-2.5 flex items-center gap-2">
+        <Button
+          variant="primary"
+          disabled={busy || Object.values(draft).every((value) => !value?.trim())}
+          onClick={() => onAnswer(draft)}
+        >
+          回答并继续
+        </Button>
+        {canDefault && (
+          <Button variant="ghost" disabled={busy} onClick={() => onAnswer({})}>
+            按默认继续
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
@@ -261,8 +274,8 @@ export function TurnView(props: TurnViewProps) {
 
       <div className="mt-3.5">
         <div className="mb-1 flex items-center gap-2">
-          <span className="grid size-5 shrink-0 place-items-center rounded-md bg-[#1b2a4a]">
-            <span className="size-1.5 rounded-[2px] bg-[#5eead4]" />
+          <span className="grid size-5 shrink-0 place-items-center rounded-md bg-logo-bg">
+            <span className="size-1.5 rounded-[2px] bg-logo-accent" />
           </span>
           <span className="text-[12.5px] font-semibold tracking-tight">空白格</span>
           <StatusChip status={props.status} running={running} />

@@ -11,6 +11,8 @@ import { isEditableTarget, PALETTE_SHORTCUT, shortcutHint, shouldHandleEscape } 
 const TITLES: Record<string, string> = {
   "/settings": "设置",
   "/projects": "项目与工作区",
+  "/evidence": "证据库",
+  "/skills": "技能",
   "/tasks/detail": "任务详情",
   "/brainstorm": "头脑风暴",
   "/daily": "日常",
@@ -80,8 +82,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         </Link>
 
         <div className="flex min-w-0 items-center gap-2">
-          <span className="grid size-5 shrink-0 place-items-center rounded-md bg-[#1b2a4a]">
-            <span className="size-1.5 rounded-[2px] bg-[#5eead4]" />
+          <span className="grid size-5 shrink-0 place-items-center rounded-md bg-logo-bg">
+            <span className="size-1.5 rounded-[2px] bg-logo-accent" />
           </span>
           <span className="shrink-0 text-[13px] font-semibold tracking-tight">空白格</span>
           {title && (

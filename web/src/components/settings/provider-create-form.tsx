@@ -348,6 +348,10 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
         />
         <Toggle checked={draft.enabled} onChange={(next) => patch({ enabled: next })} label="启用" />
       </div>
+      <p className="text-[11px] leading-relaxed text-faint">
+        模型名本身是多模态的（glm-4.5v、qwen-vl、gpt-4o、claude-3 之后、doubao-vision 这类）
+        会自动按「支持看图」处理，不用在这个开关上再勾一次；勾了也不会被模型名推翻。
+      </p>
 
       {invalidNumber && <Notice tone="warn">温度需为 0-2 的数字，tokens 与上下文窗口需为正整数。</Notice>}
       {invalidParams && <Notice tone="warn">参数量需为非负数字，且激活参数不能大于总参数。</Notice>}

@@ -84,7 +84,7 @@ export function statusMeta(status: string | null | undefined): StatusMeta {
   return { ...FALLBACK, label: key };
 }
 
-/** 工具调用状态（ok / error / denied / timeout / awaiting_approval）。 */
+/** 工具调用状态（ok / error / denied / timeout / awaiting_approval / blocked）。 */
 export function toolStatusClass(status: string): { label: string; className: string } {
   switch (status) {
     case "ok":
@@ -99,6 +99,10 @@ export function toolStatusClass(status: string): { label: string; className: str
       return { label: "超时", className: "text-warn" };
     case "denied":
       return { label: "已拒绝", className: "text-danger" };
+    // 空转拦截：既不是失败也不是用户拒绝，是"这一步和前面那次一样、做了也没有新结果"。
+    // 用 warn 而不是 danger——它代表的是一次被省掉的重复，不是一次错误。
+    case "blocked":
+      return { label: "空转拦截", className: "text-warn" };
     case "awaiting_approval":
     case "waiting_approval":
       return { label: "待审批", className: "text-warn" };

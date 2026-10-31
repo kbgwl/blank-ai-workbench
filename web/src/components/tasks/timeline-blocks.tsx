@@ -22,6 +22,7 @@ import { ReplyView } from "./reply";
 import { describeTool, type ToolFact } from "./tool-display";
 import type { Block, TermLine } from "./timeline";
 import { approvalGrantOptions, type ApprovalScope } from "./api";
+import { groupByMilestone, statusLabel, statusMark } from "./plan";
 import { BlockIcon } from "./bits";
 
 const toneClass: Record<TermLine["tone"], string> = {
@@ -95,6 +96,12 @@ function FactList({ facts }: { facts: ToolFact[] }) {
 }
 
 function PlanCard({ block }: { block: Extract<Block, { kind: "plan" }> }) {
+  const progress = block.progress;
+  // 老事件只有文本条目：照旧渲染成编号列表，不假装有进度。
+  const structured = block.steps.length > 0;
+  const groups = structured ? groupByMilestone(block.steps, block.milestones) : [];
+  const showBar = structured && progress.total > 0;
+
   return (
     <CardShell
       block={block}
@@ -104,14 +111,103 @@ function PlanCard({ block }: { block: Extract<Block, { kind: "plan" }> }) {
           <BlockIcon kind="plan" />
         </span>
       }
-      title="拆分步骤"
+      title="执行计划"
       trailing={
-        <span className="shrink-0 rounded-md border border-brand/30 bg-brand/10 px-1.5 py-0.5 font-mono text-[10px] text-brand">
-          {block.items.length} 步
-        </span>
+        showBar ? (
+          <span className="shrink-0 rounded-md border border-brand/30 bg-brand/10 px-1.5 py-0.5 font-mono text-[10px] text-brand">
+            {progress.completed}/{progress.total}
+            {progress.percent === 100 ? " · 已完成" : ""}
+          </span>
+        ) : (
+          <span className="shrink-0 rounded-md border border-brand/30 bg-brand/10 px-1.5 py-0.5 font-mono text-[10px] text-brand">
+            {block.items.length || block.steps.length} 步
+          </span>
+        )
       }
     >
-      {block.items.length === 0 ? (
+      {showBar && (
+        <div className="mb-2.5 flex items-center gap-2">
+          <div className="h-1 flex-1 overflow-hidden rounded-full bg-brand/15">
+            <div
+              className="h-full rounded-full bg-brand transition-[width] duration-300"
+              style={{ width: `${Math.min(100, Math.max(0, progress.percent))}%` }}
+            />
+          </div>
+          <span className="shrink-0 font-mono text-[10px] text-faint">{progress.percent}%</span>
+        </div>
+      )}
+
+      {structured ? (
+        <div className="flex flex-col gap-2.5">
+          {groups.map((group) => (
+            <div key={group.milestone?.id ?? "loose"} className="flex flex-col gap-1.5">
+              {group.milestone && (
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={[
+                      "size-1.5 shrink-0 rounded-full",
+                      group.milestone.status === "completed"
+                        ? "bg-brand"
+                        : group.milestone.status === "in_progress"
+                          ? "bg-brand/70 ring-2 ring-brand/25"
+                          : "bg-faint/40",
+                    ].join(" ")}
+                  />
+                  <span className="min-w-0 truncate text-[11px] font-medium text-text/75">
+                    {group.milestone.title}
+                  </span>
+                  <span className="shrink-0 font-mono text-[10px] text-faint">
+                    {group.milestone.total > 0
+                      ? `${group.milestone.completed}/${group.milestone.total}`
+                      : "—"}
+                  </span>
+                </div>
+              )}
+              <ol className="flex flex-col gap-1.5">
+                {group.steps.map((step) => (
+                  <li
+                    key={step.id}
+                    className="flex items-start gap-2 text-[13px] leading-relaxed"
+                  >
+                    <span
+                      className={[
+                        "mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border font-mono text-[9px]",
+                        step.status === "completed"
+                          ? "border-brand/60 bg-brand text-white"
+                          : step.status === "in_progress"
+                            ? "border-brand/60 bg-brand/15 text-brand"
+                            : "border-line bg-surface-3 text-faint",
+                      ].join(" ")}
+                      title={statusLabel(step.status)}
+                    >
+                      {statusMark(step.status) || ""}
+                    </span>
+                    <span
+                      className={[
+                        "min-w-0",
+                        step.status === "completed" ? "text-text/55 line-through decoration-line" : "text-text/90",
+                      ].join(" ")}
+                    >
+                      {step.text}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              {group.steps.some((step) => step.evidence) && (
+                <ul className="ml-6 flex flex-col gap-0.5">
+                  {group.steps
+                    .filter((step) => step.evidence)
+                    .map((step) => (
+                      <li key={`${step.id}-ev`} className="truncate font-mono text-[10px] text-faint">
+                        {step.text.slice(0, 12)}：{step.evidence}
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : block.items.length === 0 ? (
         <p className="text-[12px] text-faint">暂无计划条目</p>
       ) : (
         <ol className="flex flex-col gap-1.5">

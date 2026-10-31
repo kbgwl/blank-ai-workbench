@@ -138,7 +138,7 @@ export async function sendMessage(input: {
   let thread: Thread;
   let fresh = false;
   if (input.threadId) {
-    thread = { id: input.threadId, projectId: input.projectId, title: "", status: "active", forkedFrom: "", turnCount: 0, createdAt: "", updatedAt: "" };
+    thread = { id: input.threadId, projectId: input.projectId, title: "", status: "active", forkedFrom: "", turnCount: 0, lastTurnStatus: "", createdAt: "", updatedAt: "" };
   } else {
     thread = await createThread(input.projectId, { title });
     fresh = true;

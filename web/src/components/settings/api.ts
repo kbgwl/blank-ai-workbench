@@ -241,6 +241,68 @@ export function fetchObservability(): Promise<ObservabilitySummary> {
   return request<ObservabilitySummary>(`${api}/observability/summary`, { cache: "no-store" });
 }
 
+/** 台账里的一类去向：产物 / 判断 / 废纸 / 还没结算。 */
+export type LedgerBucket = { tasks: number; tokens: number; share: number };
+
+export type LedgerTaskRow = {
+  id: string;
+  title: string;
+  status: string;
+  created_at: string;
+  steps: number;
+  calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  tokens: number;
+  peak_context: number;
+  tools: number;
+  failed_tools: number;
+  /** 被空转断路器拦掉的调用：没有真执行，也没有那一轮上下文。 */
+  blocked_calls: number;
+  files: number;
+  failure_reason: string;
+  bucket: "delivered" | "advised" | "wasted" | "running";
+};
+
+export type LedgerSummary = {
+  tasks: number;
+  calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  /** 命中缓存占 prompt 的比例，不是占总量的比例。 */
+  cache_hit: number;
+  /** 单次调用的平均上下文——成本的地基。 */
+  per_call_context: number;
+  peak_context: number;
+  failed_tool_rate: number;
+  /** 每个工具动作对应几次模型调用；>2 说明在空转。 */
+  calls_per_tool: number;
+  tools: number;
+  /** 本窗口内被空转断路器拦掉的调用总数。 */
+  blocked_calls: number;
+  files: number;
+  buckets: Record<"delivered" | "advised" | "wasted" | "running", LedgerBucket>;
+  median_task_tokens: number;
+  median_delivered_tokens: number;
+  tokens_per_file: number;
+  /** 钱真正换成产物的比例，唯一一个「越低越该改」的总分。 */
+  effective_share: number;
+};
+
+export type Ledger = {
+  window_days: number;
+  summary: LedgerSummary;
+  buckets: LedgerSummary["buckets"];
+  offenders: LedgerTaskRow[];
+  tasks: LedgerTaskRow[];
+};
+
+export function fetchLedger(days = 7): Promise<Ledger> {
+  return request<Ledger>(`${api}/observability/ledger?days=${days}`, { cache: "no-store" });
+}
+
 export function fetchAgentSettings(): Promise<AgentSettings> {
   return request<AgentSettings>(`${api}/settings/agent`, { cache: "no-store" });
 }
