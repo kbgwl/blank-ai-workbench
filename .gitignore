@@ -77,3 +77,9 @@ web/.next.prev-*/
 web/out.prev-*/
 web/.next-old*/
 web/out-old*/
+
+# 打包日志：每次出包一份，里面是本机路径与时间戳，不属于源码
+desktop/build*.log
+
+# WorkBuddy 的会话目录（含本项目记忆），里面写的是本机路径与用户名
+.workbuddy/
