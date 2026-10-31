@@ -4,6 +4,7 @@ from sqlalchemy import text
 from blank_api.api.routes import (
     files,
     observability,
+    plan_templates,
     projects,
     providers,
     reverse_lab,
@@ -39,6 +40,7 @@ api_router.include_router(uploads.router)
 api_router.include_router(files.router)
 api_router.include_router(providers.router)
 api_router.include_router(tasks.router)
+api_router.include_router(plan_templates.router)
 api_router.include_router(skills.router)
 api_router.include_router(observability.router)
 api_router.include_router(settings.router)

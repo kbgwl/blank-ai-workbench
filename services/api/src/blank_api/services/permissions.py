@@ -65,6 +65,8 @@ READ_ONLY_TOOLS = frozenset(
         "read_file",
         "search_code",
         "update_plan",
+        # 目标只写在任务行上，不碰工作区。计划模式恰恰最该先把判据写清楚。
+        "set_goal",
         "git",
         "request_user_input",
         "web_search",

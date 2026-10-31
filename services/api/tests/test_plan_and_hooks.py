@@ -20,11 +20,15 @@ from blank_api.services.tools.plan import normalize_steps, plan_tools, render_pl
 
 def test_update_plan_registered_with_low_risk():
     tools = {tool.name: tool for tool in plan_tools()}
-    assert list(tools) == ["update_plan", "enter_plan_mode", "exit_plan_mode"]
+    # set_goal 与 update_plan 同属"规划"：目标是判据，计划是路径，缺一个都不完整。
+    assert list(tools) == ["update_plan", "set_goal", "enter_plan_mode", "exit_plan_mode"]
     tool = tools["update_plan"]
     assert tool.risk_level == "low"
     # 计划是纯状态更新，不该触发审批
     assert tool.requires_approval is False
+    # 目标同理：只写任务行，不碰工作区。
+    assert tools["set_goal"].risk_level == "low"
+    assert tools["set_goal"].requires_approval is False
     # 模式开关也不靠 requires_approval 挂卡：退出是否需要人批由 permissions.decide
     # 的 mode:switch 决定（那里能看见当前模式与会话记忆，工具定义看不见）。
     for name in ("enter_plan_mode", "exit_plan_mode"):
@@ -40,10 +44,14 @@ def test_update_plan_schema_rejects_missing_steps():
 
 def test_normalize_steps_accepts_strings_and_objects():
     steps = normalize_steps(["读取文件", {"step": "应用补丁", "status": "in_progress"}])
-    assert steps == [
-        {"step": "读取文件", "status": "pending"},
-        {"step": "应用补丁", "status": "in_progress"},
+    # 除了原文与状态，还带 id / milestone_id / evidence：
+    # id 是引用（里程碑、验收条件按它指步骤）的锚点，不是装饰。
+    assert [(item["step"], item["status"]) for item in steps] == [
+        ("读取文件", "pending"),
+        ("应用补丁", "in_progress"),
     ]
+    assert all(item["id"] for item in steps)
+    assert all(item["milestone_id"] == "" and item["evidence"] == "" for item in steps)
 
 
 def test_normalize_steps_drops_junk_and_caps_length():

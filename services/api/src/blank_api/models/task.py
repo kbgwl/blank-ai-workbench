@@ -64,6 +64,23 @@ class Task(Base):
     )
     acceptance_criteria: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     acceptance_results: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # 结构化的目标。`goal` 仍然只存用户原话（不许改写），这一列放拆解后的执行意图：
+    # {objective, done_when: [...], constraints: [...], out_of_scope: [...]}。
+    # 分开的理由：原话要能原样回放给用户看，结构化部分要能参与判定——同一列放不下两种用途。
+    goal_spec: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("('{}')")
+    )
+    # 持久化的执行计划 [{id, step, status, milestone_id, evidence}]。
+    # 之前只存在于图状态里，新任务一律从空开始；落库之后才能跨轮引用、跨任务复用。
+    plan_steps: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list, server_default=text("('[]')")
+    )
+    # 里程碑 [{id, title, status, step_ids: [...]}]——把多个步骤归到同一个阶段性目标下。
+    milestones: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default=text("('[]')"))
+    # 计划被改过几次。用来判断"这份计划是不是还在被维护"，也给前端做变更提示。
+    plan_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     # 用户这一轮贴进来的图片（{id, name, mime, size}）。文件本体在 data/uploads 下，
     # 这里只存引用：图片进库会让备份和迁移一起变重，而它们从来不需要被 SQL 查询。
     # `text("('[]')")` 不是口味：MySQL 8.4 拒绝给 JSON/TEXT 列写字面量默认值（1101），

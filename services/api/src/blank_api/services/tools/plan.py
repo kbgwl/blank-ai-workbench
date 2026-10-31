@@ -1,4 +1,4 @@
-"""计划作为可更新对象。
+"""计划 / 目标作为可更新对象。
 
 对标（REA 拆解证据见 docs/REA-CODEX-CLAUDE.md）：
 - Codex：`update_plan` 工具
@@ -6,55 +6,94 @@
 
 两家的共识是：计划不是一次性输出，而是执行过程中可增删、可勾选、可按用户插话追加的对象。
 设计里"执行中插话并入当前计划"的交互就落在这个工具上。
+
+与旧版的差别：步骤带上了稳定 id，并能归到里程碑下。id 稳定的意义是**引用能成立**——
+里程碑按 id 收步骤、验收条件按 id 指步骤，每次都换一批随机 id 就等于把它们全指空。
+归一化逻辑全在 `blank_api.services.plan`，这里只负责工具契约。
 """
 
 from __future__ import annotations
 
 from blank_api.services.permissions import MODE_DEFAULT, MODE_PLAN
+from blank_api.services.plan import (
+    MAX_STEPS,
+    MILESTONE_STATUSES,
+    PLAN_STATUSES,
+    link_milestones,
+    normalize_goal,
+    normalize_milestones,
+    normalize_steps,
+    plan_progress,
+    render_plan,
+    resolve_milestone_status,
+)
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, fail, ok
 
-MAX_STEPS = 12
-MAX_STEP_CHARS = 200
-PLAN_STATUSES = ("pending", "in_progress", "completed")
-_MARKS = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]"}
 
-
-def normalize_steps(raw: object) -> list[dict]:
-    """容错解析：既接受 ["步骤一", "步骤二"]，也接受 [{"step":..., "status":...}]。"""
-    steps: list[dict] = []
-    for item in raw if isinstance(raw, list) else []:
-        if isinstance(item, str):
-            text, status = item, "pending"
-        elif isinstance(item, dict):
-            text = str(item.get("step") or item.get("text") or "")
-            status = str(item.get("status") or "pending")
-        else:
-            continue
-        text = text.strip()[:MAX_STEP_CHARS]
-        if not text:
-            continue
-        steps.append({"step": text, "status": status if status in PLAN_STATUSES else "pending"})
-    return steps[:MAX_STEPS]
-
-
-def render_plan(steps: list[dict]) -> str:
-    return "\n".join(
-        f"{_MARKS[step['status']]} {index}. {step['step']}" for index, step in enumerate(steps, start=1)
-    )
+def _current_plan(context: ToolContext) -> tuple[list[dict], list[dict]]:
+    """取当前图状态里的计划。拿不到就当空——这是"第一次给计划"的正常路径。"""
+    state = getattr(context, "plan_state", None)
+    if isinstance(state, dict):
+        steps = state.get("steps")
+        milestones = state.get("milestones")
+        return (
+            list(steps) if isinstance(steps, list) else [],
+            list(milestones) if isinstance(milestones, list) else [],
+        )
+    return [], []
 
 
 async def _update_plan(context: ToolContext, arguments: dict) -> ToolOutcome:
-    steps = normalize_steps(arguments.get("steps"))
+    previous_steps, previous_milestones = _current_plan(context)
+
+    # 里程碑：没给就沿用上一版（模型常常只改状态，不想重述一遍阶段划分）
+    raw_milestones = arguments.get("milestones")
+    milestones = (
+        normalize_milestones(raw_milestones)
+        if isinstance(raw_milestones, list)
+        else list(previous_milestones)
+    )
+
+    steps = normalize_steps(arguments.get("steps"), previous=previous_steps)
     if not steps:
         return fail("error", "update_plan 至少需要一个步骤")
-    completed = sum(1 for step in steps if step["status"] == "completed")
+
+    milestones = resolve_milestone_status(link_milestones(steps, milestones), steps)
+    progress = plan_progress(steps, milestones)
+
     return ok(
-        render_plan(steps),
+        render_plan(steps, milestones),
         steps=steps,
+        milestones=milestones,
         explanation=str(arguments.get("explanation") or "").strip()[:300],
-        total=len(steps),
-        completed=completed,
+        progress=progress,
+        total=progress["total"],
+        completed=progress["completed"],
     )
+
+
+async def _set_goal(context: ToolContext, arguments: dict) -> ToolOutcome:
+    """把目标结构化：为什么做、算不算做完、不做什么。
+
+    刻意不做成 update_plan 的一个字段：目标是**判据**，计划是**路径**。
+    混在一起时，模型改计划顺手就把验收标准也改了，而用户从头到尾没看见。
+    """
+    spec = normalize_goal(arguments)
+    if not spec["objective"]:
+        return fail("error", "set_goal 需要 objective：这一轮到底要达成什么")
+
+    lines = [f"目标：{spec['objective']}"]
+    if spec["done_when"]:
+        lines.append("算做完的标准：")
+        lines.extend(f"  - {item}" for item in spec["done_when"])
+    if spec["constraints"]:
+        lines.append("约束：")
+        lines.extend(f"  - {item}" for item in spec["constraints"])
+    if spec["out_of_scope"]:
+        lines.append("这次不做：")
+        lines.extend(f"  - {item}" for item in spec["out_of_scope"])
+
+    return ok("\n".join(lines), **spec)
 
 
 def _mode_policy(context: ToolContext):
@@ -125,19 +164,54 @@ def plan_tools() -> list[ToolDefinition]:
                 "开始执行前先给出步骤；执行中把已完成的标为 completed、把正在做的标为 "
                 "in_progress；用户中途插话要求新内容时追加步骤。"
                 "每次提交**完整步骤列表**（覆盖旧计划），不要只提交变化的部分。"
+                "步骤可以带 id 保持身份（不改 id 就能保住里程碑与验收条件的引用）。"
+                "工作分阶段时用 milestones 把步骤归组，用户才能看到"
+                "「调研完了、正在实现」这种阶段感，而不是一串平铺的勾选框。"
             ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "steps": {
                         "type": "array",
+                        "maxItems": MAX_STEPS,
                         "items": {
                             "type": "object",
                             "properties": {
+                                "id": {
+                                    "type": "string",
+                                    "description": "沿用上一版的 id 以保住引用；新建步骤可省略",
+                                },
                                 "step": {"type": "string"},
                                 "status": {"type": "string", "enum": list(PLAN_STATUSES)},
+                                "milestone_id": {
+                                    "type": "string",
+                                    "description": "归到哪个里程碑（milestones 里的 id）",
+                                },
+                                "evidence": {
+                                    "type": "string",
+                                    "description": "标 completed 时说明凭什么算完成：改了哪个文件、跑了什么命令",
+                                },
                             },
                             "required": ["step"],
+                        },
+                    },
+                    "milestones": {
+                        "type": "array",
+                        "maxItems": 6,
+                        "description": "阶段性目标。省略则沿用上一版。",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "title": {"type": "string"},
+                                "status": {"type": "string", "enum": list(MILESTONE_STATUSES)},
+                                "step_ids": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "也可以不写，改由步骤的 milestone_id 指过来",
+                                },
+                            },
+                            "required": ["title"],
                         },
                     },
                     "explanation": {"type": "string"},
@@ -146,6 +220,40 @@ def plan_tools() -> list[ToolDefinition]:
             },
             risk_level="low",
             handler=_update_plan,
+        ),
+        ToolDefinition(
+            name="set_goal",
+            description=(
+                "把这一轮的目标结构化：objective（要达成什么）、done_when（怎么算做完）、"
+                "constraints（必须遵守的限制）、out_of_scope（明确不做什么）。"
+                "接到多步骤的工程任务时先调用它，再给 update_plan——"
+                "验收阶段会拿 done_when 逐条判定，写清楚了才不会做完才发现理解偏了。"
+                "用户的原话不要改写，objective 用你自己的话概括执行意图。"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "objective": {"type": "string", "description": "一句话说清要达成什么"},
+                    "done_when": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "可判定的完成标准，最好是能跑命令验证的",
+                    },
+                    "constraints": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "技术选型、不许改的文件、兼容性要求等",
+                    },
+                    "out_of_scope": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "这次明确不做的部分，防止范围蔓延",
+                    },
+                },
+                "required": ["objective"],
+            },
+            risk_level="low",
+            handler=_set_goal,
         ),
         ToolDefinition(
             name="enter_plan_mode",

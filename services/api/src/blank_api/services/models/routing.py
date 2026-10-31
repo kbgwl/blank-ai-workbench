@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 
+from blank_api.helpers.middleware import breaker_for
 from blank_api.services.models.base import (
     ChatMessage,
     ModelAdapter,
@@ -26,14 +27,27 @@ class FallbackAdapter(ModelAdapter):
     def _candidates(self):
         yield from self.adapters
 
+    @staticmethod
+    def _guard(adapter: ModelAdapter) -> None:
+        breaker = breaker_for(adapter.config.name)
+        if not breaker.allow():
+            raise ModelError(
+                "circuit_breaker_open",
+                f"供应商 {adapter.config.name} 暂时熔断，请稍后重试",
+                retryable=True,
+            )
+
     async def invoke(self, messages: Sequence[ChatMessage], **kwargs) -> ModelResponse:
         last_error: ModelError | None = None
         for adapter in self._candidates():
+            self._guard(adapter)
             try:
                 response = await adapter.invoke(messages, **kwargs)
+                breaker_for(adapter.config.name).succeed()
                 self.last_provider = adapter.config.name
                 return response
             except ModelError as exc:
+                breaker_for(adapter.config.name).fail()
                 last_error = exc
                 if not exc.retryable:
                     raise
@@ -52,11 +66,14 @@ class FallbackAdapter(ModelAdapter):
             if not adapter.config.supports_tools:
                 last_error = ModelError("model_tools_unsupported", f"模型 {adapter.config.model} 不支持工具调用")
                 continue
+            self._guard(adapter)
             try:
                 response = await adapter.bind_tools(tools, messages, **kwargs)
+                breaker_for(adapter.config.name).succeed()
                 self.last_provider = adapter.config.name
                 return response
             except ModelError as exc:
+                breaker_for(adapter.config.name).fail()
                 last_error = exc
                 if not exc.retryable:
                     raise
@@ -66,12 +83,15 @@ class FallbackAdapter(ModelAdapter):
     async def stream(self, messages: Sequence[ChatMessage], **kwargs) -> AsyncIterator[str]:
         """Streaming fallback is selected before iteration begins."""
         for adapter in self._candidates():
+            self._guard(adapter)
             try:
                 async for chunk in adapter.stream(messages, **kwargs):
                     self.last_provider = adapter.config.name
                     yield chunk
+                breaker_for(adapter.config.name).succeed()
                 return
             except ModelError as exc:
+                breaker_for(adapter.config.name).fail()
                 if not exc.retryable:
                     raise
         raise ModelError("all_models_failed", "所有候选模型均无法建立流式连接", retryable=False)

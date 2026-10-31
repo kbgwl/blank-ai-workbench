@@ -11,6 +11,7 @@ from blank_api.api.auth import require_token
 from blank_api.api.exception_handlers import register_error_handlers
 from blank_api.api.routes import api_router
 from blank_api.config import get_settings
+from blank_api.helpers.middleware import RateLimitMiddleware
 from blank_api.services.agent.manager import run_manager
 
 
@@ -28,6 +29,20 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
         pass
 
     await recover_pending_runs()
+    # 存量供应商的输出上限兜底：<=2048 会静默截断输出（表现为"工具参数偶尔是空的"）。
+    # 迁移 0027 已经改过一遍，这里防的是"有人把它改回去"和"建库走的是 create_all"。
+    try:
+        from blank_api.services.models.registry import upgrade_truncating_providers
+
+        await upgrade_truncating_providers()
+    except Exception:
+        pass
+    # 全新空库：自动写入国产默认平台（幂等：已有配置不覆盖）
+    try:
+        from blank_api.api.routes.providers import seed_empty_providers
+        await seed_empty_providers()
+    except Exception:
+        pass
     # 0017 之前的群消息没有索引行：启动时补一次，让升级后的历史也能被搜到。
     # 表不存在（旧库还没迁移）或补索引失败都不能挡住 API 启动。
     try:
@@ -146,6 +161,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(RateLimitMiddleware)
     app.include_router(api_router, prefix="/api/v1")
     if guarded:
         _mount_guarded_docs(app)

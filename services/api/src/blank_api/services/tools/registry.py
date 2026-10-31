@@ -42,6 +42,9 @@ CORE_TOOLS = frozenset(
     {
         "tool_search",
         "update_plan",
+        # 结构化目标是计划的上位：先定"算什么算做完"，再排步骤。
+        # 放进核心集合，lean 视图才不会只剩一张没有判据的步骤清单。
+        "set_goal",
         # 进出计划模式与 update_plan 同属"规划"：lean 视图要成对带上它们，
         # 而 lean 只许从核心集合里裁剪——留在核心集合外就破了那条不变量。
         "enter_plan_mode",
@@ -93,6 +96,7 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "search_code": ("搜索代码", "查找", "grep", "search"),
     "request_user_input": ("提问", "询问", "确认", "ask"),
     "update_plan": ("计划", "步骤", "plan", "todo"),
+    "set_goal": ("目标", "验收标准", "算做完", "goal", "done when", "objective"),
     "enter_plan_mode": ("计划模式", "先调研", "只读", "plan mode", "enter plan"),
     "exit_plan_mode": ("退出计划", "开始执行", "确认计划", "exit plan", "plan approved"),
 }
@@ -153,6 +157,7 @@ LEAN_TOOLS = frozenset(
     {
         "tool_search",
         "update_plan",
+        "set_goal",
         "request_user_input",
         "read_file",
         "list_files",

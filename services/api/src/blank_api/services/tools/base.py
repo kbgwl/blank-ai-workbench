@@ -59,6 +59,9 @@ class ToolContext:
     # 本任务的沙箱档位（off / workspace / workspace-net）。命令类工具与子代理读它，
     # 审批的"工具档"授权也按它分桶：在 workspace 下批过的工具，切到 off 不再免问。
     sandbox_tier: str = "workspace"
+    # 当前计划状态 {steps, milestones, goal}。update_plan 靠它拿到"上一版步骤"，
+    # 才能让重新提交时沿用原 id——否则里程碑和验收条件按 id 建起来的引用会被换空。
+    plan_state: dict = field(default_factory=dict)
 
 
 @dataclass
