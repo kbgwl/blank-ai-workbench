@@ -154,7 +154,10 @@ def _op_dispatch(root: Path, request: dict) -> dict:
     if op == "read_text_file":
         from blank_api.services.workspace import read_text_file
 
-        return {"payload": read_text_file(root, str(args["path"]))}
+        window = {
+            key: int(args[key]) for key in ("offset", "limit") if args.get(key) is not None
+        }
+        return {"payload": read_text_file(root, str(args["path"]), **window)}
     if op == "search":
         from blank_api.services.tools.filesystem import _search_blocking
 

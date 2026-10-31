@@ -55,6 +55,16 @@ def iter_text_files(root: Path, prefix: str = "") -> Iterator[tuple[str, Path]]:
     """
     root_path = Path(root).resolve()
     base = resolve_inside(root_path, prefix)
+    # prefix 可能直接是个文件（模型很爱写 path="index.html"）。os.walk 对文件一轮都不转，
+    # 于是调用方拿到空列表、回一句「未找到匹配结果」——这比慢更糟：模型会据此判定
+    # 「文件里确实没有」，换个锚点再搜一遍，白烧好几步。
+    if base.is_file():
+        try:
+            if base.stat().st_size <= MAX_SEARCH_BYTES:
+                yield base.relative_to(root_path).as_posix(), base
+        except OSError:
+            return
+        return
     scanned = 0
     deadline = time.monotonic() + MAX_SCAN_SECONDS
     for directory, dirnames, filenames in os.walk(base):

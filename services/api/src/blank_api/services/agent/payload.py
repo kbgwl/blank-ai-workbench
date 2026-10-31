@@ -42,6 +42,15 @@ MAX_PAYLOAD_CHARS = 9_000
 DROP_DIFF_TOOLS = frozenset({"apply_patch", "write_file", "create_file"})
 
 
+def _head(text: str, head: int) -> str:
+    """取头部，并退回上一个换行处：切在半行中间会让模型读到残句，比不切更难用。"""
+    head_part = text[:head]
+    cut = head_part.rfind("\n")
+    if cut > head * 0.6:
+        head_part = head_part[: cut + 1]
+    return head_part
+
+
 def _clip(text: str, head: int, tail: int) -> tuple[str, int]:
     """保留头尾，中间折掉。返回 (新文本, 省下的字符数)。"""
     if head <= 0 and tail <= 0:
@@ -49,11 +58,7 @@ def _clip(text: str, head: int, tail: int) -> tuple[str, int]:
     limit = head + tail
     if len(text) <= limit:
         return text, 0
-    # 换行对齐：切在半行中间会让模型读到残句，比不切更难用。
-    head_part = text[:head]
-    cut = head_part.rfind("\n")
-    if cut > head * 0.6:
-        head_part = head_part[: cut + 1]
+    head_part = _head(text, head)
     if tail <= 0:
         kept = f"{head_part}\n…（此处省略 {len(text) - len(head_part)} 字符，需要细节请用 search_code 或带 offset 重读）"
     else:
@@ -65,6 +70,25 @@ def _clip(text: str, head: int, tail: int) -> tuple[str, int]:
             f"{head_part}\n…（省略 {len(text) - len(head_part) - len(tail_part)} 字符）…\n{tail_part}"
         )
     return kept, len(text) - len(kept)
+
+
+def _read_file_note(kept: str, data: dict) -> str:
+    """读文件被裁剪时，把「共几行 / 现在给到第几行 / 下一步 offset」写全。
+
+    只写一句「请带 offset 重读」是空头支票：模型照着写一遍，工具压根没有这个参数，
+    它就被送回 search_code 摸行号——实测 29 步里 13 步是这么烧掉的。
+    """
+    total = data.get("total_lines")
+    start = data.get("start_line") or 1
+    if not isinstance(total, int) or total <= 0 or not isinstance(start, int):
+        return ""
+    shown = kept.count("\n")
+    if shown <= 0:
+        return ""
+    end = start + shown - 1
+    if end >= total:
+        return ""
+    return f"…（本文件共 {total} 行，此处显示第 {start}–{end} 行，继续请用 offset={end + 1} 重读）"
 
 
 def _digest(text: str) -> str:
@@ -88,7 +112,16 @@ def render(
         if tool_name in DROP_DIFF_TOOLS:
             pass
         head, tail = TOOL_BUDGETS.get(tool_name, DEFAULT_BUDGET)
-        body["output"], _ = _clip(output, head, tail)
+        data_for_note = body.get("data")
+        # 读文件被裁剪时，泛泛的「用 search_code 或带 offset 重读」要换成有数的一句话：
+        # 共几行、现在给到第几行、下一步 offset 是几。三样缺一样，模型就只能再摸一遍。
+        note = ""
+        if tool_name == "read_file" and tail <= 0 and len(output) > head and isinstance(data_for_note, dict):
+            note = _read_file_note(_head(output, head), data_for_note)
+        if note:
+            body["output"] = f"{_head(output, head).rstrip()}\n{note}"
+        else:
+            body["output"], _ = _clip(output, head, tail)
 
     data = body.get("data")
     if isinstance(data, dict) and tool_name in DROP_DIFF_TOOLS and data.get("diff"):

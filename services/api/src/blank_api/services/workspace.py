@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -136,31 +137,76 @@ def list_tree(root: Path | str, relative: str = "", max_depth: int = 2, limit: i
     return entries
 
 
-def read_text_file(root: Path | str, relative: str) -> dict:
+def _decode_text(raw: bytes) -> tuple[str, str, bool]:
+    """(内容, 编码, 是否二进制)。
+
+    先按 utf-8 严格解；失败再试本机 ANSI（中文 Windows 上大量源码是 GBK 存的，
+    一律判 binary 等于读不了这些文件）。真正的二进制里几乎一定有 NUL 字节，
+    用它兜底比"解码器报不报错"更可靠。
+    """
+    if b"\x00" in raw:
+        return "", "binary", True
+    for encoding in ("utf-8", "gbk") if os.name == "nt" else ("utf-8",):
+        try:
+            return raw.decode(encoding), encoding, False
+        except UnicodeDecodeError:
+            continue
+    return "", "binary", True
+
+
+def read_text_file(
+    root: Path | str,
+    relative: str,
+    offset: int | None = None,
+    limit: int | None = None,
+) -> dict:
+    """读文本文件，可按行取窗口。
+
+    ``offset`` 是 1 基的起始行，``limit`` 是行数；都不传时行为与原来完全一致
+    （整文件）。分页不是锦上添花：产物写到 500 行时，进上下文的部分会被裁到
+    6,000 字符，模型要改尾部只能靠 search_code 一行行摸锚点——实测 29 步里
+    13 步是这么烧掉的。裁剪提示里既然写了 offset，这个参数就必须真的存在。
+    """
     target = resolve_inside(root, relative)
     if target.is_dir():
         raise ApiError(code="is_a_directory", message="该路径是目录，无法作为文件读取", status_code=422)
     size = target.stat().st_size
     raw = target.read_bytes()[:MAX_READ_BYTES]
     truncated = size > MAX_READ_BYTES
-    try:
-        content: str = raw.decode("utf-8")
-        encoding = "utf-8"
-        is_binary = False
-    except UnicodeDecodeError:
-        content = ""
-        encoding = "binary"
-        is_binary = True
+    content, encoding, is_binary = _decode_text(raw)
+
+    lines = content.splitlines(keepends=True) if content else []
+    total_lines = len(lines)
+    start_line = max(int(offset or 1), 1)
+    if is_binary:
+        window: list[str] = []
+    elif limit is None:
+        window = lines[start_line - 1 :]
+    else:
+        count = max(int(limit), 0)
+        window = lines[start_line - 1 : start_line - 1 + count] if count else []
+    # 空窗口时 end_line = start_line - 1（第 1 行起读 0 行 → 0），与「一行都没给」同义。
+    end_line = start_line + len(window) - 1
+
+    if is_binary:
+        message = "该文件是二进制文件，界面不展示内容"
+    elif truncated:
+        message = "文件过大，仅返回前 512KB"
+    elif start_line > total_lines:
+        message = f"该文件共 {total_lines} 行，offset={start_line} 已超出末尾"
+    elif end_line < total_lines:
+        message = f"已返回第 {start_line}–{end_line} 行（共 {total_lines} 行），继续请用 offset={end_line + 1}"
+    else:
+        message = ""
     return {
         "path": relative,
         "size": size,
         "encoding": encoding,
         "binary": is_binary,
         "truncated": truncated,
-        "content": content,
-        "message": (
-            "该文件是二进制文件，界面不展示内容"
-            if is_binary
-            else ("文件过大，仅返回前 512KB" if truncated else "")
-        ),
+        "content": "".join(window),
+        "start_line": start_line,
+        "end_line": end_line,
+        "total_lines": total_lines,
+        "message": message,
     }

@@ -79,7 +79,31 @@ def assess_risk(command: str) -> str:
     return "medium"
 
 
+# 子进程输出的编码候选。顺序有意义：先按 utf-8 严格解，解不动再试本机 ANSI 代码页。
+# 反过来的顺序会把本来就正确的 utf-8 中文解成乱码——GBK 解码器对多数多字节序列
+# 也是"能解"，不报错，于是错误静默通过。所以只能"严格 utf-8 失败才回退"。
+_FALLBACK_ENCODINGS = ("gbk", "mbcs") if os.name == "nt" else ("gbk", "latin-1")
+
+
 def _decode(raw: bytes) -> str:
+    """把子进程的输出字节解成文本。
+
+    中文 Windows 上 cmd.exe 按 GBK 输出：原来一律 ``utf-8 + replace``，于是
+    ``'ls' 不是内部或外部命令`` 会变成 ``'ls' �����ڲ����ⲿ���``。模型读不懂这句话，
+    ``_UNKNOWN_COMMAND_MARKS`` 里的中文标记也永远匹配不上，方言提示形同虚设。
+    """
+    if not raw:
+        return ""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    for encoding in _FALLBACK_ENCODINGS:
+        try:
+            return raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    # 两套都不成立（真乱码）：宁可带替换符，也不能抛——一个字节异常不该让工具失败。
     return raw.decode("utf-8", errors="replace")
 
 

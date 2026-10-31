@@ -48,17 +48,24 @@ async def _list_files(context: ToolContext, arguments: dict) -> ToolOutcome:
 async def _read_file(context: ToolContext, arguments: dict) -> ToolOutcome:
     broker = _broker()
     marker: dict = {}
+    # offset/limit 只在显式传了才放进去：老调用方（含 broker 协议）看到的参数形状不变。
+    window = {
+        key: int(arguments[key])
+        for key in ("offset", "limit")
+        if arguments.get(key) is not None
+    }
     if broker.broker_enabled():
         try:
             envelope = await broker.call_broker(
-                context.root, context.task_id, "read_text_file", {"path": arguments["path"]},
+                context.root, context.task_id, "read_text_file",
+                {"path": arguments["path"], **window},
             )
         except broker.FsBrokerError as exc:
             return broker.broker_failure_outcome("read_text_file", exc)
         payload = envelope["result"]["payload"]
         marker = broker.broker_success_marker("read_text_file", envelope)
     else:
-        payload = read_text_file(context.root, arguments["path"])
+        payload = read_text_file(context.root, arguments["path"], **window)
     if payload["binary"]:
         return ToolOutcome(
             ok=False, status="error", message=f"该文件是二进制文件，无法作为文本读取：{payload['path']}",
@@ -69,6 +76,10 @@ async def _read_file(context: ToolContext, arguments: dict) -> ToolOutcome:
         path=payload["path"],
         size=payload["size"],
         truncated=payload["truncated"],
+        start_line=payload.get("start_line", 1),
+        end_line=payload.get("end_line", 0),
+        total_lines=payload.get("total_lines", 0),
+        message=payload.get("message", ""),
         **marker,
     )
 
@@ -151,25 +162,39 @@ def filesystem_tools() -> list[ToolDefinition]:
         ),
         ToolDefinition(
             name="read_file",
-            description="读取工作区内的文本文件，参数 path 必须是工作区相对路径",
+            description=(
+                "读取工作区内的文本文件，参数 path 必须是工作区相对路径。"
+                "长文件不要反复整读：结果被裁剪时会告诉你「已返回第 M–N 行（共 T 行）」，"
+                "接着用 offset=M2 往下读就行（offset 是 1 基起始行，limit 是行数）。"
+            ),
             input_schema={
                 "type": "object",
                 "required": ["path"],
-                "properties": {"path": {"type": "string", "description": "工作区相对文件路径"}},
+                "properties": {
+                    "path": {"type": "string", "description": "工作区相对文件路径"},
+                    "offset": {
+                        "type": "integer",
+                        "description": "从第几行开始读（1 基）。省略=从第 1 行读",
+                    },
+                    "limit": {"type": "integer", "description": "最多读多少行。省略=读到文件末尾"},
+                },
             },
             risk_level="low",
             handler=_read_file,
         ),
         ToolDefinition(
             name="search_code",
-            description="在工作区内按文本或正则搜索代码，返回文件、行号与命中行",
+            description=(
+                "在工作区内按文本或正则搜索代码，返回文件、行号与命中行。"
+                "path 可以是子目录，也可以直接写某个文件（如 index.html）。"
+            ),
             input_schema={
                 "type": "object",
                 "required": ["pattern"],
                 "properties": {
                     "pattern": {"type": "string", "description": "搜索文本或正则表达式"},
                     "mode": {"type": "string", "enum": ["literal", "regex"]},
-                    "path": {"type": "string", "description": "限定搜索的子目录"},
+                    "path": {"type": "string", "description": "限定的子目录或单个文件"},
                     "max_matches": {"type": "integer", "description": "最多返回多少条命中"},
                 },
             },

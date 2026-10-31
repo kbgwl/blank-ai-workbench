@@ -16,6 +16,9 @@ HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 CONTEXT_TOLERANCE = 40
 # 补丁头里的路径：``--- a/foo.py`` / ``+++ b/foo.py``。git 风格带 a/ b/ 前缀，去掉。
 FILE_HEADER = re.compile(r"^(?:---|\+\+\+)\s+(?:\w/)?(\S+)")
+# Codex 那套包装：``*** Begin Patch`` / ``*** Add File: x`` / ``*** End Patch``。
+CODEX_FILE_HEADER = re.compile(r"^\*\*\*\s*(?:Add|Update|Delete)\s+File:\s*(.+?)\s*$")
+CODEX_SHELLS = ("*** begin patch", "*** end patch")
 
 
 class PatchError(ValueError):
@@ -30,6 +33,43 @@ class PatchError(ValueError):
         self.near = near
 
 
+def normalize_codex_patch(patch: str) -> str:
+    """把 Codex 的 ``*** Begin Patch`` 包装拆成标准补丁；不是这种包装就原样返回。
+
+    两种形态都要接：带 ``@@`` 的只剥壳；只有 ``*** Add File:`` 的，整段都是新增行，
+    按新建文件补出 ``---/+++/@@`` 头。没有 ``***`` 的普通补丁一个字节都不动——
+    这条反向约束比正向更重要，改坏了现有能过的补丁，代价是整条链路回退。
+    """
+    text = patch or ""
+    if "***" not in text:
+        return text
+    path = ""
+    inner: list[str] = []
+    has_hunk = False
+    for line in text.replace("\r\n", "\n").split("\n"):
+        stripped = line.strip()
+        if stripped.lower() in CODEX_SHELLS:
+            continue
+        header = CODEX_FILE_HEADER.match(stripped)
+        if header:
+            path = path or header.group(1).strip()
+            continue
+        if HUNK_HEADER.match(stripped):
+            has_hunk = True
+        inner.append(line)
+    while inner and not inner[-1].strip():
+        inner.pop()
+    if has_hunk:
+        return "\n".join(inner)
+    body = [line for line in inner if line.strip()]
+    if not path or not body:
+        return "\n".join(inner)
+    # Add File 的正文每行通常已带 "+"，别重复加。
+    added = [line if line.startswith("+") else f"+{line}" for line in body]
+    header = f"--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,{len(added)} @@"
+    return "\n".join([header, *added])
+
+
 def infer_path(patch: str) -> str:
     """从补丁头里取文件路径，取不到返回空串。
 
@@ -39,13 +79,17 @@ def infer_path(patch: str) -> str:
     """
     preferred = ""
     for line in (patch or "").replace("\r\n", "\n").split("\n"):
-        match = FILE_HEADER.match(line.strip())
+        stripped = line.strip()
+        codex = CODEX_FILE_HEADER.match(stripped)
+        if codex:
+            return codex.group(1).strip()
+        match = FILE_HEADER.match(stripped)
         if not match:
             continue
         candidate = match.group(1).strip()
         if candidate in ("/dev/null", ""):
             continue
-        if line.strip().startswith("+++"):
+        if stripped.startswith("+++"):
             return candidate
         preferred = preferred or candidate
     return preferred
@@ -216,7 +260,7 @@ def _patch_on_disk(root: Path, task_id: str, arguments: dict) -> dict:
     existed = target.exists()
     original = target.read_text(encoding="utf-8") if existed else ""
     try:
-        patched = apply_patch_text(original, patch_text)
+        patched = apply_patch_text(original, normalize_codex_patch(patch_text))
     except PatchError as error:
         # 失败里带上真实上下文，模型下一次就能改对。只给"不匹配"三个字，
         # 它只能重读整个文件再盲猜一遍——那一步既是延迟也是成本。
