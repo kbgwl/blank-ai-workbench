@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import http from "node:http";
 import path from "node:path";
 import process from "node:process";
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "start";
+
+const API_PORT = Number(process.env.BLANK_API_PORT ?? 8000);
+const WEB_PORT = Number(process.env.BLANK_WEB_PORT ?? 3000);
 
 function findRoot(start = process.cwd()) {
   let current = path.resolve(start);
@@ -96,7 +100,24 @@ function doctor() {
   console.log(`Node.js: ${process.version}`);
   console.log(`平台：${process.platform}`);
   console.log(`配置：${configDir()}`);
-  console.log(`工作区：${findRoot() ?? "未检测到项目工作区"}`);
+  const root = findRoot();
+  console.log(`工作区：${root ?? "未检测到项目工作区"}`);
+  // 环境自检（任务书 §11）：缺什么就给出具体安装命令，不让人自己去猜。
+  if (root) {
+    const python = findPython(root);
+    console.log(`后端 Python：${python ?? "未找到（services/api/.venv 不存在，也没设 BLANK_PYTHON）"}`);
+    if (!python) {
+      console.log("");
+      console.log("安装指引（任选其一）：");
+      console.log("  1) 安装 uv（推荐，自动管理 Python 与依赖）：");
+      console.log("     Windows:  powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\"");
+      console.log("     macOS/Linux:  curl -LsSf https://astral.sh/uv/install.sh | sh");
+      console.log("  2) 或自行安装 Python 3.12：https://www.python.org/downloads/");
+      console.log("     然后在 services/api 目录执行：python -m venv .venv");
+      console.log("");
+      console.log("不想装本地环境？桌面安装版内置了完整运行时：见 README 的桌面端下载说明。");
+    }
+  }
   if (args.includes("--sandbox") || args.includes("--compare")) sandboxDoctor(args.slice(1));
 }
 
@@ -132,25 +153,155 @@ function packageCommand(action, packageName) {
   console.log(`已停用功能：${packageName}`);
 }
 
+function openBrowser(url) {
+  const cmd =
+    process.platform === "win32"
+      ? spawn("cmd", ["/c", "start", "", url], { stdio: "ignore", detached: true })
+      : process.platform === "darwin"
+        ? spawn("open", [url], { stdio: "ignore", detached: true })
+        : spawn("xdg-open", [url], { stdio: "ignore", detached: true });
+  cmd.on("error", () => console.log(`（无法自动打开浏览器，请手动访问 ${url}）`));
+}
+
+/** 静态站点服务：web/out 存在时的零依赖模式（Node 内置 http，不需要 pnpm/next）。 */
+function serveStatic(root, children) {
+  const outDir = path.join(root, "web", "out");
+  const mime = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript",
+    ".css": "text/css",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
+  };
+  const server = http.createServer((req, res) => {
+    try {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      let file = path.join(outDir, decodeURIComponent(url.pathname));
+      if (!file.startsWith(outDir)) {
+        res.writeHead(403).end();
+        return;
+      }
+      // 目录请求回落到 index.html；SPA 深链同理（存在同名目录时就近找 index）。
+      if (existsSync(file) && statSync(file).isDirectory()) file = path.join(file, "index.html");
+      if (!existsSync(file)) file = path.join(outDir, "404.html");
+      if (!existsSync(file)) {
+        res.writeHead(404).end("Not Found");
+        return;
+      }
+      const body = readFileSync(file);
+      res.writeHead(200, { "content-type": mime[path.extname(file)] ?? "application/octet-stream" });
+      res.end(body);
+    } catch {
+      // 单个请求失败不能拖垮整个进程——坏请求就按 500 回，服务继续活着。
+      if (!res.headersSent) res.writeHead(500);
+      res.end("Internal Server Error");
+    }
+  });
+  server.listen(WEB_PORT, "127.0.0.1", () => {
+    console.log(`→ 界面:  http://127.0.0.1:${WEB_PORT}`);
+    openBrowser(`http://127.0.0.1:${WEB_PORT}`);
+  });
+  children.push(server);
+}
+
 function start() {
   init();
   const root = findRoot();
   if (!root) {
     console.log("当前目录不是空白格源码工作区。");
-    console.log("请先进入项目目录，或使用已发布版本的本地运行器。 ");
+    console.log("请先进入项目目录，或使用已发布版本的本地运行器。");
     console.log("用法：blank init / blank doctor");
+    process.exitCode = 2;
     return;
   }
   console.log("启动空白格本地工作台…");
-  const child = spawn(process.execPath, [path.join(root, "scripts", "dev.mjs")], {
-    cwd: root,
-    stdio: "inherit",
-    env: process.env,
-  });
-  child.on("exit", (code) => process.exit(code ?? 0));
+  const children = [];
+  let shuttingDown = false;
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    for (const child of children) {
+      try {
+        child.kill();
+      } catch {
+        // 子进程可能已经退出，忽略。
+      }
+    }
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  const apiDir = path.join(root, "services", "api");
+  const venvPython = findPython(root);
+  // 优先 uv（自动管理依赖与 Python 版本）；其次源码工作区里的 .venv。
+  // 都没有就停下来说明怎么装——静默失败会让用户以为"命令坏了"。
+  const hasUv = spawn("uv", ["--version"], { stdio: "ignore" }).once("error", () => undefined);
+  let apiStarted = false;
+
+  function launchApi(cmd, cmdArgs) {
+    const child = spawn(cmd, cmdArgs, {
+      cwd: apiDir,
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        // Windows 的 GBK 控制台会把后端中文日志打成乱码，统一 utf-8。
+        PYTHONIOENCODING: "utf-8",
+        PYTHONPATH: [path.join(apiDir, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+      },
+    });
+    children.push(child);
+    child.on("exit", (code) => {
+      if (!shuttingDown && apiStarted) {
+        console.error(`后端退出（code ${code}），正在关闭。`);
+        shutdown();
+      }
+    });
+    apiStarted = true;
+  }
+
+  if (venvPython) {
+    console.log("→ 后端:  使用 services/api/.venv 的 Python");
+    launchApi(venvPython, ["-X", "utf8", "-m", "uvicorn", "blank_api.app:app", "--port", String(API_PORT)]);
+  } else {
+    // uv 是异步探测的：查到就用，查不到给安装指引并退出。
+    const probe = spawn("uv", ["--version"], { stdio: "ignore" });
+    probe.on("error", () => {
+      console.error("没有找到可用的后端 Python 运行时（services/api/.venv 与 uv 都不存在）。");
+      console.error("安装 uv（推荐）：powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\"");
+      console.error("或安装 Python 3.12 后在 services/api 执行：python -m venv .venv");
+      console.error("桌面安装版内置完整运行时，见 README。");
+      process.exitCode = 2;
+    });
+    probe.on("exit", (code) => {
+      if (code === 0) {
+        console.log("→ 后端:  使用 uv 管理（自动装依赖）");
+        launchApi("uv", ["run", "--project", apiDir, "uvicorn", "blank_api.app:app", "--port", String(API_PORT)]);
+      }
+    });
+  }
+
+  // 静态导出存在就直接用零依赖模式；否则退回开发模式（需要 pnpm，见 scripts/dev.mjs）。
+  if (existsSync(path.join(root, "web", "out", "index.html"))) {
+    serveStatic(root, children);
+  } else {
+    console.log(`→ 界面:  未找到 web/out 静态导出，请访问 API 文档 http://127.0.0.1:${API_PORT}/docs`);
+    console.log("        （想要完整界面：仓库根目录执行 pnpm --dir web build，产物在 web/out）");
+    openBrowser(`http://127.0.0.1:${API_PORT}/docs`);
+  }
+  console.log(`后端 http://127.0.0.1:${API_PORT}  ·  Ctrl+C 退出`);
 }
 
 switch (command) {
+  case "start":
+  case "run":
+  case undefined:
+    start();
+    break;
   case "init":
     init();
     break;
@@ -164,21 +315,17 @@ switch (command) {
   case "remove":
     packageCommand(command, args[1]);
     break;
-  case "start":
-  case "run":
-    start();
-    break;
   case "--help":
   case "-h":
     console.log("blank — 空白格 AI 工程操作台");
     console.log("\n用法：blank [start|init|doctor|list|add|remove]");
     console.log("\n示例：");
-    console.log("  blank                 启动当前源码工作区");
+    console.log("  blank                 启动本地工作台（自检环境，缺依赖时给出安装命令）");
     console.log("  blank init            初始化本地配置");
+    console.log("  blank doctor          检查 Node、Python、配置和工作区");
     console.log("  blank list            查看已启用的可选功能");
     console.log("  blank add brainstorm  启用头脑风暴功能");
-    console.log("  blank doctor          检查 Node、配置和工作区");
-  console.log("  blank doctor --sandbox  逐条攻击八条执行边界，并和这次执行的账本比对");
+    console.log("  blank doctor --sandbox  逐条攻击八条执行边界，并和这次执行的账本比对");
     break;
   default:
     console.error(`未知命令：${command}`);

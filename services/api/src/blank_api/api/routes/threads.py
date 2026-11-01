@@ -176,6 +176,7 @@ async def create_turn(thread_id: str, payload: ThreadTurnIn, db: DbSession) -> T
             goal=payload.goal,
             acceptance_criteria=payload.acceptance_criteria,
             provider_id=payload.provider_id,
+            scenario=payload.scenario,
             max_steps=payload.max_steps,
             attachments=payload.attachments,
         ),

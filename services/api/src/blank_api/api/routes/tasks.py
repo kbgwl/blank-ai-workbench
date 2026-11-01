@@ -39,6 +39,12 @@ from blank_api.schemas.task import (
     TaskSteerIn,
 )
 from blank_api.services.agent.evidence import (
+    DEFAULT_CHANGES_LIMIT,
+    DEFAULT_TIMELINE_LIMIT,
+    DEFAULT_TOOLS_LIMIT,
+    MAX_CHANGES_LIMIT,
+    MAX_TIMELINE_LIMIT,
+    MAX_TOOLS_LIMIT,
     approval_is_expired,
     build_evidence,
     load_task,
@@ -47,6 +53,7 @@ from blank_api.services.agent.evidence import (
 from blank_api.services.agent.artifacts import ArtifactStore
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.live import LiveFeed
+from blank_api.services import metrics
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.agent.vision import supports_vision
 from blank_api.services.fork import FORK_EVENT, fork_thread
@@ -87,9 +94,22 @@ def inprocess_runner_enabled() -> bool:
     raw = (os.environ.get("BLANK_INPROCESS_RUNNER") or "1").strip().lower()
     return raw not in ("0", "false", "no", "off")
 
-# 事件流在没有持久事件时等多久去数据库补一次。实时增量会提前唤醒，所以这个值
-# 只影响"没有一场模型调用正在进行时"的延迟。
+# 事件流在没有持久事件时等多久去数据库补一次。
+# 实时增量会提前唤醒，所以这个值只影响"没有一场模型调用正在进行时"的延迟。
 DELTA_WAIT_SECONDS = 0.5
+
+# 空库查询的退避：0.25s 起，每空一轮 ×1.8，封顶 2s。
+# 原来的固定 0.5s 是"每个连接每半秒查一次库"——一个跑 20 分钟的任务，界面开着就是
+# 2400 次空查询，二十个连接就是四万多次。退避把这段压到十分之一左右，
+# 而有事件时 `LiveFeed.wake()` 会立刻把循环叫回来，**时延不变**。
+# 上限 2s 是照着"人看不出卡顿"的边界定的：再长，worker 在另一个进程里跑的任务
+# 就会出现"点了没反应"的观感（跨进程收不到 wake，只能靠轮询）。
+SSE_BACKOFF_MIN_SECONDS = 0.25
+SSE_BACKOFF_MAX_SECONDS = 2.0
+SSE_BACKOFF_FACTOR = 1.8
+# 单条连接的最长寿命。到点就关，让客户端按 `after_seq` 重连——
+# 无限长的流在代理后面迟早会被中间的某一层掐掉，而那种断开没有任何信号。
+SSE_MAX_SECONDS = 30 * 60
 
 
 def _factory_from(request: Request | None):
@@ -173,6 +193,7 @@ async def persist_task(
         id=str(uuid.uuid4()),
         project_id=project_id,
         provider_id=payload.provider_id,
+        scenario=payload.scenario or "dev",
         title=payload.title,
         goal=payload.goal or payload.title,
         status="draft",
@@ -484,6 +505,10 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         raise ApiError(code="workspace_not_bound", message="该项目尚未绑定工作区目录", status_code=409)
     provider = await _resolve_provider(db, task, payload.provider_id)
     task.provider_id = provider.id
+    # 场景：运行请求显式指定（用户切了场景）时覆盖存档并写回；否则用创建时的。
+    # 未知值在 resolve() 里回退开发场景，脏数据不改变默认行为。
+    scenario_key = payload.scenario or task.scenario or "dev"
+    task.scenario = scenario_key
     await db.commit()
     client_factory = _factory_from(request)
     adapters = [build_adapter(provider, client_factory)]
@@ -565,6 +590,9 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         "skill_instructions": [str(item) for item in active_skills],
         # 会话上下文由运行时自己读：这里只告诉它"这一轮属于哪条会话"。
         "thread_ref": task.thread_id or "",
+        # 场景决定系统提示附加段、工具白名单与记忆权限；只走系统提示与工具层，
+        # 绝不向用户 prompt 拼前缀（见 scenarios.py 的设计红线）。
+        "scenario": scenario_key,
         # 空串＝沿用设置页默认档；运行时负责解析、降级与拒绝，路由层不预先猜。
         "sandbox_tier": payload.sandbox_tier,
     }
@@ -584,6 +612,7 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         approved_actions=set(payload.approved_actions),
         approved_command_prefixes=tuple(payload.approved_command_prefixes),
         permission_mode=payload.permission_mode,
+        memory_opt_in=payload.memory_opt_in,
         role_adapters=role_adapters,
         role_provider_ids=role_provider_ids,
         routing_pool=routing_pool,
@@ -789,6 +818,9 @@ async def recover_pending_runs() -> int:
         for run in runs:
             # 扫描时 attempts>0 = 上一次认领后没写终态（进程被杀/断电）。
             crashed = int(run.attempts or 0) > 0
+            if crashed:
+                # 进程内恢复同样算一次崩溃恢复：这条 run 上次认领后没写终态。
+                metrics.inc(metrics.WORKER_RECOVERED)
             task = task_map.get(run.task_id)
             if task is None:
                 continue
@@ -879,20 +911,32 @@ async def task_event_stream(
 
     同一个连接上也带实时增量（``event: delta``）：持久事件是「发生了什么」，
     增量是「模型正在说什么」。两者分开是因为前者要能跳读、要能重放，后者允许丢。
+
+    两次查库之间是**退避 + 事件唤醒**，不再是固定半秒：
+
+    * 空转一轮就把等待拉长（``SSE_BACKOFF_*``，上限 2 秒）——一个 200 步的任务
+      原来要查几千次库，其中绝大多数是空的；
+    * 本进程每次写持久事件都会 ``LiveFeed.wake()`` 叫醒这个循环，时延不涨；
+    * 退避只是"少查空库"，**断线补偿一刻没减**：``after_seq`` 仍然从库里的 seq
+      接着补，跨进程（worker）写的事件照样靠轮询落地，只是间隔更长。
     """
     await load_task(db, task_id)
 
     async def events():
         cursor = after_seq
-        idle_rounds = 0
+        delay = SSE_BACKOFF_MIN_SECONDS
+        started = time.monotonic()
         terminal = {"succeeded", "failed", "cancelled", "paused", "waiting_approval"}
         queue = LiveFeed.subscribe(task_id)
+        metrics.inc(metrics.SSE_CONNECTED)
+        metrics.gauge("sse.connections", LiveFeed.total_subscribers())
         try:
-            while idle_rounds < 600:
+            while time.monotonic() - started < SSE_MAX_SECONDS:
                 # 断流会取消这个生成器：如果取消正好落在连接 close 上，池子里会留下一条
                 # 半关闭连接，后面所有请求都可能撞上 no active connection。每次读取都
                 # 屏蔽取消，等这一小段数据库操作跑完再说。
                 with anyio.CancelScope(shield=True):
+                    metrics.inc(metrics.SSE_POLL)
                     async with get_session_factory()() as session:
                         rows = (
                             await session.execute(
@@ -906,25 +950,37 @@ async def task_event_stream(
                     for row in rows:
                         cursor = row.seq
                         yield f"id: {row.seq}\ndata: {json.dumps(EventOut.model_validate(row).model_dump(), ensure_ascii=False)}\n\n"
-                    idle_rounds = 0
+                    # 有新东西就把退避重置回最短：刚活跃过的任务下一秒多半还会活跃。
+                    delay = SSE_BACKOFF_MIN_SECONDS
                 else:
-                    idle_rounds += 1
                     if status in terminal:
                         break
-                # 有增量就立刻醒，没有就等半秒再去数据库补一次。
+                    delay = min(SSE_BACKOFF_MAX_SECONDS, delay * SSE_BACKOFF_FACTOR)
+                # 有增量就立刻醒，没有就按当前退避等一次。
                 # 用 wait_for 而不是 sleep：sleep 会让文字比模型慢半拍，
                 # 而实时预览的全部价值就在这半拍上。
                 try:
-                    frame = await asyncio.wait_for(queue.get(), timeout=DELTA_WAIT_SECONDS)
+                    frame = await asyncio.wait_for(queue.get(), timeout=delay)
                 except asyncio.TimeoutError:
                     if not rows:
                         yield ": keep-alive\n\n"
                     continue
+                if frame.get("wake"):
+                    # 被人叫醒：不推帧，直接回去查库（这次查到的多半就是刚写进去的那条）。
+                    metrics.inc(metrics.SSE_WAKE)
+                    delay = SSE_BACKOFF_MIN_SECONDS
+                    continue
                 yield _delta_frame(frame)
                 while not queue.empty():
-                    yield _delta_frame(queue.get_nowait())
+                    extra = queue.get_nowait()
+                    if extra.get("wake"):
+                        metrics.inc(metrics.SSE_WAKE)
+                        continue
+                    yield _delta_frame(extra)
         finally:
             LiveFeed.unsubscribe(task_id, queue)
+            metrics.inc(metrics.SSE_DISCONNECTED)
+            metrics.gauge("sse.connections", LiveFeed.total_subscribers())
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -935,9 +991,49 @@ def _delta_frame(payload: dict) -> str:
 
 
 @router.get("/tasks/{task_id}/evidence")
-async def task_evidence(task_id: str, db: DbSession) -> dict:
+async def task_evidence(
+    task_id: str,
+    db: DbSession,
+    timeline_limit: int = Query(default=DEFAULT_TIMELINE_LIMIT, ge=0, le=MAX_TIMELINE_LIMIT),
+    timeline_before_seq: int | None = Query(default=None, ge=1),
+    include_timeline: bool = Query(default=True),
+    tools_limit: int = Query(default=DEFAULT_TOOLS_LIMIT, ge=0, le=MAX_TOOLS_LIMIT),
+    tools_offset: int = Query(default=0, ge=0),
+    changes_limit: int = Query(default=DEFAULT_CHANGES_LIMIT, ge=0, le=MAX_CHANGES_LIMIT),
+    changes_offset: int = Query(default=0, ge=0),
+) -> dict:
+    """交付证据包。
+
+    长任务的时间线默认只给最近 200 条并带翻页游标（``timeline_meta``）；工具调用与文件变更
+    同样默认各取最近 500 条（``tools_meta`` / ``changes_meta`` 给出总数与 ``has_more``）。
+    这是一次**行为收紧**：以前一次请求会把全部事件、全部 ToolCall、全部文件 diff
+    （含一个可能数 MB 的拼接 ``diff`` 字段）塞进响应，长任务单是 JSON 就有几 MB，前端渲染
+    卡住而用户真正要看的就是最后一段。要全量仍然可以显式要大上限（``*_limit=2000``），
+    但默认路径不再无界。
+    """
     await load_task(db, task_id)
-    return await build_evidence(get_session_factory(), task_id)
+    return await build_evidence(
+        get_session_factory(),
+        task_id,
+        timeline_limit=timeline_limit,
+        timeline_before_seq=timeline_before_seq,
+        include_timeline=include_timeline,
+        tools_limit=tools_limit,
+        tools_offset=tools_offset,
+        changes_limit=changes_limit,
+        changes_offset=changes_offset,
+    )
+
+
+@router.get("/tasks/{task_id}/evidence/summary")
+async def task_evidence_summary(task_id: str, db: DbSession) -> dict:
+    """只要汇总，不要时间线。
+
+    验收、审批、用量、边界这些字段全部由服务端算好；界面首屏读这一份就够，
+    时间线用 ``/events`` 增量取。少读一遍全量事件是这条路径存在的全部理由。
+    """
+    await load_task(db, task_id)
+    return await build_evidence(get_session_factory(), task_id, include_timeline=False)
 
 
 @router.get("/tasks/{task_id}/diff")

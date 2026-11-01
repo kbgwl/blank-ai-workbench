@@ -35,6 +35,11 @@ from blank_api.services.agent.graph import (
 )
 from blank_api.services.agent.loadstats import recent_load
 from blank_api.services.agent.router import Candidate, Router
+from blank_api.services.agent.scenarios import (
+    excluded_tools,
+    resolve as resolve_scenario,
+    system_prompt as scenario_prompt,
+)
 from blank_api.services.agent.store import SerializedSessionFactory
 from blank_api.services.approval_rules import load_prefix_rules
 from blank_api.services.approvals import approval_key
@@ -161,6 +166,10 @@ class RunRequest:
     approved_command_prefixes: Sequence[str] = ()
     # 空串表示"沿用该任务已有的模式"：审批恢复时前端不重发模式，不能被默认值悄悄改口径。
     permission_mode: str = ""
+    # 场景（scenarios.py）。决定系统提示附加段与工具白名单；不向用户 prompt 拼前缀。
+    scenario: str = "dev"
+    # 仅日常场景有效：用户选择"记住习惯"时开放 memory_write。
+    memory_opt_in: bool = False
     # 空串表示"用设置页的默认档"；审批恢复时同样要读回任务首次运行记下的档位，
     # 否则一次恢复就能把 workspace 静默换成 off（或反之）。
     sandbox_tier: str = ""
@@ -209,6 +218,8 @@ class _RunScope:
     sandbox: dict = field(default_factory=dict)
     # 本轮的子代理运行器：收尾时要把仍在跑的后台子代理收走（见 _finish）。
     subagents: Any = None
+    # 场景 key（scenarios.py）。task.started 记"当时在哪个场景"用，事件与证据都以它为准。
+    scenario_key: str = "dev"
 
 
 @dataclass
@@ -426,7 +437,12 @@ class AgentRuntime:
         # 那个服务端自己——半份工具表也远好过起不来任务。
         mcp_bundle = await mcp_manager().bundle()
         tools = [*tools, *mcp_bundle.tools]
-        gateway = ToolGateway(tools, defer=tool_search_enabled)
+        # 场景装配（scenarios.py）：只影响系统提示附加段与工具可用性，
+        # 不向用户 prompt 拼前缀。被禁工具在注册表里消失、在网关执行处硬拦。
+        scenario = resolve_scenario(request.scenario)
+        scenario_excluded = excluded_tools(scenario, memory_opt_in=request.memory_opt_in)
+        gateway = ToolGateway(tools, defer=tool_search_enabled, excluded=scenario_excluded)
+        gateway.registry.exclude(scenario_excluded)
         allowed = set(request.approved_tools or set())
         approved_actions = set(request.approved_actions or set())
         if request.approve_high_risk:
@@ -553,6 +569,7 @@ class AgentRuntime:
             mcp=mcp_bundle.as_dict(),
             sandbox=sandbox.as_dict(),
             subagents=subagents,
+            scenario_key=scenario.key,
         )
 
     async def _fire_hooks(self, scope: _RunScope, event: str, payload: dict) -> None:
@@ -751,6 +768,8 @@ class AgentRuntime:
                 "workspace": mask_path(session.context.root),
                 "provider": request.provider_name,
                 "model": request.adapter.config.model,
+                "scenario": scope.scenario_key,
+                "memory_opt_in": bool(request.memory_opt_in),
                 "max_steps": session.max_steps,
                 "permission_mode": session.permission_mode,
                 "permissions": session.permissions.snapshot(),
@@ -836,6 +855,10 @@ class AgentRuntime:
                 supports_vision=request.supports_vision,
                 texts=request.texts,
                 system_instructions=system_rules,
+                scenario_prompt=scenario_prompt(
+                    resolve_scenario(request.scenario),
+                    memory_opt_in=request.memory_opt_in,
+                ),
                 run_id=recorder.run_id,
             ),
             "plan": [],

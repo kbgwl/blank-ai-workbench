@@ -134,3 +134,18 @@ async def rollback_skill(skill_id: str, db: DbSession) -> SkillOut:
     await db.commit()
     await db.refresh(skill)
     return SkillOut.model_validate(skill)
+
+
+@router.delete("/{skill_id}", status_code=204)
+async def delete_skill(skill_id: str, db: DbSession) -> None:
+    """物理删除一条记忆（Skill）。
+
+    与 disable 的区别：disable 只是"不再注入系统提示"，行还留着；删除是
+    用户明确说"这条不该存在"（比如记错了、或含敏感内容）——留着它，下次
+    接受相似候选时去重逻辑还会把旧正文当既有事实。
+    """
+    skill = await db.get(Skill, skill_id)
+    if skill is None:
+        raise ApiError(code="skill_not_found", message="Skill 不存在", status_code=404)
+    await db.delete(skill)
+    await db.commit()

@@ -211,6 +211,14 @@ class ToolRegistry:
         self._fixed = activate_all
         self.profile = PROFILE_FULL
         self._active: set[str] = set()
+        # 场景级禁用（scenarios.py）：被禁的工具从可见、待加载与检索里同时消失，
+        # tool_search 也捞不回来——否则"只读场景"会被一次检索变成可写。
+        self._excluded: set[str] = set()
+
+    @property
+    def excluded(self) -> frozenset[str]:
+        """场景级禁用的工具名（scenarios.py）。可见、待加载、检索之外的一层。"""
+        return frozenset(self._excluded)
 
     # -- 档位 ---------------------------------------------------------------
     def set_profile(self, profile: str) -> bool:
@@ -235,26 +243,53 @@ class ToolRegistry:
         return self._core != before
 
     # -- 查询 ---------------------------------------------------------------
+    def exclude(self, names: Iterable[str]) -> list[str]:
+        """把工具从本会话**彻底**禁用：可见、待加载、检索全部不可见。
+
+        与 ``set_profile`` 不同，这不是档位视图——被排除的工具没有"切回来"的
+        路径，因为场景是任务级属性，一轮内不会变。返回真正被禁的名字。
+        """
+        excluded = [name for name in names if name in self._tools and name not in self._excluded]
+        self._excluded.update(excluded)
+        return excluded
+
     def all(self) -> list[ToolDefinition]:
         return [self._tools[name] for name in self._order]
 
     def visible(self) -> list[ToolDefinition]:
-        return [self._tools[name] for name in self._order if name in self._core or name in self._active]
+        return [
+            self._tools[name]
+            for name in self._order
+            if name not in self._excluded and (name in self._core or name in self._active)
+        ]
 
     def visible_names(self) -> list[str]:
         return [tool.name for tool in self.visible()]
 
     def deferred_names(self) -> list[str]:
-        return [name for name in self._order if name not in self._core and name not in self._active]
+        return [
+            name
+            for name in self._order
+            if name not in self._excluded
+            and name not in self._core
+            and name not in self._active
+        ]
 
     def is_active(self, name: str) -> bool:
+        if name in self._excluded:
+            return False
         return name in self._core or name in self._active
 
     def activate(self, names: Iterable[str]) -> list[str]:
         """把工具加进本次会话的可见列表，返回真正新增的那些。"""
         added: list[str] = []
         for name in names:
-            if name in self._tools and name not in self._core and name not in self._active:
+            if (
+                name in self._tools
+                and name not in self._excluded
+                and name not in self._core
+                and name not in self._active
+            ):
                 self._active.add(name)
                 added.append(name)
         return added
@@ -307,7 +342,7 @@ class ToolRegistry:
         terms = _terms(raw)
         scored: list[tuple[int, int, ToolDefinition]] = []
         for index, name in enumerate(self._order):
-            if name in EXCLUDE_FROM_SEARCH:
+            if name in EXCLUDE_FROM_SEARCH or name in self._excluded:
                 continue
             tool = self._tools[name]
             score = self._score(tool, terms, raw)

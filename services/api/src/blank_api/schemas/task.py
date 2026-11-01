@@ -27,6 +27,9 @@ class TaskCreate(BaseModel):
     # 套用计划模板：步骤与里程碑原样带过来，状态一律重置为 pending。
     plan_template_id: str | None = None
     provider_id: str | None = None
+    # 场景（scenarios.py 五选一）。决定系统提示附加段、工具白名单与记忆权限；
+    # 不向用户 prompt 拼前缀。空/缺省 = 开发场景。
+    scenario: Literal["", "dev", "docs", "daily", "brainstorm", "reverse"] = ""
     max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=HARD_MAX_STEPS)
     # 这一轮贴进来的图片。上限 8 张：再多模型侧也塞不下，而且每张都要按图计费。
     attachments: list[AttachmentIn] = Field(default_factory=list, max_length=8)
@@ -38,6 +41,7 @@ class TaskOut(BaseModel):
     id: str
     project_id: str
     provider_id: str | None
+    scenario: str = "dev"
     # 所属会话（多轮对话）。独立任务为 None。
     thread_id: str | None = None
     title: str
@@ -77,6 +81,11 @@ class TaskOut(BaseModel):
 
 class TaskRunIn(BaseModel):
     provider_id: str | None = None
+    # 场景与记忆开关：空串 = 沿用任务创建时的存档（审批恢复不重发也不能被改掉）。
+    scenario: Literal["", "dev", "docs", "daily", "brainstorm", "reverse"] = ""
+    # 仅日常场景有效：True=记住习惯（开放 memory_write），False=不记住。
+    # 非日常场景无论取值都不开放记忆——日常习惯不污染其他场景。
+    memory_opt_in: bool = False
     approve_high_risk: bool = False
     approved_tools: list[str] = Field(default_factory=list)
     approved_actions: list[str] = Field(default_factory=list, max_length=50)

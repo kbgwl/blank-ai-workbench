@@ -1,8 +1,10 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from sqlalchemy import text
 
+from blank_api.api.auth import require_token
 from blank_api.api.routes import (
     files,
+    maintenance,
     observability,
     plan_templates,
     projects,
@@ -35,6 +37,18 @@ async def health() -> dict:
     }
 
 
+@api_router.get("/scenarios", dependencies=[Depends(require_token)])
+async def scenarios() -> list[dict]:
+    """场景清单（scenarios.py 五选一）。纯配置，无状态——给前端选择器用。
+
+    挂鉴权与全站口径一致：auth surface 测试要求"非公共接口匿名一律 401"，
+    这里没有豁免的理由（清单本身不含敏感数据，但漏挂一个就多一个先例）。
+    """
+    from blank_api.services.agent.scenarios import list_scenarios
+
+    return list_scenarios()
+
+
 api_router.include_router(projects.router)
 api_router.include_router(uploads.router)
 api_router.include_router(files.router)
@@ -43,6 +57,7 @@ api_router.include_router(tasks.router)
 api_router.include_router(plan_templates.router)
 api_router.include_router(skills.router)
 api_router.include_router(observability.router)
+api_router.include_router(maintenance.router)
 api_router.include_router(settings.router)
 api_router.include_router(threads.router)
 api_router.include_router(team.router)

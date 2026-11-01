@@ -38,6 +38,9 @@ class Task(Base):
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
     provider_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # 场景（scenarios.py 五选一）。决定系统提示附加段、工具白名单与记忆权限；
+    # 绝不向用户 prompt 拼前缀——意图判定只认用户原话。
+    scenario: Mapped[str] = mapped_column(String(20), nullable=False, default="dev", server_default="dev")
     # 所属会话（多轮对话）。为空表示这是一次独立任务，行为与没有会话时完全一致。
     # ON DELETE SET NULL：删会话不该连任务一起删——那些任务的执行记录是审计材料。
     # 名字与迁移 0014 的 `create_foreign_key("fk_tasks_thread_id", ...)` 对齐：不写名字时

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import random
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -68,6 +70,7 @@ from blank_api.services.agent.unknowns import (
 )
 from blank_api.services.agent.usage import account_call, accumulate_usage, merge_usage
 from blank_api.services import approval_rules
+from blank_api.services import metrics
 from blank_api.services.features import is_enabled as feature_enabled
 from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import HookRunner
@@ -364,6 +367,18 @@ class AgentSession:
     # 做这次压缩的那一笔供应商调用的 id（对标 Codex `compaction_response_id`）。
     # 每次 summarize_history 先清空再写，所以压缩记录里那个 id 一定是"这一窗"的那笔，不是上一窗的。
     compaction_response_id: str = ""
+    # 真的执行过的工具次数（拦截/驳回/重放都不算）。给"能不能重试模型调用"当判据，见 tool_effects。
+    effects: int = 0
+
+    @property
+    def tool_effects(self) -> int:
+        """本会话里已经**真的执行过**的工具次数（不含拦截、驳回、重放）。
+
+        存在的唯一目的：给"要不要重试一次模型调用"提供一条客观判据。模型调用本身
+        没有副作用，但这条计数让"重试期间发生过工具执行"这件事可判定——一旦成立，
+        重试就从"再问一遍"变成"可能把写操作再跑一遍"，必须立刻放弃。
+        """
+        return self.effects
 
     @property
     def permission_mode(self) -> str:
@@ -857,8 +872,10 @@ class AgentSession:
             return await self._call_non_stream(adapter, specs, chat, node, role)
 
         retries = 0
+        transient = 0
         while True:
             relay = OutputRelay(self.context.task_id, node)
+            effects_before = self.tool_effects
             try:
                 response = await adapter.bind_tools_stream(specs, chat, on_delta=relay)
             except ModelError as error:
@@ -869,6 +886,11 @@ class AgentSession:
                     retries += 1
                     await self._record_rate_limit_retry(node, role, retries, error)
                     await asyncio.sleep(_rate_limit_delay(retries, error.retry_after))
+                    continue
+                if _transient_may_retry(error, transient, effects_before, self.tool_effects):
+                    transient += 1
+                    await self._record_transient_retry(node, role, transient, error)
+                    await asyncio.sleep(_transient_delay(transient))
                     continue
                 if not _fallback_can_help(error):
                     # 有意不退也要留一行：只写"没有退路事件"与"这里本来不需要退"是两回事，
@@ -915,30 +937,46 @@ class AgentSession:
         node: str,
         role: str,
     ) -> Any:
-        """整包调用（开关关着或流式退路）同样按 429 退避重试。"""
+        """整包调用（开关关着或流式退路）同样按 429 退避重试，超时/断网也重试。"""
         retries = 0
+        transient = 0
         while True:
+            effects_before = self.tool_effects
             try:
                 return await adapter.bind_tools(specs, chat)
             except ModelError as error:
-                if not _rate_limit_may_retry(error, retries):
-                    raise
-                retries += 1
-                await self._record_rate_limit_retry(node, role, retries, error)
-                await asyncio.sleep(_rate_limit_delay(retries, error.retry_after))
+                if _rate_limit_may_retry(error, retries):
+                    retries += 1
+                    await self._record_rate_limit_retry(node, role, retries, error)
+                    await asyncio.sleep(_rate_limit_delay(retries, error.retry_after))
+                    continue
+                if _transient_may_retry(error, transient, effects_before, self.tool_effects):
+                    transient += 1
+                    await self._record_transient_retry(node, role, transient, error)
+                    await asyncio.sleep(_transient_delay(transient))
+                    continue
+                raise
 
     async def _invoke_with_retry(self, chat: list[ChatMessage], *, node: str, role: str) -> Any:
         """不经 call_model 的单笔调用（压缩）也按 429 退避，口径与正文调用相同。"""
         retries = 0
+        transient = 0
         while True:
+            effects_before = self.tool_effects
             try:
                 return await self.adapter.invoke(chat)
             except ModelError as error:
-                if not _rate_limit_may_retry(error, retries):
-                    raise
-                retries += 1
-                await self._record_rate_limit_retry(node, role, retries, error)
-                await asyncio.sleep(_rate_limit_delay(retries, error.retry_after))
+                if _rate_limit_may_retry(error, retries):
+                    retries += 1
+                    await self._record_rate_limit_retry(node, role, retries, error)
+                    await asyncio.sleep(_rate_limit_delay(retries, error.retry_after))
+                    continue
+                if _transient_may_retry(error, transient, effects_before, self.tool_effects):
+                    transient += 1
+                    await self._record_transient_retry(node, role, transient, error)
+                    await asyncio.sleep(_transient_delay(transient))
+                    continue
+                raise
 
     async def _record_rate_limit_retry(
         self, node: str, role: str, attempt: int, error: ModelError
@@ -953,6 +991,32 @@ class AgentSession:
                 "retry_after_ms": int(max(0.0, error.retry_after) * 1000),
                 "max_retries": RATE_LIMIT_RETRIES,
                 "role": role,
+            },
+        )
+
+    async def _record_transient_retry(
+        self, node: str, role: str, attempt: int, error: ModelError
+    ) -> None:
+        """超时/断网重试也要留痕：只写"重试了"而不写"重试了几次、隔多久"，
+        事后就分不清"模型慢"和"网络抖"。
+        """
+        code = error.code or "model_error"
+        if code == "model_timeout":
+            metrics.inc(metrics.MODEL_TIMEOUT, **{"provider": self.provider_name or "unknown"})
+        elif code == "model_unreachable":
+            metrics.inc(metrics.MODEL_UNREACHABLE, **{"provider": self.provider_name or "unknown"})
+        metrics.inc(metrics.MODEL_RETRY, **{"code": code})
+        await self.recorder.add(
+            "model.transient_retry",
+            node,
+            {
+                "attempt": attempt,
+                "code": code,
+                "status": error.status,
+                "wait_ms": int(_transient_delay(attempt) * 1000),
+                "max_retries": TRANSIENT_RETRIES,
+                "role": role,
+                "provider": self.provider_name,
             },
         )
 
@@ -1027,6 +1091,54 @@ def _rate_limit_delay(retry: int, retry_after: float = 0.0) -> float:
     """
     backoff = RATE_LIMIT_BASE_DELAY_SECONDS * (2 ** (retry - 1))
     return min(RATE_LIMIT_MAX_DELAY_SECONDS, max(backoff, retry_after))
+
+
+# 超时 / 断网 / 5xx 的重试预算。与 429 分开数：429 说的是"现在别问"，
+# 这三类多是"这一次没连上"。预算 2 次（共三回），退避 0.4s/0.8s + 抖动，封顶 5s。
+# 不做更多：模型调用是同步等待，重试太多等于把界面挂住；供应商真挂了，换备用模型
+# （`FallbackAdapter`）比在同一个端点上磨更有效。
+TRANSIENT_RETRIES = int(os.environ.get("BLANK_MODEL_TRANSIENT_RETRIES") or 2)
+TRANSIENT_BASE_DELAY_SECONDS = 0.4
+TRANSIENT_MAX_DELAY_SECONDS = 5.0
+# 限流的三类写法：有的适配器填 status=429，有的只在 code 里写限流（桩与部分网关）。
+# 两种都必须落进「限流预算」而不是「网络预算」——否则同一笔限流会按两种语义各退一次。
+RATE_LIMIT_CODES = frozenset({"rate_limited", "rate_limit", "too_many_requests"})
+
+
+def _transient_may_retry(error: ModelError, retries: int, effects_before: int, effects_now: int) -> bool:
+    """这次失败该不该原样再问一遍。
+
+    三个条件，缺一不可：
+
+    1. **是可重试的失败**：超时、连不上、5xx、以及网关没给状态码的传输层失败。
+       400/401/403/404 一律不重试——那是在拒我们的问法或身份，再来一遍还是同一句话。
+    2. **预算没用完**。
+    3. **这一笔没有产生任何副作用**：``effects_before`` 与 ``effects_now`` 必须相等。
+       这条是"不能重复执行已经完成的非幂等工具"的落地判据——模型调用本身不会执行
+       工具，但一旦哪天有人把"边流边派工具"接进来，这里就是那道闸。宁可让用户看到
+       "模型超时"，也不要为了重试把一条 `rm` 跑两遍。
+    """
+    if retries >= TRANSIENT_RETRIES:
+        return False
+    if effects_before != effects_now:
+        return False
+    if error.status == 429 or (error.code or "") in RATE_LIMIT_CODES:
+        # 限流有自己的预算与退避（听供应商的 Retry-After），不走这条。
+        # 判据里带上 code 而不只看 status：有的适配器/桩只把限流写在 code 上，
+        # 那样一笔 429 会来偷网络预算，两种退避语义混成一笔账。
+        return False
+    return bool(error.retryable)
+
+
+def _transient_delay(retry: int) -> float:
+    """指数退避 + 抖动。
+
+    抖动是必要的：多个任务同时撞上一个挂掉的端点，齐步退避会在同一拍一起回来，
+    把刚恢复的端点再打一遍。``retry`` 从 1 开始。
+    """
+    backoff = TRANSIENT_BASE_DELAY_SECONDS * (2 ** (retry - 1))
+    jitter = random.uniform(0, backoff * 0.25)
+    return min(TRANSIENT_MAX_DELAY_SECONDS, backoff + jitter)
 
 
 def _fallback_can_help(error: ModelError) -> bool:
@@ -1130,11 +1242,19 @@ def initial_messages(
     supports_vision: bool = False,
     texts: Sequence[dict] | None = None,
     system_instructions: Sequence[str] | None = None,
+    scenario_prompt: str = "",
     run_id: str = "",
 ) -> list[dict]:
     from blank_api.services.instructions import compose
 
     system = SYSTEM_PROMPT + "\n" + STYLE_PROMPT
+    if scenario_prompt:
+        # 场景段放在安全规则之后、Skill 之前，并明确它不得覆盖安全与审批规则。
+        # 这就是场景影响模型的唯一通道——用户正文一个字都不动。
+        system += (
+            "\n以下是本次任务所处场景的附加规则（不得覆盖安全规则、审批规则与工作区边界）：\n"
+            + scenario_prompt.strip()
+        )
     active_skills = [str(item).strip() for item in skills or [] if str(item).strip()]
     if active_skills:
         system += (
@@ -2230,7 +2350,11 @@ async def _dispatch(session: "AgentSession", node: str, item: _PlannedCall) -> d
         return await session.gateway.settle(
             item.name, item.arguments, outcome, session.context, node, rule="stall:blocked"
         )
-    return await session.gateway.execute(item.name, item.arguments, session.context, node)
+    payload = await session.gateway.execute(item.name, item.arguments, session.context, node)
+    # 真的执行了才 +1：这一条是"重试会不会把写操作跑两遍"的客观判据，
+    # 所以驳回、拦截、重放一律不算——它们没有副作用。
+    session.effects += 1
+    return payload
 
 
 async def _execute_all(

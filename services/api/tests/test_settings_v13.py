@@ -229,7 +229,9 @@ async def test_turning_off_tool_search_shows_every_tool(workspace: Path, store: 
     scope = await _scope(workspace, store, {"tools": {"search": False}}, monkeypatch)
     registry = scope.session.gateway.registry
     assert "tool_search" not in registry.visible_names()
-    assert set(registry.visible_names()) == set(scope.session.gateway.tools)
+    # 场景禁用（scenarios.py）是档位之外的一层：dev 场景默认禁 memory_write，
+    # 所以"关掉按需加载 = 一切可见"要按"除场景禁用外的一切可见"来断。
+    assert set(registry.visible_names()) | set(registry.excluded) == set(scope.session.gateway.tools)
 
 
 async def test_tool_search_on_by_default_keeps_git_hidden(workspace: Path, store: SettingsStore, monkeypatch):

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
@@ -19,6 +20,8 @@ class ThreadTurnIn(BaseModel):
     goal: str = ""
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=20)
     provider_id: str | None = None
+    # 场景（scenarios.py 五选一），与 TaskCreate.scenario 同名同义。
+    scenario: Literal["", "dev", "docs", "daily", "brainstorm", "reverse"] = ""
     max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=HARD_MAX_STEPS)
     # 这一轮贴的图片。和 TaskCreate 同名同义：一轮任务就是一条消息。
     attachments: list[AttachmentIn] = Field(default_factory=list, max_length=8)

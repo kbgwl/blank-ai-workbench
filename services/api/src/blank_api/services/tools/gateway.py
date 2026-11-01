@@ -6,11 +6,12 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 from blank_api.api.errors import ApiError
 from blank_api.models.task import ToolCall
 from blank_api.services.log_safety import redact
+from blank_api.services import metrics
 from blank_api.services.models.base import ToolSpecLite
 from blank_api.services.agent.artifacts import ArtifactStore
 from blank_api.services.permissions import (
@@ -229,7 +230,13 @@ def _audit(
 
 
 class ToolGateway:
-    def __init__(self, tools: Sequence[ToolDefinition], *, defer: bool = True) -> None:
+    def __init__(
+        self,
+        tools: Sequence[ToolDefinition],
+        *,
+        defer: bool = True,
+        excluded: Iterable[str] = (),
+    ) -> None:
         self.tools: dict[str, ToolDefinition] = {tool.name: tool for tool in tools}
         # 并发执行只读工具时，多条 _record 会同时落库。SQLite 的连接池本身有 30s
         # 锁等待兜底，但内存库用 StaticPool 只有一个连接，并发拿同一个连接会直接
@@ -239,6 +246,10 @@ class ToolGateway:
         # 注册表决定"模型这一轮看得见哪些工具"。defer=False 给子代理用：
         # 它拿到的本来就是一小组白名单工具，再藏一层只会让它无从下手。
         self.registry = ToolRegistry(tools, activate_all=not defer)
+        # 场景级硬禁（scenarios.py）：execute 里最先检查。注册表只是让模型看不见，
+        # 拦执行的是这一份——模型凭记忆硬调一个不可见工具时，答案必须是"被拒绝"，
+        # 而不是"照常跑了"。
+        self.excluded: frozenset[str] = frozenset(excluded)
 
     def specs(self) -> list[ToolSpecLite]:
         return [tool.spec() for tool in self.registry.visible()]
@@ -277,6 +288,24 @@ class ToolGateway:
 
     async def execute(self, name: str, arguments: dict, context: ToolContext, node: str = "") -> dict:
         started = time.perf_counter()
+        if name in self.excluded:
+            # 场景禁用先于一切判定：approve_high_risk / 审批放行都救不回来。
+            risk = self.tools[name].resolve_risk(arguments) if name in self.tools else "high"
+            outcome = ToolOutcome(
+                ok=False,
+                status="denied",
+                message=f"当前场景不允许使用 {name}。要执行这类操作请切换到开发场景。",
+            )
+            return await self._finish(
+                name,
+                arguments,
+                outcome,
+                context,
+                node,
+                risk,
+                started,
+                deny(risk, "scenario_excluded", outcome.message),
+            )
         tool = self.tools.get(name)
         if tool is None:
             risk = "high"
@@ -482,7 +511,12 @@ class ToolGateway:
             "message": _redact(outcome.message, context.extra_secrets, 10_000_000),
             "data": _redact_value(outcome.data, context.extra_secrets, 10_000_000),
         }
-        artifact_path = ArtifactStore().save(context.task_id, tool_call_id, full_payload)
+        artifact_path, artifact_meta = ArtifactStore().write(context.task_id, tool_call_id, full_payload)
+        # 落盘读数进指标：截断过的产物必须能被数出来，否则"模型读到的是完整输出"
+        # 这句假设没人能证伪。
+        metrics.inc(metrics.ARTIFACT_WRITTEN, artifact_meta["bytes"])
+        if artifact_meta["truncated"]:
+            metrics.inc(metrics.ARTIFACT_TRUNCATED)
         async with self._record_lock:
             async with context.session_factory() as session:
                 session.add(

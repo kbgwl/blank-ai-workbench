@@ -225,7 +225,12 @@ async def test_model_writes_a_typed_memory_and_finds_it_with_source(
             {"content": "已完成"},
         ]
     )
-    resp = await env.client.post(f"{API}/tasks/{task_id}/run", json={"provider_id": provider_id})
+    # 场景规则（升级任务书 §7.2）：记忆只属于日常场景，且用户要选"记住"。
+    # 这里验证的是 memory_write 的行为本身，环境按新规则给 daily + opt_in。
+    resp = await env.client.post(
+        f"{API}/tasks/{task_id}/run",
+        json={"provider_id": provider_id, "scenario": "daily", "memory_opt_in": True},
+    )
     assert resp.status_code == 200, resp.text
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
@@ -258,7 +263,10 @@ async def test_model_writes_a_typed_memory_and_finds_it_with_source(
             {"content": "已完成"},
         ]
     )
-    resp = await env.client.post(f"{API}/tasks/{second}/run", json={"provider_id": provider_id})
+    resp = await env.client.post(
+        f"{API}/tasks/{second}/run",
+        json={"provider_id": provider_id, "scenario": "daily", "memory_opt_in": True},
+    )
     assert resp.status_code == 200, resp.text
     events = (await env.client.get(f"{API}/tasks/{second}/events")).json()
     repeated = _tool_done(events, "memory_write")
