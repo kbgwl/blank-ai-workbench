@@ -210,6 +210,8 @@ export type TaskDraft = {
   prompt: string;
   acceptanceCriteria: string[];
   providerId?: string;
+  /** 场景（scenarios.py 五选一）。缺省 = 开发场景。 */
+  scenario?: string;
   /** 这一轮随消息一起给的图片。只传 id 与名字：文件本体已经上传过了。 */
   attachments?: AttachmentRef[];
   /** 目标会话：已有会话 id，或 "__new__" 表示新开一条并把这一轮作为第 1 轮。
@@ -355,6 +357,8 @@ export function createTurn(threadId: string, draft: TaskDraft): Promise<Task> {
     body.attachments = draft.attachments.map((item) => ({ id: item.id, name: item.name }));
   }
   if (draft.providerId) body.provider_id = draft.providerId;
+  // 场景是任务级属性：创建时存档，运行请求里再带一次保证切换立即生效。
+  if (draft.scenario) body.scenario = draft.scenario;
   return request<unknown>(`${api}/threads/${threadId}/turns`, {
     method: "POST",
     ...jsonInit,
@@ -1719,6 +1723,37 @@ export function fetchProviders(): Promise<Provider[]> {
   );
 }
 
+/** 场景目录（GET /scenarios）。key/label/input_hint 给选择器与输入框联动用。 */
+export type ScenarioInfo = {
+  key: string;
+  label: string;
+  summary: string;
+  allowWrite: boolean;
+  memoryAllowed: boolean;
+  inputHint: string;
+};
+
+export function fetchScenarios(): Promise<ScenarioInfo[]> {
+  return request<unknown[]>(`${api}/scenarios`, { cache: "no-store" }).then((rows) =>
+    (Array.isArray(rows) ? rows : [])
+      .map((row) => {
+        if (!row || typeof row !== "object") return null;
+        const raw = row as Record<string, unknown>;
+        const key = textOf(raw, "key");
+        if (!key) return null;
+        return {
+          key,
+          label: textOf(raw, "label") || key,
+          summary: textOf(raw, "summary"),
+          allowWrite: boolOf(raw, "allow_write") ?? true,
+          memoryAllowed: boolOf(raw, "memory_allowed") ?? false,
+          inputHint: textOf(raw, "input_hint"),
+        } satisfies ScenarioInfo;
+      })
+      .filter((item): item is ScenarioInfo => item !== null),
+  );
+}
+
 export function fetchTasks(projectId?: string): Promise<Task[]> {
   const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
   return request<unknown>(`${api}/tasks${query}`, { cache: "no-store" }).then((body) =>
@@ -1762,9 +1797,15 @@ export function createTask(projectId: string, draft: TaskDraft): Promise<Task> {
   });
 }
 
-export function runTask(taskId: string, input: { approveHigh?: boolean } = {}): Promise<unknown> {
+export function runTask(
+  taskId: string,
+  input: { approveHigh?: boolean; scenario?: string; memoryOptIn?: boolean } = {},
+): Promise<unknown> {
   const body: Record<string, unknown> = {};
   if (input.approveHigh) body.approve_high_risk = true;
+  // 场景切换立即生效：空串=沿用创建时存档。记忆开关只有日常场景会传 true。
+  if (input.scenario) body.scenario = input.scenario;
+  if (input.memoryOptIn !== undefined) body.memory_opt_in = input.memoryOptIn;
   if (typeof window !== "undefined") {
     try {
       const roles = JSON.parse(window.localStorage.getItem("blank.model.roles") ?? "{}") as Record<string, string>;

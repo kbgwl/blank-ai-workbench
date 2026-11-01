@@ -393,7 +393,7 @@ function describeSystem(event: AgentEvent): { title: string; detail: string; ton
   if (type === "validation.completed" || type.startsWith("validation")) {
     const command = textOf(payload, "command", "cmd");
     const exitCode = numOf(payload, "exit_code");
-    const verdict = verdictOf(boolOf(payload, "passed", "ok"), textOf(payload, "status"));
+    const verdict = verdictOf(boolOf(payload, "passed", "ok"));
     if (verdict.tone === "warn") {
       // 没做成自动化校验时，command 和退出码都没有意义（根本没跑），
       // 有意义的是后端给的原因：没授权、等审批、沙箱起不来。

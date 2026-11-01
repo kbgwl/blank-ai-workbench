@@ -36,6 +36,7 @@ import {
   type TeamMessage,
   type TeamQuestion,
 } from "./api";
+import { useRouter } from "next/navigation";
 import {
   argumentPreview,
   botRoundTokens,
@@ -227,6 +228,7 @@ export function TeamView() {
   const rosterRef = useRef({ group: "", signature: "", status: "" });
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const router = useRouter();
 
   const refreshBoot = useCallback(async (options: { keepSelection?: boolean } = {}) => {
     try {
@@ -425,7 +427,7 @@ export function TeamView() {
     clearSearch();
     if (hit.source === "task") {
       // 任务结论没有群内消息可定位，直接打开任务详情。
-      if (hit.task_id) window.location.assign(`/tasks/detail?id=${encodeURIComponent(hit.task_id)}`);
+      if (hit.task_id) router.push(`/tasks/detail?id=${encodeURIComponent(hit.task_id)}`);
       return;
     }
     if (!hit.group_id || !hit.message_id) return;

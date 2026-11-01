@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Project, Provider, Workspace } from "../tasks/api";
+import type { Project, Provider, ScenarioInfo, Workspace } from "../tasks/api";
 import { AtPicker } from "./at-picker";
 import { DraftImageChips } from "./image-chips";
 import { insertReference } from "./picker";
@@ -33,6 +33,13 @@ export type ComposerProps = {
   canPickWorkspace: boolean;
   providerId: string;
   onProviderChange: (id: string) => void;
+  /** 场景目录（GET /scenarios）。加载失败时为空数组——选择器隐藏，行为回落开发场景。 */
+  scenarios: ScenarioInfo[];
+  scenarioKey: string;
+  onScenarioChange: (key: string) => void;
+  /** 仅日常场景显示：用户是否允许 AI 记住习惯（后端凭它开放 memory_write）。 */
+  memoryOptIn: boolean;
+  onMemoryOptInChange: (value: boolean) => void;
   draft: string;
   onDraftChange: (value: string) => void;
   /** 草稿里的图片。上传完成的才有 id，上传中的不能发送。 */
@@ -88,6 +95,10 @@ export function Composer(props: ComposerProps) {
   const activeWorkspace = props.workspaces.find((item) => item.is_active) ?? props.workspaces[0] ?? null;
   /** 没有可挑的目录、也没有已绑目录时，渲染一句话而不是一个点不动的下拉。 */
   const workspaceSelectable = props.canPickWorkspace || props.workspaces.length > 1;
+  // 场景联动（任务书 §8.2）：换场景时输入框提示词跟着换；记忆开关只在日常场景出现。
+  const activeScenario = props.scenarios.find((item) => item.key === props.scenarioKey);
+  const placeholderText =
+    activeScenario?.inputHint || "说点什么，或者直接贴张图/丢个文件进来…";
 
   return (
     <div className="bg-bg/95 px-4 pt-3 pb-3.5 backdrop-blur">
@@ -173,7 +184,7 @@ export function Composer(props: ComposerProps) {
                     ? "还没有工作目录：点下面的「未绑定目录」选一个，它才知道在哪儿干活"
                     : props.running
                       ? "它正在做，可以插一句话调整方向…（Enter 发送）"
-                      : "说点什么，或者直接贴张图/丢个文件进来…（Enter 发送，Shift+Enter 换行）"
+                      : `${placeholderText}（Enter 发送，Shift+Enter 换行）`
             }
             className="block max-h-[262px] min-h-[88px] w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] leading-[1.75] text-text placeholder:text-faint focus:outline-none"
           />
@@ -277,6 +288,43 @@ export function Composer(props: ComposerProps) {
               >
                 未绑定目录
               </span>
+            )}
+
+            {/* 场景选择器（§8.1 顶部唯一入口）：决定这轮在哪个场景跑。
+                目录为空说明清单还没读到，隐藏而不是渲染一个空下拉。 */}
+            {props.scenarios.length > 0 && (
+              <select
+                value={props.scenarioKey}
+                onChange={(event) => props.onScenarioChange(event.target.value)}
+                title={activeScenario?.summary || "场景"}
+                className="max-w-[130px] truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
+              >
+                {props.scenarios.map((scenario) => (
+                  <option key={scenario.key} value={scenario.key}>
+                    {scenario.label}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {/* 记忆开关只在日常场景出现（§7.2）：开发场景连看都看不到。 */}
+            {activeScenario?.memoryAllowed && (
+              <button
+                type="button"
+                onClick={() => props.onMemoryOptInChange(!props.memoryOptIn)}
+                title={
+                  props.memoryOptIn
+                    ? "正在记住你的习惯，点一下改为不记住"
+                    : "点一下允许 AI 记住你的偏好（敏感信息不会记）"
+                }
+                className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                  props.memoryOptIn
+                    ? "border-brand/40 bg-brand/10 text-brand"
+                    : "border-line text-faint hover:bg-surface-2"
+                }`}
+              >
+                {props.memoryOptIn ? "记住习惯" : "不记住"}
+              </button>
             )}
 
             <select

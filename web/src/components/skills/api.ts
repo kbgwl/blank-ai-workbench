@@ -56,3 +56,8 @@ export function enableSkill(id: string): Promise<Skill> {
 export function disableSkill(id: string): Promise<Skill> {
   return request<Skill>(`${api}/skills/${id}/disable`, { method: "POST" });
 }
+
+/** 物理删除一条记忆。与停用不同：删除后这条做法不再存在于任何列表里。 */
+export async function deleteSkill(id: string): Promise<void> {
+  await request<unknown>(`${api}/skills/${id}`, { method: "DELETE" });
+}

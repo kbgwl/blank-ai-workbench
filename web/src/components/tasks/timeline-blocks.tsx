@@ -55,7 +55,6 @@ function OutputBlock({ text }: { text: string }) {
 }
 
 function CardShell({
-  block,
   accent,
   icon,
   title,

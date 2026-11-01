@@ -10,6 +10,7 @@ import {
   errorCode,
   errorMessage,
   fetchEvidence,
+  fetchScenarios,
   fetchTask,
   steerTask,
   type ApprovalScope,
@@ -18,6 +19,7 @@ import {
   type PendingQuestion,
   type Project,
   type Provider,
+  type ScenarioInfo,
   type Task,
   type Thread,
 } from "../tasks/api";
@@ -51,6 +53,8 @@ const SUGGESTIONS = [
 ];
 
 const PROVIDER_KEY = "blank.bot.provider";
+const SCENARIO_KEY = "blank.bot.scenario";
+const MEMORY_KEY = "blank.bot.memory";
 
 /** 最近用过的工作区按项目记在本地：跨会话保留，但绝不进库（它只是偏好，不是数据）。 */
 const RECENT_WS_PREFIX = "blank.recent-workspaces.";
@@ -100,6 +104,11 @@ export function BotApp() {
   const [bootError, setBootError] = useState<string | null>(null);
   const [projectId, setProjectId] = useState("");
   const [providerId, setProviderId] = useState("");
+  // 场景与记忆开关：与模型选择同一套持久化套路——localStorage 里存用户的选择，
+  // 清单读不到时保持开发场景，行为与没有场景系统时完全一致。
+  const [scenarios, setScenarios] = useState<ScenarioInfo[]>([]);
+  const [scenarioKey, setScenarioKey] = useState("dev");
+  const [memoryOptIn, setMemoryOptIn] = useState(false);
 
   const [threads, setThreads] = useState<Thread[] | null>(null);
   const [threadsError, setThreadsError] = useState<string | null>(null);
@@ -176,6 +185,9 @@ export function BotApp() {
         try {
           const saved = window.localStorage.getItem(PROVIDER_KEY) ?? "";
           if (saved) setProviderId(saved);
+          const savedScenario = window.localStorage.getItem(SCENARIO_KEY) ?? "";
+          if (savedScenario) setScenarioKey(savedScenario);
+          setMemoryOptIn(window.localStorage.getItem(MEMORY_KEY) === "on");
         } catch {
           // 隐私模式下 localStorage 会抛错，忽略即可，用默认模型照样能聊。
         }
@@ -183,6 +195,12 @@ export function BotApp() {
       .catch((error: unknown) => {
         if (alive) setBootError(errorMessage(error));
       });
+    // 场景清单单独拉：失败不阻塞首屏，选择器隐藏即可。
+    fetchScenarios()
+      .then((rows) => {
+        if (alive) setScenarios(rows);
+      })
+      .catch(() => undefined);
     return () => {
       alive = false;
     };
@@ -529,6 +547,8 @@ export function BotApp() {
         threadId: conv?.thread.id ?? "",
         text,
         providerId,
+        scenario: scenarioKey,
+        memoryOptIn,
         attachments: ready,
       });
       const created: BotTurn = {
@@ -574,7 +594,7 @@ export function BotApp() {
     } finally {
       setSending(false);
     }
-  }, [clearImages, conv, draft, images, projectId, providerId, sending, workspaceReady, workspaces.length, canPickWorkspace, pickWorkspace]);
+  }, [clearImages, conv, draft, images, memoryOptIn, projectId, providerId, scenarioKey, sending, workspaceReady, workspaces.length, canPickWorkspace, pickWorkspace]);
 
   const stop = useCallback(() => {
     if (!activeTaskId) return;
@@ -884,6 +904,30 @@ export function BotApp() {
               window.localStorage.setItem(PROVIDER_KEY, id);
             } catch {
               // 存不下就算了，下次用默认模型。
+            }
+          }}
+          scenarios={scenarios}
+          scenarioKey={scenarioKey}
+          onScenarioChange={(key) => {
+            setScenarioKey(key);
+            // 换到非日常场景时记忆开关一起收起（后端本来就不认非日常的 opt_in，
+            // 前端把状态也复位，界面和真实行为保持一致）。
+            const scenario = scenarios.find((item) => item.key === key);
+            if (!scenario?.memoryAllowed) setMemoryOptIn(false);
+            try {
+              window.localStorage.setItem(SCENARIO_KEY, key);
+              window.localStorage.setItem(MEMORY_KEY, memoryOptIn && scenario?.memoryAllowed ? "on" : "off");
+            } catch {
+              // 存不下就算了：场景选择是会话内偏好，不是必须落盘的数据。
+            }
+          }}
+          memoryOptIn={memoryOptIn}
+          onMemoryOptInChange={(value) => {
+            setMemoryOptIn(value);
+            try {
+              window.localStorage.setItem(MEMORY_KEY, value ? "on" : "off");
+            } catch {
+              // 同上：落盘失败只影响下次打开时的默认值。
             }
           }}
           draft={draft}

@@ -766,7 +766,7 @@ export function Workbench() {
               </Block>
 
               <Block label="证据">
-                <Kv k="测试" v={evidence?.test ? verdictOf(evidence.test.passed, evidence.test.status).label : "未运行"} />
+                <Kv k="测试" v={evidence?.test ? verdictOf(evidence.test.passed).label : "未运行"} />
                 <Kv k="验收覆盖" v={`${evidence?.acceptance.filter((item) => item.covered === true).length ?? 0} / ${evidence?.acceptance.length ?? 0}`} />
                 <Kv k="已用步数" v={`${task.stepsUsed ?? 0}${task.maxSteps ? ` / ${task.maxSteps}` : ""}`} />
                 <Kv k="用量" v={tokenLabel(evidence)} />

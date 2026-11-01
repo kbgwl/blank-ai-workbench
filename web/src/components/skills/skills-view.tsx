@@ -6,6 +6,7 @@ import { errorMessage } from "@/lib/http";
 import { formatDateTime } from "@/components/tasks/format";
 import {
   acceptMemoryCandidate,
+  deleteSkill,
   disableSkill,
   enableSkill,
   fetchMemoryCandidates,
@@ -60,6 +61,21 @@ export function SkillsView() {
     try {
       const updated = active ? await disableSkill(skill.id) : await enableSkill(skill.id);
       setSkills((rows) => (rows ?? []).map((row) => (row.id === updated.id ? updated : row)));
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function remove(skill: Skill) {
+    // 删除不可恢复（§7.2"记忆可以删除"）：先问一句，不搞二次确认弹层。
+    if (!window.confirm(`删除「${skill.name}」？删除后不可恢复。`)) return;
+    setBusy(skill.id);
+    setError("");
+    try {
+      await deleteSkill(skill.id);
+      setSkills((rows) => (rows ?? []).filter((row) => row.id !== skill.id));
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -146,6 +162,15 @@ export function SkillsView() {
                     }`}
                   >
                     {busy === skill.id ? "…" : active ? "停用" : "启用"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy === skill.id}
+                    onClick={() => void remove(skill)}
+                    title="删除这条记忆（不可恢复）"
+                    className="shrink-0 rounded-md border border-transparent px-2 py-1 text-[11.5px] text-faint transition-colors hover:border-danger/30 hover:text-danger disabled:opacity-50"
+                  >
+                    删除
                   </button>
                 </div>
               );

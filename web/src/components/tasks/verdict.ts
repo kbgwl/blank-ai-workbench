@@ -14,7 +14,7 @@ export type Verdict = { title: string; label: string; tone: VerdictTone };
  * `passed` 只有 true / false / null 三种：null 表示这次没做成自动化校验
  * （跳过、被拒、等审批、环境起不来），不是"跑过了但没结论"。
  */
-export function verdictOf(passed: boolean | null, status: string): Verdict {
+export function verdictOf(passed: boolean | null): Verdict {
   if (passed === true) return { title: "验证完成", label: "通过", tone: "accent" };
   if (passed === false) return { title: "验证未通过", label: "未通过", tone: "danger" };
   return { title: "未做自动化校验", label: "未验证", tone: "warn" };

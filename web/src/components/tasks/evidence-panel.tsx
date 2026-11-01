@@ -128,7 +128,7 @@ function UsageAttribution({ usage }: { usage: UsageInfo }) {
 }
 
 function TestDetails({ test }: { test: TestInfo }) {
-  const verdict = verdictOf(test.passed, test.status);
+  const verdict = verdictOf(test.passed);
   return (
     <>
       <Row label="命令" value={orNone(test.command)} />

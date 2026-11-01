@@ -126,6 +126,8 @@ export async function sendMessage(input: {
   threadId: string;
   text: string;
   providerId?: string;
+  scenario?: string;
+  memoryOptIn?: boolean;
   attachments?: AttachmentRef[];
 }): Promise<SendResult> {
   const text = input.text.trim();
@@ -152,6 +154,7 @@ export async function sendMessage(input: {
       prompt: text,
       acceptanceCriteria: [],
       providerId: input.providerId,
+      scenario: input.scenario,
       attachments,
     });
   } catch (error) {
@@ -162,7 +165,8 @@ export async function sendMessage(input: {
 
   let runError = "";
   try {
-    await runTask(task.id);
+    // 场景随运行请求再带一次：用户刚切过场景时，这一轮就要按新场景跑。
+    await runTask(task.id, { scenario: input.scenario, memoryOptIn: input.memoryOptIn });
   } catch (error) {
     runError = error instanceof Error ? error.message : String(error);
   }
