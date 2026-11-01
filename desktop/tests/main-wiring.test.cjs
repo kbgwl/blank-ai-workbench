@@ -593,6 +593,14 @@ test("测试模式硬闸：健康检查不可达也不迁移、不拉起真实 P
     await waitFor(() => shell.logIncludes("[startup] startup | complete"), "startup: complete", 15_000);
     assert.ok(shell.logIncludes("[startup] backend | health-check-start"));
     assert.ok(
+      shell.logIncludes("health-url |"),
+      "硬闸之前也要留下探活地址诊断日志",
+    );
+    assert.ok(
+      shell.logIncludes("health-error |") || shell.logIncludes("health-result |"),
+      "探活失败必须留下失败类型/状态码诊断",
+    );
+    assert.ok(
       shell.logIncludes("[startup] backend | disabled"),
       "测试模式硬闸必须记 disabled（可接受的测试替身状态），不是 failed",
     );
@@ -681,6 +689,14 @@ test("启动接线：复用已有后端、托盘就绪、更新骨架只取元�
     assert.ok(shell.win.loadedUrl.startsWith("app://bundle/"), "静态站必须走 app:// 协议");
     assert.ok(shell.logIncludes("检测到已有后端在运行，直接复用"), "健康桩可达时应复用而不是 spawn");
     assert.ok(shell.logIncludes("[startup] backend | reused"), "复用要记 reused 状态");
+    assert.ok(
+      shell.requests.includes("/health"),
+      `健康桩必须真的收到探活请求，实际请求：${JSON.stringify(shell.requests)}`,
+    );
+    assert.ok(
+      shell.logIncludes("health-url |"),
+      "要留下探活地址的诊断日志（定位探错端口的这类问题）",
+    );
     assert.equal(shell.spawnCalls.length, 0, "复用已有后端时一次 spawn 都不许有");
     assert.equal(shell.tray.created, 1, "托盘要真的建出来");
     assert.ok(shell.trayLabels().includes("后端状态：运行中"), "托盘菜单要反映后端在线");

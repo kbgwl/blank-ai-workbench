@@ -45,14 +45,18 @@ test("预发布低于同号正式版，数字标识符按数值比（rc.2 < rc.1
   assert.equal(compareVersions("abc", "0.0.1"), null, "比不了就返回 null，不许当 0 混成相等");
 });
 
-test("feed 形态：数组 / {entries:[...]} / 单条目对象都收，其余给 null", () => {
+test("feed 形态：数组 / {entries:[...]} / 单条目对象都收，其余给结构化原因", () => {
   const entry = { version: "0.9.0", url: "https://x/y", sha256: SHA_OK };
-  assert.deepEqual(extractFeedEntries([entry]), [entry]);
-  assert.deepEqual(extractFeedEntries({ entries: [entry] }), [entry]);
-  assert.deepEqual(extractFeedEntries(entry), [entry]);
-  assert.equal(extractFeedEntries("0.9.0"), null);
-  assert.equal(extractFeedEntries({ note: "今天不发版" }), null);
-  assert.equal(extractFeedEntries(null), null);
+  assert.deepEqual(extractFeedEntries([entry]), { entries: [entry], reason: "" });
+  assert.deepEqual(extractFeedEntries({ entries: [entry] }), { entries: [entry], reason: "" });
+  assert.deepEqual(extractFeedEntries(entry), { entries: [entry], reason: "" });
+  const invalid = "feed JSON 既不是条目数组，也不是 entries 数组或带 version 的单个条目";
+  assert.deepEqual(extractFeedEntries("0.9.0"), { entries: null, reason: invalid });
+  assert.deepEqual(extractFeedEntries({ note: "今天不发版" }), { entries: null, reason: invalid });
+  assert.deepEqual(extractFeedEntries(null), { entries: null, reason: invalid });
+  // entries 不是数组：同一条结构错误，不许静默吞掉。
+  assert.deepEqual(extractFeedEntries({ entries: {} }), { entries: null, reason: invalid });
+  assert.deepEqual(extractFeedEntries({ entries: "1.0.0" }), { entries: null, reason: invalid });
 });
 
 test("挑条目：取版本最高且可解析的一条，脏数据跳过", () => {

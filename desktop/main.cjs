@@ -106,7 +106,17 @@ const shellState = {
 };
 // preload 把这个值注入渲染进程；前端构建时烘焙的 NEXT_PUBLIC_API_BASE 只是兜底。
 const API_BASE = resolveApiBase(process.env);
-const HEALTH_URL = process.env.BLANK_BACKEND_HEALTH ?? `${API_BASE}/api/v1/health`;
+
+/**
+ * 健康检查地址：每次探活时读取当前有效配置，不缓存模块加载期的旧值——
+ * 测试/嵌入式场景会在 require 本模块之后才设 BLANK_BACKEND_HEALTH，
+ * 缓存旧值会让探活永远打在错误的端口上（§3.3.3）。
+ */
+let healthUrlLogged = "";
+function resolveHealthUrl() {
+  const explicit = String(process.env.BLANK_BACKEND_HEALTH ?? "").trim();
+  return explicit || `${API_BASE}/api/v1/health`;
+}
 const APP_ORIGIN = "app://bundle";
 
 /** 打包后静态站随 extraResources 落到 resources/web；开发态直接读 web/out。 */
@@ -284,14 +294,38 @@ function remember(line) {
   console.log(`[backend] ${line}`);
 }
 
+/**
+ * 探活一次。200-299 才算可达；其他状态、网络错误、超时都算不可达。
+ * 诊断日志（§3.2）：health-url 只在地址变化时打一次（就绪循环会反复探活，
+ * 每次都打会刷屏）；health-result 只在失败时打（成功留给 reused/started 终态）；
+ * health-error 记错误类型（连接拒绝/超时），不带完整堆栈和敏感查询参数。
+ */
 async function backendReachable(timeoutMs = 1500) {
+  const url = resolveHealthUrl();
+  if (healthUrlLogged !== url) {
+    healthUrlLogged = url;
+    phase("backend", `health-url | ${url}`);
+  }
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const response = await fetch(HEALTH_URL, { signal: controller.signal });
-    clearTimeout(timer);
+    let response;
+    try {
+      response = await fetch(url, { signal: controller.signal });
+    } finally {
+      // 无论成功失败都清 timer，绝不留下挂着 AbortController 的定时器。
+      clearTimeout(timer);
+    }
+    if (!response.ok) {
+      phase("backend", `health-result | status=${response.status} ok=false`);
+    }
     return response.ok;
-  } catch {
+  } catch (error) {
+    const type =
+      error?.name === "AbortError"
+        ? "timeout"
+        : (error?.code ?? error?.name ?? "network-error");
+    phase("backend", `health-error | ${type}`);
     return false;
   }
 }
@@ -465,6 +499,10 @@ async function startBackend() {
       shellState.backendOnline = true;
       refreshTrayMenu();
       return { ok: true };
+    }
+    // 子进程已经退出/被杀：继续空等只会烧满整个就绪窗口，立即判失败。
+    if (!backend || backend.killed) {
+      return { ok: false, hint: "后端进程在就绪前退出" };
     }
     await sleep(500);
   }
@@ -923,11 +961,13 @@ async function checkForUpdates() {
         if (!response.ok) {
           fetchError = `HTTP ${response.status}`;
         } else {
-          const entries = extractFeedEntries(await response.json());
-          if (!entries) {
-            fetchError = "feed JSON 既不是条目数组，也不是 entries 数组或带 version 的单个条目";
+          const parsed = extractFeedEntries(await response.json());
+          if (!parsed.entries) {
+            // 结构化原因由 shell-policy 统一给（含非法 JSON 解析失败与结构不合法），
+            // 主进程只负责透传到日志，不重复拼接文案、不输出完整 feed 内容。
+            fetchError = parsed.reason;
           } else {
-            entry = pickLatestEntry(entries);
+            entry = pickLatestEntry(parsed.entries);
             if (!entry) fetchError = "feed 里没有任何版本可解析的条目";
           }
         }
@@ -935,7 +975,9 @@ async function checkForUpdates() {
         clearTimeout(timer);
       }
     } catch (error) {
-      fetchError = error?.name === "AbortError" ? "请求超时（8 秒）" : String(error?.message ?? error);
+      if (error?.name === "AbortError") fetchError = "请求超时（8 秒）";
+      else if (error instanceof SyntaxError) fetchError = "feed 响应不是合法 JSON";
+      else fetchError = String(error?.message ?? error);
     }
     const decision = decideUpdate({ current, entry, fetchError });
     shellState.update = decision;

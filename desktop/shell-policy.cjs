@@ -256,16 +256,19 @@ function compareVersions(a, b) {
 }
 
 /**
- * feed 的 JSON 载荷 → 候选条目数组。接受三种形态：条目数组、
- * `{ entries: [...] }`、单个条目对象；其余形状返回 null（元数据不可读）。
+ * feed 的 JSON 载荷 → 候选条目数组（结构化结果）。
+ * 接受三种形态：条目数组、`{ entries: [...] }`、单个条目对象；
+ * 其余形状返回 `{ entries: null, reason }`——原因文案由这里统一给，
+ * 调用方只负责透传到日志，不要各自再拼一套。
  */
 function extractFeedEntries(payload) {
-  if (Array.isArray(payload)) return payload;
+  const invalid = "feed JSON 既不是条目数组，也不是 entries 数组或带 version 的单个条目";
+  if (Array.isArray(payload)) return { entries: payload, reason: "" };
   if (payload && typeof payload === "object") {
-    if (Array.isArray(payload.entries)) return payload.entries;
-    if (typeof payload.version === "string") return [payload];
+    if (Array.isArray(payload.entries)) return { entries: payload.entries, reason: "" };
+    if (typeof payload.version === "string") return { entries: [payload], reason: "" };
   }
-  return null;
+  return { entries: null, reason: invalid };
 }
 
 /** 从候选里选版本最高的一条；没有一条版本可解析时返回 null。 */
