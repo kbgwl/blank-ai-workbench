@@ -41,8 +41,9 @@ const argOf = (name, fallback = null) => {
 const MOCK = argv.includes("--mock");
 const PROVIDER_ID = argOf("--provider");
 const LIMIT = Number(argOf("--limit", "0")) || Infinity;
-const ONLY = argOf("--only"); // 逗号分隔任务 id
+const ONLY = argOf("--only") ?? argOf("--task"); // 逗号分隔任务 id（--task 是 --only 的别名）
 const REPORT = argOf("--report");
+const PAUSE_SECONDS = Number(argOf("--pause", "0")) || 0;
 
 function die(msg) {
   console.error(`✗ ${msg}`);
@@ -89,11 +90,19 @@ async function startMock() {
 
 /* ── HTTP 小工具 ── */
 async function api(method, urlPath, body) {
-  const resp = await fetch(`${API}${urlPath}`, {
-    method,
-    headers: { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let resp;
+  // 后端有 120 RPM 限流（mock 模式跑得快容易撞）：按 retry-after 退避重试，不静默吞掉
+  for (let attempt = 0; ; attempt += 1) {
+    resp = await fetch(`${API}${urlPath}`, {
+      method,
+      headers: { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (resp.status !== 429 || attempt >= 3) break;
+    const wait = Math.min(35, Number(resp.headers.get("retry-after") ?? "5") || 5);
+    console.log(`  ⧗ 429 限流，${wait}s 后重试（${urlPath}）`);
+    await new Promise((r) => setTimeout(r, wait * 1000));
+  }
   const text = await resp.text();
   let json;
   try {
@@ -214,7 +223,12 @@ async function runTask(def, providerId) {
   const { changed, added } = diffSnapshot(before, after);
   const touched = [...changed, ...added];
   const expectedTouched = def.expectedFiles.filter((f) => touched.includes(f));
-  const unexpectedTouched = touched.filter((f) => !def.expectedFiles.includes(f));
+  // 任务定义可声明 testSideEffectFiles：pytest 一跑就会写出的数据文件（如 save() 落盘）
+  // 不算 agent 误改——但 changedFiles 仍如实记录全集，报告里看得到。
+  const sideEffects = def.testSideEffectFiles ?? [];
+  const unexpectedTouched = touched.filter(
+    (f) => !def.expectedFiles.includes(f) && !sideEffects.includes(f),
+  );
 
   // testCommand 真实执行
   let testExit = null;
@@ -306,6 +320,11 @@ for (const def of defs) {
   }
   results.push(result);
   console.log(result.passed ? "PASS" : `FAIL (${result.status}${result.error ? `: ${result.error}` : ""})`);
+  // 免费档模型（如 glm flash）有 RPM 限制，全量连跑会被 429 打穿；--pause 拉开任务节奏。
+  if (PAUSE_SECONDS > 0 && def.id !== defs[defs.length - 1].id) {
+    console.log(`  ⏸ 间隔 ${PAUSE_SECONDS}s（--pause）`);
+    await new Promise((resolve) => setTimeout(resolve, PAUSE_SECONDS * 1000));
+  }
 }
 
 /* 汇总 §4.2 指标 */

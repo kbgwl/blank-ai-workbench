@@ -56,7 +56,11 @@ type DesktopBridge = { apiBase?: unknown };
 export function resolveApiBase(injected: unknown, baked: string | undefined): string {
   const fromShell = typeof injected === "string" ? injected.trim() : "";
   if (fromShell) return fromShell.replace(/\/+$/, "");
-  return baked ?? "";
+  // 烘焙的绝对地址只对桌面壳有意义：桌面壳的页面协议是 app://bundle，跨源请求
+  // 由壳放行；而纯浏览器场景（CLI 静态站、开发态）从 3000 打 8000 会被 CORS 拦死，
+  // 必须走相对路径，由静态服务器的同源代理（CLI serveStatic / next rewrite）转发。
+  const hasDesktopBridge = typeof (globalThis as { blankDesktop?: unknown }).blankDesktop !== "undefined";
+  return hasDesktopBridge ? baked ?? "" : "";
 }
 
 export const API_BASE = resolveApiBase(

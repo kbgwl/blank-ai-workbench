@@ -2,7 +2,7 @@
   "id": "coding-012",
   "category": "multi_file_refactor",
   "workspace": "fixture",
-  "goal": "models.py 里两个模型类的 save/load 重复实现，抽成 storage.py 里的公共函数，两个类都改为调用它",
+  "goal": "models.py 里两个模型类的 save/load 重复实现，抽成 storage.py 里的公共函数，两个类都改为调用它。不要修改测试文件",
   "allowedTools": [
     "read_file",
     "apply_patch",
@@ -12,6 +12,10 @@
   "expectedFiles": [
     "storage.py",
     "models.py"
+  ],
+  "testSideEffectFiles": [
+    "alice.json",
+    "order123.json"
   ],
   "testCommand": "python -X utf8 test_refactor.py",
   "acceptance": [

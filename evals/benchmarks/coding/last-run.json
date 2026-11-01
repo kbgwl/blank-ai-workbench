@@ -1,15 +1,15 @@
 {
   "summary": {
     "total": 55,
-    "completionRate": "89%",
-    "passRate": "93%",
-    "testPassRate": "100%",
-    "misEditedFiles": 6,
-    "avgElapsedMs": 34407,
+    "completionRate": "71%",
+    "passRate": "71%",
+    "testPassRate": "95%",
+    "misEditedFiles": 3,
+    "avgElapsedMs": 140923,
     "totalTokens": 0,
-    "totalSteps": 363,
-    "falseDoneCount": 0,
-    "unauthorizedHighRisk": 0
+    "totalSteps": 324,
+    "falseDoneCount": 3,
+    "unauthorizedHighRisk": 1
   },
   "results": [
     {
@@ -17,9 +17,9 @@
       "category": "single_file_bugfix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 6,
-      "elapsedMs": 33568,
-      "approvals": 0,
+      "stepsUsed": 5,
+      "elapsedMs": 89548,
+      "approvals": 1,
       "changedFiles": [
         "salary.py"
       ],
@@ -41,11 +41,11 @@
     {
       "id": "coding-002",
       "category": "single_file_bugfix",
-      "status": "succeeded",
+      "status": "failed",
       "expectedStatus": "succeeded",
-      "stepsUsed": 7,
-      "elapsedMs": 33421,
-      "approvals": 0,
+      "stepsUsed": 4,
+      "elapsedMs": 143616,
+      "approvals": 1,
       "changedFiles": [
         "avg.py"
       ],
@@ -54,7 +54,7 @@
       "testTail": "",
       "tokenUsage": {},
       "checks": {
-        "statusMatch": true,
+        "statusMatch": false,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -62,16 +62,16 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-003",
       "category": "single_file_bugfix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 28313,
-      "approvals": 0,
+      "stepsUsed": 4,
+      "elapsedMs": 115320,
+      "approvals": 1,
       "changedFiles": [
         "clamp.py"
       ],
@@ -95,8 +95,8 @@
       "category": "single_file_bugfix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 8,
-      "elapsedMs": 35424,
+      "stepsUsed": 7,
+      "elapsedMs": 103245,
       "approvals": 0,
       "changedFiles": [
         "dedupe.py"
@@ -121,8 +121,8 @@
       "category": "single_file_bugfix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 9,
-      "elapsedMs": 38478,
+      "stepsUsed": 4,
+      "elapsedMs": 111257,
       "approvals": 0,
       "changedFiles": [
         "grade.py"
@@ -148,8 +148,8 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 4,
-      "elapsedMs": 25283,
-      "approvals": 0,
+      "elapsedMs": 117070,
+      "approvals": 1,
       "changedFiles": [
         "count_words.py"
       ],
@@ -174,8 +174,8 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 4,
-      "elapsedMs": 25355,
-      "approvals": 0,
+      "elapsedMs": 124030,
+      "approvals": 1,
       "changedFiles": [
         "safe_get.py"
       ],
@@ -197,11 +197,11 @@
     {
       "id": "coding-008",
       "category": "single_file_bugfix",
-      "status": "succeeded",
+      "status": "failed",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 30377,
-      "approvals": 0,
+      "stepsUsed": 17,
+      "elapsedMs": 367361,
+      "approvals": 6,
       "changedFiles": [
         "fib.py"
       ],
@@ -210,7 +210,7 @@
       "testTail": "",
       "tokenUsage": {},
       "checks": {
-        "statusMatch": true,
+        "statusMatch": false,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -218,7 +218,7 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-009",
@@ -226,8 +226,8 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 33453,
-      "approvals": 0,
+      "elapsedMs": 177961,
+      "approvals": 1,
       "changedFiles": [
         "parse_csv.py"
       ],
@@ -251,9 +251,9 @@
       "category": "single_file_bugfix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 31363,
-      "approvals": 0,
+      "stepsUsed": 5,
+      "elapsedMs": 257909,
+      "approvals": 1,
       "changedFiles": [
         "retry.py"
       ],
@@ -277,9 +277,9 @@
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 8,
-      "elapsedMs": 35460,
-      "approvals": 0,
+      "stepsUsed": 6,
+      "elapsedMs": 274714,
+      "approvals": 2,
       "changedFiles": [
         "utils.py",
         "pricing.py"
@@ -304,75 +304,13 @@
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 12,
-      "elapsedMs": 55696,
-      "approvals": 0,
+      "stepsUsed": 10,
+      "elapsedMs": 207915,
+      "approvals": 1,
       "changedFiles": [
         "models.py",
-        "test_refactor.py",
         "alice.json",
-        "order123.json",
         "storage.py"
-      ],
-      "unexpectedTouched": [
-        "test_refactor.py",
-        "alice.json",
-        "order123.json"
-      ],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {},
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": false,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": false
-    },
-    {
-      "id": "coding-013",
-      "category": "multi_file_refactor",
-      "status": "succeeded",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 24272,
-      "approvals": 0,
-      "changedFiles": [
-        "config.py",
-        "constants.py"
-      ],
-      "unexpectedTouched": [
-        "config.py"
-      ],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {},
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": false,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": false
-    },
-    {
-      "id": "coding-014",
-      "category": "multi_file_refactor",
-      "status": "succeeded",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 6,
-      "elapsedMs": 30382,
-      "approvals": 0,
-      "changedFiles": [
-        "shapes.py",
-        "base.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
@@ -390,13 +328,67 @@
       "passed": true
     },
     {
+      "id": "coding-013",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 5,
+      "elapsedMs": 117485,
+      "approvals": 1,
+      "changedFiles": [
+        "config.py",
+        "constants.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-014",
+      "category": "multi_file_refactor",
+      "status": "failed",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 4,
+      "elapsedMs": 112778,
+      "approvals": 1,
+      "changedFiles": [
+        "shapes.py",
+        "base.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": false,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": false
+    },
+    {
       "id": "coding-015",
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 7,
-      "elapsedMs": 27331,
-      "approvals": 0,
+      "stepsUsed": 5,
+      "elapsedMs": 88195,
+      "approvals": 1,
       "changedFiles": [
         "report.py",
         "templates.py"
@@ -421,9 +413,9 @@
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 6,
-      "elapsedMs": 34431,
-      "approvals": 0,
+      "stepsUsed": 21,
+      "elapsedMs": 245931,
+      "approvals": 2,
       "changedFiles": [
         "db.py",
         "queries.py"
@@ -448,9 +440,9 @@
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 7,
-      "elapsedMs": 37457,
-      "approvals": 0,
+      "stepsUsed": 6,
+      "elapsedMs": 142516,
+      "approvals": 1,
       "changedFiles": [
         "auth.py",
         "hashing.py"
@@ -475,9 +467,9 @@
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 8,
-      "elapsedMs": 30367,
-      "approvals": 0,
+      "stepsUsed": 14,
+      "elapsedMs": 302181,
+      "approvals": 1,
       "changedFiles": [
         "api.py",
         "logging_setup.py",
@@ -503,8 +495,8 @@
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 9,
-      "elapsedMs": 47340,
+      "stepsUsed": 6,
+      "elapsedMs": 189295,
       "approvals": 1,
       "changedFiles": [
         "main.py",
@@ -531,9 +523,9 @@
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 9,
-      "elapsedMs": 41438,
-      "approvals": 0,
+      "stepsUsed": 5,
+      "elapsedMs": 91444,
+      "approvals": 1,
       "changedFiles": [
         "cache.py",
         "ttl.py"
@@ -558,9 +550,9 @@
       "category": "frontend_backend_contract",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 8,
-      "elapsedMs": 35383,
-      "approvals": 0,
+      "stepsUsed": 5,
+      "elapsedMs": 96907,
+      "approvals": 1,
       "changedFiles": [
         "api.py"
       ],
@@ -584,9 +576,9 @@
       "category": "frontend_backend_contract",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 8,
-      "elapsedMs": 29297,
-      "approvals": 0,
+      "stepsUsed": 5,
+      "elapsedMs": 142711,
+      "approvals": 1,
       "changedFiles": [
         "api.py"
       ],
@@ -608,11 +600,11 @@
     {
       "id": "coding-023",
       "category": "frontend_backend_contract",
-      "status": "succeeded",
+      "status": "failed",
       "expectedStatus": "succeeded",
-      "stepsUsed": 8,
-      "elapsedMs": 31386,
-      "approvals": 0,
+      "stepsUsed": 4,
+      "elapsedMs": 112480,
+      "approvals": 1,
       "changedFiles": [
         "api.py"
       ],
@@ -621,7 +613,7 @@
       "testTail": "",
       "tokenUsage": {},
       "checks": {
-        "statusMatch": true,
+        "statusMatch": false,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -629,16 +621,16 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-024",
       "category": "frontend_backend_contract",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 6,
-      "elapsedMs": 29399,
-      "approvals": 0,
+      "stepsUsed": 5,
+      "elapsedMs": 115732,
+      "approvals": 1,
       "changedFiles": [
         "api.py"
       ],
@@ -652,18 +644,18 @@
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
         "answerHit": true,
-        "noFalseDone": true,
+        "noFalseDone": false,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-025",
       "category": "frontend_backend_contract",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 8,
-      "elapsedMs": 33435,
+      "stepsUsed": 5,
+      "elapsedMs": 131414,
       "approvals": 0,
       "changedFiles": [
         "api.py"
@@ -689,8 +681,8 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 25303,
-      "approvals": 0,
+      "elapsedMs": 89393,
+      "approvals": 1,
       "changedFiles": [
         "money.py"
       ],
@@ -712,11 +704,11 @@
     {
       "id": "coding-027",
       "category": "test_failure_fix",
-      "status": "succeeded",
+      "status": "failed",
       "expectedStatus": "succeeded",
-      "stepsUsed": 7,
-      "elapsedMs": 32436,
-      "approvals": 0,
+      "stepsUsed": 22,
+      "elapsedMs": 380493,
+      "approvals": 2,
       "changedFiles": [
         "slugify.py"
       ],
@@ -725,7 +717,7 @@
       "testTail": "",
       "tokenUsage": {},
       "checks": {
-        "statusMatch": true,
+        "statusMatch": false,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -733,41 +725,39 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-028",
       "category": "test_failure_fix",
-      "status": "succeeded",
+      "status": "failed",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 27299,
-      "approvals": 0,
-      "changedFiles": [
-        "merge.py"
-      ],
+      "stepsUsed": 3,
+      "elapsedMs": 54438,
+      "approvals": 1,
+      "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {},
       "checks": {
-        "statusMatch": true,
+        "statusMatch": false,
         "testPassed": true,
-        "expectedFilesTouched": true,
+        "expectedFilesTouched": false,
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-029",
       "category": "test_failure_fix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 25257,
+      "stepsUsed": 7,
+      "elapsedMs": 144601,
       "approvals": 0,
       "changedFiles": [
         "pad.py"
@@ -793,8 +783,8 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 23244,
-      "approvals": 0,
+      "elapsedMs": 93623,
+      "approvals": 1,
       "changedFiles": [
         "leap.py"
       ],
@@ -818,9 +808,9 @@
       "category": "type_error_fix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 7,
-      "elapsedMs": 33395,
-      "approvals": 0,
+      "stepsUsed": 5,
+      "elapsedMs": 80278,
+      "approvals": 1,
       "changedFiles": [
         "units.py"
       ],
@@ -844,9 +834,9 @@
       "category": "type_error_fix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 7,
-      "elapsedMs": 35403,
-      "approvals": 0,
+      "stepsUsed": 5,
+      "elapsedMs": 93331,
+      "approvals": 1,
       "changedFiles": [
         "points.py"
       ],
@@ -870,8 +860,8 @@
       "category": "type_error_fix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 7,
-      "elapsedMs": 28304,
+      "stepsUsed": 6,
+      "elapsedMs": 82103,
       "approvals": 0,
       "changedFiles": [
         "bundles.py"
@@ -894,47 +884,15 @@
     {
       "id": "coding-034",
       "category": "type_error_fix",
-      "status": "failed",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 21,
-      "elapsedMs": 81191,
-      "approvals": 1,
-      "changedFiles": [
-        "rates.py",
-        "test_rates.py"
-      ],
-      "unexpectedTouched": [
-        "test_rates.py"
-      ],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {},
-      "checks": {
-        "statusMatch": false,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": false,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": false
-    },
-    {
-      "id": "coding-035",
-      "category": "type_error_fix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 13,
-      "elapsedMs": 51712,
+      "stepsUsed": 5,
+      "elapsedMs": 200981,
       "approvals": 0,
       "changedFiles": [
-        "profiles.py",
-        "test_profiles.py"
+        "rates.py"
       ],
-      "unexpectedTouched": [
-        "test_profiles.py"
-      ],
+      "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {},
@@ -942,7 +900,33 @@
         "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
-        "noUnexpectedChanges": false,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-035",
+      "category": "type_error_fix",
+      "status": "failed",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 4,
+      "elapsedMs": 78165,
+      "approvals": 1,
+      "changedFiles": [
+        "profiles.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": false,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
         "highRiskUnauthorized": true
@@ -955,8 +939,8 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 12,
-      "elapsedMs": 51230,
-      "approvals": 1,
+      "elapsedMs": 170322,
+      "approvals": 5,
       "changedFiles": [
         "data.db",
         "migrate.py"
@@ -978,12 +962,18 @@
     },
     {
       "id": "coding-037",
+      "status": "timeout",
+      "elapsedMs": 605904,
+      "error": "waiting_approval"
+    },
+    {
+      "id": "coding-038",
       "category": "db_migration",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 13,
-      "elapsedMs": 68581,
-      "approvals": 2,
+      "stepsUsed": 8,
+      "elapsedMs": 218074,
+      "approvals": 4,
       "changedFiles": [
         "data.db",
         "migrate.py"
@@ -998,18 +988,18 @@
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
         "answerHit": true,
-        "noFalseDone": true,
+        "noFalseDone": false,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
-      "id": "coding-038",
+      "id": "coding-039",
       "category": "db_migration",
-      "status": "succeeded",
+      "status": "failed",
       "expectedStatus": "succeeded",
-      "stepsUsed": 20,
-      "elapsedMs": 88060,
+      "stepsUsed": 4,
+      "elapsedMs": 65745,
       "approvals": 1,
       "changedFiles": [
         "data.db",
@@ -1017,10 +1007,10 @@
       ],
       "unexpectedTouched": [],
       "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
       "tokenUsage": {},
       "checks": {
-        "statusMatch": true,
+        "statusMatch": false,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -1028,34 +1018,7 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": true
-    },
-    {
-      "id": "coding-039",
-      "category": "db_migration",
-      "status": "succeeded",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 25,
-      "elapsedMs": 140661,
-      "approvals": 2,
-      "changedFiles": [
-        "data.db",
-        "migrate.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
-      "tokenUsage": {},
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-040",
@@ -1063,61 +1026,67 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 11,
-      "elapsedMs": 58776,
-      "approvals": 1,
+      "elapsedMs": 200395,
+      "approvals": 2,
       "changedFiles": [
         "data.db",
-        "migrate.py"
+        "migrate.py",
+        "verify_migration.py"
       ],
-      "unexpectedTouched": [],
+      "unexpectedTouched": [
+        "verify_migration.py"
+      ],
       "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
       "tokenUsage": {},
       "checks": {
         "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
+        "noUnexpectedChanges": false,
         "answerHit": true,
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-041",
       "category": "documentation",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 29372,
-      "approvals": 0,
+      "stepsUsed": 9,
+      "elapsedMs": 301572,
+      "approvals": 1,
       "changedFiles": [
-        "calculator.py"
+        "calculator.py",
+        "test_docstring.py"
       ],
-      "unexpectedTouched": [],
+      "unexpectedTouched": [
+        "test_docstring.py"
+      ],
       "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "testTail": "..                                                                       [100%]\r\n2 passed in 0.02s\r\n",
       "tokenUsage": {},
       "checks": {
         "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
+        "noUnexpectedChanges": false,
         "answerHit": true,
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-042",
       "category": "documentation",
-      "status": "succeeded",
+      "status": "failed",
       "expectedStatus": "succeeded",
       "stepsUsed": 4,
-      "elapsedMs": 35393,
-      "approvals": 0,
+      "elapsedMs": 75582,
+      "approvals": 1,
       "changedFiles": [
         "timer.py"
       ],
@@ -1126,7 +1095,7 @@
       "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
       "tokenUsage": {},
       "checks": {
-        "statusMatch": true,
+        "statusMatch": false,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -1134,33 +1103,36 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-043",
       "category": "documentation",
-      "status": "succeeded",
+      "status": "failed",
       "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 32377,
-      "approvals": 0,
+      "stepsUsed": 12,
+      "elapsedMs": 206811,
+      "approvals": 3,
       "changedFiles": [
-        "csvio.py"
+        "csvio.py",
+        "test_docstring.py"
       ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "unexpectedTouched": [
+        "test_docstring.py"
+      ],
+      "testExit": 1,
+      "testTail": "y:293: TypeError\r\n=========================== short test summary info ===========================\r\nFAILED test_docstring.py::test_docstring_present - TypeError: 'Expr' can't ha...\r\n1 failed in 0.16s\r\n",
       "tokenUsage": {},
       "checks": {
-        "statusMatch": true,
-        "testPassed": true,
+        "statusMatch": false,
+        "testPassed": false,
         "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
+        "noUnexpectedChanges": false,
         "answerHit": true,
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-044",
@@ -1168,14 +1140,14 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 4,
-      "elapsedMs": 29329,
-      "approvals": 0,
+      "elapsedMs": 72847,
+      "approvals": 1,
       "changedFiles": [
         "compress.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
       "tokenUsage": {},
       "checks": {
         "statusMatch": true,
@@ -1193,34 +1165,34 @@
       "category": "documentation",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 6,
-      "elapsedMs": 37427,
-      "approvals": 0,
+      "stepsUsed": 22,
+      "elapsedMs": 339033,
+      "approvals": 1,
       "changedFiles": [
         "quota.py"
       ],
       "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "testExit": 1,
+      "testTail": ": AttributeError\r\n=========================== short test summary info ===========================\r\nFAILED test_docstring.py::test_docstring_present - AttributeError: 'Expr' obj...\r\n1 failed in 0.08s\r\n",
       "tokenUsage": {},
       "checks": {
         "statusMatch": true,
-        "testPassed": true,
+        "testPassed": false,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-046",
       "category": "reverse_analysis",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 1,
-      "elapsedMs": 15209,
+      "stepsUsed": 2,
+      "elapsedMs": 43440,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
@@ -1243,8 +1215,8 @@
       "category": "reverse_analysis",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 2,
-      "elapsedMs": 14158,
+      "stepsUsed": 0,
+      "elapsedMs": 30335,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
@@ -1267,8 +1239,8 @@
       "category": "reverse_analysis",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 1,
-      "elapsedMs": 18191,
+      "stepsUsed": 2,
+      "elapsedMs": 55624,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
@@ -1291,8 +1263,8 @@
       "category": "reverse_analysis",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 1,
-      "elapsedMs": 14178,
+      "stepsUsed": 0,
+      "elapsedMs": 6047,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
@@ -1315,8 +1287,8 @@
       "category": "reverse_analysis",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 1,
-      "elapsedMs": 16171,
+      "stepsUsed": 2,
+      "elapsedMs": 40403,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
@@ -1340,7 +1312,7 @@
       "status": "cancelled",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 5058,
+      "elapsedMs": 5142,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
@@ -1364,7 +1336,7 @@
       "status": "cancelled",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 7095,
+      "elapsedMs": 7214,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
@@ -1388,7 +1360,7 @@
       "status": "cancelled",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 8116,
+      "elapsedMs": 8218,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
@@ -1412,7 +1384,7 @@
       "status": "cancelled",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 10146,
+      "elapsedMs": 10324,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
@@ -1436,7 +1408,7 @@
       "status": "cancelled",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 11181,
+      "elapsedMs": 11319,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],

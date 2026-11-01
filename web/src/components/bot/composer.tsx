@@ -281,6 +281,15 @@ export function Composer(props: ComposerProps) {
                   </option>
                 )}
               </select>
+            ) : activeWorkspace ? (
+              // 不能选目录的环境（CLI 静态站）里，已绑定的目录要如实显示名字，
+              // 不能因为"改不了"就冒充"没绑定"——那会把用户赶去项目页白跑一趟。
+              <span
+                title="在哪个目录里干活（CLI 场景只读，桌面版可切换）"
+                className="rounded-lg px-2 py-1.5 text-[12.5px] text-muted"
+              >
+                {activeWorkspace.label}
+              </span>
             ) : (
               <span
                 title="这个项目还没绑定目录，去「项目」页绑一个"

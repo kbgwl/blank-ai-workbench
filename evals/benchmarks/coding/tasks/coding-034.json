@@ -2,7 +2,7 @@
   "id": "coding-034",
   "category": "type_error_fix",
   "workspace": "fixture",
-  "goal": "apply_tax 的 rate 注解是 float，传 int 会崩（做了字符串拼接），修实现让 int/float 都能用且返回 float",
+  "goal": "apply_tax 的 rate 注解是 float，传 int 会崩（做了字符串拼接），修实现让 int/float 都能用且返回 float。不要修改测试文件",
   "allowedTools": [
     "read_file",
     "apply_patch",

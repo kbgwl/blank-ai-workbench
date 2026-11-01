@@ -163,12 +163,17 @@ const multiRefactors = [
     expected: ["pricing.py", "utils.py"],
   },
   {
-    goal: "models.py 里两个模型类的 save/load 重复实现，抽成 storage.py 里的公共函数，两个类都改为调用它",
+    // v158：goal 明确「不要修改测试文件」——否则模型加测试会被判成误修改，
+    // 没有约束的 FAIL 算不上模型违规。
+    goal: "models.py 里两个模型类的 save/load 重复实现，抽成 storage.py 里的公共函数，两个类都改为调用它。不要修改测试文件",
     files: {
       "models.py": "class User:\n    def save(self):\n        with open(f'{self.name}.json', 'w', encoding='utf-8') as f:\n            f.write(self.data)\n\nclass Order:\n    def save(self):\n        with open(f'{self.oid}.json', 'w', encoding='utf-8') as f:\n            f.write(self.data)\n",
       "test_refactor.py": "import models\nu = models.User(); u.name = 'alice'; u.data = '{}'\nu.save()\nimport os\nassert os.path.exists('alice.json')\nprint('ok')\n",
     },
     expected: ["storage.py", "models.py"],
+    // 测试一跑 save() 就会写出这两个数据文件（fixture 里不存在），
+    // 是 pytest 的可预期产物而非 agent 误改——判分按白名单豁免。
+    sideEffects: ["alice.json", "order123.json"],
   },
   {
     goal: "config.py 的硬编码常量移到 constants.py，并让 config.py from constants import *，行为不变",
@@ -248,6 +253,7 @@ for (const task of multiRefactors) {
       goal: task.goal,
       allowedTools: ["read_file", "apply_patch", "run_shell", "run_tests"],
       expectedFiles: task.expected,
+      ...(task.sideEffects ? { testSideEffectFiles: task.sideEffects } : {}),
       testCommand: testFile
         ? `${PY} -X utf8 ${testFile}`
         : `${PY} -X utf8 main.py`,
@@ -328,8 +334,11 @@ const typeFixes = [
   { file: "units.py", goal: "convert 的注解说返回 int 实际返回 str，修正实现（把结果转成 int），注解不动", broken: "def convert(text: str) -> int:\n    return text.strip()\n", test: "import units\nassert units.convert(' 42 ') == 42\nfrom typing import get_type_hints\nprint('ok')\n" },
   { file: "points.py", goal: "distance 对 None 参数崩了，按注解要求参数可空并返回 0.0", broken: "def distance(a: tuple, b: tuple | None = None) -> float:\n    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5\n", test: "from points import distance\nassert distance((0, 0), (3, 4)) == 5\nassert distance((1, 1), None) == 0.0\nprint('ok')\n" },
   { file: "bundles.py", goal: "combine 注解声明返回 list，实际返回 tuple，改实现成 list", broken: "def combine(items: list) -> list:\n    return tuple(items)\n", test: "from bundles import combine\nassert combine([1, 2]) == [1, 2]\nassert isinstance(combine([1]), list)\nprint('ok')\n" },
-  { file: "rates.py", goal: "apply_tax 的 rate 注解是 float，传 int 会崩（做了字符串拼接），修实现让 int/float 都能用且返回 float", broken: "def apply_tax(amount: float, rate: float) -> float:\n    return amount + amount * rate if isinstance(rate, float) else amount + rate\n", test: "from rates import apply_tax\nassert apply_tax(100, 0.1) == 110.0\nassert apply_tax(100, 1) == 110.0\nassert isinstance(apply_tax(100, 1), float)\nprint('ok')\n" },
-  { file: "profiles.py", goal: "rename 返回 dict 但把 key 写成了非 str（注解要求 dict[str, str]），修实现", broken: "def rename(mapping: dict) -> dict:\n    return {k.upper(): v for k, v in mapping.items()}\n", test: "from profiles import rename\nout = rename({'a': 'x'})\nassert out == {'A': 'x'}\nassert all(isinstance(k, str) for k in out)\nprint('ok')\n" },
+  // v158 修正（有单例复跑对比）：原测试两断言自相矛盾——0.1→110 要求「小数比例」语义，
+  // 1→110 在任何一致实现下都达不到（小数语义应为 200）。矛盾测试逼着模型改测试才能过。
+  // 修正为一致语义：0.1→110.0、1→200.0（int rate 与 float 同义），模型只需修实现不需碰测试。
+  { file: "rates.py", goal: "apply_tax 的 rate 注解是 float，传 int 会崩（做了字符串拼接），修实现让 int/float 都能用且返回 float。不要修改测试文件", broken: "def apply_tax(amount: float, rate: float) -> float:\n    return amount + amount * rate if isinstance(rate, float) else amount + rate\n", test: "from rates import apply_tax\nassert apply_tax(100, 0.1) == 110.0\nassert apply_tax(100, 1) == 200.0\nassert isinstance(apply_tax(100, 1), float)\nprint('ok')\n" },
+  { file: "profiles.py", goal: "rename 返回 dict 但把 key 写成了非 str（注解要求 dict[str, str]），修实现。不要修改测试文件", broken: "def rename(mapping: dict) -> dict:\n    return {k.upper(): v for k, v in mapping.items()}\n", test: "from profiles import rename\nout = rename({'a': 'x'})\nassert out == {'A': 'x'}\nassert all(isinstance(k, str) for k in out)\nprint('ok')\n" },
 ];
 for (const fix of typeFixes) {
   add(

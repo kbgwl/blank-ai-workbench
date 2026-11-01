@@ -16,7 +16,7 @@
   "testCommand": "python -X utf8 test_refactor.py",
   "acceptance": [
     "测试/主程序退出码为 0",
-    "新建或修改了 constants.py"
+    "新建或修改了 constants.py、config.py"
   ],
   "expectedStatus": "succeeded"
 }

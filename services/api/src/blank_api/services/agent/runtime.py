@@ -1031,9 +1031,12 @@ class AgentRuntime:
         if status == "succeeded":
             if request.index_summary:
                 await self._index_summary(scope, request)
-            await self._consolidate(
-                scope, result, title=request.title, source=request.memory_source
-            )
+            # 「日常 + 未选记住」是用户明说“这次别记住”：自动固化也一并跳过，
+            # 否则开关只挡住了 memory_write，任务结论照样落进项目记忆。
+            if not (request.scenario == "daily" and not request.memory_opt_in):
+                await self._consolidate(
+                    scope, result, title=request.title, source=request.memory_source
+                )
         return await build_evidence(scope.store, task_id)
 
     async def _index_summary(self, scope: _RunScope, request: RunRequest) -> None:

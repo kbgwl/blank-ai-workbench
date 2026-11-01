@@ -258,3 +258,44 @@ async def test_steer_is_rejected_after_the_task_ended(env: Env, workspace: Path)
 
     late = await env.client.post(f"{API}/tasks/{task_id}/steer", json={"message": "再改一下"})
     assert late.status_code == 409, late.text
+
+
+async def _daily_answer_run(env: Env, workspace: Path, *, memory_opt_in: bool):
+    """跑一个日常场景的纯回答任务：一轮模型调用，不碰工具。"""
+    project_id = await create_project(env, workspace)
+    provider_id = await create_provider(env)
+    env.mock.reset([{"content": "小步提交，随写随测。"}])
+    resp = await env.client.post(
+        f"{API}/projects/{project_id}/tasks",
+        json={"title": "聊聊测试节奏", "goal": "聊聊测试节奏", "scenario": "daily"},
+    )
+    assert resp.status_code == 201, resp.text
+    task_id = resp.json()["id"]
+    run = await env.client.post(
+        f"{API}/tasks/{task_id}/run",
+        json={"provider_id": provider_id, "scenario": "daily", "memory_opt_in": memory_opt_in},
+    )
+    assert run.status_code == 200, run.text
+    return task_id
+
+
+async def test_daily_without_opt_in_does_not_consolidate(env: Env, workspace: Path) -> None:  # noqa: F811
+    """日常「不记住」：任务成功后连自动固化也不能写——开关要管住所有记忆写入。"""
+    task_id = await _daily_answer_run(env, workspace, memory_opt_in=False)
+    body = (await env.client.get(f"{API}/tasks/{task_id}")).json()
+    assert body["status"] == "succeeded", body
+
+    events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
+    assert [e for e in events if e["type"] == "memory.consolidated"] == []
+    assert MemoryStore().load(workspace) == ""
+
+
+async def test_daily_with_opt_in_still_consolidates(env: Env, workspace: Path) -> None:  # noqa: F811
+    """日常「记住」：与从前一致，任务结论照常固化，开关不是把记忆整体关死。"""
+    task_id = await _daily_answer_run(env, workspace, memory_opt_in=True)
+    body = (await env.client.get(f"{API}/tasks/{task_id}")).json()
+    assert body["status"] == "succeeded", body
+
+    events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
+    assert [e for e in events if e["type"] == "memory.consolidated"]
+    assert MemoryStore().load(workspace) != ""

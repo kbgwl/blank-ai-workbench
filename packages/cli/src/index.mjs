@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import path from "node:path";
 import process from "node:process";
@@ -189,6 +189,23 @@ function serveStatic(root, children) {
   const server = http.createServer((req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
+      // 同源代理 API：静态站烘焙的绝对地址只在默认端口生效，
+      // 端口一变前端就「后端不可达」——/api/* 直接转发给本地后端，端口无关。
+      if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
+        const upstream = http.request(
+          { host: "127.0.0.1", port: API_PORT, path: url.pathname + url.search, method: req.method, headers: req.headers },
+          (up) => {
+            res.writeHead(up.statusCode ?? 502, up.headers);
+            up.pipe(res);
+          },
+        );
+        upstream.on("error", () => {
+          if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { code: "bad_gateway", message: "后端未启动或已退出" } }));
+        });
+        req.pipe(upstream);
+        return;
+      }
       let file = path.join(outDir, decodeURIComponent(url.pathname));
       if (!file.startsWith(outDir)) {
         res.writeHead(403).end();
@@ -196,6 +213,12 @@ function serveStatic(root, children) {
       }
       // 目录请求回落到 index.html；SPA 深链同理（存在同名目录时就近找 index）。
       if (existsSync(file) && statSync(file).isDirectory()) file = path.join(file, "index.html");
+      // Next 静态导出把页面放 <name>.html（目录里只有 RSC payload）：
+      // /projects 先试 projects.html，否则空目录 index 不存在会误落 404。
+      if (!existsSync(file) && !path.extname(file)) {
+        const htmlSibling = `${file}.html`;
+        if (existsSync(htmlSibling)) file = htmlSibling;
+      }
       if (!existsSync(file)) file = path.join(outDir, "404.html");
       if (!existsSync(file)) {
         res.writeHead(404).end("Not Found");
@@ -254,6 +277,24 @@ function start() {
   const hasUv = spawn("uv", ["--version"], { stdio: "ignore" }).once("error", () => undefined);
   let apiStarted = false;
 
+  // 全新数据目录里是空库：启动前先跑迁移，否则后端查 agent_runs 直接
+  // OperationalError 退出（桌面壳 main.cjs 会跑 alembic，CLI 也必须跑）。
+  // 失败不拦启动——可能是别的实例正在迁移或已迁移过。
+  function migrateDatabase(cmd, cmdArgs) {
+    const child = spawnSync(cmd, cmdArgs, {
+      cwd: apiDir,
+      stdio: "pipe",
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: "utf-8",
+        PYTHONPATH: [path.join(apiDir, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+      },
+    });
+    if (child.status === 0) return;
+    const tail = String(child.stderr ?? "").trim().split("\n").slice(-2).join(" | ").slice(0, 200);
+    console.error(`⚠ 数据库迁移未完成（code ${child.status}）${tail ? `：${tail}` : ""}，继续启动…`);
+  }
+
   function launchApi(cmd, cmdArgs) {
     const child = spawn(cmd, cmdArgs, {
       cwd: apiDir,
@@ -277,6 +318,7 @@ function start() {
 
   if (venvPython) {
     console.log("→ 后端:  使用 services/api/.venv 的 Python");
+    migrateDatabase(venvPython, ["-X", "utf8", "-m", "alembic", "upgrade", "head"]);
     launchApi(venvPython, ["-X", "utf8", "-m", "uvicorn", "blank_api.app:app", "--port", String(API_PORT)]);
   } else {
     // uv 是异步探测的：查到就用，查不到给安装指引并退出。
@@ -291,6 +333,7 @@ function start() {
     probe.on("exit", (code) => {
       if (code === 0) {
         console.log("→ 后端:  使用 uv 管理（自动装依赖）");
+        migrateDatabase("uv", ["run", "--project", apiDir, "alembic", "upgrade", "head"]);
         launchApi("uv", ["run", "--project", apiDir, "uvicorn", "blank_api.app:app", "--port", String(API_PORT)]);
       }
     });
