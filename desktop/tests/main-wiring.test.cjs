@@ -36,6 +36,7 @@ const MANAGED_ENV = [
   "BLANK_BACKEND_PORT",
   "BLANK_BACKEND_HEALTH",
   "BLANK_BACKEND_CMD",
+  "BLANK_BACKEND_READY_TRIES",
   "BLANK_DISABLE_GPU",
   "BLANK_FORCE_GPU",
   "BLANK_HOTKEY",
@@ -289,17 +290,31 @@ async function bootShell(options = {}) {
     update = null,
     hotkeyValue = "ctrl+alt+b",
     health = "live",
+    // shellTest=false 走真实模式分支（配合 child_process 桩，绝不碰真 Python）。
+    shellTest = true,
+    backendCmd = "",
+    readyTries = "",
   } = options;
 
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "blank-shell-"));
   const requests = [];
+  const healthProbes = { count: 0 };
   const server = http.createServer((request, response) => {
     requests.push(request.url);
     const send = (status, body) => {
       response.writeHead(status, { "content-type": "application/json" });
       response.end(body);
     };
-    if (request.url === "/health") return send(200, '{"status":"connected"}');
+    if (request.url === "/health") {
+      // "flaky"：先拒 3 次（把 ensureBackend 的首轮探活全部耗尽），之后 200——
+      // 用来钉「真实模式下 spawn 的后端就绪要记 started」这条路径。
+      if (health === "flaky" && healthProbes.count < 3) {
+        healthProbes.count += 1;
+        return send(500, '{"error":"not yet"}');
+      }
+      healthProbes.count += 1;
+      return send(200, '{"status":"connected"}');
+    }
     if (request.url === "/feed500") return send(500, '{"error":"boom"}');
     if (request.url === "/feed") {
       if (update === "500") return send(500, '{"error":"boom"}');
@@ -335,7 +350,8 @@ async function bootShell(options = {}) {
     BLANK_API_BASE: origin,
     BLANK_BACKEND_PORT: "",
     BLANK_BACKEND_HEALTH: healthUrl,
-    BLANK_BACKEND_CMD: "",
+    BLANK_BACKEND_CMD: backendCmd,
+    BLANK_BACKEND_READY_TRIES: readyTries,
     BLANK_DISABLE_GPU: "1",
     BLANK_FORCE_GPU: "",
     BLANK_HOTKEY: hotkeyValue,
@@ -345,7 +361,8 @@ async function bootShell(options = {}) {
     BLANK_PROBE: "",
     // 硬闸：桩环境里健康检查万一失手，main.cjs 也绝不能去迁移/拉起真实 Python——
     // services/api/.venv 在源码树里真实存在，那是 6 个用例一起超时的根因。
-    BLANK_SHELL_TEST: "1",
+    // shellTest=false 的用例走真实模式分支，但 child_process 已被下面换成计数桩。
+    BLANK_SHELL_TEST: shellTest ? "1" : "",
     BLANK_SHOT: "",
     BLANK_START_PATH: "",
     BLANK_TRAY: tray === "disabled" ? "0" : "",
@@ -367,9 +384,46 @@ async function bootShell(options = {}) {
 
   const exitListenersBefore = new Set(process.listeners("exit"));
   const stub = buildElectronStub({ lock, trayMode: tray, hotkeyMode: hotkey, userData });
+
+  // child_process 计数桩：钉「spawn 次数」这条可观察行为（复用/disabled 必须 0，
+  // 真实模式必须 ≥2：迁移 + uvicorn）。alembic 子进程立即以 0 退出让迁移通过；
+  // uvicorn 子进程常驻直到 kill——绝不碰真 Python。
+  const spawnCalls = [];
+  const makeFakeChild = (command, args) => {
+    const handlers = {};
+    const child = {
+      killed: false,
+      pid: 424242,
+      stdout: { on() {} },
+      stderr: { on() {} },
+      on(name, fn) {
+        (handlers[name] ??= []).push(fn);
+      },
+      kill() {
+        if (child.killed) return;
+        child.killed = true;
+        for (const fn of handlers.exit ?? []) fn(null, "SIGTERM");
+      },
+    };
+    if (Array.isArray(args) && args.includes("alembic")) {
+      setImmediate(() => {
+        for (const fn of handlers.exit ?? []) fn(0, null);
+      });
+    }
+    return child;
+  };
+
   const originalLoad = Module._load;
   Module._load = function patched(request, parent, isMain) {
     if (request === "electron") return stub.electron;
+    if (request === "node:child_process") {
+      return {
+        spawn: (command, args, spawnOptions) => {
+          spawnCalls.push({ command, args, options: spawnOptions });
+          return makeFakeChild(command, args);
+        },
+      };
+    }
     return originalLoad.call(this, request, parent, isMain);
   };
   let requireError = null;
@@ -415,6 +469,7 @@ async function bootShell(options = {}) {
     logs,
     requests,
     stub,
+    spawnCalls,
     windows: stub.windows,
     app: stub.app,
     tray: stub.trayRecords,
@@ -538,9 +593,22 @@ test("测试模式硬闸：健康检查不可达也不迁移、不拉起真实 P
     await waitFor(() => shell.logIncludes("[startup] startup | complete"), "startup: complete", 15_000);
     assert.ok(shell.logIncludes("[startup] backend | health-check-start"));
     assert.ok(
+      shell.logIncludes("[startup] backend | disabled"),
+      "测试模式硬闸必须记 disabled（可接受的测试替身状态），不是 failed",
+    );
+    assert.ok(
+      !shell.logIncludes("[startup] backend | failed"),
+      "测试模式不是真实失败，不许污染启动链路状态",
+    );
+    assert.ok(
       shell.logIncludes("BLANK_SHELL_TEST=1"),
       "健康桩不可达时必须走测试模式硬闸，留下原因日志",
     );
+    assert.ok(
+      !shell.logIncludes("migration-start") && !shell.logIncludes("spawn-start"),
+      "disabled 之后绝不进迁移/启动分支",
+    );
+    assert.equal(shell.spawnCalls.length, 0, "测试模式一次 spawn 都不许有");
     assert.ok(
       !shell.logIncludes("alembic") && !shell.logIncludes("uvicorn"),
       "测试模式绝不允许出现迁移/uvicorn 痕迹（这才是 6 个用例超时的根因）",
@@ -557,12 +625,63 @@ test("测试模式硬闸：健康检查不可达也不迁移、不拉起真实 P
   }
 });
 
+test("真实模式：探活耗尽后走迁移+启动，后端就绪记 started", async () => {
+  // flaky 健康桩：前 3 次 500 把首轮探活耗尽，spawn 后第 4 次起 200——
+  // 钉住「真实模式必须真的迁移 + spawn，就绪后记 started 而不是 reused」。
+  const shell = await bootShell({ shellTest: false, health: "flaky", backendCmd: "python" });
+  try {
+    await waitFor(() => shell.logIncludes("[startup] backend | started"), "backend started", 15_000);
+    assert.ok(
+      !shell.logIncludes("[startup] backend | reused"),
+      "首轮探活全 500，不该判成复用",
+    );
+    const alembic = shell.spawnCalls.find((item) => item.args.includes("alembic"));
+    assert.ok(alembic, "真实模式必须先 spawn 迁移进程");
+    const uvicorn = shell.spawnCalls.find((item) =>
+      item.args.some((arg) => String(arg).includes("uvicorn")),
+    );
+    assert.ok(uvicorn, "迁移之后必须 spawn 后端进程");
+    assert.ok(
+      shell.trayLabels().includes("后端状态：运行中"),
+      `started 后托盘要反映后端在线，实际：${JSON.stringify(shell.trayLabels())}`,
+    );
+  } finally {
+    await shell.cleanup();
+  }
+});
+
+test("真实模式：后端就绪超时必须终止子进程并记 failed", async () => {
+  // readyTries=2 把就绪等待压到 ~1 秒；健康桩一直 dead，spawn 出的假后端
+  // 永远等不到就绪 → 必须被 kill 并记 failed（不许留孤儿进程）。
+  const shell = await bootShell({
+    shellTest: false,
+    health: "dead",
+    backendCmd: "python",
+    readyTries: "2",
+  });
+  try {
+    await waitFor(() => shell.logIncludes("[startup] backend | failed"), "backend failed", 15_000);
+    const uvicorn = shell.spawnCalls.find((item) =>
+      item.args.some((arg) => String(arg).includes("uvicorn")),
+    );
+    assert.ok(uvicorn, "超时路径也要真的 spawn 过后端");
+    assert.ok(
+      shell.logIncludes("后端启动超时，已终止子进程"),
+      "就绪超时必须回收子进程，不留孤儿 uvicorn",
+    );
+  } finally {
+    await shell.cleanup();
+  }
+});
+
 test("启动接线：复用已有后端、托盘就绪、更新骨架只取元数据不下载", async () => {
   const shell = await bootShell({ update: "available" });
   try {
     assert.equal(shell.windows.length, 1, "主实例要建一个窗口");
     assert.ok(shell.win.loadedUrl.startsWith("app://bundle/"), "静态站必须走 app:// 协议");
     assert.ok(shell.logIncludes("检测到已有后端在运行，直接复用"), "健康桩可达时应复用而不是 spawn");
+    assert.ok(shell.logIncludes("[startup] backend | reused"), "复用要记 reused 状态");
+    assert.equal(shell.spawnCalls.length, 0, "复用已有后端时一次 spawn 都不许有");
     assert.equal(shell.tray.created, 1, "托盘要真的建出来");
     assert.ok(shell.trayLabels().includes("后端状态：运行中"), "托盘菜单要反映后端在线");
     assert.ok(
@@ -682,7 +801,7 @@ test("全局快捷键：注册成功时真能唤出/隐藏，被占用与抛异�
 test("更新骨架的失败形态：500 / 版本读不懂 / 同版本 / 未配置都不安装", async () => {
   const cases = [
     { update: "500", expect: "更新：不可用（原因见日志）", log: "更新源请求失败" },
-    { update: "garbage", expect: "更新：不可用（原因见日志）", log: "feed JSON 既不是条目数组" },
+    { update: "garbage", expect: "更新：不可用（原因见日志）", log: "feed JSON 既不是条目数组，也不是 entries 数组" },
     { update: "same", expect: "更新：已是最新", log: "无需更新" },
   ];
   for (const item of cases) {

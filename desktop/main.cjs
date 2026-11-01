@@ -456,7 +456,10 @@ async function startBackend() {
   backend.on("error", (error) => remember(`后端进程错误 ${error.message}`));
 
   // 最长等 30 秒（首次迁移 + 冷启动）；超时必须终止子进程，不留孤儿 uvicorn。
-  for (let i = 0; i < 60; i += 1) {
+  // 探活次数可被 BLANK_BACKEND_READY_TRIES 收紧（测试用它把超时压到亚秒级，
+  // 但生产缺省永远是 60 次 × 500ms，不因为测试而放宽）。
+  const readyTries = Number(process.env.BLANK_BACKEND_READY_TRIES ?? "") || 60;
+  for (let i = 0; i < readyTries; i += 1) {
     if (await backendReachable()) {
       remember("后端就绪");
       shellState.backendOnline = true;
@@ -476,11 +479,13 @@ async function startBackend() {
 }
 
 /**
- * 后端可达性决策：
+ * 后端可达性决策（状态语义四分，不许混用）：
  * 1. 健康检查连试 3 次（首拉只带 1.5s 超时，负载高的机器第一次探活可能失手——
  *    误判「无后端」会让壳去迁移/拉起第二个 uvicorn，这才是启动卡死的元凶）；
- * 2. 已有后端 → 复用，不迁移、不重启；
- * 3. 测试模式（BLANK_SHELL_TEST=1）绝不迁移/拉起真实 Python。
+ * 2. 已有后端 → `reused`：复用，不迁移、不重启；
+ * 3. 测试模式（BLANK_SHELL_TEST=1）→ `disabled`：这是可接受的测试替身状态，
+ *    不是失败——把它记成 failed 会让启动链路看起来像异常；
+ * 4. 真实模式才迁移 + 启动 → `started`，超时/失败才是 `failed`。
  */
 async function ensureBackend() {
   phase("backend", "health-check-start");
@@ -494,7 +499,7 @@ async function ensureBackend() {
     if (attempt < 3) await sleep(400);
   }
   if (process.env.BLANK_SHELL_TEST === "1") {
-    phase("backend", "failed | 测试模式不拉起后端");
+    phase("backend", "disabled | 测试模式不拉起真实后端");
     remember("BLANK_SHELL_TEST=1：测试模式不迁移、不拉起后端");
     return { ok: false, hint: "测试模式不启动后端" };
   }
@@ -506,7 +511,7 @@ async function ensureBackend() {
   }
   phase("backend", "spawn-start");
   const result = await startBackend();
-  phase("backend", result.ok ? "ready" : `failed | ${result.hint ?? "未知原因"}`);
+  phase("backend", result.ok ? "started" : `failed | ${result.hint ?? "未知原因"}`);
   return result;
 }
 
@@ -920,7 +925,7 @@ async function checkForUpdates() {
         } else {
           const entries = extractFeedEntries(await response.json());
           if (!entries) {
-            fetchError = "feed JSON 既不是条目数组也不是带 version 的单个条目";
+            fetchError = "feed JSON 既不是条目数组，也不是 entries 数组或带 version 的单个条目";
           } else {
             entry = pickLatestEntry(entries);
             if (!entry) fetchError = "feed 里没有任何版本可解析的条目";
