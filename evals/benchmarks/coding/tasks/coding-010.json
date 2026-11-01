@@ -1,0 +1,21 @@
+{
+  "id": "coding-010",
+  "category": "single_file_bugfix",
+  "workspace": "fixture",
+  "goal": "retry 只试了一次就 return，改成失败重试到上限、全败抛 RuntimeError",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "retry.py"
+  ],
+  "testCommand": "python -X utf8 -c \"import sys; sys.path.insert(0, '.'); exec(open('test_check.py', encoding='utf-8').read())\"",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "只修改目标文件"
+  ],
+  "expectedStatus": "succeeded"
+}

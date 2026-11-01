@@ -1,0 +1,21 @@
+{
+  "id": "coding-030",
+  "category": "test_failure_fix",
+  "workspace": "fixture",
+  "goal": "is_leap 逢百年判断错误（2100 不是闰年），修 leap.py 让测试通过",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "leap.py"
+  ],
+  "testCommand": "python -X utf8 test_leap.py",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "不许改测试文件"
+  ],
+  "expectedStatus": "succeeded"
+}

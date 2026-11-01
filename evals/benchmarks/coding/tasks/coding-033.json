@@ -1,0 +1,21 @@
+{
+  "id": "coding-033",
+  "category": "type_error_fix",
+  "workspace": "fixture",
+  "goal": "combine 注解声明返回 list，实际返回 tuple，改实现成 list",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "bundles.py"
+  ],
+  "testCommand": "python -X utf8 test_bundles.py",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "函数注解保持不变"
+  ],
+  "expectedStatus": "succeeded"
+}

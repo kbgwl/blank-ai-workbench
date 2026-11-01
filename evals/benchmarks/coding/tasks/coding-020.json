@@ -1,0 +1,22 @@
+{
+  "id": "coding-020",
+  "category": "multi_file_refactor",
+  "workspace": "fixture",
+  "goal": "cache.py 的 TTL 逻辑写死在 get 里，抽成 ttl.py 提供 is_expired 函数供 cache 调用，行为不变",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "ttl.py",
+    "cache.py"
+  ],
+  "testCommand": "python -X utf8 test_cache.py",
+  "acceptance": [
+    "测试/主程序退出码为 0",
+    "新建或修改了 ttl.py、cache.py"
+  ],
+  "expectedStatus": "succeeded"
+}

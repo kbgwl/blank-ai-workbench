@@ -1,0 +1,21 @@
+{
+  "id": "coding-008",
+  "category": "single_file_bugfix",
+  "workspace": "fixture",
+  "goal": "fib(0) 应为 0 且大 n 不得指数级慢（改成迭代）",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "fib.py"
+  ],
+  "testCommand": "python -X utf8 -c \"import sys; sys.path.insert(0, '.'); exec(open('test_check.py', encoding='utf-8').read())\"",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "只修改目标文件"
+  ],
+  "expectedStatus": "succeeded"
+}

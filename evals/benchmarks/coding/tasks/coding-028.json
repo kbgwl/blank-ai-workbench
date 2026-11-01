@@ -1,0 +1,21 @@
+{
+  "id": "coding-028",
+  "category": "test_failure_fix",
+  "workspace": "fixture",
+  "goal": "merge 丢了第二个字典，修 merge.py 让测试通过",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "merge.py"
+  ],
+  "testCommand": "python -X utf8 test_merge.py",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "不许改测试文件"
+  ],
+  "expectedStatus": "succeeded"
+}

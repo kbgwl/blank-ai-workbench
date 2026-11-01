@@ -1,0 +1,19 @@
+{
+  "id": "coding-044",
+  "category": "documentation",
+  "workspace": "fixture",
+  "goal": "给 compress.py 里的函数补 Google 风格 docstring：说明（返回文本 zlib 压缩后的字节数）、Args、Returns、注意（编码固定 utf-8）。不改函数逻辑",
+  "allowedTools": [
+    "read_file",
+    "apply_patch"
+  ],
+  "expectedFiles": [
+    "compress.py"
+  ],
+  "testCommand": "python -m pytest -q test_docstring.py",
+  "acceptance": [
+    "docstring 存在且含 Args/Returns 小节",
+    "函数行为不变（原有断言仍过）"
+  ],
+  "expectedStatus": "succeeded"
+}

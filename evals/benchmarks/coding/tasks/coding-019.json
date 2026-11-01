@@ -1,0 +1,23 @@
+{
+  "id": "coding-019",
+  "category": "multi_file_refactor",
+  "workspace": "fixture",
+  "goal": "main.py 一个函数干了校验+转换+输出三件事，拆成 validators.py / converters.py，main.py 只保留编排，输出不变",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "validators.py",
+    "converters.py",
+    "main.py"
+  ],
+  "testCommand": "python -X utf8 test_main.py",
+  "acceptance": [
+    "测试/主程序退出码为 0",
+    "新建或修改了 validators.py、converters.py、main.py"
+  ],
+  "expectedStatus": "succeeded"
+}

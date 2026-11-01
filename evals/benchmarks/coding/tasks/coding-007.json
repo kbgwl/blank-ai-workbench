@@ -1,0 +1,21 @@
+{
+  "id": "coding-007",
+  "category": "single_file_bugfix",
+  "workspace": "fixture",
+  "goal": "safe_get 不能对缺键抛 KeyError，支持 default 参数",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "safe_get.py"
+  ],
+  "testCommand": "python -X utf8 -c \"import sys; sys.path.insert(0, '.'); exec(open('test_check.py', encoding='utf-8').read())\"",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "只修改目标文件"
+  ],
+  "expectedStatus": "succeeded"
+}

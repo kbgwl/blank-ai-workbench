@@ -1,0 +1,21 @@
+{
+  "id": "coding-034",
+  "category": "type_error_fix",
+  "workspace": "fixture",
+  "goal": "apply_tax 的 rate 注解是 float，传 int 会崩（做了字符串拼接），修实现让 int/float 都能用且返回 float",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "rates.py"
+  ],
+  "testCommand": "python -X utf8 test_rates.py",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "函数注解保持不变"
+  ],
+  "expectedStatus": "succeeded"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "coding-005",
+  "category": "single_file_bugfix",
+  "workspace": "fixture",
+  "goal": "grade 的分支条件写反了，90 分以上是 A、60 分以下是 D",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "grade.py"
+  ],
+  "testCommand": "python -X utf8 -c \"import sys; sys.path.insert(0, '.'); exec(open('test_check.py', encoding='utf-8').read())\"",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "只修改目标文件"
+  ],
+  "expectedStatus": "succeeded"
+}

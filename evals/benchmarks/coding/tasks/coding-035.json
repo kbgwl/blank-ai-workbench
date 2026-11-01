@@ -1,0 +1,21 @@
+{
+  "id": "coding-035",
+  "category": "type_error_fix",
+  "workspace": "fixture",
+  "goal": "rename 返回 dict 但把 key 写成了非 str（注解要求 dict[str, str]），修实现",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "profiles.py"
+  ],
+  "testCommand": "python -X utf8 test_profiles.py",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "函数注解保持不变"
+  ],
+  "expectedStatus": "succeeded"
+}

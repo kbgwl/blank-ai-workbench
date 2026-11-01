@@ -1,0 +1,21 @@
+{
+  "id": "coding-001",
+  "category": "single_file_bugfix",
+  "workspace": "fixture",
+  "goal": "给 weekly_pay 加加班费：每周超过 40 小时的部分按 1.5 倍时薪计算",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "salary.py"
+  ],
+  "testCommand": "python -X utf8 -c \"import sys; sys.path.insert(0, '.'); exec(open('test_check.py', encoding='utf-8').read())\"",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "只修改目标文件"
+  ],
+  "expectedStatus": "succeeded"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "coding-049",
+  "category": "reverse_analysis",
+  "workspace": "fixture",
+  "goal": "只读分析 session.py，回答：commit 之后 dirty 是什么值？commit 返回的字典和 self.data 是同一个对象吗？。用「答案：」开头的短段落回复，不要修改任何文件",
+  "allowedTools": [
+    "read_file",
+    "search_code"
+  ],
+  "expectedFiles": [],
+  "testCommand": "python -X utf8 -c \"print('reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令')\"",
+  "acceptance": [
+    "回复包含关键词：False、不是",
+    "没有修改文件"
+  ],
+  "expectedStatus": "succeeded",
+  "answerKeys": [
+    "False",
+    "不是"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "id": "coding-016",
+  "category": "multi_file_refactor",
+  "workspace": "fixture",
+  "goal": "db.py 直接在函数里拼 SQL 字符串，抽到 queries.py 每条一个常量，db.py 引用，行为不变",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "queries.py",
+    "db.py"
+  ],
+  "testCommand": "python -X utf8 test_db.py",
+  "acceptance": [
+    "测试/主程序退出码为 0",
+    "新建或修改了 queries.py、db.py"
+  ],
+  "expectedStatus": "succeeded"
+}

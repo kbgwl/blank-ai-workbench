@@ -1,0 +1,19 @@
+{
+  "id": "coding-043",
+  "category": "documentation",
+  "workspace": "fixture",
+  "goal": "给 csvio.py 里的函数补 Google 风格 docstring：说明（把二维列表写成 CSV 文件）、Args、Returns、注意（使用 utf-8 编码）。不改函数逻辑",
+  "allowedTools": [
+    "read_file",
+    "apply_patch"
+  ],
+  "expectedFiles": [
+    "csvio.py"
+  ],
+  "testCommand": "python -m pytest -q test_docstring.py",
+  "acceptance": [
+    "docstring 存在且含 Args/Returns 小节",
+    "函数行为不变（原有断言仍过）"
+  ],
+  "expectedStatus": "succeeded"
+}

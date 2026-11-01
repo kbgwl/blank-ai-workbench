@@ -4,7 +4,7 @@
 
 ```bash
 npm install -g blank-ai-cli
-blank
+blank-ai
 ```
 
 > 当前仓库已完成 CLI 包结构和本地启动器；发布到 npm 前需要先在发布环境执行 `npm publish`。源码开发阶段可直接在仓库根目录运行下面的命令。
@@ -32,7 +32,7 @@ node packages/cli/src/index.mjs doctor --compare 本机.json 另一台.json
 可选功能按需启用：
 
 ```bash
-blank add brainstorm
-blank list
-blank remove brainstorm
+blank-ai add brainstorm
+blank-ai list
+blank-ai remove brainstorm
 ```

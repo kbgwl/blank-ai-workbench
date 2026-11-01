@@ -1,0 +1,19 @@
+{
+  "id": "coding-041",
+  "category": "documentation",
+  "workspace": "fixture",
+  "goal": "给 calculator.py 里的函数补 Google 风格 docstring：说明（计算两数之和）、Args、Returns、注意（参数 a、b 都支持 int/float）。不改函数逻辑",
+  "allowedTools": [
+    "read_file",
+    "apply_patch"
+  ],
+  "expectedFiles": [
+    "calculator.py"
+  ],
+  "testCommand": "python -m pytest -q test_docstring.py",
+  "acceptance": [
+    "docstring 存在且含 Args/Returns 小节",
+    "函数行为不变（原有断言仍过）"
+  ],
+  "expectedStatus": "succeeded"
+}

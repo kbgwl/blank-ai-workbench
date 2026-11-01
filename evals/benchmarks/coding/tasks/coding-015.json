@@ -1,0 +1,22 @@
+{
+  "id": "coding-015",
+  "category": "multi_file_refactor",
+  "workspace": "fixture",
+  "goal": "report.py 生成文本报表的逻辑硬编码在函数里，拆成 templates.py 存模板、report.py 引用，输出不变",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "templates.py",
+    "report.py"
+  ],
+  "testCommand": "python -X utf8 test_report.py",
+  "acceptance": [
+    "测试/主程序退出码为 0",
+    "新建或修改了 templates.py、report.py"
+  ],
+  "expectedStatus": "succeeded"
+}

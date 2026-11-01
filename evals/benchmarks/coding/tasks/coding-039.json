@@ -1,0 +1,22 @@
+{
+  "id": "coding-039",
+  "category": "db_migration",
+  "workspace": "fixture",
+  "goal": "给 logs 表加 created_at TEXT 列，既有行回填 '1970-01-01T00:00:00Z'。直接写迁移脚本 migrate.py（用 sqlite3 标准库改 data.db），不许重建表丢数据",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "migrate.py",
+    "data.db"
+  ],
+  "testCommand": "python -m pytest -q test_migration.py",
+  "acceptance": [
+    "迁移脚本幂等可重复执行",
+    "verify_migration.py 退出码为 0"
+  ],
+  "expectedStatus": "succeeded"
+}

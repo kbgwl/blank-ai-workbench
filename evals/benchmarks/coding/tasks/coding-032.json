@@ -1,0 +1,21 @@
+{
+  "id": "coding-032",
+  "category": "type_error_fix",
+  "workspace": "fixture",
+  "goal": "distance 对 None 参数崩了，按注解要求参数可空并返回 0.0",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "points.py"
+  ],
+  "testCommand": "python -X utf8 test_points.py",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "函数注解保持不变"
+  ],
+  "expectedStatus": "succeeded"
+}

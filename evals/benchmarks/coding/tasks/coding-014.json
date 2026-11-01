@@ -1,0 +1,22 @@
+{
+  "id": "coding-014",
+  "category": "multi_file_refactor",
+  "workspace": "fixture",
+  "goal": "shapes.py 里 Circle 和 Square 都有自己的 area，新建 base.py 定义 area 接口协议，两个类显式继承",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "base.py",
+    "shapes.py"
+  ],
+  "testCommand": "python -X utf8 test_shapes.py",
+  "acceptance": [
+    "测试/主程序退出码为 0",
+    "新建或修改了 base.py、shapes.py"
+  ],
+  "expectedStatus": "succeeded"
+}

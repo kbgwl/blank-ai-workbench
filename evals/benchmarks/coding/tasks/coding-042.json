@@ -1,0 +1,19 @@
+{
+  "id": "coding-042",
+  "category": "documentation",
+  "workspace": "fixture",
+  "goal": "给 timer.py 里的函数补 Google 风格 docstring：说明（返回两个时间戳之间的秒数）、Args、Returns、注意（end 必须大于等于 start）。不改函数逻辑",
+  "allowedTools": [
+    "read_file",
+    "apply_patch"
+  ],
+  "expectedFiles": [
+    "timer.py"
+  ],
+  "testCommand": "python -m pytest -q test_docstring.py",
+  "acceptance": [
+    "docstring 存在且含 Args/Returns 小节",
+    "函数行为不变（原有断言仍过）"
+  ],
+  "expectedStatus": "succeeded"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "coding-009",
+  "category": "single_file_bugfix",
+  "workspace": "fixture",
+  "goal": "parse_csv 要支持带引号的字段（逗号在引号内不算分隔符）",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "parse_csv.py"
+  ],
+  "testCommand": "python -X utf8 -c \"import sys; sys.path.insert(0, '.'); exec(open('test_check.py', encoding='utf-8').read())\"",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "只修改目标文件"
+  ],
+  "expectedStatus": "succeeded"
+}

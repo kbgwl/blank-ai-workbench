@@ -1,0 +1,21 @@
+{
+  "id": "coding-004",
+  "category": "single_file_bugfix",
+  "workspace": "fixture",
+  "goal": "dedupe 去重后必须保持原顺序（set 会打乱）",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "dedupe.py"
+  ],
+  "testCommand": "python -X utf8 -c \"import sys; sys.path.insert(0, '.'); exec(open('test_check.py', encoding='utf-8').read())\"",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "只修改目标文件"
+  ],
+  "expectedStatus": "succeeded"
+}

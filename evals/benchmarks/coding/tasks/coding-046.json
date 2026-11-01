@@ -1,0 +1,22 @@
+{
+  "id": "coding-046",
+  "category": "reverse_analysis",
+  "workspace": "fixture",
+  "goal": "只读分析 pipeline.py，回答：run([1,2,3,4,5,6]) 返回什么？过滤条件和变换规则分别是什么？。用「答案：」开头的短段落回复，不要修改任何文件",
+  "allowedTools": [
+    "read_file",
+    "search_code"
+  ],
+  "expectedFiles": [],
+  "testCommand": "python -X utf8 -c \"print('reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令')\"",
+  "acceptance": [
+    "回复包含关键词：[6, 12, 18]、偶数、乘 3",
+    "没有修改文件"
+  ],
+  "expectedStatus": "succeeded",
+  "answerKeys": [
+    "[6, 12, 18]",
+    "偶数",
+    "乘 3"
+  ]
+}

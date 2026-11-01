@@ -1,0 +1,22 @@
+{
+  "id": "coding-048",
+  "category": "reverse_analysis",
+  "workspace": "fixture",
+  "goal": "只读分析 codec.py，回答：encode 是几进制编码？字符表里排除了哪些字符？encode(31) 返回什么？。用「答案：」开头的短段落回复，不要修改任何文件",
+  "allowedTools": [
+    "read_file",
+    "search_code"
+  ],
+  "expectedFiles": [],
+  "testCommand": "python -X utf8 -c \"print('reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令')\"",
+  "acceptance": [
+    "回复包含关键词：31、il、ba",
+    "没有修改文件"
+  ],
+  "expectedStatus": "succeeded",
+  "answerKeys": [
+    "31",
+    "il",
+    "ba"
+  ]
+}

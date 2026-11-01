@@ -13,6 +13,15 @@ const API_PORT = Number(process.env.BLANK_API_PORT ?? 8000);
 const WEB_PORT = Number(process.env.BLANK_WEB_PORT ?? 3000);
 
 function findRoot(start = process.cwd()) {
+  // 干净目录模式：CLI 安装到全局后，用户的工作目录不是源码树。
+  // BLANK_SOURCE_ROOT 显式指到后端/前端资源所在位置，cwd 只承载用户数据。
+  if (process.env.BLANK_SOURCE_ROOT) {
+    const root = path.resolve(process.env.BLANK_SOURCE_ROOT);
+    if (existsSync(path.join(root, "web", "out")) && existsSync(path.join(root, "services", "api", "src"))) {
+      return root;
+    }
+    console.error(`BLANK_SOURCE_ROOT=${root} 里找不到 services/api/src 与 web/out。`);
+  }
   let current = path.resolve(start);
   while (true) {
     if (existsSync(path.join(current, "scripts", "dev.mjs")) && existsSync(path.join(current, "web"))) return current;
@@ -68,7 +77,7 @@ function findPython(root) {
 }
 
 /**
- * `blank doctor --sandbox` 不自己判断边界：本机能不能拦住越界，只有真跑一遍才知道。
+ * `blank-ai doctor --sandbox` 不自己判断边界：本机能不能拦住越界，只有真跑一遍才知道。
  * 这里只负责把同一个 API 包里的 doctor 探针拉起来，并沿用源码工作区的 PYTHONPATH。
  */
 function sandboxDoctor(rest) {
@@ -126,7 +135,7 @@ function listPackages() {
   const packages = config.packages ?? {};
   const names = Object.keys(packages);
   if (!names.length) {
-    console.log("还没有启用可选功能。使用 blank add <package> 按需启用。");
+    console.log("还没有启用可选功能。使用 blank-ai add <package> 按需启用。");
     return;
   }
   console.log("已启用功能：");
@@ -135,7 +144,7 @@ function listPackages() {
 
 function packageCommand(action, packageName) {
   if (!packageName) {
-    console.error(`用法：blank ${action} <package>`);
+    console.error(`用法：blank-ai ${action} <package>`);
     process.exitCode = 1;
     return;
   }
@@ -212,9 +221,11 @@ function start() {
   init();
   const root = findRoot();
   if (!root) {
-    console.log("当前目录不是空白格源码工作区。");
-    console.log("请先进入项目目录，或使用已发布版本的本地运行器。");
-    console.log("用法：blank init / blank doctor");
+    console.log("当前目录不是空白格源码工作区，也没设 BLANK_SOURCE_ROOT。");
+    console.log("两种方式启动：");
+    console.log("  1) 设置 BLANK_SOURCE_ROOT 指向含 services/api 与 web/out 的目录（推荐，工作目录保持干净）；");
+    console.log("  2) 进入项目源码目录直接运行。");
+    console.log("用法：blank-ai init / blank-ai doctor");
     process.exitCode = 2;
     return;
   }
@@ -317,15 +328,19 @@ switch (command) {
     break;
   case "--help":
   case "-h":
-    console.log("blank — 空白格 AI 工程操作台");
-    console.log("\n用法：blank [start|init|doctor|list|add|remove]");
+    console.log("blank-ai — 空白格 AI 工程操作台");
+    console.log("\n用法：blank-ai [start|init|doctor|list|add|remove]");
     console.log("\n示例：");
-    console.log("  blank                 启动本地工作台（自检环境，缺依赖时给出安装命令）");
-    console.log("  blank init            初始化本地配置");
-    console.log("  blank doctor          检查 Node、Python、配置和工作区");
-    console.log("  blank list            查看已启用的可选功能");
-    console.log("  blank add brainstorm  启用头脑风暴功能");
-    console.log("  blank doctor --sandbox  逐条攻击八条执行边界，并和这次执行的账本比对");
+    console.log("  blank-ai                 启动本地工作台（自检环境，缺依赖时给出安装命令）");
+    console.log("  blank-ai init            初始化本地配置");
+    console.log("  blank-ai doctor          检查 Node、Python、配置和工作区");
+    console.log("  blank-ai list            查看已启用的可选功能");
+    console.log("  blank-ai add brainstorm  启用头脑风暴功能");
+    console.log("  blank-ai doctor --sandbox  逐条攻击八条执行边界，并和这次执行的账本比对");
+    console.log("\n环境变量：");
+    console.log("  BLANK_SOURCE_ROOT  干净目录启动时指向源码根（含 services/api 与 web/out）");
+    console.log("  BLANK_API_PORT     后端端口（默认 8000）");
+    console.log("  BLANK_WEB_PORT     界面端口（默认 3000）");
     break;
   default:
     console.error(`未知命令：${command}`);

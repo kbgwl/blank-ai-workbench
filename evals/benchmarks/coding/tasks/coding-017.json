@@ -1,0 +1,22 @@
+{
+  "id": "coding-017",
+  "category": "multi_file_refactor",
+  "workspace": "fixture",
+  "goal": "auth.py 的 hash 与 verify 两函数用了不同算法（md5 vs sha256），统一抽到 hashing.py 用 sha256，两处调用方不变",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "hashing.py",
+    "auth.py"
+  ],
+  "testCommand": "python -X utf8 test_auth.py",
+  "acceptance": [
+    "测试/主程序退出码为 0",
+    "新建或修改了 hashing.py、auth.py"
+  ],
+  "expectedStatus": "succeeded"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "coding-025",
+  "category": "frontend_backend_contract",
+  "workspace": "fixture",
+  "goal": "后端 api.py 的 handle() 返回缺字段 status，前端 client.py 的 render() 依赖它。修后端让它返回 status，保证 client 的断言通过；不要改 client.py",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "api.py"
+  ],
+  "testCommand": "python -X utf8 test_contract.py",
+  "acceptance": [
+    "契约测试退出码为 0",
+    "client.py 未被修改"
+  ],
+  "expectedStatus": "succeeded"
+}

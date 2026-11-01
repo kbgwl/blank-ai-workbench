@@ -1,0 +1,22 @@
+{
+  "id": "coding-011",
+  "category": "multi_file_refactor",
+  "workspace": "fixture",
+  "goal": "把散在 utils.py 里的 format_price 移到新文件 pricing.py，utils.py 改为 re-export，main.py 不需要改也能跑",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "pricing.py",
+    "utils.py"
+  ],
+  "testCommand": "python -X utf8 test_refactor.py",
+  "acceptance": [
+    "测试/主程序退出码为 0",
+    "新建或修改了 pricing.py、utils.py"
+  ],
+  "expectedStatus": "succeeded"
+}

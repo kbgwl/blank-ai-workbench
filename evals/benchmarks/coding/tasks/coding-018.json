@@ -1,0 +1,23 @@
+{
+  "id": "coding-018",
+  "category": "multi_file_refactor",
+  "workspace": "fixture",
+  "goal": "logging_setup.py 与 api.py 各自配置了重复的 logger，抽成 log_factory.py 统一创建，两个模块改用",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "log_factory.py",
+    "api.py",
+    "logging_setup.py"
+  ],
+  "testCommand": "python -X utf8 test_refactor.py",
+  "acceptance": [
+    "测试/主程序退出码为 0",
+    "新建或修改了 log_factory.py、api.py、logging_setup.py"
+  ],
+  "expectedStatus": "succeeded"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "coding-031",
+  "category": "type_error_fix",
+  "workspace": "fixture",
+  "goal": "convert 的注解说返回 int 实际返回 str，修正实现（把结果转成 int），注解不动",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell",
+    "run_tests"
+  ],
+  "expectedFiles": [
+    "units.py"
+  ],
+  "testCommand": "python -X utf8 test_units.py",
+  "acceptance": [
+    "测试命令退出码为 0",
+    "函数注解保持不变"
+  ],
+  "expectedStatus": "succeeded"
+}

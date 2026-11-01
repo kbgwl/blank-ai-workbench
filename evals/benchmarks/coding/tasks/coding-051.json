@@ -1,0 +1,21 @@
+{
+  "id": "coding-051",
+  "category": "cancel_resume",
+  "workspace": "fixture",
+  "goal": "先运行命令 python -c \"import time; time.sleep(90)\"（必须真实跑完这条命令），成功后把 notes.txt 追加一行 done（保留原有内容）。任务可能在任何时刻被用户取消",
+  "allowedTools": [
+    "read_file",
+    "apply_patch",
+    "run_shell"
+  ],
+  "expectedFiles": [],
+  "testCommand": "python -X utf8 -c \"print('cancel/resume 由 runner 按 expectedStatus=cancelled 判定')\"",
+  "acceptance": [
+    "取消后状态为 cancelled",
+    "交付文本不含「已完成」"
+  ],
+  "expectedStatus": "cancelled",
+  "runHints": {
+    "cancelAfterSteps": 2
+  }
+}
