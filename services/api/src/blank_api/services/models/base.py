@@ -62,6 +62,48 @@ def retry_after_seconds(value: str | None, *, now: float | None = None) -> float
     return max(0.0, when.timestamp() - (time.time() if now is None else now))
 
 
+# —— 连接池 ——
+# 默认出口（没有任何注入 factory）时，整个进程共用按超时时间分组的客户端。
+# 测试注入 mock transport 的那条路**不进池**：那些客户端各自带着不同的 transport，
+# 混用会让一个用例的桩去服务另一个用例的请求，排查起来像"模型偶尔答错"。
+_POOL: dict[float, httpx.AsyncClient] = {}
+_POOL_LIMITS = httpx.Limits(max_connections=32, max_keepalive_connections=16)
+
+
+def pooled_client(timeout_seconds: float) -> httpx.AsyncClient:
+    """取（或建）一个共享客户端。按超时时间分组：超时是客户端级属性，不能中途改。"""
+    key = float(timeout_seconds or 60.0)
+    client = _POOL.get(key)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(timeout=httpx.Timeout(key), limits=_POOL_LIMITS)
+        _POOL[key] = client
+    return client
+
+
+async def aclose_pooled_clients() -> int:
+    """进程收尾时关掉共享客户端，返回关了几个。
+
+    不关也不会立刻出问题（进程退出时内核回收），但测试里会留下
+    "Task was destroyed but it is pending" 的噪音，而噪音会掩盖真问题。
+    """
+    closed = 0
+    for key, client in list(_POOL.items()):
+        _POOL.pop(key, None)
+        if client.is_closed:
+            continue
+        try:
+            await client.aclose()
+            closed += 1
+        except Exception:  # pragma: no cover - 收尾失败不该让进程退出变慢
+            continue
+    return closed
+
+
+def pooled_client_count() -> int:
+    """当前池里活着几个客户端（指标与测试用）。"""
+    return len([client for client in _POOL.values() if not client.is_closed])
+
+
 # 增量文本回调：await 它是为了背压——模型在流式输出时，消费方（记日志、广播给界面）
 # 也应当是同一节奏，而不是把模型读得快、把回调堆在后台队列里。
 DeltaHandler = Callable[[str], Awaitable[None]]
@@ -208,19 +250,40 @@ class ModelAdapter(ABC):
         流式调用在 `aiter_lines()` 迭代到一半时才抛超时，那一刻没有任何 `try` 兜着：
         异常会一路穿出任务端点，客户收到 500「服务崩了」，而真实的答案是「模型太慢，
         可以重试」。收在这一个出口上，各家适配器的 8 个流式调用点不必各写一遍翻译。
+
+        连接复用（见 :func:`pooled_client`）：**共享的客户端不在这里关闭**。
+        一次任务几十步、每步一次模型调用，每次新建客户端等于每次重新握手（https
+        还要完整 TLS），而 `httpx.AsyncClient` 本来就是为复用连接设计的。
         """
+        factory = self.config.client_factory
+        if factory is httpx.AsyncClient:
+            # 默认出口：整进程共用一个客户端，连接池跟着复用。
+            # 翻译仍然照做——池里那条路同样会超时，不translate 就等于把 500 还回去。
+            try:
+                yield pooled_client(self.config.timeout_seconds)
+            except httpx.TimeoutException:
+                raise self._timeout_error() from None
+            except httpx.HTTPError as exc:
+                raise self._unreachable_error(exc) from None
+            return
         client = self._new_client()
         try:
             async with client as opened:
                 yield opened
         except httpx.TimeoutException:
-            raise ModelError("model_timeout", f"模型请求超时：{self.config.name}", retryable=True) from None
+            raise self._timeout_error() from None
         except httpx.HTTPError as exc:
-            raise ModelError(
-                "model_unreachable",
-                f"模型服务不可达：{self.config.name}（{exc.__class__.__name__}）",
-                retryable=True,
-            ) from None
+            raise self._unreachable_error(exc) from None
+
+    def _timeout_error(self) -> ModelError:
+        return ModelError("model_timeout", f"模型请求超时：{self.config.name}", retryable=True)
+
+    def _unreachable_error(self, exc: BaseException) -> ModelError:
+        return ModelError(
+            "model_unreachable",
+            f"模型服务不可达：{self.config.name}（{exc.__class__.__name__}）",
+            retryable=True,
+        )
 
     def _new_client(self) -> httpx.AsyncClient:
         factory = self.config.client_factory

@@ -121,3 +121,65 @@ pnpm regression --evals   # 追加跑 32 个评测样例（需要后端已在运
 - 前端 `pnpm build` 后按 Next.js 自托管方式运行，`/api/:path*` 反代到后端。
 - PostgreSQL 换成独立实例并做定时备份；`data/snapshots`（覆盖前快照）与 `data/audit`（审计日志）需要留存。
 - 沙箱容器不要与数据库同宿主机共享敏感挂载点；工作区目录只挂载项目本身。
+- 多进程部署时（`BLANK_INPROCESS_RUNNER=0` 或 uvicorn 多 worker），`data/artifacts` 必须共享可见：
+  worker 接管别人的 run 时要从这里取回已完成的工具结果，取不到就只能再执行一次。
+- `BLANK_RATE_LIMIT_RPM` 默认 **120**（每 IP 每分钟）。批量客户端（评测装置、迁移脚本、集成方 SDK）
+  几十秒就能把窗口打满，然后看到一片 429——那不是服务挂了，是装置和限流在打架。给这类受控实例
+  显式放宽或设 0 关掉；**产品默认值不要改**，那是对外暴露面的保护。
+
+## 9. 桌面版（Windows 安装包）
+
+桌面包是**两段式产物**：先静态导出前端，再由 electron-builder 打壳。少了第一段，打包照样
+"成功"，但包里是上一版前端——界面能开、点进去 404，这类事故以前真发生过。
+
+```bash
+# 1. 前端静态导出（这两个变量缺一不可）
+BLANK_DESKTOP_BUILD=1 NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000 pnpm build:web
+# 2. 组装随包 Python 运行时（约 129MB，不入库；本机第一次要下载独立 CPython）
+pnpm runtime:desktop
+# 3. 出包（版本号只改 desktop/package.json）
+cd desktop && node node_modules/electron-builder/cli.js --win nsis
+# 4. 打包后自检 14 项：产物齐不齐、asar 里是不是仓库这一版、包内有没有本机痕迹
+pnpm verify:desktop
+```
+
+- **版本号只有一处**：`desktop/package.json`。安装包文件名、托盘「关于」都取它；
+  根 `package.json` 与 README 的「当前发布版本」必须同值，`pnpm check:versions` 会拦。
+- **运行时不再靠手搓**：`scripts/prepare_desktop_runtime.mjs` 用 uv 的独立 CPython +
+  `uv.lock` 冻结导出依赖现场组装，布局与 `verify-package.cjs` 断言的完全一致
+  （`python.exe` / `Lib/site-packages` / `blank_api.pth` = `../../../api/src`）。
+  这一步以前只存在于打包人的机器上，所以"打包自检"进不了 CI——现在能了。
+- 装到本机：`node desktop/install-local.cjs`；只想同步源码不重装：
+  `node desktop/self-deploy.cjs --api|--web`。**不要手改 `resources/` 下的副本**，
+  客户端读的是它。
+- CI 两格：`desktop`（单测 + 版本口径）与 `desktop-package`（静态导出 → 组装运行时 →
+  `--dir` 出包 → `verify-package`）。
+
+## 10. 数据生命周期与磁盘占用
+
+四类数据会随使用增长，处理方式是**一类的规则写在同一个地方**
+（`services/api/src/blank_api/services/maintenance.py`），不散落在业务路径里。
+
+| 数据 | 位置 | 增长原因 | 规则 |
+| --- | --- | --- | --- |
+| artifact | `data/artifacts/<task>/<call>.json[.gz]` | 每次工具调用的完整输出 | 32KB 以上 gzip；单份上限 8MB（`BLANK_ARTIFACT_MAX_BYTES`），超出按 output → data → 骨架逐级裁；**过期 30 天且无 ToolCall 引用**才可删 |
+| snapshot | `data/snapshots/<id>/` | 覆盖工作区前的副本 | 每任务至少留最近 3 份；任务被删后的快照随孤儿一起收 |
+| event | 表 `agent_events` | 每步一条时间线 | 超过 90 天的**终态**任务：payload 里的大值裁短并留标记，**行不删**（删行等于让界面上那一步消失） |
+| usage | 表 `model_usage` | 每次模型调用一行账 | **不自动清理**：行即历史事实，删行等于改账 |
+
+```bash
+# 看占用（artifact / 快照 / 事件 / 用量四块，含可回收量）
+curl -s http://127.0.0.1:8000/api/v1/maintenance/storage
+# 清理默认 dry-run：不写 dry_run: false 就只报"会删什么"
+curl -s -XPOST http://127.0.0.1:8000/api/v1/maintenance/purge \
+  -H 'content-type: application/json' \
+  -d '{"artifacts":{"ttl_days":30},"snapshots":{"keep_per_task":3},"events":{"retention_days":90}}'
+```
+
+三条纪律，改这一块之前先读：
+
+1. **引用保护优先于时间**：被 `ToolCall.artifact_path` 指着的东西，再旧也不删
+   （报表里单列 `expired_but_referenced`，那是"该涨保留期"的信号，不是"该删"的信号）。
+2. **默认 dry-run**。这些文件是用户排障时的证据，自动删掉之后"为什么这条任务打不开"就再也查不出来了。
+3. **能续跑的数据一个字不动**：`running` / `queued` / `waiting_approval` / `paused` 的
+   payload 是崩溃续跑与重放的材料，压缩它们等于把 `tool.completed` 执行日志裁短。

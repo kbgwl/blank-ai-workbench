@@ -3,13 +3,20 @@
 面向开发者的 AI 工程操作台：自然语言下达任务，Agent 读取和修改项目文件、执行命令与测试、
 展示 Diff，高风险操作需人工审批。完整方案见 [ai-workbench-plan.md](ai-workbench-plan.md)。
 
+当前发布版本：**0.8.17**（真源是 `desktop/package.json`，安装包文件名与「关于」都取这一处；
+`pnpm check:versions` 在 CI 里钉住 README 与根 `package.json` 不许各说各话）。
+
 当前进度：**v1.1（核心任务工作台 + 头脑风暴 + 按需功能中心 + CLI 骨架）**。REA Reverse Lab 已有独立入口，
 REA MCP Adapter 已接入 `/api/v1/reverse-lab`（4 个端点走 stdio 子进程里的 `blank_api.services.rea.mcp_server`，默认开着、`BLANK_REA_DISABLE=1` 可关），
 `/reverse-lab` 页面已消费这四个端点（适配器状态 / 候选目标 / 字符串线索 / 带台账的调查，见 `web/src/app/reverse-lab/page.tsx`）。
 stdio 服务端已挂 Windows Job（内存/进程数/生命周期由内核强制，见 `docs/SANDBOX-WINDOWS-DESIGN.md` §7.5），但 Job 不是文件/网络沙箱，这条链路仍不套任务的三档档位。界面是面向开发者的深色三栏操作台：
 顶栏 + 左侧导航 + 三栏工作区（项目/任务 · 执行时间线 · 终端与验收），窄屏退化为上下布局。
-没有场景选择器：用户只写要说的话，Agent 自己判这一句该直接回答、该只读看几处再给判断，
-还是该动手改。判据见 [docs/BOT-VS-AGENT.md](docs/BOT-VS-AGENT.md)，成本控制见 [docs/COST.md](docs/COST.md)。
+场景选择器只改三件事（`services/agent/scenarios.py`）：系统提示末尾附加一段场景规则、
+按场景禁用工具（只读场景把 apply_patch/run_shell/run_tests/git 从注册表与执行层同时拦下）、
+记忆开关（只有「日常」场景且用户选择记住时开放 `memory_write`）。
+它**绝不向用户的正文拼任何前缀**——用户只写要说的话，Agent 自己判这一句该直接回答、
+该只读看几处再给判断，还是该动手改（判据见 [docs/BOT-VS-AGENT.md](docs/BOT-VS-AGENT.md)），
+成本控制见 [docs/COST.md](docs/COST.md)。
 项目级工作约定（`.blank/harness`）、经验库与离线优化回路见 [docs/HARNESS.md](docs/HARNESS.md)。
 端到端演示与评测有两条通道，界面与报告里都会标清楚用的是哪条：一条是「本地脚本化模型（演示用）」，
 行为确定、可离线复现；另一条是真实供应商（当前为 DeepSeek），Key 只以密文落库、不外泄。
@@ -101,13 +108,21 @@ Windows 注意：`uvicorn --reload` 的监视器在本机偶发停止热重载�
 | --- | --- |
 | `pnpm dev` | 启动前端 + 后端 + PostgreSQL + Redis |
 | `pnpm test:api` | 后端 pytest |
+| `pnpm test:web` | 前端单测（`node --test`） |
+| `pnpm test:desktop` | 桌面壳单测（52 例，只读仓库文件，不装 electron） |
+| `pnpm test:evals` | 评测判分器的纯函数单测（`evals/lib/judgement.mjs`） |
+| `pnpm check:versions` | 版本口径一致性（`desktop/package.json` 为真源） |
 | `pnpm typecheck:web` | 前端类型检查 |
 | `pnpm lint:web` | 前端 ESLint |
 | `pnpm build:web` | 前端生产构建 |
 | `pnpm regression` | 回归门禁：PostgreSQL 迁移往返 + pytest + 前端类型检查/构建（结果写入 `evals/regression/`） |
 | `pnpm regression --evals` | 追加评测样例集 |
 | `pnpm evals` | 仅跑评测，`node evals/run_evals.mjs --provider <id> --concurrency 5` |
+| `pnpm eval:gate` | 评测成功率门禁（退出码 0/1/2，2 表示"今天没法判"） |
+| **评测环境要求** | `evals` / `eval:gate` 含 Go 样例（T11/T28），评测机需先装 Go 工具链；`run_tests` 现已支持 `go.mod→go test`，缺 Go 时这 2 条会红（详见 `evals/gate_config.json` 出处说明） |
 | `pnpm e2e:team` | 团队链路端到端门禁：stub 模型 + 隔离库 + 真实 HTTP + 浏览器点验（详见 `CONTRIBUTING.md`） |
+| `pnpm runtime:desktop` | 组装随包分发的 Python 运行时（约 129MB，不入库；`--check` 只体检） |
+| `pnpm verify:desktop` | 打包后自检 14 项，按包内产物对账（见 [deployment.md](docs/deployment.md) §9） |
 
 项目 harness 的校验、经验库浏览与 Propose–Probe–Reflect–Compose 优化用
 `python -m blank_api.services.harness.cli`，用法与边界见 [docs/HARNESS.md](docs/HARNESS.md)。
@@ -130,6 +145,13 @@ uv run alembic revision --autogenerate -m "描述"
 - `/projects` 系列 — 项目 CRUD、工作区绑定与激活、文件树与预览（`tree`、`file`）
 - `/providers` 系列 — 模型供应商 CRUD、`presets`、`test` 连通性、`chat` 与 `chat/stream`；`/usage/summary` 汇总 token
 - `/tasks` 系列 — 建任务、`run`、`events`（增量）、`evidence`（交付证明包）、`diff`、`approval`、`cancel`
+  - `evidence` 分两段读：摘要类事件全量 + 时间线尾部窗口（默认 200 条，`timeline_limit` 最大 2000，
+    用 `timeline_before_seq` 往前翻）；只要摘要走 `/tasks/{id}/evidence/summary`，返回体里的
+    `timeline_meta` 会说清"总共多少条、这次装了哪些、还有没有更早的"
+- `/maintenance` 系列 — `storage`（artifact / 快照 / 事件 / 用量四类占用与可回收量）、
+  `purge`（分 `artifacts` / `snapshots` / `events` / `orphans` 四段，**默认 dry-run**）、
+  `metrics`（进程内计数：模型超时 / 重试 / 切备用、worker 接管、SSE 连接与轮询、产物写入与压缩；
+  进程重启归零，跨重启的历史在事件表与用量表里）
 - `/team` 系列 — `bootstrap`、`bots` CRUD、`groups` CRUD 与 `groups/{id}/state`（锚点窗口）、群内发消息与 `stop`、
   `messages/{id}/approval`、`/team/search`（跨群全文检索）
 
@@ -227,6 +249,21 @@ uv run alembic revision --autogenerate -m "描述"
   MCP 服务端秒退时 stderr 被跳过）、**一处用户名泄漏**（路径掩码只认本平台分隔符），
   其余是只在 Windows 上成立、缺 `skipif` 的判据；修完这些 runner 上 `api` 转为全绿
   （1611 passed / 83 skipped）。细节见 `docs/REA-WAVE5-CLAUDE-CODE.md` §21。
+- **桌面那两格是后补的，2026-10-31 才进 CI**：`desktop`（`pnpm test:desktop` 52 例 + 版本口径 +
+  判分器纯函数单测）与 `desktop-package`（静态导出 → 组装运行时 → `--dir` 出包 → `verify-package`）。
+  此前这两类判定只在打包人的机器上跑过。`desktop-package` 能成立的前提是运行时组装有了脚本
+  （`scripts/prepare_desktop_runtime.mjs`），否则 CI 里根本造不出那 129MB 的 `build/runtime`，
+  "打包自检"就只能继续靠手工。脚本产出的运行时在本机实测：62 个包 / 113.8MB，包内方式
+  `import blank_api` 落在 `api/src`，八条边界探针装置可信、0 个不确定项。
+- **评测门禁 2026-10-31 实测是红的，原因不在门禁本身**：同一天用仓库自带脚本化桩跑全集
+  （32 例、并发 3、隔离库 :8050），`success_rate 0.875`（succeeded 26 + expected_denied 2 = 28/32，
+  阈值 0.938），红的是 T07/T29 `files_missing`（桩的确定形状，与 `evals/gate_config.json` 里记的一致）
+  **外加 T11/T28 `failed`**。后两条是 Go 样例：`run_tests` 只认 pytest 配置与 `package.json` 的
+  test 脚本（`services/tools/testing.py:67`），遇到 `go.mod` 直接报「未识别到测试命令」并按 error 处理，
+  于是任务失败。这是**既有的产品缺口**（基线 0.938 是 2026-10-26 在工作区另一版上量的，之后
+  「计划持久化/里程碑」几波让这类样例真的走到了验证节点），不是阈值该改。
+  正确修法是让 `run_tests` 认出 Go 项目并报 `skipped`（附「本机没有 Go 工具链」理由），
+  或给评测装置装 Go；**不许顺手把 0.938 调低**。在那之前 CI 的 `eval-gate` 这一格会红。
 - `api-dialect`（三方言端到端，**85 步** × 三方言）**2026-10-29 在 runner 上转绿**：
   判定行是「每一格全绿：对照判据成立」，sqlite / mysql / postgres 各 85 步 0 失败。
   它此前红的 4 步（第 80/83/84/85 步）**不是方言差异**，是"桩每轮都发同一个 `call_1`，

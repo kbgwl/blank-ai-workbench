@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     # 客户配好的权限边界会悄悄漂回默认——对"权限可控"来说是致命的。
     settings_file: str = ""
     model_timeout_seconds: float = 60.0
+    # 每 IP 每分钟的 HTTP 请求上限。**默认 120 不变**，这一项只是把它变成可配置：
+    # 以前写死在 `RateLimitMiddleware` 的构造默认值里，于是任何批量客户端（评测装置、
+    # 迁移脚本、集成方 SDK）都会在几十秒内自己把窗口打满，看到的是"服务挂了"。
+    # 0 或负数 = 关掉限流，只该在受控的批处理实例上这么设。
+    rate_limit_rpm: int = 120
 
 
 @lru_cache

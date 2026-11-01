@@ -42,6 +42,19 @@ class LiveFeed:
                 continue
 
     @classmethod
+    def wake(cls, task_id: str) -> None:
+        """叫醒正在等事件的订阅者：**持久事件刚写进库了，别等下一次轮询**。
+
+        为什么需要它：SSE 循环原本每 0.5 秒查一次库，一个 200 步的任务就是几千次
+        查询，而其中绝大多数是空的。有了这一声唤醒，循环可以退到 2 秒才查一次空库，
+        真正有事件时又被立刻叫起来——**空转的代价降下来，时延一分不涨**。
+
+        跨进程无效（订阅表在内存里），所以它只是加速器：轮询必须继续存在，
+        否则 worker 在另一个进程里写的事件就永远到不了界面。
+        """
+        cls.publish(task_id, {"wake": True})
+
+    @classmethod
     def subscribe(cls, task_id: str) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_SIZE)
         cls._queues.setdefault(task_id, set()).add(queue)
@@ -59,6 +72,15 @@ class LiveFeed:
     @classmethod
     def subscriber_count(cls, task_id: str) -> int:
         return len(cls._queues.get(task_id) or ())
+
+    @classmethod
+    def total_subscribers(cls) -> int:
+        """当前所有任务上的订阅者总数（= 活跃 SSE 连接数，减去别的订阅方）。"""
+        return sum(len(queues) for queues in cls._queues.values())
+
+    @classmethod
+    def active_tasks(cls) -> int:
+        return len([queues for queues in cls._queues.values() if queues])
 
     @classmethod
     def reset(cls) -> None:

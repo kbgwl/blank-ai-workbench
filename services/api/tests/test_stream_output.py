@@ -419,7 +419,12 @@ async def test_switch_on_publishes_deltas_and_records_metrics(seeded, tmp_path):
     assert response.text == "一二三"
     frames = []
     while not queue.empty():
-        frames.append(queue.get_nowait())
+        item = queue.get_nowait()
+        # 通道里现在还有另一种帧：`{"wake": True}`（事件落库后叫醒 SSE 循环）。
+        # 它不是增量，消费方必须按这个键过滤——所以这里也只取真正的增量帧。
+        if item.get("wake"):
+            continue
+        frames.append(item)
     assert frames, "开着流式却一帧都没推，界面还是卡的"
     assert frames[-1]["done"] is True
     assert frames[-1]["chars"] == 3

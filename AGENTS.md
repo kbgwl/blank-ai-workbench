@@ -58,13 +58,18 @@ node evals/compare.mjs --only T01,T02,T03 --agents ours,claude
 # 1. 前端静态导出（必须带这两个变量，否则构建出来的是要在服务器上跑的那份）
 cd web && BLANK_DESKTOP_BUILD=1 NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000 \
   E:/env/node/node-v24.20.0-win-x64/node.exe ./node_modules/next/dist/bin/next build
-# 2. 打安装包（版本号在 desktop/package.json）
+# 1.5 组装随包 Python 运行时（129MB，不入库；已有就跳过，--check 只体检）
+node scripts/prepare_desktop_runtime.mjs
+# 2. 打安装包（版本号在 desktop/package.json，唯一真源）
 cd desktop && E:/env/node/node-v24.20.0-win-x64/node.exe ./node_modules/electron-builder/cli.js --win nsis
 # 3. 自检 14 项（含"首页是 bot 对话页"）
 cd desktop && node verify-package.cjs
 # 4. 装到本机（安装目录复用 install-target.local.json）
 cd desktop && node install-local.cjs
 ```
+
+版本号改完跑一次 `node scripts/check_versions.mjs`：根 `package.json` 与 README 里
+「当前发布版本：**x.y.z**」必须跟 `desktop/package.json` 同值，CI 的 `desktop` job 会拦。
 
 装完想让已装客户端立刻用上新代码、但不想重装：`node self-deploy.cjs --api`（只同步后端）
 或 `--web`（只同步前端），`--shell` 换掉 app.asar 里的主进程与 preload（客户端须先完全退出）。

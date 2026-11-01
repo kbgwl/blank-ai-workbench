@@ -87,6 +87,10 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
         from blank_api.services.rea import adapter as rea_adapter
 
         await rea_adapter.close_all()
+        # 模型调用的共享连接池：进程退出前关掉，别把半开连接留给下一次启动。
+        from blank_api.services.models.base import aclose_pooled_clients
+
+        await aclose_pooled_clients()
 
 
 async def sweep_orphan_uploads() -> None:
@@ -161,7 +165,11 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(RateLimitMiddleware)
+    # 上限可配（`BLANK_RATE_LIMIT_RPM`，默认仍是 120）。批量客户端（评测装置、迁移脚本）
+    # 会在几十秒内把窗口打满，然后看到一片 429——那不是"服务挂了"，是装置和限流在打架。
+    # 0/负数 = 关掉，只该用在受控的批处理实例上；产品默认值一个字没动。
+    if settings.rate_limit_rpm > 0:
+        app.add_middleware(RateLimitMiddleware, rpm=settings.rate_limit_rpm)
     app.include_router(api_router, prefix="/api/v1")
     if guarded:
         _mount_guarded_docs(app)

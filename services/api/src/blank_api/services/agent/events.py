@@ -21,6 +21,17 @@ MAX_SEQ_ATTEMPTS = 5
 
 log = logging.getLogger(__name__)
 
+
+def _wake_subscribers(task_id: str) -> None:
+    """本进程的 SSE 订阅者叫醒。导入放在函数里：``live`` 是纯内存模块，
+    顶层互相 import 会把 events 和 live 绑成一个环（这条链已经在 agent/__init__ 里踩过）。"""
+    try:
+        from blank_api.services.agent.live import LiveFeed
+
+        LiveFeed.wake(task_id)
+    except Exception:  # pragma: no cover - 叫醒失败绝不能影响事件落库
+        log.debug("唤醒事件流失败：task=%s", task_id, exc_info=True)
+
 # 终态事件：时间线上"这一轮已经结束"的唯一凭据。前端靠它停止轮询、解锁输入框，
 # 台账靠它算一次任务的终点。写第二条不会让前端更早解锁，只会让"一轮结束了几次"
 # 变成需要解释的问题，所以收尾前要先查有没有。
@@ -127,6 +138,10 @@ class EventRecorder:
                             )
                         )
                         await session.commit()
+                    # 事件已经落库：叫醒本进程里等这条任务的事件流，省掉一整轮空轮询。
+                    # 放在 commit 之后（不是之前）：先叫醒会让订阅者读到"还没有这条"，
+                    # 于是它退避得更久，反而更慢。跨进程收不到这声唤醒，那边继续靠轮询。
+                    _wake_subscribers(self.task_id)
                     return seq
                 except IntegrityError as exc:
                     # 丢事件比丢一次写入更糟：时间线是唯一的证据来源。重读最大值再来一次。

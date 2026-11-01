@@ -27,6 +27,7 @@ from blank_api.db import get_session_factory
 from blank_api.models.run import AgentRun
 from blank_api.models.task import Task
 from blank_api.schemas.task import TaskRunIn
+from blank_api.services import metrics
 from blank_api.services.agent.queue import abandon_run, claim_run, finish_run, utc_now
 
 log = logging.getLogger("blank_api.worker")
@@ -109,6 +110,7 @@ async def run_once(worker: str | None = None) -> int:
     handled = 0
     for run_id, task_id, attempts in await _candidates():
         if attempts >= task_routes.MAX_RECOVERY_ATTEMPTS:
+            metrics.inc(metrics.WORKER_ABANDONED)
             await _give_up(
                 run_id,
                 task_id,
@@ -120,6 +122,10 @@ async def run_once(worker: str | None = None) -> int:
             continue
         handled += 1
         crashed = attempts > 0
+        if crashed:
+            # 上一次认领后没写终态（进程被杀/断电）。这个数就是"崩溃恢复真的发生过几次"，
+            # 没有它，"我们从崩溃里恢复得怎么样"只能靠日志翻。
+            metrics.inc(metrics.WORKER_RECOVERED)
         try:
             request = await _request_for(run_id)
         except Exception as error:
@@ -143,6 +149,7 @@ async def run_once(worker: str | None = None) -> int:
         except Exception:
             # _execute_claimed_run 自己会写 task.failed；这里只保证不把整轮循环带走
             log.exception("执行失败 run=%s", run_id)
+        metrics.inc(metrics.WORKER_RUN_FINISHED)
     return handled
 
 

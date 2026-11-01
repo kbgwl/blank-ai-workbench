@@ -19,6 +19,7 @@ from blank_api.services.tools.shell import (
 SUMMARY = re.compile(r"(\d+)\s+(passed|failed|errors?|skipped|xfailed|xpassed|error)")
 PYTEST_MARKERS = ("pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py")
 CONTAINER_PYTHON = "python3"
+GO_MARKERS = ("go.mod", "go.sum")
 
 
 def detect_test_command(root) -> tuple[list[str], bool] | None:
@@ -31,6 +32,10 @@ def detect_test_command(root) -> tuple[list[str], bool] | None:
             manifest = {}
         if (manifest.get("scripts") or {}).get("test"):
             return ["npm", "test"], True
+    # Go 工程：go.mod 在即认 go test，不动 docker 的 python 替换（argv[0] 是 go 不是 python）。
+    # 放在 pytest 之前，避免 go 工程里偶发的 tests/ 目录被误判成 pytest。
+    if (root / "go.mod").exists():
+        return ["go", "test", "./...", "-count=1"], False
     for marker in PYTEST_MARKERS:
         if (root / marker).exists():
             return python_test_command(), False
@@ -127,7 +132,8 @@ def test_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="run_tests",
             description=(
-                "运行项目测试。不传 command 时自动识别：存在 pytest.ini/pyproject.toml/tests 目录时执行 pytest，"
+                "运行项目测试。不传 command 时自动识别：存在 go.mod 时执行 go test ./...；"
+                "存在 pytest.ini/pyproject.toml/tests 目录时执行 pytest；"
                 "存在 package.json test 脚本时执行 npm test"
             ),
             input_schema={

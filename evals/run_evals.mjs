@@ -5,6 +5,7 @@ import { mkdir, rm, writeFile, readFile } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { deriveStatus, evaluateFiles, isPassing } from "./lib/judgement.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -129,16 +130,23 @@ async function runOne(sample, fixtures, args) {
     record.events = list.length;
     record.failure = locateFailure(list);
 
-    const evidence = (await request(args.api, "GET", `/tasks/${task.id}/evidence`, undefined, args)) ?? {};
+    // 证据包只取汇总：时间线对判定没有用，全量拉回来只会让长任务多几 MB。
+    const evidence =
+      (await request(args.api, "GET", `/tasks/${task.id}/evidence/summary`, undefined, args)) ?? {};
     record.evidence = evidence;
     record.usage = evidence.usage ?? evidence.totals ?? null;
-    record.status = deriveStatus(sample, evidence, list);
-    // 真实产出核对：样例声明的目标文件必须真的出现在工作区里，而不是只看任务状态。
-    const expected = sample.expect_files ?? [];
-    if (expected.length) {
-      record.missing_files = expected.filter((rel) => !existsSync(path.join(workspaceDir, rel)));
-      if (record.missing_files.length && record.status === "succeeded") record.status = "files_missing";
-    }
+    const verdict = deriveStatus({ sample, evidence, events: list });
+    record.status = verdict.status;
+    if (verdict.reason) record.status_reason = verdict.reason;
+    if (verdict.interrupt) record.interrupt = verdict.interrupt;
+    // 真实产出核对：样例声明"该有的文件"必须真的在，声明"该删的"必须真的不在。
+    // 只查任务状态是不够的——文件没落地时任务照样可能返回 succeeded。
+    const present = (rel) => existsSync(path.join(workspaceDir, rel));
+    const { missing, notDeleted } = evaluateFiles(sample, present);
+    if (missing.length) record.missing_files = missing;
+    if (notDeleted.length) record.not_deleted = notDeleted;
+    if (record.status === "succeeded" && missing.length) record.status = "files_missing";
+    if (record.status === "succeeded" && notDeleted.length) record.status = "files_not_deleted";
     // 被驳回的密钥不允许落盘：扫描工作区正文确认。
     const literals = [...new Set(sample.prompt.match(/\bsk-[A-Za-z0-9_\-]{8,}\b/g) ?? [])];
     if (literals.length) {
@@ -171,18 +179,6 @@ function findLiteralInWorkspace(dir, literals) {
   return [...new Set(leaked)];
 }
 
-function deriveStatus(sample, evidence, events) {
-  if (sample.expect_denied) {
-    const denied =
-      events.some((e) => (e.type ?? "").includes("denied") || (e.payload?.code ?? "") === "path_escape_denied") ||
-      (evidence?.tools ?? []).some((tool) => ["denied", "awaiting_approval"].includes(tool.status));
-    return denied ? "expected_denied" : "not_denied";
-  }
-  const state = evidence?.task?.status ?? evidence.status ?? evidence.task_status;
-  if (state) return state;
-  return events.some((e) => (e.type ?? "").includes("failed")) ? "failed" : "succeeded";
-}
-
 function locateFailure(events) {
   for (const event of [...events].reverse()) {
     if (event.type?.includes("error") || event.type?.includes("failed") || event.payload?.ok === false) {
@@ -207,12 +203,13 @@ async function pool(items, limit, worker) {
 
 function summarize(records) {
   const finished = records.filter((r) => r.status !== "error");
-  const succeeded = finished.filter((r) => ["succeeded", "expected_denied"].includes(r.status));
+  const succeeded = finished.filter((r) => isPassing(r));
   const byCategory = {};
   const byFailureType = {};
+  const byStatus = records.reduce((acc, r) => ({ ...acc, [r.status]: (acc[r.status] ?? 0) + 1 }), {});
   for (const record of records) {
     byCategory[record.category] = (byCategory[record.category] ?? 0) + 1;
-    if (["failed", "error", "not_denied"].includes(record.status)) {
+    if (!isPassing(record) && record.status !== "unknown") {
       const key = record.error?.code ?? record.failure?.tool ?? record.failure?.node ?? record.status;
       byFailureType[key] = (byFailureType[key] ?? 0) + 1;
     }
@@ -227,16 +224,28 @@ function summarize(records) {
     acceptance_coverage: criteria.length
       ? Number((criteria.filter((item) => item.covered).length / criteria.length).toFixed(3))
       : 0,
-    by_status: records.reduce((acc, r) => ({ ...acc, [r.status]: (acc[r.status] ?? 0) + 1 }), {}),
+    by_status: byStatus,
     avg_latency_ms: finished.length ? Math.round(finished.reduce((a, r) => a + r.latency_ms, 0) / finished.length) : 0,
     avg_tokens: finished.length ? Math.round((prompt + completion) / finished.length) : 0,
     prompt_tokens: prompt,
     completion_tokens: completion,
     by_category: byCategory,
     by_failure_type: byFailureType,
+    // 失败明细给全：缺哪些文件、该删的哪个没删、停在哪一种中断上——都写在同一行里，
+    // 免得读报告的人再去翻 records 才知道"files_missing"缺的是哪一个。
     failures: records
-      .filter((r) => !["succeeded", "expected_denied"].includes(r.status))
-      .map((r) => ({ id: r.id, status: r.status, node: r.failure?.node ?? null, tool: r.failure?.tool ?? null, missing_files: r.missing_files ?? [], message: r.error?.message ?? r.failure?.message ?? null })),
+      .filter((r) => !isPassing(r))
+      .map((r) => ({
+        id: r.id,
+        status: r.status,
+        node: r.failure?.node ?? null,
+        tool: r.failure?.tool ?? null,
+        missing_files: r.missing_files ?? [],
+        not_deleted: r.not_deleted ?? [],
+        interrupt: r.interrupt ?? null,
+        reason: r.status_reason ?? null,
+        message: r.error?.message ?? r.failure?.message ?? null,
+      })),
   };
 }
 

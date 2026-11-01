@@ -141,6 +141,74 @@ jobs:
           fi
           exit "$code"
 
+  desktop:
+    # 桌面壳的单测与打包自检。
+    # 单测（node --test）只读仓库文件、不装 electron、不开窗口，任何平台都能跑；
+    # 打包自检必须 Windows：electron-builder 出的是 Windows 产物，verify-package 断言的
+    # 是 `resources/backend/runtime/python.exe` 这类路径，在 Linux runner 上根本没有意义。
+    #
+    # 这一格此前一直是洞：`desktop/tests/*.test.cjs`（52 例）和 verify-package（14 项）
+    # 只在打包人的机器上跑过，"能过"这件事没有任何一次是别人复现出来的。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: 桌面壳单测（纯函数 + 壳的连线）
+        run: pnpm test:desktop
+      - name: 仓库内自洽（版本号三处一致，见 scripts/check_versions.mjs）
+        run: pnpm check:versions
+      - name: 评测判分器的纯函数单测
+        # 判分逻辑抽成 evals/lib/judgement.mjs 就是为了能在这一格单测：
+        # 以前它混在 run_evals.mjs 的 IO 里，判定对不对只能靠"跑一遍看结果"。
+        run: node --test evals/tests/judgement.test.mjs
+
+  desktop-package:
+    # 打一次真包，再让 verify-package 按包内产物逐条对账。
+    #
+    # 这一格能成立的前提是「运行时组装」有脚本了：`desktop/build/runtime`（约 129MB）
+    # 不入库、过去只能靠打包人的机器，于是"打包自检"永远无法进 CI。现在由
+    # scripts/prepare_desktop_runtime.mjs 从 uv 的独立 CPython + uv.lock 现场组装，
+    # 与既有那份同构（同一个 python.exe / Lib/site-packages / blank_api.pth 布局）。
+    #
+    # 只打 `--dir`（win-unpacked），不出 portable/NSIS 安装包：自检断言的是解包后的
+    # 目录结构，出安装包既慢又要签，多出来的那两步没有额外判据。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: 前端静态导出（桌面包只拷产物，不会自己构建前端）
+        # 这两个变量缺一不可：少了 NEXT_PUBLIC_API_BASE，产物里的接口地址是空串，
+        # 界面会去 fetch 相对路径 `/api/v1`，在 file:// 下必死——而打包日志一切正常。
+        env:
+          BLANK_DESKTOP_BUILD: "1"
+          NEXT_PUBLIC_API_BASE: http://127.0.0.1:8000
+        run: pnpm build:web
+      - name: 组装随包 Python 运行时
+        run: node scripts/prepare_desktop_runtime.mjs
+      - name: 体检运行时（缺 python.exe / .pth 内容不对会在这里就红）
+        run: node scripts/prepare_desktop_runtime.mjs --check
+      - name: electron-builder 出 win-unpacked
+        working-directory: desktop
+        run: node node_modules/electron-builder/cli.js --win --dir
+      - name: 打包后自检（14 项：产物齐不齐、asar 是否旧副本、包内有没有本机痕迹）
+        working-directory: desktop
+        run: node verify-package.cjs
+
   eval-gate:
     # #104：评测集成功率进门禁。用脚本化桩（scripts/mock-model-server.mjs，不烧真模型、不调真实供应商）
     # 跑 evals/task-samples.json 全集 32 例，读数装置是 evals/eval_gate.mjs——它自己那行「退出码=」才是判定：
@@ -164,6 +232,9 @@ jobs:
         run: uv run alembic upgrade head
         working-directory: services/api
       - name: 起脚本化桩 + API（:8050 独立实例；姿态与桌面壳同款，无 docker 时沙箱默认开会把任务全挡死）
+        # `BLANK_RATE_LIMIT_RPM=0`：这一格是**批量客户端**，32 例在几十秒内会打出 200 多个请求，
+        # 撞上默认 120 rpm 之后整批变 429，门禁读出来就是"产品成功率掉了"——那是装置和限流打架。
+        # 产品默认限流一个字没改（120），这里只是把这个受控实例的闸打开。
         run: |
           node scripts/mock-model-server.mjs > /tmp/mock.log 2>&1 &
           cd services/api
@@ -171,6 +242,7 @@ jobs:
           BLANK_SETTINGS_FILE=/tmp/eval_gate_settings.json \
           BLANK_SECRET_KEY_FILE=/tmp/eval_gate_secret.key \
           BLANK_SANDBOX_ENABLED=false \
+          BLANK_RATE_LIMIT_RPM=0 \
           uv run uvicorn blank_api.app:app --host 127.0.0.1 --port 8050 > /tmp/api.log 2>&1 &
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:8050/api/v1/health | grep -q connected && exit 0

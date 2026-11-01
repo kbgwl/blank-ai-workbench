@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 
 from blank_api.helpers.middleware import breaker_for
+from blank_api.services import metrics
 from blank_api.services.models.base import (
     ChatMessage,
     ModelAdapter,
@@ -40,6 +41,10 @@ class FallbackAdapter(ModelAdapter):
     async def invoke(self, messages: Sequence[ChatMessage], **kwargs) -> ModelResponse:
         last_error: ModelError | None = None
         for adapter in self._candidates():
+            if adapter is not self.adapters[0]:
+                # 走到这里说明主用已经失败过一次：换成备用模型这件事必须能被数出来，
+                # 否则"我们配了兜底"只是一句配置层面的话，跑起来没人知道它生没生效。
+                metrics.inc(metrics.MODEL_FALLBACK, **{"to": adapter.config.name})
             self._guard(adapter)
             try:
                 response = await adapter.invoke(messages, **kwargs)
@@ -48,6 +53,7 @@ class FallbackAdapter(ModelAdapter):
                 return response
             except ModelError as exc:
                 breaker_for(adapter.config.name).fail()
+                metrics.inc(metrics.MODEL_FALLBACK_FAILED, **{"provider": adapter.config.name})
                 last_error = exc
                 if not exc.retryable:
                     raise
@@ -66,6 +72,8 @@ class FallbackAdapter(ModelAdapter):
             if not adapter.config.supports_tools:
                 last_error = ModelError("model_tools_unsupported", f"模型 {adapter.config.model} 不支持工具调用")
                 continue
+            if adapter is not self.adapters[0]:
+                metrics.inc(metrics.MODEL_FALLBACK, **{"to": adapter.config.name})
             self._guard(adapter)
             try:
                 response = await adapter.bind_tools(tools, messages, **kwargs)
@@ -74,6 +82,7 @@ class FallbackAdapter(ModelAdapter):
                 return response
             except ModelError as exc:
                 breaker_for(adapter.config.name).fail()
+                metrics.inc(metrics.MODEL_FALLBACK_FAILED, **{"provider": adapter.config.name})
                 last_error = exc
                 if not exc.retryable:
                     raise

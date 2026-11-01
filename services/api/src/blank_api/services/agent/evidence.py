@@ -6,13 +6,57 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from blank_api.api.errors import ApiError
 from blank_api.models.model_provider import ModelProvider, ModelUsage
 from blank_api.models.task import AgentEvent, FileChange, Task, ToolCall
 from blank_api.services.plan import normalize_criteria
+
+# 证据包默认只带最近这么多条事件进 `timeline`。原来的做法是"全部塞进去"：
+# 一个 116 步、581 条事件的任务，一次 `/evidence` 就要序列化几 MB——前端渲染卡死，
+# 而其中用户真正要看的就是最后那一段。分页参数在路由上（`timeline_limit` /
+# `timeline_before_seq`），要全量照样能要（`timeline_limit=2000`）。
+DEFAULT_TIMELINE_LIMIT = 200
+MAX_TIMELINE_LIMIT = 2000
+
+# 工具调用与文件变更同样可能随长任务膨胀：一个几百步的任务会留下上千条 ToolCall、
+# 成百个文件 diff。原来它们是「全量塞进证据包」，与早期时间线同一个坑（几 MB JSON、
+# 前端渲染卡死）。这里给它们各自一个默认上限 + 游标分页，`*_meta` 把「还有多少没加载」
+# 数出来，翻页界面才不会误以为看完了。要全量仍可显式要大上限。
+DEFAULT_TOOLS_LIMIT = 500
+MAX_TOOLS_LIMIT = 2000
+DEFAULT_CHANGES_LIMIT = 500
+MAX_CHANGES_LIMIT = 2000
+# 拼接后的全量 diff 字符串同样会爆：单文件 diff 动辄几万字符，几百个文件就是数 MB。
+# 给一个字符预算，超出部分不进 `diff` 字段，由 `changes_meta.diff_truncated` 说明漏了几条。
+DIFF_CHAR_BUDGET = 200_000
+
+# 汇总类字段需要的事件类型。这份清单不是"性能优化"，是**必须**：审批状态、验收结论、
+# 上下文水位、边界归属、用量明细全部从事件里读，漏一个类型等于那一块静默变空。
+# 守卫见 `tests/test_evidence_paging_v152.py::test_summary_types_cover_every_type_read_by_evidence`，
+# 它扫这个文件的源码，新增的 `event.type == "..."` 若不在集合里会直接红。
+SUMMARY_EVENT_TYPES = frozenset(
+    {
+        "approval.required",
+        "approval.requested",
+        "context.compacted",
+        "context.measured",
+        "context.microcompacted",
+        "context.trimmed",
+        "guardian.auto_approved",
+        "guardian.reviewed",
+        "model.usage",
+        "question.required",
+        "task.started",
+        "tool.completed",
+        "turn.context",
+        "validation.completed",
+        "world.state",
+    }
+)
+
 
 
 async def load_task(session: AsyncSession, task_id: str) -> Task:
@@ -349,37 +393,109 @@ def questions_can_default(questions: object) -> bool:
 
 
 async def build_evidence(
-    session_factory: async_sessionmaker[AsyncSession], task_id: str
+    session_factory: async_sessionmaker[AsyncSession],
+    task_id: str,
+    *,
+    timeline_limit: int = DEFAULT_TIMELINE_LIMIT,
+    timeline_before_seq: int | None = None,
+    include_timeline: bool = True,
+    tools_limit: int = DEFAULT_TOOLS_LIMIT,
+    tools_offset: int = 0,
+    changes_limit: int = DEFAULT_CHANGES_LIMIT,
+    changes_offset: int = 0,
 ) -> dict[str, Any]:
+    """交付证据包。
+
+    两段读，各自有明确的上界：
+
+    * ``events``（内部变量）——只取 :data:`SUMMARY_EVENT_TYPES` 里的类型。验收、审批、
+      上下文、边界、用量这些汇总字段都从它们算出来，所以这一段必须**完整**但不能
+      顺手把工具输出、节点流水一起拖回来。
+    * ``timeline_events``——时间线本身，默认最近 :data:`DEFAULT_TIMELINE_LIMIT` 条，
+      用 ``timeline_before_seq`` 往前翻页。``include_timeline=False`` 时一条都不读。
+
+    条数统计走 ``GROUP BY type`` 的一次聚合，所以"还有多少条没加载"是数出来的，
+    不是估的——分页界面最怕的就是"以为看完了"。
+    """
+    limit = max(1, min(int(timeline_limit or DEFAULT_TIMELINE_LIMIT), MAX_TIMELINE_LIMIT))
+    tools_limit = max(0, min(int(tools_limit or 0), MAX_TOOLS_LIMIT))
+    tools_offset = max(0, int(tools_offset or 0))
+    changes_limit = max(0, min(int(changes_limit or 0), MAX_CHANGES_LIMIT))
+    changes_offset = max(0, int(changes_offset or 0))
     async with session_factory() as session:
         task = await load_task(session, task_id)
         events = (
             (
                 await session.execute(
-                    select(AgentEvent).where(AgentEvent.task_id == task_id).order_by(AgentEvent.seq)
+                    select(AgentEvent)
+                    .where(
+                        AgentEvent.task_id == task_id,
+                        AgentEvent.type.in_(sorted(SUMMARY_EVENT_TYPES)),
+                    )
+                    .order_by(AgentEvent.seq)
                 )
             )
             .scalars()
             .all()
         )
-        calls = (
+        type_rows = (
+            await session.execute(
+                select(AgentEvent.type, func.count())
+                .where(AgentEvent.task_id == task_id)
+                .group_by(AgentEvent.type)
+            )
+        ).all()
+        timeline_events: list[AgentEvent] = []
+        earlier_count = 0
+        if include_timeline:
+            query = select(AgentEvent).where(AgentEvent.task_id == task_id)
+            if timeline_before_seq is not None:
+                query = query.where(AgentEvent.seq < int(timeline_before_seq))
+            rows = (
+                await session.execute(query.order_by(AgentEvent.seq.desc()).limit(limit))
+            ).scalars().all()
+            # 取尾部再翻回正序：时间线永远是"从旧到新"，倒着渲染会让工具卡对不上步号。
+            timeline_events = list(reversed(rows))
+            # 本页之前还有多少条：一次 COUNT，比让前端"猜着翻"便宜得多。
+            if timeline_events:
+                earlier_count = int(
+                    (
+                        await session.execute(
+                            select(func.count())
+                            .select_from(AgentEvent)
+                            .where(
+                                AgentEvent.task_id == task_id,
+                                AgentEvent.seq < timeline_events[0].seq,
+                            )
+                        )
+                    ).scalar_one()
+                )
+        calls_total = int(
             (
                 await session.execute(
-                    select(ToolCall).where(ToolCall.task_id == task_id).order_by(ToolCall.created_at)
+                    select(func.count()).select_from(ToolCall).where(ToolCall.task_id == task_id)
                 )
-            )
-            .scalars()
-            .all()
+            ).scalar_one()
         )
-        changes = (
+        calls_query = (
+            select(ToolCall).where(ToolCall.task_id == task_id).order_by(ToolCall.created_at)
+        )
+        if tools_limit:
+            calls_query = calls_query.limit(tools_limit).offset(tools_offset)
+        calls = (await session.execute(calls_query)).scalars().all()
+        changes_total = int(
             (
                 await session.execute(
-                    select(FileChange).where(FileChange.task_id == task_id).order_by(FileChange.created_at)
+                    select(func.count()).select_from(FileChange).where(FileChange.task_id == task_id)
                 )
-            )
-            .scalars()
-            .all()
+            ).scalar_one()
         )
+        changes_query = (
+            select(FileChange).where(FileChange.task_id == task_id).order_by(FileChange.created_at)
+        )
+        if changes_limit:
+            changes_query = changes_query.limit(changes_limit).offset(changes_offset)
+        changes = (await session.execute(changes_query)).scalars().all()
         usage_rows = (
             (
                 await session.execute(
@@ -618,6 +734,7 @@ async def build_evidence(
         {},
     )
     boundaries = boundary_report(events, started_payload)
+    diff_text, diff_truncated = _bounded_diff(changes, DIFF_CHAR_BUDGET)
     return {
         "task": {
             "id": task.id,
@@ -635,9 +752,10 @@ async def build_evidence(
         "acceptance": acceptance,
         "changes": {
             "count": len(changes),
+            "total": changes_total,
             "files": [change.path for change in changes],
             "reversible": all(bool(change.backup_path) or change.change_type == "created" for change in changes),
-            "diff": "\n".join(change.diff for change in changes if change.diff),
+            "diff": diff_text,
             "items": [
                 {
                     "path": change.path,
@@ -647,6 +765,12 @@ async def build_evidence(
                 }
                 for change in changes
             ],
+        },
+        "changes_meta": {
+            "total": changes_total,
+            "returned": len(changes),
+            "has_more": changes_total > changes_offset + len(changes),
+            "diff_truncated": diff_truncated,
         },
         "validation": validation,
         "governance": governance_summary,
@@ -729,6 +853,11 @@ async def build_evidence(
             }
             for call in calls
         ],
+        "tools_meta": {
+            "total": calls_total,
+            "returned": len(calls),
+            "has_more": calls_total > tools_offset + len(calls),
+        },
         "pending_approvals": pending_approvals,
         "pending_questions": pending_questions,
         "question_expires_at": question_expires_at,
@@ -749,9 +878,60 @@ async def build_evidence(
                 "payload": event.payload,
                 "created_at": _iso(event.created_at),
             }
-            for event in events
+            for event in timeline_events
         ],
+        "timeline_meta": _timeline_meta(
+            timeline_events,
+            type_rows,
+            limit=limit,
+            before_seq=timeline_before_seq,
+            earlier=earlier_count,
+        ),
     }
+
+
+def _timeline_meta(
+    timeline_events: list[AgentEvent],
+    type_rows,
+    *,
+    limit: int,
+    before_seq: int | None,
+    earlier: int,
+) -> dict[str, Any]:
+    """这一页时间线是怎么切出来的。字段全部是数出来的，读侧不需要猜。
+
+    ``next_before_seq`` 为空才表示"到头了"。``earlier`` 是"本页之前还有多少条"
+    ——翻页界面要显示的是"还有 380 条更早的"，不是"总共 581 条"。
+    """
+    oldest = timeline_events[0].seq if timeline_events else None
+    more = older_exists(timeline_events, before_seq=before_seq)
+    return {
+        "total_events": sum(int(count) for _, count in type_rows),
+        "loaded": len(timeline_events),
+        "limit": limit,
+        "before_seq": before_seq,
+        # 非空 = 用这个游标再要一次就能继续往前翻。
+        "next_before_seq": oldest if more else None,
+        "by_type": {str(event_type): int(count) for event_type, count in type_rows},
+        "truncated": bool(more),
+        "earlier": earlier,
+    }
+
+
+def older_exists(timeline_events: list[AgentEvent], *, before_seq: int | None) -> bool:
+    """这一页前面还有没有更早的事件。
+
+    "满页"不等于"还有"：恰好卡在最后一页边界时，满页会让人以为还能往前翻，
+    点下去拿到空页。所以判据是**本页最小 seq 是否就是 1**——seq 从 1 起严格递增，
+    最小 seq 为 1 就一定到头了。若给了 ``before_seq``，则要看本页最小 seq 是否
+    小于它（说明还没翻到头）。
+    """
+    if not timeline_events:
+        return False
+    oldest = min(event.seq for event in timeline_events)
+    if before_seq is not None and oldest >= int(before_seq):
+        return False
+    return oldest > 1
 
 
 def approval_is_expired(expires_at: object, *, now: datetime | None = None) -> bool:
@@ -882,3 +1062,24 @@ def _latest_validation(events: list[AgentEvent]) -> dict[str, Any] | None:
 
 def _iso(value) -> str:
     return value.isoformat(timespec="seconds") if value else ""
+
+
+def _bounded_diff(changes: list, budget: int) -> tuple[str, int]:
+    """把文件 diff 拼成一段文本，但总字符数封顶到 ``budget``。
+
+    原来是无条件 ``"\\n".join(change.diff ...)``：几百个文件、每个几万字符，拼出来就是
+    数 MB 的响应体，长任务直接把后端内存和前端渲染一起拖垮。超预算的文件不再并进
+    ``diff`` 字段，返回漏掉了几条，由调用方（``changes_meta.diff_truncated``）如实说出来，
+    而不是假装全给了。单条 diff 超过预算时仍让它进（否则整段就空了），只是后面的被截断。
+    """
+    parts: list[str] = []
+    total = 0
+    truncated = 0
+    for change in changes:
+        diff = change.diff or ""
+        if parts and total + len(diff) > budget:
+            truncated += 1
+            continue
+        parts.append(diff)
+        total += len(diff)
+    return "\n".join(parts), truncated

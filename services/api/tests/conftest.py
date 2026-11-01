@@ -88,6 +88,17 @@ def _isolate_upload_root(tmp_path, monkeypatch):
     monkeypatch.setenv("BLANK_UPLOAD_ROOT", str(tmp_path / "uploads"))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_artifact_root(tmp_path, monkeypatch):
+    """每个用例一份工具产物目录。
+
+    默认根 `data/artifacts` 是相对 cwd 的：跑一次全量会在仓库里留下几百份工具输出，
+    而"这棵树有多大"恰好是新加的生命周期判据要量的东西——共享一份目录等于让
+    用例 A 的产物算进用例 B 的占用读数。
+    """
+    monkeypatch.setenv("BLANK_ARTIFACT_DIR", str(tmp_path / "artifacts"))
+
+
 @pytest.fixture
 async def client():
     app = create_app()
