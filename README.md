@@ -38,6 +38,10 @@ scripts/dev.mjs   一条命令启动全栈
 - Python 通过 [uv](https://docs.astral.sh/uv/) 管理，无需预装系统 Python
 - Docker Desktop（提供 PostgreSQL 与 Redis）
 
+> Python 依赖只针对**源码运行**：Windows 安装版/便携版自带完整 Python 运行时与后端依赖
+> （`desktop/build/runtime`，首启自动迁移数据库），不要求机器上装过 Python。
+> 源码模式下仍需 uv 或项目 `.venv`——这一点在桌面打包验收（§9.3）中已实测确认。
+
 ## 启动
 
 ```bash

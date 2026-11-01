@@ -336,6 +336,29 @@ function decideUpdate({ current, entry, fetchError } = {}) {
   };
 }
 
+// ── 6. 后端解释器优先级 ──────────────────────────────────────────────────────
+
+/**
+ * 决定用哪个解释器跑后端。纯函数：存在性探测由调用方注入，这里只定优先级。
+ *
+ * 顺序（docs/workbuddy-followup-v153.md §3.4 要求可单测）：
+ *   1. BLANK_BACKEND_CMD（调试/注入 fake backend 用）
+ *   2. 包内自带 Python（自包含分发的正解）
+ *   3. 项目 .venv
+ *   4. 本机 uv
+ *   5. 本机 python/py
+ * 全缺 → 空数组，调用方给出「缺少后端运行时」的可操作出口。
+ */
+function pickInterpreterOrder({ hasEnvCmd, hasBundled, hasVenv, hasUv, hasPython }) {
+  const order = [];
+  if (hasEnvCmd) order.push({ kind: "env", label: "BLANK_BACKEND_CMD" });
+  if (hasBundled) order.push({ kind: "bundled", label: "包内 Python" });
+  if (hasVenv) order.push({ kind: "venv", label: "项目 .venv" });
+  if (hasUv) order.push({ kind: "uv", label: "本机 uv（首次会装依赖）" });
+  if (hasPython) order.push({ kind: "python", label: "本机 python（需已装依赖）" });
+  return order;
+}
+
 module.exports = {
   DEFAULT_HOTKEY,
   buildTrayMenuModel,
@@ -347,6 +370,7 @@ module.exports = {
   normalizeHotkey,
   parseUpdateFeedUrl,
   parseVersion,
+  pickInterpreterOrder,
   pickLatestEntry,
   planHotkeyToggle,
   planSecondInstanceReveal,

@@ -10,7 +10,7 @@
  * 两条都必须存在。只留快照，用户改不动；只留现状，回放时看不到当时是怎么想的。
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import {
   type Task,
@@ -43,12 +43,17 @@ export function PlanPanel({ task, onChanged }: Props) {
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
 
-  // 任务对象被外部刷新（跑完一轮、切了任务）时要跟上，否则面板还停在旧计划上。
-  useEffect(() => {
+  // 本地可编辑状态（勾选走乐观更新）必须跟上外部刷新，但不能无条件覆盖：
+  // 只在「换了任务」或「计划版本真的变了」时重置——渲染期条件 setState 是
+  // React 官方替代 useEffect 同步的写法，切换任务不会闪现上一个任务的计划，
+  // 外部刷新也不会盖掉用户正在编辑而 revision 未变的本地状态。
+  const [seen, setSeen] = useState({ taskId: task.id, revision: task.planRevision });
+  if (seen.taskId !== task.id || seen.revision !== task.planRevision) {
+    setSeen({ taskId: task.id, revision: task.planRevision });
     setSteps(task.planSteps);
     setMilestones(task.milestones);
     setRevision(task.planRevision);
-  }, [task.id, task.planRevision, task.planSteps, task.milestones]);
+  }
 
   const progress = useMemo(() => {
     const total = steps.length;

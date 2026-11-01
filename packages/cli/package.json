@@ -7,6 +7,10 @@
     "blank": "src/index.mjs"
   },
   "files": ["src", "README.md"],
+  "scripts": {
+    "build": "node --check src/index.mjs",
+    "test": "node --test tests/cli.test.mjs"
+  },
   "keywords": ["ai", "cli", "workbench", "agent", "blank-ai"],
   "homepage": "https://github.com/kbgwl/blank-ai-workbench",
   "repository": {

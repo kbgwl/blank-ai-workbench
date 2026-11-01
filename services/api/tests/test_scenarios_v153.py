@@ -13,7 +13,12 @@ from sqlalchemy import select
 from blank_api.db import get_session_factory
 from blank_api.models.task import AgentEvent, Task
 from blank_api.services.agent.scenarios import (
+    BRAINSTORM,
     DEV,
+    DOCS,
+    DAILY,
+    REVERSE,
+    WRITE_TOOLS,
     excluded_tools,
     list_scenarios,
     resolve,
@@ -228,3 +233,35 @@ async def test_memory_lifecycle_accept_then_delete(env):  # noqa: F811
 
     again = await env.client.delete(f"{API}/skills/{skill_id}")
     assert again.status_code == 404
+
+def test_scenario_acceptance_matrix_followup153():
+    """§6 验收矩阵：五个场景的权限与提示词规则逐条钉死。"""
+    # 开发：读写代码 + 跑测试全开；记忆仍禁（日常习惯不进开发会话）。
+    assert excluded_tools(DEV) == frozenset({"memory_write"})
+    assert not DEV.system_prompt
+
+    # 文档：能落文档文件（allow_write 保持开），但提示词约束「先提纲、不重构代码」。
+    assert excluded_tools(DOCS) == frozenset({"memory_write"})
+    assert "提纲" in DOCS.system_prompt
+    assert "不做无关重构" in DOCS.system_prompt
+
+    # 日常与头脑风暴：写类工具（改文件/命令/测试/git）全部禁用——不自动执行高风险操作。
+    for readonly in (DAILY, BRAINSTORM):
+        denied = excluded_tools(readonly)
+        assert WRITE_TOOLS <= denied, readonly.key
+        assert "memory_write" in denied
+
+    # 「记住习惯」只在日常出现，且必须用户显式选择。
+    assert DAILY.memory_allowed and not BRAINSTORM.memory_allowed and not REVERSE.memory_allowed
+    assert "memory_write" in system_prompt(DAILY, memory_opt_in=True)
+    assert "敏感事实" in system_prompt(DAILY, memory_opt_in=True)
+
+    # 逆向实验室：读为主但结论要落分析笔记（保留写入），提示词强制证据与「未确认」标注。
+    assert excluded_tools(REVERSE) == frozenset({"memory_write"})
+    assert "证据" in REVERSE.system_prompt
+    assert "未确认" in REVERSE.system_prompt
+
+    # 每个场景都给前端输入框提示（§6「切换场景同步更新输入框提示」的后端半边）。
+    for item in list_scenarios():
+        assert item["input_hint"], item["key"]
+        assert item["allow_write"] == resolve(item["key"]).allow_write

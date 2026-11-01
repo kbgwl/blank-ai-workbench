@@ -37,6 +37,7 @@ const {
   extractFeedEntries,
   normalizeHotkey,
   parseUpdateFeedUrl,
+  pickInterpreterOrder,
   pickLatestEntry,
   planHotkeyToggle,
   planSecondInstanceReveal,
@@ -88,7 +89,10 @@ const PORT = String(process.env.BLANK_BACKEND_PORT ?? "").trim() || "8000";
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (shouldAbortSecondaryInstance(gotSingleInstanceLock)) {
   console.log("[desktop] 已有实例在运行，本实例放弃启动（不建窗口、不拉后端）");
+  phase("single-instance", "lost（第二实例让位）");
   app.quit();
+} else {
+  phase("single-instance", "acquired");
 }
 
 // 壳自身状态。显式退出只由 quitApplication() 或 before-quit 置位；
@@ -216,6 +220,17 @@ const MIME = {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * 启动阶段日志（验收口径见 docs/workbuddy-followup-v153.md §3.3）。
+ *
+ * 每个阶段一行、格式固定，测试与人工排障都按这个串找进度：
+ * main-wiring 的 6 个用例都在等启动走完，一旦某阶段卡住，缺哪行日志就说明卡在哪。
+ * 只打阶段名与结果，不打密钥、Token 或完整用户路径。
+ */
+function phase(name, detail = "") {
+  console.log(`[startup] ${name}${detail ? ` | ${detail}` : ""}`);
+}
+
 // ── 静态资源协议 ────────────────────────────────────────────────────────────
 
 function resolveStaticFile(urlPath) {
@@ -320,49 +335,93 @@ function resolveBackendCommand() {
     env.BLANK_SETTINGS_FILE ??= path.join(DATA_DIR, "settings.json");
   }
 
-  const uvicornArgs = ["-m", "uvicorn", "blank_api.app:app", "--host", "127.0.0.1", "--port", PORT];
+  // 测试模式的硬闸：main-wiring 用内存桩跑真 main.cjs，健康桩一旦失手，
+  // 决不能让壳把真实 alembic / uvicorn 拉起来（那正是 6 个用例一起超时的根因）。
+  if (process.env.BLANK_SHELL_TEST === "1") {
+    return null;
+  }
 
-  if (process.env.BLANK_BACKEND_CMD) {
-    return { command: process.env.BLANK_BACKEND_CMD, args: uvicornArgs, cwd: API_DIR, env, label: "BLANK_BACKEND_CMD" };
+  const uvicornArgs = ["-m", "uvicorn", "blank_api.app:app", "--host", "127.0.0.1", "--port", PORT];
+  const pick = pickInterpreterOrder({
+    hasEnvCmd: Boolean(process.env.BLANK_BACKEND_CMD),
+    hasBundled: existsSync(BUNDLED_PYTHON),
+    hasVenv: existsSync(path.join(API_DIR, ".venv", "Scripts", "python.exe")),
+    hasUv: Boolean(findOnPath("uv")),
+    hasPython: Boolean(findOnPath("python") ?? findOnPath("py")),
+  })[0];
+  if (!pick) return null;
+
+  if (pick.kind === "env") {
+    return { command: process.env.BLANK_BACKEND_CMD, args: uvicornArgs, cwd: API_DIR, env, label: pick.label };
   }
-  if (existsSync(BUNDLED_PYTHON)) {
-    return { command: BUNDLED_PYTHON, args: uvicornArgs, cwd: API_DIR, env, label: "包内 Python" };
+  if (pick.kind === "bundled") {
+    return { command: BUNDLED_PYTHON, args: uvicornArgs, cwd: API_DIR, env, label: pick.label };
   }
-  const venvPython = path.join(API_DIR, ".venv", "Scripts", "python.exe");
-  if (existsSync(venvPython)) {
-    return { command: venvPython, args: uvicornArgs, cwd: API_DIR, env, label: "项目 .venv" };
-  }
-  const uv = findOnPath("uv");
-  if (uv) {
+  if (pick.kind === "venv") {
     return {
-      command: uv,
+      command: path.join(API_DIR, ".venv", "Scripts", "python.exe"),
+      args: uvicornArgs,
+      cwd: API_DIR,
+      env,
+      label: pick.label,
+    };
+  }
+  if (pick.kind === "uv") {
+    return {
+      command: findOnPath("uv"),
       args: ["run", "--project", API_DIR, "uvicorn", "blank_api.app:app", "--host", "127.0.0.1", "--port", PORT],
       cwd: API_DIR,
       env,
-      label: "本机 uv（首次会装依赖）",
+      label: pick.label,
     };
   }
-  const python = findOnPath("python") ?? findOnPath("py");
-  if (python) {
-    return { command: python, args: uvicornArgs, cwd: API_DIR, env, label: "本机 python（需已装依赖）" };
-  }
-  return null;
+  return {
+    command: findOnPath("python") ?? findOnPath("py"),
+    args: uvicornArgs,
+    cwd: API_DIR,
+    env,
+    label: pick.label,
+  };
 }
 
-/** 首次运行要建表；失败不致命（可能已经迁移过），只记日志。 */
+/** 迁移超时：卡住的迁移进程必须被终止，而不是让启动永远停在 migration-start。 */
+const MIGRATION_TIMEOUT_MS = Number(process.env.BLANK_MIGRATION_TIMEOUT_MS ?? "") || 10_000;
+
+/**
+ * 首次运行要建表。失败/超时不致命（可能已被别的实例迁移过），记下原因继续走
+ * 启动决策；但绝不能没有超时——库被锁、alembic 等输入都会让启动永远过不去。
+ */
 async function migrateDatabase(spec) {
-  if (!spec) return;
-  await new Promise((resolve) => {
+  if (!spec) return { ok: true };
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
     const child = spawn(spec.command, ["-m", "alembic", "upgrade", "head"], {
       cwd: spec.cwd,
       env: spec.env,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    const timer = setTimeout(() => {
+      remember(`数据库迁移超过 ${MIGRATION_TIMEOUT_MS}ms，终止迁移进程`);
+      try {
+        child.kill();
+      } catch {
+        /* 已退出 */
+      }
+      finish({ ok: false, reason: `迁移超时（${MIGRATION_TIMEOUT_MS}ms）` });
+    }, MIGRATION_TIMEOUT_MS);
     child.stdout?.on("data", (chunk) => remember(String(chunk).trim()));
     child.stderr?.on("data", (chunk) => remember(String(chunk).trim()));
-    child.on("error", () => resolve());
-    child.on("exit", () => resolve());
+    child.on("error", (error) => finish({ ok: false, reason: error.message }));
+    child.on("exit", (code) =>
+      finish(code === 0 ? { ok: true } : { ok: false, reason: `迁移进程退出码 ${code}` }),
+    );
   });
 }
 
@@ -396,7 +455,7 @@ async function startBackend() {
   });
   backend.on("error", (error) => remember(`后端进程错误 ${error.message}`));
 
-  // 最长等 30 秒（首次迁移 + 冷启动）
+  // 最长等 30 秒（首次迁移 + 冷启动）；超时必须终止子进程，不留孤儿 uvicorn。
   for (let i = 0; i < 60; i += 1) {
     if (await backendReachable()) {
       remember("后端就绪");
@@ -406,18 +465,49 @@ async function startBackend() {
     }
     await sleep(500);
   }
+  try {
+    backend?.kill();
+    remember("后端启动超时，已终止子进程");
+  } catch {
+    /* 已退出 */
+  }
+  backend = null;
   return { ok: false, hint: "后端启动超时" };
 }
 
+/**
+ * 后端可达性决策：
+ * 1. 健康检查连试 3 次（首拉只带 1.5s 超时，负载高的机器第一次探活可能失手——
+ *    误判「无后端」会让壳去迁移/拉起第二个 uvicorn，这才是启动卡死的元凶）；
+ * 2. 已有后端 → 复用，不迁移、不重启；
+ * 3. 测试模式（BLANK_SHELL_TEST=1）绝不迁移/拉起真实 Python。
+ */
 async function ensureBackend() {
-  if (await backendReachable()) {
-    remember("检测到已有后端在运行，直接复用");
-    shellState.backendOnline = true;
-    return { ok: true };
+  phase("backend", "health-check-start");
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    if (await backendReachable()) {
+      remember("检测到已有后端在运行，直接复用");
+      phase("backend", "reused");
+      shellState.backendOnline = true;
+      return { ok: true };
+    }
+    if (attempt < 3) await sleep(400);
+  }
+  if (process.env.BLANK_SHELL_TEST === "1") {
+    phase("backend", "failed | 测试模式不拉起后端");
+    remember("BLANK_SHELL_TEST=1：测试模式不迁移、不拉起后端");
+    return { ok: false, hint: "测试模式不启动后端" };
   }
   const spec = resolveBackendCommand();
-  await migrateDatabase(spec);
-  return startBackend();
+  phase("backend", "migration-start");
+  const migration = await migrateDatabase(spec);
+  if (!migration.ok) {
+    phase("backend", `migration-failed | ${migration.reason}`);
+  }
+  phase("backend", "spawn-start");
+  const result = await startBackend();
+  phase("backend", result.ok ? "ready" : `failed | ${result.hint ?? "未知原因"}`);
+  return result;
 }
 
 function stopBackend() {
@@ -516,6 +606,7 @@ function refreshTrayMenu() {
 function createTray() {
   if (String(process.env.BLANK_TRAY ?? "") === "0") {
     console.log("[desktop] BLANK_TRAY=0：不建托盘，关窗行为退回退出");
+    phase("tray", "disabled");
     return;
   }
   try {
@@ -527,9 +618,11 @@ function createTray() {
     refreshTrayMenu();
     tray.on("double-click", () => showMainWindow("双击托盘图标"));
     console.log(`[desktop] 托盘已就绪（${TRAY_ICON_PATH}）`);
+    phase("tray", "ready");
   } catch (error) {
     shellState.trayAvailable = false;
     console.error(`[desktop] 托盘创建失败，关窗将退回退出而不是隐藏：${error.message}`);
+    phase("tray", "failed");
   }
 }
 
@@ -628,6 +721,7 @@ function createWindow() {
   // BLANK_START_PATH 让自检能直接落在某一页（如 settings.html），不必先点导航。
   const startPath = String(process.env.BLANK_START_PATH ?? "").replace(/^\/+/, "") || "index.html";
   void win.loadURL(`${APP_ORIGIN}/${startPath}`);
+  phase("window", "created");
   return win;
 }
 
@@ -753,6 +847,7 @@ function registerGlobalShortcut() {
   if (!normalized.ok) {
     shellState.hotkeyAccelerator = null;
     console.error(`[desktop] ${normalized.reason}，降级：本次不启用全局快捷键，主流程不受影响`);
+    phase("shortcut", "unavailable");
     return;
   }
   const { accelerator } = normalized;
@@ -765,6 +860,10 @@ function registerGlobalShortcut() {
   }
   const result = describeShortcutRegistration(accelerator, outcome);
   console.log(`[desktop] ${result.message}`);
+  phase(
+    "shortcut",
+    result.status === "registered" ? "registered" : result.status === "occupied" ? "unavailable" : "failed",
+  );
   shellState.hotkeyAccelerator = result.status === "registered" ? accelerator : null;
 }
 
@@ -801,41 +900,50 @@ function toggleMainWindowFromHotkey() {
  * 复核一次日志里的 action/reason，并确认桌面端依旧什么都不下载。
  */
 async function checkForUpdates() {
-  const feed = parseUpdateFeedUrl(process.env.BLANK_UPDATE_FEED_URL);
-  if (!feed.ok) {
-    console.log(`[desktop] 更新检查跳过：${feed.reason}`);
+  try {
+    const feed = parseUpdateFeedUrl(process.env.BLANK_UPDATE_FEED_URL);
+    if (!feed.ok) {
+      console.log(`[desktop] 更新检查跳过：${feed.reason}`);
+      phase("update", "skipped");
+      return null;
+    }
+    const current = app.getVersion();
+    let fetchError = "";
+    let entry = null;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch(feed.url, { signal: controller.signal });
+        if (!response.ok) {
+          fetchError = `HTTP ${response.status}`;
+        } else {
+          const entries = extractFeedEntries(await response.json());
+          if (!entries) {
+            fetchError = "feed JSON 既不是条目数组也不是带 version 的单个条目";
+          } else {
+            entry = pickLatestEntry(entries);
+            if (!entry) fetchError = "feed 里没有任何版本可解析的条目";
+          }
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (error) {
+      fetchError = error?.name === "AbortError" ? "请求超时（8 秒）" : String(error?.message ?? error);
+    }
+    const decision = decideUpdate({ current, entry, fetchError });
+    shellState.update = decision;
+    console.log(`[desktop] 更新决策 action=${decision.action}｜${decision.reason}`);
+    phase("update", `checked | action=${decision.action}`);
+    refreshTrayMenu();
+    return decision;
+  } catch (error) {
+    // 更新检查的任何意外都不许影响窗口已创建的启动主流程。
+    console.error(`[desktop] 更新检查异常：${error?.message ?? error}`);
+    phase("update", "failed");
     return null;
   }
-  const current = app.getVersion();
-  let fetchError = "";
-  let entry = null;
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    try {
-      const response = await fetch(feed.url, { signal: controller.signal });
-      if (!response.ok) {
-        fetchError = `HTTP ${response.status}`;
-      } else {
-        const entries = extractFeedEntries(await response.json());
-        if (!entries) {
-          fetchError = "feed JSON 既不是条目数组也不是带 version 的单个条目";
-        } else {
-          entry = pickLatestEntry(entries);
-          if (!entry) fetchError = "feed 里没有任何版本可解析的条目";
-        }
-      }
-    } finally {
-      clearTimeout(timer);
-    }
-  } catch (error) {
-    fetchError = error?.name === "AbortError" ? "请求超时（8 秒）" : String(error?.message ?? error);
-  }
-  const decision = decideUpdate({ current, entry, fetchError });
-  shellState.update = decision;
-  console.log(`[desktop] 更新决策 action=${decision.action}｜${decision.reason}`);
-  refreshTrayMenu();
-  return decision;
 }
 
 // ── 生命周期 ────────────────────────────────────────────────────────────────
@@ -860,6 +968,7 @@ app.on("second-instance", () => {
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return;
+  phase("app", "ready");
   registerAppProtocol();
   console.log(`[desktop] 静态根目录 ${STATIC_ROOT}`);
   console.log(`[desktop] 后端源码目录 ${API_DIR}`);
@@ -886,7 +995,7 @@ app.whenReady().then(async () => {
 
   registerGlobalShortcut();
   // 更新检查只在配了 BLANK_UPDATE_FEED_URL 时真的发请求；不下载、不安装。
-  void checkForUpdates();
+  void checkForUpdates().finally(() => phase("startup", "complete"));
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) showMainWindow("activate");

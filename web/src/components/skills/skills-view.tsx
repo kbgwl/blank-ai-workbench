@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
 import { errorMessage } from "@/lib/http";
 import { formatDateTime } from "@/components/tasks/format";
@@ -37,22 +37,29 @@ export function SkillsView() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
 
-  const load = useCallback(async () => {
-    setError("");
-    try {
-      const [skillRows, candidateRows] = await Promise.all([fetchSkills(), fetchMemoryCandidates()]);
-      setSkills(skillRows);
-      setCandidates(candidateRows);
-    } catch (cause) {
-      setError(errorMessage(cause));
-      setSkills([]);
-      setCandidates([]);
-    }
-  }, []);
-
+  // 初次加载在 effect 里做（无 query 库，fetch 是唯一入口）。
+  // alive 守卫保证：卸载后不继续 setState；effect 里没有同步 setState
+  // （所有落 state 都在 await 之后），不触发 set-state-in-effect。
   useEffect(() => {
-    void load();
-  }, [load]);
+    let alive = true;
+    void (async () => {
+      try {
+        const [skillRows, candidateRows] = await Promise.all([fetchSkills(), fetchMemoryCandidates()]);
+        if (!alive) return;
+        setSkills(skillRows);
+        setCandidates(candidateRows);
+        setError("");
+      } catch (cause) {
+        if (!alive) return;
+        setError(errorMessage(cause));
+        setSkills([]);
+        setCandidates([]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   async function toggle(skill: Skill) {
     const active = skillState(skill.status) === "active";

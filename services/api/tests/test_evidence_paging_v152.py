@@ -331,3 +331,68 @@ async def test_http_evidence_defaults_cap_tools_and_changes(client):
     assert page["tools_meta"]["returned"] == DEFAULT_TOOLS_LIMIT
     assert page["changes_meta"]["total"] == 600
     assert page["changes_meta"]["returned"] == DEFAULT_CHANGES_LIMIT
+
+async def test_evidence_sql_statements_are_all_bounded():
+    """§7：证据包发出去的每一条事件/工具/改动 SELECT 都必须带 LIMIT。
+
+    不看返回值看真实 SQL——用 before_cursor_execute 监听引擎抓语句，
+    以后有人把某条查询改回无界 .all()，这里直接红，不依赖"恰好数据少"。
+    """
+    from sqlalchemy import event as sa_event
+
+    seeded = 40
+    base = datetime.now(timezone.utc)
+    async with get_session_factory()() as session:
+        session.add(Project(id="p-sqlbound", name="p"))
+        await session.commit()
+        task = Task(
+            id="task-sqlbound",
+            project_id="p-sqlbound",
+            title="t",
+            goal="g",
+            status="succeeded",
+            created_at=base,
+            updated_at=base,
+        )
+        session.add(task)
+        for seq in range(1, seeded + 1):
+            session.add(
+                AgentEvent(
+                    id=f"ev-{seq:04d}",
+                    task_id=task.id,
+                    type="tool_result" if seq % 2 else "task.started",
+                    payload={"seq": seq, "output": "x" * 200},
+                    seq=seq,
+                    created_at=base + timedelta(seconds=seq),
+                )
+            )
+        await session.commit()
+
+    statements: list[str] = []
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(str(statement).lower())
+
+    engine = get_engine()
+    sa_event.listen(engine.sync_engine, "before_cursor_execute", _capture)
+    try:
+        evidence = await build_evidence(get_session_factory(), task.id)
+    finally:
+        sa_event.remove(engine.sync_engine, "before_cursor_execute", _capture)
+
+    assert evidence["tools_meta"]["returned"] <= DEFAULT_TOOLS_LIMIT
+    assert evidence["changes_meta"]["returned"] <= DEFAULT_CHANGES_LIMIT
+
+    checked = 0
+    for sql in statements:
+        if "select" not in sql:
+            continue
+        for table in ("agent_events", "tool_calls", "file_changes"):
+            if table in sql:
+                # count(*) 与 group by 统计不需要 LIMIT；取行数的必须带。
+                is_count = "count(" in sql or "group by" in sql
+                if not is_count:
+                    assert "limit" in sql, f"{table} 的取行查询没有 LIMIT：\n{sql}"
+                    checked += 1
+                break
+    assert checked >= 3, f"没抓到足够的取行查询，监听器可能没生效（抓到 {checked} 条）"

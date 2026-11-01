@@ -20,15 +20,6 @@ const eslintConfig = defineConfig([
     "node_modules/**",
     "next-env.d.ts",
   ]),
-  // react-hooks/set-state-in-effect 对「无数据请求库前提下在 effect 里拉数据」
-  // 以及「可编辑面板把 props 同步进本地 state（如计划面板乐观勾选）」这类成熟模式
-  // 误报极高。本项目刻意不引入 query 库，这两类写法是有意为之，下调为 warn，
-  // 让它不再以 error 阻断 lint gate。
-  {
-    rules: {
-      "react-hooks/set-state-in-effect": "warn",
-    },
-  },
 ]);
 
 export default eslintConfig;

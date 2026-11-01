@@ -57,6 +57,10 @@ SUMMARY_EVENT_TYPES = frozenset(
     }
 )
 
+# 汇总事件的单次装载上限（条）。类型有界但轮数无界；消费方全是「取最近」语义，
+# 超限时保尾部（倒序取上限再回正序），小任务结果与不设限完全一致。
+SUMMARY_EVENT_LIMIT = 2000
+
 
 
 async def load_task(session: AsyncSession, task_id: str) -> Task:
@@ -424,6 +428,10 @@ async def build_evidence(
     changes_offset = max(0, int(changes_offset or 0))
     async with session_factory() as session:
         task = await load_task(session, task_id)
+        # 汇总事件（计划/交付/验收等）按类型过滤后仍要给个硬上限：类型有界
+        # （每轮各几条）但轮数本身无界。这些事件的消费方全都是「取最近」语义
+        # （最新验收结论、最近审批上下文、最后一次用量），所以倒序取上限再回正序——
+        # 小任务结果与不设限完全一致，大任务保住的是尾部而不是头部。
         events = (
             (
                 await session.execute(
@@ -432,12 +440,14 @@ async def build_evidence(
                         AgentEvent.task_id == task_id,
                         AgentEvent.type.in_(sorted(SUMMARY_EVENT_TYPES)),
                     )
-                    .order_by(AgentEvent.seq)
+                    .order_by(AgentEvent.seq.desc())
+                    .limit(SUMMARY_EVENT_LIMIT)
                 )
             )
             .scalars()
             .all()
         )
+        events = list(reversed(events))
         type_rows = (
             await session.execute(
                 select(AgentEvent.type, func.count())

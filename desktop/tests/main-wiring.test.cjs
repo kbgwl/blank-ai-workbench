@@ -40,8 +40,10 @@ const MANAGED_ENV = [
   "BLANK_FORCE_GPU",
   "BLANK_HOTKEY",
   "BLANK_LOG_FILE",
+  "BLANK_MIGRATION_TIMEOUT_MS",
   "BLANK_NO_SANDBOX",
   "BLANK_PROBE",
+  "BLANK_SHELL_TEST",
   "BLANK_SHOT",
   "BLANK_START_PATH",
   "BLANK_TRAY",
@@ -286,6 +288,7 @@ async function bootShell(options = {}) {
     hotkey = "ok",
     update = null,
     hotkeyValue = "ctrl+alt+b",
+    health = "live",
   } = options;
 
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "blank-shell-"));
@@ -319,17 +322,30 @@ async function bootShell(options = {}) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
 
+  // health: "dead" 用一个刚关掉的端口——连接被拒比超时快，专测「无后端」分支。
+  let healthUrl = `${origin}/health`;
+  if (health === "dead") {
+    const dead = http.createServer(() => {});
+    await new Promise((resolve) => dead.listen(0, "127.0.0.1", resolve));
+    healthUrl = `http://127.0.0.1:${dead.address().port}/health`;
+    await new Promise((resolve) => dead.close(resolve));
+  }
+
   const envValues = {
     BLANK_API_BASE: origin,
     BLANK_BACKEND_PORT: "",
-    BLANK_BACKEND_HEALTH: `${origin}/health`,
+    BLANK_BACKEND_HEALTH: healthUrl,
     BLANK_BACKEND_CMD: "",
     BLANK_DISABLE_GPU: "1",
     BLANK_FORCE_GPU: "",
     BLANK_HOTKEY: hotkeyValue,
     BLANK_LOG_FILE: "",
+    BLANK_MIGRATION_TIMEOUT_MS: "",
     BLANK_NO_SANDBOX: "",
     BLANK_PROBE: "",
+    // 硬闸：桩环境里健康检查万一失手，main.cjs 也绝不能去迁移/拉起真实 Python——
+    // services/api/.venv 在源码树里真实存在，那是 6 个用例一起超时的根因。
+    BLANK_SHELL_TEST: "1",
     BLANK_SHOT: "",
     BLANK_START_PATH: "",
     BLANK_TRAY: tray === "disabled" ? "0" : "",
@@ -453,6 +469,86 @@ test("单实例：拿不到锁的第二实例在建窗口/建托盘/探后端之
       0,
       "第二实例不许探后端（更不能 spawn）",
     );
+    assert.ok(shell.logIncludes("[startup] single-instance | lost"), "让位要留阶段日志");
+  } finally {
+    await shell.cleanup();
+  }
+});
+
+test("后端解释器优先级（§3.4）：CMD > 包内 > .venv > uv > python，全缺为空", () => {
+  const { pickInterpreterOrder } = require("../shell-policy.cjs");
+  const all = pickInterpreterOrder({
+    hasEnvCmd: true,
+    hasBundled: true,
+    hasVenv: true,
+    hasUv: true,
+    hasPython: true,
+  });
+  assert.deepEqual(
+    all.map((item) => item.kind),
+    ["env", "bundled", "venv", "uv", "python"],
+    "优先级顺序必须钉死：显式指定 > 自带 > venv > uv > 系统 python",
+  );
+  assert.deepEqual(
+    pickInterpreterOrder({}).map((item) => item.kind),
+    [],
+    "一个都没有时要明确为空，由调用方给可操作出口",
+  );
+  assert.deepEqual(
+    pickInterpreterOrder({ hasVenv: true, hasUv: true }).map((item) => item.kind),
+    ["venv", "uv"],
+    "venv 优先于 uv：项目环境比临时装依赖更贴近开发现场",
+  );
+  assert.deepEqual(
+    pickInterpreterOrder({ hasBundled: true, hasPython: true }).map((item) => item.kind),
+    ["bundled", "python"],
+    "打包态必须先用自己的运行时，不能碰用户机器的 Python",
+  );
+});
+
+test("启动阶段日志（§3.3）：阶段行齐全且 startup: complete 收尾", async () => {
+  const shell = await bootShell({ update: null });
+  try {
+    await waitFor(
+      () => shell.logIncludes("[startup] startup | complete"),
+      "startup: complete",
+      10_000,
+    );
+    for (const line of [
+      "[startup] single-instance | acquired",
+      "[startup] app | ready",
+      "[startup] backend | health-check-start",
+      "[startup] backend | reused",
+      "[startup] tray | ready",
+      "[startup] window | created",
+      "[startup] shortcut | registered",
+      "[startup] update | skipped",
+      "[startup] startup | complete",
+    ]) {
+      assert.ok(shell.logIncludes(line), `缺阶段日志：${line}\n实际日志：\n${shell.logs.join("\n")}`);
+    }
+  } finally {
+    await shell.cleanup();
+  }
+});
+
+test("测试模式硬闸：健康检查不可达也不迁移、不拉起真实 Python，启动仍走完", async () => {
+  const shell = await bootShell({ health: "dead" });
+  try {
+    await waitFor(() => shell.logIncludes("[startup] startup | complete"), "startup: complete", 15_000);
+    assert.ok(shell.logIncludes("[startup] backend | health-check-start"));
+    assert.ok(
+      shell.logIncludes("BLANK_SHELL_TEST=1"),
+      "健康桩不可达时必须走测试模式硬闸，留下原因日志",
+    );
+    assert.ok(
+      !shell.logIncludes("alembic") && !shell.logIncludes("uvicorn"),
+      "测试模式绝不允许出现迁移/uvicorn 痕迹（这才是 6 个用例超时的根因）",
+    );
+    assert.equal(shell.windows.length, 1, "后端没起也要照常建窗口给失败出口");
+    assert.ok(shell.logIncludes("[startup] window | created"));
+    // 桩的对话框返回「退出」→ 显式退出路径被走到。
+    assert.equal(shell.app._quitCalled, true, "失败出口的对话框选择了退出");
   } finally {
     await shell.cleanup();
   }

@@ -126,3 +126,69 @@ async def test_next_turn_uses_the_new_choice_not_the_old_one(env, workspace):  #
     _two_calls(env)
     assert (await env.client.post(f"{API}/tasks/{second}/run", json={})).status_code == 200
     assert (await _started(second))["model"] == "mock-beta"
+
+async def _make_thread(env, project_id: str) -> str:
+    resp = await env.client.post(f"{API}/projects/{project_id}/threads", json={})
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+async def _add_turn(env, thread_id: str, title: str, goal: str, provider_id: str | None) -> str:
+    body: dict = {"title": title, "goal": goal, "acceptance_criteria": [], "max_steps": 6}
+    if provider_id:
+        body["provider_id"] = provider_id
+    resp = await env.client.post(f"{API}/threads/{thread_id}/turns", json=body)
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+async def test_switching_models_keeps_conversation_context(env, workspace):  # noqa: F811
+    """§5.3.4：同一条会话里第一轮用 A、第二轮换 B，历史必须还在。
+
+    上下文的真源是 thread 历史（history_for 拼进提示词），不跟着供应商走；
+    断言取自第二轮真实发出的请求体——里面要能找到第一轮说过的原话，
+    且 model 字段是 B 的（请求参数真的换了）。
+    """
+    project_id = await create_project(env, workspace)
+    provider_a = await _make_provider(env, "mock-alpha")
+    provider_b = await _make_provider(env, "mock-beta")
+    thread_id = await _make_thread(env, project_id)
+
+    marker = "九月的部署窗口定在周三上午"
+    first = await _add_turn(env, thread_id, "第一轮", f"记住这个背景：{marker}", provider_a)
+    _two_calls(env)
+    assert (await env.client.post(f"{API}/tasks/{first}/run", json={})).status_code == 200
+    first_run_requests = len(env.mock.requests)
+    assert first_run_requests > 0
+
+    second = await _add_turn(env, thread_id, "第二轮", "继续，基于上面的背景给结论", provider_b)
+    _two_calls(env)
+    assert (await env.client.post(f"{API}/tasks/{second}/run", json={})).status_code == 200
+
+    second_run = env.mock.requests[first_run_requests:]
+    assert second_run, "第二轮没有发出模型请求"
+    # ① 请求参数真的换成了 B 的模型。
+    assert all(item.get("model") == "mock-beta" for item in second_run)
+    # ② 第一轮的用户消息还在第二轮的提示词里（上下文没丢）。
+    assert any(marker in str(item) for item in second_run), "第二轮请求里找不到第一轮的背景原话"
+
+
+async def test_multi_turn_keeps_provider_until_user_switches(env, workspace):  # noqa: F811
+    """§5.3.5：用户不主动切换时，多轮任务用同一个供应商，不许悄悄漂移。
+
+    两轮都不传 provider_id：解析走同一条默认路径（按名字取第一个启用的），
+    两轮 task.started 记录的 provider/model 必须一致。
+    """
+    project_id = await create_project(env, workspace)
+    await _make_provider(env, "mock-alpha")
+    await _make_provider(env, "mock-beta")
+    thread_id = await _make_thread(env, project_id)
+
+    models: list[str] = []
+    for index in (1, 2):
+        task_id = await _add_turn(env, thread_id, f"第{index}轮", f"第{index}步：查看 README", None)
+        _two_calls(env)
+        assert (await env.client.post(f"{API}/tasks/{task_id}/run", json={})).status_code == 200
+        started = await _started(task_id)
+        models.append(str(started["model"]))
+    assert models[0] == models[1], f"两轮模型不一致：{models}"
