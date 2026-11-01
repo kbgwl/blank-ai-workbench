@@ -701,3 +701,45 @@ Blank AI 的竞争力不在于功能列表更多，而在于：
 ```text
 真实安装 > 真实执行 > 任务完成率 > 模型路由 > Skill DIY > 记忆学习 > 更多页面
 ```
+
+---
+
+## 15. 收尾报告（2026-11-01，P0 修复后）
+
+### §4 benchmark 全量基线（commit 979d703 修复后重跑）
+
+- 55 例全量真实模型基线（OpenRouter deepseek-chat-v3.1，eval 后端 8060 独立库副本）：
+  **51/55（93%），013 判分定义修正后口径 52/55（94.5%）**，平均 34.4s/例，总 363 步。
+- **P0 缺陷（审批批准后 run_tests 未执行）已修复**：
+  - 根因一：run_validation 直接调网关执行 run_tests，拿到 awaiting_approval 只能
+    skip 收场，任务照样 succeeded、证据永远挂「待审批」。修法：校验通道走同一张
+    审批中断卡（graph.py `_ask_run_tests_approval`），批准后真实执行、驳回如实记
+    skipped（新增 tests/test_validation_approval_v157.py 两例）。
+  - 根因二：evidence 把历史 awaiting ToolCall 永远当「待审批」。修法：同工具后续有
+    新执行账的旧等待账视为陈账不挂卡；任务结束后改报「未获批准，未执行」。
+  - 修复后：migration 5/5、cancel_resume 5/5（取消 5 秒内生效、零误修改）、
+    unauthorizedHighRisk = 0、falseDoneCount = 0。
+- 4 例 FAIL 定性（无产品缺陷）：013 判分定义漏算 goal 明确要求的 config.py（已修，
+  单例复跑 PASS）；012/035 模型主动加测试属于未经要求的改动（如实计误修改）；
+  034 步数耗尽真失败。
+- runner 侧修正：POST /run 是长请求，改为发出不等待靠轮询推进；取消窗口改用
+  cancelAfterMs（steps_used 运行中恒为 0）。
+
+### 回归
+
+- 后端全量 1958 passed + 23 skipped（10m36s）。
+- §2 CLI 与 §2.4 Desktop 验收沿用 5185119 的结论（13 步全流程、128MB 出包、34 项
+  verify 全过）。
+
+### 仍未完成（如实列出）
+
+- 真实 GUI 人工点验（§3.1-3.4）未做，需要真人会话。
+- npm publish 未执行；评测机 Go 环境未配置。
+- P1 项（速度/上下文裁剪/模型路由/Skill DIY/记忆学习）未开始。
+- 前端 `node --test` 在本机全红为 @/ 别名解析不了的既有环境问题（tsc 干净），
+  未在本轮处理。
+
+### 结论
+
+维持 5185119 的口径升级：**P0 缺陷已修复并有回归测试钉住，benchmark 全量基线
+达标**；但发布动作（npm publish、GUI 人工点验）未做，仍不写「可以发布」。

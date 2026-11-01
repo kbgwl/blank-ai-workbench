@@ -176,7 +176,9 @@ const multiRefactors = [
       "config.py": "MAX_RETRIES = 3\nTIMEOUT = 30\n",
       "test_refactor.py": "def test_constants_visible():\n    import config\n\n    assert config.MAX_RETRIES == 3\n    assert config.TIMEOUT == 30\n",
     },
-    expected: ["constants.py"],
+    // goal 明确要求改 config.py（移走常量后还要 from constants import *），
+    // expectedFiles 必须把它算进去——漏掉会把 goal 要求的改动判成误修改。
+    expected: ["constants.py", "config.py"],
   },
   {
     goal: "shapes.py 里 Circle 和 Square 都有自己的 area，新建 base.py 定义 area 接口协议，两个类显式继承",

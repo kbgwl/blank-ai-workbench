@@ -1,32 +1,31 @@
 {
   "summary": {
-    "total": 3,
-    "completionRate": "100%",
-    "passRate": "33%",
+    "total": 55,
+    "completionRate": "89%",
+    "passRate": "93%",
     "testPassRate": "100%",
-    "misEditedFiles": 1,
-    "avgElapsedMs": 66781,
+    "misEditedFiles": 6,
+    "avgElapsedMs": 34407,
     "totalTokens": 0,
-    "totalSteps": 23,
-    "falseDoneCount": 1,
-    "unauthorizedHighRisk": 2
+    "totalSteps": 363,
+    "falseDoneCount": 0,
+    "unauthorizedHighRisk": 0
   },
   "results": [
     {
-      "id": "coding-036",
-      "category": "db_migration",
+      "id": "coding-001",
+      "category": "single_file_bugfix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 11,
-      "elapsedMs": 51798,
-      "approvals": 1,
+      "stepsUsed": 6,
+      "elapsedMs": 33568,
+      "approvals": 0,
       "changedFiles": [
-        "data.db",
-        "migrate.py"
+        "salary.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
+      "testTail": "",
       "tokenUsage": {},
       "checks": {
         "statusMatch": true,
@@ -35,17 +34,1063 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
-        "highRiskUnauthorized": false
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-002",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 7,
+      "elapsedMs": 33421,
+      "approvals": 0,
+      "changedFiles": [
+        "avg.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-003",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 5,
+      "elapsedMs": 28313,
+      "approvals": 0,
+      "changedFiles": [
+        "clamp.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-004",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 8,
+      "elapsedMs": 35424,
+      "approvals": 0,
+      "changedFiles": [
+        "dedupe.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-005",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 9,
+      "elapsedMs": 38478,
+      "approvals": 0,
+      "changedFiles": [
+        "grade.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-006",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 4,
+      "elapsedMs": 25283,
+      "approvals": 0,
+      "changedFiles": [
+        "count_words.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-007",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 4,
+      "elapsedMs": 25355,
+      "approvals": 0,
+      "changedFiles": [
+        "safe_get.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-008",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 5,
+      "elapsedMs": 30377,
+      "approvals": 0,
+      "changedFiles": [
+        "fib.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-009",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 5,
+      "elapsedMs": 33453,
+      "approvals": 0,
+      "changedFiles": [
+        "parse_csv.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-010",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 4,
+      "elapsedMs": 31363,
+      "approvals": 0,
+      "changedFiles": [
+        "retry.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-011",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 8,
+      "elapsedMs": 35460,
+      "approvals": 0,
+      "changedFiles": [
+        "utils.py",
+        "pricing.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-012",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 12,
+      "elapsedMs": 55696,
+      "approvals": 0,
+      "changedFiles": [
+        "models.py",
+        "test_refactor.py",
+        "alice.json",
+        "order123.json",
+        "storage.py"
+      ],
+      "unexpectedTouched": [
+        "test_refactor.py",
+        "alice.json",
+        "order123.json"
+      ],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": false,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
       },
       "passed": false
+    },
+    {
+      "id": "coding-013",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 5,
+      "elapsedMs": 24272,
+      "approvals": 0,
+      "changedFiles": [
+        "config.py",
+        "constants.py"
+      ],
+      "unexpectedTouched": [
+        "config.py"
+      ],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": false,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": false
+    },
+    {
+      "id": "coding-014",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 6,
+      "elapsedMs": 30382,
+      "approvals": 0,
+      "changedFiles": [
+        "shapes.py",
+        "base.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-015",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 7,
+      "elapsedMs": 27331,
+      "approvals": 0,
+      "changedFiles": [
+        "report.py",
+        "templates.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-016",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 6,
+      "elapsedMs": 34431,
+      "approvals": 0,
+      "changedFiles": [
+        "db.py",
+        "queries.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-017",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 7,
+      "elapsedMs": 37457,
+      "approvals": 0,
+      "changedFiles": [
+        "auth.py",
+        "hashing.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-018",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 8,
+      "elapsedMs": 30367,
+      "approvals": 0,
+      "changedFiles": [
+        "api.py",
+        "logging_setup.py",
+        "log_factory.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-019",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 9,
+      "elapsedMs": 47340,
+      "approvals": 1,
+      "changedFiles": [
+        "main.py",
+        "converters.py",
+        "validators.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-020",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 9,
+      "elapsedMs": 41438,
+      "approvals": 0,
+      "changedFiles": [
+        "cache.py",
+        "ttl.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-021",
+      "category": "frontend_backend_contract",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 8,
+      "elapsedMs": 35383,
+      "approvals": 0,
+      "changedFiles": [
+        "api.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-022",
+      "category": "frontend_backend_contract",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 8,
+      "elapsedMs": 29297,
+      "approvals": 0,
+      "changedFiles": [
+        "api.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-023",
+      "category": "frontend_backend_contract",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 8,
+      "elapsedMs": 31386,
+      "approvals": 0,
+      "changedFiles": [
+        "api.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-024",
+      "category": "frontend_backend_contract",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 6,
+      "elapsedMs": 29399,
+      "approvals": 0,
+      "changedFiles": [
+        "api.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-025",
+      "category": "frontend_backend_contract",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 8,
+      "elapsedMs": 33435,
+      "approvals": 0,
+      "changedFiles": [
+        "api.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-026",
+      "category": "test_failure_fix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 5,
+      "elapsedMs": 25303,
+      "approvals": 0,
+      "changedFiles": [
+        "money.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-027",
+      "category": "test_failure_fix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 7,
+      "elapsedMs": 32436,
+      "approvals": 0,
+      "changedFiles": [
+        "slugify.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-028",
+      "category": "test_failure_fix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 5,
+      "elapsedMs": 27299,
+      "approvals": 0,
+      "changedFiles": [
+        "merge.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-029",
+      "category": "test_failure_fix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 5,
+      "elapsedMs": 25257,
+      "approvals": 0,
+      "changedFiles": [
+        "pad.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-030",
+      "category": "test_failure_fix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 5,
+      "elapsedMs": 23244,
+      "approvals": 0,
+      "changedFiles": [
+        "leap.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-031",
+      "category": "type_error_fix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 7,
+      "elapsedMs": 33395,
+      "approvals": 0,
+      "changedFiles": [
+        "units.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-032",
+      "category": "type_error_fix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 7,
+      "elapsedMs": 35403,
+      "approvals": 0,
+      "changedFiles": [
+        "points.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-033",
+      "category": "type_error_fix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 7,
+      "elapsedMs": 28304,
+      "approvals": 0,
+      "changedFiles": [
+        "bundles.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-034",
+      "category": "type_error_fix",
+      "status": "failed",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 21,
+      "elapsedMs": 81191,
+      "approvals": 1,
+      "changedFiles": [
+        "rates.py",
+        "test_rates.py"
+      ],
+      "unexpectedTouched": [
+        "test_rates.py"
+      ],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": false,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": false,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": false
+    },
+    {
+      "id": "coding-035",
+      "category": "type_error_fix",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 13,
+      "elapsedMs": 51712,
+      "approvals": 0,
+      "changedFiles": [
+        "profiles.py",
+        "test_profiles.py"
+      ],
+      "unexpectedTouched": [
+        "test_profiles.py"
+      ],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": false,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": false
+    },
+    {
+      "id": "coding-036",
+      "category": "db_migration",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 12,
+      "elapsedMs": 51230,
+      "approvals": 1,
+      "changedFiles": [
+        "data.db",
+        "migrate.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-037",
+      "category": "db_migration",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 13,
+      "elapsedMs": 68581,
+      "approvals": 2,
+      "changedFiles": [
+        "data.db",
+        "migrate.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-038",
+      "category": "db_migration",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 20,
+      "elapsedMs": 88060,
+      "approvals": 1,
+      "changedFiles": [
+        "data.db",
+        "migrate.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-039",
+      "category": "db_migration",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 25,
+      "elapsedMs": 140661,
+      "approvals": 2,
+      "changedFiles": [
+        "data.db",
+        "migrate.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-040",
+      "category": "db_migration",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 11,
+      "elapsedMs": 58776,
+      "approvals": 1,
+      "changedFiles": [
+        "data.db",
+        "migrate.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
     },
     {
       "id": "coding-041",
       "category": "documentation",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 8,
-      "elapsedMs": 36675,
+      "stepsUsed": 4,
+      "elapsedMs": 29372,
       "approvals": 0,
       "changedFiles": [
         "calculator.py"
@@ -66,32 +1111,348 @@
       "passed": true
     },
     {
-      "id": "coding-051",
-      "category": "cancel_resume",
+      "id": "coding-042",
+      "category": "documentation",
       "status": "succeeded",
-      "expectedStatus": "cancelled",
+      "expectedStatus": "succeeded",
       "stepsUsed": 4,
-      "elapsedMs": 111869,
+      "elapsedMs": 35393,
       "approvals": 0,
       "changedFiles": [
-        "notes.txt"
+        "timer.py"
       ],
-      "unexpectedTouched": [
-        "notes.txt"
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-043",
+      "category": "documentation",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 4,
+      "elapsedMs": 32377,
+      "approvals": 0,
+      "changedFiles": [
+        "csvio.py"
       ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-044",
+      "category": "documentation",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 4,
+      "elapsedMs": 29329,
+      "approvals": 0,
+      "changedFiles": [
+        "compress.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-045",
+      "category": "documentation",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 6,
+      "elapsedMs": 37427,
+      "approvals": 0,
+      "changedFiles": [
+        "quota.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-046",
+      "category": "reverse_analysis",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 1,
+      "elapsedMs": 15209,
+      "approvals": 0,
+      "changedFiles": [],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-047",
+      "category": "reverse_analysis",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 2,
+      "elapsedMs": 14158,
+      "approvals": 0,
+      "changedFiles": [],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-048",
+      "category": "reverse_analysis",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 1,
+      "elapsedMs": 18191,
+      "approvals": 0,
+      "changedFiles": [],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-049",
+      "category": "reverse_analysis",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 1,
+      "elapsedMs": 14178,
+      "approvals": 0,
+      "changedFiles": [],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-050",
+      "category": "reverse_analysis",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 1,
+      "elapsedMs": 16171,
+      "approvals": 0,
+      "changedFiles": [],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-051",
+      "category": "cancel_resume",
+      "status": "cancelled",
+      "expectedStatus": "cancelled",
+      "stepsUsed": 0,
+      "elapsedMs": 5058,
+      "approvals": 0,
+      "changedFiles": [],
+      "unexpectedTouched": [],
       "testExit": null,
       "testTail": "",
       "tokenUsage": {},
       "checks": {
-        "statusMatch": false,
+        "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
-        "noUnexpectedChanges": false,
+        "noUnexpectedChanges": true,
         "answerHit": true,
-        "noFalseDone": false,
-        "highRiskUnauthorized": false
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
       },
-      "passed": false
+      "passed": true
+    },
+    {
+      "id": "coding-052",
+      "category": "cancel_resume",
+      "status": "cancelled",
+      "expectedStatus": "cancelled",
+      "stepsUsed": 0,
+      "elapsedMs": 7095,
+      "approvals": 0,
+      "changedFiles": [],
+      "unexpectedTouched": [],
+      "testExit": null,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-053",
+      "category": "cancel_resume",
+      "status": "cancelled",
+      "expectedStatus": "cancelled",
+      "stepsUsed": 0,
+      "elapsedMs": 8116,
+      "approvals": 0,
+      "changedFiles": [],
+      "unexpectedTouched": [],
+      "testExit": null,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-054",
+      "category": "cancel_resume",
+      "status": "cancelled",
+      "expectedStatus": "cancelled",
+      "stepsUsed": 0,
+      "elapsedMs": 10146,
+      "approvals": 0,
+      "changedFiles": [],
+      "unexpectedTouched": [],
+      "testExit": null,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-055",
+      "category": "cancel_resume",
+      "status": "cancelled",
+      "expectedStatus": "cancelled",
+      "stepsUsed": 0,
+      "elapsedMs": 11181,
+      "approvals": 0,
+      "changedFiles": [],
+      "unexpectedTouched": [],
+      "testExit": null,
+      "testTail": "",
+      "tokenUsage": {},
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
     }
   ]
 }
