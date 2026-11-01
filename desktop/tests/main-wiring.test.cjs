@@ -548,6 +548,9 @@ test("测试模式硬闸：健康检查不可达也不迁移、不拉起真实 P
     assert.equal(shell.windows.length, 1, "后端没起也要照常建窗口给失败出口");
     assert.ok(shell.logIncludes("[startup] window | created"));
     // 桩的对话框返回「退出」→ 显式退出路径被走到。
+    // 失败对话框挂在 did-finish-load 之后、与更新检查并发：startup: complete
+    // 先落日志不等于 quit 已被调用，这里等它到位（负载下否则必踩空）。
+    await waitFor(() => shell.app._quitCalled, "失败出口的对话框选择了退出", 15_000);
     assert.equal(shell.app._quitCalled, true, "失败出口的对话框选择了退出");
   } finally {
     await shell.cleanup();
