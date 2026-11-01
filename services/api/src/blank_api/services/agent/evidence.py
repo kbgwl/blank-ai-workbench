@@ -544,6 +544,21 @@ async def build_evidence(
         if event.type in ("approval.required", "approval.requested") and isinstance(event.payload, dict):
             approval_context = dict(event.payload)
             break
+    # 对账：同一工具在这次等待之后又落了新的账（无论成败），说明那次等待已被
+    # 批准并执行完毕，这条旧的「待审批」是重放留下的陈账，不再挂卡。
+    _later_tool_seen: set[str] = set()
+    _superseded_ids: set[str] = set()
+    for call in reversed(calls):
+        if call.status == "awaiting_approval" and call.name in _later_tool_seen:
+            _superseded_ids.add(call.id)
+        _later_tool_seen.add(call.name)
+    _unresolved_awaiting = [
+        call
+        for call in calls
+        if call.status == "awaiting_approval" and call.id not in _superseded_ids
+    ]
+    # 待审批卡只在任务真的在等待时才有意义；任务已结束时挂着一张必然 409 的卡，
+    # 用户点什么都是徒劳（benchmark coding-036 实测：任务 succeeded 后证据包仍报「待审批」）。
     pending_approvals = [
         {
             "tool_call_id": call.id,
@@ -554,8 +569,8 @@ async def build_evidence(
             **_approval_lifecycle(approval_context.get("expires_at")),
             **_approval_hints(approval_context, call.name, call.arguments),
         }
-        for call in calls
-        if call.status == "awaiting_approval"
+        for call in _unresolved_awaiting
+        if task.status == "waiting_approval"
     ]
     if not pending_approvals and task.status == "waiting_approval":
         # 图在工具网关之前就被 interrupt() 打断时不会留下 ToolCall 行，退回最近一次审批事件。
@@ -734,6 +749,13 @@ async def build_evidence(
     if pending_approvals:
         unverified.append(
             f"存在待审批的高风险操作：{', '.join(sorted({a['tool'] for a in pending_approvals}))}"
+        )
+    elif task.status != "waiting_approval" and _unresolved_awaiting:
+        # 任务结束了还留着从没获批、也没被后续执行覆盖的等待账：如实说「没批、没跑」，
+        # 不再说「待审批」——已经没有可批的卡了，这句话只会误导用户去等一张不存在的卡。
+        unverified.append(
+            "高风险操作未获批准，未执行："
+            + ", ".join(sorted({call.name for call in _unresolved_awaiting}))
         )
     started_payload = next(
         (

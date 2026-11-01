@@ -77,6 +77,7 @@ from blank_api.services.hooks import HookRunner
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.plan import normalize_goal, normalize_steps, plan_progress
 from blank_api.services.permissions import (
+    ASK,
     MODE_DEFAULT,
     READ_ONLY_TOOLS,
     SCOPE_ONCE,
@@ -3175,6 +3176,61 @@ def _skipped_validation(reason: str, *, command: str = "", output_tail: str = ""
     }
 
 
+async def _ask_run_tests_approval(session: AgentSession, node: str, decision) -> bool:
+    """校验通道的 run_tests 审批中断：与主循环审批门同一张卡、同一条决定通道。
+
+    修改过工作区之后的自动校验也属于「执行命令」，没批准就是没跑。以前校验
+    直接调网关，拿到 awaiting_approval 只能跳过校验收场——任务照样 succeeded，
+    证据里挂着一条永远不会消失的「待审批」，用户批与不批都改变不了这个结局
+    （benchmark coding-036 实测抓到）。中断位置在 run_validation 节点内，与
+    execute_action 的审批门各占一个中断位，恢复值按位置回放不会串味。
+
+    重放安全性：批准先记进会话权限再执行；节点重放时 decide 直接放行，
+    不会二次走到中断，测试也只执行一次。
+    """
+    name = "run_tests"
+    arguments: dict = {}
+    fingerprint = approval_key(name, arguments)
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+    answer = interrupt(
+        {
+            "tool": name,
+            "arguments": arguments,
+            "risk_level": decision.risk,
+            "approval_key": fingerprint,
+            "permission_mode": session.permission_mode,
+            "permission_rule": decision.rule,
+            "approval_options": approval_options(
+                name, decision.memo, tool_scope=not tool_grant_too_wide(name, arguments)
+            ),
+            "expires_at": expires_at,
+            "source": "validation",
+        }
+    )
+    granted, scope = parse_decision(answer)
+    if granted:
+        session.permissions.remember(name, arguments, scope)
+        await session.recorder.add(
+            "approval.granted",
+            node,
+            {
+                "tool": name,
+                "arguments": arguments,
+                "approval_key": fingerprint,
+                "scope": scope,
+                "expires_at": expires_at,
+            },
+        )
+    else:
+        session.permissions.forget(name, arguments, scope)
+        await session.recorder.add(
+            "approval.denied",
+            node,
+            {"tool": name, "arguments": arguments, "scope": scope},
+        )
+    return granted
+
+
 async def run_validation_node(state: AgentState, session: AgentSession) -> AgentState:
     node = "run_validation"
     await session.recorder.add("node.started", node, {})
@@ -3201,6 +3257,18 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
             "data": last.get("data") or {},
         }
     else:
+        # 校验通道的 run_tests 与主循环走同一张审批卡：先判定，要批就走中断，
+        # 批准后这一次真的会跑。驳回记 skipped 而不是 failed——代码没问题，
+        # 是命令没获批，判 failed 会把模型引去「修」一个不存在的 bug。
+        validation_tool = session.gateway.get("run_tests")
+        if validation_tool is not None:
+            validation_decision = _decision(session, validation_tool, {})
+            if validation_decision.outcome == ASK and not await _ask_run_tests_approval(
+                session, node, validation_decision
+            ):
+                validation = _skipped_validation("命令执行未获授权，测试没有执行", command="run_tests")
+                await session.recorder.add("validation.completed", node, validation)
+                return {"validation": validation}
         payload = await session.gateway.execute("run_tests", {}, session.context, node)
         await session.recorder.add(
             "tool.completed",

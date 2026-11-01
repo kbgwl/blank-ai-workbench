@@ -483,7 +483,10 @@ for (let i = 0; i < 5; i++) {
       testCommand: `${PY} -X utf8 -c "print('cancel/resume 由 runner 按 expectedStatus=cancelled 判定')"`,
       acceptance: ["取消后状态为 cancelled", "交付文本不含「已完成」"],
       expectedStatus: "cancelled",
-      runHints: { cancelAfterSteps: 2 + i },
+      // 取消窗口用真实流逝时间：steps_used 只在收尾落库，运行中恒为 0，
+      // 按它触发取消永远发不出去（2026-11-01 实测三次全空发）。
+      // 4s 落在规划模型调用期间，取消在下一个节点入口生效，notes.txt 不会被碰。
+      runHints: { cancelAfterMs: 4000 + i * 1500 },
     },
     {
       "notes.txt": `baseline ${i}\n`,

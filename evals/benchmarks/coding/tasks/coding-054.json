@@ -16,6 +16,6 @@
   ],
   "expectedStatus": "cancelled",
   "runHints": {
-    "cancelAfterSteps": 5
+    "cancelAfterMs": 8500
   }
 }
