@@ -139,6 +139,58 @@ def _run_blocking(
     }
 
 
+_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
+
+
+def normalize_relative_executable(command: str | list[str], root: Path) -> str | list[str]:
+    """Windows 上把"工作区里的相对可执行文件"补成绝对路径。
+
+    模型写命令习惯用 POSIX 形状：`.venv/Scripts/python.exe -m pytest -q`。这在 sh 里
+    完全合法，在 cmd 里却是另一回事——`/` 被当成参数分隔，cmd 只把 `.venv` 当命令名，
+    于是报「'.venv' 不是内部或外部命令」，一条测试都没跑。用户看到的是"测试失败"，
+    会去改代码；真实原因只是路径写法（实测任务 d7143491：改对的文件、跑不了的命令）。
+
+    只处理**确实存在**的相对路径首段，其余原样返回：没匹配上就不猜，宁可让 cmd
+    按原样报错，也不要改坏用户自己的命令。
+    """
+    if os.name != "nt":
+        return command
+
+    def fix(token: str) -> str:
+        head = token.strip()
+        if len(head) < 3 or head[0] in "\"'":
+            return token
+        if "/" not in head and "\\" not in head:
+            return token  # 裸命令名，交给 PATH
+        if _DRIVE_PREFIX.match(head) or head.startswith("\\\\"):
+            return token  # 已经是绝对路径 / UNC
+        candidate = Path(root) / head.replace("/", "\\")
+        try:
+            exists = candidate.exists()
+        except OSError:
+            exists = False
+        if not exists:
+            return token
+        return str(candidate)
+
+    if isinstance(command, list):
+        if not command:
+            return command
+        return [fix(str(command[0])), *[str(part) for part in command[1:]]]
+
+    text = str(command)
+    stripped = text.lstrip()
+    if not stripped:
+        return command
+    head, sep, tail = stripped.partition(" ")
+    fixed = fix(head)
+    if fixed == head:
+        return command
+    # 绝对路径含空格时必须加引号，否则 cmd 会把后半截当成参数
+    rendered = f'"{fixed}"' if " " in fixed else fixed
+    return f"{rendered}{sep}{tail}"
+
+
 async def run_process(
     command: str | list[str],
     root: Path,
@@ -146,6 +198,9 @@ async def run_process(
     shell: bool = False,
     env: dict[str, str] | None = None,
 ) -> dict:
+    # 命令首段是工作区里的相对可执行文件时要先补成绝对路径（见函数注释）。
+    # 放在这里而不是各个工具里：run_shell 与 run_tests、宿主直连与沙箱执行都经过它。
+    command = normalize_relative_executable(command, root)
     kwargs = {
         "cwd": str(root),
         "stdout": asyncio.subprocess.PIPE,

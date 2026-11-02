@@ -136,3 +136,50 @@ def test_a_real_pass_still_reports_passed() -> None:
     update, _ = _run({"tool_results": [_test_result("ok", exit_code=0, output="3 passed")]})
     assert update["validation"]["passed"] is True
     assert update["validation"]["status"] == "ok"
+
+
+# ── 交付正文必须说出"校验没跑"（v161 §2.2：没有验证证据不得输出成功）──
+def _note(state: dict, report: str = "结论\n- 改好了") -> str:
+    from blank_api.services.agent.graph import _validation_note
+
+    return _validation_note(report, state)
+
+
+def test_delivery_says_out_loud_when_validation_was_skipped() -> None:
+    """这条以前只活在证据包里：卡片上写着"测试没执行"，交付正文却可以照写"改好了"。
+    读正文的人不会去翻依据条，于是"没验过"就等于"验过了"。"""
+    update, _ = _run({"tool_results": [_test_result("awaiting_approval")]})
+    text = _note({"validation": update["validation"]})
+    assert "未做自动化校验" in text
+    assert "批准" in text
+
+
+def test_delivery_is_not_polluted_when_there_was_nothing_to_validate() -> None:
+    # 纯问答没有产物，硬加一句"未验证"是噪音。
+    update, _ = _run({"tool_results": [], "repair_rounds": 0})
+    assert _note({"validation": update["validation"]}) == "结论\n- 改好了"
+
+
+def test_delivery_note_is_not_duplicated_when_the_model_already_said_it() -> None:
+    update, _ = _run({"tool_results": [_test_result("denied")]})
+    report = "结论\n- 改好了，但没验证（命令未获批）"
+    assert _note({"validation": update["validation"]}, report) == report
+
+
+def test_a_passed_validation_adds_no_note_and_no_prompt_hint() -> None:
+    from blank_api.services.agent.graph import _validation_fact
+
+    update, _ = _run({"tool_results": [_test_result("ok", exit_code=0)]})
+    state = {"validation": update["validation"]}
+    assert _note(state) == "结论\n- 改好了"
+    assert _validation_fact(state) == ""
+
+
+def test_a_skipped_validation_is_told_to_the_writer_explicitly() -> None:
+    from blank_api.services.agent.graph import _validation_fact
+
+    update, _ = _run({"tool_results": [_test_result("awaiting_approval")]})
+    fact = _validation_fact({"validation": update["validation"]})
+    # 光说"没跑"不够：要明确禁止它写成测试通过。
+    assert "未执行" in fact
+    assert "不许写测试通过" in fact

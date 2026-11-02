@@ -391,3 +391,48 @@ async def test_usage_source_is_recorded_on_row_event_and_evidence(seeded, tmp_pa
     assert usage["usage_sources"] == ["provider", "unknown"]
     assert usage["by_model"]["mock"]["total_tokens"] == 110
     assert usage["by_model"]["mock"]["calls"] == 2
+
+
+async def test_a_failed_call_does_not_invent_a_model_name(seeded, tmp_path):
+    """没拿到用量的调用不许拿供应商名当模型名。
+
+    实测里「按模型拆账」会多出一个以供应商命名的模型：calls=89、tokens=0。
+    读账的人分不清那是"某模型一文没花"还是"这 89 次根本没拿到账"，
+    于是整份 token 统计被当成不可信。模型名未知就留空，归到 (unknown)。
+    """
+    adapter = ScriptedAdapter("mock", [])
+    session = _session(tmp_path, adapter, provider_name="bench-glm45flash-v158")
+    await session.record_usage("execute_action", "", Usage(), 0, "error")
+
+    rows = await _rows()
+    assert len(rows) == 1
+    assert rows[0].model == "", "供应商名不是模型名"
+    assert rows[0].usage_source == "unknown"
+    record = (await _records())[0]
+    assert record["call"]["model"] == ""
+    assert record["call"]["provider"] == "bench-glm45flash-v158", "供应商维度仍然说不清"
+
+    usage = (await build_evidence(get_session_factory(), TASK_ID, include_timeline=False))["usage"]
+    assert "bench-glm45flash-v158" not in usage["by_model"], "不许凭空造一个零 token 的模型"
+    assert usage["by_model"]["(unknown)"]["total_tokens"] == 0
+    assert usage["models"] == []
+
+
+async def test_usage_source_calls_tells_one_lost_call_from_no_ledger(seeded, tmp_path):
+    """来源要按行计数：集合里同时出现 provider 与 unknown 时，
+    只凭集合分不清"整段没账"还是"9 次里丢了 1 次"。"""
+    adapter = ScriptedAdapter(
+        "mock",
+        [
+            Usage(prompt_tokens=100, completion_tokens=10, source="provider"),
+            Usage(source="unknown"),
+        ],
+    )
+    session = _session(tmp_path, adapter)
+    await session.call_model([{"role": "user", "content": "有账"}], "execute_action", step=1)
+    await session.record_usage("execute_action", "", Usage(), 0, "error")
+
+    usage = (await build_evidence(get_session_factory(), TASK_ID, include_timeline=False))["usage"]
+    assert usage["usage_source_calls"] == {"provider": 1, "unknown": 1}
+    assert usage["calls"] == 2
+    assert usage["total_tokens"] == 110, "丢的那一次不影响有账的数字"

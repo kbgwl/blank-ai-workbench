@@ -50,6 +50,18 @@ function die(msg) {
   process.exit(1);
 }
 
+/**
+ * 这段话是不是在说「供应商那边不行」，而不是「Agent 能力不行」。
+ *
+ * 一条规则两处用：任务跑到终态的 `failure_reason`，和 `/run` 直接返回的错误体。
+ * 早先只有前者走了这条判断，后者被一律记成 `setup_failed`——于是 glm 免费档的
+ * 429 在汇总里变成「环境没搭好」（setupFailed=10，其中 7 例其实是限流），
+ * 既不重跑也不进 provider 分类，报告读起来像装置坏了。
+ */
+const PROVIDER_FAILURE_RE =
+  /429|rate.?limit|限流|model_unreachable|model_timeout|模型不可达|模型请求超时|模型返回 5\d\d|fetch failed|ECONNRESET|ETIMEDOUT|502|503|504/i;
+const isProviderFailure = (text) => PROVIDER_FAILURE_RE.test(String(text ?? ""));
+
 if (!MOCK && !PROVIDER_ID) die("必须给 --mock 或 --provider <id>，没有模型来源就不许跑——不许静默假装跑过");
 
 /* ── mock provider（openai 兼容最小实现，随 runner 起/停）── */
@@ -179,7 +191,10 @@ async function runTask(def, providerId) {
   );
   const early = await Promise.race([runPromise, Promise.resolve(null)]);
   if (early && early.status !== 200) {
-    return { id: def.id, status: "setup_failed", error: JSON.stringify(early.json).slice(0, 200) };
+    const detail = JSON.stringify(early.json).slice(0, 200);
+    // 首轮模型调用就 429/超时时，`/run` 会即刻把错误体交回来。这不是装置没搭好，
+    // 是供应商按住了闸门——单独一类，交给外层按 provider_failed 重跑。
+    return { id: def.id, status: isProviderFailure(detail) ? "provider_failed" : "setup_failed", error: detail };
   }
 
   // 轮询到终态；取消类任务在指定窗口后主动 cancel，waiting_approval 自动审批
@@ -228,6 +243,12 @@ async function runTask(def, providerId) {
   }
 
   const ev = await api("GET", `/tasks/${task.json.id}/evidence`);
+  // 供应商失败不能当成 Agent 能力失败（任务书 §2.5）：限流/断网时模型连话都没说完，
+  // 把这种终态算进完成率，等于用别家的故障给自己的基线扣分；反过来把它算成通过，
+  // 又是拿故障冒充能力。单独一类，逐例打印原因，报告里能指名道姓。
+  const failureReason = String(ev.json?.task?.failure_reason ?? "");
+  const providerFailure = isProviderFailure(failureReason);
+  if (providerFailure) console.log(`\n  [provider] ${def.id}: ${failureReason.slice(0, 120)}`);
   const after = snapshot(workdir);
   const { changed, added } = diffSnapshot(before, after);
   const touched = [...changed, ...added];
@@ -295,13 +316,19 @@ async function runTask(def, providerId) {
     calls: Number(eu.calls ?? 0),
     // provider=供应商回的；unknown=没回（全零不等于免费）。
     usage_source: (eu.usage_sources ?? []).join(",") || "unknown",
+    // 按行计数：一组调用里丢一次 usage，集合就会同时出现 provider 与 unknown，
+    // 只看集合会把"只丢了一次"读成"整段没账"。
+    usage_source_calls: eu.usage_source_calls ?? {},
     models: eu.models ?? [],
     by_model: eu.by_model ?? {},
   };
   return {
     id: def.id,
     category: def.category,
-    status: final.status,
+    // provider_failed 只表示"这一例的终态是供应商造成的"，判分细节仍原样留在 checks 里。
+    status: providerFailure ? "provider_failed" : final.status,
+    agentStatus: final.status,
+    failureReason,
     expectedStatus: def.expectedStatus,
     stepsUsed: final.steps_used,
     elapsedMs,
@@ -344,11 +371,36 @@ const results = [];
 for (const def of defs) {
   process.stdout.write(`- ${def.id} (${def.category}) … `);
   let result;
-  try {
-    result = await runTask(def, providerId);
-  } catch (error) {
-    result = { id: def.id, category: def.category, status: "runner_error", error: String(error).slice(0, 200), passed: false };
+  let attempts = 0;
+  // 供应商限流（429）不是这例能力不够，给它干净的机会再判：
+  // 每次重跑都换新工作区（runTask 自己建目录），不继承上一次的改动。
+  // 重跑次数逐例记进 attempts，报告里能看到哪些例子是第二次才跑出来的。
+  //
+  // 等待从 60s 拉到 90s/180s：glm 免费档的 1302 是账户级限流，实测 60s 不够退干净
+  // （上一轮 4 例 provider_failed 在 60s 重跑后仍被 429 打死）。两次重跑共 3 回，
+  // 仍不行就如实记 provider_failed——不拿重跑次数去凑完成率。
+  const PROVIDER_RETRIES = 2;
+  const PROVIDER_WAITS = [90_000, 180_000];
+  for (;;) {
+    attempts += 1;
+    try {
+      result = await runTask(def, providerId);
+    } catch (error) {
+      // 本地连接抖一下（fetch failed）也重跑一次：这既不是 Agent 的错，也不该记成装置坏了。
+      result = { id: def.id, category: def.category, status: "runner_error", error: String(error).slice(0, 200), passed: false };
+      if (attempts < 2) {
+        console.log(`\n  ↻ 本地连接失败，30s 后重跑这一例（第 ${attempts + 1} 次）`);
+        await new Promise((resolve) => setTimeout(resolve, 30_000));
+        continue;
+      }
+      break;
+    }
+    if (result.status !== "provider_failed" || attempts > PROVIDER_RETRIES) break;
+    const wait = PROVIDER_WAITS[attempts - 1];
+    console.log(`\n  ↻ 供应商限流，${wait / 1000}s 后重跑这一例（第 ${attempts + 1} 次）`);
+    await new Promise((resolve) => setTimeout(resolve, wait));
   }
+  result.attempts = attempts;
   results.push(result);
   console.log(result.passed ? "PASS" : `FAIL (${result.status}${result.error ? `: ${result.error}` : ""})`);
   // 免费档模型（如 glm flash）有 RPM 限制，全量连跑会被 429 打穿；--pause 拉开任务节奏。
@@ -359,14 +411,18 @@ for (const def of defs) {
 }
 
 /* 汇总 §4.2 指标 */
-// 只有真正跑到终态、有交付可判的任务才进分母与违规统计：
-// setup_failed / seed_failed / runner_error 是供应商或环境失败（§3.5：不当成
-// Agent 能力失败），timeout 连交付都没有，判「假完成/未授权」无从谈起——
-// 把它们算进 falseDone 等于给没跑的任务记账。
+// judged = 真正跑到终态、有交付可判的任务。falseDone / 未授权只在这里统计：
+// setup_failed / runner_error 是装置或网络失败，timeout 连交付都没有，判「假完成」
+// 无从谈起——把它们算进去等于给没跑的任务记账。
+// 但**完成率/通过率的分母是全部例子**，不是 judged：分母跟着缩水，会让"14 例没跑成"
+// 印成 100% 通过，正是任务书 §2 禁止的算法。
 const JUDGED = new Set(["succeeded", "failed", "cancelled", "timeout"]);
 const judged = results.filter((r) => JUDGED.has(r.status) && r.checks);
 const total = judged.length;
-const setupFailed = results.length - judged.length;
+const providerFailed = results.filter((r) => r.status === "provider_failed").length;
+// 按状态逐个数，不做减法：减法会把 runner_error / timeout 一并算成「装置没搭好」，
+// 汇总里就看不出到底是装置坏了、还是本地连接抖了、还是任务挂住了。
+const setupFailed = results.filter((r) => r.status === "setup_failed").length;
 const succeeded = judged.filter((r) => r.status === "succeeded").length;
 const firstTryPassed = judged.filter((r) => r.passed).length;
 const testPassed = judged.filter((r) => r.checks?.testPassed).length;
@@ -388,21 +444,47 @@ const p95Tokens = tokenSeries.length ? tokenSeries[Math.min(tokenSeries.length -
 const failedTokens = judged
   .filter((r) => !r.passed)
   .reduce((s, r) => s + Number(r.tokenUsage?.total_tokens ?? 0), 0);
-const unknownUsageTasks = judged.filter((r) => (r.tokenUsage?.usage_source ?? "").includes("unknown")).length;
+// 「这例的 token 是不是完全没账」按行计数判：一行 provider 都没有才算 unknown。
+// 早先用 usage_sources.includes("unknown") 判，把"9 次调用里有 1 次重试没拿到 usage"
+// 也记成整例未知——44/54 就是这么虚高的，等于自己把可信的账说成不可信。
+const hasProviderUsage = (r) => Number(r.tokenUsage?.usage_source_calls?.provider ?? 0) > 0;
+const unknownUsageTasks = judged.filter((r) => !hasProviderUsage(r)).length;
+const providerCalls = judged.reduce(
+  (s, r) => s + Number(r.tokenUsage?.usage_source_calls?.provider ?? 0),
+  0
+);
+const unknownUsageCalls = judged.reduce(
+  (s, r) => s + Number(r.tokenUsage?.usage_source_calls?.unknown ?? 0),
+  0
+);
 const summary = {
-  total,
+  // 分母永远是"要跑几例"（55），不是"跑成了几例"：拿 judged 当分母，供应商一限流
+  // 分母就跟着缩水，14 例没跑成也能印出 passRate 100%——这正是任务书 §2 不让做的
+  // 「把失败藏进分母」。judged 只用来定位能力问题，不参与达标判定。
+  total: results.length,
+  judged: judged.length,
   setupFailed,
-  completionRate: total ? `${Math.round((succeeded / total) * 100)}%` : "n/a",
-  passRate: total ? `${Math.round((firstTryPassed / total) * 100)}%` : "n/a",
-  testPassRate: total ? `${Math.round((testPassed / total) * 100)}%` : "n/a",
+  runnerError: results.filter((r) => r.status === "runner_error").length,
+  timedOut: results.filter((r) => r.status === "timeout").length,
+  // 供应商限流/断网单独成项：既不算通过也不算 Agent 失败，报告里逐例列原因。
+  providerFailed,
+  // 被限流后重跑过的例子数：报告要能看出哪些不是一次跑成的。
+  providerRetried: results.filter((r) => Number(r.attempts ?? 1) > 1).length,
+  completionRate: results.length ? `${Math.round((succeeded / results.length) * 100)}%` : "n/a",
+  passRate: results.length ? `${Math.round((firstTryPassed / results.length) * 100)}%` : "n/a",
+  testPassRate: results.length ? `${Math.round((testPassed / results.length) * 100)}%` : "n/a",
+  // 只在"真跑到终态"的例子里的比例，用来区分「能力不行」和「没跑成」。
+  judgedCompletionRate: judged.length ? `${Math.round((succeeded / judged.length) * 100)}%` : "n/a",
   misEditedFiles: misEdited,
   avgElapsedMs: avgMs,
   totalTokens: tokens,
-  avgTokens: total ? Math.round(tokens / total) : 0,
+  avgTokens: judged.length ? Math.round(tokens / judged.length) : 0,
   p95Tokens,
   failedTaskTokens: failedTokens,
   tokensByModel: byModel,
   unknownUsageTasks,
+  providerCalls,
+  unknownUsageCalls,
   totalSteps: toolCalls,
   falseDoneCount: judged.filter((r) => !r.checks?.noFalseDone).length,
   unauthorizedHighRisk: judged.filter((r) => !r.checks?.highRiskUnauthorized).length,

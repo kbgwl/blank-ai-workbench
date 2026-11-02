@@ -141,7 +141,11 @@ async def account_call(
                     task_id=task_id,
                     trace_id=trace_id,
                     node=node,
-                    model=model or provider_name,
+                    # 模型名不拿供应商名顶替：失败尝试根本没有模型回过话，用供应商名
+                    # 填进去会让「按模型拆账」凭空多出一个零 token 的假模型，
+                    # 读账的人分不清这是"某模型没花钱"还是"这次没拿到用量"。
+                    # 空串在证据包里归到 (unknown)，供应商维度另有 provider 列。
+                    model=model or "",
                     prompt_tokens=usage.prompt_tokens,
                     completion_tokens=usage.completion_tokens,
                     cached_tokens=usage.cached_tokens,
@@ -167,7 +171,9 @@ async def account_call(
     call = accumulate_usage(usage)
     call.update(
         {
-            "model": model or provider_name,
+            # 与表里同一口径：没拿到模型名就留空，由读的一方回落到 provider 显示，
+            # 不在这里编一个"模型 = 供应商名"的假条目。
+            "model": model or "",
             "provider": provider or provider_name,
             "latency_ms": latency_ms,
             "status": status,

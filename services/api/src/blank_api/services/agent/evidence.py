@@ -830,6 +830,19 @@ async def build_evidence(
             "usage_sources": sorted(
                 {str(getattr(row, "usage_source", "") or "unknown") for row, _ in usage_rows}
             ),
+            # 来源得按行计数：一组调用里只要有一条没拿到 usage，集合就会同时出现
+            # provider 与 unknown。只凭集合读不出"是整段都没账，还是只丢了一次"，
+            # 于是总 token 会被误当成不可信。口径：provider=有真实数字的行数。
+            "usage_source_calls": {
+                source: sum(
+                    1
+                    for row, _ in usage_rows
+                    if (str(getattr(row, "usage_source", "") or "unknown") == source)
+                )
+                for source in sorted(
+                    {str(getattr(row, "usage_source", "") or "unknown") for row, _ in usage_rows}
+                )
+            },
             "trace_ids": trace_ids,
             "calls": len(usage_rows),
             "prompt_tokens": prompt_tokens,

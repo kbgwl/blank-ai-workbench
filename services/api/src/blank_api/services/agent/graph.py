@@ -2181,6 +2181,9 @@ async def _approval_gate(
                 Usage(
                     prompt_tokens=verdict.prompt_tokens,
                     completion_tokens=verdict.completion_tokens,
+                    # 来源跟着审查员的响应走：回了 usage 就是 provider，没回才是 unknown。
+                    # 填默认值会把真实的供应商用量记成 unknown，按来源拆账时对不上。
+                    source=verdict.usage_source,
                 ),
                 verdict.latency_ms,
                 "error" if verdict.error else "ok",
@@ -3471,6 +3474,59 @@ def _first_answer_text(messages: list[dict], min_chars: int = 60) -> str:
     return ""
 
 
+def _validation_fact(state: AgentState) -> str:
+    """把「自动化校验到底跑没跑」这条事实交给写交付的人。
+
+    以前交付提示词里没有这一项：模型只知道"我改了文件"，不知道校验节点最后给的
+    是 skipped。于是它会照着前面的动作写"已修复并验证通过"，而 `validation.completed`
+    里明明写着"测试没有执行"。用户按这句话去信，等于被自己的工具骗了。
+    """
+    validation = state.get("validation") or {}
+    status = str(validation.get("status") or "")
+    if not validation:
+        return ""
+    if status == "skipped":
+        reason = str(validation.get("skipped_reason") or "本次没有执行自动化校验")
+        return f"自动化校验：未执行（{reason}）。有改动就必须说明「未验证」，不许写测试通过。"
+    if status == "ok" and validation.get("passed"):
+        return ""
+    command = str(validation.get("command") or "run_tests")
+    return f"自动化校验：未通过（{command}，退出码 {validation.get('exit_code')}）。结论里要写明没通过。"
+
+
+def _validation_prompt_block(state: AgentState) -> str:
+    fact = _validation_fact(state)
+    return f"\n{fact}" if fact else ""
+
+
+def _report_prompt(state: AgentState, hint: str) -> str:
+    """交付提示词：固定两段 + 本次校验的客观事实。"""
+    prompt = REPORT_INSTRUCTION + (f"\n本次执行摘要（仅供参考，不要照抄）：{hint}" if hint else "")
+    return prompt + _validation_prompt_block(state)
+
+
+def _validation_note(report: str, state: AgentState) -> str:
+    """交付正文末尾补一句缺口说明（模型改不掉这句话）。
+
+    只补在「有产物、但校验没给出结论」上：纯问答没有可校验的东西，硬加一句
+    "未验证"只会制造噪音。
+    """
+    validation = state.get("validation") or {}
+    if str(validation.get("status") or "") != "skipped":
+        return report
+    reason = str(validation.get("skipped_reason") or "")
+    if not reason or "无需执行测试" in reason:
+        return report
+    # 正文里已经说过了就不再补一遍——同一句话出现两次，读者会以为是两件事。
+    if any(
+        word in report
+        for word in ("未验证", "没验证", "未做自动化校验", "没跑测试", "测试没有执行")
+    ):
+        return report
+    note = f"未做自动化校验：{reason}。"
+    return f"{report}\n\n{note}" if report.strip() else note
+
+
 def _with_placeholder_note(report: str, session: AgentSession, state: AgentState) -> str:
     """交付正文末尾补一句确定性的缺口说明（模型改不掉这句话）。
 
@@ -3581,6 +3637,7 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
             + plan_block
             + links_block
             + (f"\n本次执行摘要（仅供参考，不要照抄）：{hint}" if hint else "")
+            + _validation_prompt_block(state)
         )
         link_by_criterion = {
             str(item.get("criterion") or ""): item
@@ -3615,7 +3672,7 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
                 )
             await session.recorder.add("delivery.recorded", node, {"mode": "report", "chars": len(report)})
             return {
-                "summary": _with_placeholder_note(report, session, state),
+                "summary": _validation_note(_with_placeholder_note(report, session, state), state),
                 "acceptance_results": results,
                 "usage": merge_usage(state.get("usage") or {}, ask["usage"]),
             }
@@ -3627,11 +3684,11 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
             report = as_report(raw)
             await session.recorder.add("delivery.recorded", node, {"mode": "fallback", "chars": len(report)})
             return {
-                "summary": _with_placeholder_note(report, session, state),
+                "summary": _validation_note(_with_placeholder_note(report, session, state), state),
                 "acceptance_results": results,
             }
 
-    prompt = REPORT_INSTRUCTION + (f"\n本次执行摘要（仅供参考，不要照抄）：{hint}" if hint else "")
+    prompt = _report_prompt(state, hint)
     try:
         ask = await session.ask(state, prompt, node)
         report = as_report(ask["text"])
@@ -3643,7 +3700,7 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
         mode = "fallback"
     await session.recorder.add("delivery.recorded", node, {"mode": mode, "chars": len(report)})
     return {
-        "summary": _with_placeholder_note(report, session, state),
+        "summary": _validation_note(_with_placeholder_note(report, session, state), state),
         "acceptance_results": results,
         "usage": usage,
     }

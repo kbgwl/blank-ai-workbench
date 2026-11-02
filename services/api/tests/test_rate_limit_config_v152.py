@@ -22,7 +22,10 @@ def _clear_settings_cache():
     config_module.get_settings.cache_clear()
 
 
-def test_default_limit_is_still_120():
+def test_default_limit_is_still_120(monkeypatch):
+    # conftest 全批设了 BLANK_RATE_LIMIT_RPM=0（测试进程共用一个计数器，整批跑必被自己拦下）。
+    # 这条判据问的是"没有 env 时默认多少"，所以先把 env 摘掉再断言，不然测的是装置不是默认值。
+    monkeypatch.delenv("BLANK_RATE_LIMIT_RPM", raising=False)
     assert config_module.Settings().rate_limit_rpm == 120, "默认值改了就是放宽策略，要单独讨论"
 
 

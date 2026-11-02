@@ -48,6 +48,10 @@ class GuardianVerdict:
     error: str = ""
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # 这次审查的用量是供应商亲口说的，还是没拿到。不带上它，落账时只能填默认
+    # "unknown"——审查员明明回了 usage，账上却记成「没说用了多少」，按 provider
+    # 拆账时审查员的 token 会整块掉进 unknown 桶。
+    usage_source: str = "unknown"
 
     @property
     def denied(self) -> bool:
@@ -67,6 +71,7 @@ class GuardianVerdict:
             "error": self.error,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
+            "usage_source": self.usage_source,
         }
 
 
@@ -199,6 +204,7 @@ class Guardian:
             latency_ms=int((time.perf_counter() - started) * 1000),
             prompt_tokens=response.usage.prompt_tokens,
             completion_tokens=response.usage.completion_tokens,
+            usage_source=response.usage.source,
         )
         if result.allowed and not reversible:
             # 不可逆动作不接受模型的"放行"，只能由人来决定。

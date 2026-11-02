@@ -115,6 +115,42 @@ def test_modes_are_frozen_and_unknown_falls_back_to_veto() -> None:
     assert GuardianVerdict().as_dict()["verdict"] == "abstain"
 
 
+class SourcedAdapter(FakeAdapter):
+    """真的在响应里回了 usage 的适配器（把 source 标成 provider）。"""
+
+    async def invoke(self, messages, **kwargs) -> ModelResponse:
+        response = await super().invoke(messages, **kwargs)
+        response.usage = Usage(prompt_tokens=42, completion_tokens=7, source="provider")
+        return response
+
+
+async def test_verdict_carries_usage_source_instead_of_defaulting_to_unknown() -> None:
+    """审查员回了 usage，账上就得记 provider。
+
+    回归点：`graph` 落账时手搓 `Usage(prompt_tokens=…, completion_tokens=…)` 不带 source，
+    默认值 "unknown" 把真实的供应商用量记成「没说用了多少」——按来源拆账时，
+    审查员这块 token（实测占窗口内 27 行 / 10,512 tokens）整块掉进 unknown 桶。
+    """
+    plain = await Guardian.from_env(FakeAdapter('{"verdict": "allow"}'), raw="veto").review(
+        "read_file", {"path": "a.py"}
+    )
+    # 夹具没声明来源：仍然如实记 unknown，不能反过来冒充 provider。
+    assert (plain.prompt_tokens, plain.completion_tokens) == (42, 7)
+    assert plain.usage_source == "unknown"
+    assert plain.as_dict()["usage_source"] == "unknown"
+
+    sourced = await Guardian.from_env(SourcedAdapter('{"verdict": "allow"}'), raw="veto").review(
+        "read_file", {"path": "a.py"}
+    )
+    assert sourced.usage_source == "provider"
+    assert sourced.as_dict()["usage_source"] == "provider"
+    # 失败/超时路径没有用量，来源也只能是 unknown——不拿上一次的 provider 顶上
+    timed_out = await Guardian(FakeAdapter('{"verdict": "deny"}', delay=0.3), mode="veto", timeout=0.05).review(
+        "run_shell", {"command": "ls"}
+    )
+    assert timed_out.usage_source == "unknown"
+
+
 # --------------------------------------------------------------------------- #
 # 3. 端到端：审查拦下危险命令，任务继续而不是卡住
 # --------------------------------------------------------------------------- #

@@ -9,6 +9,11 @@ from pathlib import Path
 # 与生产同构；路径随测试临时目录清理。
 _TEST_DB = (Path(tempfile.mkdtemp(prefix="blank-db-")) / "test.db").as_posix()
 os.environ.setdefault("BLANK_DATABASE_URL", f"sqlite+aiosqlite:///{_TEST_DB}")
+# 限流是给真实用户进程用的（默认 120 RPM），而测试进程里所有用例共用同一个计数器：
+# 一个两千例的批次跑到后段必然被自己拦下，报出来的是 `rate_limit_exceeded`——
+# 看着像产品缺陷，实际是装置自撞（v160 起只在共享 client 夹具里关，但自建 Env 的
+# 用例拿不到，test_origin_run_v27 就是这么假红的）。整批关掉，口径同"受控批处理客户端"。
+os.environ.setdefault("BLANK_RATE_LIMIT_RPM", "0")
 # 默认让命令在宿主机跑，保持测试夹具与 Docker 无关；沙箱路由由 tests/test_sandbox_v07.py 用真实镜像验证。
 os.environ.setdefault("BLANK_SANDBOX_ENABLED", "0")
 # 主密钥用固定合成值：默认路径是 data/.blank_secret.key，测试跑在仓库里就会顺手留一份；
