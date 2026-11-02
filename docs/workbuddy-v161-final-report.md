@@ -1,8 +1,14 @@
 # WorkBuddy v161 收尾报告：当前工作区最终验证
 
 工作目录：`E:\projects\kbgai\kbgai`
-执行时间：2026-11-02 15:12 – （进行中）
+执行时间：2026-11-02 15:12 – 22:05
 基线模型：`glm-4.5-flash`（provider `bench-glm45flash-v158`，评测后端 8060，独立库副本）
+提交：`50525f8`
+
+**结论先说：本轮不写「可以发布」。** 55 例全量跑完，三项阈值没过——
+`completionRate 87%`（要求 ≥90%）、`testPassRate 96%`（要求 100%）、`misEditedFiles 1`（要求 0）。
+这三项各挂在一例具体任务上，原因都查清了（§四），但没有一条能靠改算法变绿。
+另外三项达标：`passRate 93%`、`falseDone 0`、`unauthorizedHighRisk 0`。
 
 ## 零、先说三件与任务书前提不同的事实
 
@@ -14,8 +20,8 @@
 | 主基线 `totalTokens = 0` | **2,899,321**（v160 全量 54 例，provider 来源） | `last-run-v160.json` 的 `summary.totalTokens` |
 | 完成率 71% / 通过率 71% / 测试 95% / 误改 3 / falseDone 3 / 未授权 1 | 85% / 81% / 96% / 0 / 5 / 0 | 同上 |
 
-但这不等于任务书提的问题都不存在。本轮查出并修掉的是**另外五个真问题**（见 §八：四处是账与交付口径，
-一处是 Windows 相对路径可执行文件），
+但这不等于任务书提的问题都不存在。本轮查出并修掉的是**另外八个真问题**（见 §八：六处是账与交付口径，
+一处是 Windows 相对路径可执行文件，一处是评测的限流归类与分母口径），
 其中两个正好对应任务书 §2.2 与 §3.2 的要求；另有一个是任务书 §1.2 直接指出的
 **口径违规**——上一轮报告用了「全量 44 例 + 失败 11 例复跑」的合并口径宣布 55/55 达标，
 这等于拿两次运行拼一次结论。本轮不合并：**一次全量、55 例、同一次运行内出全部指标**。
@@ -71,16 +77,18 @@
 | `services/api/tests/test_shell_relative_exec_v161.py` | 测试（新） | #6 的 7 例（含真跑 `.bat`） |
 | `services/api/tests/conftest.py` | 测试装置 | §八 #5 整批关闭本机 120 RPM 限流 |
 | `services/api/tests/test_rate_limit_config_v152.py` | 测试（改） | 装置改了之后，这一例要测"默认值仍是 120"，用 `monkeypatch.delenv` 隔离装置 |
-| `evals/benchmarks/coding/run.mjs` | 评测工具 | #4 供应商失败归类 + 重跑一次 + 新口径的 unknownUsageTasks |
+| `evals/benchmarks/coding/run.mjs` | 评测工具 | #4 供应商失败归类；#8 限流退避、分类计数、分母改回全部例子 |
 | `evals/benchmarks/coding/failure-table.mjs` | 评测工具（新） | 生成 §四 那张逐例事实表 |
-| `evals/benchmarks/coding/last-run.json` | 运行产物 | 本轮 55 例的原始结果 |
+| `evals/benchmarks/coding/last-run.json` | 运行产物 | **最终** 55 例全量结果（阈值判定只用它） |
+| `evals/benchmarks/coding/last-run-attempt1.json` | 运行产物 | 第一次全量的原始结果（§三 3.2 的 14 例没跑成） |
+| `evals/benchmarks/coding/last-run-failed-rerun.json` | 运行产物 | 单例复跑那 14 例的原始结果（§三 3.3） |
 | `evals/benchmarks/coding/last-run-v160.json` | 证据副本 | §零 里"开工实测"的数字来源（上一轮的原始结果） |
 | `docs/workbuddy-v161-final-report.md` | 文档（新） | 本报告 |
 
 **没有动**的：`alembic/versions/0030_usage_source.py`（本轮只验证不修改，六段验证见 §六 末尾）、
 `web/`（前端零改动，所以 §六 里直接复用了现成 `web/out` 静态导出）、`desktop/`（只同步源码，不改壳代码）。
 
-`evals/benchmarks/coding/` 下还有三个历史文件（`failure-analysis-v159.json`、`glm-fix-verify.json`、
+`evals/benchmarks/coding/` 下还有四个历史文件（`failure-analysis-v159.json`、`glm-fix-verify.json`、
 `rerun-failed-v160.json`、`merge-rerun.py`）——它们是前几轮的取证材料，本轮**不删也不改**。
 其中 `merge-rerun.py` 正是 §零 说的"全量 + 复跑合并口径"的产物，本轮没有用它；留着是为了让
 "上一轮怎么算出 55/55"可追。要不要删是产品决策，不在本轮收尾里替用户决定。
@@ -152,6 +160,10 @@ Provider：`bench-glm45flash-v158`；模型：`glm-4.5-flash`。窗口 19:15→2
 | provider_failed / providerRetried | 0 / 1（coding-042 第一次 429，重跑后成功建立任务） |
 | 总步数 / 总审批 | 291 / 60 |
 | 按类别通过率 | single_file_bugfix 9/10、multi_file_refactor 9/9、frontend_backend_contract 5/5、test_failure_fix 5/5、type_error_fix 5/5、db_migration 4/5、documentation 4/5、reverse_analysis 5/5、cancel_resume 5/5、未分类 0/1 |
+
+（最后那个「未分类 0/1」就是 coding-014：`runTask` 在建立任务前提前返回时没带 `category` 字段，
+所以进了「未分类」。它实际属于 `multi_file_refactor`，合起来这一类是 **9/10**。
+这是 runner 的小毛病，不是任务定义的问题——已经在跑分之后才发现，没有为了让它好看去改代码重跑。）
 
 **阈值判定（任务书 §2）：4 项过、3 项不过 → 本轮质量基线未达标，不写「可以发布」。**
 
@@ -379,7 +391,7 @@ Provider：`bench-glm45flash-v158`；模型：`glm-4.5-flash`。窗口 19:15→2
 - 日常场景「记住」那条任务的交付正文落库成了模型原始 JSON（`{"intent": "answer", …}`），
   界面上读起来像没答完。这是本轮新观察到的问题，**没修**，记在 §十。
 
-## 八、本轮修掉的产品缺陷（都有测试）
+## 八、本轮修掉的缺陷（六处产品代码 + 两处评测工具，都有测试）
 
 | # | 缺陷 | 证据 | 修复 |
 |---|---|---|---|
@@ -474,4 +486,19 @@ $ git diff --stat
 v161 收尾：限流归类与退避重跑、交付正文校验事实、token 来源按行计数、Windows 相对路径可执行文件
 ```
 
-提交哈希与提交后复查：`__HASH__`
+提交哈希与提交后复查：
+
+```text
+$ git commit …
+[main 50525f8] v161 收尾：限流归类与退避重跑、交付正文校验事实、token 来源按行计数、Windows 相对路径可执行文件
+ 18 files changed, 8285 insertions(+), 737 deletions(-)
+
+$ git status --short
+（无输出——工作区干净）
+
+$ git diff --check
+（无输出，退出码 0）
+```
+
+`50525f8` 就是本轮全部产物的落点。报告里所有数字都出自提交中那三个 `last-run*.json`，
+不是写报告时手算的。
