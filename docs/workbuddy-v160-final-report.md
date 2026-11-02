@@ -389,4 +389,23 @@ B 失败是供应商自己下线了模型，不是切换没生效。
 
 ## 十一、提交与工作区状态
 
-__GIT_SECTION__
+提交：`73c300d`（`v160 质量闸门：55 例全量+复跑达标，token 全链路可溯，桌面版真机闭环`），
+34 个文件修改 + 11 个新增，提交后 `git status` 干净。
+
+新增文件：
+
+| 文件 | 用途 |
+|---|---|
+| `services/api/alembic/versions/0030_usage_source.py` | usage 来源列 + 存量行回填 |
+| `services/api/tests/test_task_provider_binding_v160.py` | 悬空 `provider_id` 创建即挡（3 例） |
+| `web/src/components/bot/provider-choice.ts` / `.test.ts` | 失效模型选择不再沿用（4 例） |
+| `evals/benchmarks/coding/rerun-failed-v160.json` | 失败例复跑的真实结果 |
+| `evals/benchmarks/coding/failure-analysis-v159.json` | v159 基线 16 例逐例归因 |
+| `evals/benchmarks/coding/glm-fix-verify.json` | 5 例抽样验证 token 记账已修 |
+| `docs/workbuddy-v160-final-report.md` | 本报告 |
+| `docs/workbuddy-v159-…`、`docs/workbuddy-v160-final-quality-gate.md`、`docs/workbuddy-v161-…` | 两轮任务书原文 |
+
+安全与卫生：`git diff --check` 干净；新增行无 `console.log`/`print(` 调试残留、无 `TODO/FIXME`、
+无本机绝对路径硬编码（`E:\temp\...` 只出现在本报告的取证描述里）；提交内容里没有
+`sk-*`、`Bearer`、任何供应商 Key 明文——本轮为了跑 GUI 闭环从评测库解出过两个 Key，
+只写进了后端加密列与临时文件，未进仓库。
