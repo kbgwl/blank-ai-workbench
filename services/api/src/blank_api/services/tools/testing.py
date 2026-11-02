@@ -11,6 +11,7 @@ from blank_api.services.tools.shell import (
     execute_command,
     mask_output,
     policy_gate,
+    project_python,
     python_test_command,
     runs_in_docker,
     truncate,
@@ -20,6 +21,23 @@ SUMMARY = re.compile(r"(\d+)\s+(passed|failed|errors?|skipped|xfailed|xpassed|er
 PYTEST_MARKERS = ("pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py")
 CONTAINER_PYTHON = "python3"
 GO_MARKERS = ("go.mod", "go.sum")
+
+# 「跑不了测试」的特征：解释器里没 pytest，或 PATH 上压根没有这个命令。
+# 只认这几个稳定片段，不要把任何非零退出都归成环境问题——那样会把真失败洗白。
+MISSING_RUNNER = (
+    (re.compile(r"No module named ['\"]?pytest['\"]?"), "pytest"),
+    (re.compile(r"No module named ['\"]?py\.test['\"]?"), "pytest"),
+    (re.compile(r"pytest: (command )?not found"), "pytest"),
+    (re.compile(r"'pytest' is not recognized", re.IGNORECASE), "pytest"),
+)
+
+
+def missing_runner(output: str) -> str:
+    """测试运行器本身不可用时返回它的名字，否则空串。"""
+    for pattern, name in MISSING_RUNNER:
+        if pattern.search(output or ""):
+            return name
+    return ""
 
 
 def detect_test_command(root) -> tuple[list[str], bool] | None:
@@ -38,11 +56,11 @@ def detect_test_command(root) -> tuple[list[str], bool] | None:
         return ["go", "test", "./...", "-count=1"], False
     for marker in PYTEST_MARKERS:
         if (root / marker).exists():
-            return python_test_command(), False
+            return python_test_command(root), False
     if (root / "tests").is_dir():
-        return python_test_command(), False
+        return python_test_command(root), False
     if any(root.glob("test_*.py")) or any(root.glob("*_test.py")):
-        return python_test_command(), False
+        return python_test_command(root), False
     return None
 
 
@@ -72,7 +90,7 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
                 message="未识别到测试命令：工作区中既没有 pytest 配置，也没有 package.json 的 test 脚本",
             )
         argv, shell = detected
-        if runs_in_docker(tier) and argv and argv[0] == sys.executable:
+        if runs_in_docker(tier) and argv and argv[0] in (sys.executable, project_python(context.root)):
             # 宿主虚拟环境不在容器里，测试要改用镜像自带的解释器
             argv = [CONTAINER_PYTHON, *argv[1:]]
         if shell:
@@ -109,6 +127,32 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
                   "tier": result.get("tier", {}), "enforcement": result["enforcement"]},
         )
     passed = result["exit_code"] == 0
+    if not passed:
+        missing = missing_runner(combined)
+        if missing:
+            # 「测试挂了」和「这台机器上跑不了测试」是两件事。混成一句"测试未通过"，
+            # 用户会去改代码，而真正该做的是把测试运行器装上。真实台账里的证据：
+            # 同一条命令四次退出码 1，输出是 `No module named pytest`，交付却写成
+            # "测试未通过"，任务被判失败——代码其实早就改对了。
+            return ToolOutcome(
+                ok=False,
+                status="error",
+                output=combined,
+                message=(
+                    f"测试未能执行：环境里没有 {missing}。"
+                    f"请先安装（例如 `python -m pip install {missing}`）或改用项目虚拟环境里的解释器"
+                ),
+                data={
+                    "command": command_text,
+                    "exit_code": result["exit_code"],
+                    "passed": False,
+                    "missing_test_runner": missing,
+                    "sandbox": result["sandbox"],
+                    "tier": result.get("tier", {}),
+                    "enforcement": result["enforcement"],
+                    "summary": summarize_exit_codes(combined),
+                },
+            )
     return ToolOutcome(
         ok=passed,
         status="ok" if passed else "failed",

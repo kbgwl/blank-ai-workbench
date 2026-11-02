@@ -638,5 +638,34 @@ def shell_tools() -> list[ToolDefinition]:
     ]
 
 
-def python_test_command() -> list[str]:
-    return [sys.executable, "-m", "pytest", "-q"]
+PROJECT_VENV_PYTHONS = (
+    (".venv", "Scripts", "python.exe"),
+    ("venv", "Scripts", "python.exe"),
+    (".venv", "bin", "python"),
+    ("venv", "bin", "python"),
+)
+
+
+def project_python(root) -> str:
+    """工作区里的虚拟环境解释器；没有就空串。
+
+    桌面版带的是一个干净的 Python 运行时，**没有 pytest**。用户的项目依赖装在自己的
+    `.venv` 里，旧逻辑却一律用 `sys.executable -m pytest`，于是"这台机器上跑不了测试"，
+    和"测试没通过"混成一句话（真实台账里出现过：代码已改对、断言已通过，
+    只因解释器没 pytest 而被判失败）。项目里有 venv 就用它，这是唯一知道项目依赖的解释器。
+    """
+    if root is None:
+        return ""
+    try:
+        base = Path(root)
+    except TypeError:
+        return ""
+    for parts in PROJECT_VENV_PYTHONS:
+        candidate = base.joinpath(*parts)
+        if candidate.exists():
+            return str(candidate)
+    return ""
+
+
+def python_test_command(root=None) -> list[str]:
+    return [project_python(root) or sys.executable, "-m", "pytest", "-q"]

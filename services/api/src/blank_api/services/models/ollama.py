@@ -52,6 +52,7 @@ class OllamaAdapter(ModelAdapter):
         usage = Usage(
             prompt_tokens=int(data.get("prompt_eval_count") or 0),
             completion_tokens=int(data.get("eval_count") or 0),
+            source="provider" if (data.get("prompt_eval_count") or data.get("eval_count")) else "unknown",
         )
         message = data.get("message") or {}
         # Ollama 的 /api/chat 回复里没有请求 id（本地进程，没有供应商侧可查的那一笔），
@@ -132,6 +133,9 @@ class OllamaAdapter(ModelAdapter):
                         usage = Usage(
                             prompt_tokens=int(chunk.get("prompt_eval_count") or 0),
                             completion_tokens=int(chunk.get("eval_count") or 0),
+                            source="provider"
+                            if (chunk.get("prompt_eval_count") or chunk.get("eval_count"))
+                            else "unknown",
                         )
                         done = True
 

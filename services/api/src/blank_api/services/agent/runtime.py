@@ -156,6 +156,9 @@ class RunRequest:
     title: str = ""
     goal: str = ""
     acceptance_criteria: Sequence[str] = ()
+    # 结构化目标 {objective, done_when, constraints, out_of_scope}。constraints /
+    # out_of_scope 会进首轮提示（模型必须看见用户声明的边界）；done_when 只用于收尾对账。
+    goal_spec: dict | None = None
     # 验收条件与计划步骤的对应关系 [{id, criterion, milestone_id, step_ids}]。
     # 有了它，验收失败能指到具体是哪一步没做完，而不是只知道"整体没过"。
     acceptance_links: Sequence[dict] = ()
@@ -527,6 +530,7 @@ class AgentRuntime:
             skill_instructions=[str(item) for item in request.skill_instructions],
             system_instructions=[str(item) for item in request.system_instructions],
             acceptance_criteria=[str(item) for item in request.acceptance_criteria or ()],
+            goal_spec=dict(request.goal_spec or {}),
             acceptance_links=[dict(item) for item in request.acceptance_links or () if isinstance(item, dict)],
             max_steps=max(1, int(request.max_steps)),
             # 模型看不懂图时一张都不挂：挂了就是 400，用户看到的是"传了图就发不出去"。
@@ -833,6 +837,10 @@ class AgentRuntime:
             goal="" if prompt.suppressed else (prompt.goal_for_model or request.goal or session.goal),
             memory=session.memory,
             history=history,
+            # 记忆读取按场景门控：日常习惯（type=user）只在 memory_allowed 的场景
+            # （日常）读取，开发等场景与日常共用工作区时也不把习惯带进上下文（§6.4）；
+            # 项目知识仍然共享。
+            allow_user_memory=resolve_scenario(scope.scenario_key).memory_allowed,
         )
         if curated.text:
             await recorder.add("context.curated", "receive_task", curated.as_dict())
@@ -851,6 +859,7 @@ class AgentRuntime:
                 session.skill_instructions,
                 session.instruction_layers,
                 history,
+                goal_spec=session.goal_spec,
                 images=request.images,
                 supports_vision=request.supports_vision,
                 texts=request.texts,

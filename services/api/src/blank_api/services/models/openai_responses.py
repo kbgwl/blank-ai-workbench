@@ -196,6 +196,9 @@ class OpenAIResponsesAdapter(ModelAdapter):
             completion_tokens=int(usage.get("output_tokens") or 0),
             cached_tokens=int(prompt_details.get("cached_tokens") or 0),
             reasoning_tokens=int(completion_details.get("reasoning_tokens") or 0),
+            source="provider"
+            if (usage.get("input_tokens") or usage.get("output_tokens"))
+            else "unknown",
         )
 
     async def invoke(self, messages, tools=None, **kwargs) -> ModelResponse:

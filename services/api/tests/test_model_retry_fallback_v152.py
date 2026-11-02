@@ -33,6 +33,7 @@ from blank_api.services.models.base import (
     ModelError,
     ModelResponse,
     ToolSpecLite,
+    Usage,
 )
 from blank_api.services.models.routing import FallbackAdapter
 from blank_api.services.tools.base import ToolContext
@@ -185,6 +186,42 @@ async def test_retry_budget_is_bounded(tmp_path):
     assert len(await _events("model.transient_retry")) == TRANSIENT_RETRIES
 
 
+async def test_each_attempt_of_a_retry_takes_its_own_usage_row(tmp_path):
+    """重试两次调用必须记两行账（P0-2「retry 每次调用单独记录」）。
+
+    只记成功那一笔时，"这个任务调了几次模型"在台账上永远是 1，限流、
+    网络抖动和模型真的在思考就分不开；失败尝试拿不到 usage，记全零 +
+    error + usage_source=unknown，表示"没拿到"而不是"免费"。
+    """
+    from sqlalchemy import select
+
+    from blank_api.models.model_provider import ModelUsage
+
+    adapter = FlakyAdapter(failures=1)
+    session = _session(tmp_path, adapter)
+
+    response, call_usage = await session.call_model(
+        [{"role": "user", "content": "改一下 a.py"}], "execute_action"
+    )
+
+    assert response.text == "好了"
+    assert adapter.calls == 2
+    async with get_session_factory()() as db:
+        rows = (
+            await db.execute(select(ModelUsage).where(ModelUsage.task_id == TASK_ID))
+        ).scalars().all()
+    err_rows = [r for r in rows if r.status == "error"]
+    ok_rows = [r for r in rows if r.status == "ok"]
+    assert len(err_rows) == 1, "被重试吃掉的那次调用也要占一行"
+    assert len(ok_rows) == 1
+    assert err_rows[0].prompt_tokens == 0
+    assert err_rows[0].usage_source == "unknown"
+    # 返回值是"这一次调用"的用量，不该把被重试的那次算进来；
+    # 轮累计（turn_usage）按真实调用数算 2 次。
+    assert call_usage["calls"] == 1
+    assert session.turn_usage["calls"] == 2
+
+
 async def test_side_effect_during_the_call_blocks_the_retry(tmp_path):
     """调用期间执行了工具 → 不重试。
 
@@ -288,3 +325,103 @@ async def test_all_providers_failing_reports_one_clear_error():
 
     assert caught.value.code == "all_models_failed"
     assert "备用" in caught.value.message or "断网" in caught.value.message
+
+
+# ── §7 切换证据：fallback 发生 + 错误保留 + token 按模型分别统计 ─────────────
+
+
+class UsageBackup(FlakyAdapter):
+    """一次成功的备用调用，并带回真实的 usage（来源=provider）。"""
+
+    async def _attempt(self) -> ModelResponse:
+        self.calls += 1
+        return ModelResponse(
+            text="好了",
+            model="m-backup",
+            usage=Usage(prompt_tokens=120, completion_tokens=30, source="provider"),
+        )
+
+
+async def test_fallback_switch_records_usage_under_backup_model(tmp_path):
+    """主模型失败 → 切备用成功：model.fallback 事件要发，token 要记在备用模型名下。
+
+    "我们配了兜底"必须有三个可数的事实：切换事件存在、成功那笔的用量挂在
+    备用模型的账上（而不是笼统记在供应商名下）、usage_source 跟着数字走。
+    """
+    from sqlalchemy import select
+
+    from blank_api.models.model_provider import ModelUsage
+
+    primary = BoomAdapter("兜底测试-主", ModelError("model_timeout", "读超时", retryable=True))
+    backup = UsageBackup(failures=0)
+    backup.config = AdapterConfig(
+        name="兜底测试-备",
+        kind="openai_compatible",
+        base_url="https://example.test/v1",
+        api_key="k",
+        model="m-backup",
+        supports_tools=True,
+    )
+    adapter = FallbackAdapter([primary, backup])
+    session = _session(tmp_path, adapter)
+
+    response, call_usage = await session.call_model(
+        [{"role": "user", "content": "读一下 a.py"}], "execute_action"
+    )
+
+    # 切换真的发生了
+    assert adapter.last_provider == "兜底测试-备"
+    assert response.model == "m-backup"
+    assert metrics.counter(metrics.MODEL_FALLBACK) == 1
+    # 切换事件带 from/to，审计能数出来
+    payloads = await _events("model.fallback")
+    assert len(payloads) == 1
+    assert payloads[0]["from"] == "兜底测试-主"
+    assert payloads[0]["to"] == "兜底测试-备"
+    # token 记在备用模型名下，来源=provider
+    async with get_session_factory()() as db:
+        rows = (await db.execute(select(ModelUsage).where(ModelUsage.task_id == TASK_ID))).scalars().all()
+    ok_rows = [r for r in rows if r.status == "ok"]
+    assert len(ok_rows) == 1
+    assert ok_rows[0].model == "m-backup"
+    assert ok_rows[0].prompt_tokens == 120
+    assert ok_rows[0].completion_tokens == 30
+    assert ok_rows[0].usage_source == "provider"
+    assert call_usage["total_tokens"] == 150
+    # 主用那一笔失败调用也单独入账：全零 + error + unknown，call 数才数得清
+    err_rows = [r for r in rows if r.status == "error"]
+    assert len(err_rows) == 1
+    assert err_rows[0].model == "m"          # 主用模型名（BoomAdapter 的 model）
+    assert err_rows[0].prompt_tokens == 0
+    assert err_rows[0].usage_source == "unknown"
+
+
+async def test_all_models_failed_records_error_usage_and_keeps_cause(tmp_path):
+    """全部候选失败：错误信息保留主模型原因，且失败调用以全零 usage 入账。
+
+    "失败也要记账"是口径的一部分：失败那笔请求根本没花 token（全零+error），
+    但没有这条记录，"任务为什么失败、花了多少次请求"就无从对账。
+    """
+    from sqlalchemy import select
+
+    from blank_api.models.model_provider import ModelUsage
+
+    primary = BoomAdapter("兜底测试-主", ModelError("model_timeout", "读超时", retryable=True))
+    backup = BoomAdapter("兜底测试-备", ModelError("model_unreachable", "断网", retryable=True))
+    adapter = FallbackAdapter([primary, backup])
+    session = _session(tmp_path, adapter)
+
+    with pytest.raises(ModelError) as caught:
+        await session.call_model([{"role": "user", "content": "读一下 a.py"}], "execute_action")
+
+    # 错误保留：最外层的错要能一路指回主模型为什么挂
+    assert caught.value.code == "all_models_failed"
+    assert "读超时" in caught.value.message
+    # 失败调用入账：status=error、全零 usage
+    async with get_session_factory()() as db:
+        rows = (await db.execute(select(ModelUsage).where(ModelUsage.task_id == TASK_ID))).scalars().all()
+    err_rows = [r for r in rows if r.status == "error"]
+    assert len(err_rows) == 1
+    assert err_rows[0].prompt_tokens == 0
+    assert err_rows[0].completion_tokens == 0
+    assert err_rows[0].usage_source == "unknown"

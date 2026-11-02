@@ -496,3 +496,43 @@ async def test_a_shape_independent_failure_is_not_replayed(seeded, tmp_path):
     skipped = await _events("model.stream_fallback_skipped")
     assert [(row.get("code"), row.get("status")) for row in skipped] == list(cases), skipped
     assert not await _events("model.stream_fallback"), "不该退的那三次里，有任何一次偷偷退了"
+
+
+async def test_openai_stream_usage_source_is_provider_when_reported():
+    """供应商回了 usage → source=provider；这是成本数字的出身证明。"""
+    chunks = [
+        {"model": "m1", "choices": [{"delta": {"content": "好"}}]},
+        {"choices": [], "usage": {"prompt_tokens": 120, "completion_tokens": 30}},
+    ]
+    body = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+    adapter = _adapter("openai_compatible", body)
+    response = await adapter.bind_tools_stream(TOOLS, [ChatMessage("user", "hi")])
+    assert response.usage.prompt_tokens == 120
+    assert response.usage.source == "provider"
+
+
+async def test_openai_stream_usage_source_is_unknown_when_missing():
+    """网关吞掉 usage（如不认 stream_options）→ source=unknown，全零不冒充免费。"""
+    chunks = [
+        {"model": "m1", "choices": [{"delta": {"content": "好"}}]},
+        {"choices": [], "finish_reason": "stop"},
+    ]
+    body = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+    adapter = _adapter("openai_compatible", body)
+    response = await adapter.bind_tools_stream(TOOLS, [ChatMessage("user", "hi")])
+    assert response.usage.total_tokens == 0
+    assert response.usage.source == "unknown"
+
+
+async def test_openai_nonstream_usage_source_is_provider():
+    body = json.dumps(
+        {
+            "model": "m1",
+            "choices": [{"message": {"content": "好"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+    )
+    adapter = _adapter("openai_compatible", body)
+    response = await adapter.bind_tools(TOOLS, [ChatMessage("user", "hi")])
+    assert response.usage.source == "provider"
+    assert response.usage.total_tokens == 15

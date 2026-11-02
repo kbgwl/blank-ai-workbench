@@ -49,6 +49,17 @@ test("入口名统一为 blank-ai：package.json bin、shebang、帮助文案一
   assert.doesNotMatch(stdout, /(^|\s)blank(\s|$)/, "帮助文案不许再出现旧入口名 blank");
 });
 
+test("start 真的消费 --workspace：不再静默忽略目录参数", async () => {
+  const { stdout } = await run(process.execPath, [BIN, "--help"], { timeout: TIMEOUT });
+  assert.match(stdout, /--workspace/, "帮助里必须写明 --workspace，否则用户不知道有这个开关");
+  // 这条断言是结构性的：之前 start 完全不读参数，用户给了目录也会被丢掉，
+  // 打开界面还是空的。用源码级断言防回退——比"起一个后端再手点界面"稳。
+  const source = readFileSync(BIN, "utf8");
+  assert.match(source, /argValue\(args\.slice\(1\), "--workspace"\)/, "start 必须解析 --workspace");
+  assert.match(source, /工作区不存在/, "目录不存在时要有明确报错");
+  assert.match(source, /\/workspaces/, "绑定必须真的调后端的工作区接口");
+});
+
 test("干净目录模式：BLANK_SOURCE_ROOT 指向源码根时 start 能找到资源，未设时明确退出", async () => {
   const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
   // 未设 BLANK_SOURCE_ROOT 且不在源码树：退出码 2 + 明确指引，不是堆栈。

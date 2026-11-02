@@ -147,6 +147,9 @@ async def account_call(
                     cached_tokens=usage.cached_tokens,
                     cache_write_tokens=usage.cache_write_tokens,
                     reasoning_tokens=usage.reasoning_tokens,
+                    # 供应商回没回 usage 必须跟数字一起落库：全零+unknown 是"没说"，
+                    # 全零+provider 是"真的没花"，两者不能混。
+                    usage_source=getattr(usage, "source", "") or "unknown",
                     latency_ms=latency_ms,
                     status=status,
                     response_id=response_id or "",
@@ -168,6 +171,8 @@ async def account_call(
             "provider": provider or provider_name,
             "latency_ms": latency_ms,
             "status": status,
+            # 来源跟着数字走：读账的人要先知道这是供应商说的还是没说。
+            "usage_source": getattr(usage, "source", "") or "unknown",
             # 供应商那一笔请求的 id：三级口径说的是"花了多少"，这一条说的是"去哪家查这一笔"。
             "response_id": response_id or "",
         }

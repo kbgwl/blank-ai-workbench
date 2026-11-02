@@ -54,6 +54,7 @@ if not os.path.exists(_SETTINGS_FIXTURE):
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 
+from blank_api import config as config_module  # noqa: E402
 from blank_api.app import create_app  # noqa: E402
 from blank_api.db import Base, get_engine  # noqa: E402
 
@@ -100,7 +101,11 @@ def _isolate_artifact_root(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-async def client():
+async def client(monkeypatch):
+    # 测试装置是"受控的批处理客户端"（config.py 对 0 值的定位）：轮询型用例
+    # （team 轮询 20 次/秒）会自己把 120rpm 窗口打满，看到的 429 与被测行为无关。
+    monkeypatch.setenv("BLANK_RATE_LIMIT_RPM", "0")
+    config_module.get_settings.cache_clear()
     app = create_app()
     engine = get_engine()
     async with engine.begin() as conn:
@@ -109,6 +114,7 @@ async def client():
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+    config_module.get_settings.cache_clear()
 
 
 @pytest.fixture

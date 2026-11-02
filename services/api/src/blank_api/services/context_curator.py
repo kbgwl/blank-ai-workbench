@@ -114,6 +114,7 @@ def curate(
     memory: MemoryStore | None = None,
     history: list[dict] | tuple = (),
     max_chars: int = DEFAULT_MAX_CHARS,
+    allow_user_memory: bool = True,
 ) -> CuratedContext:
     store = memory if isinstance(memory, MemoryStore) else MemoryStore()
     query = str(goal or "").strip()
@@ -125,6 +126,13 @@ def curate(
             hits = store.search(root, query, limit=MAX_MEMORY_HITS)
         except Exception:
             hits = []
+    # 场景门控在调用方（allow_user_memory）：日常习惯（type=user）只在日常场景
+    # 读取，开发/文档等场景与日常共用工作区时也不把习惯带进上下文（§6.4）。
+    # 项目知识（project/feedback/reference）是共享资产，任何场景都可以读——
+    # 把整份记忆都挡掉等于让 dev 任务看不到自己前几天做过什么。
+    if not allow_user_memory:
+        # 属性名是 memory_type（as_dict 里才叫 type）。
+        hits = [hit for hit in hits if str(getattr(hit, "memory_type", "") or "") != "user"]
     result.memory_hits = [hit.as_dict() for hit in hits]
     result.files = _file_candidates(Path(root), query)
 

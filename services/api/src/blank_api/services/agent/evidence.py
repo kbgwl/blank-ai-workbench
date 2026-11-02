@@ -732,6 +732,18 @@ async def build_evidence(
     models = sorted({row.model for row, _ in usage_rows if row.model})
     providers = sorted({name for _, name in usage_rows if name})
     trace_ids = sorted({row.trace_id for row, _ in usage_rows if row.trace_id})
+    # 按模型拆账（任务书 §4.3"每个模型 tokens"）：对比哪个模型更省时按行分摊，
+    # 不从 totals 里猜。usage_sources 回答"这些数字是供应商说的还是没说"。
+    by_model: dict[str, dict[str, int]] = {}
+    for row, _ in usage_rows:
+        key = row.model or "(unknown)"
+        bucket = by_model.setdefault(
+            key, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        )
+        bucket["calls"] += 1
+        bucket["prompt_tokens"] += int(row.prompt_tokens or 0)
+        bucket["completion_tokens"] += int(row.completion_tokens or 0)
+        bucket["total_tokens"] += int(row.prompt_tokens or 0) + int(row.completion_tokens or 0)
     unverified = [
         f"验收条件未验证：{item['criterion']}"
         for item in acceptance
@@ -812,6 +824,12 @@ async def build_evidence(
         "usage": {
             "providers": providers,
             "models": models,
+            # 每个模型各花多少（任务书 §4.3）；usage_sources 是这批数字的来源集合
+            # （provider=供应商回的，unknown=没回——全零不等于免费）。
+            "by_model": by_model,
+            "usage_sources": sorted(
+                {str(getattr(row, "usage_source", "") or "unknown") for row, _ in usage_rows}
+            ),
             "trace_ids": trace_ids,
             "calls": len(usage_rows),
             "prompt_tokens": prompt_tokens,

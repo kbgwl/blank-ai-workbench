@@ -240,7 +240,105 @@ function serveStatic(root, children) {
   children.push(server);
 }
 
-function start() {
+/** 读 `--name value` / `--name=value`（CLI 只有几个开关，不值得上参数解析器）。 */
+function argValue(rest, name) {
+  const inline = rest.find((item) => item.startsWith(`${name}=`));
+  if (inline) return inline.slice(name.length + 1);
+  const index = rest.indexOf(name);
+  return index >= 0 ? rest[index + 1] : undefined;
+}
+
+/** 一次本地 API 调用：CLI 自己也要用后端接口（绑定工作区），不引入额外依赖。 */
+function apiJson(method, pathname, body) {
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? null : Buffer.from(JSON.stringify(body), "utf8");
+    const request = http.request(
+      {
+        host: "127.0.0.1",
+        port: API_PORT,
+        path: pathname,
+        method,
+        headers: payload ? { "content-type": "application/json", "content-length": payload.length } : {},
+        timeout: 8000,
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          let json = null;
+          try {
+            json = text ? JSON.parse(text) : null;
+          } catch {
+            json = null;
+          }
+          resolve({ status: response.statusCode ?? 0, json, text });
+        });
+      },
+    );
+    request.on("error", reject);
+    request.on("timeout", () => request.destroy(new Error("timeout")));
+    if (payload) request.write(payload);
+    request.end();
+  });
+}
+
+async function waitForApi(timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const health = await apiJson("GET", "/api/v1/health");
+      if (health.status === 200) return true;
+    } catch {
+      // 后端还在启动，接着等。
+    }
+    await new Promise((done) => setTimeout(done, 400));
+  }
+  return false;
+}
+
+/**
+ * `--workspace <dir>`：把用户给的这个目录绑成活动工作区。
+ *
+ * 之前 start 是静默忽略这个参数的——用户以为指定了目录，实际打开界面还是
+ * 空的，只能自己再点一遍选目录。工作区是"这个任务改哪个仓库"的唯一来源，
+ * 参数说了就要真生效。
+ */
+async function bindWorkspace(dir) {
+  const target = path.resolve(String(dir));
+  if (!existsSync(target)) {
+    console.error(`✗ 工作区不存在：${target}`);
+    return;
+  }
+  if (!(await waitForApi())) {
+    console.error("✗ 后端 30s 内未就绪，工作区未绑定（界面里仍可手动选目录）。");
+    return;
+  }
+  const listed = await apiJson("GET", "/api/v1/projects");
+  const projects = Array.isArray(listed.json) ? listed.json : listed.json?.items ?? [];
+  let project = projects[0] ?? null;
+  if (!project) {
+    const created = await apiJson("POST", "/api/v1/projects", { name: path.basename(target) || "工作区" });
+    if (created.status >= 300 || !created.json?.id) {
+      console.error(`✗ 创建工作区项目失败（HTTP ${created.status}）：${String(created.text).slice(0, 140)}`);
+      return;
+    }
+    project = created.json;
+  }
+  const bound = await apiJson("POST", `/api/v1/projects/${project.id}/workspaces`, {
+    path: target,
+    label: path.basename(target) || undefined,
+  });
+  if (bound.status >= 300) {
+    console.error(`✗ 绑定工作区失败（HTTP ${bound.status}）：${String(bound.text).slice(0, 160)}`);
+    return;
+  }
+  // 响应里的 path 默认是脱敏后的 `<workspace:xxx>`（后端有意不暴露主机绝对路径），
+  // 这里打印用户自己给的那个目录才读得懂。
+  console.log(`→ 工作区: ${target}${bound.json?.is_active ? "（活动）" : ""}`);
+}
+
+function start(args = []) {
   init();
   const root = findRoot();
   if (!root) {
@@ -348,13 +446,20 @@ function start() {
     openBrowser(`http://127.0.0.1:${API_PORT}/docs`);
   }
   console.log(`后端 http://127.0.0.1:${API_PORT}  ·  Ctrl+C 退出`);
+  const workspace = argValue(args.slice(1), "--workspace");
+  if (workspace) {
+    // 绑工作区要等后端就绪：不 await 是为了不让"等后端"挡住在浏览器里已经能打开的界面。
+    bindWorkspace(workspace).catch((error) => {
+      console.error(`✗ 绑定工作区失败：${error?.message ?? error}`);
+    });
+  }
 }
 
 switch (command) {
   case "start":
   case "run":
   case undefined:
-    start();
+    start(args);
     break;
   case "init":
     init();
@@ -375,6 +480,7 @@ switch (command) {
     console.log("\n用法：blank-ai [start|init|doctor|list|add|remove]");
     console.log("\n示例：");
     console.log("  blank-ai                 启动本地工作台（自检环境，缺依赖时给出安装命令）");
+    console.log("  blank-ai start --workspace D:\\proj   启动并把这个目录绑成活动工作区");
     console.log("  blank-ai init            初始化本地配置");
     console.log("  blank-ai doctor          检查 Node、Python、配置和工作区");
     console.log("  blank-ai list            查看已启用的可选功能");

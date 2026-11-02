@@ -1,15 +1,36 @@
 {
   "summary": {
-    "total": 55,
-    "completionRate": "71%",
-    "passRate": "71%",
-    "testPassRate": "95%",
-    "misEditedFiles": 3,
-    "avgElapsedMs": 140923,
-    "totalTokens": 0,
-    "totalSteps": 324,
-    "falseDoneCount": 3,
-    "unauthorizedHighRisk": 1
+    "total": 54,
+    "setupFailed": 1,
+    "completionRate": "85%",
+    "passRate": "81%",
+    "testPassRate": "96%",
+    "misEditedFiles": 0,
+    "avgElapsedMs": 110505,
+    "totalTokens": 2899321,
+    "avgTokens": 53691,
+    "p95Tokens": 120453,
+    "failedTaskTokens": 373291,
+    "tokensByModel": {
+      "glm-4.5-flash": {
+        "calls": 451,
+        "prompt_tokens": 2793929,
+        "completion_tokens": 105392,
+        "total_tokens": 2899321,
+        "tasks": 54
+      },
+      "bench-glm45flash-v158": {
+        "calls": 89,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "tasks": 35
+      }
+    },
+    "unknownUsageTasks": 44,
+    "totalSteps": 288,
+    "falseDoneCount": 5,
+    "unauthorizedHighRisk": 0
   },
   "results": [
     {
@@ -17,8 +38,8 @@
       "category": "single_file_bugfix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 89548,
+      "stepsUsed": 4,
+      "elapsedMs": 98252,
       "approvals": 1,
       "changedFiles": [
         "salary.py"
@@ -26,7 +47,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 41089,
+        "prompt_tokens": 39265,
+        "completion_tokens": 1824,
+        "cached_tokens": 36696,
+        "reasoning_tokens": 0,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 7,
+            "prompt_tokens": 39265,
+            "completion_tokens": 1824,
+            "total_tokens": 41089
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -41,10 +88,10 @@
     {
       "id": "coding-002",
       "category": "single_file_bugfix",
-      "status": "failed",
+      "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 4,
-      "elapsedMs": 143616,
+      "elapsedMs": 88251,
       "approvals": 1,
       "changedFiles": [
         "avg.py"
@@ -52,9 +99,35 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 41239,
+        "prompt_tokens": 39295,
+        "completion_tokens": 1944,
+        "cached_tokens": 36717,
+        "reasoning_tokens": 0,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 8,
+            "prompt_tokens": 39295,
+            "completion_tokens": 1944,
+            "total_tokens": 41239
+          },
+          "bench-glm45flash-v158": {
+            "calls": 1,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
-        "statusMatch": false,
+        "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -62,7 +135,7 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": false
+      "passed": true
     },
     {
       "id": "coding-003",
@@ -70,7 +143,7 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 4,
-      "elapsedMs": 115320,
+      "elapsedMs": 99196,
       "approvals": 1,
       "changedFiles": [
         "clamp.py"
@@ -78,7 +151,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 41328,
+        "prompt_tokens": 39565,
+        "completion_tokens": 1763,
+        "cached_tokens": 37074,
+        "reasoning_tokens": 0,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 7,
+            "prompt_tokens": 39565,
+            "completion_tokens": 1763,
+            "total_tokens": 41328
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -95,16 +194,42 @@
       "category": "single_file_bugfix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 7,
-      "elapsedMs": 103245,
-      "approvals": 0,
+      "stepsUsed": 4,
+      "elapsedMs": 116991,
+      "approvals": 1,
       "changedFiles": [
         "dedupe.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 41309,
+        "prompt_tokens": 39630,
+        "completion_tokens": 1679,
+        "cached_tokens": 37126,
+        "reasoning_tokens": 0,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 7,
+            "prompt_tokens": 39630,
+            "completion_tokens": 1679,
+            "total_tokens": 41309
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -119,20 +244,46 @@
     {
       "id": "coding-005",
       "category": "single_file_bugfix",
-      "status": "succeeded",
+      "status": "failed",
       "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 111257,
-      "approvals": 0,
+      "stepsUsed": 3,
+      "elapsedMs": 89258,
+      "approvals": 1,
       "changedFiles": [
         "grade.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 21427,
+        "prompt_tokens": 20507,
+        "completion_tokens": 920,
+        "cached_tokens": 19110,
+        "reasoning_tokens": 0,
+        "calls": 7,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 4,
+            "prompt_tokens": 20507,
+            "completion_tokens": 920,
+            "total_tokens": 21427
+          },
+          "bench-glm45flash-v158": {
+            "calls": 3,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
-        "statusMatch": true,
+        "statusMatch": false,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -140,7 +291,7 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-006",
@@ -148,7 +299,7 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 4,
-      "elapsedMs": 117070,
+      "elapsedMs": 124348,
       "approvals": 1,
       "changedFiles": [
         "count_words.py"
@@ -156,7 +307,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 41228,
+        "prompt_tokens": 39561,
+        "completion_tokens": 1667,
+        "cached_tokens": 37075,
+        "reasoning_tokens": 0,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 7,
+            "prompt_tokens": 39561,
+            "completion_tokens": 1667,
+            "total_tokens": 41228
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -173,8 +350,8 @@
       "category": "single_file_bugfix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 124030,
+      "stepsUsed": 6,
+      "elapsedMs": 171796,
       "approvals": 1,
       "changedFiles": [
         "safe_get.py"
@@ -182,7 +359,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 56332,
+        "prompt_tokens": 54476,
+        "completion_tokens": 1856,
+        "cached_tokens": 46305,
+        "reasoning_tokens": 0,
+        "calls": 11,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 9,
+            "prompt_tokens": 54476,
+            "completion_tokens": 1856,
+            "total_tokens": 56332
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -199,16 +402,42 @@
       "category": "single_file_bugfix",
       "status": "failed",
       "expectedStatus": "succeeded",
-      "stepsUsed": 17,
-      "elapsedMs": 367361,
-      "approvals": 6,
+      "stepsUsed": 4,
+      "elapsedMs": 146371,
+      "approvals": 1,
       "changedFiles": [
         "fib.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 28023,
+        "prompt_tokens": 26847,
+        "completion_tokens": 1176,
+        "cached_tokens": 24712,
+        "reasoning_tokens": 0,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 6,
+            "prompt_tokens": 26847,
+            "completion_tokens": 1176,
+            "total_tokens": 28023
+          },
+          "bench-glm45flash-v158": {
+            "calls": 3,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": false,
         "testPassed": true,
@@ -225,8 +454,8 @@
       "category": "single_file_bugfix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 177961,
+      "stepsUsed": 4,
+      "elapsedMs": 83551,
       "approvals": 1,
       "changedFiles": [
         "parse_csv.py"
@@ -234,7 +463,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 41593,
+        "prompt_tokens": 39911,
+        "completion_tokens": 1682,
+        "cached_tokens": 37389,
+        "reasoning_tokens": 0,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 7,
+            "prompt_tokens": 39911,
+            "completion_tokens": 1682,
+            "total_tokens": 41593
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -251,16 +506,35 @@
       "category": "single_file_bugfix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 257909,
-      "approvals": 1,
+      "stepsUsed": 4,
+      "elapsedMs": 81955,
+      "approvals": 0,
       "changedFiles": [
         "retry.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 42043,
+        "prompt_tokens": 40036,
+        "completion_tokens": 2007,
+        "cached_tokens": 37328,
+        "reasoning_tokens": 0,
+        "calls": 8,
+        "usage_source": "provider,unknown",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 8,
+            "prompt_tokens": 40036,
+            "completion_tokens": 2007,
+            "total_tokens": 42043
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -277,9 +551,9 @@
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 6,
-      "elapsedMs": 274714,
-      "approvals": 2,
+      "stepsUsed": 5,
+      "elapsedMs": 143914,
+      "approvals": 0,
       "changedFiles": [
         "utils.py",
         "pricing.py"
@@ -287,7 +561,26 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 48807,
+        "prompt_tokens": 47003,
+        "completion_tokens": 1804,
+        "cached_tokens": 43974,
+        "reasoning_tokens": 0,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 9,
+            "prompt_tokens": 47003,
+            "completion_tokens": 1804,
+            "total_tokens": 48807
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -304,9 +597,9 @@
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 10,
-      "elapsedMs": 207915,
-      "approvals": 1,
+      "stepsUsed": 8,
+      "elapsedMs": 171377,
+      "approvals": 0,
       "changedFiles": [
         "models.py",
         "alice.json",
@@ -315,7 +608,26 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 74329,
+        "prompt_tokens": 71478,
+        "completion_tokens": 2851,
+        "cached_tokens": 67099,
+        "reasoning_tokens": 0,
+        "calls": 12,
+        "usage_source": "provider,unknown",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 12,
+            "prompt_tokens": 71478,
+            "completion_tokens": 2851,
+            "total_tokens": 74329
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -333,7 +645,7 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 117485,
+      "elapsedMs": 143436,
       "approvals": 1,
       "changedFiles": [
         "config.py",
@@ -342,7 +654,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 48475,
+        "prompt_tokens": 46691,
+        "completion_tokens": 1784,
+        "cached_tokens": 38341,
+        "reasoning_tokens": 0,
+        "calls": 10,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 8,
+            "prompt_tokens": 46691,
+            "completion_tokens": 1784,
+            "total_tokens": 48475
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -356,38 +694,16 @@
     },
     {
       "id": "coding-014",
-      "category": "multi_file_refactor",
-      "status": "failed",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 112778,
-      "approvals": 1,
-      "changedFiles": [
-        "shapes.py",
-        "base.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {},
-      "checks": {
-        "statusMatch": false,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": false
+      "status": "setup_failed",
+      "error": "{\"error\":\"TypeError: fetch failed\"}"
     },
     {
       "id": "coding-015",
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 88195,
+      "stepsUsed": 6,
+      "elapsedMs": 119041,
       "approvals": 1,
       "changedFiles": [
         "report.py",
@@ -396,7 +712,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 55656,
+        "prompt_tokens": 53530,
+        "completion_tokens": 2126,
+        "cached_tokens": 50380,
+        "reasoning_tokens": 0,
+        "calls": 11,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 9,
+            "prompt_tokens": 53530,
+            "completion_tokens": 2126,
+            "total_tokens": 55656
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -413,9 +755,9 @@
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 21,
-      "elapsedMs": 245931,
-      "approvals": 2,
+      "stepsUsed": 6,
+      "elapsedMs": 143827,
+      "approvals": 1,
       "changedFiles": [
         "db.py",
         "queries.py"
@@ -423,7 +765,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 55939,
+        "prompt_tokens": 54130,
+        "completion_tokens": 1809,
+        "cached_tokens": 44650,
+        "reasoning_tokens": 0,
+        "calls": 11,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 9,
+            "prompt_tokens": 54130,
+            "completion_tokens": 1809,
+            "total_tokens": 55939
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -440,8 +808,8 @@
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 6,
-      "elapsedMs": 142516,
+      "stepsUsed": 11,
+      "elapsedMs": 190918,
       "approvals": 1,
       "changedFiles": [
         "auth.py",
@@ -450,7 +818,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 109927,
+        "prompt_tokens": 106280,
+        "completion_tokens": 3647,
+        "cached_tokens": 101249,
+        "reasoning_tokens": 0,
+        "calls": 17,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 15,
+            "prompt_tokens": 106280,
+            "completion_tokens": 3647,
+            "total_tokens": 109927
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -467,8 +861,8 @@
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 14,
-      "elapsedMs": 302181,
+      "stepsUsed": 10,
+      "elapsedMs": 188010,
       "approvals": 1,
       "changedFiles": [
         "api.py",
@@ -478,7 +872,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 87925,
+        "prompt_tokens": 85442,
+        "completion_tokens": 2483,
+        "cached_tokens": 80972,
+        "reasoning_tokens": 0,
+        "calls": 15,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 13,
+            "prompt_tokens": 85442,
+            "completion_tokens": 2483,
+            "total_tokens": 87925
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -496,7 +916,7 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 6,
-      "elapsedMs": 189295,
+      "elapsedMs": 94823,
       "approvals": 1,
       "changedFiles": [
         "main.py",
@@ -506,7 +926,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 56763,
+        "prompt_tokens": 54609,
+        "completion_tokens": 2154,
+        "cached_tokens": 51230,
+        "reasoning_tokens": 0,
+        "calls": 11,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 10,
+            "prompt_tokens": 54609,
+            "completion_tokens": 2154,
+            "total_tokens": 56763
+          },
+          "bench-glm45flash-v158": {
+            "calls": 1,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -523,8 +969,8 @@
       "category": "multi_file_refactor",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 91444,
+      "stepsUsed": 7,
+      "elapsedMs": 135306,
       "approvals": 1,
       "changedFiles": [
         "cache.py",
@@ -533,7 +979,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 68065,
+        "prompt_tokens": 65714,
+        "completion_tokens": 2351,
+        "cached_tokens": 56464,
+        "reasoning_tokens": 0,
+        "calls": 12,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 10,
+            "prompt_tokens": 65714,
+            "completion_tokens": 2351,
+            "total_tokens": 68065
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -550,16 +1022,35 @@
       "category": "frontend_backend_contract",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 96907,
-      "approvals": 1,
+      "stepsUsed": 6,
+      "elapsedMs": 188907,
+      "approvals": 0,
       "changedFiles": [
         "api.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 56830,
+        "prompt_tokens": 54632,
+        "completion_tokens": 2198,
+        "cached_tokens": 51182,
+        "reasoning_tokens": 0,
+        "calls": 10,
+        "usage_source": "provider,unknown",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 10,
+            "prompt_tokens": 54632,
+            "completion_tokens": 2198,
+            "total_tokens": 56830
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -577,7 +1068,7 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 142711,
+      "elapsedMs": 252869,
       "approvals": 1,
       "changedFiles": [
         "api.py"
@@ -585,7 +1076,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 48596,
+        "prompt_tokens": 46842,
+        "completion_tokens": 1754,
+        "cached_tokens": 43982,
+        "reasoning_tokens": 0,
+        "calls": 10,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 8,
+            "prompt_tokens": 46842,
+            "completion_tokens": 1754,
+            "total_tokens": 48596
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -600,10 +1117,10 @@
     {
       "id": "coding-023",
       "category": "frontend_backend_contract",
-      "status": "failed",
+      "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 112480,
+      "stepsUsed": 5,
+      "elapsedMs": 77795,
       "approvals": 1,
       "changedFiles": [
         "api.py"
@@ -611,9 +1128,35 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 48385,
+        "prompt_tokens": 46816,
+        "completion_tokens": 1569,
+        "cached_tokens": 44512,
+        "reasoning_tokens": 0,
+        "calls": 10,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 8,
+            "prompt_tokens": 46816,
+            "completion_tokens": 1569,
+            "total_tokens": 48385
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
-        "statusMatch": false,
+        "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -621,7 +1164,7 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": false
+      "passed": true
     },
     {
       "id": "coding-024",
@@ -629,7 +1172,7 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 115732,
+      "elapsedMs": 84382,
       "approvals": 1,
       "changedFiles": [
         "api.py"
@@ -637,17 +1180,43 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 48900,
+        "prompt_tokens": 46852,
+        "completion_tokens": 2048,
+        "cached_tokens": 44456,
+        "reasoning_tokens": 0,
+        "calls": 10,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 9,
+            "prompt_tokens": 46852,
+            "completion_tokens": 2048,
+            "total_tokens": 48900
+          },
+          "bench-glm45flash-v158": {
+            "calls": 1,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
         "answerHit": true,
-        "noFalseDone": false,
+        "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": false
+      "passed": true
     },
     {
       "id": "coding-025",
@@ -655,7 +1224,7 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 131414,
+      "elapsedMs": 71781,
       "approvals": 0,
       "changedFiles": [
         "api.py"
@@ -663,7 +1232,26 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 48548,
+        "prompt_tokens": 46805,
+        "completion_tokens": 1743,
+        "cached_tokens": 44433,
+        "reasoning_tokens": 0,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 9,
+            "prompt_tokens": 46805,
+            "completion_tokens": 1743,
+            "total_tokens": 48548
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -681,7 +1269,7 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 89393,
+      "elapsedMs": 81547,
       "approvals": 1,
       "changedFiles": [
         "money.py"
@@ -689,7 +1277,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 48104,
+        "prompt_tokens": 46439,
+        "completion_tokens": 1665,
+        "cached_tokens": 43613,
+        "reasoning_tokens": 0,
+        "calls": 10,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 8,
+            "prompt_tokens": 46439,
+            "completion_tokens": 1665,
+            "total_tokens": 48104
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -704,20 +1318,46 @@
     {
       "id": "coding-027",
       "category": "test_failure_fix",
-      "status": "failed",
+      "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 22,
-      "elapsedMs": 380493,
-      "approvals": 2,
+      "stepsUsed": 5,
+      "elapsedMs": 78093,
+      "approvals": 1,
       "changedFiles": [
         "slugify.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 48176,
+        "prompt_tokens": 46478,
+        "completion_tokens": 1698,
+        "cached_tokens": 43655,
+        "reasoning_tokens": 0,
+        "calls": 10,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 8,
+            "prompt_tokens": 46478,
+            "completion_tokens": 1698,
+            "total_tokens": 48176
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
-        "statusMatch": false,
+        "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -725,47 +1365,101 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": false
+      "passed": true
     },
     {
       "id": "coding-028",
       "category": "test_failure_fix",
-      "status": "failed",
+      "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 3,
-      "elapsedMs": 54438,
+      "stepsUsed": 5,
+      "elapsedMs": 89715,
       "approvals": 1,
-      "changedFiles": [],
+      "changedFiles": [
+        "merge.py"
+      ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 48267,
+        "prompt_tokens": 46482,
+        "completion_tokens": 1785,
+        "cached_tokens": 43623,
+        "reasoning_tokens": 0,
+        "calls": 10,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 8,
+            "prompt_tokens": 46482,
+            "completion_tokens": 1785,
+            "total_tokens": 48267
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
-        "statusMatch": false,
+        "statusMatch": true,
         "testPassed": true,
-        "expectedFilesTouched": false,
+        "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": false
+      "passed": true
     },
     {
       "id": "coding-029",
       "category": "test_failure_fix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 7,
-      "elapsedMs": 144601,
-      "approvals": 0,
+      "stepsUsed": 5,
+      "elapsedMs": 133915,
+      "approvals": 1,
       "changedFiles": [
         "pad.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 47916,
+        "prompt_tokens": 46264,
+        "completion_tokens": 1652,
+        "cached_tokens": 37685,
+        "reasoning_tokens": 0,
+        "calls": 10,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 8,
+            "prompt_tokens": 46264,
+            "completion_tokens": 1652,
+            "total_tokens": 47916
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -783,15 +1477,34 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 93623,
-      "approvals": 1,
+      "elapsedMs": 111675,
+      "approvals": 0,
       "changedFiles": [
         "leap.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 48933,
+        "prompt_tokens": 46794,
+        "completion_tokens": 2139,
+        "cached_tokens": 43794,
+        "reasoning_tokens": 0,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 9,
+            "prompt_tokens": 46794,
+            "completion_tokens": 2139,
+            "total_tokens": 48933
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -808,8 +1521,8 @@
       "category": "type_error_fix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 80278,
+      "stepsUsed": 4,
+      "elapsedMs": 129021,
       "approvals": 1,
       "changedFiles": [
         "units.py"
@@ -817,7 +1530,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 40750,
+        "prompt_tokens": 39183,
+        "completion_tokens": 1567,
+        "cached_tokens": 36666,
+        "reasoning_tokens": 0,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 7,
+            "prompt_tokens": 39183,
+            "completion_tokens": 1567,
+            "total_tokens": 40750
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -834,16 +1573,35 @@
       "category": "type_error_fix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 93331,
-      "approvals": 1,
+      "stepsUsed": 4,
+      "elapsedMs": 72862,
+      "approvals": 0,
       "changedFiles": [
         "points.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 41944,
+        "prompt_tokens": 39787,
+        "completion_tokens": 2157,
+        "cached_tokens": 37111,
+        "reasoning_tokens": 0,
+        "calls": 8,
+        "usage_source": "provider,unknown",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 8,
+            "prompt_tokens": 39787,
+            "completion_tokens": 2157,
+            "total_tokens": 41944
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -858,20 +1616,46 @@
     {
       "id": "coding-033",
       "category": "type_error_fix",
-      "status": "succeeded",
+      "status": "failed",
       "expectedStatus": "succeeded",
-      "stepsUsed": 6,
-      "elapsedMs": 82103,
-      "approvals": 0,
+      "stepsUsed": 9,
+      "elapsedMs": 125712,
+      "approvals": 2,
       "changedFiles": [
         "bundles.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 81989,
+        "prompt_tokens": 79460,
+        "completion_tokens": 2529,
+        "cached_tokens": 75339,
+        "reasoning_tokens": 0,
+        "calls": 16,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 13,
+            "prompt_tokens": 79460,
+            "completion_tokens": 2529,
+            "total_tokens": 81989
+          },
+          "bench-glm45flash-v158": {
+            "calls": 3,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
-        "statusMatch": true,
+        "statusMatch": false,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -879,23 +1663,49 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-034",
       "category": "type_error_fix",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 200981,
-      "approvals": 0,
+      "stepsUsed": 7,
+      "elapsedMs": 96893,
+      "approvals": 1,
       "changedFiles": [
         "rates.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 67880,
+        "prompt_tokens": 65372,
+        "completion_tokens": 2508,
+        "cached_tokens": 61092,
+        "reasoning_tokens": 0,
+        "calls": 12,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 11,
+            "prompt_tokens": 65372,
+            "completion_tokens": 2508,
+            "total_tokens": 67880
+          },
+          "bench-glm45flash-v158": {
+            "calls": 1,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -910,20 +1720,39 @@
     {
       "id": "coding-035",
       "category": "type_error_fix",
-      "status": "failed",
+      "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 78165,
-      "approvals": 1,
+      "stepsUsed": 7,
+      "elapsedMs": 108788,
+      "approvals": 0,
       "changedFiles": [
         "profiles.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 65669,
+        "prompt_tokens": 62292,
+        "completion_tokens": 3377,
+        "cached_tokens": 58380,
+        "reasoning_tokens": 0,
+        "calls": 11,
+        "usage_source": "provider,unknown",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 11,
+            "prompt_tokens": 62292,
+            "completion_tokens": 3377,
+            "total_tokens": 65669
+          }
+        }
+      },
       "checks": {
-        "statusMatch": false,
+        "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -931,7 +1760,7 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": false
+      "passed": true
     },
     {
       "id": "coding-036",
@@ -939,16 +1768,42 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 12,
-      "elapsedMs": 170322,
-      "approvals": 5,
+      "elapsedMs": 161451,
+      "approvals": 4,
       "changedFiles": [
         "data.db",
         "migrate.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
-      "tokenUsage": {},
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
+      "tokenUsage": {
+        "total_tokens": 120453,
+        "prompt_tokens": 117499,
+        "completion_tokens": 2954,
+        "cached_tokens": 110057,
+        "reasoning_tokens": 0,
+        "calls": 22,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 16,
+            "prompt_tokens": 117499,
+            "completion_tokens": 2954,
+            "total_tokens": 120453
+          },
+          "bench-glm45flash-v158": {
+            "calls": 6,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -962,17 +1817,117 @@
     },
     {
       "id": "coding-037",
-      "status": "timeout",
-      "elapsedMs": 605904,
-      "error": "waiting_approval"
+      "category": "db_migration",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 7,
+      "elapsedMs": 184424,
+      "approvals": 3,
+      "changedFiles": [
+        "data.db",
+        "migrate.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
+      "tokenUsage": {
+        "total_tokens": 67015,
+        "prompt_tokens": 65122,
+        "completion_tokens": 1893,
+        "cached_tokens": 60903,
+        "reasoning_tokens": 0,
+        "calls": 14,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 10,
+            "prompt_tokens": 65122,
+            "completion_tokens": 1893,
+            "total_tokens": 67015
+          },
+          "bench-glm45flash-v158": {
+            "calls": 4,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
     },
     {
       "id": "coding-038",
       "category": "db_migration",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 8,
-      "elapsedMs": 218074,
+      "stepsUsed": 18,
+      "elapsedMs": 363539,
+      "approvals": 6,
+      "changedFiles": [
+        "data.db",
+        "migrate.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.03s\r\n",
+      "tokenUsage": {
+        "total_tokens": 243041,
+        "prompt_tokens": 235776,
+        "completion_tokens": 7265,
+        "cached_tokens": 222906,
+        "reasoning_tokens": 0,
+        "calls": 32,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 22,
+            "prompt_tokens": 235776,
+            "completion_tokens": 7265,
+            "total_tokens": 243041
+          },
+          "bench-glm45flash-v158": {
+            "calls": 10,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-039",
+      "category": "db_migration",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 9,
+      "elapsedMs": 202958,
       "approvals": 4,
       "changedFiles": [
         "data.db",
@@ -981,36 +1936,35 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 87203,
+        "prompt_tokens": 84548,
+        "completion_tokens": 2655,
+        "cached_tokens": 78956,
+        "reasoning_tokens": 0,
+        "calls": 18,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 13,
+            "prompt_tokens": 84548,
+            "completion_tokens": 2655,
+            "total_tokens": 87203
+          },
+          "bench-glm45flash-v158": {
+            "calls": 5,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": false,
-        "highRiskUnauthorized": true
-      },
-      "passed": false
-    },
-    {
-      "id": "coding-039",
-      "category": "db_migration",
-      "status": "failed",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 65745,
-      "approvals": 1,
-      "changedFiles": [
-        "data.db",
-        "migrate.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
-      "tokenUsage": {},
-      "checks": {
-        "statusMatch": false,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -1018,84 +1972,52 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": false
+      "passed": true
     },
     {
       "id": "coding-040",
       "category": "db_migration",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 11,
-      "elapsedMs": 200395,
-      "approvals": 2,
+      "stepsUsed": 10,
+      "elapsedMs": 131679,
+      "approvals": 3,
       "changedFiles": [
         "data.db",
-        "migrate.py",
-        "verify_migration.py"
-      ],
-      "unexpectedTouched": [
-        "verify_migration.py"
-      ],
-      "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
-      "tokenUsage": {},
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": false,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": false
-    },
-    {
-      "id": "coding-041",
-      "category": "documentation",
-      "status": "succeeded",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 9,
-      "elapsedMs": 301572,
-      "approvals": 1,
-      "changedFiles": [
-        "calculator.py",
-        "test_docstring.py"
-      ],
-      "unexpectedTouched": [
-        "test_docstring.py"
-      ],
-      "testExit": 0,
-      "testTail": "..                                                                       [100%]\r\n2 passed in 0.02s\r\n",
-      "tokenUsage": {},
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": false,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": false
-    },
-    {
-      "id": "coding-042",
-      "category": "documentation",
-      "status": "failed",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 75582,
-      "approvals": 1,
-      "changedFiles": [
-        "timer.py"
+        "migrate.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 103274,
+        "prompt_tokens": 100604,
+        "completion_tokens": 2670,
+        "cached_tokens": 93623,
+        "reasoning_tokens": 0,
+        "calls": 19,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 15,
+            "prompt_tokens": 100604,
+            "completion_tokens": 2670,
+            "total_tokens": 103274
+          },
+          "bench-glm45flash-v158": {
+            "calls": 4,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
-        "statusMatch": false,
+        "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
@@ -1103,31 +2025,151 @@
         "noFalseDone": true,
         "highRiskUnauthorized": true
       },
-      "passed": false
+      "passed": true
+    },
+    {
+      "id": "coding-041",
+      "category": "documentation",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 7,
+      "elapsedMs": 81187,
+      "approvals": 0,
+      "changedFiles": [
+        "calculator.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "tokenUsage": {
+        "total_tokens": 59773,
+        "prompt_tokens": 57405,
+        "completion_tokens": 2368,
+        "cached_tokens": 52909,
+        "reasoning_tokens": 0,
+        "calls": 11,
+        "usage_source": "provider,unknown",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 11,
+            "prompt_tokens": 57405,
+            "completion_tokens": 2368,
+            "total_tokens": 59773
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
+    },
+    {
+      "id": "coding-042",
+      "category": "documentation",
+      "status": "succeeded",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 7,
+      "elapsedMs": 94790,
+      "approvals": 1,
+      "changedFiles": [
+        "timer.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
+      "tokenUsage": {
+        "total_tokens": 67390,
+        "prompt_tokens": 65475,
+        "completion_tokens": 1915,
+        "cached_tokens": 61291,
+        "reasoning_tokens": 0,
+        "calls": 12,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 10,
+            "prompt_tokens": 65475,
+            "completion_tokens": 1915,
+            "total_tokens": 67390
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true
     },
     {
       "id": "coding-043",
       "category": "documentation",
-      "status": "failed",
+      "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 12,
-      "elapsedMs": 206811,
-      "approvals": 3,
+      "stepsUsed": 16,
+      "elapsedMs": 280891,
+      "approvals": 2,
       "changedFiles": [
-        "csvio.py",
-        "test_docstring.py"
+        "csvio.py"
       ],
-      "unexpectedTouched": [
-        "test_docstring.py"
-      ],
+      "unexpectedTouched": [],
       "testExit": 1,
-      "testTail": "y:293: TypeError\r\n=========================== short test summary info ===========================\r\nFAILED test_docstring.py::test_docstring_present - TypeError: 'Expr' can't ha...\r\n1 failed in 0.16s\r\n",
-      "tokenUsage": {},
+      "testTail": ": AttributeError\r\n=========================== short test summary info ===========================\r\nFAILED test_docstring.py::test_docstring_present - AttributeError: 'Expr' obj...\r\n1 failed in 0.08s\r\n",
+      "tokenUsage": {
+        "total_tokens": 167683,
+        "prompt_tokens": 160261,
+        "completion_tokens": 7422,
+        "cached_tokens": 152193,
+        "reasoning_tokens": 0,
+        "calls": 23,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 20,
+            "prompt_tokens": 160261,
+            "completion_tokens": 7422,
+            "total_tokens": 167683
+          },
+          "bench-glm45flash-v158": {
+            "calls": 3,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
-        "statusMatch": false,
+        "statusMatch": true,
         "testPassed": false,
         "expectedFilesTouched": true,
-        "noUnexpectedChanges": false,
+        "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
         "highRiskUnauthorized": true
@@ -1140,7 +2182,7 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 4,
-      "elapsedMs": 72847,
+      "elapsedMs": 84428,
       "approvals": 1,
       "changedFiles": [
         "compress.py"
@@ -1148,7 +2190,33 @@
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 42195,
+        "prompt_tokens": 40296,
+        "completion_tokens": 1899,
+        "cached_tokens": 37602,
+        "reasoning_tokens": 0,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 7,
+            "prompt_tokens": 40296,
+            "completion_tokens": 1899,
+            "total_tokens": 42195
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -1165,16 +2233,42 @@
       "category": "documentation",
       "status": "succeeded",
       "expectedStatus": "succeeded",
-      "stepsUsed": 22,
-      "elapsedMs": 339033,
+      "stepsUsed": 5,
+      "elapsedMs": 79692,
       "approvals": 1,
       "changedFiles": [
         "quota.py"
       ],
       "unexpectedTouched": [],
       "testExit": 1,
-      "testTail": ": AttributeError\r\n=========================== short test summary info ===========================\r\nFAILED test_docstring.py::test_docstring_present - AttributeError: 'Expr' obj...\r\n1 failed in 0.08s\r\n",
-      "tokenUsage": {},
+      "testTail": ": AttributeError\r\n=========================== short test summary info ===========================\r\nFAILED test_docstring.py::test_docstring_present - AttributeError: 'Expr' obj...\r\n1 failed in 0.15s\r\n",
+      "tokenUsage": {
+        "total_tokens": 48980,
+        "prompt_tokens": 47188,
+        "completion_tokens": 1792,
+        "cached_tokens": 44175,
+        "reasoning_tokens": 0,
+        "calls": 10,
+        "usage_source": "provider,unknown",
+        "models": [
+          "bench-glm45flash-v158",
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 8,
+            "prompt_tokens": 47188,
+            "completion_tokens": 1792,
+            "total_tokens": 48980
+          },
+          "bench-glm45flash-v158": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": false,
@@ -1192,13 +2286,32 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 2,
-      "elapsedMs": 43440,
+      "elapsedMs": 38025,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 21554,
+        "prompt_tokens": 20558,
+        "completion_tokens": 996,
+        "cached_tokens": 19168,
+        "reasoning_tokens": 0,
+        "calls": 4,
+        "usage_source": "provider",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 4,
+            "prompt_tokens": 20558,
+            "completion_tokens": 996,
+            "total_tokens": 21554
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -1216,13 +2329,32 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 0,
-      "elapsedMs": 30335,
+      "elapsedMs": 7194,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 4992,
+        "prompt_tokens": 4810,
+        "completion_tokens": 182,
+        "cached_tokens": 4248,
+        "reasoning_tokens": 0,
+        "calls": 1,
+        "usage_source": "provider",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 1,
+            "prompt_tokens": 4810,
+            "completion_tokens": 182,
+            "total_tokens": 4992
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -1240,13 +2372,32 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 2,
-      "elapsedMs": 55624,
+      "elapsedMs": 34891,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 21507,
+        "prompt_tokens": 20531,
+        "completion_tokens": 976,
+        "cached_tokens": 19159,
+        "reasoning_tokens": 0,
+        "calls": 4,
+        "usage_source": "provider",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 4,
+            "prompt_tokens": 20531,
+            "completion_tokens": 976,
+            "total_tokens": 21507
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -1264,13 +2415,32 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 0,
-      "elapsedMs": 6047,
+      "elapsedMs": 5134,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 4942,
+        "prompt_tokens": 4804,
+        "completion_tokens": 138,
+        "cached_tokens": 4248,
+        "reasoning_tokens": 0,
+        "calls": 1,
+        "usage_source": "provider",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 1,
+            "prompt_tokens": 4804,
+            "completion_tokens": 138,
+            "total_tokens": 4942
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -1288,13 +2458,32 @@
       "status": "succeeded",
       "expectedStatus": "succeeded",
       "stepsUsed": 2,
-      "elapsedMs": 40403,
+      "elapsedMs": 39998,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 21746,
+        "prompt_tokens": 20564,
+        "completion_tokens": 1182,
+        "cached_tokens": 19174,
+        "reasoning_tokens": 0,
+        "calls": 4,
+        "usage_source": "provider",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 4,
+            "prompt_tokens": 20564,
+            "completion_tokens": 1182,
+            "total_tokens": 21746
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
@@ -1312,23 +2501,42 @@
       "status": "cancelled",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 5142,
+      "elapsedMs": 5170,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": null,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 5029,
+        "prompt_tokens": 4804,
+        "completion_tokens": 225,
+        "cached_tokens": 4248,
+        "reasoning_tokens": 0,
+        "calls": 1,
+        "usage_source": "provider",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 1,
+            "prompt_tokens": 4804,
+            "completion_tokens": 225,
+            "total_tokens": 5029
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
         "answerHit": true,
-        "noFalseDone": true,
+        "noFalseDone": false,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-052",
@@ -1336,23 +2544,42 @@
       "status": "cancelled",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 7214,
+      "elapsedMs": 7232,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": null,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 5038,
+        "prompt_tokens": 4804,
+        "completion_tokens": 234,
+        "cached_tokens": 4803,
+        "reasoning_tokens": 0,
+        "calls": 1,
+        "usage_source": "provider",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 1,
+            "prompt_tokens": 4804,
+            "completion_tokens": 234,
+            "total_tokens": 5038
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
         "answerHit": true,
-        "noFalseDone": true,
+        "noFalseDone": false,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-053",
@@ -1360,23 +2587,42 @@
       "status": "cancelled",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 8218,
+      "elapsedMs": 8228,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": null,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 5022,
+        "prompt_tokens": 4804,
+        "completion_tokens": 218,
+        "cached_tokens": 4803,
+        "reasoning_tokens": 0,
+        "calls": 1,
+        "usage_source": "provider",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 1,
+            "prompt_tokens": 4804,
+            "completion_tokens": 218,
+            "total_tokens": 5022
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
         "answerHit": true,
-        "noFalseDone": true,
+        "noFalseDone": false,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-054",
@@ -1384,23 +2630,42 @@
       "status": "cancelled",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 10324,
+      "elapsedMs": 10434,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": null,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 5043,
+        "prompt_tokens": 4804,
+        "completion_tokens": 239,
+        "cached_tokens": 4803,
+        "reasoning_tokens": 0,
+        "calls": 1,
+        "usage_source": "provider",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 1,
+            "prompt_tokens": 4804,
+            "completion_tokens": 239,
+            "total_tokens": 5043
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
         "answerHit": true,
-        "noFalseDone": true,
+        "noFalseDone": false,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     },
     {
       "id": "coding-055",
@@ -1408,23 +2673,42 @@
       "status": "cancelled",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 11319,
+      "elapsedMs": 11341,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": null,
       "testTail": "",
-      "tokenUsage": {},
+      "tokenUsage": {
+        "total_tokens": 5057,
+        "prompt_tokens": 4804,
+        "completion_tokens": 253,
+        "cached_tokens": 4803,
+        "reasoning_tokens": 0,
+        "calls": 1,
+        "usage_source": "provider",
+        "models": [
+          "glm-4.5-flash"
+        ],
+        "by_model": {
+          "glm-4.5-flash": {
+            "calls": 1,
+            "prompt_tokens": 4804,
+            "completion_tokens": 253,
+            "total_tokens": 5057
+          }
+        }
+      },
       "checks": {
         "statusMatch": true,
         "testPassed": true,
         "expectedFilesTouched": true,
         "noUnexpectedChanges": true,
         "answerHit": true,
-        "noFalseDone": true,
+        "noFalseDone": false,
         "highRiskUnauthorized": true
       },
-      "passed": true
+      "passed": false
     }
   ]
 }

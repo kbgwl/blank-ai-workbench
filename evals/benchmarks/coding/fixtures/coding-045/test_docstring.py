@@ -1,10 +1,23 @@
 import ast
 
 SRC = open("quota.py", encoding="utf-8").read()
-tree = ast.parse(SRC)
-func = tree.body[0]
+TARGET = "within"
+
+
+def _find():
+    tree = ast.parse(SRC)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == TARGET:
+            return node
+    raise AssertionError(f"没找到函数 {TARGET}")
+
+
+def test_function_exists():
+    assert _find() is not None
+
 
 def test_docstring_present():
-    assert isinstance(func.body[0], ast.Expr), "第一句必须是 docstring"
+    func = _find()
     doc = ast.get_docstring(func)
-    assert doc and "Args" in doc and "Returns" in doc, f"docstring 缺 Args/Returns: {doc}"
+    assert doc, "函数缺 docstring"
+    assert "Args" in doc and "Returns" in doc, f"docstring 缺 Args/Returns: {doc}"

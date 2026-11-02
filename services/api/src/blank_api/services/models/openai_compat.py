@@ -212,12 +212,21 @@ def _whole_completion(lines: list[str]) -> dict | None:
 
 
 def _usage_from(usage: dict) -> Usage:
-    """OpenAI 的 prompt_tokens 已包含缓存命中部分，这里只把细分项拆出来记账。"""
+    """OpenAI 的 prompt_tokens 已包含缓存命中部分，这里只把细分项拆出来记账。
+
+    供应商真的回了 usage（有任一非零计数字段）→ source="provider"；
+    空字典 / 全零 → source 保持 "unknown"：0 个 token 与"没说用了多少"是两回事。
+    """
     prompt_details = usage.get("prompt_tokens_details") or {}
     completion_details = usage.get("completion_tokens_details") or {}
+    has_usage = bool(
+        usage.get("prompt_tokens") or usage.get("completion_tokens")
+        or usage.get("total_tokens")
+    )
     return Usage(
         prompt_tokens=int(usage.get("prompt_tokens") or 0),
         completion_tokens=int(usage.get("completion_tokens") or 0),
         cached_tokens=int(prompt_details.get("cached_tokens") or 0),
         reasoning_tokens=int(completion_details.get("reasoning_tokens") or 0),
+        source="provider" if has_usage else "unknown",
     )

@@ -135,6 +135,11 @@ class ModelUsage(Base):
     cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     cache_write_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     reasoning_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # 这一份用量的来源：provider=供应商真的回了 usage；unknown=没回（全零不等于免费）。
+    # 历史行在列加上之前没记过来源，一律按 unknown 读。
+    usage_source: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="unknown", server_default="unknown"
+    )
     # 供应商那一笔请求的 id。空串=这家没给（Ollama 一类），不许拿我们自己的 id 顶上。
     response_id: Mapped[str] = mapped_column(String(120), nullable=False, default="", server_default="", index=True)
     # 回合归属：这一笔钱是谁引起的、属于哪一轮。对标 Codex 的

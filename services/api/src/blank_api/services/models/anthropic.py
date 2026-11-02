@@ -112,6 +112,7 @@ class AnthropicAdapter(ModelAdapter):
                 completion_tokens=int(usage.get("output_tokens") or 0),
                 cached_tokens=cache_read,
                 cache_write_tokens=cache_write,
+                source="provider" if (usage.get("input_tokens") or usage.get("output_tokens")) else "unknown",
             ),
             model=data.get("model") or self.config.model,
             tool_calls=tool_calls,
@@ -236,10 +237,13 @@ class AnthropicAdapter(ModelAdapter):
         else:
             # input_tokens 不含缓存部分，三块加起来才是真实输入总量
             prompt = int(inputs) + cached + written
+        has_usage = bool(inputs or outputs)
         return Usage(
             prompt_tokens=prompt,
             completion_tokens=base.completion_tokens if outputs is None else int(outputs),
             cached_tokens=cached,
             cache_write_tokens=written,
             reasoning_tokens=base.reasoning_tokens,
+            # 供应商真回过任一计数字段才算 provider；一路都没给就保持 unknown。
+            source="provider" if has_usage else base.source,
         )

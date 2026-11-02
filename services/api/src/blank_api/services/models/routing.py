@@ -40,6 +40,7 @@ class FallbackAdapter(ModelAdapter):
 
     async def invoke(self, messages: Sequence[ChatMessage], **kwargs) -> ModelResponse:
         last_error: ModelError | None = None
+        errors: list[str] = []
         for adapter in self._candidates():
             if adapter is not self.adapters[0]:
                 # 走到这里说明主用已经失败过一次：换成备用模型这件事必须能被数出来，
@@ -54,13 +55,15 @@ class FallbackAdapter(ModelAdapter):
             except ModelError as exc:
                 breaker_for(adapter.config.name).fail()
                 metrics.inc(metrics.MODEL_FALLBACK_FAILED, **{"provider": adapter.config.name})
+                # 每一家的失败原因都留痕：只保留最后一家，就说不清主用当初为什么挂。
+                errors.append(f"{adapter.config.name}（{exc.code}）：{exc.message}")
                 last_error = exc
                 if not exc.retryable:
                     raise
         assert last_error is not None
         raise ModelError(
             "all_models_failed",
-            "所有候选模型均调用失败：" + last_error.message,
+            "所有候选模型均调用失败：" + "；".join(errors),
             retryable=False,
         ) from last_error
 
@@ -68,8 +71,10 @@ class FallbackAdapter(ModelAdapter):
         self, tools: Sequence[ToolSpecLite], messages: Sequence[ChatMessage], **kwargs
     ) -> ModelResponse:
         last_error: ModelError | None = None
+        errors: list[str] = []
         for adapter in self._candidates():
             if not adapter.config.supports_tools:
+                errors.append(f"{adapter.config.name}（model_tools_unsupported）：模型 {adapter.config.model} 不支持工具调用")
                 last_error = ModelError("model_tools_unsupported", f"模型 {adapter.config.model} 不支持工具调用")
                 continue
             if adapter is not self.adapters[0]:
@@ -83,11 +88,12 @@ class FallbackAdapter(ModelAdapter):
             except ModelError as exc:
                 breaker_for(adapter.config.name).fail()
                 metrics.inc(metrics.MODEL_FALLBACK_FAILED, **{"provider": adapter.config.name})
+                errors.append(f"{adapter.config.name}（{exc.code}）：{exc.message}")
                 last_error = exc
                 if not exc.retryable:
                     raise
         assert last_error is not None
-        raise ModelError("all_models_failed", "所有支持工具的候选模型均调用失败：" + last_error.message, retryable=False) from last_error
+        raise ModelError("all_models_failed", "所有支持工具的候选模型均调用失败：" + "；".join(errors), retryable=False) from last_error
 
     async def stream(self, messages: Sequence[ChatMessage], **kwargs) -> AsyncIterator[str]:
         """Streaming fallback is selected before iteration begins."""

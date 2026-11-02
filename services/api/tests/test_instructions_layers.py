@@ -137,3 +137,29 @@ def test_broken_harness_does_not_break_loading(tmp_path: Path) -> None:
 
     layers = load_layers(tmp_path, env=_env(tmp_path))
     assert [item.source for item in layers] == [LAYER_PROJECT]
+
+def test_goal_spec_constraints_reach_first_user_message() -> None:
+    """创建任务时声明的 constraints / out_of_scope 必须进首轮用户消息。
+
+    只存库不进提示，模型永远看不见边界——"不改测试文件"就成了一句空话。
+    """
+    messages = initial_messages(
+        "修复失败测试",
+        ["测试通过"],
+        goal_spec={
+            "constraints": ["只允许修改 calc.py"],
+            "out_of_scope": ["不要改 test_calc.py"],
+        },
+    )
+    user = [m for m in messages if m.get("role") == "user"]
+    assert user, [m.get("role") for m in messages]
+    text = str(user[0].get("content"))
+    assert "约束（必须遵守）" in text and "只允许修改 calc.py" in text
+    assert "越界（不要做）" in text and "不要改 test_calc.py" in text
+
+
+def test_goal_spec_absent_keeps_prompt_unchanged() -> None:
+    """没传 goal_spec 时提示与从前逐字节一致（不能因为可选参数多出空段落）。"""
+    without = initial_messages("目标", ["验收"])
+    assert "约束（必须遵守）" not in str(without[-1].get("content"))
+    assert "越界（不要做）" not in str(without[-1].get("content"))

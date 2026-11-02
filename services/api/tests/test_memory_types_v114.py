@@ -142,6 +142,32 @@ def test_curator_labels_each_hit_with_its_type(tmp_path: Path) -> None:
     assert result.memory_hits[0]["source_task"] == TASK_ID
 
 
+def test_curator_memory_gate_blocks_user_habits_only(tmp_path: Path) -> None:
+    """读取侧的场景门控（§6.4）：非日常场景不读日常习惯，但项目知识照常共享。
+
+    写入侧早就有闸（memory_write 只在日常+记住时可见）。读取侧如果整份挡掉，
+    开发任务就看不到自己前几天做过什么；如果一点不挡，日常习惯又会渗进开发会话。
+    分界线是记忆类型：user=用户习惯，只在日常场景读；project/feedback=项目知识，共享。
+    """
+    store = _store(tmp_path)
+    workspace = _workspace(tmp_path)
+    store.remember(workspace, memory_type="user", content="偏好简短回复", task_id=TASK_ID)
+    store.consolidate(
+        workspace,
+        task_id="old-task",
+        title="登录改造",
+        summary="登录测试要保留 patched 标记",
+    )
+
+    gated = curate(root=workspace, goal="简短回复 patched 标记", memory=store, allow_user_memory=False)
+    types = [hit["type"] for hit in gated.memory_hits]
+    assert "user" not in types, f"非日常场景不该读日常习惯：{types}"
+    assert "project" in types, "项目知识必须仍然可读"
+
+    allowed = curate(root=workspace, goal="简短回复 patched 标记", memory=store, allow_user_memory=True)
+    assert "user" in [hit["type"] for hit in allowed.memory_hits], "日常场景必须能读回自己的习惯"
+
+
 # --------------------------------------------------------------------------- #
 # 2. 工具：模型可写、可筛、坏输入不落盘、不进计划模式
 # --------------------------------------------------------------------------- #

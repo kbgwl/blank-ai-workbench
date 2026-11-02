@@ -165,6 +165,10 @@ class Usage:
     cache_write_tokens: int = 0
     # 推理 token：已包含在 completion_tokens 里，单独给出用于解释成本与耗时。
     reasoning_tokens: int = 0
+    # 这一份用量的来源：provider=供应商在响应里真的回了 usage；unknown=没回
+    # （比如网关吞了 stream_options）。0 个 token 与"没说用了多少"是两回事，
+    # 混在一起就会把断供当成免费。对接 task书 §4.2 的 usage_source 统一字段。
+    source: str = "unknown"
 
     @property
     def total_tokens(self) -> int:

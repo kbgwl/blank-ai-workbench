@@ -10,7 +10,7 @@ from datetime import datetime
 import anyio
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, select
+from sqlalchemy import case, delete, select
 
 from blank_api.api.auth import require_token
 from blank_api.api.errors import ApiError
@@ -126,8 +126,18 @@ async def _resolve_provider(db: DbSession, task: Task, requested: str | None) ->
         if not provider.enabled:
             raise ApiError(code="provider_disabled", message="该模型供应商已停用", status_code=409)
         return provider
+    # 默认模型优先挑「配了 key 的」：只按名字取第一个启用项，很容易挑到模板里预置但
+    # 没填 key 的供应商，用户第一次发消息就是 401，还得自己猜是哪一环出的问题。
+    # 全都没配 key 时退回第一个启用项，报错仍然来自供应商，不会凭空成功。
     provider = (
-        await db.execute(select(ModelProvider).where(ModelProvider.enabled == True).order_by(ModelProvider.name))  # noqa: E712
+        await db.execute(
+            select(ModelProvider)
+            .where(ModelProvider.enabled == True)  # noqa: E712
+            .order_by(
+                case((ModelProvider.api_key_encrypted != "", 0), else_=1),
+                ModelProvider.name,
+            )
+        )
     ).scalars().first()
     if provider is None:
         raise ApiError(
@@ -225,6 +235,14 @@ async def persist_task(
 @router.post("/projects/{project_id}/tasks", response_model=TaskOut, status_code=201)
 async def create_task(project_id: str, payload: TaskCreate, db: DbSession) -> TaskOut:
     project = await load_project(db, project_id)
+    # 悬空的模型选择在这里就挡掉：等任务跑起来才报「模型供应商不存在」，
+    # 用户看到的是一句没有出处的失败，而界面上那个选择器早就不显示它了。
+    if payload.provider_id and await db.get(ModelProvider, payload.provider_id) is None:
+        raise ApiError(
+            code="provider_not_found",
+            message="所选模型已不存在，请在输入框下方重新选择模型后再发送",
+            status_code=400,
+        )
     task = await persist_task(db, project.id, payload)
     return TaskOut.model_validate(task)
 
@@ -578,6 +596,9 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         "title": task.title,
         "goal": task.goal,
         "acceptance_criteria": criteria_text(task.acceptance_criteria),
+        # 结构化约束（constraints/out_of_scope）随任务带进运行时：它们要进首轮提示，
+        # 光存库不进提示等于模型从没见过用户声明的边界。
+        "goal_spec": dict(task.goal_spec or {}) or None,
         # 结构化的一份单独带过去：会话主体只吃字符串，但收尾判定要知道
         # 每条验收对应哪几步——这个映射不能靠再回表读一次。
         "acceptance_links": normalize_criteria(task.acceptance_criteria),

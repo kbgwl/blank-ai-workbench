@@ -29,6 +29,7 @@ import { canPickDirectory, pickDirectory } from "@/lib/desktop";
 import { activateWorkspace, bindWorkspace } from "../projects/api";
 import { loadBoot, loadConversation, loadConversations, sendMessage, stopTask, type BotTurn, type Conversation } from "./bot-api";
 import { Composer } from "./composer";
+import { usableProviderId } from "./provider-choice";
 import { TaskPanel } from "./panel";
 import { Sidebar } from "./sidebar";
 import { TurnView } from "./turn";
@@ -183,8 +184,17 @@ export function BotApp() {
         // 存过的模型选择在这里读：不在 useState 初始化里碰 localStorage，
         // 否则服务端渲染出空值、客户端渲染出选中值，hydration 会报不一致。
         try {
-          const saved = window.localStorage.getItem(PROVIDER_KEY) ?? "";
-          if (saved) setProviderId(saved);
+          // 供应商可能已经被删掉了：认不出来就当没选过，同时把本地记录擦掉，
+          // 免得下一轮又把同一个悬空 id 发下去（详见 provider-choice.ts）。
+          const saved = usableProviderId(
+            window.localStorage.getItem(PROVIDER_KEY) ?? "",
+            data.providers.map((provider) => provider.id),
+          );
+          if (saved) {
+            setProviderId(saved);
+          } else {
+            window.localStorage.removeItem(PROVIDER_KEY);
+          }
           const savedScenario = window.localStorage.getItem(SCENARIO_KEY) ?? "";
           if (savedScenario) setScenarioKey(savedScenario);
           setMemoryOptIn(window.localStorage.getItem(MEMORY_KEY) === "on");

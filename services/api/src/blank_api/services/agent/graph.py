@@ -290,6 +290,8 @@ class AgentSession:
     # 恒为 full 档，与裁剪功能上线前逐字节一致。
     tiered_tools: bool = False
     acceptance_criteria: list[str] = field(default_factory=list)
+    # 任务创建时的结构化目标。constraints / out_of_scope 进首轮提示；不进就等于没约束。
+    goal_spec: dict = field(default_factory=dict)
     # 每条验收条件对应的计划步骤 [{id, criterion, milestone_id, step_ids}]，与上一行同序。
     # 收尾判定时把步骤进度一并发给模型：它才知道"这条验收依赖的第 3 步根本没做"，
     # 而不是照着交付文本自己猜。
@@ -828,13 +830,24 @@ class AgentSession:
         # 用真实 prompt_tokens 校准估算器：水位要按模型的说法算，不能只信字符启发式
         self.compactor.observe(usage.prompt_tokens, report.tokens_after)
         selected_provider = str(getattr(adapter, "last_provider", adapter.config.name))
+        latency_ms = int((time.perf_counter() - started) * 1000)
         if selected_provider != adapter.config.name:
             await self.recorder.add(
                 "model.fallback",
                 node,
                 {"role": role, "from": adapter.config.name, "to": selected_provider},
             )
-        latency_ms = int((time.perf_counter() - started) * 1000)
+            # 主用这一笔失败了也要单独入账（§4.3「每次调用单独记录」）：它确实发过
+            # 一次请求、花了时间，只是没拿到 usage。全零 + error 是事实，不是免费。
+            await self._record_usage(
+                node,
+                adapter.config.model,
+                Usage(),
+                latency_ms,
+                "error",
+                role=role,
+                provider=adapter.config.name,
+            )
         await self._record_usage(
             node,
             response.model,
@@ -994,6 +1007,11 @@ class AgentSession:
                 "role": role,
             },
         )
+        # 被 429 退回去的那一次同样是一次真实请求：不进台账，事后就看不出
+        # "这个任务多花了三次调用"是限流还是模型在思考。
+        await self._record_usage(
+            node, "", Usage(), 0, "error", role=role, provider=self.provider_name or ""
+        )
 
     async def _record_transient_retry(
         self, node: str, role: str, attempt: int, error: ModelError
@@ -1019,6 +1037,12 @@ class AgentSession:
                 "role": role,
                 "provider": self.provider_name,
             },
+        )
+        # 这一次尝试也要在用量台账里占一行：重试成功时最终只有成功那笔有数字，
+        # 事后读账就看不见"这一轮其实调用了两次"。失败尝试拿不到 usage，
+        # 记为全零 + error + source=unknown——0 是"没拿到"而不是"免费"。
+        await self._record_usage(
+            node, "", Usage(), 0, "error", role=role, provider=self.provider_name or ""
         )
 
     async def record_usage(
@@ -1245,6 +1269,7 @@ def initial_messages(
     system_instructions: Sequence[str] | None = None,
     scenario_prompt: str = "",
     run_id: str = "",
+    goal_spec: dict | None = None,
 ) -> list[dict]:
     from blank_api.services.instructions import compose
 
@@ -1281,6 +1306,13 @@ def initial_messages(
     prompt = f"任务目标：{goal}"
     if criteria:
         prompt += "\n验收条件：\n" + "\n".join(f"- {item}" for item in criteria)
+    # 结构化约束进提示：创建任务时声明的 constraints / out_of_scope 只存库不进提示，
+    # 模型就永远不知道边界在哪——"不改测试文件""只改这些文件"必须让模型看见才算数。
+    spec = goal_spec or {}
+    for key, label in (("constraints", "约束（必须遵守）"), ("out_of_scope", "越界（不要做）")):
+        items = [str(item).strip() for item in (spec.get(key) or []) if str(item).strip()]
+        if items:
+            prompt += f"\n{label}：\n" + "\n".join(f"- {item}" for item in items)
     attached = list(images or ())
     if attached and supports_vision:
         prompt += (

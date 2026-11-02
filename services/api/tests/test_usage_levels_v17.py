@@ -358,3 +358,36 @@ async def test_task_totals_fall_back_to_turn_when_task_is_unbound(seeded, tmp_pa
     record = (await _records())[0]
     assert record["task"] == record["turn"]
     assert record["task"]["prompt_tokens"] == 100
+
+
+async def test_usage_source_is_recorded_on_row_event_and_evidence(seeded, tmp_path):
+    """任务书 §4.2/§4.3：来源跟着数字走。
+
+    供应商回 usage → 行/事件/证据包都是 provider；没回 → unknown，
+    全零不允许被读成"免费"。两次调用（一次有账、一次没账）分别记来源，
+    fallback 的两笔调用天然就是两行，不并账。
+    """
+    adapter = ScriptedAdapter(
+        "mock",
+        [
+            Usage(prompt_tokens=100, completion_tokens=10, source="provider"),
+            Usage(source="unknown"),
+        ],
+    )
+    session = _session(tmp_path, adapter)
+    await session.call_model([{"role": "user", "content": "第一步"}], "execute_action", step=1)
+    await session.call_model([{"role": "user", "content": "第二步"}], "review_result", step=2)
+
+    rows = await _rows()
+    assert len(rows) == 2
+    assert [row.usage_source for row in rows] == ["provider", "unknown"]
+
+    records = await _records()
+    assert records[0]["call"]["usage_source"] == "provider"
+    assert records[1]["call"]["usage_source"] == "unknown"
+
+    evidence = await build_evidence(get_session_factory(), TASK_ID, include_timeline=False)
+    usage = evidence["usage"]
+    assert usage["usage_sources"] == ["provider", "unknown"]
+    assert usage["by_model"]["mock"]["total_tokens"] == 110
+    assert usage["by_model"]["mock"]["calls"] == 2

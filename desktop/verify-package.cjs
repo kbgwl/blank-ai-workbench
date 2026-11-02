@@ -42,7 +42,28 @@ for (const [label, target] of [
   existsSync(target) ? ok(label) : bad(label, `缺失 ${target}`);
 }
 
-// ── 1b. asar 里的主进程文件（壳 require 的东西漏打，装完就是双击没反应）──────
+// ── 1b. 迁移脚本必须与仓库同版 ──────────────────────────────────────────────
+// alembic/versions 不在 src 里，只同步源码（self-deploy --api）或打旧包时会漏。
+// 真实事故：包内停在 0028、仓库已到 0030，用户发第一句话就是
+// `table tasks has no column named scenario` —— 界面能开、一句话都发不出去。
+{
+  const repoDir = path.join(__dirname, "..", "services", "api", "alembic", "versions");
+  const packedDir = path.join(API_DIR, "alembic", "versions");
+  const list = (dir) =>
+    existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".py") && !f.startsWith("__")).sort() : [];
+  const want = list(repoDir);
+  const got = list(packedDir);
+  const missing = want.filter((f) => !got.includes(f));
+  if (!got.length) {
+    bad("包内没有 alembic 迁移脚本", packedDir);
+  } else if (missing.length) {
+    bad("包内迁移脚本落后于仓库", `缺 ${missing.join("、")}`);
+  } else {
+    ok("包内迁移脚本与仓库同版", `${got.length} 个`);
+  }
+}
+
+// ── 1c. asar 里的主进程文件（壳 require 的东西漏打，装完就是双击没反应）──────
 // asar 头是 `[8 字节 pickle 头][JSON 头]`，offset 12 是头字符串长度，16 起是 JSON。
 // 只读头，不把整个 asar 读进内存。
 const ASAR = path.join(RESOURCES, "app.asar");
