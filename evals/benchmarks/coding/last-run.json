@@ -1,43 +1,44 @@
 {
   "summary": {
     "total": 55,
-    "judged": 54,
-    "setupFailed": 1,
+    "judged": 55,
+    "setupFailed": 0,
     "runnerError": 0,
     "timedOut": 0,
     "providerFailed": 0,
-    "providerRetried": 1,
-    "completionRate": "87%",
-    "passRate": "93%",
-    "testPassRate": "96%",
-    "judgedCompletionRate": "89%",
-    "misEditedFiles": 1,
-    "avgElapsedMs": 117922,
-    "totalTokens": 2975698,
-    "avgTokens": 55106,
-    "p95Tokens": 120799,
-    "failedTaskTokens": 409868,
+    "providerRetried": 2,
+    "completionRate": "91%",
+    "passRate": "98%",
+    "testPassRate": "100%",
+    "judgedCompletionRate": "91%",
+    "misEditedFiles": 0,
+    "avgElapsedMs": 212617,
+    "totalTokens": 2752228,
+    "avgTokens": 50041,
+    "p95Tokens": 99420,
+    "failedTaskTokens": 46655,
     "tokensByModel": {
-      "glm-4.5-flash": {
-        "calls": 450,
-        "prompt_tokens": 2873445,
-        "completion_tokens": 102253,
-        "total_tokens": 2975698,
-        "tasks": 54
+      "mistralai/mistral-large-4-1t-a52b": {
+        "calls": 391,
+        "prompt_tokens": 2704609,
+        "completion_tokens": 47619,
+        "total_tokens": 2752228,
+        "tasks": 55
       },
       "(unknown)": {
-        "calls": 111,
+        "calls": 147,
         "prompt_tokens": 0,
         "completion_tokens": 0,
         "total_tokens": 0,
-        "tasks": 41
+        "tasks": 46
       }
     },
     "unknownUsageTasks": 0,
-    "providerCalls": 450,
-    "unknownUsageCalls": 111,
-    "totalSteps": 291,
+    "providerCalls": 391,
+    "unknownUsageCalls": 147,
+    "totalSteps": 244,
     "falseDoneCount": 0,
+    "falseClaimCount": 0,
     "unauthorizedHighRisk": 0
   },
   "results": [
@@ -49,7 +50,7 @@
       "failureReason": "",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 87666,
+      "elapsedMs": 116838,
       "approvals": 1,
       "changedFiles": [
         "salary.py"
@@ -58,11 +59,11 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 47384,
-        "prompt_tokens": 45821,
-        "completion_tokens": 1563,
-        "cached_tokens": 38914,
-        "reasoning_tokens": 0,
+        "total_tokens": 51438,
+        "prompt_tokens": 50740,
+        "completion_tokens": 698,
+        "cached_tokens": 0,
+        "reasoning_tokens": 195,
         "calls": 10,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
@@ -70,14 +71,14 @@
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 8,
-            "prompt_tokens": 45821,
-            "completion_tokens": 1563,
-            "total_tokens": 47384
+            "prompt_tokens": 50740,
+            "completion_tokens": 698,
+            "total_tokens": 51438
           },
           "(unknown)": {
             "calls": 2,
@@ -94,6 +95,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -106,9 +108,9 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 98555,
-      "approvals": 1,
+      "stepsUsed": 6,
+      "elapsedMs": 171273,
+      "approvals": 2,
       "changedFiles": [
         "avg.py"
       ],
@@ -116,29 +118,29 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 40782,
-        "prompt_tokens": 39140,
-        "completion_tokens": 1642,
-        "cached_tokens": 36694,
-        "reasoning_tokens": 0,
-        "calls": 9,
+        "total_tokens": 60308,
+        "prompt_tokens": 59663,
+        "completion_tokens": 645,
+        "cached_tokens": 30080,
+        "reasoning_tokens": 223,
+        "calls": 13,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 7,
-          "unknown": 2
+          "provider": 9,
+          "unknown": 4
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 7,
-            "prompt_tokens": 39140,
-            "completion_tokens": 1642,
-            "total_tokens": 40782
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 9,
+            "prompt_tokens": 59663,
+            "completion_tokens": 645,
+            "total_tokens": 60308
           },
           "(unknown)": {
-            "calls": 2,
+            "calls": 4,
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0
@@ -152,6 +154,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -165,7 +168,7 @@
       "failureReason": "",
       "expectedStatus": "succeeded",
       "stepsUsed": 4,
-      "elapsedMs": 113514,
+      "elapsedMs": 244923,
       "approvals": 1,
       "changedFiles": [
         "clamp.py"
@@ -174,11 +177,11 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 41204,
-        "prompt_tokens": 39671,
-        "completion_tokens": 1533,
-        "cached_tokens": 37045,
-        "reasoning_tokens": 0,
+        "total_tokens": 44613,
+        "prompt_tokens": 43960,
+        "completion_tokens": 653,
+        "cached_tokens": 5120,
+        "reasoning_tokens": 181,
         "calls": 9,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
@@ -186,14 +189,14 @@
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 7,
-            "prompt_tokens": 39671,
-            "completion_tokens": 1533,
-            "total_tokens": 41204
+            "prompt_tokens": 43960,
+            "completion_tokens": 653,
+            "total_tokens": 44613
           },
           "(unknown)": {
             "calls": 2,
@@ -210,6 +213,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -222,9 +226,9 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 8,
-      "elapsedMs": 164192,
-      "approvals": 2,
+      "stepsUsed": 5,
+      "elapsedMs": 302189,
+      "approvals": 1,
       "changedFiles": [
         "dedupe.py"
       ],
@@ -232,26 +236,500 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 80756,
-        "prompt_tokens": 77622,
-        "completion_tokens": 3134,
-        "cached_tokens": 73446,
-        "reasoning_tokens": 0,
-        "calls": 16,
+        "total_tokens": 52074,
+        "prompt_tokens": 51353,
+        "completion_tokens": 721,
+        "cached_tokens": 5120,
+        "reasoning_tokens": 209,
+        "calls": 10,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 12,
+          "provider": 8,
+          "unknown": 2
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 8,
+            "prompt_tokens": 51353,
+            "completion_tokens": 721,
+            "total_tokens": 52074
+          },
+          "(unknown)": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-005",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 4,
+      "elapsedMs": 201003,
+      "approvals": 1,
+      "changedFiles": [
+        "grade.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {
+        "total_tokens": 36503,
+        "prompt_tokens": 35858,
+        "completion_tokens": 645,
+        "cached_tokens": 11072,
+        "reasoning_tokens": 329,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 6,
+          "unknown": 3
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 6,
+            "prompt_tokens": 35858,
+            "completion_tokens": 645,
+            "total_tokens": 36503
+          },
+          "(unknown)": {
+            "calls": 3,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-006",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 5,
+      "elapsedMs": 139785,
+      "approvals": 1,
+      "changedFiles": [
+        "count_words.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {
+        "total_tokens": 51943,
+        "prompt_tokens": 51195,
+        "completion_tokens": 748,
+        "cached_tokens": 0,
+        "reasoning_tokens": 266,
+        "calls": 10,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 8,
+          "unknown": 2
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 8,
+            "prompt_tokens": 51195,
+            "completion_tokens": 748,
+            "total_tokens": 51943
+          },
+          "(unknown)": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-007",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 5,
+      "elapsedMs": 190249,
+      "approvals": 1,
+      "changedFiles": [
+        "safe_get.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {
+        "total_tokens": 52279,
+        "prompt_tokens": 51515,
+        "completion_tokens": 764,
+        "cached_tokens": 6528,
+        "reasoning_tokens": 201,
+        "calls": 10,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 8,
+          "unknown": 2
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 8,
+            "prompt_tokens": 51515,
+            "completion_tokens": 764,
+            "total_tokens": 52279
+          },
+          "(unknown)": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-008",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 6,
+      "elapsedMs": 309791,
+      "approvals": 1,
+      "changedFiles": [
+        "fib.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {
+        "total_tokens": 61573,
+        "prompt_tokens": 60813,
+        "completion_tokens": 760,
+        "cached_tokens": 18560,
+        "reasoning_tokens": 260,
+        "calls": 11,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 9,
+          "unknown": 2
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 9,
+            "prompt_tokens": 60813,
+            "completion_tokens": 760,
+            "total_tokens": 61573
+          },
+          "(unknown)": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-009",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 6,
+      "elapsedMs": 318282,
+      "approvals": 2,
+      "changedFiles": [
+        "parse_csv.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {
+        "total_tokens": 64196,
+        "prompt_tokens": 62969,
+        "completion_tokens": 1227,
+        "cached_tokens": 5760,
+        "reasoning_tokens": 718,
+        "calls": 14,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 9,
+          "unknown": 5
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 9,
+            "prompt_tokens": 62969,
+            "completion_tokens": 1227,
+            "total_tokens": 64196
+          },
+          "(unknown)": {
+            "calls": 5,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-010",
+      "category": "single_file_bugfix",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 5,
+      "elapsedMs": 235664,
+      "approvals": 1,
+      "changedFiles": [
+        "retry.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {
+        "total_tokens": 52649,
+        "prompt_tokens": 51865,
+        "completion_tokens": 784,
+        "cached_tokens": 0,
+        "reasoning_tokens": 239,
+        "calls": 11,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 8,
+          "unknown": 3
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 8,
+            "prompt_tokens": 51865,
+            "completion_tokens": 784,
+            "total_tokens": 52649
+          },
+          "(unknown)": {
+            "calls": 3,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-011",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 10,
+      "elapsedMs": 259878,
+      "approvals": 3,
+      "changedFiles": [
+        "utils.py",
+        "pricing.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {
+        "total_tokens": 122708,
+        "prompt_tokens": 121303,
+        "completion_tokens": 1405,
+        "cached_tokens": 11072,
+        "reasoning_tokens": 486,
+        "calls": 19,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 13,
+          "unknown": 6
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 13,
+            "prompt_tokens": 121303,
+            "completion_tokens": 1405,
+            "total_tokens": 122708
+          },
+          "(unknown)": {
+            "calls": 6,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-012",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 6,
+      "elapsedMs": 332440,
+      "approvals": 2,
+      "changedFiles": [
+        "models.py",
+        "storage.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {
+        "total_tokens": 68189,
+        "prompt_tokens": 66283,
+        "completion_tokens": 1906,
+        "cached_tokens": 1280,
+        "reasoning_tokens": 1194,
+        "calls": 13,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 9,
           "unknown": 4
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 12,
-            "prompt_tokens": 77622,
-            "completion_tokens": 3134,
-            "total_tokens": 80756
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 9,
+            "prompt_tokens": 66283,
+            "completion_tokens": 1906,
+            "total_tokens": 68189
           },
           "(unknown)": {
             "calls": 4,
@@ -268,473 +746,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": true,
-      "attempts": 1
-    },
-    {
-      "id": "coding-005",
-      "category": "single_file_bugfix",
-      "status": "succeeded",
-      "agentStatus": "succeeded",
-      "failureReason": "",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 100949,
-      "approvals": 1,
-      "changedFiles": [
-        "grade.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {
-        "total_tokens": 49809,
-        "prompt_tokens": 47988,
-        "completion_tokens": 1821,
-        "cached_tokens": 44811,
-        "reasoning_tokens": 0,
-        "calls": 10,
-        "usage_source": "provider,unknown",
-        "usage_source_calls": {
-          "provider": 8,
-          "unknown": 2
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 8,
-            "prompt_tokens": 47988,
-            "completion_tokens": 1821,
-            "total_tokens": 49809
-          },
-          "(unknown)": {
-            "calls": 2,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": true,
-      "attempts": 1
-    },
-    {
-      "id": "coding-006",
-      "category": "single_file_bugfix",
-      "status": "succeeded",
-      "agentStatus": "succeeded",
-      "failureReason": "",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 104456,
-      "approvals": 1,
-      "changedFiles": [
-        "count_words.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {
-        "total_tokens": 40721,
-        "prompt_tokens": 39375,
-        "completion_tokens": 1346,
-        "cached_tokens": 36993,
-        "reasoning_tokens": 0,
-        "calls": 9,
-        "usage_source": "provider,unknown",
-        "usage_source_calls": {
-          "provider": 7,
-          "unknown": 2
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 7,
-            "prompt_tokens": 39375,
-            "completion_tokens": 1346,
-            "total_tokens": 40721
-          },
-          "(unknown)": {
-            "calls": 2,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": true,
-      "attempts": 1
-    },
-    {
-      "id": "coding-007",
-      "category": "single_file_bugfix",
-      "status": "succeeded",
-      "agentStatus": "succeeded",
-      "failureReason": "",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 108967,
-      "approvals": 1,
-      "changedFiles": [
-        "safe_get.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {
-        "total_tokens": 41614,
-        "prompt_tokens": 39707,
-        "completion_tokens": 1907,
-        "cached_tokens": 37170,
-        "reasoning_tokens": 0,
-        "calls": 9,
-        "usage_source": "provider,unknown",
-        "usage_source_calls": {
-          "provider": 7,
-          "unknown": 2
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 7,
-            "prompt_tokens": 39707,
-            "completion_tokens": 1907,
-            "total_tokens": 41614
-          },
-          "(unknown)": {
-            "calls": 2,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": true,
-      "attempts": 1
-    },
-    {
-      "id": "coding-008",
-      "category": "single_file_bugfix",
-      "status": "failed",
-      "agentStatus": "failed",
-      "failureReason": "测试未能执行：python -m pytest fib.py -v",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 10,
-      "elapsedMs": 310194,
-      "approvals": 3,
-      "changedFiles": [
-        "fib.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {
-        "total_tokens": 111796,
-        "prompt_tokens": 107857,
-        "completion_tokens": 3939,
-        "cached_tokens": 91102,
-        "reasoning_tokens": 0,
-        "calls": 20,
-        "usage_source": "provider,unknown",
-        "usage_source_calls": {
-          "provider": 15,
-          "unknown": 5
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 15,
-            "prompt_tokens": 107857,
-            "completion_tokens": 3939,
-            "total_tokens": 111796
-          },
-          "(unknown)": {
-            "calls": 5,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": false,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": false,
-      "attempts": 1
-    },
-    {
-      "id": "coding-009",
-      "category": "single_file_bugfix",
-      "status": "succeeded",
-      "agentStatus": "succeeded",
-      "failureReason": "",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 6,
-      "elapsedMs": 107076,
-      "approvals": 1,
-      "changedFiles": [
-        "parse_csv.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {
-        "total_tokens": 58067,
-        "prompt_tokens": 55585,
-        "completion_tokens": 2482,
-        "cached_tokens": 52073,
-        "reasoning_tokens": 0,
-        "calls": 11,
-        "usage_source": "provider,unknown",
-        "usage_source_calls": {
-          "provider": 9,
-          "unknown": 2
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 9,
-            "prompt_tokens": 55585,
-            "completion_tokens": 2482,
-            "total_tokens": 58067
-          },
-          "(unknown)": {
-            "calls": 2,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": true,
-      "attempts": 1
-    },
-    {
-      "id": "coding-010",
-      "category": "single_file_bugfix",
-      "status": "succeeded",
-      "agentStatus": "succeeded",
-      "failureReason": "",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 113031,
-      "approvals": 1,
-      "changedFiles": [
-        "retry.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {
-        "total_tokens": 41769,
-        "prompt_tokens": 39966,
-        "completion_tokens": 1803,
-        "cached_tokens": 37356,
-        "reasoning_tokens": 0,
-        "calls": 9,
-        "usage_source": "provider,unknown",
-        "usage_source_calls": {
-          "provider": 7,
-          "unknown": 2
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 7,
-            "prompt_tokens": 39966,
-            "completion_tokens": 1803,
-            "total_tokens": 41769
-          },
-          "(unknown)": {
-            "calls": 2,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": true,
-      "attempts": 1
-    },
-    {
-      "id": "coding-011",
-      "category": "multi_file_refactor",
-      "status": "succeeded",
-      "agentStatus": "succeeded",
-      "failureReason": "",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 94765,
-      "approvals": 1,
-      "changedFiles": [
-        "utils.py",
-        "pricing.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {
-        "total_tokens": 48811,
-        "prompt_tokens": 47015,
-        "completion_tokens": 1796,
-        "cached_tokens": 44016,
-        "reasoning_tokens": 0,
-        "calls": 10,
-        "usage_source": "provider,unknown",
-        "usage_source_calls": {
-          "provider": 8,
-          "unknown": 2
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 8,
-            "prompt_tokens": 47015,
-            "completion_tokens": 1796,
-            "total_tokens": 48811
-          },
-          "(unknown)": {
-            "calls": 2,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": true,
-      "attempts": 1
-    },
-    {
-      "id": "coding-012",
-      "category": "multi_file_refactor",
-      "status": "succeeded",
-      "agentStatus": "succeeded",
-      "failureReason": "",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 15,
-      "elapsedMs": 187898,
-      "approvals": 1,
-      "changedFiles": [
-        "models.py",
-        "alice.json",
-        "storage.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {
-        "total_tokens": 151485,
-        "prompt_tokens": 147789,
-        "completion_tokens": 3696,
-        "cached_tokens": 140989,
-        "reasoning_tokens": 0,
-        "calls": 21,
-        "usage_source": "provider,unknown",
-        "usage_source_calls": {
-          "provider": 19,
-          "unknown": 2
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 19,
-            "prompt_tokens": 147789,
-            "completion_tokens": 3696,
-            "total_tokens": 151485
-          },
-          "(unknown)": {
-            "calls": 2,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -747,9 +759,9 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 65681,
-      "approvals": 0,
+      "stepsUsed": 4,
+      "elapsedMs": 310184,
+      "approvals": 1,
       "changedFiles": [
         "config.py",
         "constants.py"
@@ -758,25 +770,32 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 48891,
-        "prompt_tokens": 46788,
-        "completion_tokens": 2103,
-        "cached_tokens": 43791,
-        "reasoning_tokens": 0,
-        "calls": 9,
-        "usage_source": "provider",
+        "total_tokens": 38383,
+        "prompt_tokens": 37856,
+        "completion_tokens": 527,
+        "cached_tokens": 7744,
+        "reasoning_tokens": 166,
+        "calls": 10,
+        "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 9
+          "provider": 6,
+          "unknown": 4
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 9,
-            "prompt_tokens": 46788,
-            "completion_tokens": 2103,
-            "total_tokens": 48891
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 6,
+            "prompt_tokens": 37856,
+            "completion_tokens": 527,
+            "total_tokens": 38383
+          },
+          "(unknown)": {
+            "calls": 4,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
           }
         }
       },
@@ -787,6 +806,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -794,48 +814,42 @@
     },
     {
       "id": "coding-014",
-      "status": "setup_failed",
-      "error": "{\"error\":\"TypeError: fetch failed\"}",
-      "attempts": 1
-    },
-    {
-      "id": "coding-015",
       "category": "multi_file_refactor",
       "status": "succeeded",
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 102323,
+      "stepsUsed": 4,
+      "elapsedMs": 195973,
       "approvals": 1,
       "changedFiles": [
-        "report.py",
-        "templates.py"
+        "shapes.py",
+        "base.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 48614,
-        "prompt_tokens": 46747,
-        "completion_tokens": 1867,
-        "cached_tokens": 43874,
-        "reasoning_tokens": 0,
-        "calls": 10,
+        "total_tokens": 47260,
+        "prompt_tokens": 46310,
+        "completion_tokens": 950,
+        "cached_tokens": 11136,
+        "reasoning_tokens": 352,
+        "calls": 9,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 8,
+          "provider": 7,
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 8,
-            "prompt_tokens": 46747,
-            "completion_tokens": 1867,
-            "total_tokens": 48614
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 46310,
+            "completion_tokens": 950,
+            "total_tokens": 47260
           },
           "(unknown)": {
             "calls": 2,
@@ -852,6 +866,67 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-015",
+      "category": "multi_file_refactor",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 12,
+      "elapsedMs": 283876,
+      "approvals": 2,
+      "changedFiles": [
+        "report.py",
+        "templates.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {
+        "total_tokens": 135434,
+        "prompt_tokens": 133584,
+        "completion_tokens": 1850,
+        "cached_tokens": 25600,
+        "reasoning_tokens": 603,
+        "calls": 19,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 15,
+          "unknown": 4
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 15,
+            "prompt_tokens": 133584,
+            "completion_tokens": 1850,
+            "total_tokens": 135434
+          },
+          "(unknown)": {
+            "calls": 4,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -864,8 +939,8 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 6,
-      "elapsedMs": 109957,
+      "stepsUsed": 4,
+      "elapsedMs": 145047,
       "approvals": 1,
       "changedFiles": [
         "db.py",
@@ -875,26 +950,26 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 55783,
-        "prompt_tokens": 53706,
-        "completion_tokens": 2077,
-        "cached_tokens": 50508,
-        "reasoning_tokens": 0,
-        "calls": 11,
+        "total_tokens": 46661,
+        "prompt_tokens": 45591,
+        "completion_tokens": 1070,
+        "cached_tokens": 7232,
+        "reasoning_tokens": 504,
+        "calls": 9,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 9,
+          "provider": 7,
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 9,
-            "prompt_tokens": 53706,
-            "completion_tokens": 2077,
-            "total_tokens": 55783
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 45591,
+            "completion_tokens": 1070,
+            "total_tokens": 46661
           },
           "(unknown)": {
             "calls": 2,
@@ -911,6 +986,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -924,7 +1000,7 @@
       "failureReason": "",
       "expectedStatus": "succeeded",
       "stepsUsed": 6,
-      "elapsedMs": 100895,
+      "elapsedMs": 372873,
       "approvals": 1,
       "changedFiles": [
         "auth.py",
@@ -934,11 +1010,11 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 57024,
-        "prompt_tokens": 54826,
-        "completion_tokens": 2198,
-        "cached_tokens": 51456,
-        "reasoning_tokens": 0,
+        "total_tokens": 63681,
+        "prompt_tokens": 62601,
+        "completion_tokens": 1080,
+        "cached_tokens": 12544,
+        "reasoning_tokens": 328,
         "calls": 11,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
@@ -946,14 +1022,14 @@
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 9,
-            "prompt_tokens": 54826,
-            "completion_tokens": 2198,
-            "total_tokens": 57024
+            "prompt_tokens": 62601,
+            "completion_tokens": 1080,
+            "total_tokens": 63681
           },
           "(unknown)": {
             "calls": 2,
@@ -970,6 +1046,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -982,8 +1059,8 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 9,
-      "elapsedMs": 132289,
+      "stepsUsed": 7,
+      "elapsedMs": 204613,
       "approvals": 1,
       "changedFiles": [
         "api.py",
@@ -994,26 +1071,26 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 81756,
-        "prompt_tokens": 78974,
-        "completion_tokens": 2782,
-        "cached_tokens": 74514,
-        "reasoning_tokens": 0,
-        "calls": 14,
+        "total_tokens": 82710,
+        "prompt_tokens": 81208,
+        "completion_tokens": 1502,
+        "cached_tokens": 21504,
+        "reasoning_tokens": 526,
+        "calls": 12,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 12,
+          "provider": 10,
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 12,
-            "prompt_tokens": 78974,
-            "completion_tokens": 2782,
-            "total_tokens": 81756
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 10,
+            "prompt_tokens": 81208,
+            "completion_tokens": 1502,
+            "total_tokens": 82710
           },
           "(unknown)": {
             "calls": 2,
@@ -1030,6 +1107,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -1042,8 +1120,8 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 8,
-      "elapsedMs": 140082,
+      "stepsUsed": 4,
+      "elapsedMs": 229359,
       "approvals": 1,
       "changedFiles": [
         "main.py",
@@ -1054,26 +1132,26 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 73056,
-        "prompt_tokens": 70791,
-        "completion_tokens": 2265,
-        "cached_tokens": 58809,
-        "reasoning_tokens": 0,
-        "calls": 13,
+        "total_tokens": 48523,
+        "prompt_tokens": 47510,
+        "completion_tokens": 1013,
+        "cached_tokens": 0,
+        "reasoning_tokens": 330,
+        "calls": 9,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 11,
+          "provider": 7,
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 11,
-            "prompt_tokens": 70791,
-            "completion_tokens": 2265,
-            "total_tokens": 73056
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 47510,
+            "completion_tokens": 1013,
+            "total_tokens": 48523
           },
           "(unknown)": {
             "calls": 2,
@@ -1090,6 +1168,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -1103,7 +1182,7 @@
       "failureReason": "",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 142953,
+      "elapsedMs": 262456,
       "approvals": 1,
       "changedFiles": [
         "cache.py",
@@ -1113,11 +1192,11 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 49783,
-        "prompt_tokens": 47462,
-        "completion_tokens": 2321,
-        "cached_tokens": 42621,
-        "reasoning_tokens": 0,
+        "total_tokens": 56196,
+        "prompt_tokens": 55075,
+        "completion_tokens": 1121,
+        "cached_tokens": 1280,
+        "reasoning_tokens": 362,
         "calls": 10,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
@@ -1125,14 +1204,14 @@
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 8,
-            "prompt_tokens": 47462,
-            "completion_tokens": 2321,
-            "total_tokens": 49783
+            "prompt_tokens": 55075,
+            "completion_tokens": 1121,
+            "total_tokens": 56196
           },
           "(unknown)": {
             "calls": 2,
@@ -1149,6 +1228,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -1161,8 +1241,8 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 148744,
+      "stepsUsed": 4,
+      "elapsedMs": 285284,
       "approvals": 1,
       "changedFiles": [
         "api.py"
@@ -1171,26 +1251,26 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 48946,
-        "prompt_tokens": 46888,
-        "completion_tokens": 2058,
-        "cached_tokens": 43990,
-        "reasoning_tokens": 0,
-        "calls": 10,
+        "total_tokens": 47300,
+        "prompt_tokens": 46445,
+        "completion_tokens": 855,
+        "cached_tokens": 5184,
+        "reasoning_tokens": 440,
+        "calls": 9,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 8,
+          "provider": 7,
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 8,
-            "prompt_tokens": 46888,
-            "completion_tokens": 2058,
-            "total_tokens": 48946
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 46445,
+            "completion_tokens": 855,
+            "total_tokens": 47300
           },
           "(unknown)": {
             "calls": 2,
@@ -1207,6 +1287,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -1219,8 +1300,8 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 117464,
+      "stepsUsed": 6,
+      "elapsedMs": 287928,
       "approvals": 1,
       "changedFiles": [
         "api.py"
@@ -1229,26 +1310,26 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 48645,
-        "prompt_tokens": 46871,
-        "completion_tokens": 1774,
-        "cached_tokens": 43990,
-        "reasoning_tokens": 0,
-        "calls": 10,
+        "total_tokens": 60438,
+        "prompt_tokens": 59549,
+        "completion_tokens": 889,
+        "cached_tokens": 7552,
+        "reasoning_tokens": 298,
+        "calls": 11,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 8,
+          "provider": 9,
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 8,
-            "prompt_tokens": 46871,
-            "completion_tokens": 1774,
-            "total_tokens": 48645
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 9,
+            "prompt_tokens": 59549,
+            "completion_tokens": 889,
+            "total_tokens": 60438
           },
           "(unknown)": {
             "calls": 2,
@@ -1265,6 +1346,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -1278,8 +1360,8 @@
       "failureReason": "",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 113009,
-      "approvals": 1,
+      "elapsedMs": 300410,
+      "approvals": 2,
       "changedFiles": [
         "api.py"
       ],
@@ -1287,120 +1369,11 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 48704,
-        "prompt_tokens": 46872,
-        "completion_tokens": 1832,
-        "cached_tokens": 44556,
-        "reasoning_tokens": 0,
-        "calls": 10,
-        "usage_source": "provider,unknown",
-        "usage_source_calls": {
-          "provider": 8,
-          "unknown": 2
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 8,
-            "prompt_tokens": 46872,
-            "completion_tokens": 1832,
-            "total_tokens": 48704
-          },
-          "(unknown)": {
-            "calls": 2,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": true,
-      "attempts": 1
-    },
-    {
-      "id": "coding-024",
-      "category": "frontend_backend_contract",
-      "status": "succeeded",
-      "agentStatus": "succeeded",
-      "failureReason": "",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 68725,
-      "approvals": 0,
-      "changedFiles": [
-        "api.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {
-        "total_tokens": 48863,
-        "prompt_tokens": 46940,
-        "completion_tokens": 1923,
-        "cached_tokens": 44533,
-        "reasoning_tokens": 0,
-        "calls": 9,
-        "usage_source": "provider",
-        "usage_source_calls": {
-          "provider": 9
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 9,
-            "prompt_tokens": 46940,
-            "completion_tokens": 1923,
-            "total_tokens": 48863
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": true,
-      "attempts": 1
-    },
-    {
-      "id": "coding-025",
-      "category": "frontend_backend_contract",
-      "status": "succeeded",
-      "agentStatus": "succeeded",
-      "failureReason": "",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 118543,
-      "approvals": 1,
-      "changedFiles": [
-        "api.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {
-        "total_tokens": 48587,
-        "prompt_tokens": 46754,
-        "completion_tokens": 1833,
-        "cached_tokens": 38631,
-        "reasoning_tokens": 0,
+        "total_tokens": 57061,
+        "prompt_tokens": 56155,
+        "completion_tokens": 906,
+        "cached_tokens": 6720,
+        "reasoning_tokens": 408,
         "calls": 12,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
@@ -1408,14 +1381,14 @@
           "unknown": 4
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 8,
-            "prompt_tokens": 46754,
-            "completion_tokens": 1833,
-            "total_tokens": 48587
+            "prompt_tokens": 56155,
+            "completion_tokens": 906,
+            "total_tokens": 57061
           },
           "(unknown)": {
             "calls": 4,
@@ -1432,48 +1405,49 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
       "attempts": 1
     },
     {
-      "id": "coding-026",
-      "category": "test_failure_fix",
+      "id": "coding-024",
+      "category": "frontend_backend_contract",
       "status": "succeeded",
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 99233,
+      "stepsUsed": 6,
+      "elapsedMs": 315121,
       "approvals": 1,
       "changedFiles": [
-        "money.py"
+        "api.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 48433,
-        "prompt_tokens": 46578,
-        "completion_tokens": 1855,
-        "cached_tokens": 43668,
-        "reasoning_tokens": 0,
-        "calls": 10,
+        "total_tokens": 60494,
+        "prompt_tokens": 59662,
+        "completion_tokens": 832,
+        "cached_tokens": 14144,
+        "reasoning_tokens": 310,
+        "calls": 11,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 8,
+          "provider": 9,
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 8,
-            "prompt_tokens": 46578,
-            "completion_tokens": 1855,
-            "total_tokens": 48433
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 9,
+            "prompt_tokens": 59662,
+            "completion_tokens": 832,
+            "total_tokens": 60494
           },
           "(unknown)": {
             "calls": 2,
@@ -1490,6 +1464,125 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-025",
+      "category": "frontend_backend_contract",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 4,
+      "elapsedMs": 206068,
+      "approvals": 1,
+      "changedFiles": [
+        "api.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {
+        "total_tokens": 47519,
+        "prompt_tokens": 46655,
+        "completion_tokens": 864,
+        "cached_tokens": 17920,
+        "reasoning_tokens": 393,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 7,
+          "unknown": 2
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 46655,
+            "completion_tokens": 864,
+            "total_tokens": 47519
+          },
+          "(unknown)": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-026",
+      "category": "test_failure_fix",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 4,
+      "elapsedMs": 177759,
+      "approvals": 1,
+      "changedFiles": [
+        "money.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {
+        "total_tokens": 44878,
+        "prompt_tokens": 44158,
+        "completion_tokens": 720,
+        "cached_tokens": 0,
+        "reasoning_tokens": 257,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 7,
+          "unknown": 2
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 44158,
+            "completion_tokens": 720,
+            "total_tokens": 44878
+          },
+          "(unknown)": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -1503,7 +1596,7 @@
       "failureReason": "",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 125422,
+      "elapsedMs": 118708,
       "approvals": 1,
       "changedFiles": [
         "slugify.py"
@@ -1512,11 +1605,11 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 47976,
-        "prompt_tokens": 46465,
-        "completion_tokens": 1511,
-        "cached_tokens": 43650,
-        "reasoning_tokens": 0,
+        "total_tokens": 51904,
+        "prompt_tokens": 51260,
+        "completion_tokens": 644,
+        "cached_tokens": 5120,
+        "reasoning_tokens": 140,
         "calls": 10,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
@@ -1524,14 +1617,14 @@
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 8,
-            "prompt_tokens": 46465,
-            "completion_tokens": 1511,
-            "total_tokens": 47976
+            "prompt_tokens": 51260,
+            "completion_tokens": 644,
+            "total_tokens": 51904
           },
           "(unknown)": {
             "calls": 2,
@@ -1548,6 +1641,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -1560,8 +1654,8 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 132066,
+      "stepsUsed": 4,
+      "elapsedMs": 169453,
       "approvals": 1,
       "changedFiles": [
         "merge.py"
@@ -1570,26 +1664,26 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 48115,
-        "prompt_tokens": 46469,
-        "completion_tokens": 1646,
-        "cached_tokens": 43615,
-        "reasoning_tokens": 0,
-        "calls": 10,
+        "total_tokens": 44783,
+        "prompt_tokens": 44194,
+        "completion_tokens": 589,
+        "cached_tokens": 6144,
+        "reasoning_tokens": 198,
+        "calls": 9,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 8,
+          "provider": 7,
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 8,
-            "prompt_tokens": 46469,
-            "completion_tokens": 1646,
-            "total_tokens": 48115
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 44194,
+            "completion_tokens": 589,
+            "total_tokens": 44783
           },
           "(unknown)": {
             "calls": 2,
@@ -1606,6 +1700,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -1619,8 +1714,8 @@
       "failureReason": "",
       "expectedStatus": "succeeded",
       "stepsUsed": 5,
-      "elapsedMs": 110433,
-      "approvals": 1,
+      "elapsedMs": 178104,
+      "approvals": 2,
       "changedFiles": [
         "pad.py"
       ],
@@ -1628,29 +1723,29 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 48024,
-        "prompt_tokens": 46251,
-        "completion_tokens": 1773,
-        "cached_tokens": 43467,
-        "reasoning_tokens": 0,
-        "calls": 10,
+        "total_tokens": 46075,
+        "prompt_tokens": 45452,
+        "completion_tokens": 623,
+        "cached_tokens": 17216,
+        "reasoning_tokens": 313,
+        "calls": 11,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 8,
-          "unknown": 2
+          "provider": 7,
+          "unknown": 4
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 8,
-            "prompt_tokens": 46251,
-            "completion_tokens": 1773,
-            "total_tokens": 48024
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 45452,
+            "completion_tokens": 623,
+            "total_tokens": 46075
           },
           "(unknown)": {
-            "calls": 2,
+            "calls": 4,
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0
@@ -1664,10 +1759,11 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
-      "attempts": 1
+      "attempts": 2
     },
     {
       "id": "coding-030",
@@ -1676,8 +1772,8 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 127937,
+      "stepsUsed": 4,
+      "elapsedMs": 216024,
       "approvals": 1,
       "changedFiles": [
         "leap.py"
@@ -1686,26 +1782,26 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 48590,
-        "prompt_tokens": 46749,
-        "completion_tokens": 1841,
-        "cached_tokens": 43801,
-        "reasoning_tokens": 0,
-        "calls": 10,
+        "total_tokens": 44959,
+        "prompt_tokens": 44273,
+        "completion_tokens": 686,
+        "cached_tokens": 11008,
+        "reasoning_tokens": 146,
+        "calls": 9,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 8,
+          "provider": 7,
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 8,
-            "prompt_tokens": 46749,
-            "completion_tokens": 1841,
-            "total_tokens": 48590
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 44273,
+            "completion_tokens": 686,
+            "total_tokens": 44959
           },
           "(unknown)": {
             "calls": 2,
@@ -1722,6 +1818,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -1734,8 +1831,8 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 4,
-      "elapsedMs": 79189,
+      "stepsUsed": 5,
+      "elapsedMs": 136966,
       "approvals": 1,
       "changedFiles": [
         "units.py"
@@ -1744,26 +1841,26 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 40987,
-        "prompt_tokens": 39248,
-        "completion_tokens": 1739,
-        "cached_tokens": 36702,
-        "reasoning_tokens": 0,
-        "calls": 9,
+        "total_tokens": 52354,
+        "prompt_tokens": 51713,
+        "completion_tokens": 641,
+        "cached_tokens": 0,
+        "reasoning_tokens": 180,
+        "calls": 10,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 7,
+          "provider": 8,
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 7,
-            "prompt_tokens": 39248,
-            "completion_tokens": 1739,
-            "total_tokens": 40987
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 8,
+            "prompt_tokens": 51713,
+            "completion_tokens": 641,
+            "total_tokens": 52354
           },
           "(unknown)": {
             "calls": 2,
@@ -1780,6 +1877,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -1792,9 +1890,9 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 11,
-      "elapsedMs": 160971,
-      "approvals": 0,
+      "stepsUsed": 4,
+      "elapsedMs": 170515,
+      "approvals": 1,
       "changedFiles": [
         "points.py"
       ],
@@ -1802,80 +1900,29 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 109510,
-        "prompt_tokens": 104923,
-        "completion_tokens": 4587,
-        "cached_tokens": 99524,
-        "reasoning_tokens": 0,
-        "calls": 16,
-        "usage_source": "provider",
-        "usage_source_calls": {
-          "provider": 16
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 16,
-            "prompt_tokens": 104923,
-            "completion_tokens": 4587,
-            "total_tokens": 109510
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": true,
-      "attempts": 1
-    },
-    {
-      "id": "coding-033",
-      "category": "type_error_fix",
-      "status": "succeeded",
-      "agentStatus": "succeeded",
-      "failureReason": "",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 9,
-      "elapsedMs": 231423,
-      "approvals": 3,
-      "changedFiles": [
-        "bundles.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": "",
-      "tokenUsage": {
-        "total_tokens": 98555,
-        "prompt_tokens": 96333,
-        "completion_tokens": 2222,
-        "cached_tokens": 89241,
-        "reasoning_tokens": 0,
-        "calls": 18,
+        "total_tokens": 44205,
+        "prompt_tokens": 43524,
+        "completion_tokens": 681,
+        "cached_tokens": 7360,
+        "reasoning_tokens": 351,
+        "calls": 10,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 12,
-          "unknown": 6
+          "provider": 7,
+          "unknown": 3
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 12,
-            "prompt_tokens": 96333,
-            "completion_tokens": 2222,
-            "total_tokens": 98555
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 43524,
+            "completion_tokens": 681,
+            "total_tokens": 44205
           },
           "(unknown)": {
-            "calls": 6,
+            "calls": 3,
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0
@@ -1889,6 +1936,66 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-033",
+      "category": "type_error_fix",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 5,
+      "elapsedMs": 204356,
+      "approvals": 1,
+      "changedFiles": [
+        "bundles.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "",
+      "tokenUsage": {
+        "total_tokens": 53337,
+        "prompt_tokens": 52643,
+        "completion_tokens": 694,
+        "cached_tokens": 5120,
+        "reasoning_tokens": 215,
+        "calls": 10,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 8,
+          "unknown": 2
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 8,
+            "prompt_tokens": 52643,
+            "completion_tokens": 694,
+            "total_tokens": 53337
+          },
+          "(unknown)": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -1902,7 +2009,7 @@
       "failureReason": "",
       "expectedStatus": "succeeded",
       "stepsUsed": 4,
-      "elapsedMs": 93043,
+      "elapsedMs": 342754,
       "approvals": 1,
       "changedFiles": [
         "rates.py"
@@ -1911,29 +2018,29 @@
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 42391,
-        "prompt_tokens": 40466,
-        "completion_tokens": 1925,
-        "cached_tokens": 37703,
-        "reasoning_tokens": 0,
-        "calls": 9,
+        "total_tokens": 45136,
+        "prompt_tokens": 44433,
+        "completion_tokens": 703,
+        "cached_tokens": 7360,
+        "reasoning_tokens": 165,
+        "calls": 10,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
           "provider": 7,
-          "unknown": 2
+          "unknown": 3
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 7,
-            "prompt_tokens": 40466,
-            "completion_tokens": 1925,
-            "total_tokens": 42391
+            "prompt_tokens": 44433,
+            "completion_tokens": 703,
+            "total_tokens": 45136
           },
           "(unknown)": {
-            "calls": 2,
+            "calls": 3,
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0
@@ -1947,6 +2054,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -1960,38 +2068,36 @@
       "failureReason": "",
       "expectedStatus": "succeeded",
       "stepsUsed": 4,
-      "elapsedMs": 83100,
+      "elapsedMs": 347060,
       "approvals": 1,
-      "changedFiles": [
-        "profiles.py"
-      ],
+      "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 41642,
-        "prompt_tokens": 39513,
-        "completion_tokens": 2129,
-        "cached_tokens": 36898,
-        "reasoning_tokens": 0,
+        "total_tokens": 46655,
+        "prompt_tokens": 44433,
+        "completion_tokens": 2222,
+        "cached_tokens": 0,
+        "reasoning_tokens": 1705,
         "calls": 9,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 8,
-          "unknown": 1
+          "provider": 7,
+          "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 8,
-            "prompt_tokens": 39513,
-            "completion_tokens": 2129,
-            "total_tokens": 41642
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 44433,
+            "completion_tokens": 2222,
+            "total_tokens": 46655
           },
           "(unknown)": {
-            "calls": 1,
+            "calls": 2,
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0
@@ -2001,13 +2107,14 @@
       "checks": {
         "statusMatch": true,
         "testPassed": true,
-        "expectedFilesTouched": true,
+        "expectedFilesTouched": false,
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
-      "passed": true,
+      "passed": false,
       "attempts": 1
     },
     {
@@ -2017,8 +2124,8 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 11,
-      "elapsedMs": 150747,
+      "stepsUsed": 6,
+      "elapsedMs": 335027,
       "approvals": 4,
       "changedFiles": [
         "data.db",
@@ -2026,28 +2133,28 @@
       ],
       "unexpectedTouched": [],
       "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
       "tokenUsage": {
-        "total_tokens": 112641,
-        "prompt_tokens": 109633,
-        "completion_tokens": 3008,
-        "cached_tokens": 102314,
-        "reasoning_tokens": 0,
-        "calls": 21,
+        "total_tokens": 74230,
+        "prompt_tokens": 72934,
+        "completion_tokens": 1296,
+        "cached_tokens": 0,
+        "reasoning_tokens": 612,
+        "calls": 15,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 15,
+          "provider": 9,
           "unknown": 6
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 15,
-            "prompt_tokens": 109633,
-            "completion_tokens": 3008,
-            "total_tokens": 112641
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 9,
+            "prompt_tokens": 72934,
+            "completion_tokens": 1296,
+            "total_tokens": 74230
           },
           "(unknown)": {
             "calls": 6,
@@ -2064,6 +2171,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2076,8 +2184,8 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 10,
-      "elapsedMs": 221740,
+      "stepsUsed": 6,
+      "elapsedMs": 499530,
       "approvals": 4,
       "changedFiles": [
         "data.db",
@@ -2085,31 +2193,31 @@
       ],
       "unexpectedTouched": [],
       "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
       "tokenUsage": {
-        "total_tokens": 102133,
-        "prompt_tokens": 98656,
-        "completion_tokens": 3477,
-        "cached_tokens": 91888,
-        "reasoning_tokens": 0,
-        "calls": 20,
+        "total_tokens": 72843,
+        "prompt_tokens": 71608,
+        "completion_tokens": 1235,
+        "cached_tokens": 0,
+        "reasoning_tokens": 564,
+        "calls": 15,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 15,
-          "unknown": 5
+          "provider": 9,
+          "unknown": 6
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 15,
-            "prompt_tokens": 98656,
-            "completion_tokens": 3477,
-            "total_tokens": 102133
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 9,
+            "prompt_tokens": 71608,
+            "completion_tokens": 1235,
+            "total_tokens": 72843
           },
           "(unknown)": {
-            "calls": 5,
+            "calls": 6,
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0
@@ -2123,6 +2231,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2135,9 +2244,9 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 12,
-      "elapsedMs": 243829,
-      "approvals": 3,
+      "stepsUsed": 8,
+      "elapsedMs": 425856,
+      "approvals": 5,
       "changedFiles": [
         "data.db",
         "migrate.py"
@@ -2146,29 +2255,29 @@
       "testExit": 0,
       "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
       "tokenUsage": {
-        "total_tokens": 120799,
-        "prompt_tokens": 117715,
-        "completion_tokens": 3084,
-        "cached_tokens": 103081,
-        "reasoning_tokens": 0,
-        "calls": 20,
+        "total_tokens": 99420,
+        "prompt_tokens": 97477,
+        "completion_tokens": 1943,
+        "cached_tokens": 12032,
+        "reasoning_tokens": 1167,
+        "calls": 25,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 16,
-          "unknown": 4
+          "provider": 11,
+          "unknown": 14
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 16,
-            "prompt_tokens": 117715,
-            "completion_tokens": 3084,
-            "total_tokens": 120799
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 11,
+            "prompt_tokens": 97477,
+            "completion_tokens": 1943,
+            "total_tokens": 99420
           },
           "(unknown)": {
-            "calls": 4,
+            "calls": 14,
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0
@@ -2182,6 +2291,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2194,71 +2304,9 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 19,
-      "elapsedMs": 475955,
-      "approvals": 4,
-      "changedFiles": [
-        "data.db",
-        "migrate.py",
-        "verify_migration.py"
-      ],
-      "unexpectedTouched": [
-        "verify_migration.py"
-      ],
-      "testExit": 0,
-      "testTail": ".                                                                        [100%]\r\n1 passed in 0.02s\r\n",
-      "tokenUsage": {
-        "total_tokens": 228860,
-        "prompt_tokens": 224543,
-        "completion_tokens": 4317,
-        "cached_tokens": 203968,
-        "reasoning_tokens": 0,
-        "calls": 32,
-        "usage_source": "provider,unknown",
-        "usage_source_calls": {
-          "provider": 24,
-          "unknown": 8
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 24,
-            "prompt_tokens": 224543,
-            "completion_tokens": 4317,
-            "total_tokens": 228860
-          },
-          "(unknown)": {
-            "calls": 8,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": false,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": false,
-      "attempts": 1
-    },
-    {
-      "id": "coding-040",
-      "category": "db_migration",
-      "status": "succeeded",
-      "agentStatus": "succeeded",
-      "failureReason": "",
-      "expectedStatus": "succeeded",
       "stepsUsed": 6,
-      "elapsedMs": 207087,
-      "approvals": 3,
+      "elapsedMs": 431258,
+      "approvals": 5,
       "changedFiles": [
         "data.db",
         "migrate.py"
@@ -2267,29 +2315,29 @@
       "testExit": 0,
       "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
       "tokenUsage": {
-        "total_tokens": 58729,
-        "prompt_tokens": 56690,
-        "completion_tokens": 2039,
-        "cached_tokens": 52801,
-        "reasoning_tokens": 0,
-        "calls": 14,
+        "total_tokens": 77452,
+        "prompt_tokens": 76097,
+        "completion_tokens": 1355,
+        "cached_tokens": 10944,
+        "reasoning_tokens": 571,
+        "calls": 18,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
           "provider": 9,
-          "unknown": 5
+          "unknown": 9
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 9,
-            "prompt_tokens": 56690,
-            "completion_tokens": 2039,
-            "total_tokens": 58729
+            "prompt_tokens": 76097,
+            "completion_tokens": 1355,
+            "total_tokens": 77452
           },
           "(unknown)": {
-            "calls": 5,
+            "calls": 9,
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0
@@ -2303,6 +2351,67 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-040",
+      "category": "db_migration",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 6,
+      "elapsedMs": 355482,
+      "approvals": 4,
+      "changedFiles": [
+        "data.db",
+        "migrate.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": ".                                                                        [100%]\r\n1 passed in 0.01s\r\n",
+      "tokenUsage": {
+        "total_tokens": 74903,
+        "prompt_tokens": 73726,
+        "completion_tokens": 1177,
+        "cached_tokens": 0,
+        "reasoning_tokens": 493,
+        "calls": 17,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 9,
+          "unknown": 8
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 9,
+            "prompt_tokens": 73726,
+            "completion_tokens": 1177,
+            "total_tokens": 74903
+          },
+          "(unknown)": {
+            "calls": 8,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2315,36 +2424,36 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 187088,
+      "stepsUsed": 4,
+      "elapsedMs": 124915,
       "approvals": 1,
       "changedFiles": [
         "calculator.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
-      "testTail": "..                                                                       [100%]\r\n2 passed in 0.02s\r\n",
+      "testTail": "..                                                                       [100%]\r\n2 passed in 0.01s\r\n",
       "tokenUsage": {
-        "total_tokens": 49418,
-        "prompt_tokens": 47723,
-        "completion_tokens": 1695,
-        "cached_tokens": 44593,
-        "reasoning_tokens": 0,
-        "calls": 10,
+        "total_tokens": 45742,
+        "prompt_tokens": 45009,
+        "completion_tokens": 733,
+        "cached_tokens": 11584,
+        "reasoning_tokens": 152,
+        "calls": 9,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 8,
+          "provider": 7,
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 8,
-            "prompt_tokens": 47723,
-            "completion_tokens": 1695,
-            "total_tokens": 49418
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 45009,
+            "completion_tokens": 733,
+            "total_tokens": 45742
           },
           "(unknown)": {
             "calls": 2,
@@ -2361,6 +2470,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2373,152 +2483,36 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 8,
-      "elapsedMs": 224300,
-      "approvals": 2,
-      "changedFiles": [
-        "timer.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 1,
-      "testTail": "tionError\r\n=========================== short test summary info ===========================\r\nFAILED test_docstring.py::test_docstring_present - AssertionError: 函数缺 doc...\r\n1 failed, 1 passed in 0.11s\r\n",
-      "tokenUsage": {
-        "total_tokens": 69212,
-        "prompt_tokens": 66866,
-        "completion_tokens": 2346,
-        "cached_tokens": 57733,
-        "reasoning_tokens": 0,
-        "calls": 14,
-        "usage_source": "provider,unknown",
-        "usage_source_calls": {
-          "provider": 10,
-          "unknown": 4
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 10,
-            "prompt_tokens": 66866,
-            "completion_tokens": 2346,
-            "total_tokens": 69212
-          },
-          "(unknown)": {
-            "calls": 4,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": true,
-        "testPassed": false,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": false,
-      "attempts": 2
-    },
-    {
-      "id": "coding-043",
-      "category": "documentation",
-      "status": "succeeded",
-      "agentStatus": "succeeded",
-      "failureReason": "",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 7,
-      "elapsedMs": 94963,
+      "stepsUsed": 4,
+      "elapsedMs": 180550,
       "approvals": 1,
       "changedFiles": [
-        "csvio.py"
+        "timer.py"
       ],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "..                                                                       [100%]\r\n2 passed in 0.01s\r\n",
       "tokenUsage": {
-        "total_tokens": 72198,
-        "prompt_tokens": 69898,
-        "completion_tokens": 2300,
-        "cached_tokens": 64835,
-        "reasoning_tokens": 0,
-        "calls": 12,
+        "total_tokens": 43760,
+        "prompt_tokens": 43052,
+        "completion_tokens": 708,
+        "cached_tokens": 0,
+        "reasoning_tokens": 188,
+        "calls": 9,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 11,
-          "unknown": 1
-        },
-        "models": [
-          "glm-4.5-flash"
-        ],
-        "by_model": {
-          "glm-4.5-flash": {
-            "calls": 11,
-            "prompt_tokens": 69898,
-            "completion_tokens": 2300,
-            "total_tokens": 72198
-          },
-          "(unknown)": {
-            "calls": 1,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-          }
-        }
-      },
-      "checks": {
-        "statusMatch": true,
-        "testPassed": true,
-        "expectedFilesTouched": true,
-        "noUnexpectedChanges": true,
-        "answerHit": true,
-        "noFalseDone": true,
-        "highRiskUnauthorized": true
-      },
-      "passed": true,
-      "attempts": 1
-    },
-    {
-      "id": "coding-044",
-      "category": "documentation",
-      "status": "succeeded",
-      "agentStatus": "succeeded",
-      "failureReason": "",
-      "expectedStatus": "succeeded",
-      "stepsUsed": 5,
-      "elapsedMs": 146408,
-      "approvals": 1,
-      "changedFiles": [
-        "compress.py"
-      ],
-      "unexpectedTouched": [],
-      "testExit": 0,
-      "testTail": "..                                                                       [100%]\r\n2 passed in 0.02s\r\n",
-      "tokenUsage": {
-        "total_tokens": 49552,
-        "prompt_tokens": 47599,
-        "completion_tokens": 1953,
-        "cached_tokens": 44516,
-        "reasoning_tokens": 0,
-        "calls": 10,
-        "usage_source": "provider,unknown",
-        "usage_source_calls": {
-          "provider": 8,
+          "provider": 7,
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 8,
-            "prompt_tokens": 47599,
-            "completion_tokens": 1953,
-            "total_tokens": 49552
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 43052,
+            "completion_tokens": 708,
+            "total_tokens": 43760
           },
           "(unknown)": {
             "calls": 2,
@@ -2535,6 +2529,125 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 2
+    },
+    {
+      "id": "coding-043",
+      "category": "documentation",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 4,
+      "elapsedMs": 174938,
+      "approvals": 1,
+      "changedFiles": [
+        "csvio.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "..                                                                       [100%]\r\n2 passed in 0.01s\r\n",
+      "tokenUsage": {
+        "total_tokens": 46519,
+        "prompt_tokens": 45496,
+        "completion_tokens": 1023,
+        "cached_tokens": 0,
+        "reasoning_tokens": 377,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 7,
+          "unknown": 2
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 45496,
+            "completion_tokens": 1023,
+            "total_tokens": 46519
+          },
+          "(unknown)": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
+        "highRiskUnauthorized": true
+      },
+      "passed": true,
+      "attempts": 1
+    },
+    {
+      "id": "coding-044",
+      "category": "documentation",
+      "status": "succeeded",
+      "agentStatus": "succeeded",
+      "failureReason": "",
+      "expectedStatus": "succeeded",
+      "stepsUsed": 4,
+      "elapsedMs": 168768,
+      "approvals": 1,
+      "changedFiles": [
+        "compress.py"
+      ],
+      "unexpectedTouched": [],
+      "testExit": 0,
+      "testTail": "..                                                                       [100%]\r\n2 passed in 0.01s\r\n",
+      "tokenUsage": {
+        "total_tokens": 45979,
+        "prompt_tokens": 45232,
+        "completion_tokens": 747,
+        "cached_tokens": 5248,
+        "reasoning_tokens": 316,
+        "calls": 9,
+        "usage_source": "provider,unknown",
+        "usage_source_calls": {
+          "provider": 7,
+          "unknown": 2
+        },
+        "models": [
+          "mistralai/mistral-large-4-1t-a52b"
+        ],
+        "by_model": {
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 7,
+            "prompt_tokens": 45232,
+            "completion_tokens": 747,
+            "total_tokens": 45979
+          },
+          "(unknown)": {
+            "calls": 2,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          }
+        }
+      },
+      "checks": {
+        "statusMatch": true,
+        "testPassed": true,
+        "expectedFilesTouched": true,
+        "noUnexpectedChanges": true,
+        "answerHit": true,
+        "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2548,7 +2661,7 @@
       "failureReason": "",
       "expectedStatus": "succeeded",
       "stepsUsed": 4,
-      "elapsedMs": 73112,
+      "elapsedMs": 189588,
       "approvals": 1,
       "changedFiles": [
         "quota.py"
@@ -2557,11 +2670,11 @@
       "testExit": 0,
       "testTail": "..                                                                       [100%]\r\n2 passed in 0.01s\r\n",
       "tokenUsage": {
-        "total_tokens": 41773,
-        "prompt_tokens": 40298,
-        "completion_tokens": 1475,
-        "cached_tokens": 37643,
-        "reasoning_tokens": 0,
+        "total_tokens": 45949,
+        "prompt_tokens": 45179,
+        "completion_tokens": 770,
+        "cached_tokens": 6336,
+        "reasoning_tokens": 146,
         "calls": 9,
         "usage_source": "provider,unknown",
         "usage_source_calls": {
@@ -2569,14 +2682,14 @@
           "unknown": 2
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 7,
-            "prompt_tokens": 40298,
-            "completion_tokens": 1475,
-            "total_tokens": 41773
+            "prompt_tokens": 45179,
+            "completion_tokens": 770,
+            "total_tokens": 45949
           },
           "(unknown)": {
             "calls": 2,
@@ -2593,6 +2706,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2606,32 +2720,32 @@
       "failureReason": "",
       "expectedStatus": "succeeded",
       "stepsUsed": 2,
-      "elapsedMs": 43026,
+      "elapsedMs": 93034,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
       "tokenUsage": {
-        "total_tokens": 21698,
-        "prompt_tokens": 20661,
-        "completion_tokens": 1037,
-        "cached_tokens": 19194,
-        "reasoning_tokens": 0,
+        "total_tokens": 22839,
+        "prompt_tokens": 22154,
+        "completion_tokens": 685,
+        "cached_tokens": 0,
+        "reasoning_tokens": 347,
         "calls": 4,
         "usage_source": "provider",
         "usage_source_calls": {
           "provider": 4
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 4,
-            "prompt_tokens": 20661,
-            "completion_tokens": 1037,
-            "total_tokens": 21698
+            "prompt_tokens": 22154,
+            "completion_tokens": 685,
+            "total_tokens": 22839
           }
         }
       },
@@ -2642,6 +2756,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2654,33 +2769,33 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 0,
-      "elapsedMs": 10246,
+      "stepsUsed": 2,
+      "elapsedMs": 61561,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
       "tokenUsage": {
-        "total_tokens": 4967,
-        "prompt_tokens": 4810,
-        "completion_tokens": 157,
-        "cached_tokens": 4248,
-        "reasoning_tokens": 0,
-        "calls": 1,
+        "total_tokens": 22819,
+        "prompt_tokens": 22168,
+        "completion_tokens": 651,
+        "cached_tokens": 5248,
+        "reasoning_tokens": 351,
+        "calls": 4,
         "usage_source": "provider",
         "usage_source_calls": {
-          "provider": 1
+          "provider": 4
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 1,
-            "prompt_tokens": 4810,
-            "completion_tokens": 157,
-            "total_tokens": 4967
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 4,
+            "prompt_tokens": 22168,
+            "completion_tokens": 651,
+            "total_tokens": 22819
           }
         }
       },
@@ -2691,6 +2806,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2704,32 +2820,32 @@
       "failureReason": "",
       "expectedStatus": "succeeded",
       "stepsUsed": 2,
-      "elapsedMs": 34914,
+      "elapsedMs": 138416,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
       "tokenUsage": {
-        "total_tokens": 21450,
-        "prompt_tokens": 20565,
-        "completion_tokens": 885,
-        "cached_tokens": 19165,
-        "reasoning_tokens": 0,
+        "total_tokens": 22896,
+        "prompt_tokens": 22217,
+        "completion_tokens": 679,
+        "cached_tokens": 0,
+        "reasoning_tokens": 369,
         "calls": 4,
         "usage_source": "provider",
         "usage_source_calls": {
           "provider": 4
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 4,
-            "prompt_tokens": 20565,
-            "completion_tokens": 885,
-            "total_tokens": 21450
+            "prompt_tokens": 22217,
+            "completion_tokens": 679,
+            "total_tokens": 22896
           }
         }
       },
@@ -2740,6 +2856,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2752,33 +2869,33 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 0,
-      "elapsedMs": 8217,
+      "stepsUsed": 2,
+      "elapsedMs": 94069,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
       "tokenUsage": {
-        "total_tokens": 4969,
-        "prompt_tokens": 4804,
-        "completion_tokens": 165,
-        "cached_tokens": 4248,
-        "reasoning_tokens": 0,
-        "calls": 1,
+        "total_tokens": 22995,
+        "prompt_tokens": 22222,
+        "completion_tokens": 773,
+        "cached_tokens": 1280,
+        "reasoning_tokens": 451,
+        "calls": 4,
         "usage_source": "provider",
         "usage_source_calls": {
-          "provider": 1
+          "provider": 4
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 1,
-            "prompt_tokens": 4804,
-            "completion_tokens": 165,
-            "total_tokens": 4969
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 4,
+            "prompt_tokens": 22222,
+            "completion_tokens": 773,
+            "total_tokens": 22995
           }
         }
       },
@@ -2789,6 +2906,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2801,33 +2919,33 @@
       "agentStatus": "succeeded",
       "failureReason": "",
       "expectedStatus": "succeeded",
-      "stepsUsed": 0,
-      "elapsedMs": 9220,
+      "stepsUsed": 2,
+      "elapsedMs": 96110,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": 0,
       "testTail": "reverse tasks 由判分器按 answer_keys 匹配回复文本，不跑命令\r\n",
       "tokenUsage": {
-        "total_tokens": 4993,
-        "prompt_tokens": 4814,
-        "completion_tokens": 179,
-        "cached_tokens": 4248,
-        "reasoning_tokens": 0,
-        "calls": 1,
+        "total_tokens": 22986,
+        "prompt_tokens": 22402,
+        "completion_tokens": 584,
+        "cached_tokens": 0,
+        "reasoning_tokens": 193,
+        "calls": 4,
         "usage_source": "provider",
         "usage_source_calls": {
-          "provider": 1
+          "provider": 4
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
-            "calls": 1,
-            "prompt_tokens": 4814,
-            "completion_tokens": 179,
-            "total_tokens": 4993
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 4,
+            "prompt_tokens": 22402,
+            "completion_tokens": 584,
+            "total_tokens": 22986
           }
         }
       },
@@ -2838,6 +2956,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2851,32 +2970,39 @@
       "failureReason": "任务已取消",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 5156,
+      "elapsedMs": 5074,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": null,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 5029,
-        "prompt_tokens": 4804,
-        "completion_tokens": 225,
-        "cached_tokens": 4248,
-        "reasoning_tokens": 0,
-        "calls": 1,
-        "usage_source": "provider",
+        "total_tokens": 5370,
+        "prompt_tokens": 5167,
+        "completion_tokens": 203,
+        "cached_tokens": 0,
+        "reasoning_tokens": 154,
+        "calls": 2,
+        "usage_source": "provider,unknown",
         "usage_source_calls": {
-          "provider": 1
+          "provider": 1,
+          "unknown": 1
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "(unknown)": {
             "calls": 1,
-            "prompt_tokens": 4804,
-            "completion_tokens": 225,
-            "total_tokens": 5029
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+          },
+          "mistralai/mistral-large-4-1t-a52b": {
+            "calls": 1,
+            "prompt_tokens": 5167,
+            "completion_tokens": 203,
+            "total_tokens": 5370
           }
         }
       },
@@ -2887,6 +3013,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2900,32 +3027,32 @@
       "failureReason": "任务已取消",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 7217,
+      "elapsedMs": 7120,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": null,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 5055,
-        "prompt_tokens": 4804,
-        "completion_tokens": 251,
-        "cached_tokens": 4803,
-        "reasoning_tokens": 0,
+        "total_tokens": 5272,
+        "prompt_tokens": 5167,
+        "completion_tokens": 105,
+        "cached_tokens": 0,
+        "reasoning_tokens": 52,
         "calls": 1,
         "usage_source": "provider",
         "usage_source_calls": {
           "provider": 1
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 1,
-            "prompt_tokens": 4804,
-            "completion_tokens": 251,
-            "total_tokens": 5055
+            "prompt_tokens": 5167,
+            "completion_tokens": 105,
+            "total_tokens": 5272
           }
         }
       },
@@ -2936,6 +3063,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2949,32 +3077,32 @@
       "failureReason": "任务已取消",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 8248,
+      "elapsedMs": 8121,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": null,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 5029,
-        "prompt_tokens": 4804,
-        "completion_tokens": 225,
-        "cached_tokens": 4803,
-        "reasoning_tokens": 0,
+        "total_tokens": 5267,
+        "prompt_tokens": 5167,
+        "completion_tokens": 100,
+        "cached_tokens": 5120,
+        "reasoning_tokens": 41,
         "calls": 1,
         "usage_source": "provider",
         "usage_source_calls": {
           "provider": 1
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 1,
-            "prompt_tokens": 4804,
-            "completion_tokens": 225,
-            "total_tokens": 5029
+            "prompt_tokens": 5167,
+            "completion_tokens": 100,
+            "total_tokens": 5267
           }
         }
       },
@@ -2985,6 +3113,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -2998,32 +3127,32 @@
       "failureReason": "任务已取消",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 10260,
+      "elapsedMs": 10163,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": null,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 5073,
-        "prompt_tokens": 4804,
-        "completion_tokens": 269,
-        "cached_tokens": 4803,
-        "reasoning_tokens": 0,
+        "total_tokens": 5295,
+        "prompt_tokens": 5167,
+        "completion_tokens": 128,
+        "cached_tokens": 1280,
+        "reasoning_tokens": 77,
         "calls": 1,
         "usage_source": "provider",
         "usage_source_calls": {
           "provider": 1
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 1,
-            "prompt_tokens": 4804,
-            "completion_tokens": 269,
-            "total_tokens": 5073
+            "prompt_tokens": 5167,
+            "completion_tokens": 128,
+            "total_tokens": 5295
           }
         }
       },
@@ -3034,6 +3163,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,
@@ -3047,32 +3177,32 @@
       "failureReason": "任务已取消",
       "expectedStatus": "cancelled",
       "stepsUsed": 0,
-      "elapsedMs": 11332,
+      "elapsedMs": 11155,
       "approvals": 0,
       "changedFiles": [],
       "unexpectedTouched": [],
       "testExit": null,
       "testTail": "",
       "tokenUsage": {
-        "total_tokens": 5047,
-        "prompt_tokens": 4804,
-        "completion_tokens": 243,
-        "cached_tokens": 4803,
-        "reasoning_tokens": 0,
+        "total_tokens": 5273,
+        "prompt_tokens": 5167,
+        "completion_tokens": 106,
+        "cached_tokens": 0,
+        "reasoning_tokens": 52,
         "calls": 1,
         "usage_source": "provider",
         "usage_source_calls": {
           "provider": 1
         },
         "models": [
-          "glm-4.5-flash"
+          "mistralai/mistral-large-4-1t-a52b"
         ],
         "by_model": {
-          "glm-4.5-flash": {
+          "mistralai/mistral-large-4-1t-a52b": {
             "calls": 1,
-            "prompt_tokens": 4804,
-            "completion_tokens": 243,
-            "total_tokens": 5047
+            "prompt_tokens": 5167,
+            "completion_tokens": 106,
+            "total_tokens": 5273
           }
         }
       },
@@ -3083,6 +3213,7 @@
         "noUnexpectedChanges": true,
         "answerHit": true,
         "noFalseDone": true,
+        "noFalseClaim": true,
         "highRiskUnauthorized": true
       },
       "passed": true,

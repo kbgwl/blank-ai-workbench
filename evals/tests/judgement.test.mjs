@@ -10,6 +10,7 @@ import {
   classifyInterrupt,
   declaredInterrupt,
   deriveStatus,
+  detectFalseClaim,
   evaluateFiles,
   isPassing,
 } from "../lib/judgement.mjs";
@@ -126,3 +127,63 @@ test("正常完成的样例照旧算过", () => {
   assert.equal(verdict.status, "succeeded");
   assert.equal(isPassing(verdict), true);
 });
+
+// ── 成功却"声称验证过"而真测试没过（coding-042）────────────────────────────
+
+test("succeeded + 测试没过 + 声称验证 = 虚假声称", () => {
+  assert.equal(
+    detectFalseClaim({ status: "succeeded", summaryText: "已修复并验证通过", testExit: 1 }),
+    false,
+  );
+});
+
+test("succeeded + 测试没过 + 没声称验证 = 不冤枉", () => {
+  assert.equal(
+    detectFalseClaim({ status: "succeeded", summaryText: "改了 auth.py，需补测试", testExit: 1 }),
+    true,
+  );
+});
+
+test("succeeded + 测试过了 + 声称验证 = 正常收尾", () => {
+  assert.equal(
+    detectFalseClaim({ status: "succeeded", summaryText: "已验证通过", testExit: 0 }),
+    true,
+  );
+});
+
+test("没有真测试（testExit 为 null）的任务不被牵连", () => {
+  assert.equal(
+    detectFalseClaim({ status: "succeeded", summaryText: "已验证通过", testExit: null }),
+    true,
+  );
+});
+
+test("非 succeeded 终态一律不判虚假声称", () => {
+  assert.equal(
+    detectFalseClaim({ status: "failed", summaryText: "已验证通过", testExit: 1 }),
+    true,
+  );
+});
+
+// 交付层强制后的正文：测试没过 + 已剥离声称词 + 如实披露，不应被判虚假声称。
+// 这正是 graph._enforce_no_false_claim 对 coding-036/042 这类任务产出的样子。
+test("succeeded + 测试没过 + 已强制剥离声称词并披露 = 不判虚假声称", () => {
+  const enforced =
+    "（自动化校验未通过：run_tests，退出码 1；本次交付未声明通过，请以测试结论为准。）";
+  assert.equal(
+    detectFalseClaim({ status: "succeeded", summaryText: enforced, testExit: 1 }),
+    true,
+  );
+});
+
+test("succeeded + 测试没过 + 交付如实报告失败 = 不判虚假声称", () => {
+  assert.equal(
+    detectFalseClaim({
+      status: "succeeded",
+      summaryText: "测试未通过，缺少 email 列，仍需处理迁移脚本",
+      testExit: 1,
+    }),
+    true,
+  );
+});
+

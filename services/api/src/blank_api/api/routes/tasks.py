@@ -60,6 +60,8 @@ from blank_api.services.fork import FORK_EVENT, fork_thread
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
 from blank_api.services.agent.queue import abandon_run, claim_run, enqueue_run, finish_run, renew_run
 from blank_api.services.agent.router import candidate_from_provider
+from blank_api.services.agent.dispatch import ExecutionSnapshot, explain, route
+from blank_api.services.features import is_enabled
 from blank_api.services.models.registry import build_adapter
 from blank_api.services.plan import (
     criteria_text,
@@ -229,7 +231,61 @@ async def persist_task(
             "attachments": len(attachments),
         },
     )
+    await _record_dispatch(db, task)
     return task
+
+
+async def _record_dispatch(db: DbSession, task: Task) -> None:
+    """创建时算一次派发快照并落库（v162，特性开关 super_agent_dispatch）。
+
+    为什么在**创建**这一刻算：派发方式（现在跑 / 排队 / 等事件 / 先问人）是用户
+    点发送后立刻要给出的反应，等到模型判完意图才决定"这条该不该排队"已经晚了。
+    为什么落库而不是留在内存：执行可能发生在另一个进程（独立 worker）或几小时后
+    （断点恢复），那时内存里那份早没了，只剩库能回答「当时按什么权限派的」。
+
+    开关关着时整段跳过：不写快照、不发事件，行为与引入 Router 之前一致。
+    """
+    if not is_enabled("super_agent_dispatch"):
+        return
+    if (task.dispatch_snapshot or {}).get("snapshot_id"):
+        # 已有快照就不再覆盖：重复调用 persist 时重新路由会让"当时那份决定"漂移。
+        return
+    snapshot = route(
+        task.goal or task.title,
+        scenario=task.scenario or "dev",
+        max_steps=int(task.max_steps or 0) or None,
+    )
+    task.dispatch_snapshot = snapshot.as_dict()
+    await db.commit()
+    # commit 会让 ORM 实例过期，之后序列化 created_at/updated_at 会触发同步懒加载
+    # （异步会话里直接 MissingGreenlet）。和 persist_task 里同一条规矩：写完读回。
+    await db.refresh(task)
+    await EventRecorder(get_session_factory(), task.id).add(
+        "dispatch.decided",
+        "receive_task",
+        {
+            "snapshot_id": snapshot.snapshot_id,
+            "intent": snapshot.intent,
+            "dispatch": snapshot.dispatch,
+            "tool_policy": snapshot.tool_policy,
+            "notify_policy": snapshot.notify_policy,
+            "memory_policy": snapshot.memory_policy,
+            "priority": snapshot.priority,
+            "high_risk": snapshot.high_risk,
+            "budget": snapshot.budget.as_dict(),
+            "why": explain(snapshot),
+        },
+    )
+
+
+def dispatch_of(task: Task) -> ExecutionSnapshot | None:
+    """读回任务上的快照。开关关着、或老数据没有快照时返回 None。"""
+    if not is_enabled("super_agent_dispatch"):
+        return None
+    raw = task.dispatch_snapshot or {}
+    if not isinstance(raw, dict) or not raw:
+        return None
+    return ExecutionSnapshot.from_dict(raw)
 
 
 @router.post("/projects/{project_id}/tasks", response_model=TaskOut, status_code=201)
@@ -528,6 +584,18 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
     scenario_key = payload.scenario or task.scenario or "dev"
     task.scenario = scenario_key
     await db.commit()
+    # 派发快照（v162）：执行侧的唯一权限来源。只往更严的方向收紧——
+    # 步数取「任务上限」与「快照预算」的较小者，只读就整回合禁写。
+    # 开关关着或是老数据时为 None，下面三行都不生效，行为与从前一致。
+    snapshot_of_task = dispatch_of(task)
+    max_steps = int(task.max_steps)
+    readonly = False
+    dispatch_payload: dict = {}
+    if snapshot_of_task is not None:
+        snapshot_of_task = snapshot_of_task.tightened(max_steps=max_steps)
+        max_steps = snapshot_of_task.budget.max_steps
+        readonly = snapshot_of_task.readonly
+        dispatch_payload = snapshot_of_task.as_dict()
     client_factory = _factory_from(request)
     adapters = [build_adapter(provider, client_factory)]
     # 路由候选：本次任务已经选定的供应商（主用 + 兜底 + 分角色），不会扩到别处。
@@ -602,7 +670,7 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         # 结构化的一份单独带过去：会话主体只吃字符串，但收尾判定要知道
         # 每条验收对应哪几步——这个映射不能靠再回表读一次。
         "acceptance_links": normalize_criteria(task.acceptance_criteria),
-        "max_steps": int(task.max_steps),
+        "max_steps": max_steps,
         "images": bundle.images,
         "texts": bundle.texts,
         # 能不能看图取决于模型名，不只看那个开关：把模型换成 glm-4.5v 之后，
@@ -616,6 +684,9 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         "scenario": scenario_key,
         # 空串＝沿用设置页默认档；运行时负责解析、降级与拒绝，路由层不预先猜。
         "sandbox_tier": payload.sandbox_tier,
+        # 派发快照与它决定的只读边界。空 dict / False = 这条 run 不按快照跑。
+        "dispatch": dispatch_payload,
+        "readonly": readonly,
     }
     # 候选必须在这里算：下面 rollback 会让 ORM 实例过期，之后读 api_key_encrypted
     # 会触发同步懒加载，在异步会话里直接抛 MissingGreenlet。
@@ -787,13 +858,37 @@ async def start_task(task_id: str, payload: TaskRunIn, request: Request, db: DbS
     task = await load_task(db, task_id)
     if task.status in ("running", "queued"):
         raise ApiError(code="task_running", message="任务正在执行中", status_code=409)
+    # 派发方式为「等触发」时不要当场跑（v162）：定时/监控类请求一旦按原路径立即执行，
+    # 「每天跑一次」就变成了「现在跑一次」。特性开关关着时照旧立即执行。
+    deferred = await _defer_if_needed(db, task, payload)
+    if deferred is not None:
+        return deferred
+    return await launch_task(db, task, payload, request)
+
+
+async def launch_task(
+    db: DbSession,
+    task: Task,
+    payload: TaskRunIn,
+    request: Request | None,
+    *,
+    start_runner: bool = True,
+) -> dict:
+    """把一条任务推进 run 队列（可顺带在进程内起跑）。
+
+    触发器、定时到点、以及用户点「开始」走的是同一条路：入参快照、队列行、状态
+    三件事必须一起写，分开写就会出现「界面上在跑、队列里没有」这种对不上的状态。
+    """
+    # 先取出 id：``_run_request`` 收尾会 rollback（让运行时用自己的会话），
+    # 之后任何属性访问都会触发同步懒加载，在异步会话里直接 MissingGreenlet。
+    task_id = task.id
     run_request = await _run_request(db, task, payload, request)
     run = await enqueue_run(db, task_id, payload.model_dump(mode="json"))
     run_request.run_id = run.id
     task.status = "queued"
     await db.commit()
 
-    if not inprocess_runner_enabled():
+    if not start_runner or not inprocess_runner_enabled():
         # 队列归独立 worker：这里只落库并返回，否则本进程会先抢走它。
         return {"task_id": task_id, "run_id": run.id, "status": "queued"}
 
@@ -816,6 +911,50 @@ async def start_task(task_id: str, payload: TaskRunIn, request: Request, db: DbS
     except RunAlreadyActive:
         raise ApiError(code="task_running", message="任务正在执行中", status_code=409) from None
     return {"task_id": task_id, "run_id": run.id, "status": "queued"}
+
+
+async def _defer_if_needed(db: DbSession, task: Task, payload: TaskRunIn) -> dict | None:
+    """监控/定时类请求：登记为待触发，返回给调用方，而不是现在就跑。"""
+    if not is_enabled("background_execution"):
+        return None
+    snapshot = dispatch_of(task)
+    if snapshot is None or snapshot.dispatch != "defer":
+        return None
+    from blank_api.models.trigger import AgentTrigger  # 局部导入：路由与触发器互相引用
+    from blank_api.services.agent import triggers
+
+    event = triggers.normalize(
+        event_type=triggers.EVENT_SCHEDULE,
+        source="task.start",
+        payload={"task_id": task.id, "goal": task.goal[:200]},
+        dedupe_key=f"task:{task.id}",
+    )
+    row, created = await triggers.ingest(
+        db,
+        task.project_id,
+        event,
+        task_id=task.id,
+        provider_id=payload.provider_id or "",
+        run_payload=payload.model_dump(mode="json"),
+        fire_at=None,
+    )
+    await db.commit()
+    await EventRecorder(get_session_factory(), task.id).add(
+        "dispatch.deferred",
+        "receive_task",
+        {
+            "trigger_id": row.id,
+            "created": created,
+            "intent": snapshot.intent,
+            "reason": "定时/监控类请求，已登记为待触发；确认后再执行",
+        },
+    )
+    return {
+        "task_id": task.id,
+        "trigger_id": row.id,
+        "status": "deferred",
+        "reason": "定时/监控类请求已登记，未立即执行",
+    }
 
 
 async def recover_pending_runs() -> int:

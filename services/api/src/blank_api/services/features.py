@@ -152,6 +152,35 @@ _REGISTRY: tuple[FeatureFlag, ...] = (
             "绝不静默回退宿主执行（设计稿 §9.2 的延迟换边界，先由实测数字裁决）。"
         ),
     ),
+    FeatureFlag(
+        name="super_agent_dispatch",
+        stage=BETA,
+        default=False,
+        summary=(
+            "Router 执行快照（v162）：创建任务时判定意图/场景/工具边界/通知与记忆策略，"
+            "落成不可变快照；执行侧只按快照收紧权限，不重新解释用户权限。"
+            "默认关闭——关着时不写快照，行为与引入 Router 之前完全一致。"
+        ),
+    ),
+    FeatureFlag(
+        name="background_execution",
+        stage=BETA,
+        default=False,
+        summary=(
+            "后台主动执行（v162）：监控/定时类请求登记为待触发，不当作「现在就做」立即执行；"
+            "只接受显式 fire_at，不做周期调度。默认关闭——关着时所有请求按原路径立即派发。"
+        ),
+    ),
+    FeatureFlag(
+        name="watchdog",
+        stage=BETA,
+        default=False,
+        summary=(
+            "Watchdog 巡检（v162）：每个 worker 轮询周期检查租约过期、长时间无事件、"
+            "审批等待过久、步数/token 预算用尽，把诊断写进事件流（同一条只报一次）。"
+            "只报告不改状态。默认关闭——关着时 worker 不扫这一层。"
+        ),
+    ),
 )
 
 FEATURES: dict[str, FeatureFlag] = {flag.name: flag for flag in _REGISTRY}

@@ -3,8 +3,10 @@
 面向开发者的 AI 工程操作台：自然语言下达任务，Agent 读取和修改项目文件、执行命令与测试、
 展示 Diff，高风险操作需人工审批。完整方案见 [ai-workbench-plan.md](ai-workbench-plan.md)。
 
-当前发布版本：**0.8.17**（真源是 `desktop/package.json`，安装包文件名与「关于」都取这一处；
+当前发布版本：**0.9.0**（真源是 `desktop/package.json`，安装包文件名与「关于」都取这一处；
 `pnpm check:versions` 在 CI 里钉住 README 与根 `package.json` 不许各说各话）。
+
+下一版本规划：**v0.9.0 Super Agent Upgrade**，包括 Router/Worker 双层运行时、事件触发、后台执行、Watchdog、断点恢复和低打扰交付，详细任务与验收见 [docs/workbuddy-v162-super-agent-upgrade.md](docs/workbuddy-v162-super-agent-upgrade.md)。
 
 当前进度：**v1.1（核心任务工作台 + 头脑风暴 + 按需功能中心 + CLI 骨架）**。REA Reverse Lab 已有独立入口，
 REA MCP Adapter 已接入 `/api/v1/reverse-lab`（4 个端点走 stdio 子进程里的 `blank_api.services.rea.mcp_server`，默认开着、`BLANK_REA_DISABLE=1` 可关），

@@ -15,6 +15,7 @@ from blank_api.api.routes import (
     tasks,
     team,
     threads,
+    triggers,
     uploads,
 )
 from blank_api.db import get_session_factory
@@ -60,6 +61,8 @@ api_router.include_router(observability.router)
 api_router.include_router(maintenance.router)
 api_router.include_router(settings.router)
 api_router.include_router(threads.router)
+# 事件触发（v162 §5）：上报/查询/点火，受 background_execution 开关控制
+api_router.include_router(triggers.router)
 api_router.include_router(team.router)
 # REA 逆向线（#108）：/reverse-lab 的能力入口，走 MCP Adapter，不走模型
 api_router.include_router(reverse_lab.router)

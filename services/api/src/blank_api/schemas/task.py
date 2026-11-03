@@ -42,6 +42,9 @@ class TaskOut(BaseModel):
     project_id: str
     provider_id: str | None
     scenario: str = "dev"
+    # 派发快照（v162，dispatch.py）。空 dict = 这条任务不是按快照派的。
+    # 原样带出去而不是只给摘要：证据页要能回答「当时按什么权限跑的」。
+    dispatch_snapshot: dict = Field(default_factory=dict)
     # 所属会话（多轮对话）。独立任务为 None。
     thread_id: str | None = None
     title: str

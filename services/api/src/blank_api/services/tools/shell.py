@@ -478,6 +478,9 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
         return blocked
     command = str(arguments["command"]).strip()
     timeout = float(arguments.get("timeout_seconds", 30))
+    # coding-008：模型直接写 `python -m pytest` 时，把它换成工作区 venv 解释器，
+    # 否则会落到系统解释器（可能没 pytest），把"跑不了测试"误判成"测试没过"。
+    command = normalize_python_command(command, context.root)
     from blank_api.services.sandbox.policy import host_bypass_enabled
     from blank_api.services.sandbox.tiers import host_bypass_requested
 
@@ -724,3 +727,116 @@ def project_python(root) -> str:
 
 def python_test_command(root=None) -> list[str]:
     return [project_python(root) or sys.executable, "-m", "pytest", "-q"]
+
+
+# 裸解释器写法（不带路径、不带扩展名）。模型爱写 `python -m pytest`，在 Windows 上
+# 这个 `python` 解析到系统解释器（3.13，没装 pytest），于是"测试跑不了"被当成
+# "测试没过"（真实台账 coding-008：代码改对了，却因解释器没 pytest 被判失败）。
+# 工作区自己的 venv 才是知道项目依赖的解释器，优先用它。
+_BARE_PYTHON = ("python", "python3", "py")
+
+
+def normalize_python_command(command: str | list[str], root) -> str | list[str]:
+    """把命令首段的裸 `python`/`python3`/`py` 换成工作区的 venv 解释器。
+
+    只换**确实存在**的项目 venv，其余原样返回——没匹配上就不猜。用于处理模型直接
+    写 `run_shell("python -m pytest …")` 而非走 `run_tests` 的情况：那一路不经过
+    `python_test_command`，会落到系统解释器。
+
+    注意：这跟 `normalize_relative_executable` 是两件事。那个补的是
+    `.venv/Scripts/python.exe` 这种相对路径首段；这个补的是裸 `python`。两条都
+    在服务 `run_process` 之前，分别覆盖不同的写法。
+    """
+    venv = project_python(root)
+    if not venv:
+        return command
+
+    def fix(token: str) -> str:
+        head = token.strip().strip('"').strip("'")
+        if head in _BARE_PYTHON:
+            return venv
+        return token
+
+    if isinstance(command, list):
+        if not command:
+            return command
+        return [fix(str(command[0])), *[str(part) for part in command[1:]]]
+
+    text = str(command)
+    stripped = text.lstrip()
+    if not stripped:
+        return command
+    # 只取首个"词"（到第一个空白或引号为止）
+    match = re.match(r'\s*["\']?([^\s"\']+)', text)
+    if not match:
+        return command
+    head = match.group(1)
+    tail = text[match.end():]
+    fixed = fix(head)
+    if fixed == head:
+        return command
+    # 绝对路径含空格时必须加引号（和 normalize_relative_executable 同样的原因）
+    rendered = f'"{fixed}"' if " " in fixed else fixed
+    return f"{rendered}{tail}"
+
+
+# ── 临时验证脚本清理（v162 §7.3：coding-039）────────────────────────────────
+# 模型为了"自证清白"常在工作区写一个 `verify_*.py` / `*_check.py` / `temp_*.py`，
+# 验证完却忘了删。判分器按 expectedFiles 硬比对，这些遗留文件就记成 misEditedFiles。
+# 这里把"显然是临时产物"的文件挑出来，交付前清场——它们不在任何任务的预期产出里。
+SCRATCH_FILE_PATTERNS = (
+    "verify_*.py",
+    "*_verify.py",
+    "*_check.py",
+    "temp_*.py",
+    "tmp_*.py",
+    "scratch_*.py",
+    "test_scratch*.py",
+    "*.scratch.py",
+)
+
+SCRATCH_GLOBS = (
+    "verify_*",
+    "*_verify",
+    "*_check",
+    "temp_*",
+    "tmp_*",
+    "scratch_*",
+)
+
+
+def list_scratch_files(root) -> list[str]:
+    """返回 root 下匹配临时候选模式的文件路径（相对 root）。"""
+    try:
+        base = Path(root)
+    except TypeError:
+        return []
+    if not base.exists():
+        return []
+    found: list[str] = []
+    for pattern in SCRATCH_FILE_PATTERNS:
+        for path in base.glob(pattern):
+            if path.is_file():
+                found.append(str(path.relative_to(base)))
+    return sorted(set(found))
+
+
+def cleanup_scratch_files(root, keep: Iterable[str] | None = None) -> list[str]:
+    """删除工作区里匹配临时候选模式的文件，但保留 `keep` 里列出的（相对路径）。
+
+    返回实际删除的文件（相对路径）。`keep` 一般传任务声明的 expectedFiles，避免误删
+    用户本来就想要的脚本。删前不递归子目录以外的随机位置，只在 root 直接一层 glob——
+    临时脚本几乎都落在工作区根，深目录的不动，宁可多留不可误删。
+    """
+    keep_set = {str(p) for p in (keep or [])}
+    removed: list[str] = []
+    for rel in list_scratch_files(root):
+        if rel in keep_set:
+            continue
+        try:
+            Path(root) / rel  # 已校验存在
+            (Path(root) / rel).unlink(missing_ok=True)
+            removed.append(rel)
+        except OSError:
+            continue
+    return removed

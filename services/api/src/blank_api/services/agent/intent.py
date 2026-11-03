@@ -167,7 +167,9 @@ REPORT_INSTRUCTION = (
     "- 只有用户确实需要接着做点什么才写，最多 2 条；不需要就整段不要写。\n"
     "如果还有没验证的、或者你知道哪儿可能有风险，就并进结论里一句话说完，不要单开一段。\n"
     "硬要求：总共不超过 6 行；不出现「我」「作为」「本次任务」这类自述；不列文件清单、不复述命令；"
-    "没做完的事不许写成做完了。"
+    "没做完的事不许写成做完了。\n"
+    "交付前清场：你为了验证而临时写的脚本（命名像 verify_* / *_check / temp_* / scratch_* 的 .py）"
+    "必须在交付前删除，它们不属于任务产出。验证脚本用完即删，不要让它们留在工作区。"
 )
 
 ANSWER_INSTRUCTION = (
@@ -213,6 +215,23 @@ _SECTION = re.compile(r"^\s*(?:#{1,4}\s*)?\*{0,2}(结论|已完成|未完成|已
 
 def _clean_lines(text: str) -> list[str]:
     return [line.rstrip() for line in (text or "").replace("\r\n", "\n").split("\n")]
+
+
+def derive_answer_fallback(intent: str, answer: str, text: str) -> str:
+    """intent=answer 但模型没在 answer 字段给内容时，决定交付文本（v162 §7.5）。
+
+    规则：
+    - 不是 answer 意图、或 answer 字段已有内容：原样返回，不动。
+    - answer 字段为空且原始输出以 ``{`` 开头（只吐了判定用的 JSON，answer 留空）：
+      绝不能把这段协议 JSON 返回给用户，给一句简洁兜底。
+    - answer 字段为空但原始输出是可用自然语言：直接用原文。
+    """
+    if intent != INTENT_ANSWER or answer:
+        return answer
+    candidate = (text or "").strip()
+    if candidate.startswith("{"):
+        return "已收到你的消息。"
+    return text
 
 
 def normalize_answer(text: str) -> str:

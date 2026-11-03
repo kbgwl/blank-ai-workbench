@@ -90,3 +90,31 @@ export const INTERRUPT_STATUSES = new Set([
   "interrupted_question",
   "expected_interrupt",
 ]);
+
+// 交付正文里"声称验证过"的措辞。只要出现这些且真测试没过，就构成"过了终态却
+// 结论错"——光看交付正文看不出来，必须和测试退出码对碰才知道（v162 §7.4：coding-042）。
+const _VERIFY_CLAIM = /已验证|验证通过|测试通过|验证完成|测试已通过|通过了测试|验证无误|验证成功|已通过测试|测试验证通过/;
+
+/**
+ * 检测「成功任务里的错误自述」：任务终态是 succeeded，但真测试没过（testExit≠0），
+ * 交付正文却声称"已验证/测试通过"。
+ *
+ * 只在这三个条件同时成立时返回 false（构成虚假声称）；其余一律返回 true，不扩大打击面：
+ * - 没有真测试（testExit 为 null）的任务，本来就不该被"测试没过"牵连；
+ * - 测试过了还写"已验证"是正常收尾，不算假；
+ * - 测试没过但没声称验证，那是别的检查（falseDone / 验收）的事。
+ *
+ * 注意它和 noFalseDone 是两件不同的事：falseDone 管"没成功却声称完成"，这里管
+ * "成功了但结论与事实不符"。后者在 v161 里被漏掉——coding-042 任务 succeeded，
+ * 正文写"已验证"，真测试却 1 failed。
+ *
+ * @param {{status?: string, summaryText?: string, testExit?: number|null}} ctx
+ * @returns {boolean} true 表示没有虚假声称
+ */
+export function detectFalseClaim({ status, summaryText, testExit }) {
+  if (status !== "succeeded") return true;
+  if (typeof testExit !== "number" || testExit === 0) return true;
+  const text = String(summaryText ?? "");
+  if (!_VERIFY_CLAIM.test(text)) return true;
+  return false;
+}

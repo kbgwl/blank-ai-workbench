@@ -171,6 +171,12 @@ class RunRequest:
     permission_mode: str = ""
     # 场景（scenarios.py）。决定系统提示附加段与工具白名单；不向用户 prompt 拼前缀。
     scenario: str = "dev"
+    # 派发快照（dispatch.py，v162）。空 dict = 这条 run 不是按快照起的。
+    # 执行侧只读它：工具边界与步数上限都从这里来，不重新解释用户权限。
+    dispatch: dict = field(default_factory=dict)
+    # 快照判定的只读。True 时整个回合只放行只读工具（与「征求意见」同一道闸），
+    # 而不是靠提示词"请勿修改"——那句话模型可以不听。
+    readonly: bool = False
     # 仅日常场景有效：用户选择"记住习惯"时开放 memory_write。
     memory_opt_in: bool = False
     # 空串表示"用设置页的默认档"；审批恢复时同样要读回任务首次运行记下的档位，
@@ -538,6 +544,8 @@ class AgentRuntime:
             vision_images=list(request.images) if request.supports_vision else [],
             token_budget=_token_budget(),
             permissions=permissions,
+            # 快照判成只读时，这一整回合就不许写：闸门在这里，不在提示词里。
+            readonly=bool(request.readonly),
             role_adapters=request.role_adapters or {},
             role_provider_ids=request.role_provider_ids or {},
             router=router,
@@ -773,6 +781,9 @@ class AgentRuntime:
                 "provider": request.provider_name,
                 "model": request.adapter.config.model,
                 "scenario": scope.scenario_key,
+                # 派发快照（v162）：执行侧按它收紧，事后审计读它——不再靠场景配置反推。
+                "dispatch": dict(request.dispatch or {}),
+                "readonly": bool(request.readonly),
                 "memory_opt_in": bool(request.memory_opt_in),
                 "max_steps": session.max_steps,
                 "permission_mode": session.permission_mode,

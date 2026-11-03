@@ -67,6 +67,15 @@ OK_REPEAT_LIMIT = 3
 # 但 limit / offset / max_matches 是算的——那决定了模型看到的内容，换它就是换一件事。
 IGNORED_ARG_KEYS = ("timeout_seconds", "timeout", "step", "call_id")
 
+# 会改变工作区内容的工具。它们成功执行后，"之前失败过的同一条命令"需要被允许再试一次——
+# 因为工作区变了，那条命令（典型是 run_tests）很可能得到不同结果。这是合法重试，不是空转
+# （v162 §三：coding-044 修复——"改完代码再跑测试"必须能继续，不能因为同签名失败两次就拦死）。
+MUTATING_TOOLS = frozenset(
+    {"apply_patch", "write_file", "create_file", "delete_file", "move_file"}
+)
+# 同一个签名被"改完再试"最多放行几次：超过就当作确实修不好，安全失败，避免无限重试。
+MAX_DIRTY_RESETS = 3
+
 _CN = re.compile(r"[\u4e00-\u9fff]")
 _MISSING_ARG = re.compile(r"缺少必填参数|必填参数|missing required|Field required", re.I)
 _BAD_ARG = re.compile(r"缺少 @@|无法定位修改位置|补丁未产生任何变更|参数 .* 类型应为|不是合法", re.I)
@@ -264,7 +273,8 @@ class StallBreaker:
     由台账页去看。
     """
 
-    # 签名 → {"fail": 失败次数, "ok": 成功次数, "kind": 最近一次失败分类, "tool": 工具名}
+    # 签名 → {"fail": 失败次数, "ok": 成功次数, "kind": 最近一次失败分类, "tool": 工具名,
+    #          "last_reset_gen": 上次因"改完再试"被清零失败计数时的工作区版本}
     signatures: dict[str, dict] = field(default_factory=dict)
     # (工具, 分类) → 次数
     kind_counts: dict[tuple[str, str], int] = field(default_factory=dict)
@@ -275,6 +285,10 @@ class StallBreaker:
     missing_commands: set[str] = field(default_factory=set)
     # 签名 → 是否已经等过审批。用户没批之前，同一调用不可能有别的结果。
     awaiting: set[str] = field(default_factory=set)
+    # 工作区被成功改过的总代数。每次 mutate 工具成功 +1；用来判断"失败过的命令之后工作区是否变过"。
+    dirty_gen: int = 0
+    # 签名 → 已经因为"改完再试"被放行的次数。到 MAX_DIRTY_RESETS 就当确实修不好，安全失败。
+    resets: dict[str, int] = field(default_factory=dict)
     order: int = 0
     blocked: int = 0
 
@@ -286,7 +300,9 @@ class StallBreaker:
         """
         kind = classify(payload)
         key = signature(name, arguments)
-        entry = self.signatures.setdefault(key, {"fail": 0, "ok": 0, "kind": "", "tool": name})
+        entry = self.signatures.setdefault(
+            key, {"fail": 0, "ok": 0, "kind": "", "tool": name, "last_reset_gen": 0}
+        )
         if not kind:
             entry["ok"] += 1
             entry["kind"] = ""
@@ -294,6 +310,10 @@ class StallBreaker:
                 self.kind_counts.pop(existing, None)
             self.broken = {(tool, why) for tool, why in self.broken if tool != name}
             self.awaiting.discard(key)
+            # 工作区被成功改过：之前失败过的命令（比如改完代码再跑的 run_tests）应当被允许再试。
+            # 这是合法重试，不是空转——记一代，verdict 端据此放行一次。
+            if name in MUTATING_TOOLS:
+                self.dirty_gen += 1
             # 这次成功用到了某条"已知不存在"的命令 → 说明它现在能跑了（装了、改了 PATH），
             # 把这条记忆撤掉。不清的话，一次历史失败会永久拦掉一条正确的路。
             command = str((arguments or {}).get("command") or "")
@@ -303,6 +323,8 @@ class StallBreaker:
 
         entry["fail"] += 1
         entry["kind"] = kind
+        # 注意：失败记录**不**更新 last_reset_gen——清零只在 verdict 的脏感知放行里做，
+        # 否则一次失败就会把"之后改过文件"的信号抹掉，导致下一个"改完再测"无法被放行。
         self.kind_counts[(name, kind)] = self.kind_counts.get((name, kind), 0) + 1
         if kind in TOOL_BROKEN_KINDS:
             self.broken.add((name, kind))
@@ -320,6 +342,27 @@ class StallBreaker:
 
         # 1) 同一签名已经失败到阈值：这次一定不会更好。
         if entry and entry["fail"] >= SIGNATURE_FAIL_LIMIT:
+            # 脏感知：这条命令失败之后，工作区被成功改过（改完代码再测是合法循环），
+            # 放行一次并清零失败计数——但用 resets 记下来，到 MAX_DIRTY_RESETS 就当
+            # 确实修不好，安全失败，避免无限重试。这条放行不冒充任何别的判定，
+            # 也不影响"改完再测仍失败"时收尾把任务判 failed 的回路。
+            if (
+                self.dirty_gen > entry.get("last_reset_gen", 0)
+                and self.resets.get(key, 0) < MAX_DIRTY_RESETS
+            ):
+                self.resets[key] = self.resets.get(key, 0) + 1
+                entry["fail"] = 0
+                entry["last_reset_gen"] = self.dirty_gen
+                return Verdict(
+                    block=False,
+                    kind="dirty_retry",
+                    reason=(
+                        f"{name} 与前面失败过 {SIGNATURE_FAIL_LIMIT} 次的调用参数相同，"
+                        f"但工作区在这之后被成功改过，允许再试一次"
+                        f"（第 {self.resets.get(key)}/{MAX_DIRTY_RESETS} 次放行）。"
+                    ),
+                    hint="这次很可能得到不同结果；若改完再测仍失败，请先读测试输出、定位文件与行，再决定怎么改。",
+                )
             kind = str(entry.get("kind") or KIND_OTHER)
             return Verdict(
                 block=True,
@@ -389,6 +432,8 @@ class StallBreaker:
             "signatures": len(self.signatures),
             "broken": sorted(f"{tool}:{kind}" for tool, kind in self.broken),
             "missing_commands": sorted(self.missing_commands),
+            "dirty_gen": self.dirty_gen,
+            "resets": dict(self.resets),
         }
 
 

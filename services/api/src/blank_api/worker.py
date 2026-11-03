@@ -26,9 +26,13 @@ from blank_api.api.routes import tasks as task_routes
 from blank_api.db import get_session_factory
 from blank_api.models.run import AgentRun
 from blank_api.models.task import Task
+from blank_api.models.trigger import AgentTrigger
 from blank_api.schemas.task import TaskRunIn
 from blank_api.services import metrics
+from blank_api.services.agent import triggers as triggers_module
+from blank_api.services.agent import watchdog as watchdog_module
 from blank_api.services.agent.queue import abandon_run, claim_run, finish_run, utc_now
+from blank_api.services.features import is_enabled
 
 log = logging.getLogger("blank_api.worker")
 
@@ -108,6 +112,12 @@ async def run_once(worker: str | None = None) -> int:
     """扫一轮队列，返回这一轮真正被本进程领走的 run 数量。"""
     worker = worker or worker_id()
     handled = 0
+    # 先放到点的触发器（v162）：它们会产生新的 queued run，紧接着的那一轮扫描
+    # 就能认领，不必等下一次轮询。开关关着时这一步什么都不做。
+    await release_due_triggers()
+    # 巡检（v162）：只看已存在的 run，不改状态。放在认领之前，这样"刚刚到期"的
+    # 租约能先被记一笔诊断，而不是被下一轮认领之后再也看不到。
+    await inspect_runs()
     for run_id, task_id, attempts in await _candidates():
         if attempts >= task_routes.MAX_RECOVERY_ATTEMPTS:
             metrics.inc(metrics.WORKER_ABANDONED)
@@ -151,6 +161,66 @@ async def run_once(worker: str | None = None) -> int:
             log.exception("执行失败 run=%s", run_id)
         metrics.inc(metrics.WORKER_RUN_FINISHED)
     return handled
+
+
+async def release_due_triggers() -> int:
+    """把到点的触发器推进 run 队列（v162 §5 的本地定时器）。
+
+    只入队、不在这里执行：执行路径必须只有一条（worker 的认领循环），否则
+    "谁在跑这条任务"会出现两个答案，而租约只能挡住其中一个。
+
+    失败一条不影响其他条：触发器是个别事件，一条跑不起来不该让整轮扫描停下。
+    """
+    if not is_enabled("background_execution"):
+        return 0
+    released = 0
+    async with get_session_factory()() as session:
+        await triggers_module.expire_stale(session)
+        await session.commit()
+        rows = await triggers_module.due(session)
+        trigger_ids = [row.id for row in rows]
+    for trigger_id in trigger_ids:
+        try:
+            async with get_session_factory()() as session:
+                row = await session.get(AgentTrigger, trigger_id)
+                if row is None or row.status != triggers_module.STATUS_PENDING:
+                    continue
+                task = await session.get(Task, row.task_id) if row.task_id else None
+                if task is None:
+                    row.status = triggers_module.STATUS_SKIPPED
+                    row.payload = {**dict(row.payload or {}), "error": "关联任务不存在"}
+                    await session.commit()
+                    continue
+                if task.status in ("running", "queued"):
+                    # 已经有人在跑：标记成已放行即可，不重复入队。
+                    await triggers_module.mark_fired(session, row)
+                    await session.commit()
+                    continue
+                payload = TaskRunIn.model_validate(row.run_payload or {})
+                await task_routes.launch_task(session, task, payload, None, start_runner=False)
+                await triggers_module.mark_fired(session, row)
+                await session.commit()
+                released += 1
+        except Exception as error:  # noqa: BLE001 - 单条失败不该带走整轮
+            log.warning("触发器放行失败 trigger=%s: %s", trigger_id, error)
+    return released
+
+
+async def inspect_runs() -> int:
+    """Watchdog 一轮巡检（v162，开关 watchdog）。返回这一轮新记下的告警条数。
+
+    刻意不在巡检里改 run 状态：判死与放行都由正常的认领路径负责。观察者一旦
+    动手改状态，出问题时就没有第三方能回答"当时它看到的是什么"。
+    """
+    if not is_enabled("watchdog"):
+        return 0
+    try:
+        async with get_session_factory()() as session:
+            alerts = await watchdog_module.sweep(session)
+        return len(alerts)
+    except Exception:  # noqa: BLE001 - 巡检失败绝不能带走 worker 主循环
+        log.warning("Watchdog 巡检失败", exc_info=True)
+        return 0
 
 
 async def _claim(run_id: str, worker: str) -> bool:

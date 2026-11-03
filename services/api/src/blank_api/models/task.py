@@ -41,6 +41,12 @@ class Task(Base):
     # 场景（scenarios.py 五选一）。决定系统提示附加段、工具白名单与记忆权限；
     # 绝不向用户 prompt 拼前缀——意图判定只认用户原话。
     scenario: Mapped[str] = mapped_column(String(20), nullable=False, default="dev", server_default="dev")
+    # 派发快照（dispatch.py，v162 Super Agent）。创建任务时算一次、之后不改：
+    # 执行侧拿它回答「当时按什么权限派的」，而不是每轮重新解释用户权限。
+    # 空 dict = 这条任务不是按快照派的（老数据或开关关着），行为与从前一致。
+    dispatch_snapshot: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("('{}')")
+    )
     # 所属会话（多轮对话）。为空表示这是一次独立任务，行为与没有会话时完全一致。
     # ON DELETE SET NULL：删会话不该连任务一起删——那些任务的执行记录是审计材料。
     # 名字与迁移 0014 的 `create_foreign_key("fk_tasks_thread_id", ...)` 对齐：不写名字时
