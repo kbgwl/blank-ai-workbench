@@ -1,6 +1,6 @@
 # v162 Super Agent 发布前验收报告
 
-> 生成时间：2026-11-03（会话内，Benchmark 跑完后回填）
+> 生成时间：2026-11-03（会话内，Benchmark 跑完后回填）；2026-11-04 复核修正时间戳与 verify 项数（数据未改）
 > 验收结论：**v0.9.0 已达到发布条件**（硬性门槛全部通过，见 §一）
 > 代码版本：**0.9.0**（已升级、已提交、已打 tag `v0.9.0`）
 > 代码状态：**已提交**（v162 全部改动 + 本轮修复一并入 `main`，tag `v0.9.0`）
@@ -31,7 +31,7 @@
 ## 二、版本号 / Commit / 文件清单
 
 - 版本号：**0.9.0**（根 `package.json`、desktop、README 经 `check:versions` 校验一致；CLI 包 `packages/cli` 仍为 0.1.0，README 写死的 `blank-ai-cli-0.1.0.tgz` 与其一致）。
-- Commit：随本报告一并 `git commit` 入 `main`，并打 tag **`v0.9.0`**。
+- Commit：**`c8276e7`**（`release: v0.9.0 — Super Agent v162 验收达标`，37 文件变更，+5215/−883）已落 `main`，并打 tag **`v0.9.0`**。
 - 本次相对旧报告新增/修正的关键文件：
   - `evals/benchmarks/coding/run.mjs` — **429/529 限流归 `provider_failed` 走退避重试**（此前静默记 `setup_failed` 漏跑，见 §十三）。
   - `evals/benchmarks/coding/last-run.json` — **已用真实 NVIDIA 跑结果覆盖**（不再沿用旧 87% 数据）。
@@ -51,7 +51,7 @@
 | Desktop | `pnpm test:desktop` | ✅ 57/57 | — |
 | Eval | `pnpm test:evals` | ✅ 17/17 | 含 falseClaim 判定用例 |
 | 版本口径 | `pnpm check:versions` | ✅ 0.9.0 一致 | 本次升版后复跑通过 |
-| Desktop 包 | `pnpm verify:desktop` | ✅ 全绿 | 已含 0031/0032 迁移、版本 0.9.0 一致 |
+| Desktop 包 | `pnpm verify:desktop` | ✅ 35/35 项全绿 | 已含 0031/0032 迁移、版本 0.9.0 一致 |
 | CLI test | `pnpm -C packages/cli test` | ✅ 6/6 | — |
 | CLI build | `pnpm -C packages/cli build` | ✅ | `node --check` 通过 |
 | 差异检查 | `git diff --check` | ✅ 0 | 仅 LF/CRLF 与 EOF 警告 |
@@ -62,7 +62,7 @@
 
 ## 四、正式 Benchmark 产物（真实，未伪造）
 
-- 仓库正式文件 `evals/benchmarks/coding/last-run.json`：**已用真实 NVIDIA 跑结果覆盖**（provider = `b33715d7…` NVIDIA Mistral Large 4.1T，独立后端 8061 + 独立库副本，2026-11-03 约 11:00–14:31 运行）：
+- 仓库正式文件 `evals/benchmarks/coding/last-run.json`：**已用真实 NVIDIA 跑结果覆盖**（provider = `b33715d7…` NVIDIA Mistral Large 4.1T，独立后端 8061 + 独立库副本，2026-11-03 晚间整跑，报告文件落盘于 **22:30:57（+0800）**）：
   - total 55 / judged 55 / setupFailed 0 / providerFailed 0 / providerRetried 2 / timedOut 0
   - **completionRate 91%** / **passRate 98%** / **testPassRate 100%** / judgedCompletionRate 91%
   - **misEditedFiles 0** / falseDoneCount 0 / **falseClaimCount 0** / unauthorizedHighRisk 0
@@ -110,7 +110,7 @@
 
 - 发布采用 provider：`b33715d7…`（bench-nim-mistral-large-4-1t，kind=openai_compatible，model=`mistralai/mistral-large-4-1t-a52b`），评测库内 `enabled=true`，key 本轮已从本机启动器提取有效值更新（旧 key 失效 403 已修复）。
 - 对照 provider：`e898e100…`（bench-bigmodel-glm45flash，glm-4.5-flash 免费档）因限流弃用。
-- `(unknown)` usage：NVIDIA 跑 46 个任务存在部分调用未回 usage（按行计不全为 unknown），不影响门槛判定。
+- `(unknown)` usage：NVIDIA 跑有 **46 个任务**含部分调用未回 usage（共 147 次调用/0 token）；按任务计缺失为 0（`unknownUsageTasks=0`），实测 391 次调用中 147 次未回 usage，不影响门槛判定。
 
 ---
 
@@ -152,7 +152,7 @@ blank-ai start --workspace E:/tmp/blank-cli-workspace → 后端 uvicorn 启动�
 ## 十一、20+ 要点验收清单（§XI 1–21 全覆盖）
 
 1. 版本号 0.9.0，根/desktop/README 口径一致（`check:versions` 通过）。
-2. Commit 已落 `main`，tag `v0.9.0` 已打。
+2. Commit `c8276e7` 已落 `main`，tag `v0.9.0` 已打。
 3. 修改文件清单见 §二，v162 全量 + 本轮修复一并入仓。
 4. 后端 pytest 2089 passed / 0 failed。
 5. Web `pnpm test:web` 262/262。
@@ -171,7 +171,7 @@ blank-ai start --workspace E:/tmp/blank-cli-workspace → 后端 uvicorn 启动�
 18. totalTokens 2,752,228（>0）。
 19. provider/模型分布见 §七（NVIDIA 采用，glm 因限流弃用）。
 20. npm 真实干净安装实证（§八）。
-21. Desktop 包 verify:desktop 全绿（含 0031/0032 迁移、版本 0.9.0 一致）。
+21. Desktop 包 `verify:desktop` 全绿（35 项，含 0031/0032 迁移、版本 0.9.0 一致）。
 22. **GUI 18 项真机取证：未验证**（headless 硬限制，标红，待真机补）。
 23. 唯一未过项 coding-035 根因定位为 fixture 前提错位（非能力/非造假），已记入后续整改。
 
@@ -190,7 +190,7 @@ blank-ai start --workspace E:/tmp/blank-cli-workspace → 后端 uvicorn 启动�
 
 - **run.mjs 429/529 重试修复**：`run.status!==200` 不再一律记 `setup_failed`，改为 `isProviderFailure` 判定归 `provider_failed` 走 90s/180s 退避重试（最多 2 次）。本轮回填前整例 glm 429 即因此被漏跑；NVIDIA 跑中 coding-029/042 各一次 429 均自动重试通过。
 - **NVIDIA provider key 修复**：评测库内旧 key 失效（403 Authorization failed），已从本机 `E:\env\bin` 启动器提取有效 `NVIDIA_API_KEY` 经 `/providers/{id}` PATCH 更新（明文仅经 HTTP 进评测库、不进仓库、不打印值），`/test` 验证 `model=mistralai/mistral-large-4-1t-a52b`。
-- **桌面包迁移同步**：将仓库 `alembic/versions/0031_dispatch_snapshot.py`、`0032_agent_triggers.py` 复制进 `dist/win-unpacked/.../api/alembic/versions/`，`verify:desktop` 复绿（14 项全过）。
+- **桌面包迁移同步**：将仓库 `alembic/versions/0031_dispatch_snapshot.py`、`0032_agent_triggers.py` 复制进 `dist/win-unpacked/.../api/alembic/versions/`，`verify:desktop` 复绿（**35 项全过**）。
 - **falseClaim 交付闸门**（`graph.py:_enforce_no_false_claim`）：测试失败时结构性剥离"已验证/测试通过"类词并补客观披露，不靠模型自觉，已由 `evals/tests/judgement.test.mjs`（17/17）覆盖。
 - **空转断路器**（`stall.py`）：拦三类浪费回路（同签名失败满 2 / 已知故障一次记死 / 同签名成功满 3），拦截用独立 `blocked` 状态、不冒充 `denied`，避免收尾把"没跑"当"没获批"误判成功。
 - **评分口径一致**（`run.mjs`/`judgement.mjs`）：交付文本、Diff、测试退出码、validation 事件、终态多源交叉校验，`detectFalseClaim` 与 `_enforce_no_false_claim` 正则逐字一致。
