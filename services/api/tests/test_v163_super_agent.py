@@ -388,3 +388,69 @@ async def test_execute_action_stops_on_cancel():
     out = await graph.execute_action_node({"steps": 1, "pending": []}, session)
     assert out["status"] == "cancelled"
     assert session.recorder.events == ["task.cancelled"]
+
+
+# ── 审批卡有效期（GUI 验收发现的真缺陷）──────────────────────────────────────
+# 原先写死 5 分钟：人离开工位回来，卡片还在、按钮还能点，点下去 409，
+# 任务永远停在 waiting_approval，界面一直显示「进行中」且没有重试入口。
+
+
+def test_approval_ttl_is_configurable_and_clamped(monkeypatch):
+    from blank_api.services.agent.graph import approval_ttl_seconds
+
+    monkeypatch.delenv("BLANK_APPROVAL_TTL_SECONDS", raising=False)
+    assert approval_ttl_seconds() == 1800, "默认给够半小时，别逼着人守在屏幕前"
+    monkeypatch.setenv("BLANK_APPROVAL_TTL_SECONDS", "60")
+    assert approval_ttl_seconds() == 60
+    monkeypatch.setenv("BLANK_APPROVAL_TTL_SECONDS", "999999")
+    assert approval_ttl_seconds() == 86400, "再长也不能超过一天"
+    monkeypatch.setenv("BLANK_APPROVAL_TTL_SECONDS", "不是数字")
+    assert approval_ttl_seconds() == 1800, "读不懂就回默认，不能抛"
+
+
+async def test_expire_stale_approvals_fails_only_the_expired(monkeypatch):
+    from sqlalchemy import update as sa_update
+
+    from blank_api import worker
+
+    monkeypatch.setenv("BLANK_APPROVAL_TTL_SECONDS", "1800")
+    monkeypatch.setattr(worker, "is_enabled", lambda name: True)
+
+    stale_id, _ = await _seed(status="waiting_approval")
+    fresh_id, _ = await _seed(status="waiting_approval")
+    past = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1800 + 120)
+    async with get_session_factory()() as session:
+        # 用 Core update 显式给值：ORM flush 会被 onupdate 覆盖回 now
+        await session.execute(sa_update(Task).where(Task.id == stale_id).values(updated_at=past))
+        await session.commit()
+
+    assert await worker.expire_stale_approvals() == 1
+
+    async with get_session_factory()() as session:
+        stale = await session.get(Task, stale_id)
+        fresh = await session.get(Task, fresh_id)
+        events = list(
+            (await session.execute(select(AgentEvent).where(AgentEvent.task_id == stale_id))).scalars()
+        )
+    assert stale.status == "failed"
+    assert "审批已过期" in stale.failure_reason
+    assert "重试" in stale.failure_reason, "错误话术要告诉用户下一步能做什么"
+    assert fresh.status == "waiting_approval", "没过期的一个都不许动"
+    assert any(event.type == "approval.expired" for event in events)
+
+
+async def test_expire_stale_approvals_respects_the_switch(monkeypatch):
+    from blank_api import worker
+
+    monkeypatch.setattr(worker, "is_enabled", lambda name: False)
+    monkeypatch.setenv("BLANK_APPROVAL_TTL_SECONDS", "60")
+    stale_id, _ = await _seed(status="waiting_approval")
+    past = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=3600)
+    from sqlalchemy import update as sa_update
+
+    async with get_session_factory()() as session:
+        await session.execute(sa_update(Task).where(Task.id == stale_id).values(updated_at=past))
+        await session.commit()
+    assert await worker.expire_stale_approvals() == 0
+    async with get_session_factory()() as session:
+        assert (await session.get(Task, stale_id)).status == "waiting_approval"

@@ -8,18 +8,23 @@
 
 后端能力（Router/Worker/Trigger/Watchdog、暂停恢复重试、低打扰、四行交付、结构化状态、
 零改动伪成功拦截、coding-035 口径）已全部落地并有单测 + 集成测试 + 真实 Benchmark 证据；
-**真实 Electron GUI 18 项未取证**，因此按 §9 保留当前版本 `0.9.0`，不升 `0.9.1`、不打 tag。
+真实 Electron GUI 18 项**已实跑 17 项通过、1 项未通过**（§八），验收过程中发现 4 个真缺陷，
+其中 2 个当场修掉（审批 TTL 卡死、代理导致 ProxyError）。按 §9，2.7 未通过即不满足发布条件，
+故**版本号已升到 `0.9.1` 但未打 tag、未重打包安装**。
 
 ## 一、版本与提交
 
 | 项 | 值 |
 | --- | --- |
-| 当前发布版本 | `0.9.0`（未升版，见 §9） |
-| 目标版本 | `v0.9.1`（**未发布**） |
+| 当前版本号 | `0.9.1`（用于 §2 的 GUI 验收，见下条） |
+| 是否发布 | **否**：未打 tag、未重打包安装 |
 | Tag | 无新增（既有 `v0.9.0` 保持指向 `c8276e7`） |
-| Commit | `e7679d9`（代码与测试）/ `12faf03`（本报告数据补充）；HEAD 以 `git log -1` 为准 |
+| 未发布原因 | 任务书 §9 要求 GUI 18 项全部有证据；本轮 17/18，2.7 未通过（§八） |
+| Commit | 见文末「提交记录」；HEAD 以 `git log -1` 为准 |
 | 代码分支 | `master` |
-| 工作区 | 干净（`git status` 空） |
+
+> 版本号为什么先升：任务书 §2 明写「使用 v0.9.1 最新构建版或安装版，不得只使用旧版本窗口」，
+> 不升版本就无法按要求取证。升号 ≠ 发布，tag 与安装包才是发布动作，这两步没做。
 
 ## 二、修改文件
 
@@ -176,38 +181,133 @@ notify{policy,last}
 前端仍读 `live` 结构化状态与事件流，不靠"最后一条文本"猜状态；把 `/status` 接进任务面板属于
 GUI 侧工作，本轮未验证（见 §八）。
 
-## 八、Electron GUI 18 项（§2）—— **未完成**
+## 八、Electron GUI 18 项（§2）—— **实跑，17 项通过 / 1 项未通过**
 
-本轮在 headless 环境执行，无法启动真实 Electron 窗口、无法点击审批卡片、无法做模型/场景切换的
-界面取证。按 §9 明确记录：**GUI 验证未完成**，因此不升版本、不打 tag、不发布。
+### 方法与边界
 
-未取证清单（与任务书 §2 一一对应）：
+先前把这一节判成「headless 不可代劳」是错的：本机有真实桌面会话，Electron 能起窗口，也能用
+Chrome DevTools Protocol 驱动它。本轮的做法是：
 
-| 项 | 状态 |
+- `electron .` 以 `--remote-debugging-port=9222 --user-data-dir=E:\tmp\blank-gui-profile` 启动，
+  连**评测后端 8061**（独立库），不碰日常 8000；
+- 所有点击走 `Input.dispatchMouseEvent`（真实坐标）、输入走 `Input.insertText`、原生 `<select>`
+  走 `Home/ArrowDown/Enter` 键盘序列——不用 `el.value = x` 那种绕开用户路径的写法；
+- 证据三件套：窗口截图（`E:\tmp\blank-eval-8061\gui-*.png`）+ 后端事件流（`/tasks/{id}/events`）
+  + 磁盘真实变化（文件内容 / md5）。
+
+限制说明：截图与点击由脚本驱动，不是人手点击。**审批卡片的点击是真的鼠标事件**（后端留下
+`approval.decided` / `approval.granted` 事件），但「人眼看到的动画、hover 态」没有验证。
+
+### 逐项结果
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| 2.1 启动 / health / 首页 / 版本 / 重启 | **通过** | `gui-2.1-home.png`；`[startup] startup \| complete`；health `{"status":"ok"}`；`desktop/package.json` = `0.9.1`；关窗后重启 CDP 1s 就绪 |
+| 2.2 开发任务闭环 8 步 | **通过 8/8** | 见下表 |
+| 2.3 双 provider 模型切换 | **通过** | 任务 `0e56e0cd`：`model=mistralai/mistral-large-4-1t-a52b`、`provider=bench-nim-…`；任务 `15ad426a`：`model=glm-4.5-flash`、`provider=bench-bigmodel-glm45flash`；usage 7648+441=8089 tokens；上游 `integrate.api.nvidia.com` ↔ `open.bigmodel.cn/api/anthropic` |
+| 2.4 五场景切换 | **通过（4 项符合，1 项与任务书有出入）** | dev/docs/daily/brainstorm/reverse 各真跑一轮，见下 |
+| 2.5 审批卡片真实点击 | **通过** | 3 张卡真实点击，事件 `approval.decided{approve:true,scope:once}` → `approval.granted` → `tool.completed`；`gui-2.5-approval-card.png` |
+| 2.6 日常记忆「记住 / 不记住」 | **通过** | 见下 |
+| 2.7 关窗后继续 + 重开可见 | **未通过（半项）** | Worker 继续 ✅；重开窗口看不到该任务 ❌ |
+
+#### 2.2 八步明细
+
+| 步 | 要求 | 实测 |
+| --- | --- | --- |
+| 1 | 新建对话 + 选开发场景 | 点「新对话」、`select[2]` 键盘切到「开发」 |
+| 2 | 选已配置模型 | 键盘选 `bench-nim-mistral-large-4-1t` |
+| 3 | 输入「读取当前工作区并说明入口文件」 | 原话进输入框（`gui-2.2-typed.png`） |
+| 4 | 真实调用文件读取工具 | 事件：`list_files` ×1 + `read_file` ×5，共 6 次 `tool.completed` |
+| 5 | 输入代码修改任务 | 「把 config.py 里的 MAX_RETRY 从 9 改成 11…」 |
+| 6 | 文件真实变化 + 查看 Diff | 磁盘 `MAX_RETRY = 11`；右侧面板 Diff `-MAX_RETRY = 9 / +MAX_RETRY = 11`（`gui-2.2-diff.png`） |
+| 7 | 运行测试并查看退出码 | `run_shell python -m pytest -q` 真实执行，退出码 **0**；`run_tests` 卡另有一次 |
+| 8 | 交付只含完成/改动/验证/需要你 | 交付原文三行（无待办则整行省略）：`完成：MAX_RETRY 已改为 11，测试 2 个全通过` / `改动：1 个文件、1 处 Diff` / `验证：…python.exe -m pytest -q（退出码 0）`；`gui-2.2-delivery.png` |
+
+#### 2.4 五场景
+
+| 场景 | 实测 | 与任务书比对 |
+| --- | --- | --- |
+| 开发 | 读写 + 审批 + 改文件，全链路通过 | ✅ |
+| 文档 | `intent=answer`、`tools=[]`，直接成文 | ⚠️ 任务书要求「文档默认只读」，代码里 `DOCS.allow_write=True`（写 .md 需要它）。二者冲突，未擅自改 |
+| 日常 | 让它改 `config.py` → `tools=[]`、文件仍是 11（写工具确实被禁） | ✅ 写被禁；⚠️ 但它答的是上一轮的 `apply_discount`，没解释「日常场景不改文件」 |
+| 头脑风暴 | `tools=[read_file]`，只读发散，未改文件 | ✅ |
+| 逆向实验室 | `tools=[read_file]`，只读分析 | ⚠️ 「隔离工作区」未单独体现：`sandbox.tier=workspace / isolation=host`，与开发场景同档 |
+
+#### 2.6 日常记忆
+
+| 开关 | 实测 |
 | --- | --- |
-| 2.1 启动/health/首页/版本号/重启 | 未取证（后端 health 已单独验证） |
-| 2.2 开发任务闭环 8 步（读文件→改文件→Diff→测试→四行交付） | 未取证（后端同类链路由集成测试覆盖） |
-| 2.3 双 provider 模型切换（事件 + usage 真变） | 未取证 |
-| 2.4 五场景切换（Router 快照/工具白名单/记忆/审批） | 未取证（快照行为有单测） |
-| 2.5 审批卡片真实点击 | 未取证（禁止用 API 放行代替，故不冒充） |
-| 2.6 日常记忆「记住/不记住」 | 未取证（后端 `test_scenarios_v153.py` 已覆盖开关语义） |
-| 2.7 关窗后继续 + 终止 Worker 后接管 | 未取证（租约接管有单测） |
+| 记住习惯 | `memory_write` 被调用 3 次（前两次参数错：缺 `type`、`type=habit` 不在枚举内，第三次 `type=user` 成功）；磁盘 `services/api/data/memory/work-006857a0.md` 新增 `- [user] 用户习惯用 pytest 跑测试，不用 unittest` |
+| 不记住 | 同一请求（含地址）→ `tool.requested` 为空、任务 succeeded、记忆文件 md5 `4b1e1160…` **前后完全一致** |
+
+顺带发现：该记忆文件里除 `[user]` 条目外，还有各场景任务结果的自动固化条目（文档/头脑风暴/逆向的
+结果都写了进去）。工具层面的「用户习惯」确实只开放给日常，但「任务结果固化」不分场景——这条边界
+比任务书描述更松，如实记录。
+
+### 2.7 为什么算未通过
+
+**做到了的**：窗口跑任务途中被 `Stop-Process` 强制结束（不是隐藏），50 秒后后端事件从 seq 31 涨到 77、
+工作区文件从 2 个增到 4 个——**Worker 完全不受窗口影响**，任务继续执行。
+
+**没做到的**：重开窗口后，会话列表里找不到那条正在跑的任务（`title=在工作区新建 5 个文件…`、
+`status=waiting_approval`），`GET /tasks/{id}` 里 `conversation_id=None`。也就是说窗口关闭那一刻，
+这一轮没有落成一条可回到的会话记录，用户只能看到「它曾经跑过」，看不到「它现在卡在哪、要不要批」。
+这条任务最后卡在审批上，直到审批 TTL 到期被 `expire_stale_approvals` 收敛成 failed。
+
+根因：会话（conversation）与任务（task）是两条写入路径，关窗时 task 已落库、conversation 还没。
+修法是把 conversation 的创建提前到发送瞬间（或让任务列表按 `project_id + status` 兜底展示孤儿任务），
+这属于前端改动 + 需要重新静态导出，本轮未做。
+
+### 验收过程中发现并修掉的缺陷
+
+**① 审批卡 5 分钟过期，过期后任务永久卡死（已修）**
+
+真实撞了三次：21:49 挂起、22:06 点 → 409「审批请求已过期」，而任务状态仍是 `waiting_approval`，
+界面显示「进行中」，既批不了也没有重试入口。第三次是脚本点得快也没用——TTL 就是 5 分钟。
+
+修法两处：
+
+- `graph.approval_ttl_seconds()`：TTL 改为 `BLANK_APPROVAL_TTL_SECONDS` 可配，默认 **30 分钟**，
+  夹在 60 秒 ~ 24 小时。理由写在函数 docstring 里：5 分钟对「先去确认一下再回来」不够。
+- `worker.expire_stale_approvals()`：每轮 `run_once` 开头把「审批已过期超过 60 秒宽限」的
+  `waiting_approval` 任务收敛成 `failed`（`failure_reason` 写明原因并提示「点重试」），
+  并写 `approval.expired` + `task.failed` 事件。界面因此从「永远进行中」变成「失败 + 重试」。
+
+配 3 个单测：TTL 默认/夹取/坏值回默认；只收敛过期的那一条（未过期的必须不动）；总开关关掉时不动。
+修复后同一套 GUI 流程连跑 3 次审批，全部点击成功（`approval.decided` → `running`）。
+
+**② 后端继承宿主代理，NVIDIA 端点间歇 `ProxyError`（已修）**
+
+`start-8061.sh` 从 shell 继承了 `https_proxy=127.0.0.1:58288`，httpx 经它访问
+`integrate.api.nvidia.com` 间歇失败，而 `curl` 直连和经代理都是 200。修法是启动脚本里
+`unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy`，后端直连。
+修复后同一 provider 连续跑通文档 / 逆向 / 头脑风暴三个场景。
+
+### 验收中发现但**未修**的缺陷
+
+| # | 缺陷 | 影响 | 为什么没修 |
+| --- | --- | --- | --- |
+| 1 | 关窗后正在跑的任务在 GUI 里消失（`conversation_id=None`） | 用户回不到那条任务，卡在审批也没法批（§2.7 未通过的根因） | 前端会话落库时机 + 列表兜底，改动需重新静态导出并重跑 GUI 取证 |
+| 2 | 日常场景收到「改文件」请求时答非所问（回了上一轮的 `apply_discount`） | 用户不知道是「场景不允许」还是「模型跑偏」 | 属提示词/意图层调优，改动会影响全部场景的判定，需单独评测 |
+| 3 | 文档场景 `allow_write=True`，与任务书「文档默认只读」不一致 | 文档场景能改任意文件 | 任务书要求与「文档场景要产出 .md」直接冲突，需产品决策：要么加文件类型级权限，要么改任务书 |
+| 4 | 逆向实验室没有独立工作区（`isolation=host`，与开发同档） | 「隔离工具和工作区」只体现在提示词，没有系统级隔离 | 沙箱档位是全局设置，按场景切档会与「同一条任务只能有一个沙箱结论」冲突 |
+
 
 ## 九、自动化回归（本轮实跑）
 
 | 门禁 | 命令 | 结果 |
 | --- | --- | --- |
-| 后端全量 | `.venv/Scripts/python.exe -m pytest -q` | **2118 passed / 23 skipped / 0 failed**（18m22s） |
+| 后端全量 | `.venv/Scripts/python.exe -m pytest -q` | **2121 passed / 23 skipped / 0 failed**（13m08s，含审批 TTL 修复后的 3 例新增） |
 | 前端单测 | `node --test --import ./test-bootstrap.mjs "src/**/*.test.ts"` | **262 / 262** |
 | 前端 lint | `eslint src` | exit 0 |
 | 前端类型 | `next typegen` + `tsc --noEmit` | exit 0 |
 | 桌面单测 | `node --test desktop/tests/*.test.cjs`（5 个文件） | **57 / 57** |
 | 评测单测 | `node --test evals/tests/judgement.test.mjs` | **21 / 21**（新增 4 例零改动判定） |
 | CLI | `node --test` + `node --check src/index.mjs` | **6 / 6** + build 通过 |
-| 版本口径 | `node scripts/check_versions.mjs` | 一致（发布版本 0.9.0） |
+| 版本口径 | `node scripts/check_versions.mjs` | 一致（发布版本 0.9.1） |
 | 空白错误 | `git diff --check` | clean |
 
-本轮新增测试 30 例：`test_v163_super_agent.py`（24）、`test_v163_integration.py`（3）、
+本轮新增测试 33 例：`test_v163_super_agent.py`（27，含审批 TTL 3 例）、`test_v163_integration.py`（3）、
 `test_watchdog_v162.py`（+2）、`evals/tests/judgement.test.mjs`（+4，含零改动判定）。
 
 > 说明：跑分与全量回归并行时曾出现 1 次 `test_triggers_v162::test_worker_releases_due_trigger_once`
@@ -231,23 +331,31 @@ blank-ai start      → 找到 services/api/.venv 的 Python，绑定 127.0.0.1:
 
 ## 十一、未完成项
 
-1. GUI 18 项全部未取证（§八）。
-2. `/tasks/{id}/status` 尚未接进 GUI 任务面板（后端已就绪，前端未验证）。
-3. `blank-ai start` 未能端到端起服务（端口占用），只验证到"正确报错并退出"。
+1. **§2.7 关窗后重开可见** 未通过：Worker 继续跑（已证），但重开的窗口里找不到那条任务（§八有根因）。
+2. `/tasks/{id}/status` 尚未接进 GUI 任务面板（后端已就绪，前端未接）。
+3. 验收中发现的 3 个未修缺陷：关窗任务不可见、日常场景答非所问、文档场景可写（§八表格）。
+4. `blank-ai start` 未能端到端起服务（本机 8000 端口已被日常后端占用），只验证到「正确报错并退出」。
+5. 逆向实验室未做系统级隔离（`isolation=host`）。
+6. 未重打包安装版：按 §9，GUI 未全通过就不发布，`D:\Softwares\kbg\...` 仍是 0.9.0 构建。
 
 ## 十二、最终工作区状态
 
-- `git status` 干净；HEAD = `e7679d9`。
-- 版本口径：桌面/根/README 均为 `0.9.0`（`check_versions.mjs` 通过），目标版本 `0.9.1` **未发布、未打 tag**。
-- 评测后端仍在 8061 运行（`E:\tmp\blank-eval-8061\start-8061.sh` 可复现同一环境）。
-- 安装目录 `D:\Softwares\kbg\blank-ai-workbench-desktop` 仍是 **0.9.0** 构建，未用 v163 代码重打包——
-  因为没有 GUI 取证，重打包等于发布一个验证过的版本，按 §9 不做。
+- `git status` 干净；HEAD 见文末「提交记录」。
+- 版本口径：桌面/根/README 均为 `0.9.1`（`check_versions.mjs` 通过），但 **未打 tag、未发布**。
+- 评测后端仍在 8061 运行（`E:\tmp\blank-eval-8061\start-8061.sh` 可复现同一环境，已 unset 代理）。
+- 安装目录 `D:\Softwares\kbg\blank-ai-workbench-desktop` 仍是 **0.9.0** 构建，未用 v163 代码重打包。
+- GUI 取证脚本与截图：`E:\tmp\blank-eval-8061\{cdp.mjs,scenario-probe.mjs,fast-approve.mjs,gui-*.png}`，
+  可复跑（先起 8061，再 `electron . --remote-debugging-port=9222`）。
 
 ## 十三、结论
 
-**v0.9.1 暂不发布。** 后端闭环、质量闸门与 55 项 Benchmark 已达标；缺的是真实 Electron GUI 18 项取证
-（§2）。待 GUI 取证补齐后，按 §9 的完整条件（GUI 证据 + npm clean-prefix + 工作区干净 + 已提交）
-才可升版、打 tag 并发布。
+**v0.9.1 不发布。** 后端闭环、质量闸门与 55 项 Benchmark 已达标；GUI 18 项实跑 17 项通过，
+卡在 2.7（关窗后重开看不到那条任务）。这条不修，用户「关掉窗口去吃饭、回来接着看」的路径就断了，
+正好是 Super Agent 该保证的事，不适合带着发布。
+
+修复优先级建议：① 会话落库提前到发送瞬间 + 任务列表兜底展示孤儿任务（解 2.7）；
+② 日常场景对「改文件」请求给出明确拒绝话术；③ 文档场景只读边界需要产品决策。
+三者都完成后，按 §9 的完整条件（GUI 18/18 + npm clean-prefix + 工作区干净 + 已提交）再升版打 tag。
 ## 附表：55 项逐项结果
 
 | # | 任务 | 类别 | 期望状态 | 实际状态 | 判分 | 改动文件 | 测试退出码 | 步骤 | tokens |

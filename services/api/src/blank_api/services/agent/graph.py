@@ -2124,6 +2124,24 @@ async def guardian_reviews_for(session: AgentSession) -> list[dict]:
     ]
 
 
+def approval_ttl_seconds() -> int:
+    """审批卡的有效期。默认 30 分钟，夹在 60 秒 ~ 24 小时之间。
+
+    原先是写死的 5 分钟。真实 GUI 验收里这条卡把任务坑死过三次：人离开工位
+    十几分钟回来，卡片还在、按钮还能点，点下去却是 409「审批请求已过期」，
+    而任务状态永远停在 waiting_approval——界面写「进行中」，既不会自己收敛，
+    也没有重试入口。5 分钟对"看一眼再批"尚可，对"我先去确认一下再回来"就不够。
+    宁可让用户自己决定挂多久（``BLANK_APPROVAL_TTL_SECONDS``），也不要替他把
+    活掐死在半路。
+    """
+    raw = os.environ.get("BLANK_APPROVAL_TTL_SECONDS", "").strip()
+    try:
+        value = int(raw) if raw else 1800
+    except ValueError:
+        value = 1800
+    return max(60, min(value, 24 * 3600))
+
+
 async def _approval_gate(
     session: AgentSession,
     node: str,
@@ -2236,7 +2254,7 @@ async def _approval_gate(
                     {"tool": name, "approval_key": fingerprint, "arguments": arguments, "reasons": verdict.reasons},
                 )
                 continue
-        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=approval_ttl_seconds())).isoformat()
         answer = interrupt(
             {
                 "tool": name,

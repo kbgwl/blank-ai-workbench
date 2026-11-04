@@ -19,6 +19,7 @@ import logging
 import os
 import socket
 import uuid
+from datetime import timedelta
 
 from sqlalchemy import or_, select
 
@@ -31,6 +32,7 @@ from blank_api.schemas.task import TaskRunIn
 from blank_api.services import metrics
 from blank_api.services.agent import triggers as triggers_module
 from blank_api.services.agent import watchdog as watchdog_module
+from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.queue import abandon_run, claim_run, finish_run, utc_now
 from blank_api.services.features import is_enabled
 
@@ -108,10 +110,69 @@ async def _request_for(run_id: str):
         return request
 
 
+async def expire_stale_approvals() -> int:
+    """把「审批已过期、也没人再来点」的任务收敛成失败。
+
+    审批卡有有效期（默认 30 分钟，``BLANK_APPROVAL_TTL_SECONDS`` 可调）。过期之后
+    那张卡再也批不动——提交会拿到 409。但任务状态原先一直停在 ``waiting_approval``：
+    界面写着「进行中」，用户既批不了、也没有重试入口，只能关掉重开一轮。真实 GUI
+    验收里这个死状态连撞三次（两次是我离开工位超过 5 分钟，一次是点了才被告知过期）。
+
+    收敛成 failed 而不是悄悄删除：界面因此给出「重试」，用户知道发生了什么。
+    留一条 ``approval.expired`` 事件说明原因，事后能追。
+    """
+    if not is_enabled("background_execution"):
+        return 0
+    from blank_api.services.agent.graph import approval_ttl_seconds
+
+    cutoff = utc_now() - timedelta(seconds=approval_ttl_seconds() + 60)
+    expired: list[str] = []
+    async with get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                select(Task.id).where(
+                    Task.status == "waiting_approval",
+                    Task.updated_at <= cutoff,
+                )
+            )
+        ).scalars().all()
+        for task_id in rows:
+            task = await session.get(Task, task_id)
+            if task is None or task.status != "waiting_approval":
+                continue
+            task.status = "failed"
+            task.failure_reason = (
+                "审批已过期：这张审批卡超过有效期没人处理，本轮已结束。需要继续请点「重试」。"
+            )
+            task.updated_at = utc_now()
+            expired.append(task_id)
+        if expired:
+            await session.commit()
+    for task_id in expired:
+        try:
+            recorder = EventRecorder(get_session_factory(), task_id)
+            await recorder.add(
+                "approval.expired",
+                "worker",
+                {"reason": "审批卡超过有效期没人处理，任务已收敛为失败，可重试"},
+            )
+            await recorder.add("task.failed", "worker", {"status": "failed", "reason": "approval_expired"})
+        except Exception:
+            log.exception("记录审批过期事件失败 task=%s", task_id)
+    if expired:
+        log.warning("审批过期收敛 %d 条任务：%s", len(expired), ",".join(t[:8] for t in expired))
+    return len(expired)
+
+
 async def run_once(worker: str | None = None) -> int:
     """扫一轮队列，返回这一轮真正被本进程领走的 run 数量。"""
     worker = worker or worker_id()
     handled = 0
+    # 审批过期收敛（v163 验收补）：先清掉再也走不下去的等待，别让它一直挂着"进行中"。
+    try:
+        await expire_stale_approvals()
+    except Exception:
+        log.exception("审批过期收敛失败（不影响本轮认领）")
     # 先放到点的触发器（v162）：它们会产生新的 queued run，紧接着的那一轮扫描
     # 就能认领，不必等下一次轮询。开关关着时这一步什么都不做。
     await release_due_triggers()
