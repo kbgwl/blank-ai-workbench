@@ -16,14 +16,26 @@
 | --- | --- |
 | 当前发布版本 | `0.9.0`（未升版，见 §9） |
 | 目标版本 | `v0.9.1`（**未发布**） |
-| Tag | 无（仅保留既有 `v0.9.0`） |
-| Commit | 见文末「提交记录」 |
+| Tag | 无新增（既有 `v0.9.0` 保持指向 `c8276e7`） |
+| Commit | `e7679d9` |
 | 代码分支 | `master` |
+| 工作区 | 干净（`git status` 空） |
 
 ## 二、修改文件
 
-（见文末「提交记录」的 diffstat；新增 4 个文件：`notify.py`、`delivery.py`、
-`test_v163_super_agent.py`、`test_v163_integration.py`）
+24 个文件，`+2866 / −706`（含 55 项正式结果 JSON 与两份文档；删除行主要来自
+`last-run.json` 整份替换）。
+
+新增（5）：`services/api/src/blank_api/services/agent/{notify,delivery}.py`、
+`services/api/tests/test_v163_{super_agent,integration}.py`、`docs/workbuddy-v163-super-agent-completion.md`
+
+改动（19）：`README.md`、`evals/benchmarks/coding/{run.mjs,last-run.json}`、
+`evals/benchmarks/coding/fixtures/coding-035/{profiles,test_profiles}.py`、
+`evals/lib/judgement.mjs`、`evals/tests/judgement.test.mjs`、
+`services/api/src/blank_api/api/routes/{tasks,settings}.py`、
+`services/api/src/blank_api/schemas/settings.py`、
+`services/api/src/blank_api/services/{settings.py,agent/{events,evidence,graph,queue,runtime,watchdog}.py}`、
+`services/api/tests/test_watchdog_v162.py`、`docs/workbuddy-v163-acceptance-report.md`
 
 ## 三、coding-035：改前 / 改后
 
@@ -225,7 +237,17 @@ blank-ai start      → 找到 services/api/.venv 的 Python，绑定 127.0.0.1:
 
 ## 十二、最终工作区状态
 
-见文末。
+- `git status` 干净；HEAD = `e7679d9`。
+- 版本口径：桌面/根/README 均为 `0.9.0`（`check_versions.mjs` 通过），目标版本 `0.9.1` **未发布、未打 tag**。
+- 评测后端仍在 8061 运行（`E:\tmp\blank-eval-8061\start-8061.sh` 可复现同一环境）。
+- 安装目录 `D:\Softwares\kbg\blank-ai-workbench-desktop` 仍是 **0.9.0** 构建，未用 v163 代码重打包——
+  因为没有 GUI 取证，重打包等于发布一个验证过的版本，按 §9 不做。
+
+## 十三、结论
+
+**v0.9.1 暂不发布。** 后端闭环、质量闸门与 55 项 Benchmark 已达标；缺的是真实 Electron GUI 18 项取证
+（§2）。待 GUI 取证补齐后，按 §9 的完整条件（GUI 证据 + npm clean-prefix + 工作区干净 + 已提交）
+才可升版、打 tag 并发布。
 ## 附表：55 项逐项结果
 
 | # | 任务 | 类别 | 期望状态 | 实际状态 | 判分 | 改动文件 | 测试退出码 | 步骤 | tokens |
