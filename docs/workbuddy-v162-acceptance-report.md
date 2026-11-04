@@ -1,6 +1,6 @@
 # v162 Super Agent 发布前验收报告
 
-> 生成时间：2026-11-03（会话内，Benchmark 跑完后回填）；2026-11-04 复核修正时间戳与 verify 项数（数据未改）
+> 生成时间：2026-11-03（会话内，Benchmark 跑完后回填）；2026-11-04 全量复核：修正 §六 两处数据串台（旧跑 `falseClaimCount` 误填、glm 跑 `totalTokens` 误填）、跑分时间戳与 verify 项数，并**全量复跑全部测试门禁**（真实数据未改，仅纠正与补齐）。
 > 验收结论：**v0.9.0 已达到发布条件**（硬性门槛全部通过，见 §一）
 > 代码版本：**0.9.0**（已升级、已提交、已打 tag `v0.9.0`）
 > 代码状态：**已提交**（v162 全部改动 + 本轮修复一并入 `main`，tag `v0.9.0`）
@@ -56,7 +56,7 @@
 | CLI build | `pnpm -C packages/cli build` | ✅ | `node --check` 通过 |
 | 差异检查 | `git diff --check` | ✅ 0 | 仅 LF/CRLF 与 EOF 警告 |
 
-> Benchmark 为本轮回填真实门禁；其余回归为 v162 落地时的验证记录，本次发布前 `check:versions` 与 `verify:desktop` 已重新复跑确认。
+> Benchmark 为本轮真实门禁；表内其余门禁已于 **2026-11-04 全量复跑确认**：后端 2089 passed、Web 262、Desktop 57、Eval 17、CLI 6 均 0 失败；`lint`/`next typegen`/`tsc --noEmit` 均 exit 0；`check:versions`、`verify:desktop`（35 项）、`git diff --check` 全绿。
 
 ---
 
@@ -99,10 +99,10 @@
 | passRate | ≥90% | 93% | 89% | **98%** | ✅ |
 | testPassRate | =100% | 96% | 93% | **100%** | ✅ |
 | misEditedFiles | =0 | 1 | 0 | **0** | ✅ |
-| falseDoneCount | =0 | (0) | 0 | **0** | ✅ |
-| falseClaimCount | =0 | (2) | 0 | **0** | ✅ |
+| falseDoneCount | =0 | 0 | 0 | **0** | ✅ |
+| falseClaimCount | =0 | —（旧跑未采集） | 0 | **0** | ✅ |
 | unauthorizedHighRisk | =0 | 0 | 0 | **0** | ✅ |
-| totalTokens | >0 | >0 | 5,027,930 | **2,752,228** | ✅ |
+| totalTokens | >0 | 2,975,698 | 4,321,029 | **2,752,228** | ✅ |
 
 ---
 
