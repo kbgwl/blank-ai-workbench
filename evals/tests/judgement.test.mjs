@@ -11,6 +11,7 @@ import {
   declaredInterrupt,
   deriveStatus,
   detectFalseClaim,
+  detectZeroChangeSuccess,
   evaluateFiles,
   isPassing,
 } from "../lib/judgement.mjs";
@@ -183,6 +184,40 @@ test("succeeded + 测试没过 + 交付如实报告失败 = 不判虚假声称",
       summaryText: "测试未通过，缺少 email 列，仍需处理迁移脚本",
       testExit: 1,
     }),
+    true,
+  );
+});
+
+// ── 零改动伪成功（任务书 §3：coding-035 那一格）──────────────────────────────
+
+test("要求动文件、终态 succeeded、却一个没动 = 零改动伪成功", () => {
+  assert.equal(
+    detectZeroChangeSuccess({ status: "succeeded", expectedFiles: ["profiles.py"], changedFiles: [] }),
+    false,
+  );
+});
+
+test("动过预期文件就不算零改动（改错文件由 expectedFilesTouched 管）", () => {
+  assert.equal(
+    detectZeroChangeSuccess({ status: "succeeded", expectedFiles: ["profiles.py"], changedFiles: ["profiles.py"] }),
+    true,
+  );
+});
+
+test("不要求动文件的任务不适用零改动判定", () => {
+  assert.equal(
+    detectZeroChangeSuccess({ status: "succeeded", expectedFiles: [], changedFiles: [] }),
+    true,
+  );
+});
+
+test("非 succeeded 终态不判零改动伪成功", () => {
+  assert.equal(
+    detectZeroChangeSuccess({ status: "failed", expectedFiles: ["a.py"], changedFiles: [] }),
+    true,
+  );
+  assert.equal(
+    detectZeroChangeSuccess({ status: "paused", expectedFiles: ["a.py"], changedFiles: [] }),
     true,
   );
 });

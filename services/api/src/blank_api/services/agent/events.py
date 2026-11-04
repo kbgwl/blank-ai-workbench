@@ -70,23 +70,32 @@ class EventRecorder:
         # 报的就是 `UNIQUE constraint failed: agent_events.task_id, agent_events.seq`。
         self._seq_lock = asyncio.Lock()
 
-    async def has_terminal(self) -> bool:
+    async def has_terminal(self, *, paused_counts: bool = False) -> bool:
         """这一轮是否已经有终态事件。
 
         取消走的是「先改任务状态、再补一条事件」——改状态这一步运行时看不到，
         只有事件是双方都能读到的凭据。取消端点因此必须先落终态事件，否则界面
         会一直以为它还在跑；而运行时收尾时也要先问一句，避免同一轮结束两次。
+
+        ``paused_counts`` 默认 False：暂停不是"这一轮结束"，恢复后还要写
+        task.completed。把 task.paused 当终态会吞掉恢复后的完成事件——任务做完了，
+        界面上却停在"已暂停"。只有收尾本身就是 paused 时才传 True，防重复写。
         """
         # 查不到就按"还没有"处理：多写一条终态事件顶多让时间线多一行，
         # 而收尾路径上抛异常会让任务收不干净——两害相权，取前者。
         try:
+            kinds = (
+                TERMINAL_EVENT_TYPES
+                if paused_counts
+                else tuple(kind for kind in TERMINAL_EVENT_TYPES if kind != "task.paused")
+            )
             async with self.session_factory() as session:
                 row = (
                     await session.execute(
                         select(AgentEvent.id)
                         .where(
                             AgentEvent.task_id == self.task_id,
-                            AgentEvent.type.in_(TERMINAL_EVENT_TYPES),
+                            AgentEvent.type.in_(kinds),
                         )
                         .limit(1)
                     )

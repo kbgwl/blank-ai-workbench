@@ -73,6 +73,9 @@ async def finish_run(db: AsyncSession, run_id: str, status: str, worker_id: str)
     只按 run_id 更新会出这种事：A 的租约过期、B 接管（attempts 已经加到 2），
     A 手上的活儿跑完照样把这条 run 写成 succeeded——界面上看到的是"B 在跑、
     结果已就绪"，而 B 其实一步都还没走完。实测见 E:/tmp/m90/lease2-readings.txt 的 S3。
+
+    终态**保留 worker_id**：租约要立刻释放（清 lease_expires_at），但「这条任务是谁
+    跑完的」不能跟着一起抹掉——否则事后排查只剩一句「不知道哪个进程干的」。
     """
     result = await db.execute(
         update(AgentRun)
@@ -81,7 +84,7 @@ async def finish_run(db: AsyncSession, run_id: str, status: str, worker_id: str)
             AgentRun.status == "running",
             AgentRun.worker_id == worker_id,
         )
-        .values(status=status, worker_id="", lease_expires_at=None)
+        .values(status=status, lease_expires_at=None)
     )
     await db.commit()
     return result.rowcount == 1

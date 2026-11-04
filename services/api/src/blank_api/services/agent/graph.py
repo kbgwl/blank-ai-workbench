@@ -57,6 +57,7 @@ from blank_api.services.agent.context import (
 )
 from blank_api.services.agent.router import LIGHT, TIER_LABELS, Router
 from blank_api.services.agent.payload import render
+from blank_api.services.agent.delivery import DeliveryFacts, as_dict as delivery_dict, render as render_delivery
 from blank_api.services.agent.placeholders import (
     describe as describe_placeholders,
     scan_messages as scan_placeholder_messages,
@@ -311,6 +312,10 @@ class AgentSession:
     # 这里回答"跑在哪"，permissions.mode 回答"问不问"。两者都进 turn.context。
     sandbox_tier: str = "workspace"
     is_cancelled: Callable[[], Awaitable[bool]] = _never_cancelled
+    # 当前任务状态（cancelled / paused / running …）。取消与暂停是两种语义：
+    # 前者是终态，后者只是"停下等人"，恢复后还要接着跑。只有 is_cancelled 一个
+    # 布尔时，暂停只能被冒充成取消——用户会以为活儿作废了。
+    current_status: Callable[[], Awaitable[str]] | None = None
     compactor: ContextCompactor = field(default_factory=ContextCompactor)
     hooks: HookRunner = field(default_factory=HookRunner)
     # 最近一次组装的上下文 token 估算，前端"上下文 8.2k"那一行读它。
@@ -2603,7 +2608,18 @@ def _settle_fact_gate(
 
 async def execute_action_node(state: AgentState, session: AgentSession) -> AgentState:
     node = "execute_action"
-    if await session.is_cancelled():
+    # 暂停与取消是两种语义：暂停只是"停下等人"，恢复后接着跑；取消是终态。
+    # 只看 is_cancelled 一个布尔时，暂停只能被冒充成取消，用户会以为活儿作废了。
+    status_now = ""
+    if session.current_status is not None:
+        try:
+            status_now = str(await session.current_status() or "")
+        except Exception:  # noqa: BLE001 - 状态读不到不该让执行节点崩掉
+            status_now = ""
+    if status_now == "paused":
+        await session.recorder.add("task.paused", node, {"reason": "用户暂停了任务"})
+        return {"status": "paused", "pending": []}
+    if status_now == "cancelled" or await session.is_cancelled():
         await session.recorder.add("task.cancelled", node, {"reason": "用户已取消任务"})
         return {"status": "cancelled", "pending": []}
     steps = int(state.get("steps") or 0) + 1
@@ -3549,6 +3565,115 @@ def _report_prompt(state: AgentState, hint: str) -> str:
     return prompt + _validation_prompt_block(state)
 
 
+def _report_sections(report: str) -> tuple[str, str]:
+    """把模型写的交付正文拆成「一句话结论」与「一个待办」。
+
+    四行交付只要一句结果，不要整份汇报：结论段取第一个实质条目，下一步段取第一条。
+    旧标题（已完成）与「未完成」继续识别——模型偶尔还按老格式写，认不出来就白丢结构。
+    """
+    conclusion = ""
+    next_step = ""
+    unfinished = ""
+    section = ""
+    for raw in str(report or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        heading = line.rstrip("：:").strip("-*# ")
+        if heading in {"结论", "已完成", "完成"}:
+            section = "conclusion"
+            continue
+        if heading in {"下一步", "后续", "需要你"}:
+            section = "next"
+            continue
+        if heading in {"未完成", "未验证"}:
+            section = "unfinished"
+            continue
+        text = line.lstrip("-*· ").strip()
+        if not text:
+            continue
+        # 模型习惯在"下一步"里写「无」「暂无」：那不是待办，是"没有待办"。
+        # 照抄会让交付固定多出一行「需要你：无」，§5 要求没有就整行隐藏。
+        if text.strip("。.；; ") in {"无", "没有", "暂无", "无需", "不需要", "无待办", "none", "n/a"}:
+            continue
+        if section == "next" and not next_step:
+            next_step = text
+        elif section == "unfinished" and not unfinished:
+            unfinished = text
+        elif not conclusion:
+            conclusion = text
+    return conclusion, next_step or unfinished
+
+
+def _change_facts(state: AgentState) -> tuple[int, int]:
+    """改动事实：几个文件、几处 Diff 段。取自工具结果，不从正文里再猜一遍。"""
+    hunks_by_path: dict[str, int] = {}
+    for item in state.get("tool_results") or []:
+        if not item.get("ok"):
+            continue
+        data = item.get("data") or {}
+        path = str(data.get("path") or "")
+        if not path:
+            continue
+        diff = str(data.get("diff") or "")
+        if not diff and not data.get("change_type"):
+            continue
+        hunks = sum(1 for line in diff.splitlines() if line.startswith("@@")) if diff else 0
+        hunks_by_path[path] = max(hunks_by_path.get(path, 0), hunks)
+    return len(hunks_by_path), sum(hunks_by_path.values())
+
+
+def _delivery_facts(report: str, state: AgentState) -> DeliveryFacts:
+    """四行交付的事实来源：结论取模型段落首句，改动与验证取记录。
+
+    只在这里拼一次，文本与结构化负载共用同一份事实——两处各拼一遍就会出现
+    "正文说改了 3 个文件、证据页说 2 个"这种对不上的账。
+    """
+    conclusion, needs_user = _report_sections(report)
+    validation = dict(state.get("validation") or {})
+    command = ""
+    exit_code: int | None = None
+    if validation and str(validation.get("status") or "") != "skipped":
+        command = str(validation.get("command") or "").strip()
+        raw_exit = validation.get("exit_code")
+        if isinstance(raw_exit, int) and not isinstance(raw_exit, bool):
+            exit_code = raw_exit
+    files, hunks = _change_facts(state)
+    return DeliveryFacts(
+        completed=conclusion,
+        changed_files=files,
+        diff_count=hunks,
+        verify_command=command,
+        verify_exit=exit_code,
+        needs_user=needs_user,
+    )
+
+
+def _delivery_text(report: str, state: AgentState, session: AgentSession) -> str:
+    """固定四行交付（任务书 §5）：完成 / 改动 / 验证 / 需要你，没有的项整行隐藏。
+
+    四行全部由事实拼出来：结论取模型那一段的首句，改动与验证取工具结果与校验记录。
+    模型没法在这里塞「已验证」——它那句原本就可能不实，而 ``验证`` 这一行只有真的
+    跑过、且退出码已知时才会出现。
+    """
+    facts = _delivery_facts(report, state)
+    # 没改动、也没真跑过校验的任务（只读分析、纯回答）不进四行格式：那类交付的价值
+    # 就在正文本身，压成"一句话结论"等于把答案截掉。四行是给"有产物的工作"用的。
+    if facts.changed_files == 0 and facts.verify_exit is None:
+        return report
+    text = render_delivery(facts)
+    # 四行全都拼不出来（模型没给结论、也没改动和校验）时退回原文，总比交一页空白好。
+    return text or report
+
+
+def _delivery_payload(report: str, state: AgentState, mode: str, text: str) -> dict:
+    """结构化交付负载：和正文同源，前端不必回头解析那四行。"""
+    payload = delivery_dict(_delivery_facts(report, state))
+    payload["mode"] = mode
+    payload["chars"] = len(text)
+    return payload
+
+
 def _validation_note(report: str, state: AgentState) -> str:
     """交付正文末尾补一句缺口说明（模型改不掉这句话）。
 
@@ -3714,10 +3839,11 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
                         "step_ids": [str(sid) for sid in (link.get("step_ids") or [])],
                     }
                 )
-            await session.recorder.add("delivery.recorded", node, {"mode": "report", "chars": len(report)})
+            text = _delivery_text(report, state, session)
+            await session.recorder.add("delivery.recorded", node, _delivery_payload(report, state, "report", text))
             return {
                 "summary": _enforce_no_false_claim(
-                    _validation_note(_with_placeholder_note(report, session, state), state), state
+                    _validation_note(_with_placeholder_note(text, session, state), state), state
                 ),
                 "acceptance_results": results,
                 "usage": merge_usage(state.get("usage") or {}, ask["usage"]),
@@ -3728,10 +3854,11 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
                 for item in session.acceptance_criteria
             ]
             report = as_report(raw)
-            await session.recorder.add("delivery.recorded", node, {"mode": "fallback", "chars": len(report)})
+            text = _delivery_text(report, state, session)
+            await session.recorder.add("delivery.recorded", node, _delivery_payload(report, state, "fallback", text))
             return {
                 "summary": _enforce_no_false_claim(
-                    _validation_note(_with_placeholder_note(report, session, state), state), state
+                    _validation_note(_with_placeholder_note(text, session, state), state), state
                 ),
                 "acceptance_results": results,
             }
@@ -3746,10 +3873,11 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
         report = as_report(raw)
         usage = state.get("usage") or {}
         mode = "fallback"
-    await session.recorder.add("delivery.recorded", node, {"mode": mode, "chars": len(report)})
+    text = _delivery_text(report, state, session)
+    await session.recorder.add("delivery.recorded", node, _delivery_payload(report, state, mode, text))
     return {
         "summary": _enforce_no_false_claim(
-            _validation_note(_with_placeholder_note(report, session, state), state), state
+            _validation_note(_with_placeholder_note(text, session, state), state), state
         ),
         "acceptance_results": results,
         "usage": usage,

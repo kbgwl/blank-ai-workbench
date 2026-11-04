@@ -107,6 +107,26 @@ def test_budget_exhaustion_asks_to_wrap_up_not_fail():
     assert "终止" not in "；".join(tokens.reasons)
 
 
+def test_time_budget_exhaustion_asks_to_wrap_up():
+    # 任务书 §4.4 的「耗时」一项：跑了 20 分钟、上限 10 分钟 → 要求收尾，不是判死。
+    exhausted = watchdog.inspect(_pulse(started_at=NOW - timedelta(minutes=20), max_seconds=600))
+    assert exhausted.action == watchdog.ACTION_PAUSE
+    assert any("耗时预算" in reason for reason in exhausted.reasons)
+
+    # 没声明上限（老数据/未派发）时这一项不参与判定，不能凭空判定超时。
+    unset = watchdog.inspect(_pulse(started_at=NOW - timedelta(minutes=20), max_seconds=0))
+    assert unset.action == watchdog.ACTION_OK
+
+
+def test_elapsed_and_time_exhausted_properties():
+    pulse = _pulse(started_at=NOW - timedelta(seconds=90), max_seconds=60)
+    assert pulse.elapsed_seconds == 90
+    assert pulse.time_exhausted is True
+    # 起点缺失时读作 0 秒，不猜一个"很久"。
+    assert _pulse(started_at=None, max_seconds=60).elapsed_seconds == 0
+    assert _pulse(started_at=None, max_seconds=60).time_exhausted is False
+
+
 def test_success_without_delivery_evidence_is_flagged():
     verdict = watchdog.inspect(_pulse(status="succeeded", has_delivery=False))
     assert verdict.action == watchdog.ACTION_DIAGNOSE

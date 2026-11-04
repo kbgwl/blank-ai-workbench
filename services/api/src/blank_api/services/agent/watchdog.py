@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Iterable
+from typing import Any, Iterable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,6 +70,8 @@ class Pulse:
     attempts: int
     max_recoveries: int = 2
     max_steps: int = 200
+    # 耗时预算（秒）。0 表示这条 run 没声明时间上限（老数据/未派发），不参与判定。
+    max_seconds: int = 0
     steps_used: int = 0
     lease_expires_at: datetime | None = None
     last_event_at: datetime | None = None
@@ -103,6 +105,18 @@ class Pulse:
     @property
     def steps_exhausted(self) -> bool:
         return self.max_steps > 0 and self.steps_used >= self.max_steps
+
+    @property
+    def elapsed_seconds(self) -> int:
+        started = _aware(self.started_at)
+        if started is None:
+            return 0
+        return max(0, int((self.now - started).total_seconds()))
+
+    @property
+    def time_exhausted(self) -> bool:
+        """耗时预算用完。和步数/token 一样，动作是「收尾」不是「判死」。"""
+        return self.max_seconds > 0 and self.elapsed_seconds >= self.max_seconds
 
     @property
     def tokens_exhausted(self) -> bool:
@@ -159,6 +173,8 @@ def inspect(pulse: Pulse) -> Verdict:
 
     if pulse.steps_exhausted:
         bump(ACTION_PAUSE, f"步数预算用完（{pulse.steps_used}/{pulse.max_steps}），应当收尾而不是继续开新工作面")
+    if pulse.time_exhausted:
+        bump(ACTION_PAUSE, f"耗时预算用完（{pulse.elapsed_seconds}s/{pulse.max_seconds}s），应当收尾")
     if pulse.tokens_exhausted:
         bump(ACTION_PAUSE, f"token 预算用完（{pulse.tokens_used}/{pulse.token_budget}），应当收尾")
 
@@ -215,6 +231,19 @@ async def _has_delivery(db: AsyncSession, task_id: str) -> bool:
     return row is not None
 
 
+def _budget_int(snapshot: Any, key: str) -> int:
+    """从派发快照里取一项预算上限。读不出来按 0（= 不参与判定），绝不猜一个默认值。"""
+    if not isinstance(snapshot, dict):
+        return 0
+    budget = snapshot.get("budget")
+    if not isinstance(budget, dict):
+        return 0
+    try:
+        return max(0, int(budget.get(key) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 async def pulses(db: AsyncSession, *, now: datetime | None = None, limit: int = 50) -> list[Pulse]:
     """把当前所有 running 的 run 读成体检数据。"""
     moment = now or now_utc()
@@ -235,6 +264,7 @@ async def pulses(db: AsyncSession, *, now: datetime | None = None, limit: int = 
                 status=run.status,
                 attempts=int(run.attempts or 0),
                 max_steps=int(task.max_steps or 0),
+                max_seconds=_budget_int(task.dispatch_snapshot, "max_seconds"),
                 steps_used=int(task.steps_used or 0),
                 lease_expires_at=run.lease_expires_at,
                 last_event_at=await _last_event_at(db, run.task_id, run.id),

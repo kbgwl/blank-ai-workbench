@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 from copy import deepcopy
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -72,7 +73,31 @@ DEFAULTS: dict[str, Any] = {
         "allowed_roots": [],
         "denied_commands": [],
     },
+    "background": {
+        # 后台执行的安全上限（任务书 §5）。用户可以把这些调小，不能调大：
+        # normalize 一律按下面的硬上限夹住，模型不能自行提升预算。
+        "enabled": True,
+        # 默认只在需要审批时打扰：后台任务刷屏比不通知更糟。
+        "notify_policy": "approval_only",
+        # 免打扰时段 "HH:MM-HH:MM"；空串表示不设。跨零点（22:00-08:00）合法。
+        "quiet_hours": "",
+        "max_seconds": 1800,
+        "max_steps": 200,
+        "token_budget": 1_500_000,
+        "auto_recoveries": 2,
+        "default_model_policy": "default",
+    },
 }
+
+# 后台执行的合法取值与硬上限。这些是安全边界，不接受"用户说更大就更大"。
+BACKGROUND_NOTIFY_POLICIES = ("silent", "milestone", "approval_only", "always")
+BACKGROUND_MODEL_POLICIES = ("default", "fast", "quality", "local", "user_selected")
+BACKGROUND_MIN_SECONDS = 60
+BACKGROUND_MAX_SECONDS = 6 * 3600
+BACKGROUND_MAX_STEPS_CAP = 200
+BACKGROUND_MIN_TOKENS = 1_000
+BACKGROUND_MAX_TOKENS = 1_500_000
+BACKGROUND_MAX_RECOVERIES = 3
 
 SAFETY_MIN_TIMEOUT = 10.0
 SAFETY_MAX_TIMEOUT = 600.0
@@ -179,6 +204,7 @@ def normalize(raw: Any) -> dict[str, Any]:
     tools = data.get("tools") if isinstance(data.get("tools"), dict) else {}
     sandbox = data.get("sandbox") if isinstance(data.get("sandbox"), dict) else {}
     safety = data.get("safety") if isinstance(data.get("safety"), dict) else {}
+    background = data.get("background") if isinstance(data.get("background"), dict) else {}
     features = data.get("features") if isinstance(data.get("features"), dict) else {}
 
     mode = str(guardian.get("mode") or "").strip().lower()
@@ -187,6 +213,12 @@ def normalize(raw: Any) -> dict[str, Any]:
     default_mode = str(permissions.get("default_mode") or "").strip().lower()
     if default_mode not in PERMISSION_MODES:
         default_mode = MODE_DEFAULT
+    notify_policy = str(background.get("notify_policy") or "").strip().lower()
+    if notify_policy not in BACKGROUND_NOTIFY_POLICIES:
+        notify_policy = DEFAULTS["background"]["notify_policy"]
+    model_policy = str(background.get("default_model_policy") or "").strip().lower()
+    if model_policy not in BACKGROUND_MODEL_POLICIES:
+        model_policy = DEFAULTS["background"]["default_model_policy"]
 
     return {
         "guardian": {
@@ -260,7 +292,82 @@ def normalize(raw: Any) -> dict[str, Any]:
             "allowed_roots": _clean_paths(safety.get("allowed_roots")),
             "denied_commands": _clean_paths(safety.get("denied_commands")),
         },
+        "background": {
+            # 全部按硬上限夹住：设置页/手改文件只能往"更保守"的方向调。
+            "enabled": _as_bool(background.get("enabled"), DEFAULTS["background"]["enabled"]),
+            "notify_policy": notify_policy,
+            "quiet_hours": _clean_quiet_hours(background.get("quiet_hours")),
+            "max_seconds": int(
+                _clamp(
+                    background.get("max_seconds"),
+                    BACKGROUND_MIN_SECONDS,
+                    BACKGROUND_MAX_SECONDS,
+                    DEFAULTS["background"]["max_seconds"],
+                )
+            ),
+            "max_steps": int(
+                _clamp(
+                    background.get("max_steps"),
+                    1,
+                    BACKGROUND_MAX_STEPS_CAP,
+                    DEFAULTS["background"]["max_steps"],
+                )
+            ),
+            "token_budget": int(
+                _clamp(
+                    background.get("token_budget"),
+                    BACKGROUND_MIN_TOKENS,
+                    BACKGROUND_MAX_TOKENS,
+                    DEFAULTS["background"]["token_budget"],
+                )
+            ),
+            "auto_recoveries": int(
+                _clamp(
+                    background.get("auto_recoveries"),
+                    0,
+                    BACKGROUND_MAX_RECOVERIES,
+                    DEFAULTS["background"]["auto_recoveries"],
+                )
+            ),
+            "default_model_policy": model_policy,
+        },
     }
+
+
+def _clean_quiet_hours(raw: Any) -> str:
+    """免打扰时段：只认 "HH:MM-HH:MM"，跨零点合法；写坏就整段丢掉（等于不设）。"""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    try:
+        start, end = text.split("-", 1)
+        for item in (start, end):
+            hour, minute = item.strip().split(":", 1)
+            if not (0 <= int(hour) <= 23 and 0 <= int(minute) <= 59):
+                return ""
+        return f"{start.strip()}-{end.strip()}"
+    except (ValueError, AttributeError):
+        return ""
+
+
+def quiet_hours_active(window: str, *, now: datetime | None = None) -> bool:
+    """此刻是否落在免打扰时段内。空串/坏值一律 False（不设时段）。"""
+    text = _clean_quiet_hours(window)
+    if not text:
+        return False
+    start, end = text.split("-", 1)
+    sh, sm = (int(part) for part in start.split(":", 1))
+    eh, em = (int(part) for part in end.split(":", 1))
+    moment = now or datetime.now()
+    current = moment.hour * 60 + moment.minute
+    begin = sh * 60 + sm
+    finish = eh * 60 + em
+    if begin == finish:
+        return False
+    if begin < finish:
+        return begin <= current < finish
+    # 跨零点：22:00-08:00
+    return current >= begin or current < finish
 
 
 def _clean_paths(raw: Any) -> list[str]:

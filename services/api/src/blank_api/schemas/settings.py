@@ -35,12 +35,26 @@ class SafetySettings(BaseModel):
     denied_commands: list[str] = Field(default_factory=list)
 
 
+class BackgroundSettings(BaseModel):
+    """后台执行与低打扰（任务书 §5）。所有数值都有硬上限，模型不能自行提升。"""
+
+    enabled: bool = True
+    notify_policy: str = "approval_only"
+    quiet_hours: str = ""
+    max_seconds: int = 1800
+    max_steps: int = 200
+    token_budget: int = 1_500_000
+    auto_recoveries: int = 2
+    default_model_policy: str = "default"
+
+
 class AgentSettings(BaseModel):
     guardian: GuardianSettings = Field(default_factory=GuardianSettings)
     compaction: CompactionSettings = Field(default_factory=CompactionSettings)
     permissions: PermissionSettings = Field(default_factory=PermissionSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)
     safety: SafetySettings = Field(default_factory=SafetySettings)
+    background: BackgroundSettings = Field(default_factory=BackgroundSettings)
     # 设置文件位置与合法取值：前端用来画滑杆边界，顺便让"改到哪去了"可查
     path: str = ""
     limits: dict = Field(default_factory=dict)
@@ -74,9 +88,21 @@ class SafetyPatch(BaseModel):
     denied_commands: list[str] | None = None
 
 
+class BackgroundPatch(BaseModel):
+    enabled: bool | None = None
+    notify_policy: str | None = None
+    quiet_hours: str | None = None
+    max_seconds: int | None = None
+    max_steps: int | None = None
+    token_budget: int | None = None
+    auto_recoveries: int | None = None
+    default_model_policy: str | None = None
+
+
 class AgentSettingsPatch(BaseModel):
     guardian: GuardianPatch | None = None
     compaction: CompactionPatch | None = None
     permissions: PermissionPatch | None = None
     tools: ToolPatch | None = None
     safety: SafetyPatch | None = None
+    background: BackgroundPatch | None = None

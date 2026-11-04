@@ -22,6 +22,14 @@ from blank_api.services.sandbox import docker_probe
 from blank_api.services.sandbox.policy import SandboxPolicy
 from blank_api.services.safety import SafetyPolicy, backend_info
 from blank_api.services.settings import (
+    BACKGROUND_MAX_RECOVERIES,
+    BACKGROUND_MAX_SECONDS,
+    BACKGROUND_MAX_STEPS_CAP,
+    BACKGROUND_MAX_TOKENS,
+    BACKGROUND_MIN_SECONDS,
+    BACKGROUND_MIN_TOKENS,
+    BACKGROUND_MODEL_POLICIES,
+    BACKGROUND_NOTIFY_POLICIES,
     DEFAULTS,
     GUARDIAN_MAX_TIMEOUT,
     GUARDIAN_MIN_TIMEOUT,
@@ -65,6 +73,15 @@ def _limits() -> dict:
             "default": DEFAULTS["safety"]["timeout_seconds"],
         },
         "safety_max_entries": SAFETY_MAX_ENTRIES,
+        # 后台面板的边界：用户只能往更保守的方向调，这里的 max 就是硬上限。
+        "background": {
+            "notify_policies": list(BACKGROUND_NOTIFY_POLICIES),
+            "model_policies": list(BACKGROUND_MODEL_POLICIES),
+            "max_seconds": {"min": BACKGROUND_MIN_SECONDS, "max": BACKGROUND_MAX_SECONDS},
+            "max_steps": {"min": 1, "max": BACKGROUND_MAX_STEPS_CAP},
+            "token_budget": {"min": BACKGROUND_MIN_TOKENS, "max": BACKGROUND_MAX_TOKENS},
+            "auto_recoveries": {"min": 0, "max": BACKGROUND_MAX_RECOVERIES},
+        },
     }
 
 
@@ -72,7 +89,7 @@ def _render(payload: dict, store: SettingsStore) -> AgentSettings:
     body = {
         k: v
         for k, v in payload.items()
-        if k in ("guardian", "compaction", "permissions", "tools", "safety")
+        if k in ("guardian", "compaction", "permissions", "tools", "safety", "background")
     }
     return AgentSettings.model_validate({**body, "path": str(store.path), "limits": _limits()})
 

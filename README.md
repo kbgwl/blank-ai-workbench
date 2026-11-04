@@ -8,6 +8,8 @@
 
 下一版本规划：**v0.9.0 Super Agent Upgrade**，包括 Router/Worker 双层运行时、事件触发、后台执行、Watchdog、断点恢复和低打扰交付，详细任务与验收见 [docs/workbuddy-v162-super-agent-upgrade.md](docs/workbuddy-v162-super-agent-upgrade.md)。
 
+后续补全版本：**v0.9.1 Super Agent Completion**，重点完成真实 Electron GUI 18 项闭环、coding-035 口径修复、后台任务恢复、审批、模型/场景切换和日常记忆端到端验证，详细任务见 [docs/workbuddy-v163-super-agent-completion.md](docs/workbuddy-v163-super-agent-completion.md)。
+
 当前进度：**v1.1（核心任务工作台 + 头脑风暴 + 按需功能中心 + CLI 骨架）**。REA Reverse Lab 已有独立入口，
 REA MCP Adapter 已接入 `/api/v1/reverse-lab`（4 个端点走 stdio 子进程里的 `blank_api.services.rea.mcp_server`，默认开着、`BLANK_REA_DISABLE=1` 可关），
 `/reverse-lab` 页面已消费这四个端点（适配器状态 / 候选目标 / 字符串线索 / 带台账的调查，见 `web/src/app/reverse-lab/page.tsx`）。

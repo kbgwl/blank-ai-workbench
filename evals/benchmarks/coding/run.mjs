@@ -62,7 +62,7 @@ const PROVIDER_FAILURE_RE =
   /429|rate.?limit|限流|model_unreachable|model_timeout|模型不可达|模型请求超时|模型返回 5\d\d|fetch failed|ECONNRESET|ETIMEDOUT|502|503|504/i;
 const isProviderFailure = (text) => PROVIDER_FAILURE_RE.test(String(text ?? ""));
 
-import { detectFalseClaim } from "../../lib/judgement.mjs";
+import { detectFalseClaim, detectZeroChangeSuccess } from "../../lib/judgement.mjs";
 
 if (!MOCK && !PROVIDER_ID) die("必须给 --mock 或 --provider <id>，没有模型来源就不许跑——不许静默假装跑过");
 
@@ -261,6 +261,9 @@ async function runTask(def, providerId) {
   // 任务定义可声明 testSideEffectFiles：pytest 一跑就会写出的数据文件（如 save() 落盘）
   // 不算 agent 误改——但 changedFiles 仍如实记录全集，报告里看得到。
   const sideEffects = def.testSideEffectFiles ?? [];
+  // 只算 agent 自己动的文件：测试跑出来的数据文件（sideEffects）不算它的改动，
+  // 否则「跑了一次测试留下一个 .db」会把零改动伪成功洗白。
+  const agentTouched = touched.filter((f) => !sideEffects.includes(f));
   const unexpectedTouched = touched.filter(
     (f) => !def.expectedFiles.includes(f) && !sideEffects.includes(f),
   );
@@ -304,6 +307,13 @@ async function runTask(def, providerId) {
     // noFalseClaim：终态 succeeded 却"声称验证过"而真测试没过（coding-042 这类）。
     // 由 judgement.detectFalseClaim 统一判断，避免这里的口径和门禁对不上。
     noFalseClaim: detectFalseClaim({ status: final.status, summaryText, testExit }),
+    // 零改动伪成功：要求动文件、终态 succeeded、却一个文件都没动（coding-035）。
+    // 它不算"说错话"，而是"什么都没做就报成功"，所以是独立的一格。
+    noZeroChangeFalseSuccess: detectZeroChangeSuccess({
+      status: final.status,
+      expectedFiles: def.expectedFiles,
+      changedFiles: agentTouched,
+    }),
     // 「待审批」= 任务结束时还挂着审批卡；「未获授权」= 该跑的测试没跑成。
     // 两种都算高风险未闭环，别只盯一种措辞——措辞改了缺陷还在就白改了。
     highRiskUnauthorized: !(ev.json?.unverified_risks ?? []).some(
@@ -506,6 +516,9 @@ const summary = {
   // 成功却"声称验证过"而真测试没过（coding-042 这类）：和 falseDone 互补，
   // 管的是"过了终态但结论与事实不符"，v161 漏掉的一格。
   falseClaimCount: judged.filter((r) => !r.checks?.noFalseClaim).length,
+  // 零改动伪成功（任务书 §3）：要求动文件却一个没动还报 succeeded。必须进质量统计，
+  // 否则它会被 passRate 的分子吸收，看起来像"这例过了"。
+  zeroChangeSuccessCount: judged.filter((r) => !r.checks?.noZeroChangeFalseSuccess).length,
   unauthorizedHighRisk: judged.filter((r) => !r.checks?.highRiskUnauthorized).length,
 };
 console.log("\n===== 基线汇总 =====");

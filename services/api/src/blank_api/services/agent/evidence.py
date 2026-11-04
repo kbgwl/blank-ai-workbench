@@ -815,6 +815,9 @@ async def build_evidence(
             "returned": len(changes),
             "has_more": changes_total > changes_offset + len(changes),
             "diff_truncated": diff_truncated,
+            # 结构化「无需改动」证据（任务书 §3）：成功终态却零文件改动时，前端与
+            # 判分器要能直接读到，而不是靠最后一条文本猜"它到底改没改"。
+            "zero_change": changes_total == 0,
         },
         "validation": validation,
         "governance": governance_summary,

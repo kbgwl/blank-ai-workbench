@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -10,7 +11,7 @@ from datetime import datetime
 import anyio
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import case, delete, select
+from sqlalchemy import case, delete, func, select
 
 from blank_api.api.auth import require_token
 from blank_api.api.errors import ApiError
@@ -23,6 +24,7 @@ from blank_api.models.model_provider import ModelUsage
 from blank_api.models.plan_template import PlanTemplate
 from blank_api.models.task import AgentEvent, FileChange, Task, ToolCall
 from blank_api.models.run import AgentRun
+from blank_api.models.trigger import AgentTrigger
 from blank_api.models.skill import Skill
 from blank_api.schemas.task import (
     EventOut,
@@ -52,6 +54,8 @@ from blank_api.services.agent.evidence import (
 )
 from blank_api.services.agent.artifacts import ArtifactStore
 from blank_api.services.agent.events import EventRecorder
+from blank_api.services.agent import notify
+from blank_api.services.settings import SettingsStore, quiet_hours_active
 from blank_api.services.agent.live import LiveFeed
 from blank_api.services import metrics
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
@@ -60,7 +64,7 @@ from blank_api.services.fork import FORK_EVENT, fork_thread
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
 from blank_api.services.agent.queue import abandon_run, claim_run, enqueue_run, finish_run, renew_run
 from blank_api.services.agent.router import candidate_from_provider
-from blank_api.services.agent.dispatch import ExecutionSnapshot, explain, route
+from blank_api.services.agent.dispatch import ExecutionSnapshot, NOTIFY_APPROVAL_ONLY, explain, route
 from blank_api.services.features import is_enabled
 from blank_api.services.models.registry import build_adapter
 from blank_api.services.plan import (
@@ -846,10 +850,54 @@ async def _execute_claimed_run(
         if not await db_retry(finish):
             # 收尾被拒=租约在这期间被人拿走了。这条 run 的账现在归接管者写，我闭嘴。
             log.warning("收尾被拒（租约已失去）run=%s worker=%s", run_id, worker_id)
+        else:
+            await _record_notify_decision(run_request.task_id, status)
     except Exception as error:
         # 收尾失败会让任务永远停在 queued（界面一直转圈），必须留下痕迹并强行置终态
         log.exception("收尾写库失败 run=%s", run_id)
         await _record_run_failure(run_request.task_id, run_id, error)
+
+
+def _notify_kind(status: str) -> str:
+    """任务终态对应哪一类通知事件。
+
+    waiting_approval 走审批（永远放行），failed/cancelled 走失败，succeeded 走交付物。
+    其余中间态算进度——策略配了 always 才会打扰。
+    """
+    if status == "waiting_approval":
+        return notify.EVENT_APPROVAL
+    if status in ("failed", "cancelled"):
+        return notify.EVENT_FAILURE
+    if status == "succeeded":
+        return notify.EVENT_DELIVERABLE
+    return notify.EVENT_PROGRESS
+
+
+async def _record_notify_decision(task_id: str, status: str) -> None:
+    """把「这一次该不该打扰用户」写成事件（任务书 §5）。
+
+    判断与投递分开：这里只落判定，前端/未来的推送通道读 ``notify.decided`` 决定要不要
+    出声。没有这条事件，低打扰就只是一句配置——谁也不知道某次通知是被策略压掉的、
+    还是压根没触发。写事件失败绝不影响任务本身的终态。
+    """
+    try:
+        async with get_session_factory()() as session:
+            task = await session.get(Task, task_id)
+            if task is None:
+                return
+            snapshot = dict(task.dispatch_snapshot or {})
+            policy = str(snapshot.get("notify_policy") or "") or NOTIFY_APPROVAL_ONLY
+            window = str((SettingsStore().read().get("background") or {}).get("quiet_hours") or "")
+            quiet = quiet_hours_active(window)
+            kind = _notify_kind(status)
+            decision = notify.explain(policy, kind, quiet_hours=quiet)
+            await EventRecorder(get_session_factory(), task_id).add(
+                "notify.decided",
+                "finish",
+                {**decision, "status": status},
+            )
+    except Exception:  # 通知判定是旁路，坏了也不能把任务的终态带走
+        log.warning("记录通知判定失败 task=%s", task_id, exc_info=True)
 
 
 @router.post("/tasks/{task_id}/start", status_code=202)
@@ -873,6 +921,7 @@ async def launch_task(
     request: Request | None,
     *,
     start_runner: bool = True,
+    crashed: bool = False,
 ) -> dict:
     """把一条任务推进 run 队列（可顺带在进程内起跑）。
 
@@ -898,7 +947,7 @@ async def launch_task(
             async with get_session_factory()() as session:
                 if not await claim_run(session, run.id, worker_id):
                     return
-            await _execute_claimed_run(run.id, worker_id, run_request)
+            await _execute_claimed_run(run.id, worker_id, run_request, crashed=crashed)
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -1402,3 +1451,253 @@ async def cancel_task(task_id: str, db: DbSession) -> TaskOut:
             {"status": "cancelled", "reason": "用户取消了这一轮"},
         )
     return TaskOut.model_validate(task)
+
+
+async def _stored_run_payload(db: DbSession, task_id: str) -> TaskRunIn:
+    """恢复/重试要沿用这条任务当时的运行参数，不能用今天设置页里的默认值。"""
+    run = (
+        await db.execute(select(AgentRun).where(AgentRun.task_id == task_id))
+    ).scalar_one_or_none()
+    raw = dict(run.request_payload or {}) if run is not None else {}
+    try:
+        return TaskRunIn.model_validate(raw)
+    except Exception:  # noqa: BLE001 - 旧入参形状不认识时按默认跑，不阻断恢复
+        return TaskRunIn()
+
+
+@router.post("/tasks/{task_id}/pause", response_model=TaskOut)
+async def pause_task(task_id: str, db: DbSession) -> TaskOut:
+    """暂停后台任务：状态落 paused、租约释放，执行节点在下一步停下。
+
+    暂停不是取消——任务还在，恢复后接着跑。所以这里不写 cancelled 终态，
+    也不删事件。执行侧每一步都会读一次任务状态（graph.execute_action_node），
+    因此暂停在「下一次模型调用之前」生效，不会打断正在进行的单次调用。
+    """
+    task = await load_task(db, task_id)
+    if task.status in ("succeeded", "failed", "cancelled"):
+        raise ApiError(
+            code="task_not_pausable",
+            message=f"任务已结束，无法暂停（当前状态：{task.status}）",
+            status_code=409,
+        )
+    if task.status == "paused":
+        return TaskOut.model_validate(task)
+    task.status = "paused"
+    run = (
+        await db.execute(select(AgentRun).where(AgentRun.task_id == task_id))
+    ).scalar_one_or_none()
+    if run is not None and run.status not in ("succeeded", "failed", "cancelled"):
+        # 释放租约：暂停期间不允许别的 worker 把它领走继续跑。
+        run.status = "paused"
+        run.worker_id = ""
+        run.lease_expires_at = None
+    await db.commit()
+    await db.refresh(task)
+    recorder = EventRecorder(get_session_factory(), task_id)
+    await recorder.add("task.pause_requested", "receive_task", {"status": "paused"})
+    if not await recorder.has_terminal(paused_counts=True):
+        await recorder.add(
+            "task.paused", "receive_task", {"status": "paused", "reason": "用户暂停了任务"}
+        )
+    return TaskOut.model_validate(task)
+
+
+@router.post("/tasks/{task_id}/resume", response_model=TaskOut)
+async def resume_task(task_id: str, request: Request, db: DbSession) -> TaskOut:
+    """恢复一条已暂停的任务：从最近检查点继续，不重跑已经完成的工具。"""
+    task = await load_task(db, task_id)
+    if task.status != "paused":
+        raise ApiError(
+            code="task_not_paused",
+            message=f"只有已暂停的任务可以恢复（当前状态：{task.status}）",
+            status_code=409,
+        )
+    payload = await _stored_run_payload(db, task_id)
+    await EventRecorder(get_session_factory(), task_id).add(
+        "task.resume_requested", "receive_task", {"status": "queued"}
+    )
+    await launch_task(db, task, payload, request, crashed=True)
+    await db.refresh(task)
+    return TaskOut.model_validate(task)
+
+
+@router.post("/tasks/{task_id}/retry", response_model=TaskOut)
+async def retry_task(task_id: str, request: Request, db: DbSession) -> TaskOut:
+    """重试：把一条失败/取消/暂停的任务重新排进队列。
+
+    与"恢复"的区别：重试是从头再跑一遍（attempts 归零），恢复是从检查点接着跑。
+    失败后先改代码再重试是常见用法，所以这里不沿用旧的工具结果。
+    """
+    task = await load_task(db, task_id)
+    if task.status in ("running", "queued", "waiting_approval"):
+        raise ApiError(code="task_running", message="任务仍在执行中，不能重试", status_code=409)
+    if task.status == "paused":
+        # 暂停态的重试语义就是"继续"，交给恢复路径，避免两套状态机。
+        return await resume_task(task_id, request, db)
+    payload = await _stored_run_payload(db, task_id)
+    await EventRecorder(get_session_factory(), task_id).add(
+        "task.retry_requested", "receive_task", {"from": task.status}
+    )
+    await launch_task(db, task, payload, request)
+    await db.refresh(task)
+    return TaskOut.model_validate(task)
+
+
+def _iso_or_none(value) -> str | None:
+    return value.isoformat() if value else None
+
+
+@router.get("/tasks/{task_id}/status")
+async def task_status(task_id: str, db: DbSession) -> dict:
+    """结构化任务状态（任务书 §6）。
+
+    前端不许靠"最后一条文本"猜状态：这里把 task / run / trigger / 最后事件 /
+    用量 / 审批 / 改动指纹读成一份结构化快照，缺哪项就显式给 null。
+    """
+    task = await load_task(db, task_id)
+    run = (
+        await db.execute(select(AgentRun).where(AgentRun.task_id == task_id))
+    ).scalar_one_or_none()
+    trigger = (
+        await db.execute(
+            select(AgentTrigger)
+            .where(AgentTrigger.task_id == task_id)
+            .order_by(AgentTrigger.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    last_event = (
+        await db.execute(
+            select(AgentEvent.type, AgentEvent.node, AgentEvent.created_at)
+            .where(AgentEvent.task_id == task_id)
+            .order_by(AgentEvent.seq.desc())
+            .limit(1)
+        )
+    ).first()
+    approval = (
+        await db.execute(
+            select(ToolCall.name, ToolCall.created_at)
+            .where(ToolCall.task_id == task_id, ToolCall.status == "awaiting_approval")
+            .order_by(ToolCall.created_at)
+            .limit(1)
+        )
+    ).first()
+    approval_payload = (
+        {"tool": approval[0], "waiting_since": _iso_or_none(approval[1])}
+        if approval is not None
+        else None
+    )
+    if approval_payload is None and task.status == "waiting_approval":
+        # 图在工具网关之前就 interrupt() 时不会留下 ToolCall 行（审批卡还没落到工具账上），
+        # 只查 ToolCall 会让「正在等审批」的任务显示成「没有审批」——前端于是既不弹卡片、
+        # 也不提示，用户只能看着任务挂着。退回最近一次审批事件，与 build_evidence 同口径。
+        row = (
+            await db.execute(
+                select(AgentEvent.payload, AgentEvent.created_at)
+                .where(
+                    AgentEvent.task_id == task_id,
+                    AgentEvent.type.in_(("approval.required", "approval.requested")),
+                )
+                .order_by(AgentEvent.seq.desc())
+                .limit(1)
+            )
+        ).first()
+        if row is not None:
+            payload = dict(row[0] or {})
+            approval_payload = {
+                "tool": str(payload.get("tool") or ""),
+                "waiting_since": _iso_or_none(row[1]),
+                "risk_level": str(payload.get("risk_level") or "high"),
+            }
+    changes = (
+        await db.execute(
+            select(FileChange.path, FileChange.change_type)
+            .where(FileChange.task_id == task_id)
+            .order_by(FileChange.path)
+        )
+    ).all()
+    usage = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(ModelUsage.prompt_tokens + ModelUsage.completion_tokens), 0),
+                func.count(),
+            ).where(ModelUsage.task_id == task_id)
+        )
+    ).first()
+    model_name = (
+        await db.execute(
+            select(ModelUsage.model)
+            .where(ModelUsage.task_id == task_id)
+            .order_by(ModelUsage.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    delivered = (
+        await db.execute(
+            select(AgentEvent.id)
+            .where(
+                AgentEvent.task_id == task_id,
+                AgentEvent.type.in_(("task.completed", "validation.completed", "delivery.recorded")),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    snapshot = dict(task.dispatch_snapshot or {})
+    notify_row = (
+        await db.execute(
+            select(AgentEvent.payload, AgentEvent.created_at)
+            .where(AgentEvent.task_id == task_id, AgentEvent.type == "notify.decided")
+            .order_by(AgentEvent.seq.desc())
+            .limit(1)
+        )
+    ).first()
+    _last_notify_decision = (
+        {**dict(notify_row[0] or {}), "at": _iso_or_none(notify_row[1])}
+        if notify_row is not None
+        else None
+    )
+    fingerprint = (
+        hashlib.sha256(
+            "|".join(f"{path}:{kind}" for path, kind in changes).encode("utf-8")
+        ).hexdigest()[:16]
+        if changes
+        else ""
+    )
+    return {
+        "task_id": task.id,
+        "run_id": run.id if run is not None else None,
+        "trigger_id": trigger.id if trigger is not None else None,
+        "worker_id": (run.worker_id or None) if run is not None else None,
+        "snapshot_id": snapshot.get("snapshot_id"),
+        "status": task.status,
+        "current_step": int(task.steps_used or 0),
+        "last_heartbeat": _iso_or_none(run.updated_at) if run is not None else None,
+        "last_event": (
+            {"type": last_event[0], "node": last_event[1], "at": _iso_or_none(last_event[2])}
+            if last_event is not None
+            else None
+        ),
+        "model": model_name,
+        "tokens": {"total": int((usage[0] if usage else 0) or 0), "calls": int((usage[1] if usage else 0) or 0)},
+        "approval": approval_payload,
+        "changes": {
+            "count": len(changes),
+            "paths": [path for path, _ in changes],
+            "diff_fingerprint": fingerprint,
+        },
+        "delivery": {
+            "present": delivered is not None,
+            "summary": task.result_summary,
+        },
+        "dispatch": {
+            "intent": snapshot.get("intent"),
+            "scenario": snapshot.get("scenario"),
+            "notify_policy": snapshot.get("notify_policy"),
+            "memory_policy": snapshot.get("memory_policy"),
+        },
+        # 低打扰（§5）：前端读策略 + 最近一次 notify.decided 判定，不靠"有没有新文本"猜要不要提醒。
+        "notify": {
+            "policy": str(snapshot.get("notify_policy") or NOTIFY_APPROVAL_ONLY),
+            "last": _last_notify_decision,
+        },
+    }

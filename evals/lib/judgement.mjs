@@ -118,3 +118,26 @@ export function detectFalseClaim({ status, summaryText, testExit }) {
   if (!_VERIFY_CLAIM.test(text)) return true;
   return false;
 }
+
+/**
+ * 检测「零改动伪成功」：任务要求动文件，终态 succeeded，却一个文件都没改。
+ *
+ * 和 `detectFalseClaim` 是两件不同的事：后者管"说了已验证而测试没过"，这里管
+ * "根本没改东西却报成功"。v162 的 coding-035 就是这一格——agent 跑完测试看到
+ * 全绿，判定"无需修改"，交付 succeeded，而任务目标明确要求修 `profiles.py`。
+ *
+ * 只在三个条件同时成立时返回 false：
+ * - 终态是 succeeded（其余终态各有各的判据）；
+ * - 任务声明了 `expectedFiles`（不要求动文件的任务天然不适用）；
+ * - 交付时 changed/added 全为空（改错文件不算零改动，那是 `expectedFilesTouched` 的活）。
+ *
+ * @param {{status?: string, expectedFiles?: string[], changedFiles?: string[]}} ctx
+ * @returns {boolean} true 表示没有零改动伪成功
+ */
+export function detectZeroChangeSuccess({ status, expectedFiles, changedFiles }) {
+  if (status !== "succeeded") return true;
+  const expected = Array.isArray(expectedFiles) ? expectedFiles : [];
+  if (expected.length === 0) return true;
+  const changed = Array.isArray(changedFiles) ? changedFiles : [];
+  return changed.length > 0;
+}

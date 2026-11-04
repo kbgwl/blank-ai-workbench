@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -75,6 +76,8 @@ from blank_api.services.sandbox.tiers import (
 )
 from blank_api.services.workspace import mask_path
 
+log = logging.getLogger(__name__)
+
 
 class _CancelledLookup:
     def __init__(self, session_factory, task_id: str) -> None:
@@ -87,6 +90,21 @@ class _CancelledLookup:
                 await session.execute(select(Task.status).where(Task.id == self.task_id))
             ).scalar_one_or_none()
         return status == "cancelled"
+
+
+class _StatusLookup:
+    """读当前任务状态。取消与暂停要分开处理，一个布尔不够用。"""
+
+    def __init__(self, session_factory, task_id: str) -> None:
+        self.session_factory = session_factory
+        self.task_id = task_id
+
+    async def __call__(self) -> str:
+        async with self.session_factory() as session:
+            status = (
+                await session.execute(select(Task.status).where(Task.id == self.task_id))
+            ).scalar_one_or_none()
+        return str(status or "")
 
 
 def _attempt(thread_id: str) -> int:
@@ -555,6 +573,7 @@ class AgentRuntime:
             tiered_tools=bool(router is not None and is_enabled("tiered_tools", settings)),
             stream_output=is_enabled("stream_output", settings),
             is_cancelled=_CancelledLookup(store, request.task_id),
+            current_status=_StatusLookup(store, request.task_id),
             hooks=HookRunner.from_env(),
             guardian=guardian,
             compactor=compactor,
@@ -963,6 +982,17 @@ class AgentRuntime:
         else:
             payload["decision"] = decision if isinstance(decision, (bool, str)) else dict(decision)
         await scope.recorder.add("task.resumed", "receive_task", payload)
+        if crash_recovery:
+            # 暂停后恢复：检查点里的 status 还停在 paused，直接 ainvoke(None) 会
+            # 立刻按 paused 再收一次尾——用户点了恢复却什么都没发生。先把检查点
+            # 里的状态改回 running，再接着走。读不到状态就照旧继续（老检查点）。
+            try:
+                snapshot = await scope.graph.aget_state(scope.config)
+                values = getattr(snapshot, "values", None) or {}
+                if isinstance(values, dict) and values.get("status") == "paused":
+                    await scope.graph.aupdate_state(scope.config, {"status": "running"})
+            except Exception:  # noqa: BLE001 - 状态读写失败不该让恢复直接崩
+                log.warning("恢复前重置 paused 状态失败 task=%s", request.task_id, exc_info=True)
         try:
             result = await scope.graph.ainvoke(graph_input, scope.config)
         except ModelError as exc:
@@ -1214,7 +1244,11 @@ class AgentRuntime:
         # 取消端点会当场写一条 task.cancelled：界面靠它立刻解锁，不用等运行时
         # 走到收尾（模型调用挂着时那一步可能永远不到）。这里再写一条不会让界面
         # 更早解锁，只会让"这一轮结束了几次"变成需要解释的问题，所以先问一句。
-        skip_terminal = status in ("succeeded", "failed", "cancelled", "paused") and await scope.recorder.has_terminal()
+        skip_terminal = status in ("succeeded", "failed", "cancelled", "paused") and await scope.recorder.has_terminal(
+            # 只有收尾本身就是 paused 时，才把已有的 task.paused 当成"这一轮已结束"；
+            # 恢复后跑成功时它不算数，否则完成事件会被暂停事件吞掉。
+            paused_counts=(status == "paused")
+        )
         if not skip_terminal:
             await scope.recorder.add(event_type, "complete", payload)
         if status in ("succeeded", "failed", "cancelled"):
