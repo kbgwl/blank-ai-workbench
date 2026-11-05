@@ -284,7 +284,19 @@ export function Sidebar(props: SidebarProps) {
                         <span className="shrink-0 font-mono text-[9.5px] text-faint">{thread.turnCount}</span>
                       )}
                     </button>
-                    <div className="absolute top-1/2 right-1 hidden -translate-y-1/2 items-center gap-0.5 group-hover/item:flex">
+                    {/* 悬停操作条：以前是三个图标直接浮在标题上，标题从图标缝里透出来像乱码。
+                        现在垫一层与行底色一致的遮罩：右 68% 实色盖住图标区，左边一段渐变淡出，
+                        被盖住的半个字顺着渐变消失，读起来是"标题在这里截断"而不是"字被压住"。
+                        渐变用行内样式写死色值和停点——Tailwind 的 from-55% 停点落在图标中间，
+                        会让最左边那个图标压在文字上。 */}
+                    <div
+                      className="absolute inset-y-0 right-0 hidden items-center gap-0.5 rounded-r-lg pr-1 pl-9 group-hover/item:flex"
+                      style={{
+                        backgroundImage: `linear-gradient(to left, var(${
+                          active ? "--surface-3" : "--surface-2"
+                        }) 68%, transparent 100%)`,
+                      }}
+                    >
                       <button
                         type="button"
                         onClick={(event) => {
@@ -292,6 +304,7 @@ export function Sidebar(props: SidebarProps) {
                           props.onRename(thread);
                         }}
                         title="重命名"
+                        aria-label={`重命名「${thread.title}」`}
                         className="rounded p-1 text-faint transition-colors hover:bg-surface-3 hover:text-text"
                       >
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3" aria-hidden>
@@ -305,26 +318,27 @@ export function Sidebar(props: SidebarProps) {
                           props.onArchive(thread);
                         }}
                         title="归档这条对话"
-                        className="rounded p-1 text-faint transition-colors hover:bg-surface-3 hover:text-danger"
+                        aria-label={`归档「${thread.title}」`}
+                        className="rounded p-1 text-faint transition-colors hover:bg-surface-3 hover:text-text"
                       >
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3" aria-hidden>
                           <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />
                         </svg>
                       </button>
-                        <button
+                      <button
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
                           props.onDelete(thread);
                         }}
                         title="删除对话（不可恢复）"
+                        aria-label={`删除「${thread.title}」`}
                         className="rounded p-1 text-faint transition-colors hover:bg-surface-3 hover:text-danger"
                       >
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3" aria-hidden>
                           <path d="M3 6h18M8 6V4h8v3M6 6l1 14h10l1-14M10 11v6M14 11v6" />
                         </svg>
                       </button>
-
                     </div>
                   </div>
                 );

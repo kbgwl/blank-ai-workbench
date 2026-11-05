@@ -97,6 +97,8 @@ export function Composer(props: ComposerProps) {
   const workspaceSelectable = props.canPickWorkspace || props.workspaces.length > 1;
   // 场景联动（任务书 §8.2）：换场景时输入框提示词跟着换；记忆开关只在日常场景出现。
   const activeScenario = props.scenarios.find((item) => item.key === props.scenarioKey);
+  // 下拉里显示的是"名字 · 模型"，名字一长就把模型名挤没了；悬停时给出完整模型名。
+  const activeProvider = props.providers.find((item) => item.id === props.providerId);
   const placeholderText =
     activeScenario?.inputHint || "说点什么，或者直接贴张图/丢个文件进来…";
 
@@ -189,12 +191,15 @@ export function Composer(props: ComposerProps) {
             className="block max-h-[262px] min-h-[88px] w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] leading-[1.75] text-text placeholder:text-faint focus:outline-none"
           />
 
-          <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-2.5">
+          {/* 工具条：左边是"在哪儿干活、按什么规矩"，右边是"用哪个模型、发不发"。
+              以前全部挤在一行且允许收缩，窗口一窄文字类控件就被压成竖排（"不/记/住"）；
+              现在整条允许换行，右边整组（开关/模型/发送）作为一块整体换到下一行靠右。 */}
+          <div className="flex flex-wrap items-center gap-x-1 gap-y-1 px-2.5 pt-1 pb-2.5">
             <button
               type="button"
               onClick={() => setPicking((value) => !value)}
               title="引用工作区里的文件"
-              className="grid size-8 place-items-center rounded-lg text-faint transition-colors hover:bg-surface-2 hover:text-text"
+              className="grid size-8 shrink-0 place-items-center rounded-lg text-faint transition-colors hover:bg-surface-2 hover:text-text"
             >
               <span className="font-mono text-[14px]">@</span>
             </button>
@@ -204,7 +209,7 @@ export function Composer(props: ComposerProps) {
               onClick={() => fileInput.current?.click()}
               disabled={props.disabled}
               title="添加图片（也可以直接拖进来或 Ctrl+V 粘贴）"
-              className="grid size-8 place-items-center rounded-lg text-faint transition-colors hover:bg-surface-2 hover:text-text disabled:opacity-40"
+              className="grid size-8 shrink-0 place-items-center rounded-lg text-faint transition-colors hover:bg-surface-2 hover:text-text disabled:opacity-40"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" className="size-[15px]" aria-hidden>
                 <rect x="3" y="4" width="18" height="16" rx="2.5" />
@@ -226,7 +231,7 @@ export function Composer(props: ComposerProps) {
               }}
             />
 
-            <span className="hidden font-mono text-[10.5px] text-faint sm:inline">
+            <span className="hidden shrink-0 font-mono text-[10.5px] text-faint sm:inline">
               {referencesIn(props.draft).length > 0
                 ? `已引用 ${referencesIn(props.draft).length} 个文件`
                 : uploading
@@ -236,12 +241,15 @@ export function Composer(props: ComposerProps) {
                     : ""}
             </span>
 
+            {/* 一条竖线把"操作按钮"和"上下文下拉"分开：之前它们长得一样、挨得也近。 */}
+            <span className="mx-0.5 h-4 w-px shrink-0 bg-line" aria-hidden />
+
             {props.projects.length > 1 && (
               <select
                 value={props.projectId}
                 onChange={(event) => props.onProjectChange(event.target.value)}
-                title="项目"
-                className="max-w-[170px] truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
+                title={`项目：${props.projects.find((project) => project.id === props.projectId)?.name ?? ""}`}
+                className="max-w-[118px] min-w-[72px] shrink truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
               >
                 {props.projects.map((project) => (
                   <option key={project.id} value={project.id}>
@@ -265,7 +273,7 @@ export function Composer(props: ComposerProps) {
                   if (next) props.onActivateWorkspace(next);
                 }}
                 title={activeWorkspace ? "在哪个目录里干活" : "这个项目还没绑定目录"}
-                className={`max-w-[180px] truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] transition-colors hover:bg-surface-2 focus:outline-none ${
+                className={`max-w-[132px] min-w-[76px] shrink truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] transition-colors hover:bg-surface-2 focus:outline-none ${
                   activeWorkspace ? "text-muted" : "text-danger"
                 }`}
               >
@@ -306,7 +314,7 @@ export function Composer(props: ComposerProps) {
                 value={props.scenarioKey}
                 onChange={(event) => props.onScenarioChange(event.target.value)}
                 title={activeScenario?.summary || "场景"}
-                className="max-w-[130px] truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
+                className="max-w-[96px] min-w-[68px] shrink truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
               >
                 {props.scenarios.map((scenario) => (
                   <option key={scenario.key} value={scenario.key}>
@@ -316,52 +324,56 @@ export function Composer(props: ComposerProps) {
               </select>
             )}
 
-            {/* 记忆开关只在日常场景出现（§7.2）：开发场景连看都看不到。 */}
-            {activeScenario?.memoryAllowed && (
-              <button
-                type="button"
-                onClick={() => props.onMemoryOptInChange(!props.memoryOptIn)}
-                title={
-                  props.memoryOptIn
-                    ? "正在记住你的习惯，点一下改为不记住"
-                    : "点一下允许 AI 记住你的偏好（敏感信息不会记）"
-                }
-                className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
-                  props.memoryOptIn
-                    ? "border-brand/40 bg-brand/10 text-brand"
-                    : "border-line text-faint hover:bg-surface-2"
-                }`}
+            {/* 右边整组：偏好开关 + 模型 + 发送。整组不会被拆开，窄了就整体换到下一行靠右；
+                真窄到放不下时只让模型下拉变窄（它的名字本来就该截断），开关和发送保持原样，
+                免得再出现文字被压成竖排。 */}
+            <div className="ml-auto flex min-w-0 shrink items-center gap-1.5">
+              {/* 记忆开关只在日常场景出现（§7.2）：开发场景连看都看不到。 */}
+              {activeScenario?.memoryAllowed && (
+                <button
+                  type="button"
+                  onClick={() => props.onMemoryOptInChange(!props.memoryOptIn)}
+                  aria-pressed={props.memoryOptIn}
+                  title={
+                    props.memoryOptIn
+                      ? "正在记住你的习惯，点一下改为不记住"
+                      : "点一下允许 AI 记住你的偏好（敏感信息不会记）"
+                  }
+                  className={`shrink-0 rounded-full border px-2 py-1 text-[11px] whitespace-nowrap transition-colors ${
+                    props.memoryOptIn
+                      ? "border-brand/40 bg-brand/10 text-brand"
+                      : "border-line text-faint hover:bg-surface-2"
+                  }`}
+                >
+                  {props.memoryOptIn ? "记住习惯" : "不记住"}
+                </button>
+              )}
+
+              <select
+                value={props.providerId}
+                onChange={(event) => props.onProviderChange(event.target.value)}
+                title={activeProvider?.model ? `模型：${activeProvider.model}` : "用哪个模型"}
+                className="max-w-[168px] min-w-[72px] shrink truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
               >
-                {props.memoryOptIn ? "记住习惯" : "不记住"}
-              </button>
-            )}
+                <option value="">默认模型</option>
+                {props.providers.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                    {provider.model ? ` · ${provider.model}` : ""}
+                  </option>
+                ))}
+              </select>
 
-            <select
-              value={props.providerId}
-              onChange={(event) => props.onProviderChange(event.target.value)}
-              title="用哪个模型"
-              className="max-w-[220px] truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
-            >
-              <option value="">默认模型</option>
-              {props.providers.map((provider) => (
-                <option key={provider.id} value={provider.id}>
-                  {provider.name}
-                  {provider.model ? ` · ${provider.model}` : ""}
-                </option>
-              ))}
-            </select>
-
-            {/* 只有一个按钮：闲着是发送，跑着是停止。
-                以前跑着的时候是"停止 + 插话"两个圆钮并排，停止还从对话区再出一个文字按钮，
-                三处都能停，用户得先分清哪个是哪个。插话仍然可用——按回车就是，提示写在占位文案里。 */}
-            <div className="ml-auto flex items-center gap-2">
+              {/* 只有一个按钮：闲着是发送，跑着是停止。
+                  以前跑着的时候是"停止 + 插话"两个圆钮并排，停止还从对话区再出一个文字按钮，
+                  三处都能停，用户得先分清哪个是哪个。插话仍然可用——按回车就是，提示写在占位文案里。 */}
               <button
                 type="button"
                 onClick={action === "stop" ? props.onStop : props.onSend}
                 disabled={action === "disabled"}
                 title={action === "stop" ? "停止这一轮（想插一句话直接按 Enter）" : "发送（Enter）"}
                 aria-label={action === "stop" ? "停止这一轮" : "发送"}
-                className="grid size-9 place-items-center rounded-full bg-text text-bg transition-opacity hover:opacity-90 disabled:opacity-25"
+                className="grid size-9 shrink-0 place-items-center rounded-full bg-text text-bg transition-opacity hover:opacity-90 disabled:opacity-25"
               >
                 {action === "stop" ? (
                   <span className="size-2.5 rounded-[2px] bg-current" />
