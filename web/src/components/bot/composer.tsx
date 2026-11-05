@@ -399,8 +399,16 @@ export function Composer(props: ComposerProps) {
           )}
         </div>
 
+        {/* 场景的边界要写在用户看得见的地方（v164 §4.3）。
+            只在提示词里写"别改代码"等于没说：用户点开发送才发现做不了。 */}
         <p className="mt-2 text-center text-[11px] text-faint">
-          它会读你的代码、改文件、跑命令；高风险操作会先问你。
+          {activeScenario && !activeScenario.allowWrite
+            ? `「${activeScenario.label}」场景只读：不修改文件、不执行命令。要动手请切换到开发场景。`
+            : activeScenario && activeScenario.writeExtensions.length > 0
+              ? `「${activeScenario.label}」场景只能写 ${activeScenario.writeExtensions
+                  .slice(0, 4)
+                  .join(" / ")}${activeScenario.writeExtensions.length > 4 ? " 等文档" : ""}；改代码请切换到开发场景。`
+              : "它会读你的代码、改文件、跑命令；高风险操作会先问你。"}
         </p>
       </div>
     </div>

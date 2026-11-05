@@ -118,10 +118,28 @@ export function TaskPanel(props: TaskPanelProps) {
         <span className="text-[12.5px] font-medium">最新一轮</span>
         <span
           className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-            props.running ? "bg-brand/[0.08] text-brand" : props.status === "failed" ? "bg-danger/[0.08] text-danger" : "bg-surface-2 text-muted"
+            props.status === "waiting_approval"
+              ? "bg-warn/[0.12] text-warn"
+              : props.running
+                ? "bg-brand/[0.08] text-brand"
+                : props.status === "failed"
+                  ? "bg-danger/[0.08] text-danger"
+                  : "bg-surface-2 text-muted"
           }`}
         >
-          {props.running ? "进行中" : props.status === "failed" ? "失败" : props.status === "cancelled" ? "已停止" : "完成"}
+          {/* 等审批也要如实说：显示"进行中"会让人以为它在自己往下走，
+              实际是卡在一个等他点的按钮上。 */}
+          {props.status === "waiting_approval"
+            ? "等你批准"
+            : props.status === "paused"
+              ? "已暂停"
+              : props.running
+                ? "进行中"
+                : props.status === "failed"
+                  ? "失败"
+                  : props.status === "cancelled"
+                    ? "已停止"
+                    : "完成"}
         </span>
         <button
           type="button"

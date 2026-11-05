@@ -78,6 +78,7 @@ MEMORY_POLICIES = (MEMORY_OFF, MEMORY_READ_ONLY, MEMORY_OPT_IN_WRITE)
 DISPATCH_IMMEDIATE = "immediate"  # 现在就跑（问答类，跑完即交付）
 DISPATCH_QUEUE = "queue"  # 进后台队列，由 Worker 领取
 DISPATCH_DEFER = "defer"  # 等事件或到点再来（watch / schedule）
+SANDBOX_TIERS = ("off", "workspace", "workspace-net")
 DISPATCH_ASK = "ask_user"  # 先问清楚，不创建执行
 
 # ── 预算。步数按意图给，而不是所有人一个 200：纯问答给 200 步等于允许它把
@@ -185,6 +186,11 @@ class ExecutionSnapshot:
     memory_policy: str
     steps: tuple[str, ...] = ()
     risk_summary: str = ""
+    # 这一趟跑在哪个沙箱档位（off / workspace / workspace-net）。
+    #
+    # 写进快照是为了"固定"：档位决定命令能不能碰网络、能不能碰工作区外的路径，
+    # 它属于派发那一刻的决定。执行时另传一个更宽的档位不能把它顶掉（v164 §5.3）。
+    sandbox_tier: str = "workspace"
     needs_user_decision: bool = False
     budget: Budget = field(default_factory=Budget)
     # 审批永远是硬约束：快照里没有"关掉审批"这个取值，序列化时也不接受 False。
@@ -225,6 +231,7 @@ class ExecutionSnapshot:
             "memory_policy": self.memory_policy,
             "steps": list(self.steps),
             "risk_summary": self.risk_summary,
+            "sandbox_tier": self.sandbox_tier,
             "needs_user_decision": self.needs_user_decision,
             "budget": self.budget.as_dict(),
             "approval_required": self.approval_required,
@@ -248,6 +255,7 @@ class ExecutionSnapshot:
             "memory_policy": self.memory_policy,
             "steps": list(self.steps),
             "risk_summary": self.risk_summary,
+            "sandbox_tier": self.sandbox_tier,
             "needs_user_decision": self.needs_user_decision,
             "budget": self.budget.as_dict(),
             "approval_required": self.approval_required,
@@ -318,6 +326,7 @@ class ExecutionSnapshot:
             memory_policy=memory_policy,
             steps=_clean_steps(data.get("steps")),
             risk_summary=str(data.get("risk_summary") or "").strip()[:400],
+            sandbox_tier=_one_of(str(data.get("sandbox_tier") or "").strip().lower(), SANDBOX_TIERS, "workspace"),
             needs_user_decision=bool(data.get("needs_user_decision")),
             budget=budget,
             # 数据里写 False 也照样是 True：审批开关不属于快照的可配项。
@@ -450,6 +459,7 @@ def route(
     priority: str | None = None,
     steps: Iterable[str] | None = None,
     max_steps: int | None = None,
+    sandbox_tier: str = "workspace",
 ) -> ExecutionSnapshot:
     """生成一份执行快照。同样的入参永远得到同样的快照（含 id）。"""
     scenario_key = resolve_scenario(scenario).key
@@ -478,6 +488,7 @@ def route(
         memory_policy=_memory_policy(intent, scenario_key, memory_opt_in),
         steps=plan,
         risk_summary=risk_summary,
+        sandbox_tier=_one_of(str(sandbox_tier or "").strip().lower(), SANDBOX_TIERS, "workspace"),
         # 只有"先问人"才需要决策；执行类不需要在派发阶段就打断用户。
         needs_user_decision=intent == INTENT_ASK_USER,
         budget=budget,

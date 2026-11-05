@@ -23,6 +23,7 @@ from blank_api.services.agent.scenarios import (
     list_scenarios,
     resolve,
     system_prompt,
+    write_allowed,
 )
 
 from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
@@ -148,11 +149,13 @@ async def test_daily_scenario_hides_and_blocks_write_tools(env, workspace):  # n
     assert started["scenario"] == "daily"
     # 写类工具不进下发列表，模型从一开始就不该看见它。
     assert "apply_patch" not in started["tools"]
+    # v164：日常场景收到"动手"的请求时不再进工具循环赌模型不乱调，
+    # 而是在判完意图那一刻就给一句确定的回答，所以连一次 apply_patch 都不会有。
     calls = await env.tool_calls(task_id)
-    patch_rows = [row for row in calls if row.name == "apply_patch"]
-    assert patch_rows, "模型没有尝试调用 apply_patch（脚本失效）"
-    assert patch_rows[0].status == "denied"
-    assert "当前场景不允许" in (patch_rows[0].result_summary or "")
+    assert [row for row in calls if row.name == "apply_patch"] == []
+    row = await _task_row(task_id)
+    assert row.status == "succeeded"
+    assert "日常场景不会直接修改文件" in (row.result_summary or "")
 
 
 async def test_memory_write_only_visible_in_daily_with_opt_in(env, workspace):  # noqa: F811
@@ -241,7 +244,14 @@ def test_scenario_acceptance_matrix_followup153():
     assert not DEV.system_prompt
 
     # 文档：能落文档文件（allow_write 保持开），但提示词约束「先提纲、不重构代码」。
-    assert excluded_tools(DOCS) == frozenset({"memory_write"})
+    # v164：权限细化到文件类型——写文档要保留 apply_patch，跑命令/跑测试/git 拿掉，
+    # 因为它们能绕开扩展名限制改任何东西。
+    assert excluded_tools(DOCS) == frozenset({"memory_write", "run_shell", "run_tests", "git"})
+    assert "apply_patch" not in excluded_tools(DOCS)
+    assert write_allowed(DOCS, "README.md")
+    assert write_allowed(DOCS, "docs/guide.txt")
+    assert not write_allowed(DOCS, "src/main.py")
+    assert not write_allowed(DOCS, "package.json")
     assert "提纲" in DOCS.system_prompt
     assert "不做无关重构" in DOCS.system_prompt
 
@@ -257,7 +267,11 @@ def test_scenario_acceptance_matrix_followup153():
     assert "敏感事实" in system_prompt(DAILY, memory_opt_in=True)
 
     # 逆向实验室：读为主但结论要落分析笔记（保留写入），提示词强制证据与「未确认」标注。
-    assert excluded_tools(REVERSE) == frozenset({"memory_write"})
+    # v164：不跑项目测试、不提交、不跑 shell——这三件事都在改被分析的那个仓库；
+    # 写笔记走独立分析区（见 runtime 的 write_root 与网关的路径重定向）。
+    assert excluded_tools(REVERSE) == frozenset({"memory_write", "run_shell", "run_tests", "git"})
+    assert write_allowed(REVERSE, "analysis/report.md")
+    assert not write_allowed(REVERSE, "sample.exe")
     assert "证据" in REVERSE.system_prompt
     assert "未确认" in REVERSE.system_prompt
 

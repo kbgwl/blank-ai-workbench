@@ -9,6 +9,7 @@ import {
   decideApproval,
   errorCode,
   errorMessage,
+  fetchActiveTasks,
   fetchEvidence,
   fetchScenarios,
   fetchTask,
@@ -32,6 +33,7 @@ import { Composer } from "./composer";
 import { usableProviderId } from "./provider-choice";
 import { TaskPanel } from "./panel";
 import { Sidebar } from "./sidebar";
+import { backgroundTaskTarget, visibleBackgroundTasks } from "./background";
 import { TurnView } from "./turn";
 import { buildSteps, isTurnRunning, touchedFiles, turnReply } from "./turns";
 import {
@@ -100,6 +102,15 @@ function entryFor(file: File, kind: DraftAttachment["kind"], error: string): Dra
   };
 }
 
+/** 后台任务横幅上的状态词。比任务卡片的徽标更短，一行放得下。 */
+function activeTaskLabel(status: string): string {
+  if (status === "waiting_approval") return "等你批准";
+  if (status === "paused") return "已暂停";
+  if (status === "failed") return "失败";
+  if (status === "queued") return "排队中";
+  return "进行中";
+}
+
 export function BotApp() {
   const [boot, setBoot] = useState<{ projects: Project[]; providers: Provider[] } | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -114,6 +125,8 @@ export function BotApp() {
   const [threads, setThreads] = useState<Thread[] | null>(null);
   const [threadsError, setThreadsError] = useState<string | null>(null);
   const [threadsNonce, setThreadsNonce] = useState(0);
+  /** 后台任务：关窗后仍在跑的、停在审批上等人的、或者失败没处理的（v164 §2.4）。 */
+  const [activeTasks, setActiveTasks] = useState<Task[]>([]);
 
   const [conv, setConv] = useState<Conversation | null>(null);
   const [convError, setConvError] = useState<string | null>(null);
@@ -235,6 +248,33 @@ export function BotApp() {
       alive = false;
     };
   }, [projectId, threadsNonce]);
+
+  // ── 后台任务：关窗之后还在动的那几条 ───────────────────────────────
+  //
+  // 窗口关掉不代表任务结束，后端 worker 会继续跑；任务也可能卡在审批上等人。
+  // 界面每次打开都要重新问一遍"还有哪些没结束"，否则用户重开客户端看到的是
+  // 一片空，以为活丢了——而它其实还在后台改文件。
+  useEffect(() => {
+    if (!projectId) return;
+    let alive = true;
+    const pull = () =>
+      fetchActiveTasks(projectId)
+        .then((rows) => {
+          if (alive) setActiveTasks(rows);
+        })
+        // 读不到就不显示：这是恢复入口，不是首屏关键路径，不该弹错误打断用户。
+        .catch(() => undefined);
+    pull();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") pull();
+    }, 20000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+    // threadsNonce / activeTaskId：刚发出去一条、或换了一条时立刻刷新一次，
+    // 不等那 20 秒的轮询。
+  }, [projectId, threadsNonce, activeTaskId]);
 
   // ── 当前轮的事件流 ────────────────────────────────────────────────────
   const activeTurn = conv?.turns.find((turn) => turn.id === activeTaskId) ?? null;
@@ -362,6 +402,34 @@ export function BotApp() {
     const timer = setTimeout(() => openThread(target), 0);
     return () => clearTimeout(timer);
   }, [projectId, openThread]);
+
+  // ── 重开窗口后回到没结束的那一轮 ──────────────────────────────────────
+  //
+  // 关窗时任务还在跑，重开是一张白纸的话，用户只能从左侧几十条里猜是哪一条。
+  // 首屏没有指定会话时，自动打开最该被看到的那条：先等审批的（它正卡着等一个点击），
+  // 再在跑的，再暂停的。只做一次——用户随后自己切走，不该被反复拽回来。
+  const resumed = useRef(false);
+  useEffect(() => {
+    if (resumed.current || conv || activeTasks.length === 0) return;
+    let hasDeepLink = false;
+    try {
+      hasDeepLink = Boolean(new URLSearchParams(window.location.search).get("thread"));
+    } catch {
+      hasDeepLink = false;
+    }
+    if (hasDeepLink) return;
+    const rank = (status: string) =>
+      status === "waiting_approval" ? 0 : status === "running" ? 1 : status === "paused" ? 2 : 3;
+    const target = activeTasks
+      .filter((task) => task.threadId)
+      .sort((left, right) => rank(left.status) - rank(right.status))[0];
+    if (!target?.threadId) return;
+    resumed.current = true;
+    // 和上面的深链恢复同理：openThread 会同步置 loading，放到异步回调里，
+    // 避免 effect 里直接触发一次 setState（react-hooks/set-state-in-effect）。
+    const timer = setTimeout(() => openThread(target.threadId!), 0);
+    return () => clearTimeout(timer);
+  }, [activeTasks, conv, openThread]);
 
   const startNew = useCallback(() => {
     setConv(null);
@@ -781,6 +849,12 @@ export function BotApp() {
 
   const lastTurn = currentTurnView[currentTurnView.length - 1] ?? null;
   const activeEvidence = running ? evidence : null;
+  // 不在当前这条会话里的后台任务。正在看的那条不该在横幅里再报一遍。
+  // 没有 threadId 的历史孤儿任务**不能**被过滤掉：它们恰恰是最容易"关窗后找不到"
+  // 的那批，横幅是唯一的兜底入口（v164 §2.3）。它们点开走任务详情，不走会话。
+  const backgroundTasks = visibleBackgroundTasks(activeTasks, conv?.thread.id);
+  const topBackground = backgroundTasks[0] ?? null;
+  const backgroundTarget = topBackground ? backgroundTaskTarget(topBackground) : null;
 
   return (
     <div className="flex h-dvh overflow-hidden bg-bg">
@@ -820,6 +894,52 @@ export function BotApp() {
             </svg>
           </button>
         </header>
+
+        {/* 后台任务条：还有别的任务在动、或者在等人点，就在这里说一句。
+            关窗不等于结束——没有这条，用户重开只会看到当前会话，以为另一条没了。 */}
+        {topBackground && (
+          <div className="flex shrink-0 items-center gap-2 border-b border-line bg-warn/[0.05] px-4 py-1.5 text-[11.5px]">
+            <span
+              className={`size-1.5 shrink-0 rounded-full ${
+                topBackground.status === "waiting_approval" || topBackground.status === "paused"
+                  ? "bg-warn"
+                  : topBackground.status === "failed"
+                    ? "bg-danger"
+                    : "bg-brand"
+              }`}
+            />
+            <span className="shrink-0 text-faint">后台任务</span>
+            {backgroundTarget?.kind === "thread" ? (
+              <button
+                type="button"
+                onClick={() => openThread(backgroundTarget.threadId)}
+                title={topBackground.title}
+                className="min-w-0 flex-1 truncate text-left text-muted transition-colors hover:text-text"
+              >
+                {topBackground.title}
+              </button>
+            ) : (
+              <a
+                href={backgroundTarget?.href ?? "#"}
+                title="这条任务没有关联会话，打开任务详情看事件与证据"
+                className="min-w-0 flex-1 truncate text-left text-muted transition-colors hover:text-text"
+              >
+                {topBackground.title}
+                <span className="ml-1 text-faint">（无会话 · 打开任务详情）</span>
+              </a>
+            )}
+            <span
+              className={`shrink-0 ${
+                topBackground.status === "failed" ? "text-danger" : "text-warn"
+              }`}
+            >
+              {activeTaskLabel(topBackground.status)}
+            </span>
+            {backgroundTasks.length > 1 && (
+              <span className="shrink-0 text-faint">还有 {backgroundTasks.length - 1} 个</span>
+            )}
+          </div>
+        )}
 
         <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl px-4 py-6">

@@ -23,6 +23,7 @@ from blank_api.models.checkpoint import AgentCheckpoint, AgentCheckpointWrite
 from blank_api.models.model_provider import ModelUsage
 from blank_api.models.plan_template import PlanTemplate
 from blank_api.models.task import AgentEvent, FileChange, Task, ToolCall
+from blank_api.models.thread import Thread
 from blank_api.models.run import AgentRun
 from blank_api.models.trigger import AgentTrigger
 from blank_api.models.skill import Skill
@@ -254,10 +255,19 @@ async def _record_dispatch(db: DbSession, task: Task) -> None:
     if (task.dispatch_snapshot or {}).get("snapshot_id"):
         # 已有快照就不再覆盖：重复调用 persist 时重新路由会让"当时那份决定"漂移。
         return
+    # 沙箱档位也一起钉进快照：它是"这件事跑在哪"的决定，事后传参改不了它（v164 §5.3）。
+    # 读设置失败按默认档位走——比让整个任务建不出来更合理。
+    try:
+        default_tier = str(
+            (SettingsStore().read().get("sandbox") or {}).get("default_tier") or "workspace"
+        )
+    except Exception:  # noqa: BLE001 - 设置读不出来时按默认档位，不影响建任务
+        default_tier = "workspace"
     snapshot = route(
         task.goal or task.title,
         scenario=task.scenario or "dev",
         max_steps=int(task.max_steps or 0) or None,
+        sandbox_tier=default_tier,
     )
     task.dispatch_snapshot = snapshot.as_dict()
     await db.commit()
@@ -303,8 +313,34 @@ async def create_task(project_id: str, payload: TaskCreate, db: DbSession) -> Ta
             message="所选模型已不存在，请在输入框下方重新选择模型后再发送",
             status_code=400,
         )
-    task = await persist_task(db, project.id, payload)
+    # 独立任务也必须有一条可追溯的会话（v164 §2.3）。
+    #
+    # 以前这条路径建出来的任务 thread_id 恒为 null：关掉窗口再从会话列表回来时，
+    # 它在任何一条对话里都找不到，用户只能当它丢了。会话行和任务行在同一个事务里
+    # 提交（persist_task 里面的 commit 会把它一起写下去），任务建失败就一起回滚，
+    # 不会反过来留下一条点开是空的会话。
+    thread = Thread(
+        id=str(uuid.uuid4()),
+        project_id=project.id,
+        title=(payload.title or payload.goal or "新任务")[:80],
+        status="active",
+        turn_count=1,
+    )
+    db.add(thread)
+    task = await persist_task(db, project.id, payload, thread_id=thread.id, turn_index=1)
     return TaskOut.model_validate(task)
+
+
+# 「关窗之后还在动」的那几种状态。界面用它决定要不要给用户一个回来的入口：
+# 任务在后台继续跑，人却关掉窗口走了，重开时必须能重新找到它（v164 §2.3）。
+ACTIVE_TASK_STATUSES = (
+    "queued",
+    "running",
+    "waiting_approval",
+    "paused",
+    "failed",
+    "interrupted",
+)
 
 
 @router.get("/tasks", response_model=list[TaskOut])
@@ -312,13 +348,24 @@ async def list_tasks(
     db: DbSession,
     project_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    active: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[TaskOut]:
+    """任务列表。
+
+    ``active=true`` 是给「后台任务」入口用的：只回还在进行或停下来等人处理的，
+    不夹带一堆早就结束的历史任务。``status`` 支持逗号分隔多值——
+    前端要一次问「running + waiting_approval + paused」，不该发三次请求。
+    """
     stmt = select(Task).order_by(Task.created_at.desc()).limit(limit)
     if project_id:
         stmt = stmt.where(Task.project_id == project_id)
-    if status:
-        stmt = stmt.where(Task.status == status)
+    if active:
+        stmt = stmt.where(Task.status.in_(ACTIVE_TASK_STATUSES))
+    elif status:
+        wanted = [item.strip() for item in status.split(",") if item.strip()]
+        if wanted:
+            stmt = stmt.where(Task.status.in_(wanted))
     return [TaskOut.model_validate(task) for task in (await db.execute(stmt)).scalars()]
 
 
@@ -1665,6 +1712,13 @@ async def task_status(task_id: str, db: DbSession) -> dict:
     )
     return {
         "task_id": task.id,
+        "title": task.title,
+        "project_id": task.project_id,
+        # 会话归属：关窗、换设备、从任务列表点回来都靠它把用户送回原来那条对话。
+        # 历史任务可能没有（thread 被删过），显式给 null，前端走孤儿任务兜底。
+        "conversation_id": task.thread_id or None,
+        "turn_index": int(task.turn_index or 0),
+        "updated_at": _iso_or_none(task.updated_at),
         "run_id": run.id if run is not None else None,
         "trigger_id": trigger.id if trigger is not None else None,
         "worker_id": (run.worker_id or None) if run is not None else None,

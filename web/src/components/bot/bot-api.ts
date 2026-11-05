@@ -159,7 +159,18 @@ export async function sendMessage(input: {
     });
   } catch (error) {
     // 刚建的空会话要收掉：否则用户点一次发送失败，左侧就多一条点开没内容的会话。
-    if (fresh) await archiveThread(thread.id).catch(() => undefined);
+    //
+    // 但不能闭着眼睛收：createTurn 抛错只说明"这次调用没拿到结果"，不说明服务端
+    // 没写进去。请求发出去之后连接被掐（关窗口、切网络、桌面壳退出）时任务往往
+    // 已经建好了，这时再归档会话，就等于把一条正在后台跑的任务从列表里删掉——
+    // 重开窗口找不到它，但它在后台还在动（v164 §2.2 的现场）。
+    // 所以先读一次：确认这一轮真的没建出来（turns 为空）才收；读不到就留着。
+    if (fresh) {
+      const detail = await fetchThread(thread.id).catch(() => null);
+      if (detail !== null && detail.turns.length === 0) {
+        await archiveThread(thread.id).catch(() => undefined);
+      }
+    }
     throw error;
   }
 

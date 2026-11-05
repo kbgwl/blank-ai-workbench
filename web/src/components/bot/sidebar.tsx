@@ -374,7 +374,7 @@ function ThreadMenuItem(props: {
  *
  * 以前是三个图标并排在行尾：吃掉窄侧栏近 70px 的标题宽度，而且只在悬停时
  * `display:flex`——`display:none` 的元素不能聚焦，键盘用户永远够不着这两个操作。
- * 现在常驻一个可聚焦的「⋯」（不悬停时透明，聚焦或悬停才显形），操作收进菜单里。
+ * 现在常驻一个可聚焦的「⋯」（平时淡显，悬停或聚焦时满色），操作收进菜单里。
  *
  * 菜单用 portal 挂到 body：侧栏列表是 `overflow-y-auto`，挂在行内的绝对定位菜单
  * 会被容器裁掉，越靠近底部的行越明显。
@@ -463,8 +463,10 @@ function ThreadMenu(props: {
           if (!open) place();
           setOpen(!open);
         }}
-        className={`absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded text-faint transition-opacity hover:bg-surface-3 hover:text-text focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-brand/40 focus-visible:outline-none group-hover/item:opacity-100 group-focus-within/item:opacity-100 ${
-          open ? "bg-surface-3 text-text opacity-100" : "opacity-0"
+        className={`absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded text-muted transition-opacity hover:bg-surface-3 hover:text-text focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-brand/40 focus-visible:outline-none group-hover/item:opacity-100 group-focus-within/item:opacity-100 ${
+          // 常驻半透明：之前默认 opacity-0，用户不把鼠标移到行尾就永远看不见这个入口，
+          // 反馈是「改了吗，在哪儿」。现在平时淡显（hover 才满色），一眼能找到。
+          open ? "bg-surface-3 text-text opacity-100" : "opacity-55"
         }`}
       >
         <svg viewBox="0 0 24 24" fill="currentColor" className="size-3.5" aria-hidden>

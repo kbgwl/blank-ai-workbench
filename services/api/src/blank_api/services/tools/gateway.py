@@ -7,6 +7,8 @@ import logging
 import time
 import uuid
 from collections.abc import Iterable, Sequence
+from dataclasses import replace as dc_replace
+from pathlib import Path, PurePosixPath
 
 from blank_api.api.errors import ApiError
 from blank_api.models.task import ToolCall
@@ -14,6 +16,8 @@ from blank_api.services.log_safety import redact
 from blank_api.services import metrics
 from blank_api.services.models.base import ToolSpecLite
 from blank_api.services.agent.artifacts import ArtifactStore
+from blank_api.services.agent.scenarios import resolve as resolve_scenario
+from blank_api.services.agent.scenarios import write_allowed
 from blank_api.services.permissions import (
     ASK,
     DENY,
@@ -229,6 +233,47 @@ def _audit(
         log.warning("审计日志写入失败（本次调用结果不受影响）：%s %s", exc.__class__.__name__, exc)
 
 
+# 带文件路径参数的写类工具。只有它们需要按后缀判场景权限：
+# run_shell / run_tests / git 能不能用是"整件工具准不准"的问题，在 excluded 里解决，
+# 它们没有"改哪个文件"这个参数可判。
+PATH_WRITE_TOOLS = frozenset({"apply_patch"})
+
+
+def _write_target(name: str, arguments: dict) -> str:
+    """取出这次写入要落到哪个相对路径。
+
+    apply_patch 的路径可以省略（模型经常只写补丁头），这时从 ``+++ b/x`` 推断——
+    否则"省略路径"就成了绕过扩展名检查的口子。
+    """
+    if name == "apply_patch":
+        explicit = str(arguments.get("path") or "").strip()
+        if explicit:
+            return explicit
+        try:
+            from blank_api.services.tools.patch import infer_path
+
+            return infer_path(str(arguments.get("patch") or "")).strip()
+        except Exception:  # noqa: BLE001 - 推断失败就当没有路径，交给工具自身报错
+            return ""
+    return str(arguments.get("path") or "").strip()
+
+
+def _analysis_relative(relative: str) -> str:
+    """把模型写的路径压成分析区里的相对路径。
+
+    模型可能给绝对路径、带盘符、或想用 ``../`` 往外爬。这里只保留"向下的"部分：
+    分析区是它唯一的写根，爬出去没有去处。清空时给一个默认文件名，
+    至少不会因为路径为空而整次调用失败。
+    """
+    raw = str(relative or "").replace("\\", "/")
+    parts = [
+        part
+        for part in PurePosixPath(raw).parts
+        if part not in ("", ".", "..", "/") and not part.endswith(":")
+    ]
+    return str(PurePosixPath(*parts)) if parts else "note.md"
+
+
 class ToolGateway:
     def __init__(
         self,
@@ -236,8 +281,18 @@ class ToolGateway:
         *,
         defer: bool = True,
         excluded: Iterable[str] = (),
+        scenario: str = "dev",
+        write_root: Path | None = None,
     ) -> None:
         self.tools: dict[str, ToolDefinition] = {tool.name: tool for tool in tools}
+        # 场景对象：写类工具还要按文件类型再过一道（文档场景只能写 .md 这一档）。
+        # 传 key 而不是对象，是为了让"这次按哪个场景装"在调用处一眼可见。
+        self.scenario = resolve_scenario(scenario)
+        # 写根与读根分离：逆向场景读原始样本，但所有派生文件落到独立分析区，
+        # 被分析的那个仓库 diff 保持为空（v164 §5）。
+        self.write_root = write_root
+        # 场景的文件类型白名单只在"这个场景确实能写"时才有意义；
+        # 只读场景已经在 excluded 里把写工具拿掉了，走不到这里。
         # 并发执行只读工具时，多条 _record 会同时落库。SQLite 的连接池本身有 30s
         # 锁等待兜底，但内存库用 StaticPool 只有一个连接，并发拿同一个连接会直接
         # 抛错——这类失败偶发且难复现，用一把锁把写库这一段串起来最省心。
@@ -286,6 +341,15 @@ class ToolGateway:
             name, arguments, outcome, context, node, risk, time.perf_counter(), approve(risk, rule)
         )
 
+    def _path_allowed(self, name: str, arguments: dict) -> bool:
+        """这次写入的目标文件在不在本场景的白名单里。
+
+        取不到路径就放行：这里只回答"后缀对不对"，路径越界由工具自身的工作区
+        校验和审批链去拦。两件事混在一起判，会把"我推断不出路径"变成"你没有权限"。
+        """
+        target = _write_target(name, arguments)
+        return write_allowed(self.scenario, target) if target else True
+
     async def execute(self, name: str, arguments: dict, context: ToolContext, node: str = "") -> dict:
         started = time.perf_counter()
         if name in self.excluded:
@@ -306,6 +370,37 @@ class ToolGateway:
                 started,
                 deny(risk, "scenario_excluded", outcome.message),
             )
+        # 场景的文件类型闸门：文档场景能写 .md，不能写 .py（v164 §4）。
+        #
+        # 放在工具分发之前、审批之前：这类拒绝是"这个场景根本不允许"，不是"这次没批"。
+        # 走审批会让用户以为点同意就能改代码——点了也不会过，因为下一层还是拒。
+        if name in PATH_WRITE_TOOLS and not self._path_allowed(name, arguments):
+            risk = self.tools[name].resolve_risk(arguments) if name in self.tools else "high"
+            allowed = self.scenario.write_extensions
+            hint = "、".join(sorted(allowed)) if allowed else ""
+            message = (
+                f"「{self.scenario.label}」场景只能写入 {hint} 这类文档文件，"
+                f"不能改 {_write_target(name, arguments) or '这个文件'}。"
+                "要改代码请切换到开发场景。"
+            )
+            return await self._finish(
+                name,
+                arguments,
+                ToolOutcome(ok=False, status="denied", message=message),
+                context,
+                node,
+                risk,
+                started,
+                deny(risk, "scenario_path_blocked", message),
+            )
+        # 逆向场景：读原始样本，写落到独立分析区（v164 §5）。
+        # 重写的是"这次调用用的根"，不是提示词里的一句叮嘱——路径越界由工具自身的
+        # 工作区校验兜住，所以必须把 context.root 一起换掉，只改参数是能绕过的。
+        if self.write_root is not None and name in PATH_WRITE_TOOLS:
+            target = _write_target(name, arguments)
+            if target:
+                arguments = {**arguments, "path": _analysis_relative(target)}
+                context = dc_replace(context, root=self.write_root)
         tool = self.tools.get(name)
         if tool is None:
             risk = "high"

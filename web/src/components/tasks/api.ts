@@ -1731,6 +1731,8 @@ export type ScenarioInfo = {
   allowWrite: boolean;
   memoryAllowed: boolean;
   inputHint: string;
+  /** 这个场景能落盘的文件扩展名；空数组 = 不按类型限制（开发场景）。 */
+  writeExtensions: string[];
 };
 
 export function fetchScenarios(): Promise<ScenarioInfo[]> {
@@ -1748,6 +1750,9 @@ export function fetchScenarios(): Promise<ScenarioInfo[]> {
           allowWrite: boolOf(raw, "allow_write") ?? true,
           memoryAllowed: boolOf(raw, "memory_allowed") ?? false,
           inputHint: textOf(raw, "input_hint"),
+          writeExtensions: Array.isArray(raw.write_extensions)
+            ? raw.write_extensions.map((item) => String(item)).filter(Boolean)
+            : [],
         } satisfies ScenarioInfo;
       })
       .filter((item): item is ScenarioInfo => item !== null),
@@ -1757,6 +1762,21 @@ export function fetchScenarios(): Promise<ScenarioInfo[]> {
 export function fetchTasks(projectId?: string): Promise<Task[]> {
   const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
   return request<unknown>(`${api}/tasks${query}`, { cache: "no-store" }).then((body) =>
+    normalizeTasks(body),
+  );
+}
+
+/**
+ * 还在动、或者在等人处理的任务。
+ *
+ * 关掉窗口不等于结束任务：worker 仍在后台跑，任务可能停在一个审批上等人点。
+ * 启动时问一次这个接口，界面才有东西可显示给「我刚才那条去哪了」。
+ * 只取未完成的几种状态，不夹带历史任务——否则横幅会一直挂着几十条旧账。
+ */
+export function fetchActiveTasks(projectId?: string): Promise<Task[]> {
+  const params = new URLSearchParams({ active: "true", limit: "20" });
+  if (projectId) params.set("project_id", projectId);
+  return request<unknown>(`${api}/tasks?${params.toString()}`, { cache: "no-store" }).then((body) =>
     normalizeTasks(body),
   );
 }

@@ -203,6 +203,21 @@ function main() {
   if (doApi) {
     console.log("\n同步后端源码");
     syncTree(API_SRC, path.join(dir, "resources", "backend", "api", "src", "blank_api"), "后端");
+    // 迁移要和源码一起同步。
+    //
+    // 只同步 src 会留下一种很难查的安装版：代码里认识某个列，库里没有；客户端启动时
+    // 跑 `alembic upgrade head`，但包里根本没有那条迁移，于是"升级成功"却停在旧版本。
+    // 之后任何查这张表的接口都 500，用户看到的是"任务不见了"——v164 §2 的现场就是这个。
+    const migrations = path.join(ROOT, "services", "api", "alembic");
+    syncTree(
+      path.join(migrations, "versions"),
+      path.join(dir, "resources", "backend", "api", "alembic", "versions"),
+      "数据库迁移",
+    );
+    const ini = path.join(ROOT, "services", "api", "alembic.ini");
+    if (!dryRun && fs.existsSync(ini)) {
+      fs.copyFileSync(ini, path.join(dir, "resources", "backend", "api", "alembic.ini"));
+    }
   }
 
   if (doWeb) {

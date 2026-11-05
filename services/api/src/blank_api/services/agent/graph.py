@@ -30,6 +30,11 @@ from blank_api.limits import (
 )
 from blank_api.services.agent.artifacts import ArtifactStore
 from blank_api.services.agent.events import EventRecorder
+from blank_api.services.agent.scenarios import (
+    REFUSAL_TEXT,
+    needs_write,
+    resolve as resolve_scenario,
+)
 from blank_api.services.agent import governance
 from blank_api.services.agent.live import OutputRelay
 from blank_api.services.agent.stall import StallBreaker, signature as _stall_signature
@@ -311,6 +316,12 @@ class AgentSession:
     # 本任务的沙箱档位（off / workspace / workspace-net）。审批模式与它正交：
     # 这里回答"跑在哪"，permissions.mode 回答"问不问"。两者都进 turn.context。
     sandbox_tier: str = "workspace"
+    # 场景 key（dev / docs / daily / brainstorm / reverse）。
+    #
+    # 执行期需要它做两件事：只读场景收到"动手"的请求时要给出明确回答（而不是让模型
+    # 拿着空工具表自由发挥、把上一轮的结果再讲一遍），逆向场景要把写入重定向到分析区。
+    # 工具可见性那层已经由注册表与网关管住，这里是语义层。
+    scenario: str = "dev"
     is_cancelled: Callable[[], Awaitable[bool]] = _never_cancelled
     # 当前任务状态（cancelled / paused / running …）。取消与暂停是两种语义：
     # 前者是终态，后者只是"停下等人"，恢复后还要接着跑。只有 is_cancelled 一个
@@ -1615,6 +1626,57 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
         {"intent": intent, "note": (parsed.get("note") or goal)[:120], "steps": steps[:8]},
     )
     usage = merge_usage(state.get("usage") or {}, result["usage"])
+
+    # 只读场景收到"要动手"的请求：明确说不做，并指路（v164 §3.2）。
+    #
+    # 写工具已经被场景禁掉了，但"模型看不见工具"不等于"用户知道为什么"。
+    # 它手里没有能用的东西，就会顺着上文把上一轮的结果再讲一遍——用户看到的是
+    # 答非所问，还以为模型坏了。这种情况不该交给模型自由发挥，直接给一句确定的话。
+    # 老测试里的 _Session 是鸭子类型的替身，没有这个字段；真实 AgentSession 一定有。
+    # 拿不到就按开发场景走，别让一个替身把整条判定链打断。
+    scenario_obj = resolve_scenario(getattr(session, "scenario", "dev"))
+    if intent == INTENT_ACT and not scenario_obj.allow_write:
+        refusal = REFUSAL_TEXT.get(scenario_obj.key, "")
+        if refusal and needs_write(raw_goal):
+            await session.recorder.add(
+                "scenario.refused",
+                node,
+                {
+                    "scenario": scenario_obj.key,
+                    "intent": intent,
+                    "reason": "readonly_scenario",
+                    "goal": raw_goal[:200],
+                },
+            )
+            return {
+                "messages": result["messages"],
+                "plan": [],
+                "plan_steps": [],
+                "summary": refusal,
+                "usage": usage,
+                "pending": [],
+                "status": "running",
+                "direct_answer": True,
+            }
+        # 只读能做完的（看代码、查文件、讲思路、记一条偏好）：继续做，不整句拒掉。
+        #
+        # 这里**不**把整轮切成 readonly 工具集：写工具已由 excluded_tools 按场景摘掉，
+        # 网关还有一层硬拒；而 memory_write 记的是用户偏好、不是工作区文件，
+        # 一刀切会把「日常场景 + 选了记住」也砍掉（v164 全量回归里实测到的回归）。
+        # 只保留步数上限：工具被禁之后别让模型空转到预算烧完。
+        if session.max_steps > READONLY_MAX_STEPS:
+            session.max_steps = min(session.max_steps, READONLY_MAX_STEPS)
+            await session.recorder.add(
+                "scenario.readonly_budget",
+                node,
+                {
+                    "reason": f"{scenario_obj.label}场景不动工作区，收紧步数但不收紧记忆工具",
+                    "max_steps": session.max_steps,
+                    "steps": steps[:8],
+                },
+            )
+        if not steps:
+            steps = ["查看相关文件"]
 
     if intent == INTENT_ANSWER:
         text = normalize_answer(answer) or normalize_answer(result["text"])

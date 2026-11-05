@@ -229,7 +229,10 @@ async def test_model_writes_a_typed_memory_and_finds_it_with_source(
     monkeypatch.setenv("BLANK_MEMORY_DIR", str(memory_dir))
     project_id = await create_project(env, workspace)
     provider_id = await create_provider(env)
-    task_id = await create_task(env, project_id, ["记住这条偏好"])
+    # 明确给出目标：夹具默认是「修改 main.py 并运行测试」，而 v164 起日常场景
+    # 按用户原话判定"要不要动工作区"，那句话会被正确地拒掉。这条用例验的是
+    # 记忆工具本身，不是拒绝逻辑，目标就得写成用例真正要做的那件事。
+    task_id = await create_task(env, project_id, ["记住这条偏好"], goal="记住这条偏好")
 
     env.mock.reset(
         [
@@ -276,7 +279,7 @@ async def test_model_writes_a_typed_memory_and_finds_it_with_source(
     assert "来源 用户原话" in text
 
     # 换一个任务再写同一句：账本上仍只有一笔。
-    second = await create_task(env, project_id, ["再说一遍"])
+    second = await create_task(env, project_id, ["再说一遍"], goal="再说一遍")
     env.mock.reset(
         [
             {"content": "执行计划：\n1. 再记一次"},

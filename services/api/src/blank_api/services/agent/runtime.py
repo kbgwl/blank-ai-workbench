@@ -432,7 +432,11 @@ class AgentRuntime:
         settings = SettingsStore().read()
         # 档位在装配层解析一次：网关、工具上下文、子代理与治理快照读的是同一份结果。
         # 不可用就整任务拒绝——不让它有"先跑起来再说"的机会。
-        requested_tier = request.sandbox_tier or str(
+        #
+        # 快照里的档位优先：它是派发那一刻定下的"这件事跑在哪"。执行时另传一个更宽的
+        # 档位不能把它顶掉，否则"沙箱档位固定"只是句口号（v164 §5.3）。
+        pinned_tier = str((request.dispatch or {}).get("sandbox_tier") or "").strip()
+        requested_tier = pinned_tier or request.sandbox_tier or str(
             (settings.get("sandbox") or {}).get("default_tier") or ""
         )
         try:
@@ -468,7 +472,25 @@ class AgentRuntime:
         # 不向用户 prompt 拼前缀。被禁工具在注册表里消失、在网关执行处硬拦。
         scenario = resolve_scenario(request.scenario)
         scenario_excluded = excluded_tools(scenario, memory_opt_in=request.memory_opt_in)
-        gateway = ToolGateway(tools, defer=tool_search_enabled, excluded=scenario_excluded)
+        # 逆向场景：读根仍是用户的工作区（样本在那儿），写根切到独立分析区。
+        # 这一层不写在提示词里——提示词只是"别改原文"的建议，换写入根才是约束（v164 §5）。
+        write_root = None
+        if scenario.key == "reverse":
+            from blank_api.services.agent.analysis import analysis_root
+
+            write_root = analysis_root(request.task_id)
+            await recorder.add(
+                "analysis.workspace",
+                "receive_task",
+                {"root": str(write_root), "readonly_source": str(request.root)},
+            )
+        gateway = ToolGateway(
+            tools,
+            defer=tool_search_enabled,
+            excluded=scenario_excluded,
+            scenario=scenario.key,
+            write_root=write_root,
+        )
         gateway.registry.exclude(scenario_excluded)
         allowed = set(request.approved_tools or set())
         approved_actions = set(request.approved_actions or set())
@@ -582,6 +604,9 @@ class AgentRuntime:
             shell=shell,
             instruction_layers=layers,
             sandbox_tier=sandbox.tier,
+            # 场景 key：执行期还要用它做两件事——只读场景收到"动手"请求时给明确回答，
+            # 逆向场景把写入重定向到独立分析区。
+            scenario=scenario.key,
         )
         subagents.bind(session)
         graph = build_agent_graph(session, SqlAlchemyCheckpointSaver(store))

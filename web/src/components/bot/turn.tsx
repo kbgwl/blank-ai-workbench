@@ -34,6 +34,26 @@ function timeLabel(value: string): string {
 }
 
 function StatusChip({ status, running }: { status: string; running: boolean }) {
+  // 「等你批准」必须排在「进行中」前面。
+  //
+  // isTurnRunning 把 waiting_approval 也算"还在跑"（这没错——这一轮确实没结束，
+  // 输入框该显示停止按钮）。但徽标先判 running 的话，等审批的任务永远显示
+  // "进行中"：关掉窗口再打开的人看到的是一个在动的任务，不知道卡在等他点一下。
+  if (status === "waiting_approval") {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-warn/[0.12] px-2 py-0.5 text-[10.5px] font-medium text-warn">
+        <span className="size-1.5 rounded-full bg-warn" />
+        等你批准
+      </span>
+    );
+  }
+  if (status === "paused") {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2 py-0.5 text-[10.5px] font-medium text-muted">
+        已暂停
+      </span>
+    );
+  }
   if (running) {
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-brand/[0.08] px-2 py-0.5 text-[10.5px] font-medium text-brand">
@@ -44,9 +64,6 @@ function StatusChip({ status, running }: { status: string; running: boolean }) {
         进行中
       </span>
     );
-  }
-  if (status === "waiting_approval") {
-    return <span className="rounded-full bg-warn/[0.1] px-2 py-0.5 text-[10.5px] font-medium text-warn">等你批准</span>;
   }
   if (status === "failed" || status === "error") {
     return <span className="rounded-full bg-danger/[0.08] px-2 py-0.5 text-[10.5px] font-medium text-danger">失败</span>;
