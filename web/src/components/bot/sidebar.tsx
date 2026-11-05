@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { Thread } from "../tasks/api";
 import { isNavActive, NAV_ITEMS, TURN_TONE_LABEL, turnTone, type NavId } from "./nav";
 import { dayBucket } from "./turns";
@@ -274,7 +275,7 @@ export function Sidebar(props: SidebarProps) {
                     <button
                       type="button"
                       onClick={() => props.onSelect(thread.id)}
-                      className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 pr-7 text-left transition-colors ${
+                      className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 pr-8 text-left transition-colors ${
                         active ? "bg-surface-3 text-text" : "text-muted hover:bg-surface-2 hover:text-text"
                       }`}
                     >
@@ -284,62 +285,15 @@ export function Sidebar(props: SidebarProps) {
                         <span className="shrink-0 font-mono text-[9.5px] text-faint">{thread.turnCount}</span>
                       )}
                     </button>
-                    {/* 悬停操作条：以前是三个图标直接浮在标题上，标题从图标缝里透出来像乱码。
-                        现在垫一层与行底色一致的遮罩：右 68% 实色盖住图标区，左边一段渐变淡出，
-                        被盖住的半个字顺着渐变消失，读起来是"标题在这里截断"而不是"字被压住"。
-                        渐变用行内样式写死色值和停点——Tailwind 的 from-55% 停点落在图标中间，
-                        会让最左边那个图标压在文字上。 */}
-                    <div
-                      className="absolute inset-y-0 right-0 hidden items-center gap-0.5 rounded-r-lg pr-1 pl-9 group-hover/item:flex"
-                      style={{
-                        backgroundImage: `linear-gradient(to left, var(${
-                          active ? "--surface-3" : "--surface-2"
-                        }) 68%, transparent 100%)`,
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          props.onRename(thread);
-                        }}
-                        title="重命名"
-                        aria-label={`重命名「${thread.title}」`}
-                        className="rounded p-1 text-faint transition-colors hover:bg-surface-3 hover:text-text"
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3" aria-hidden>
-                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          props.onArchive(thread);
-                        }}
-                        title="归档这条对话"
-                        aria-label={`归档「${thread.title}」`}
-                        className="rounded p-1 text-faint transition-colors hover:bg-surface-3 hover:text-text"
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3" aria-hidden>
-                          <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          props.onDelete(thread);
-                        }}
-                        title="删除对话（不可恢复）"
-                        aria-label={`删除「${thread.title}」`}
-                        className="rounded p-1 text-faint transition-colors hover:bg-surface-3 hover:text-danger"
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3" aria-hidden>
-                          <path d="M3 6h18M8 6V4h8v3M6 6l1 14h10l1-14M10 11v6M14 11v6" />
-                        </svg>
-                      </button>
-                    </div>
+                    {/* 操作收进一个「⋯」：三个图标并排会吃掉窄侧栏一截标题，而且它们
+                        只在悬停时 display:flex，键盘根本 Tab 不到。菜单本身挂到 body 上，
+                        侧栏列表是 overflow-y-auto，挂在行里会被裁掉半截。 */}
+                    <ThreadMenu
+                      thread={thread}
+                      onRename={props.onRename}
+                      onArchive={props.onArchive}
+                      onDelete={props.onDelete}
+                    />
                   </div>
                 );
               })}
@@ -388,5 +342,183 @@ export function Sidebar(props: SidebarProps) {
         <p className="px-2 pt-1 font-mono text-[9.5px] text-faint">空白格 bot</p>
       </div>
     </aside>
+  );
+}
+
+/** 菜单里的一项。图标 + 文字，danger 只用在删除上。 */
+function ThreadMenuItem(props: {
+  onPick: () => void;
+  danger?: boolean;
+  icon: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={props.onPick}
+      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors focus:outline-none ${
+        props.danger
+          ? "text-danger hover:bg-danger/10 focus:bg-danger/10"
+          : "text-muted hover:bg-surface-2 hover:text-text focus:bg-surface-2 focus:text-text"
+      }`}
+    >
+      <span className="shrink-0">{props.icon}</span>
+      {props.children}
+    </button>
+  );
+}
+
+/**
+ * 一条对话的「⋯」菜单。
+ *
+ * 以前是三个图标并排在行尾：吃掉窄侧栏近 70px 的标题宽度，而且只在悬停时
+ * `display:flex`——`display:none` 的元素不能聚焦，键盘用户永远够不着这两个操作。
+ * 现在常驻一个可聚焦的「⋯」（不悬停时透明，聚焦或悬停才显形），操作收进菜单里。
+ *
+ * 菜单用 portal 挂到 body：侧栏列表是 `overflow-y-auto`，挂在行内的绝对定位菜单
+ * 会被容器裁掉，越靠近底部的行越明显。
+ */
+function ThreadMenu(props: {
+  thread: Thread;
+  onRename: (thread: Thread) => void;
+  onArchive: (thread: Thread) => void;
+  onDelete: (thread: Thread) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState({ left: 0, top: 0 });
+  const trigger = useRef<HTMLButtonElement | null>(null);
+  const menu = useRef<HTMLDivElement | null>(null);
+
+  // 三项 + 内边距约 118px：只用来判断向下放得下还是得往上翻，不需要精确。
+  const MENU_W = 132;
+  const MENU_H = 118;
+
+  function place() {
+    const rect = trigger.current?.getBoundingClientRect();
+    if (!rect) return;
+    const left = Math.min(Math.max(8, rect.right - MENU_W), window.innerWidth - MENU_W - 8);
+    const below = rect.bottom + 6;
+    const top = below + MENU_H > window.innerHeight - 8 ? Math.max(8, rect.top - MENU_H - 6) : below;
+    setAt({ left, top });
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (menu.current?.contains(target) || trigger.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        trigger.current?.focus();
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const items = [...(menu.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+      if (items.length === 0) return;
+      event.preventDefault();
+      const index = items.indexOf(document.activeElement as HTMLButtonElement);
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      items[(index + step + items.length) % items.length].focus();
+    };
+    // 菜单是 fixed 定位，列表一滚就挂错位置；直接关掉比跟着跑更不容易出错。
+    const onAway = () => setOpen(false);
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("keydown", onKey, true);
+    window.addEventListener("resize", onAway);
+    window.addEventListener("scroll", onAway, true);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("resize", onAway);
+      window.removeEventListener("scroll", onAway, true);
+    };
+  }, [open]);
+
+  // 打开后把焦点交给第一项：鼠标用户看不到焦点环（程序化聚焦不算 :focus-visible），
+  // 键盘用户则可以直接用上下键选，不用再 Tab 一次。
+  useEffect(() => {
+    if (open) menu.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [open]);
+
+  const pick = (action: (thread: Thread) => void) => {
+    setOpen(false);
+    action(props.thread);
+  };
+
+  return (
+    <>
+      <button
+        ref={trigger}
+        type="button"
+        title="重命名、归档或删除这条对话"
+        aria-label={`「${props.thread.title}」的更多操作`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (!open) place();
+          setOpen(!open);
+        }}
+        className={`absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded text-faint transition-opacity hover:bg-surface-3 hover:text-text focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-brand/40 focus-visible:outline-none group-hover/item:opacity-100 group-focus-within/item:opacity-100 ${
+          open ? "bg-surface-3 text-text opacity-100" : "opacity-0"
+        }`}
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor" className="size-3.5" aria-hidden>
+          <circle cx="5" cy="12" r="1.6" />
+          <circle cx="12" cy="12" r="1.6" />
+          <circle cx="19" cy="12" r="1.6" />
+        </svg>
+      </button>
+
+      {open &&
+        createPortal(
+          <div
+            ref={menu}
+            role="menu"
+            aria-label={`「${props.thread.title}」的操作`}
+            style={{ left: at.left, top: at.top, width: MENU_W }}
+            className="fixed z-50 rounded-lg border border-line bg-surface p-1 shadow-[0_10px_28px_-12px_rgba(16,24,40,0.35)]"
+          >
+            <ThreadMenuItem
+              onPick={() => pick(props.onRename)}
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3.5" aria-hidden>
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                </svg>
+              }
+            >
+              重命名
+            </ThreadMenuItem>
+            <ThreadMenuItem
+              onPick={() => pick(props.onArchive)}
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3.5" aria-hidden>
+                  <path d="M3 8h18v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8Z" />
+                  <path d="M2 4h20v4H2zM9.5 12h5" />
+                </svg>
+              }
+            >
+              归档
+            </ThreadMenuItem>
+            <ThreadMenuItem
+              danger
+              onPick={() => pick(props.onDelete)}
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3.5" aria-hidden>
+                  <path d="M3 6h18M8 6V4h8v3M6 6l1 14h10l1-14M10 11v6M14 11v6" />
+                </svg>
+              }
+            >
+              删除
+            </ThreadMenuItem>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
