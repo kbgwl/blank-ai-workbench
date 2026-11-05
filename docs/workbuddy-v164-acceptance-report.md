@@ -238,7 +238,17 @@ curl http://127.0.0.1:3071/                → HTTP 200
 
 ## 10. Commit / Tag / 工作区状态
 
-见本次发布提交与 `v0.9.1` Tag；具体 hash 与 `git status` 输出在提交完成后由紧随其后的 docs 提交补齐（沿用 v163 的两段式口径，避免报告自引用 hash）。
+沿用 v163 的两段式口径（避免报告自引用 hash）：
+
+| 项 | 事实 |
+| --- | --- |
+| 发布代码提交 | `6443aea` — `feat(v164): 四个 P0 修复 + 最终 GUI 18/18 实跑闭环`，22 files changed / 1605 insertions(+) / 27 deletions(-) |
+| 报告定稿提交 | 本条 docs 提交（`docs(v164): 补提交 hash、Tag 与工作区状态`） |
+| Tag | `v0.9.1` 打在报告定稿提交上（轻量 tag） |
+| 分支 | `main`（未推送远端） |
+| 工作区状态 | `git status --porcelain` 为空；`git diff --check` exit 0 |
+
+`desktop/dist/*.exe`、`web/out`、安装目录均被 `.gitignore` 忽略，不进版本库；报告引用的产物在本机保留可复查。
 
 任务书 §9 逐条核对：
 
