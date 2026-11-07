@@ -42,10 +42,25 @@ def _ratio(hit: int, total: int) -> float | None:
 
 
 def _events(con: sqlite3.Connection) -> dict[str, set[str]]:
-    """type -> 出现过这种事件的 task_id 集合。"""
+    """type -> 出现过这种事件的 task_id 集合。
+
+    另外派生一个 ``task.resumed.crash``：只有 payload 里带 ``crash_recovery=true``
+    的恢复才算「崩溃/重启后接回来」。同一个 ``task.resumed`` 事件也会在审批恢复时
+    发出（payload 里是 ``decision``），两者混在一起会把「点了一次批准」算成关窗恢复。
+    """
     out: dict[str, set[str]] = {}
-    for row in _rows(con, "select type, task_id from agent_events"):
-        out.setdefault(str(row["type"]), set()).add(str(row["task_id"]))
+    for row in _rows(con, "select type, task_id, payload from agent_events"):
+        kind = str(row["type"])
+        task_id = str(row["task_id"])
+        out.setdefault(kind, set()).add(task_id)
+        if kind != "task.resumed":
+            continue
+        try:
+            payload = json.loads(row["payload"]) if row["payload"] else {}
+        except (ValueError, TypeError):
+            payload = {}
+        if isinstance(payload, dict) and payload.get("crash_recovery"):
+            out.setdefault("task.resumed.crash", set()).add(task_id)
     return out
 
 
@@ -103,14 +118,28 @@ def compute(db_path: str | Path) -> dict[str, Any]:
         repair_evidence = events.get("repair.completed", set()) | events.get("verification.verdict", set())
         repaired = [tid for tid in repair_started if tid in repair_evidence]
 
-        resumed: list[sqlite3.Row] = []
-        recovered: list[sqlite3.Row] = []
+        # 「关窗 / 重启后恢复」有两条真实路径，必须都进分母：
+        #   ① 进程被杀后 watchdog 另起一次 attempt（agent_runs.attempts > 1）；
+        #   ② 进程重启后由 `resume_after_crash` 把还在 running 的任务接回来
+        #      （事件 task.resumed，payload 里带 crash_recovery=true）。
+        # 注意不能用「存在 task.resumed」当判据：审批恢复也会发同一个事件
+        # （payload 里是 decision），那样会把每次点「仅本次允许」都算成一次关窗恢复。
+        status_by_task = {str(row["id"]): str(row["status"]) for row in tasks}
+        resumed_ids: set[str] = {
+            str(tid) for tid in events.get("task.resumed.crash", set())
+        }
         if _table(con, "agent_runs"):
             for row in _rows(con, "select task_id, status, attempts from agent_runs"):
                 if int(row["attempts"] or 0) > 1:
-                    resumed.append(row)
-                    if str(row["status"]) == "succeeded":
-                        recovered.append(row)
+                    resumed_ids.add(str(row["task_id"]))
+        # 与另外三项口径对齐：有 v0.10.0 任务时只看它们。把 v0.9.1 及更早的历史续跑
+        # 算进来，这个比率反映的是「历史数据里有多少续跑成功」，而不是这一版的能力。
+        scoped = {str(row["id"]) for row in supervised} if supervised else None
+        if scoped:
+            resumed_ids &= scoped
+        recovered_ids = {tid for tid in resumed_ids if status_by_task.get(tid) == "succeeded"}
+        resumed = sorted(resumed_ids)
+        recovered = sorted(recovered_ids)
 
         leak = [
             row
