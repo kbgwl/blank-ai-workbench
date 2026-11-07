@@ -19,6 +19,33 @@ from blank_api.services.log_safety import mask_deep
 # 撞一次就重读再来；四次还不够说明系统真的在过载，那时把错误如实抛出去。
 MAX_SEQ_ATTEMPTS = 5
 
+# 同一任务的所有记录器共用一把锁，但要按**事件循环**再隔一层。
+#
+# 为什么不能只挂在记录器实例上（v0.10.1）：后端在创建轮次时就地启动 runner，
+# `create_turn` 手里那个记录器与后台 runner 自己的记录器会同时写同一条任务——
+# 两把实例锁互不相干，重试 5 次仍可能齐步撞号（全量实测：`test_second_turn_
+# knows_the_first_turn_had_images` 报 `UNIQUE constraint failed: agent_events.task_id,
+# agent_events.seq`）。
+#
+# 为什么又要按循环隔离：测试装置里不同用例可能复用同一个 task_id，而每个用例
+# 有自己的事件循环。上一个循环关闭时锁可能仍处于持锁态，下一个用例拿到同一把
+# 死锁就永久等待（`test_parallel_budget_v26` 整文件跑会卡死在 acquire）。
+# 锁挂在循环对象上：同循环内共享、跨循环天然隔离，循环销毁即随之回收。
+_SEQ_LOCKS_ATTR = "_blank_seq_locks"
+
+
+def _seq_lock_for(task_id: str) -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    locks = getattr(loop, _SEQ_LOCKS_ATTR, None)
+    if locks is None:
+        locks = {}
+        setattr(loop, _SEQ_LOCKS_ATTR, locks)
+    lock = locks.get(task_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[task_id] = lock
+    return lock
+
 log = logging.getLogger(__name__)
 
 
@@ -62,13 +89,10 @@ class EventRecorder:
         # 放在记录器上（而不是会话字段上）的理由：子代理共用父记录器，
         # 孙辈因此天然知道自己是被哪一轮引起的，不必再传一次、也不必自己猜。
         self.origin_run_id = origin_run_id or run_id
-        # seq 是「读最大值再插一条」，同一记录器上的并发写会读到同一个号。捕获
-        # IntegrityError 重试能兜住，但十二个协程同时重试时是**齐步走**的：大家在同一拍
-        # 重读、同一拍再撞，几轮下来仍然有事件写不进去，而写不进去的事件是静默消失的
-        # （时间线是唯一能拿给用户看的证据）。所以进程内先串行，跨进程/跨记录器再靠重试。
-        # 2026-10-29 Linux runner 全量里 `test_parallel_children_do_not_lose_events_to_the_seq_race`
-        # 报的就是 `UNIQUE constraint failed: agent_events.task_id, agent_events.seq`。
-        self._seq_lock = asyncio.Lock()
+        # seq 是「读最大值再插一条」，两个记录器同时写同一条任务就会读到同一个号。
+        # 锁按「事件循环 + task_id」共享（见 _seq_lock_for）：创建轮次的记录器与
+        # 后台 runner 的记录器是不同实例，实例锁挡不住它们；跨进程仍靠 IntegrityError 重试。
+        # 这里不预先取锁：构造记录器时未必处在事件循环里（同步测试会直接 new）。
 
     async def has_terminal(self, *, paused_counts: bool = False) -> bool:
         """这一轮是否已经有终态事件。
@@ -116,7 +140,7 @@ class EventRecorder:
         event_payload.setdefault("trace_id", self.trace_id)
         # 串行段只包住「读最大值 + 插一条 + commit」：打码与拼载荷在锁外做，
         # 免得一次耗时的 mask 把整条时间线堵住。
-        async with self._seq_lock:
+        async with _seq_lock_for(self.task_id):
             last_error: IntegrityError | None = None
             for attempt in range(MAX_SEQ_ATTEMPTS):
                 try:

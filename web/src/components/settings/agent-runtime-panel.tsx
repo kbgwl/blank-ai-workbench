@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
+import { SelectPopover } from "@/components/ui/select-popover";
 import {
   errorMessage,
   fetchAgentSettings,
@@ -239,47 +240,43 @@ export function AgentRuntimePanel() {
       </Panel>
 
       <Panel title="新任务的默认权限档位" hint="任务里仍可随时切换">
-        <label className="flex flex-col gap-1 text-[11px] text-muted">
-          <select
+        <div className="flex flex-col gap-1 text-[11px] text-muted">
+          <SelectPopover
+            ariaLabel="新任务的默认权限档位"
             value={settings.permissions.default_mode}
             disabled={busy}
-            onChange={(event) =>
-              void apply({ permissions: { default_mode: event.target.value } }, "默认档位已更新")
-            }
-            className="rounded-md border border-line bg-surface px-2 py-1.5 text-[12px] text-text outline-none"
-          >
-            {(limits.permission_modes ?? ["default", "accept_edits", "plan", "bypass"]).map((mode) => (
-              <option key={mode} value={mode}>
-                {limits.permission_mode_labels?.[mode] ?? mode}
-              </option>
-            ))}
-          </select>
-        </label>
+            options={(limits.permission_modes ?? ["default", "accept_edits", "plan", "bypass"]).map((mode) => ({
+              value: mode,
+              label: limits.permission_mode_labels?.[mode] ?? mode,
+            }))}
+            onChange={(mode) => void apply({ permissions: { default_mode: mode } }, "默认档位已更新")}
+            menuMinWidth={220}
+          />
+        </div>
         <p className="mt-2 text-[11px] leading-relaxed text-faint">
           档位只决定「要不要问」，不决定「能不能做」：不可逆命令在任何档位下都必须人工确认。
         </p>
       </Panel>
 
       <Panel title="自动化模式" hint="v165 §8 · 决定「要不要自己动」">
-        <label className="flex flex-col gap-1 text-[11px] text-muted">
-          <select
+        <div className="flex flex-col gap-1 text-[11px] text-muted">
+          <SelectPopover
+            ariaLabel="自动化模式"
             value={settings.background?.automation_mode ?? "assist"}
             disabled={busy}
-            onChange={(event) =>
+            options={(limits.automation_modes ?? ["manual", "assist", "autonomous"]).map((mode) => ({
+              value: mode,
+              label: limits.automation_mode_labels?.[mode] ?? AUTOMATION_LABELS[mode] ?? mode,
+            }))}
+            onChange={(mode) =>
               void apply(
-                { background: { automation_mode: event.target.value as "manual" | "assist" | "autonomous" } },
+                { background: { automation_mode: mode as "manual" | "assist" | "autonomous" } },
                 "自动化模式已更新",
               )
             }
-            className="rounded-md border border-line bg-surface px-2 py-1.5 text-[12px] text-text outline-none"
-          >
-            {(limits.automation_modes ?? ["manual", "assist", "autonomous"]).map((mode) => (
-              <option key={mode} value={mode}>
-                {limits.automation_mode_labels?.[mode] ?? AUTOMATION_LABELS[mode] ?? mode}
-              </option>
-            ))}
-          </select>
-        </label>
+            menuMinWidth={220}
+          />
+        </div>
         <p className="mt-2 text-[11px] leading-relaxed text-faint">
           这和上面的权限档位是两回事：档位决定「要不要问」，模式决定「要不要自己动」。
           自动驾驶可以连续执行、自动修复失败、后台常驻，但高风险操作仍然必须你审批。

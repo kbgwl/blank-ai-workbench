@@ -128,6 +128,8 @@ export async function sendMessage(input: {
   providerId?: string;
   scenario?: string;
   memoryOptIn?: boolean;
+  /** 发送栏的权限档（v0.10.1 §4）：随任务快照固定，start 兜底时也带同一份。 */
+  permissionMode?: string;
   attachments?: AttachmentRef[];
 }): Promise<SendResult> {
   const text = input.text.trim();
@@ -155,6 +157,10 @@ export async function sendMessage(input: {
       acceptanceCriteria: [],
       providerId: input.providerId,
       scenario: input.scenario,
+      // v0.10.1：权限档与记忆开关在创建时刻入快照；auto_start 交给后端监督者
+      // 判定并就地启动——后端会直接返回 queued/running，下面的兜底不再触发。
+      permissionMode: input.permissionMode,
+      memoryOptIn: input.memoryOptIn,
       attachments,
     });
   } catch (error) {
@@ -180,7 +186,12 @@ export async function sendMessage(input: {
   if (shouldAutoRunTurn(task.status, dispatchAutoStart(task.goalSpec))) {
     try {
       // 场景随运行请求再带一次：用户刚切过场景时，这一轮就要按新场景跑。
-      await runTask(task.id, { scenario: input.scenario, memoryOptIn: input.memoryOptIn });
+      // 权限档同样补发，保证兜底路径与发送栏的选择一致。
+      await runTask(task.id, {
+        scenario: input.scenario,
+        memoryOptIn: input.memoryOptIn,
+        permissionMode: input.permissionMode,
+      });
     } catch (error) {
       runError = error instanceof Error ? error.message : String(error);
     }

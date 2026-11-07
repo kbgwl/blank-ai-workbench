@@ -210,6 +210,18 @@ async def persist_task(
     # 建行这一刻就把形状定下来，后面验收循环、证据页、前端读到的才是同一份东西。
     criteria = normalize_criteria(payload.acceptance_criteria)
     goal_spec = normalize_goal(payload.goal_spec, fallback=payload.goal or payload.title)
+    # v0.10.1 §4：创建时用户选的权限档位钉进快照链。_run_request 的回落顺序是
+    # 运行请求 → goal_spec.dispatch.permission_mode → 设置页默认；落在中间一层，
+    # 之后重试/恢复不传模式也不会漂回全局默认。（threads 路径随后会整份覆盖
+    # goal_spec.dispatch，两处口径一致，互不冲突。）
+    if payload.permission_mode:
+        goal_spec = {
+            **goal_spec,
+            "dispatch": {
+                **(goal_spec.get("dispatch") or {}),
+                "permission_mode": payload.permission_mode,
+            },
+        }
 
     # 套用计划模板：步骤原样带过来，但状态一律重置为 pending。
     # 模板是"怎么做事"，不是"做到哪了"——把完成态一起带过来会显示一份假进度。
@@ -340,7 +352,9 @@ def dispatch_of(task: Task) -> ExecutionSnapshot | None:
 
 
 @router.post("/projects/{project_id}/tasks", response_model=TaskOut, status_code=201)
-async def create_task(project_id: str, payload: TaskCreate, db: DbSession) -> TaskOut:
+async def create_task(
+    project_id: str, payload: TaskCreate, db: DbSession, request: Request
+) -> TaskOut:
     project = await load_project(db, project_id)
     # 悬空的模型选择在这里就挡掉：等任务跑起来才报「模型供应商不存在」，
     # 用户看到的是一句没有出处的失败，而界面上那个选择器早就不显示它了。
@@ -365,6 +379,58 @@ async def create_task(project_id: str, payload: TaskCreate, db: DbSession) -> Ta
     )
     db.add(thread)
     task = await persist_task(db, project.id, payload, thread_id=thread.id, turn_index=1)
+    # v0.10.1 §2：与 threads.create_turn 同一条规矩——auto_start 由后端就地接管，
+    # 前端不再二次调 /run。启动失败记 task.dispatch_failed，任务留在 draft/queued
+    # 可重试的状态；失败不能把 201 带走，也不能静默。
+    if payload.auto_start:
+        # rollback 会过期 ORM 实例；id 先取成普通值，except 里才不会触发
+        # 同步懒加载（MissingGreenlet）。
+        auto_task_id = task.id
+        run_payload = TaskRunIn(
+            provider_id=payload.provider_id,
+            scenario=payload.scenario or "",
+            memory_opt_in=payload.memory_opt_in,
+            permission_mode=payload.permission_mode,
+        )
+        try:
+            deferred = await _defer_if_needed(db, task, run_payload)
+            if deferred is not None:
+                launched = deferred
+            else:
+                launched = await launch_task(db, task, run_payload, request)
+            await EventRecorder(get_session_factory(), auto_task_id).add(
+                "task.auto_started",
+                "receive_task",
+                {
+                    "task_id": auto_task_id,
+                    "run_id": str(launched.get("run_id") or ""),
+                    "status": str(launched.get("status") or ""),
+                    "source": "backend",
+                },
+            )
+        except Exception as error:  # noqa: BLE001 - 派发失败降级为事件，不吞 201
+            log.warning("任务自动下发失败 task=%s", auto_task_id, exc_info=True)
+            await db.rollback()
+            failure_payload = {
+                "task_id": auto_task_id,
+                "reason": str(error)[:400],
+                "code": str(getattr(error, "code", "") or ""),
+                "auto_start": True,
+            }
+            # 用独立会话查任务行现状：draft（没入队，可手动重试）还是 queued
+            # （已入队，启动恢复/worker 会接管）。不猜，以库里的状态为准。
+            async with get_session_factory()() as event_session:
+                stored = (
+                    await event_session.execute(select(Task).where(Task.id == auto_task_id))
+                ).scalar_one_or_none()
+                if stored is not None:
+                    failure_payload["task_status"] = str(stored.status or "")
+            await EventRecorder(get_session_factory(), auto_task_id).add(
+                "task.dispatch_failed", "receive_task", failure_payload
+            )
+    # launch/rollback 会让 task 实例过期（expire_on_commit），直接序列化会
+    # MissingGreenlet；refresh 一次拿到终态（draft/queued/deferred）再出去。
+    await db.refresh(task)
     return TaskOut.model_validate(task)
 
 
@@ -733,6 +799,13 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
     # rollback 会让本事务里的 ORM 实例全部过期，之后再读属性会触发同步懒加载，
     # 在异步会话里直接抛 MissingGreenlet。所以先把要用的字段取成普通值。
     attachment_refs = [dict(item) for item in (task.attachments or [])]
+    # v0.10.1 §4.3：权限快照链的「任务」一环。发送栏选的档在创建时刻写进了
+    # 下发快照（goal_spec.dispatch.permission_mode），运行请求没显式带模式时
+    # 优先用它，其次才是运行时自己的回落（同任务历史模式 → 设置页默认）。
+    # 没有这一环，「任务创建后改全局默认档」会悄悄改变正在跑的任务的审批行为。
+    task_permission_mode = str(
+        ((task.goal_spec or {}).get("dispatch") or {}).get("permission_mode") or ""
+    )
     # 读附件放到线程里：图片最多 20MB、PDF 还要解析，同步读会把事件循环按住，
     # 这期间连 /health 都不回。
     bundle = await anyio.to_thread.run_sync(load_attachments_for, project.id, attachment_refs)
@@ -791,7 +864,9 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         approved_tools=set(payload.approved_tools),
         approved_actions=set(payload.approved_actions),
         approved_command_prefixes=tuple(payload.approved_command_prefixes),
-        permission_mode=payload.permission_mode,
+        # 任务快照优先于全局默认：runtime.run 里 `if not request.permission_mode`
+        # 的回落链仍在其后兜底（同任务历史 → 设置页默认）。
+        permission_mode=payload.permission_mode or task_permission_mode,
         memory_opt_in=payload.memory_opt_in,
         role_adapters=role_adapters,
         role_provider_ids=role_provider_ids,
@@ -1020,6 +1095,14 @@ async def launch_task(
     run_request.run_id = run.id
     task.status = "queued"
     await db.commit()
+    # v0.10.1 §2：run 的两条生命周期事件。「入队」与「真正开跑」必须分开记——
+    # 排队后无人认领（独立 worker 没部署）和执行中途失败是两种完全不同的病。
+    recorder = EventRecorder(get_session_factory(), task_id)
+    await recorder.add(
+        "run.created",
+        "receive_task",
+        {"run_id": run.id, "task_id": task_id, "status": "queued"},
+    )
 
     if not start_runner or not inprocess_runner_enabled():
         # 队列归独立 worker：这里只落库并返回，否则本进程会先抢走它。
@@ -1031,6 +1114,11 @@ async def launch_task(
             async with get_session_factory()() as session:
                 if not await claim_run(session, run.id, worker_id):
                     return
+            await recorder.add(
+                "run.started",
+                "receive_task",
+                {"run_id": run.id, "worker_id": worker_id, "crashed": crashed},
+            )
             await _execute_claimed_run(run.id, worker_id, run_request, crashed=crashed)
         except asyncio.CancelledError:
             raise
@@ -1346,8 +1434,32 @@ async def task_diff(task_id: str, db: DbSession) -> dict:
 async def decide_approval(
     task_id: str, payload: TaskApprovalIn, request: Request, db: DbSession
 ) -> dict:
+    # 同一张卡连点两下、或两个审批卡并发提交：决策+恢复必须串行，否则两次
+    # resume 会按中断位置各消费一次，第二张卡被静默跳过。
+    lock = _approval_locks.setdefault(task_id, asyncio.Lock())
+    async with lock:
+        return await _decide_approval_locked(task_id, payload, request, db)
+
+
+_approval_locks: dict[str, asyncio.Lock] = {}
+
+
+async def _decide_approval_locked(
+    task_id: str, payload: TaskApprovalIn, request: Request, db: DbSession
+) -> dict:
     task = await load_task(db, task_id)
     if task.status != "waiting_approval":
+        # v0.10.1 §3.4 幂等：同一张卡已经批过了（重复点击），返回当时的决定，
+        # 不再 resume、也不报错——「重复点击允许不能重复执行」的温和实现。
+        if payload.approval_id:
+            prior = await _prior_decision(task_id, payload.approval_id)
+            if prior is not None:
+                return {
+                    "status": "already_decided",
+                    "approval_id": payload.approval_id,
+                    "decision": prior,
+                    "task": TaskOut.model_validate(task).model_dump(),
+                }
         raise ApiError(
             code="task_not_waiting_approval",
             message=f"任务当前不在待审批状态（当前状态：{task.status}），无需重复审批",
@@ -1355,6 +1467,41 @@ async def decide_approval(
         )
     evidence = await build_evidence(get_session_factory(), task_id)
     pending = [str(item.get("tool") or "") for item in evidence.get("pending_approvals") or []]
+    # v0.10.1 §3.2/§3.3：审批按身份精确匹配。当前等待的是哪张卡，以最近一次
+    # approval.required 事件为准；提交的身份对不上就明确拒绝，绝不按文件名、
+    # 工具名或"任务里第一张 pending 卡"猜。
+    identity = await _current_approval_identity(task_id)
+    provided = {
+        key: value
+        for key, value in (
+            ("approval_id", payload.approval_id),
+            ("tool_call_id", payload.tool_call_id),
+            ("arguments_hash", payload.arguments_hash),
+        )
+        if value
+    }
+    if provided and identity:
+        mismatched = [
+            key for key, value in provided.items() if str(identity.get(key) or "") != value
+        ]
+        # tool_call_id 有两种真实形态：中断事件里的模型调用 id，和网关形态留下的
+        # ToolCall 行 id。两个都算匹配——审批身份的唯一定址键是 approval_id
+        # （它就是从 task+调用 id+参数哈希派生的），行 id 只是展示层的账。
+        if "tool_call_id" in mismatched:
+            row_ids = {
+                str(item.get("tool_call_id") or "")
+                for item in evidence.get("pending_approvals") or []
+            }
+            if provided["tool_call_id"] in row_ids or provided["tool_call_id"] == str(
+                identity.get("tool_call_id") or ""
+            ):
+                mismatched.remove("tool_call_id")
+        if mismatched:
+            raise ApiError(
+                code="approval_mismatch",
+                message="审批对象已变化，请重新生成审批请求",
+                status_code=409,
+            )
     for approval in evidence.get("pending_approvals") or []:
         expires_at = approval.get("expires_at")
         if expires_at:
@@ -1367,10 +1514,25 @@ async def decide_approval(
             if approval_is_expired(expires_at):
                 raise ApiError(code="approval_expired", message="审批请求已过期，请重新运行任务生成新的审批请求", status_code=409)
     recorder = EventRecorder(get_session_factory(), task_id)
+    # 审批身份随决定落账：幂等判定与事后审计都靠它对号。当前等待的卡没有身份
+    # （老中断事件）时，如实记提交上来的值，不编空号。
+    decided_identity = (
+        {
+            key: str(identity.get(key) or "")
+            for key in ("approval_id", "tool_call_id", "arguments_hash", "resource_path")
+        }
+        if identity
+        else {"approval_id": payload.approval_id}
+    )
     await recorder.add(
         "approval.decided",
         "execute_action",
-        {"approve": payload.approve, "scope": payload.scope, "tools": pending},
+        {
+            "approve": payload.approve,
+            "scope": payload.scope,
+            "tools": pending,
+            **decided_identity,
+        },
     )
     # 决定只通过 Command(resume=...) 交回图里：批准时中断返回带作用域的批准，
     # 图据此写入会话记忆并补记 approval.granted。在这里预先塞 approved_tools
@@ -1384,6 +1546,42 @@ async def decide_approval(
     async with get_session_factory()() as session:
         finished = await load_task(session, task_id)
         return {"task": TaskOut.model_validate(finished).model_dump(), "evidence": evidence}
+
+
+async def _current_approval_identity(task_id: str) -> dict:
+    """任务此刻在等的那张审批卡的身份（最近一次 approval.required 事件）。"""
+    async with get_session_factory()() as session:
+        row = (
+            await session.execute(
+                select(AgentEvent)
+                .where(AgentEvent.task_id == task_id, AgentEvent.type == "approval.required")
+                .order_by(AgentEvent.seq.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if row is None or not isinstance(row.payload, dict):
+        return {}
+    return {
+        key: str(row.payload.get(key) or "")
+        for key in ("approval_id", "tool_call_id", "tool", "arguments_hash", "resource_path")
+    }
+
+
+async def _prior_decision(task_id: str, approval_id: str) -> dict | None:
+    """这张卡之前批过吗？批过就返回当时的决定（幂等回放）。"""
+    async with get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                select(AgentEvent)
+                .where(AgentEvent.task_id == task_id, AgentEvent.type == "approval.decided")
+                .order_by(AgentEvent.seq)
+            )
+        ).scalars().all()
+    for row in rows:
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        if str(payload.get("approval_id") or "") == approval_id:
+            return {"approve": bool(payload.get("approve")), "scope": str(payload.get("scope") or "")}
+    return None
 
 
 @router.post("/tasks/{task_id}/answer")

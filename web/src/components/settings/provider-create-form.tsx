@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { Button, Field, Input, Notice } from "@/components/projects/ui";
 import { createProvider, errorMessage, type Preset, type Provider } from "./api";
 import { Toggle } from "./bits";
+import { SelectPopover } from "../ui/select-popover";
 
 type Props = {
   presets: Record<string, Preset>;
@@ -271,32 +272,22 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
 
       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
         <Field label="推理档位 reasoning_effort">
-          <select
+          <SelectPopover
+            ariaLabel="推理档位"
             value={draft.reasoning_effort}
-            onChange={(event) => patch({ reasoning_effort: event.target.value })}
-            aria-label="推理档位"
-            className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] text-text focus:border-brand/60 focus:outline-none"
-          >
-            {effortOptions.map((value) => (
-              <option key={value || "off"} value={value}>
-                {value || "不启用"}
-              </option>
-            ))}
-          </select>
+            options={effortOptions.map((value) => ({ value, label: value || "不启用" }))}
+            onChange={(value) => patch({ reasoning_effort: value })}
+            menuMinWidth={180}
+          />
         </Field>
         <Field label="输出详略 verbosity">
-          <select
+          <SelectPopover
+            ariaLabel="输出详略"
             value={draft.verbosity}
-            onChange={(event) => patch({ verbosity: event.target.value })}
-            aria-label="输出详略"
-            className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] text-text focus:border-brand/60 focus:outline-none"
-          >
-            {verbosityOptions.map((value) => (
-              <option key={value || "off"} value={value}>
-                {value || "不启用"}
-              </option>
-            ))}
-          </select>
+            options={verbosityOptions.map((value) => ({ value, label: value || "不启用" }))}
+            onChange={(value) => patch({ verbosity: value })}
+            menuMinWidth={180}
+          />
         </Field>
       </div>
 

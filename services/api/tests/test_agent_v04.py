@@ -97,7 +97,12 @@ async def env():
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         state.client = client
-        yield state
+        try:
+            yield state
+        finally:
+            from tests.conftest import _drain_active_runs
+
+            await _drain_active_runs()
 
 
 async def create_project(env: Env, root: Path) -> str:

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Project, Provider, ScenarioInfo, Workspace } from "../tasks/api";
+import { SelectPopover, type SelectOption } from "../ui/select-popover";
 import { AtPicker } from "./at-picker";
 import { DraftImageChips } from "./image-chips";
 import { insertReference } from "./picker";
@@ -40,6 +41,12 @@ export type ComposerProps = {
   /** 仅日常场景显示：用户是否允许 AI 记住习惯（后端凭它开放 memory_write）。 */
   memoryOptIn: boolean;
   onMemoryOptInChange: (value: boolean) => void;
+  /**
+   * 发送栏的权限档（v0.10.1 §4）：default=询问 / bypass=完全访问 / plan=计划。
+   * 它随这一轮的任务快照固定——任务创建后再改设置页默认档不影响这轮。
+   */
+  permissionMode: string;
+  onPermissionChange: (value: string) => void;
   draft: string;
   onDraftChange: (value: string) => void;
   /** 草稿里的图片。上传完成的才有 id，上传中的不能发送。 */
@@ -97,10 +104,30 @@ export function Composer(props: ComposerProps) {
   const workspaceSelectable = props.canPickWorkspace || props.workspaces.length > 1;
   // 场景联动（任务书 §8.2）：换场景时输入框提示词跟着换；记忆开关只在日常场景出现。
   const activeScenario = props.scenarios.find((item) => item.key === props.scenarioKey);
-  // 下拉里显示的是"名字 · 模型"，名字一长就把模型名挤没了；悬停时给出完整模型名。
-  const activeProvider = props.providers.find((item) => item.id === props.providerId);
   const placeholderText =
     activeScenario?.inputHint || "说点什么，或者直接贴张图/丢个文件进来…";
+
+  // v0.10.1 §4.2：三种权限的中文文案与范围说明。选项顺序即建议顺序。
+  const permissionOptions: SelectOption[] = [
+    {
+      value: "default",
+      label: "询问",
+      description: "自动允许读取、分析和低风险检查",
+      warning: "修改文件、装依赖、高风险命令前先问你",
+    },
+    {
+      value: "bypass",
+      label: "完全访问",
+      description: "工作区内自动读写文件、跑测试、装依赖、自动修复",
+      warning: "仍需确认：大量删除、工作区外路径、发布、不可逆操作",
+    },
+    {
+      value: "plan",
+      label: "计划",
+      description: "只读取、分析、生成计划和建议",
+      warning: "不修改文件、不执行命令",
+    },
+  ];
 
   return (
     <div className="bg-bg/95 px-4 pt-3 pb-3.5 backdrop-blur">
@@ -245,50 +272,50 @@ export function Composer(props: ComposerProps) {
             <span className="mx-0.5 h-4 w-px shrink-0 bg-line" aria-hidden />
 
             {props.projects.length > 1 && (
-              <select
+              <SelectPopover
+                size="compact"
+                ariaLabel="项目"
                 value={props.projectId}
-                onChange={(event) => props.onProjectChange(event.target.value)}
-                title={`项目：${props.projects.find((project) => project.id === props.projectId)?.name ?? ""}`}
-                className="max-w-[118px] min-w-[72px] shrink truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
-              >
-                {props.projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </select>
+                options={props.projects.map((project) => ({ value: project.id, label: project.name }))}
+                onChange={props.onProjectChange}
+                triggerClassName="max-w-[118px] min-w-[72px]"
+                menuMinWidth={180}
+              />
             )}
 
             {/* 工作区：真正决定"在哪个目录里改东西"的就是它，之前只在项目页能改，
                 对话页连看都看不到，于是整个功能像是不存在。 */}
             {workspaceSelectable ? (
-              <select
+              <SelectPopover
+                size="compact"
+                ariaLabel="工作目录"
                 value={activeWorkspace?.id ?? ""}
-                onChange={(event) => {
-                  const next = event.target.value;
+                options={[
+                  ...(!activeWorkspace ? [{ value: "", label: "未绑定目录" }] : []),
+                  ...props.workspaces.map((workspace) => ({
+                    value: workspace.id,
+                    label: workspace.label,
+                    description: "在这个目录里读写文件、跑命令",
+                  })),
+                  ...(props.canPickWorkspace
+                    ? [
+                        {
+                          value: "__pick__",
+                          label: props.workspaces.length > 0 ? "选另一个目录…" : "选一个目录…",
+                        },
+                      ]
+                    : []),
+                ]}
+                onChange={(next) => {
                   if (next === "__pick__") {
                     props.onPickWorkspace();
                     return;
                   }
                   if (next) props.onActivateWorkspace(next);
                 }}
-                title={activeWorkspace ? "在哪个目录里干活" : "这个项目还没绑定目录"}
-                className={`max-w-[132px] min-w-[76px] shrink truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] transition-colors hover:bg-surface-2 focus:outline-none ${
-                  activeWorkspace ? "text-muted" : "text-danger"
-                }`}
-              >
-                {!activeWorkspace && <option value="">未绑定目录</option>}
-                {props.workspaces.map((workspace) => (
-                  <option key={workspace.id} value={workspace.id}>
-                    {workspace.label}
-                  </option>
-                ))}
-                {props.canPickWorkspace && (
-                  <option value="__pick__">
-                    {props.workspaces.length > 0 ? "选另一个目录…" : "选一个目录…"}
-                  </option>
-                )}
-              </select>
+                triggerClassName={`max-w-[132px] min-w-[76px] ${activeWorkspace ? "" : "text-danger"}`}
+                menuMinWidth={200}
+              />
             ) : activeWorkspace ? (
               // 不能选目录的环境（CLI 静态站）里，已绑定的目录要如实显示名字，
               // 不能因为"改不了"就冒充"没绑定"——那会把用户赶去项目页白跑一趟。
@@ -310,24 +337,55 @@ export function Composer(props: ComposerProps) {
             {/* 场景选择器（§8.1 顶部唯一入口）：决定这轮在哪个场景跑。
                 目录为空说明清单还没读到，隐藏而不是渲染一个空下拉。 */}
             {props.scenarios.length > 0 && (
-              <select
+              <SelectPopover
+                size="compact"
+                ariaLabel="场景"
                 value={props.scenarioKey}
-                onChange={(event) => props.onScenarioChange(event.target.value)}
-                title={activeScenario?.summary || "场景"}
-                className="max-w-[96px] min-w-[68px] shrink truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
-              >
-                {props.scenarios.map((scenario) => (
-                  <option key={scenario.key} value={scenario.key}>
-                    {scenario.label}
-                  </option>
-                ))}
-              </select>
+                options={props.scenarios.map((scenario) => ({
+                  value: scenario.key,
+                  label: scenario.label,
+                  description: scenario.summary,
+                  warning: scenario.allowWrite ? undefined : "只读：不修改文件、不执行命令",
+                }))}
+                onChange={props.onScenarioChange}
+                triggerClassName="max-w-[96px] min-w-[68px]"
+                menuMinWidth={220}
+              />
             )}
 
-            {/* 右边整组：偏好开关 + 模型 + 发送。整组不会被拆开，窄了就整体换到下一行靠右；
+            {/* 右边整组：模型 + 权限 + 偏好开关 + 发送。整组不会被拆开，窄了就整体换到下一行靠右；
                 真窄到放不下时只让模型下拉变窄（它的名字本来就该截断），开关和发送保持原样，
                 免得再出现文字被压成竖排。 */}
             <div className="ml-auto flex min-w-0 shrink items-center gap-1.5">
+              <SelectPopover
+                size="compact"
+                ariaLabel="用哪个模型"
+                value={props.providerId}
+                options={[
+                  { value: "", label: "默认模型", description: "按设置页的角色分工自动挑" },
+                  ...props.providers.map((provider) => ({
+                    value: provider.id,
+                    label: provider.model ? `${provider.name} · ${provider.model}` : provider.name,
+                  })),
+                ]}
+                onChange={props.onProviderChange}
+                disabled={props.providers.length === 0}
+                triggerClassName="max-w-[168px] min-w-[72px]"
+                menuMinWidth={240}
+              />
+
+              {/* 权限档（v0.10.1 §4）：这轮任务「问不问」的总开关，随任务快照固定。 */}
+              <SelectPopover
+                size="compact"
+                ariaLabel="权限模式"
+                value={props.permissionMode}
+                options={permissionOptions}
+                onChange={props.onPermissionChange}
+                triggerClassName={`max-w-[92px] min-w-[64px] ${
+                  props.permissionMode === "bypass" ? "text-warn" : props.permissionMode === "plan" ? "text-brand" : ""
+                }`}
+                menuMinWidth={260}
+              />
               {/* 记忆开关只在日常场景出现（§7.2）：开发场景连看都看不到。 */}
               {activeScenario?.memoryAllowed && (
                 <button
@@ -348,21 +406,6 @@ export function Composer(props: ComposerProps) {
                   {props.memoryOptIn ? "记住习惯" : "不记住"}
                 </button>
               )}
-
-              <select
-                value={props.providerId}
-                onChange={(event) => props.onProviderChange(event.target.value)}
-                title={activeProvider?.model ? `模型：${activeProvider.model}` : "用哪个模型"}
-                className="max-w-[168px] min-w-[72px] shrink truncate rounded-lg bg-transparent px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 focus:outline-none"
-              >
-                <option value="">默认模型</option>
-                {props.providers.map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.name}
-                    {provider.model ? ` · ${provider.model}` : ""}
-                  </option>
-                ))}
-              </select>
 
               {/* 只有一个按钮：闲着是发送，跑着是停止。
                   以前跑着的时候是"停止 + 插话"两个圆钮并排，停止还从对话区再出一个文字按钮，
@@ -399,16 +442,20 @@ export function Composer(props: ComposerProps) {
           )}
         </div>
 
-        {/* 场景的边界要写在用户看得见的地方（v164 §4.3）。
+        {/* 场景与权限的边界要写在用户看得见的地方（v164 §4.3 / v0.10.1 §4）。
             只在提示词里写"别改代码"等于没说：用户点开发送才发现做不了。 */}
         <p className="mt-2 text-center text-[11px] text-faint">
-          {activeScenario && !activeScenario.allowWrite
-            ? `「${activeScenario.label}」场景只读：不修改文件、不执行命令。要动手请切换到开发场景。`
-            : activeScenario && activeScenario.writeExtensions.length > 0
-              ? `「${activeScenario.label}」场景只能写 ${activeScenario.writeExtensions
-                  .slice(0, 4)
-                  .join(" / ")}${activeScenario.writeExtensions.length > 4 ? " 等文档" : ""}；改代码请切换到开发场景。`
-              : "它会读你的代码、改文件、跑命令；高风险操作会先问你。"}
+          {props.permissionMode === "plan"
+            ? "计划模式：只读分析和出建议，不改文件、不执行命令。要动手请切回「询问」或「完全访问」。"
+            : activeScenario && !activeScenario.allowWrite
+              ? `「${activeScenario.label}」场景只读：不修改文件、不执行命令。要动手请切换到开发场景。`
+              : activeScenario && activeScenario.writeExtensions.length > 0
+                ? `「${activeScenario.label}」场景只能写 ${activeScenario.writeExtensions
+                    .slice(0, 4)
+                    .join(" / ")}${activeScenario.writeExtensions.length > 4 ? " 等文档" : ""}；改代码请切换到开发场景。`
+                : props.permissionMode === "bypass"
+                  ? "完全访问：工作区内自动读写和测试；删除、工作区外路径、发布仍会先确认。"
+                  : "它会读你的代码、改文件、跑命令；高风险操作会先问你。"}
         </p>
       </div>
     </div>

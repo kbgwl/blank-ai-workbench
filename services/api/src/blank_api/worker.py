@@ -194,6 +194,16 @@ async def run_once(worker: str | None = None) -> int:
             continue
         handled += 1
         crashed = attempts > 0
+        # v0.10.1 §2：独立 worker 的开跑事件与进程内 runner 同名同义，
+        # 「排队了但没人跑」和「跑起来后失败」在事件流里必须可区分。
+        try:
+            await EventRecorder(get_session_factory(), task_id).add(
+                "run.started",
+                "worker",
+                {"run_id": run_id, "worker_id": worker, "crashed": crashed},
+            )
+        except Exception:
+            log.warning("记录 run.started 失败 run=%s", run_id, exc_info=True)
         if crashed:
             # 上一次认领后没写终态（进程被杀/断电）。这个数就是"崩溃恢复真的发生过几次"，
             # 没有它，"我们从崩溃里恢复得怎么样"只能靠日志翻。

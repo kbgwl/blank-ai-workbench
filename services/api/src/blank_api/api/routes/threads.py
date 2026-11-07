@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -25,14 +26,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from blank_api.api.auth import require_token
 from blank_api.api.errors import ApiError
 from blank_api.api.routes.projects import load_project
-from blank_api.api.routes.tasks import persist_task
+from blank_api.api.routes.tasks import _defer_if_needed, launch_task, persist_task
 from blank_api.db import get_session_factory
 from blank_api.deps import DbSession
 from blank_api.models.goal import Goal
 from blank_api.models.task import Task
 from blank_api.models.thread import Thread
 from blank_api.schemas.goal import GoalOut
-from blank_api.schemas.task import TaskOut
+from blank_api.schemas.task import TaskOut, TaskRunIn
 from blank_api.schemas.thread import (
     ThreadCreate,
     ThreadDetailOut,
@@ -61,6 +62,8 @@ from blank_api.services.settings import SettingsStore
 from blank_api.services.threads import rewind_to_turn, thread_or_404, thread_turns
 
 router = APIRouter(tags=["threads"], dependencies=[Depends(require_token)])
+
+log = logging.getLogger(__name__)
 
 
 def _turn_out(task: Task) -> ThreadTurnOut:
@@ -314,7 +317,12 @@ async def create_turn(
     # v165 §5.1：下发前逐条核对七个条件。auto_start 不是「收到消息就开跑」，
     # 同时留下可回放的下发快照——任务结束后仍能回答「当时凭什么自动跑起来」。
     settings = SettingsStore().read()
-    permission_mode = str((settings.get("permissions") or {}).get("default_mode") or "default")
+    # v0.10.1 §4.3：发送栏的选择（payload.permission_mode）优先于设置页默认档。
+    # 它随下发快照固定，任务创建后再改全局默认不影响这一轮。
+    permission_mode = (
+        payload.permission_mode
+        or str((settings.get("permissions") or {}).get("default_mode") or "default")
+    )
     # 设置页是唯一真源；目标上的存档值只作回落。resolve_mode 与审批矩阵、
     # PermissionPolicy、runtime 共用同一份枚举，脏值一律回到 assist。
     automation_mode = resolve_automation_mode(settings, str(goal.automation_mode or ""))
@@ -379,6 +387,15 @@ async def create_turn(
         goal_id=goal_id,
         created_at=datetime.now(timezone.utc).isoformat(),
     )
+    # v0.10.1 §2：auto_start 的最终值。监督者判定是底座；用户的显式选择可以
+    # 越过 manual 模式的「排队」，但越过不了 blocked / wait_user——那两类
+    # 是环境本身不成立（没目标/没工作区/没场景），硬跑只会原地失败。
+    auto_start = bool(dispatch.get("auto_start"))
+    if payload.auto_start is True and dispatch["decision"] not in ("blocked", "wait_user"):
+        auto_start = True
+    elif payload.auto_start is False:
+        auto_start = False
+    dispatch["auto_start"] = auto_start
     # 监督者判定放在结构化目标里（不是用户 prompt 的前缀）。执行侧
     # create_plan_node 读它来纠正「补充要求被判成闲聊」，见 supervisor.execution_override。
     # normalize_goal 只保留四个已知键，所以必须在 persist_task 之后补写。
@@ -412,6 +429,60 @@ async def create_turn(
     await recorder.add(
         "thread.turn", "receive_task", {"thread": thread_id, "turn": next_turn}
     )
+
+    # v0.10.1 §2：后端真正接管自动执行。auto_start 在这里就地入队/启动，
+    # 不再依赖前端读快照后二次调用 /start——窗口关了、前端崩了、网络断了，
+    # 任务照常执行。启动失败记 task.dispatch_failed，任务留在 draft/queued
+    # 可重试的状态，绝不让它停在 planned 无人接管。
+    if auto_start and judgement.needs_execution:
+        # rollback/commit 都会过期 ORM 实例；id 先取成普通值，except 里才不会
+        # 触发同步懒加载（MissingGreenlet）。
+        auto_task_id = task.id
+        run_payload = TaskRunIn(
+            provider_id=payload.provider_id,
+            scenario=payload.scenario,
+            memory_opt_in=payload.memory_opt_in,
+            permission_mode=payload.permission_mode,
+        )
+        try:
+            deferred = await _defer_if_needed(db, task, run_payload)
+            if deferred is not None:
+                launched = deferred
+            else:
+                launched = await launch_task(db, task, run_payload, request)
+            await recorder.add(
+                "task.auto_started",
+                "supervisor",
+                {
+                    "task_id": auto_task_id,
+                    "run_id": str(launched.get("run_id") or ""),
+                    "status": str(launched.get("status") or ""),
+                    "decision": dispatch["decision"],
+                    "source": "backend",
+                },
+            )
+        except Exception as error:  # 派发失败不能把这一轮的 201 带走，也不能静默
+            log.warning("自动下发失败 task=%s", auto_task_id, exc_info=True)
+            await db.rollback()
+            failure_payload = {
+                "task_id": auto_task_id,
+                "reason": str(error)[:400],
+                "code": str(getattr(error, "code", "") or ""),
+                "decision": dispatch["decision"],
+                "auto_start": True,
+            }
+            # 用独立会话查任务行现状：draft（没入队，可手动重试）还是 queued
+            # （已入队，启动恢复/worker 会接管）。不猜，以库里的状态为准。
+            async with get_session_factory()() as event_session:
+                stored = (
+                    await event_session.execute(select(Task).where(Task.id == auto_task_id))
+                ).scalar_one_or_none()
+                if stored is not None:
+                    failure_payload["task_status"] = str(stored.status or "")
+            await recorder.add("task.dispatch_failed", "supervisor", failure_payload)
+    # launch/rollback 会让 task 实例过期（expire_on_commit），直接序列化会
+    # MissingGreenlet；refresh 一次拿到终态（draft/queued/deferred）再出去。
+    await db.refresh(task)
     return TaskOut.model_validate(task)
 
 

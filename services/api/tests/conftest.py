@@ -64,6 +64,26 @@ from blank_api.app import create_app  # noqa: E402
 from blank_api.db import Base, get_engine  # noqa: E402
 
 
+async def _drain_active_runs(timeout: float = 15.0) -> None:
+    """等在途 run 收尾。
+
+    v0.10.1 起后端在创建轮次时就地启动 runner（§2 自动执行），HTTP 请求返回
+    不再代表执行结束。下一个用例的夹具会 drop_all，而 SQLite 是单写者——
+    撞上还在写事件的 runner 就是 `database is locked`。这里等 run_manager
+    清空（含运行结束后的证据落盘），再放行下一个用例。
+    """
+    import asyncio
+
+    from blank_api.services.agent.manager import run_manager
+
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if not run_manager.active_run_ids:
+            return
+        await asyncio.sleep(0.05)
+    # 超时就不等了：留着让用例自己暴露问题，别把整批测试卡死。
+
+
 @pytest.fixture(autouse=True)
 def _isolate_approvals_file(tmp_path, monkeypatch):
     """每个用例一份空的审批规则：上个用例批准过的前缀不该改变下个用例的判定。"""
@@ -105,6 +125,30 @@ def _isolate_artifact_root(tmp_path, monkeypatch):
     monkeypatch.setenv("BLANK_ARTIFACT_DIR", str(tmp_path / "artifacts"))
 
 
+@pytest.fixture(autouse=True)
+def _restore_shared_settings_file():
+    """用例结束后把共享 settings.json 恢复原样。
+
+    PUT /settings/agent 走 SettingsStore.update → write(normalize(merged))，
+    会把 normalize 出来的**全部段**（含 guardian 默认 "off"）物化进文件。
+    而 guardian.from_settings 的回落规则是「文件里有显式 guardian 段就不再读
+    BLANK_GUARDIAN 环境变量」——一个改过全局设置的用例，会让后面所有靠
+    monkeypatch.setenv("BLANK_GUARDIAN", ...) 生效的 guardian 用例集体假红
+    （危险命令没人拦、走审批等用户）。这里按"进入时是什么样、离开时还是什么
+    样"恢复：用例内的设置改动照常生效，只是不许泄漏给邻居。
+    """
+    path = Path(_SETTINGS_FIXTURE)
+    original = path.read_bytes() if path.exists() else None
+    yield
+    try:
+        if original is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(original)
+    except OSError:  # noqa: BLE001 - 恢复失败让下一个用例自己暴露问题
+        pass
+
+
 @pytest.fixture
 async def client(monkeypatch):
     # 测试装置是"受控的批处理客户端"（config.py 对 0 值的定位）：轮询型用例
@@ -117,8 +161,11 @@ async def client(monkeypatch):
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac
+    finally:
+        await _drain_active_runs()
     config_module.get_settings.cache_clear()
 
 

@@ -183,3 +183,99 @@ def test_a_skipped_validation_is_told_to_the_writer_explicitly() -> None:
     # 光说"没跑"不够：要明确禁止它写成测试通过。
     assert "未执行" in fact
     assert "不许写测试通过" in fact
+
+
+# ── 自动修复：改完必须重跑，不能复用「修之前」那条失败结果（v0.10.1 §6.5）──
+class _FreshGateway:
+    """校验通道真的重跑测试时用：返回一条全新的结果。"""
+
+    def __init__(self, status: str = "ok") -> None:
+        self.calls = 0
+        self.status = status
+
+    def get(self, name: str):
+        # 真实网关按名字取工具定义；校验通道用它判「要不要先问一句」。
+        return {"name": name}
+
+    def decide(self, tool, arguments, context):
+        # 完全访问：不打断、也不弹审批卡，这样用例才能走到"真的重跑一次"。
+        from types import SimpleNamespace
+
+        return SimpleNamespace(outcome="allow", rule="mode:bypass", risk="medium")
+
+    async def execute(self, tool: str, args: dict, context: object, node: str) -> dict:
+        self.calls += 1
+        passed = self.status == "ok"
+        return {
+            "tool": tool,
+            "status": self.status,
+            "ok": passed,
+            "output": f"fresh run: {'2 passed' if passed else '2 failed'}",
+            "data": {"command": "pytest -q", "exit_code": 0 if passed else 1},
+        }
+
+
+def _run_with(state: dict, gateway: _FreshGateway) -> tuple[dict, _Session]:
+    session = _Session()
+    session.gateway = gateway
+    # 重跑测试要先过审批判定，判定入口会读 session.context。
+    session.context = object()
+    update = asyncio.run(run_validation_node(state, session))
+    return update, session
+
+
+def _patch_result(ok: bool = True) -> dict:
+    return {
+        "tool": "apply_patch",
+        "status": "ok" if ok else "failed",
+        "ok": ok,
+        "output": "已修改文件：calc.py（2 行变更）",
+        "data": {"path": "calc.py", "change_type": "modified"},
+    }
+
+
+def test_a_test_run_before_the_fix_is_not_reused() -> None:
+    """先跑测试看到失败、再改代码 —— 修好了却被判「测试未通过」。
+
+    真机验收里就是这样：`run_tests` 失败 → `apply_patch` 修好 → 校验通道把**修之前**
+    那条失败结果原样复用，两次 `validation.completed` 输出逐字节相同，任务最后判
+    `failed`，理由还写着「相同失败重复出现」。用户看到的是「明明改对了却说没通过」。
+    """
+    state = {"tool_results": [_test_result("failed", exit_code=1, output="2 failed"), _patch_result()]}
+    gateway = _FreshGateway("ok")
+    update, session = _run_with(state, gateway)
+    assert gateway.calls == 1, "改完文件之后必须重新跑一次测试"
+    assert update["validation"]["passed"] is True
+    assert update["validation"]["status"] == "ok"
+    # 修好了就不该进修复回路，否则会被当成"还能再抢救一下"，白烧一轮
+    assert "repair_rounds" not in update
+    recorded = [p for k, _, p in session.recorder.events if k == "validation.completed"]
+    assert recorded and recorded[0]["passed"] is True
+
+
+def test_a_pass_before_a_later_edit_is_not_enough() -> None:
+    # 反向守卫：旧结果是"通过"，但之后又改过文件 —— 那份通过证明不了现在的代码。
+    state = {"tool_results": [_test_result("ok", exit_code=0), _patch_result()]}
+    gateway = _FreshGateway("failed")
+    update, _ = _run_with(state, gateway)
+    assert gateway.calls == 1
+    assert update["validation"]["passed"] is False
+    assert update["repair_rounds"] == 1
+
+
+def test_a_test_run_after_the_last_edit_is_reused() -> None:
+    # 改完再跑的那次就是最新证据，不该再烧一次测试（校验通道每次都要钱和时间）。
+    state = {"tool_results": [_patch_result(), _test_result("ok", exit_code=0)]}
+    gateway = _FreshGateway("ok")
+    update, _ = _run_with(state, gateway)
+    assert gateway.calls == 0
+    assert update["validation"]["passed"] is True
+
+
+def test_a_failed_edit_does_not_invalidate_the_previous_test_result() -> None:
+    # 补丁没打上（ok=False）就没有改动，前一次通过的测试仍然有效。
+    state = {"tool_results": [_test_result("ok", exit_code=0), _patch_result(ok=False)]}
+    gateway = _FreshGateway("ok")
+    update, _ = _run_with(state, gateway)
+    assert gateway.calls == 0
+    assert update["validation"]["passed"] is True

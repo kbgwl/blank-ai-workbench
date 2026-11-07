@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { chatProvider } from "@/components/settings/api";
 import { createTask, fetchProjects, fetchProviders, type Project, type Provider, type Task } from "@/components/tasks/api";
+import { SelectPopover } from "@/components/ui/select-popover";
 
 type Idea = { name: string; summary: string; upside: string; downside: string; effort: string };
 
@@ -113,10 +114,9 @@ export default function BrainstormPage() {
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-3">
           <div className="flex items-center gap-3 font-mono text-[10px] text-faint">
             <span>技术方案 · Debug · 产品拆解</span>
-            <select value={providerId} onChange={(event) => setProviderId(event.target.value)} className="bg-transparent text-muted outline-none" aria-label="选择模型">
-              <option value="">本地模板</option>
-              {providers.filter((provider) => provider.enabled).map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
-            </select>
+            <SelectPopover size="compact" ariaLabel="选择模型" value={providerId}
+              options={[{ value: "", label: "本地模板" }, ...providers.filter((provider) => provider.enabled).map((provider) => ({ value: provider.id, label: `${provider.name} · ${provider.model}` }))]}
+              onChange={setProviderId} menuMinWidth={220} />
           </div>
           <button type="button" onClick={start} disabled={busy || !question.trim()} className="rounded-md bg-brand px-3 py-1.5 text-[11px] font-medium text-bg hover:bg-brand/85 disabled:cursor-not-allowed disabled:opacity-40">{busy ? "处理中…" : "开始发散"}</button>
         </div>
@@ -131,7 +131,9 @@ export default function BrainstormPage() {
         </article>)}
       </section>}
       {ideas.length > 0 && <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface/25 p-4">
-        <div className="flex items-center gap-3 text-[11px] text-muted"><span>已选：{selectedIdea?.name ?? "未选择"}</span><select value={projectId} onChange={(event) => setProjectId(event.target.value)} className="rounded border border-line bg-transparent px-2 py-1 outline-none" aria-label="选择项目"><option value="">选择项目</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></div>
+        <div className="flex items-center gap-3 text-[11px] text-muted"><span>已选：{selectedIdea?.name ?? "未选择"}</span><SelectPopover size="compact" ariaLabel="选择项目" value={projectId}
+              options={[{ value: "", label: "选择项目" }, ...projects.map((project) => ({ value: project.id, label: project.name }))]}
+              onChange={setProjectId} menuMinWidth={200} /></div>
         <button type="button" onClick={convertToTask} disabled={!selectedIdea || !projectId || busy} className="rounded-md bg-brand px-3 py-1.5 text-[11px] font-medium text-bg hover:bg-brand/85 disabled:cursor-not-allowed disabled:opacity-40">转为开发任务 →</button>
       </section>}
       {createdTask && <div className="text-[11px] text-muted">任务已创建：<Link className="text-brand hover:underline" href={`/tasks/detail?id=${createdTask.id}`}>{createdTask.title}</Link></div>}

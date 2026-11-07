@@ -225,7 +225,13 @@ export function TasksView({ initialTaskId = null }: Props) {
       setActionError(null);
       if (block) setApprovalKey(block.key);
       try {
-        await decideApproval(selectedId, { decision, scope });
+        await decideApproval(selectedId, {
+          decision,
+          scope,
+          approvalId: block?.approvalId,
+          toolCallId: block?.toolCallId,
+          argumentsHash: block?.argumentsHash,
+        });
         await loadDetail(selectedId);
         reload();
       } catch (error: unknown) {
@@ -281,23 +287,18 @@ export function TasksView({ initialTaskId = null }: Props) {
         draft.thread === NEW_THREAD
           ? (await createThread(draft.projectId, { title: draft.title })).id
           : draft.thread;
-      const created = threadId ? await createTurn(threadId, draft) : await createTask(draft.projectId, draft);
+      // v0.10.1 §2：立即运行由后端就地启动（autoStart），前端不再补一次 /run。
+      const payload = autoRun ? { ...draft, autoStart: true } : draft;
+      const created = threadId ? await createTurn(threadId, payload) : await createTask(draft.projectId, payload);
       if (threadId) setThreadsRevision((value) => value + 1);
       setTasks((current) => [created, ...(current ?? []).filter((item) => item.id !== created.id)]);
       setSelectedId(created.id);
       setTask(created);
-      if (autoRun) {
-        try {
-          await runTask(created.id);
-        } catch (error: unknown) {
-          notify(`任务已创建，但启动失败：${errorMessage(error)}`);
-        }
-      }
       await loadDetail(created.id);
       reload();
       return created;
     },
-    [loadDetail, notify, reload],
+    [loadDetail, reload],
   );
 
   /** 继续聊：在同一个会话里开新的一轮，并且直接开跑——"接着说"的意思就是要它接着做。 */
@@ -308,22 +309,19 @@ export function TasksView({ initialTaskId = null }: Props) {
       setActionError(null);
       const title = prompt.split("\n")[0]?.trim().slice(0, 60) || `第 ${thread.turnCount + 1} 轮`;
       try {
+        // v0.10.1 §2：「接着说」就是要它接着做——autoStart 交给后端就地启动，
+        // 这里不再补一次 /run；启动失败后端记 task.dispatch_failed，任务留 draft。
         const created = await createTurn(thread.id, {
           projectId: thread.projectId,
           title,
           prompt,
           acceptanceCriteria: [],
+          autoStart: true,
         });
         setTasks((current) => [created, ...(current ?? []).filter((item) => item.id !== created.id)]);
         setSelectedId(created.id);
         setTask(created);
         setThreadsRevision((value) => value + 1);
-        try {
-          await runTask(created.id);
-        } catch (error: unknown) {
-          // 创建成功、启动失败：这一轮还在，用户可以在控制台里手动点运行。
-          notify(`这一轮已创建，但启动失败：${errorMessage(error)}`);
-        }
         await loadDetail(created.id);
         reload();
       } catch (error: unknown) {

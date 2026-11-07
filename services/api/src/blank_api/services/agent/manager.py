@@ -34,6 +34,12 @@ class RunManager:
         task = self._runs.get(run_id)
         return task is not None and not task.done()
 
+    @property
+    def active_run_ids(self) -> list[str]:
+        """当前还在跑的 run。测试夹具卸载时等它清空，避免下一个用例
+        drop_all 撞上还在收尾的 runner（SQLite 单写者 → database is locked）。"""
+        return [rid for rid, task in self._runs.items() if not task.done()]
+
     def _remove_if_current(self, run_id: str, finished: asyncio.Task) -> None:
         if self._runs.get(run_id) is finished:
             self._runs.pop(run_id, None)

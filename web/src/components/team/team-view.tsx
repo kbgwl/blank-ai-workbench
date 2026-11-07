@@ -5,6 +5,7 @@ import { MarkdownView } from "@/components/bot/markdown-view";
 import { Button, Field, Input, Notice, Spinner, StateLine } from "@/components/projects/ui";
 import { guardianFromPayload } from "@/components/tasks/api";
 import { guardianReviewLabel } from "@/components/tasks/status";
+import { SelectPopover } from "@/components/ui/select-popover";
 import { errorCode, errorMessage } from "@/lib/http";
 import {
   answerTeamQuestion,
@@ -62,8 +63,6 @@ const MODE_LABEL: Record<PermissionMode, string> = {
   bypass: "全部放行",
 };
 
-const selectClass =
-  "w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13px] text-text focus:border-brand/60 focus:outline-none";
 
 function timeOf(iso: string): string {
   const date = new Date(iso);
@@ -1620,51 +1619,46 @@ function BotEditor({
 
         <div className="flex gap-3">
           <Field label="模型供应商">
-            <select
+            <SelectPopover
+              ariaLabel="模型供应商"
               value={form.provider_id ?? ""}
-              onChange={(event) => setForm((current) => ({ ...current, provider_id: event.target.value }))}
-              className={selectClass}
-            >
-              <option value="">跟随默认供应商</option>
-              {boot.providers
-                .filter((provider) => provider.enabled)
-                .map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.name} · {provider.model}
-                  </option>
-                ))}
-            </select>
+              options={[
+                { value: "", label: "跟随默认供应商" },
+                ...boot.providers
+                  .filter((provider) => provider.enabled)
+                  .map((provider) => ({ value: provider.id, label: `${provider.name} · ${provider.model}` })),
+              ]}
+              onChange={(value) => setForm((current) => ({ ...current, provider_id: value }))}
+              menuMinWidth={240}
+            />
           </Field>
           <Field label="权限模式">
-            <select
-              value={form.permission_mode}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, permission_mode: event.target.value as PermissionMode }))
+            <SelectPopover
+              ariaLabel="权限模式"
+              value={form.permission_mode ?? ""}
+              options={(Object.keys(MODE_LABEL) as PermissionMode[]).map((mode) => ({
+                value: mode,
+                label: MODE_LABEL[mode],
+              }))}
+              onChange={(value) =>
+                setForm((current) => ({ ...current, permission_mode: value as PermissionMode }))
               }
-              className={selectClass}
-            >
-              {(Object.keys(MODE_LABEL) as PermissionMode[]).map((mode) => (
-                <option key={mode} value={mode}>
-                  {MODE_LABEL[mode]}
-                </option>
-              ))}
-            </select>
+              menuMinWidth={200}
+            />
           </Field>
         </div>
 
         <Field label="工作区">
-          <select
+          <SelectPopover
+            ariaLabel="工作区"
             value={form.workspace_id ?? ""}
-            onChange={(event) => setForm((current) => ({ ...current, workspace_id: event.target.value }))}
-            className={selectClass}
-          >
-            <option value="">跟随项目当前工作区</option>
-            {workspaces.map((workspace) => (
-              <option key={workspace.id} value={workspace.id}>
-                {workspace.label}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: "", label: "跟随项目当前工作区" },
+              ...workspaces.map((workspace) => ({ value: workspace.id, label: workspace.label })),
+            ]}
+            onChange={(value) => setForm((current) => ({ ...current, workspace_id: value }))}
+            menuMinWidth={220}
+          />
         </Field>
 
         <div className="flex gap-3">
@@ -1680,15 +1674,17 @@ function BotEditor({
             />
           </Field>
           <Field label="状态">
-            <select
+            <SelectPopover
+              ariaLabel="成员状态"
               value={form.enabled ? "on" : "off"}
               disabled={admin}
-              onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.value === "on" }))}
-              className={selectClass}
-            >
-              <option value="on">启用</option>
-              <option value="off">停用（不再被派活）</option>
-            </select>
+              options={[
+                { value: "on", label: "启用" },
+                { value: "off", label: "停用（不再被派活）" },
+              ]}
+              onChange={(value) => setForm((current) => ({ ...current, enabled: value === "on" }))}
+              menuMinWidth={200}
+            />
           </Field>
         </div>
 
@@ -1813,18 +1809,14 @@ function GroupEditor({
             />
           </Field>
           <Field label="项目">
-            <select
-              value={form.project_id}
+            <SelectPopover
+              ariaLabel="项目"
+              value={form.project_id ?? ""}
               disabled={Boolean(group)}
-              onChange={(event) => setForm((current) => ({ ...current, project_id: event.target.value }))}
-              className={selectClass}
-            >
-              {boot.projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
+              options={boot.projects.map((project) => ({ value: project.id, label: project.name }))}
+              onChange={(value) => setForm((current) => ({ ...current, project_id: value }))}
+              menuMinWidth={220}
+            />
           </Field>
         </div>
 

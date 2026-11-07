@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { SelectPopover } from "../ui/select-popover";
 import { Button, Notice, Spinner } from "@/components/projects/ui";
 import { errorMessage, streamChat, type Provider } from "./api";
 
@@ -79,20 +80,20 @@ export function StreamDemo({ providers, onFinished }: Props) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <select
-          value={active?.id ?? ""}
-          onChange={(event) => setProviderId(event.target.value)}
-          aria-label="选择供应商"
-          disabled={enabled.length === 0}
-          className="min-w-0 flex-1 rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] text-text focus:border-brand/60 focus:outline-none disabled:opacity-60"
-        >
-          {enabled.length === 0 && <option value="">没有已启用的供应商</option>}
-          {enabled.map((provider) => (
-            <option key={provider.id} value={provider.id}>
-              {provider.name} · {provider.model}
-            </option>
-          ))}
-        </select>
+        <div className="min-w-0 flex-1">
+          <SelectPopover
+            ariaLabel="选择供应商"
+            value={active?.id ?? ""}
+            disabled={enabled.length === 0}
+            options={
+              enabled.length === 0
+                ? [{ value: "", label: "没有已启用的供应商", disabled: true }]
+                : enabled.map((provider) => ({ value: provider.id, label: `${provider.name} · ${provider.model}` }))
+            }
+            onChange={setProviderId}
+            menuMinWidth={240}
+          />
+        </div>
         {status === "running" ? (
           <Button variant="danger" onClick={stop}>
             停止

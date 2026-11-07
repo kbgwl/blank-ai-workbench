@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
+import type { ReactNode, TextareaHTMLAttributes } from "react";
 import { statusMeta } from "./status";
 
 export function Textarea({ className = "", ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
@@ -12,27 +12,9 @@ export function Textarea({ className = "", ...props }: TextareaHTMLAttributes<HT
   );
 }
 
-export function Select({ className = "", children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return (
-    <div className="relative">
-      <select
-        className={`w-full appearance-none rounded-lg border border-line bg-surface-2 py-2 pr-8 pl-3 text-[13px] text-text focus:border-brand/60 focus:outline-none disabled:text-faint ${className}`}
-        {...props}
-      >
-        {children}
-      </select>
-      <svg
-        viewBox="0 0 24 24"
-        className="pointer-events-none absolute top-1/2 right-2.5 size-3.5 -translate-y-1/2 text-faint"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-      >
-        <path d="m6 9 6 6 6-6" />
-      </svg>
-    </div>
-  );
-}
+// 原生 `<select>` 包装器已删除（v0.10.1 §5）：业务下拉一律用
+// `components/ui/select-popover` 的 SelectPopover——浏览器默认菜单不吃主题、
+// 不能带描述与选中态，任务书验收要求业务界面原生 select 数量为 0。
 
 export function StatusBadge({ status, className = "" }: { status: string; className?: string }) {
   const meta = statusMeta(status);

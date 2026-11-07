@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { chatProvider } from "@/components/settings/api";
-import { createTask, fetchProjects, fetchProviders, fetchTasks, runTask, type Project, type Provider, type Task } from "@/components/tasks/api";
+import { createTask, fetchProjects, fetchProviders, fetchTasks, type Project, type Provider, type Task } from "@/components/tasks/api";
 import { useModel } from "@/components/model";
 
 type Message = { id: string; role: "user" | "agent"; text: string; task?: Task };
@@ -35,16 +35,17 @@ export function ChatHome() {
     setBusy(true);
     try {
       if (project) {
+        // v0.10.1 §2：后端就地启动，不再前端补一次 /run（关窗也照跑）。
         const task = await createTask(project.id, {
           projectId: project.id,
           providerId: provider?.id,
           title: text.split("\n")[0].slice(0, 80),
           prompt: text,
           acceptanceCriteria: [],
+          autoStart: true,
         });
         setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
         setMessages((current) => [...current, { id: crypto.randomUUID(), role: "agent", text: "已开始执行。完成后我会只汇报结果、变更和未验证项。", task }]);
-        await runTask(task.id);
       } else if (provider) {
         const response = await chatProvider(provider.id, text);
         setMessages((current) => [...current, { id: crypto.randomUUID(), role: "agent", text: response.text }]);

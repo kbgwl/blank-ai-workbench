@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import random
@@ -2225,6 +2226,43 @@ async def guardian_reviews_for(session: AgentSession) -> list[dict]:
     ]
 
 
+def approval_resource_path(name: str, arguments: dict) -> str:
+    """从工具参数里提取这次操作针对的资源路径（v0.10.1 §3.2）。
+
+    审批事件的完整身份里要有"动的是哪个东西"：审计里只写 `run_shell` 不写命令、
+    只写 `read_file` 不写路径，出了争议就没法对质。取常见键的第一个非空值，
+    命令类工具回退到 command 首行；都不满足就空串，不编造。
+    """
+    for key in ("path", "file", "file_path", "target", "dir", "directory", "url"):
+        value = str(arguments.get(key) or "").strip()
+        if value:
+            return value
+    command = str(arguments.get("command") or "").strip()
+    return command.splitlines()[0][:200] if command else ""
+
+
+def approval_identity(
+    task_id: str, call_key: str, tool: str, arguments: dict
+) -> dict[str, str]:
+    """一次待审批调用的稳定身份（v0.10.1 §3.2）。
+
+    唯一匹配条件是 approval_id + tool_call_id + tool_name + arguments_hash——
+    不能只按文件名、工具名或 task_id 判定授权（Clipboard_Screenshot 教训）。
+    approval_id 从 task + 模型调用 id + 参数哈希派生：同一张卡在图重放/审批恢复
+    时算出同一个 id（幂等判定的依据），不同的调用永不撞号。
+    """
+    args_hash = approval_key(tool, arguments)
+    raw = f"{task_id}|{call_key}|{tool}|{args_hash}"
+    approval_id = "apr-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    return {
+        "approval_id": approval_id,
+        "tool_call_id": call_key,
+        "tool": tool,
+        "arguments_hash": args_hash,
+        "resource_path": approval_resource_path(tool, arguments),
+    }
+
+
 def approval_ttl_seconds() -> int:
     """审批卡的有效期。默认 30 分钟，夹在 60 秒 ~ 24 小时之间。
 
@@ -2356,12 +2394,19 @@ async def _approval_gate(
                 )
                 continue
         expires_at = (datetime.now(timezone.utc) + timedelta(seconds=approval_ttl_seconds())).isoformat()
+        # v0.10.1 §3.2：这张卡的完整身份。事件、证据包、审批 API 三处共用同一组
+        # 字段——前端提交时带回 approval_id/tool_call_id/arguments_hash，后端
+        # 校验不匹配就拒绝，多张卡并存也不会批错那张。
+        identity = approval_identity(
+            str(session.context.task_id), key, name, arguments
+        )
         answer = interrupt(
             {
                 "tool": name,
                 "arguments": arguments,
                 "risk_level": decision.risk,
                 "approval_key": approval_key(name, arguments),
+                **identity,
                 "permission_mode": session.permission_mode,
                 "permission_rule": decision.rule,
                 "command_prefix": decision.prefix,
@@ -2389,6 +2434,7 @@ async def _approval_gate(
                     "tool": name,
                     "arguments": arguments,
                     "approval_key": approval_key(name, arguments),
+                    **identity,
                     "scope": scope,
                     "prefix": learned,
                     # 老客户端（旧版界面与安装包）还会硬传 scope=tool。账本记不记是
@@ -2423,7 +2469,13 @@ async def _approval_gate(
             await session.recorder.add(
                 "approval.denied",
                 node,
-                {"tool": name, "arguments": arguments, "scope": scope, "prefix": learned},
+                {
+                    "tool": name,
+                    "arguments": arguments,
+                    **identity,
+                    "scope": scope,
+                    "prefix": learned,
+                },
             )
     return denied, blocked
 
@@ -3329,6 +3381,20 @@ def _changed_paths(results: list[dict]) -> list[str]:
     return paths
 
 
+def _mutated_after(results: list[dict], entry: dict) -> bool:
+    """``entry`` 之后还有没有成功的写动作。用身份找位置，避免两份相同结果认错。"""
+    index = next((i for i in range(len(results) - 1, -1, -1) if results[i] is entry), -1)
+    if index < 0:
+        return False
+    for item in results[index + 1:]:
+        if not item.get("ok"):
+            continue
+        data = item.get("data") or {}
+        if item.get("tool") in MUTATING_TOOLS or data.get("change_type"):
+            return True
+    return False
+
+
 def _skipped_validation(reason: str, *, command: str = "", output_tail: str = "") -> dict:
     """构造「本次没有自动化校验」的结论。
 
@@ -3419,6 +3485,13 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
     )
     results = state.get("tool_results") or []
     executed = [item for item in results if item.get("tool") == "run_tests"]
+    # 「先跑测试看到失败，再改代码」是自动修复最常见的顺序。旧逻辑一律取 results 里
+    # 最后一条 run_tests，于是校验通道复用了**修之前**那条失败结果：代码已经改对，
+    # 任务仍被判「测试未通过」，还会因为「相同失败重复出现」停掉修复回路
+    # （v0.10.1 真机验收实测，见 docs/workbuddy-v101-acceptance-report.md §6.5）。
+    # 只有发生在最后一次文件改动之后的测试，才能证明**当前**代码是好的。
+    if executed and _mutated_after(results, executed[-1]):
+        executed = []
     changed = _changed_paths(results)
     if state.get("readonly") or session.readonly:
         # 只读调研里被拒掉的 run_tests 也会出现在 results 里。不在这里提前返回，

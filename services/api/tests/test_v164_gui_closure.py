@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 
 from sqlalchemy import select
@@ -25,6 +26,17 @@ from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
     create_provider,
     env,
 )
+
+
+async def _wait_terminal(task_id: str, seconds: float = 15.0) -> str:
+    """等后端自主启动的 run 跑到终态（v0.10.1 §2 的轮询替身）。"""
+    deadline = asyncio.get_event_loop().time() + seconds
+    while asyncio.get_event_loop().time() < deadline:
+        row = await _row(task_id)
+        if row.status in ("succeeded", "failed", "cancelled"):
+            return str(row.status)
+        await asyncio.sleep(0.1)
+    return str((await _row(task_id)).status)
 
 
 async def _run_task(env, project_id: str, goal: str, scenario: str, *, max_steps: int = 6) -> str:
@@ -132,7 +144,9 @@ async def test_daily_answer_uses_current_turn_only(env, workspace):  # noqa: F81
         json={"title": "问题一", "goal": "介绍一下你自己", "scenario": "daily"},
     )
     first_id = first.json()["id"]
-    await env.client.post(f"{API}/tasks/{first_id}/run", json={})
+    # v0.10.1 §2：后端已就地启动，前端（和这里）不再补一枪 /run——那会变成
+    # 第二次执行，把 mock 的脚本步数提前耗光。
+    assert await _wait_terminal(first_id) == "succeeded"
     assert "甲" in ((await _row(first_id)).result_summary or "")
 
     env.mock.reset([{"content": '{"intent": "answer", "answer": "第二问的答案：乙"}', "tool_calls": []}])
@@ -141,7 +155,7 @@ async def test_daily_answer_uses_current_turn_only(env, workspace):  # noqa: F81
         json={"title": "问题二", "goal": "再讲一个别的", "scenario": "daily"},
     )
     second_id = second.json()["id"]
-    await env.client.post(f"{API}/tasks/{second_id}/run", json={})
+    assert await _wait_terminal(second_id) == "succeeded"
     summary = (await _row(second_id)).result_summary or ""
     assert "乙" in summary
     assert "甲" not in summary, "第二轮把上一轮的答案又讲了一遍"

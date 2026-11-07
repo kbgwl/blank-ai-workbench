@@ -6,6 +6,7 @@ import { Button, Field, Input, Notice, StateLine } from "@/components/projects/u
 import { Panel } from "@/components/panel";
 import { errorMessage, fetchThreads, type Project, type Provider, type Task, type TaskDraft, type Thread } from "./api";
 import { StatusBadge } from "./bits";
+import { SelectPopover } from "../ui/select-popover";
 import { formatDateTime } from "./format";
 
 type Props = {
@@ -122,23 +123,22 @@ export function TaskListPane({
         <form className="flex flex-col gap-3" onSubmit={(event) => void submit(false, event)}>
           <Field label="项目">
             {projectReady ? (
-              <select
+              <SelectPopover
+                ariaLabel="选择项目"
                 value={chosenProject}
-                onChange={(event) => {
-                  setProjectId(event.target.value);
+                options={usableProjects.map((project) => ({
+                  value: project.id,
+                  label: project.name,
+                  description: project.workspaces.length === 0 ? "未绑定工作区" : (project.workspaces[0]?.label || "工作区"),
+                  disabled: project.workspaces.length === 0,
+                }))}
+                onChange={(next) => {
+                  setProjectId(next);
                   // 会话 id 属于上一个项目，切换后继续带着它只会在后端撞 404。
                   setThreadChoice("");
                 }}
-                aria-label="选择项目"
-                className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13px] text-text focus:border-brand/60 focus:outline-none"
-              >
-                {usableProjects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                    {project.workspaces.length === 0 ? "（未绑定工作区）" : `· ${project.workspaces[0]?.label || "工作区"}`}
-                  </option>
-                ))}
-              </select>
+                menuMinWidth={260}
+              />
             ) : (
               <Input value={PROJECT_PLACEHOLDER} readOnly disabled placeholder={projectsError ?? "正在读取项目…"} aria-label="选择项目" />
             )}
@@ -148,22 +148,23 @@ export function TaskListPane({
             {threadsError ? (
               <p className="text-[11px] leading-relaxed text-faint">会话列表不可用（{threadsError}），只能建独立任务。</p>
             ) : (
-              <select
+              <SelectPopover
+                ariaLabel="选择会话"
                 value={threadChoice}
-                onChange={(event) => setThreadChoice(event.target.value)}
-                aria-label="选择会话"
-                className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13px] text-text focus:border-brand/60 focus:outline-none"
-              >
-                <option value="">独立任务（不带上下文）</option>
-                <option value={NEW_THREAD}>+ 新会话（这一轮作为第 1 轮）</option>
-                {(threads ?? [])
-                  .filter((thread) => thread.status === "active")
-                  .map((thread) => (
-                    <option key={thread.id} value={thread.id}>
-                      续聊 · {thread.title}（{thread.turnCount} 轮）
-                    </option>
-                  ))}
-              </select>
+                options={[
+                  { value: "", label: "独立任务（不带上下文）" },
+                  { value: NEW_THREAD, label: "+ 新会话（这一轮作为第 1 轮）" },
+                  ...(threads ?? [])
+                    .filter((thread) => thread.status === "active")
+                    .map((thread) => ({
+                      value: thread.id,
+                      label: `续聊 · ${thread.title}`,
+                      description: `${thread.turnCount} 轮`,
+                    })),
+                ]}
+                onChange={setThreadChoice}
+                menuMinWidth={260}
+              />
             )}
             <p className="mt-1 text-[10px] leading-relaxed text-faint">
               续聊会带上这条会话前几轮的结论，不是全部消息；独立任务的开销与以前完全一样。
@@ -203,22 +204,25 @@ export function TaskListPane({
           </Field>
 
           <Field label="模型供应商">
-            <select
+            <SelectPopover
+              ariaLabel="选择模型供应商"
               value={providerId}
-              onChange={(event) => setProviderId(event.target.value)}
-              aria-label="选择模型供应商"
-              className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13px] text-text focus:border-brand/60 focus:outline-none"
-            >
-              <option value="">跟随默认供应商</option>
-              {(providers ?? []).map((provider) => (
-                <option key={provider.id} value={provider.id}>
-                  {provider.name}
-                  {provider.model ? ` · ${provider.model}` : ""}
-                  {provider.enabled ? "" : "（已停用）"}
-                </option>
-              ))}
-              {providers !== null && providers.length === 0 && <option value="">后端没有可用供应商</option>}
-            </select>
+              options={
+                providers !== null && providers.length === 0
+                  ? [{ value: "", label: "后端没有可用供应商", disabled: true }]
+                  : [
+                      { value: "", label: "跟随默认供应商" },
+                      ...(providers ?? []).map((provider) => ({
+                        value: provider.id,
+                        label: `${provider.name}${provider.model ? ` · ${provider.model}` : ""}`,
+                        disabled: !provider.enabled,
+                        warning: provider.enabled ? undefined : "已停用",
+                      })),
+                    ]
+              }
+              onChange={setProviderId}
+              menuMinWidth={260}
+            />
           </Field>
           {providersError && <Notice tone="muted">供应商列表读取失败：{providersError}</Notice>}
           {!projectReady && projectsError && <Notice tone="warn">项目列表读取失败：{projectsError}</Notice>}

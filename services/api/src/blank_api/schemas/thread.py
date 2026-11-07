@@ -25,6 +25,17 @@ class ThreadTurnIn(BaseModel):
     max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=HARD_MAX_STEPS)
     # 这一轮贴的图片。和 TaskCreate 同名同义：一轮任务就是一条消息。
     attachments: list[AttachmentIn] = Field(default_factory=list, max_length=8)
+    # v0.10.1 §2：auto_start 由后端消费——True 时创建即入队/启动，不再等前端
+    # 第二次调用 /start。None 表示交给监督者判定（decide_dispatch 的七条件）；
+    # 显式 True 是用户的直接意愿（可越过 manual 模式的排队，越过不了 blocked /
+    # wait_user 这类「环境本身不成立」的判定）；显式 False 永远不自动启动。
+    auto_start: bool | None = None
+    # v0.10.1 §4：发送栏的权限选择。非空时覆盖设置页默认档，并随任务快照固定——
+    # 任务创建后再改全局默认，不影响已经在跑的这一轮。
+    permission_mode: Literal["", "default", "accept_edits", "plan", "bypass"] = ""
+    # 仅日常场景生效：True=记住习惯，False=不记住。与 TaskRunIn.memory_opt_in 同义，
+    # 创建时带上就不必再靠 start 请求补发。
+    memory_opt_in: bool = False
 
 
 class ThreadOut(BaseModel):

@@ -212,6 +212,15 @@ export type TaskDraft = {
   providerId?: string;
   /** 场景（scenarios.py 五选一）。缺省 = 开发场景。 */
   scenario?: string;
+  /**
+   * 发送栏的权限档（v0.10.1 §4）：default=询问 / accept_edits / plan=计划 /
+   * bypass=完全访问。空缺 = 用设置页默认档。它随任务快照固定。
+   */
+  permissionMode?: string;
+  /** 仅日常场景有意义的记忆开关；创建时就带上，不必再靠 start 请求补发。 */
+  memoryOptIn?: boolean;
+  /** 显式要求（或禁止）后端立即启动。缺省 = 交给后端监督者判定。 */
+  autoStart?: boolean;
   /** 这一轮随消息一起给的图片。只传 id 与名字：文件本体已经上传过了。 */
   attachments?: AttachmentRef[];
   /** 目标会话：已有会话 id，或 "__new__" 表示新开一条并把这一轮作为第 1 轮。
@@ -394,6 +403,10 @@ export function createTurn(threadId: string, draft: TaskDraft): Promise<Task> {
   if (draft.providerId) body.provider_id = draft.providerId;
   // 场景是任务级属性：创建时存档，运行请求里再带一次保证切换立即生效。
   if (draft.scenario) body.scenario = draft.scenario;
+  // v0.10.1 §4：权限档与记忆开关在创建时刻入快照；auto_start 交给后端就地启动。
+  if (draft.permissionMode) body.permission_mode = draft.permissionMode;
+  if (draft.memoryOptIn !== undefined) body.memory_opt_in = draft.memoryOptIn;
+  if (draft.autoStart !== undefined) body.auto_start = draft.autoStart;
   return request<unknown>(`${api}/threads/${threadId}/turns`, {
     method: "POST",
     ...jsonInit,
@@ -767,6 +780,10 @@ export type PendingApproval = {
   /** 后端下发的可选作用域，前端不自己编造档位。 */
   scopes: ApprovalGrant[];
   mode: string;
+  /** v0.10.1 §3 审批身份：提交时原样带回，后端按它精确匹配这张卡。 */
+  approvalId: string;
+  argumentsHash: string;
+  resourcePath: string;
   /** 独立审查员的话。undefined=这张卡是"审查进载荷之前"的老任务；null=记过了、当时审查关着。 */
   guardian?: GuardianVerdictInfo | null;
 };
@@ -1343,6 +1360,9 @@ function normalizeApprovals(container: unknown): PendingApproval[] {
         prefix: textOf(item, "suggested_prefix", "prefix"),
         scopes: normalizeApprovalScopes(item),
         mode: textOf(item, "permission_mode", "mode"),
+        approvalId: textOf(item, "approval_id"),
+        argumentsHash: textOf(item, "arguments_hash"),
+        resourcePath: textOf(item, "resource_path"),
         ...(guardian === undefined ? {} : { guardian }),
       };
     });
@@ -1841,6 +1861,12 @@ export function createTask(projectId: string, draft: TaskDraft): Promise<Task> {
   if (draft.providerId) {
     body.provider_id = draft.providerId;
   }
+  // v0.10.1：场景/权限/记忆/auto_start 创建时就带上——后端在 create_task 里
+  // 就地启动，前端不再读快照后补一次 /run（关窗/断网任务也照跑）。
+  if (draft.scenario) body.scenario = draft.scenario;
+  if (draft.permissionMode) body.permission_mode = draft.permissionMode;
+  if (draft.memoryOptIn !== undefined) body.memory_opt_in = draft.memoryOptIn;
+  if (draft.autoStart !== undefined) body.auto_start = draft.autoStart;
   return request<unknown>(`${api}/projects/${projectId}/tasks`, {
     method: "POST",
     ...jsonInit,
@@ -1854,13 +1880,15 @@ export function createTask(projectId: string, draft: TaskDraft): Promise<Task> {
 
 export function runTask(
   taskId: string,
-  input: { approveHigh?: boolean; scenario?: string; memoryOptIn?: boolean } = {},
+  input: { approveHigh?: boolean; scenario?: string; memoryOptIn?: boolean; permissionMode?: string } = {},
 ): Promise<unknown> {
   const body: Record<string, unknown> = {};
   if (input.approveHigh) body.approve_high_risk = true;
   // 场景切换立即生效：空串=沿用创建时存档。记忆开关只有日常场景会传 true。
   if (input.scenario) body.scenario = input.scenario;
   if (input.memoryOptIn !== undefined) body.memory_opt_in = input.memoryOptIn;
+  // 权限档：补发时仍以发送栏的选择为准（与任务快照一致），不悄悄落回全局默认。
+  if (input.permissionMode) body.permission_mode = input.permissionMode;
   if (typeof window !== "undefined") {
     try {
       const roles = JSON.parse(window.localStorage.getItem("blank.model.roles") ?? "{}") as Record<string, string>;
@@ -1892,13 +1920,26 @@ export function steerTask(taskId: string, message: string): Promise<{ queued: bo
   }).then((body) => ({ queued: body?.queued !== false, queuedAt: body?.queued_at ?? null }));
 }
 
-/** POST /tasks/{id}/approval：批准或驳回待审批的高风险操作，返回 {task, evidence}。 */
+/** POST /tasks/{id}/approval：批准或驳回待审批的高风险操作，返回 {task, evidence}。
+ *  v0.10.1 §3：审批按身份寻址——提交时带上卡片上的 approval_id/tool_call_id/
+ *  arguments_hash，后端校验不匹配就拒绝（不再出现"同意了却说没有同意"）。 */
 export function decideApproval(
   taskId: string,
-  input: { decision: "approve" | "deny"; scope?: ApprovalScope },
+  input: {
+    decision: "approve" | "deny";
+    scope?: ApprovalScope;
+    approvalId?: string;
+    toolCallId?: string;
+    argumentsHash?: string;
+  },
 ): Promise<{ used: string }> {
   const body: Record<string, unknown> = { approve: input.decision === "approve" };
   if (input.decision === "approve" && input.scope) body.scope = input.scope;
+  if (input.approvalId) body.approval_id = input.approvalId;
+  // 老卡片没有 tool_call_id 时 normalize 会回落成 approval_id——把它当
+  // tool_call_id 发回去必然 mismatch，不如不发（后端按 approval_id 对号）。
+  if (input.toolCallId && input.toolCallId !== input.approvalId) body.tool_call_id = input.toolCallId;
+  if (input.argumentsHash) body.arguments_hash = input.argumentsHash;
   return request<unknown>(`${api}/tasks/${taskId}/approval`, {
     method: "POST",
     ...jsonInit,

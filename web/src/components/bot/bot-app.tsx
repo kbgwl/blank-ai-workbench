@@ -63,6 +63,7 @@ const SUGGESTIONS = [
 const PROVIDER_KEY = "blank.bot.provider";
 const SCENARIO_KEY = "blank.bot.scenario";
 const MEMORY_KEY = "blank.bot.memory";
+const PERMISSION_KEY = "blank.bot.permission";
 
 /** 最近用过的工作区按项目记在本地：跨会话保留，但绝不进库（它只是偏好，不是数据）。 */
 const RECENT_WS_PREFIX = "blank.recent-workspaces.";
@@ -126,6 +127,9 @@ export function BotApp() {
   const [scenarios, setScenarios] = useState<ScenarioInfo[]>([]);
   const [scenarioKey, setScenarioKey] = useState("dev");
   const [memoryOptIn, setMemoryOptIn] = useState(false);
+  // v0.10.1 §4：发送栏的权限档。默认「询问」（= 后端 default 档）。
+  // 界面文案是「询问 / 完全访问 / 计划」，内部映射回既有四档枚举。
+  const [permissionMode, setPermissionMode] = useState("default");
 
   const [threads, setThreads] = useState<Thread[] | null>(null);
   const [threadsError, setThreadsError] = useState<string | null>(null);
@@ -221,6 +225,11 @@ export function BotApp() {
           const savedScenario = window.localStorage.getItem(SCENARIO_KEY) ?? "";
           if (savedScenario) setScenarioKey(savedScenario);
           setMemoryOptIn(window.localStorage.getItem(MEMORY_KEY) === "on");
+          // 权限档只认四个合法值，脏值保持询问模式（后端会再兜一层）。
+          const savedPermission = window.localStorage.getItem(PERMISSION_KEY) ?? "";
+          if (["default", "accept_edits", "plan", "bypass"].includes(savedPermission)) {
+            setPermissionMode(savedPermission);
+          }
         } catch {
           // 隐私模式下 localStorage 会抛错，忽略即可，用默认模型照样能聊。
         }
@@ -689,6 +698,7 @@ export function BotApp() {
         providerId,
         scenario: scenarioKey,
         memoryOptIn,
+        permissionMode,
         attachments: ready,
       });
       const created: BotTurn = {
@@ -734,7 +744,7 @@ export function BotApp() {
     } finally {
       setSending(false);
     }
-  }, [clearImages, conv, draft, images, memoryOptIn, projectId, providerId, scenarioKey, sending, workspaceReady, workspaces.length, canPickWorkspace, pickWorkspace]);
+  }, [clearImages, conv, draft, images, memoryOptIn, permissionMode, projectId, providerId, scenarioKey, sending, workspaceReady, workspaces.length, canPickWorkspace, pickWorkspace]);
 
   const stop = useCallback(() => {
     if (!activeTaskId) return;
@@ -788,7 +798,13 @@ export function BotApp() {
       if (!activeTaskId) return;
       setActionBusy(true);
       setActionError(null);
-      decideApproval(activeTaskId, { decision, scope })
+      decideApproval(activeTaskId, {
+        decision,
+        scope,
+        approvalId: approval.approvalId,
+        toolCallId: approval.toolCallId,
+        argumentsHash: approval.argumentsHash,
+      })
         .then(() => {
           setEvidence(null);
           live.reload();
@@ -1134,6 +1150,15 @@ export function BotApp() {
               window.localStorage.setItem(MEMORY_KEY, value ? "on" : "off");
             } catch {
               // 同上：落盘失败只影响下次打开时的默认值。
+            }
+          }}
+          permissionMode={permissionMode}
+          onPermissionChange={(value) => {
+            setPermissionMode(value);
+            try {
+              window.localStorage.setItem(PERMISSION_KEY, value);
+            } catch {
+              // 同上：落盘失败只影响下次打开时的默认档。
             }
           }}
           draft={draft}

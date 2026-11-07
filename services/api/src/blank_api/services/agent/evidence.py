@@ -559,6 +559,8 @@ async def build_evidence(
     ]
     # 待审批卡只在任务真的在等待时才有意义；任务已结束时挂着一张必然 409 的卡，
     # 用户点什么都是徒劳（benchmark coding-036 实测：任务 succeeded 后证据包仍报「待审批」）。
+    # v0.10.1 §3.2：审批卡必须带完整身份（approval_id/tool_call_id/arguments_hash/
+    # resource_path）——前端提交审批时原样带回，后端按身份匹配，不能按文件名猜。
     pending_approvals = [
         {
             "tool_call_id": call.id,
@@ -568,6 +570,7 @@ async def build_evidence(
             "message": call.result_summary,
             **_approval_lifecycle(approval_context.get("expires_at")),
             **_approval_hints(approval_context, call.name, call.arguments),
+            **_approval_identity_fields(approval_context, call.name),
         }
         for call in _unresolved_awaiting
         if task.status == "waiting_approval"
@@ -587,6 +590,7 @@ async def build_evidence(
                     "message": "高风险操作等待人工审批",
                     **_approval_lifecycle(payload.get("expires_at") if isinstance(payload, dict) else None),
                     **_approval_hints(payload, str(payload.get("tool") or ""), payload.get("arguments") or {}),
+                    **_approval_identity_fields(payload if isinstance(payload, dict) else {}, str(payload.get("tool") or "")),
                 }
             )
             break
@@ -1096,6 +1100,26 @@ def _guardian_history(events: list[AgentEvent]) -> dict[str, Any]:
         "windows": windows,
         "windows_unrecorded": unrecorded,
     }
+
+
+def _approval_identity_fields(context: dict, tool: str) -> dict[str, Any]:
+    """把审批身份（v0.10.1 §3.2）摘到待审批卡上。
+
+    上下文只描述最近一次 approval.required 那张卡：只有卡上的工具和它一致时才带
+    身份，其他卡不冒领——多张卡并存时，提交哪张就校验哪张，不能拿 A 的 id 批 B。
+    ``tool_call_id`` 刻意**不**在这里覆盖：真实路径的中断卡本来就没有 ToolCall 行
+    （卡上的 tool_call_id 就是中断事件里的调用 id），而网关形态的 awaiting 行有自己
+    的行 id——两个 id 各有含义，校验侧两个都认，展示侧不偷换。
+    老任务的中断事件没有这些键，返回空 dict，行为与从前一致。
+    """
+    if not context or str(context.get("tool") or "") != tool:
+        return {}
+    fields: dict[str, Any] = {}
+    for key in ("approval_id", "arguments_hash", "resource_path"):
+        value = context.get(key)
+        if value:
+            fields[key] = str(value)
+    return fields
 
 
 def _approval_hints(context: dict, tool: str, arguments) -> dict[str, Any]:

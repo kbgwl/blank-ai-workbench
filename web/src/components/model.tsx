@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { fetchProviders, type Provider } from "@/components/settings/api";
+import { SelectPopover } from "./ui/select-popover";
 
 /**
  * 全站只共享一件事：当前用哪个模型。
@@ -54,9 +55,10 @@ export function ModelSwitcher() {
   const selected = providers.find((provider) => provider.id === modelId);
   return <label className="flex items-center gap-2 rounded-md border border-line bg-surface/40 px-2 py-1 text-[11px] text-muted">
     <span className="text-faint">模型</span>
-    <select value={modelId} onChange={(event) => setModelId(event.target.value)} className="max-w-52 bg-transparent text-text outline-none" aria-label="选择模型" disabled={providers.length === 0}>
-      {providers.length === 0 ? <option value="">未配置模型</option> : providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
-    </select>
+    <SelectPopover size="compact" ariaLabel="选择模型" value={modelId}
+      disabled={providers.length === 0}
+      options={providers.length === 0 ? [{ value: "", label: "未配置模型" }] : providers.map((provider) => ({ value: provider.id, label: `${provider.name} · ${provider.model}` }))}
+      onChange={setModelId} menuMinWidth={220} />
     {selected && <span className="hidden text-faint lg:inline">{selected.kind}</span>}
   </label>;
 }

@@ -134,7 +134,9 @@ async def _make_thread(env, project_id: str) -> str:
 
 
 async def _add_turn(env, thread_id: str, title: str, goal: str, provider_id: str | None) -> str:
-    body: dict = {"title": title, "goal": goal, "acceptance_criteria": [], "max_steps": 6}
+    # v0.10.1 起后端在创建轮次时就地启动（auto_start 监督者判定）。这几个用例
+    # 验证的正是手动 /run 的行为，必须显式关掉自动启动，否则随后的 /run 撞 409。
+    body: dict = {"title": title, "goal": goal, "acceptance_criteria": [], "max_steps": 6, "auto_start": False}
     if provider_id:
         body["provider_id"] = provider_id
     resp = await env.client.post(f"{API}/threads/{thread_id}/turns", json=body)

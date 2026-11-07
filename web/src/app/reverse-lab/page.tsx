@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { activeWorkspace, fetchProjects, type Project } from "@/components/projects/api";
 import { Button, Field, Input, Notice, Spinner, StateLine } from "@/components/projects/ui";
+import { SelectPopover } from "@/components/ui/select-popover";
 import {
   adapterLabel,
   adapterReason,
@@ -205,19 +206,21 @@ export default function ReverseLabPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <select
+          <SelectPopover
+            size="compact"
+            ariaLabel="选择项目"
             value={projectId}
-            onChange={(event) => chooseProject(event.target.value)}
-            className="rounded-lg border border-line bg-surface-2 px-2 py-2 text-[12px] text-text focus:border-brand/60 focus:outline-none"
-          >
-            {projects.length === 0 && <option value="">没有项目</option>}
-            {projects.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-                {activeWorkspace(item) ? "" : "（未绑定工作区）"}
-              </option>
-            ))}
-          </select>
+            options={projects.length === 0
+              ? [{ value: "", label: "没有项目" }]
+              : projects.map((item) => ({
+                  value: item.id,
+                  label: item.name,
+                  description: activeWorkspace(item) ? undefined : "未绑定工作区",
+                  disabled: !activeWorkspace(item),
+                }))}
+            onChange={chooseProject}
+            menuMinWidth={220}
+          />
           <span className={`rounded-md border px-2 py-1 text-[11px] ${TONE_CLASS[tone]}`}>
             {status ? adapterLabel(status.adapter.state) : "状态未知"}
           </span>

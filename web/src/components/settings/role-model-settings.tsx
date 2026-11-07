@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { SelectPopover } from "../ui/select-popover";
 import { fetchProviders, type Provider } from "./api";
 
 const STORAGE_KEY = "blank.model.roles";
@@ -29,10 +30,18 @@ export function RoleModelSettings() {
   return <div className="mt-3 grid gap-2 sm:grid-cols-3">
     {ROLES.map(([role, label]) => <label key={role} className="flex flex-col gap-1 text-[11px] text-muted">
       <span>{label}</span>
-      <select value={roles[role] ?? ""} onChange={(event) => update(role, event.target.value)} className="rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-text outline-none" disabled={providers.length === 0}>
-        <option value="">跟随主模型</option>
-        {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
-      </select>
+      <SelectPopover
+        size="compact"
+        ariaLabel={`选择${label}模型`}
+        value={roles[role] ?? ""}
+        disabled={providers.length === 0}
+        options={[
+          { value: "", label: "跟随主模型" },
+          ...providers.map((provider) => ({ value: provider.id, label: `${provider.name} · ${provider.model}` })),
+        ]}
+        onChange={(value) => update(role, value)}
+        menuMinWidth={220}
+      />
     </label>)}
   </div>;
 }

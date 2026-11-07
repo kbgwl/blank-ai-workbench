@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { Button, Field, Input, Notice, Spinner } from "@/components/projects/ui";
 import { errorMessage, updateProvider, type Provider, type ProviderPatch } from "./api";
 import { KindBadge, Toggle } from "./bits";
+import { SelectPopover } from "../ui/select-popover";
 
 type Props = {
   provider: Provider;
@@ -153,21 +154,19 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
 
       <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
         <Field label="类型">
-          <select
+          <SelectPopover
+            ariaLabel="供应商类型"
             value={kinds.includes(draft.kind) ? draft.kind : "__custom"}
-            onChange={(event) => {
-              if (event.target.value !== "__custom") patch({ kind: event.target.value });
-            }}
             disabled={!kinds.includes(draft.kind)}
-            className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] text-text focus:border-brand/60 focus:outline-none disabled:opacity-60"
-          >
-            {kinds.map((kind) => (
-              <option key={kind} value={kind}>
-                {kind}
-              </option>
-            ))}
-            {!kinds.includes(draft.kind) && <option value="__custom">{draft.kind}</option>}
-          </select>
+            options={[
+              ...kinds.map((kind) => ({ value: kind, label: kind })),
+              ...(!kinds.includes(draft.kind) ? [{ value: "__custom", label: draft.kind }] : []),
+            ]}
+            onChange={(value) => {
+              if (value !== "__custom") patch({ kind: value });
+            }}
+            menuMinWidth={180}
+          />
         </Field>
         <Field label="默认模型">
           <Input
@@ -226,32 +225,22 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
 
       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
         <Field label="推理档位 reasoning_effort">
-          <select
+          <SelectPopover
+            ariaLabel="推理档位"
             value={draft.reasoning_effort}
-            onChange={(event) => patch({ reasoning_effort: event.target.value })}
-            aria-label="推理档位"
-            className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] text-text focus:border-brand/60 focus:outline-none"
-          >
-            {effortOptions.map((value) => (
-              <option key={value || "off"} value={value}>
-                {value || "不启用"}
-              </option>
-            ))}
-          </select>
+            options={effortOptions.map((value) => ({ value, label: value || "不启用" }))}
+            onChange={(value) => patch({ reasoning_effort: value })}
+            menuMinWidth={180}
+          />
         </Field>
         <Field label="输出详略 verbosity">
-          <select
+          <SelectPopover
+            ariaLabel="输出详略"
             value={draft.verbosity}
-            onChange={(event) => patch({ verbosity: event.target.value })}
-            aria-label="输出详略"
-            className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] text-text focus:border-brand/60 focus:outline-none"
-          >
-            {verbosityOptions.map((value) => (
-              <option key={value || "off"} value={value}>
-                {value || "不启用"}
-              </option>
-            ))}
-          </select>
+            options={verbosityOptions.map((value) => ({ value, label: value || "不启用" }))}
+            onChange={(value) => patch({ verbosity: value })}
+            menuMinWidth={180}
+          />
         </Field>
       </div>
 

@@ -33,6 +33,13 @@ class TaskCreate(BaseModel):
     max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=HARD_MAX_STEPS)
     # 这一轮贴进来的图片。上限 8 张：再多模型侧也塞不下，而且每张都要按图计费。
     attachments: list[AttachmentIn] = Field(default_factory=list, max_length=8)
+    # v0.10.1 §2：True=后端在 create_task 里就地入队/启动，不等前端读快照后
+    # 二次调 /run——窗口关了、前端崩了任务也照跑。
+    auto_start: bool = False
+    # v0.10.1 §4：创建时钉进任务快照的权限档位；空串 = 用设置页默认模式。
+    permission_mode: Literal["", "default", "accept_edits", "plan", "bypass"] = ""
+    # 仅日常场景有效（与 TaskRunIn.memory_opt_in 同口径）。
+    memory_opt_in: bool = False
 
 
 class TaskOut(BaseModel):
@@ -118,6 +125,12 @@ class EventOut(BaseModel):
 class TaskApprovalIn(BaseModel):
     approve: bool
     provider_id: str | None = None
+    # v0.10.1 §3.3：审批身份。带上这三样后端就按 identity 精确匹配——不匹配
+    # 返回 409「审批对象已变化」，而不是一句含混的「没有同意」。留空表示老客户端，
+    # 行为与从前一致（按任务当前等待的那张卡处理）。
+    approval_id: str = Field(default="", max_length=64)
+    tool_call_id: str = Field(default="", max_length=128)
+    arguments_hash: str = Field(default="", max_length=128)
     # 批准作用域：仅本次 / 本会话该命令前缀 / 本会话该工具。
     scope: Literal["once", "prefix", "tool"] = "once"
 

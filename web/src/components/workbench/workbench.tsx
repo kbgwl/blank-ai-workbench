@@ -332,13 +332,15 @@ export function Workbench() {
         // 验收条件交给 Agent 自己按这句话定；场景那套默认条件已经移除，
         // 替用户预设「补充测试」这类条件，只会让不做测试的任务被判成没做完。
         acceptanceCriteria: [],
+        // v0.10.1 §2：后端就地启动。这里不再补一次 /run——窗口关了任务也照跑，
+        // 启动失败由后端记 task.dispatch_failed，任务留在 draft 可手动重试。
+        autoStart: true,
       };
       const created = await createTask(targetProject.id, payload);
       setTasks((current) => [created, ...(current ?? []).filter((item) => item.id !== created.id)]);
       setSelectedId(created.id);
       setTask(created);
       setDraft("");
-      await runTask(created.id).catch((error: unknown) => setNotice(`任务已创建，但启动失败：${errorMessage(error)}`));
       refresh(created.id);
     } catch (error: unknown) {
       setNotice(errorMessage(error));
@@ -380,7 +382,13 @@ export function Workbench() {
       setBusy("decide");
       setApprovalKey(block.key);
       try {
-        await decideApproval(selectedId, { decision, scope });
+        await decideApproval(selectedId, {
+          decision,
+          scope,
+          approvalId: block.approvalId,
+          toolCallId: block.toolCallId,
+          argumentsHash: block.argumentsHash,
+        });
         refresh(selectedId);
       } catch (error: unknown) {
         setNotice(errorMessage(error));
