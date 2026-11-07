@@ -392,6 +392,9 @@ zeroChangeSuccess`，因此这一项必须重跑才能判定达标。
 | 装后接口 | `/settings/agent` 返回 `automation_modes: [manual, assist, autonomous]` 与三档中文说明，`background.automation_mode = assist` |
 | 用户库现状 | `goals = 0`（用户还没用新版发过消息，所以 §9 指标分母仍为空，不编数） |
 | 装机数据保护 | 安装前备份 `resources/backend/api/data`（165 个文件）→ 装完回填，文件数一致 |
+| 发布代码提交 | `178cde8` feat(v165): v0.10.0 自主超级 Agent —— 目标跟踪、自动下发、独立验收、自动修复（65 文件，+6259 / −113） |
+| Tag | `v0.10.0`（annotated），已推送 `origin/main` 与 `v0.10.0` |
+| `git status --porcelain` | 0 行，工作区干净 |
 
 迁移超时那处修复在真机上得到验证：`migration-start → spawn-start` 用时 8.5 秒，
 放在旧的 10 秒预算里就是这次假失败的边缘，新预算 60 秒不再报 `migration-failed`。
