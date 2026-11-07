@@ -3,6 +3,7 @@
 > 任务单：`docs/workbuddy-v101-p0-autonomous-and-ui.md`
 > 基线：v0.10.0（tag `v0.10.0`，验收报告 `docs/workbuddy-v165-acceptance-report.md`）
 > 验收时间：2026-11-07
+> 提交：`9ca4751`（feat(v101)）
 > 验收载体：本机 web 前端（Next dev server，同源 `/api` 反代）+ 独立后端实例（8060，独立库 `E:/2026-10-15-17-39-54/.gui/data/blank.db`）+ 脚本化 OpenAI 兼容 mock 模型（8090）。
 > **桌面安装版未重装**，GUI 验收跑的是同一套前端源码（详见「已知限制」）。
 
