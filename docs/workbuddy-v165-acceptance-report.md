@@ -438,7 +438,8 @@ totalTokens 3,659,598 / avgTokens 66,538 / p95Tokens 121,928 / providerCalls 548
 | 用户库现状 | `goals = 0`（用户还没用新版发过消息，所以 §9 指标分母仍为空，不编数） |
 | 装机数据保护 | 安装前备份 `resources/backend/api/data`（165 个文件）→ 装完回填，文件数一致 |
 | 发布代码提交 | `178cde8` feat(v165): v0.10.0 自主超级 Agent —— 目标跟踪、自动下发、独立验收、自动修复（65 文件，+6259 / −113） |
-| Tag | `v0.10.0`（annotated），已推送 `origin/main` 与 `v0.10.0` |
+| 11-07 重跑提交 | `4b26132` docs(v165): 全量重跑 GUI 18/18 + 55 项 Benchmark + npm clean-prefix（4 文件，含旧基线存档 `last-run-v163.json`） |
+| Tag | `v0.10.0`（annotated），已推送 `origin/main` 与 `v0.10.0`。重跑只动文档与口径脚本，不带产品代码，Tag 不重打 |
 | `git status --porcelain` | 0 行，工作区干净 |
 
 迁移超时那处修复在真机上得到验证：`migration-start → spawn-start` 用时 8.5 秒，
@@ -462,7 +463,7 @@ totalTokens 3,659,598 / avgTokens 66,538 / p95Tokens 121,928 / providerCalls 548
 | 真实 GUI 18 项通过 | ✅ 18/18 | 11-07 全部重跑，逐项截图与事件见 §7.3 / §14.4 |
 | npm 安装和 Desktop 打包通过 | ✅ | 安装包 0.10.0 已重打 + `verify-package.cjs` 24 项 + 装机；npm clean-prefix `pack → install -g → doctor → start → health 200` 本轮重跑（§14.2） |
 | 工作区干净 | ✅ | `git status --porcelain` = 0 行 |
-| 报告、Commit、Tag 一致 | ✅ | `178cde8` + `a3005ab` / `v0.10.0`，均已推送 |
+| 报告、Commit、Tag 一致 | ✅ | `178cde8`（代码）+ `4b26132`（11-07 重跑证据）/ `v0.10.0`；重跑无产品代码改动，Tag 不重打 |
 
 **结论（11-07 更新）：§18 的发布条件逐条都有真实证据——GUI 18/18、55 项 Benchmark
 全量重跑、npm clean-prefix 与安装包两条安装路径都走通、六项质量门槛里五项达标。
