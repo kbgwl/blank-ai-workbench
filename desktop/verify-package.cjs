@@ -79,7 +79,7 @@ if (!existsSync(ASAR)) {
     readSync(fd, headerBuf, 0, headerSize, 16);
     closeSync(fd);
     const entries = Object.keys(JSON.parse(headerBuf.toString("utf8")).files ?? {});
-    for (const name of ["main.cjs", "gpu-guard.cjs", "shell-policy.cjs", "preload.cjs"]) {
+    for (const name of ["main.cjs", "gpu-guard.cjs", "shell-policy.cjs", "splash-policy.cjs", "splash.html", "splash-preload.cjs", "preload.cjs"]) {
       entries.includes(name) ? ok(`asar 含 ${name}`) : bad(`asar 缺 ${name}`, "壳启动时会 require 失败");
     }
   } catch (error) {
@@ -113,7 +113,7 @@ function asarFile(asarPath, name) {
 }
 
 if (existsSync(ASAR)) {
-  for (const name of ["api-base.cjs", "gpu-guard.cjs", "shell-policy.cjs", "main.cjs", "preload.cjs"]) {
+  for (const name of ["api-base.cjs", "gpu-guard.cjs", "shell-policy.cjs", "splash-policy.cjs", "splash.html", "splash-preload.cjs", "main.cjs", "preload.cjs"]) {
     const packed = asarFile(ASAR, name);
     const source = path.join(__dirname, name);
     if (packed === null) {
@@ -350,6 +350,15 @@ if (existsSync(homeHtml)) {
     : bad("首页还是旧界面", "index.html 没有 bot 输入框文案");
 } else {
   bad("首页缺失", homeHtml);
+}
+
+// 窗口标题取的是页面 <title>，会盖掉 main.cjs 的 BrowserWindow title。
+// 只改主进程不改静态导出，任务栏仍会显示中文老名字——按包内产物点验。
+if (existsSync(homeHtml)) {
+  const html = readFileSync(homeHtml, "utf8");
+  html.includes("<title>Blank AI</title>")
+    ? ok("包内页面标题是 Blank AI")
+    : bad("包内页面标题不是应用名", "index.html 的 <title> 会覆盖窗口标题");
 }
 
 // ── 5. 包里不许有本机开发痕迹 ───────────────────────────────────────────────

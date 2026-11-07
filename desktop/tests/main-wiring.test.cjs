@@ -46,6 +46,9 @@ const MANAGED_ENV = [
   "BLANK_PROBE",
   "BLANK_SHELL_TEST",
   "BLANK_SHOT",
+  // 主进程接线测试用内存 Electron 桩，没有 GUI 也没有 loadFile；启动屏在这里
+  // 显式关掉，时序判定由 splash.test.cjs 单独钉。
+  "BLANK_SPLASH",
   "BLANK_START_PATH",
   "BLANK_TRAY",
   "BLANK_UPDATE_FEED_URL",
@@ -364,6 +367,7 @@ async function bootShell(options = {}) {
     // shellTest=false 的用例走真实模式分支，但 child_process 已被下面换成计数桩。
     BLANK_SHELL_TEST: shellTest ? "1" : "",
     BLANK_SHOT: "",
+    BLANK_SPLASH: "0",
     BLANK_START_PATH: "",
     BLANK_TRAY: tray === "disabled" ? "0" : "",
     BLANK_UPDATE_FEED_URL: update === null ? "" : `${origin}/feed`,

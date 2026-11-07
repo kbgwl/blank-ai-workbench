@@ -332,6 +332,41 @@ export function fetchThread(threadId: string): Promise<ThreadDetail | null> {
   return request<unknown>(`${api}/threads/${threadId}`, { cache: "no-store" }).then((body) => normalizeThreadDetail(body));
 }
 
+/** v165 §3：当前会话的活跃长期目标。没有目标时后端返回 null（不是 404）。 */
+export type ThreadGoal = {
+  id: string;
+  title: string;
+  status: string;
+  scenario: string;
+  automationMode: string;
+  currentTaskId: string;
+  stepsDone: unknown[];
+  stepsPending: unknown[];
+  blockedReason: string;
+  nextAction: string;
+};
+
+export function fetchThreadGoal(threadId: string): Promise<ThreadGoal | null> {
+  return request<unknown>(`${api}/threads/${threadId}/goal`, { cache: "no-store" }).then((body) => {
+    if (!body || typeof body !== "object") return null;
+    const raw = body as Record<string, unknown>;
+    const id = textOf(raw, "id");
+    if (!id) return null;
+    return {
+      id,
+      title: textOf(raw, "title"),
+      status: textOf(raw, "status"),
+      scenario: textOf(raw, "scenario"),
+      automationMode: textOf(raw, "automation_mode"),
+      currentTaskId: textOf(raw, "current_task_id"),
+      stepsDone: Array.isArray(raw.steps_done) ? raw.steps_done : [],
+      stepsPending: Array.isArray(raw.steps_pending) ? raw.steps_pending : [],
+      blockedReason: textOf(raw, "blocked_reason"),
+      nextAction: textOf(raw, "next_action"),
+    };
+  });
+}
+
 export function createThread(projectId: string, input: { title?: string; forkedFrom?: string } = {}): Promise<Thread> {
   const body: Record<string, unknown> = { title: input.title ?? "" };
   if (input.forkedFrom) body.forked_from = input.forkedFrom;

@@ -6,6 +6,7 @@ import { useEffect, type ReactNode } from "react";
 import { HealthPill } from "@/components/health-pill";
 import { CommandPalette } from "@/components/command-palette";
 import { ModelSwitcher } from "@/components/model";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { isEditableTarget, PALETTE_SHORTCUT, shortcutHint, shouldHandleEscape } from "@/lib/shortcuts";
 
 const TITLES: Record<string, string> = {
@@ -117,6 +118,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             {shortcutHint(PALETTE_SHORTCUT)} 命令
           </kbd>
           <ModelSwitcher />
+          <ThemeToggle compact />
           <HealthPill />
         </div>
       </header>

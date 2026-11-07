@@ -122,6 +122,18 @@ export type AgentSettings = {
   permissions: { default_mode: string };
   tools: { search: boolean };
   safety: SafetySettings;
+  /** v165 §8：三种自动化模式与后台预算。后端 _render 一直返回这段，前端此前漏了类型。 */
+  background: {
+    enabled: boolean;
+    notify_policy: string;
+    quiet_hours: string;
+    max_seconds: number;
+    max_steps: number;
+    token_budget: number;
+    auto_recoveries: number;
+    default_model_policy: string;
+    automation_mode: string;
+  };
   path: string;
   limits: {
     guardian_modes?: string[];
@@ -132,6 +144,9 @@ export type AgentSettings = {
     reserve_tokens?: { min: number; max: number; default: number };
     safety_timeout?: { min: number; max: number; default: number };
     safety_max_entries?: number;
+    automation_modes?: string[];
+    automation_mode_labels?: Record<string, string>;
+    background?: Record<string, unknown>;
   };
 };
 
@@ -141,6 +156,16 @@ export type AgentSettingsPatch = {
   permissions?: { default_mode?: string };
   tools?: { search?: boolean };
   safety?: Partial<SafetySettings>;
+  background?: {
+    enabled?: boolean;
+    automation_mode?: "manual" | "assist" | "autonomous";
+    notify_policy?: string;
+    quiet_hours?: string;
+    max_seconds?: number;
+    max_steps?: number;
+    token_budget?: number;
+    auto_recoveries?: number;
+  };
 };
 
 /** 这台机器此刻到底怎么隔离的：容器 / 本机实测边界 / 无隔离。 */

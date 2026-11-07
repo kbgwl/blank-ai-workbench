@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -46,6 +48,9 @@ class BackgroundSettings(BaseModel):
     token_budget: int = 1_500_000
     auto_recoveries: int = 2
     default_model_policy: str = "default"
+    # v165 §8 自动化模式：要不要自己动。与 PermissionSettings.default_mode
+    # （要不要问）是两回事，服务端必须把它回显出来，前端才能校验「真的存上了」。
+    automation_mode: str = "assist"
 
 
 class AgentSettings(BaseModel):
@@ -71,7 +76,10 @@ class CompactionPatch(BaseModel):
 
 
 class PermissionPatch(BaseModel):
-    default_mode: str | None = None
+    # 不认的档位必须 422，不能让 SettingsStore.normalize() 静默回落到 default：
+    # 用户在界面选了「全放行」，服务端悄悄写回 default，面板还提示「已更新」，
+    # 于是每一条命令继续弹审批（v165 P0 真机实测）。
+    default_mode: Literal["default", "accept_edits", "plan", "bypass"] | None = None
 
 
 class ToolPatch(BaseModel):
@@ -97,6 +105,9 @@ class BackgroundPatch(BaseModel):
     token_budget: int | None = None
     auto_recoveries: int | None = None
     default_model_policy: str | None = None
+    # 和 PermissionPatch 同理：不认的档位必须 422，不能被 normalize 静默回落，
+    # 更不能让前端弹一个「自动化模式已更新」却什么都没变。
+    automation_mode: Literal["manual", "assist", "autonomous"] | None = None
 
 
 class AgentSettingsPatch(BaseModel):

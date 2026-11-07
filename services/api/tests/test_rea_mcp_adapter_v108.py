@@ -24,7 +24,8 @@ from blank_api.services.mcp import bridge as mcp_bridge
 from blank_api.services.rea import adapter, artifact
 
 API = "/api/v1"
-DESKTOP_RESOURCES = Path(__file__).resolve().parents[3] / "desktop" / "dist" / "win-unpacked" / "resources"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DESKTOP_RESOURCES = REPO_ROOT / "desktop" / "dist" / "win-unpacked" / "resources"
 
 
 # --------------------------------------------------------------------------- #
@@ -657,23 +658,20 @@ def test_load_target_refuses_directories_and_escapes(rea_root: Path):
 def test_real_desktop_asar_answers_are_known():
     """红于：解析器只对自己的合成样本成立，遇到真产物就报错。
 
-    字面量按 0.8.5 产物当刻量得（6 个文件，与 desktop/package.json 的 build.files 同集）；
-    壳文件增删会让这条红，是有意的。
+    文件表按 desktop/package.json 的 build.files 动态取：壳文件增删本身不该让这条红
+    （启动屏就一次加了 3 个文件），真正要守的是「打进 asar 的文件集与打包声明一致」。
     """
     raw = (DESKTOP_RESOURCES / "app.asar").read_bytes()
     report = artifact.inspect_bytes("app.asar", raw)
     assert report["format"] == "asar"
     assert report["entry"]["main"] == "main.cjs"
     values = {item["kind"]: item["value"] for item in report["findings"]}
-    assert values["容器结构"] == "6 个文件 / 0 个子目录"
-    assert set(values["文件表"].split(", ")) == {
-        "api-base.cjs",
-        "gpu-guard.cjs",
-        "main.cjs",
-        "package.json",
-        "preload.cjs",
-        "shell-policy.cjs",
-    }
+
+    declared = json.loads(
+        (REPO_ROOT / "desktop" / "package.json").read_text(encoding="utf-8")
+    )["build"]["files"]
+    assert set(values["文件表"].split(", ")) == set(declared)
+    assert values["容器结构"] == f"{len(declared)} 个文件 / 0 个子目录"
     assert values["包声明"].startswith("blank-ai-workbench-desktop")
 
 

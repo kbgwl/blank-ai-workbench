@@ -25,7 +25,7 @@ function latestInstaller() {
   const dir = path.join(__dirname, "dist");
   if (!existsSync(dir)) return null;
   const candidates = readdirSync(dir)
-    .filter((name) => /^空白格-安装版-.*\.exe$/.test(name) && !name.includes("__uninstaller"))
+    .filter((name) => /^Blank-AI-安装版-.*\.exe$/.test(name) && !name.includes("__uninstaller"))
     .map((name) => path.join(dir, name))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
   return candidates[0] ?? null;

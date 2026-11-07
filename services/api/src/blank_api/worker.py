@@ -179,8 +179,9 @@ async def run_once(worker: str | None = None) -> int:
     # 巡检（v162）：只看已存在的 run，不改状态。放在认领之前，这样"刚刚到期"的
     # 租约能先被记一笔诊断，而不是被下一轮认领之后再也看不到。
     await inspect_runs()
+    attempt_limit = task_routes.recovery_attempt_limit()
     for run_id, task_id, attempts in await _candidates():
-        if attempts >= task_routes.MAX_RECOVERY_ATTEMPTS:
+        if attempts >= attempt_limit:
             metrics.inc(metrics.WORKER_ABANDONED)
             await _give_up(
                 run_id,
@@ -265,6 +266,32 @@ async def release_due_triggers() -> int:
         except Exception as error:  # noqa: BLE001 - 单条失败不该带走整轮
             log.warning("触发器放行失败 trigger=%s: %s", trigger_id, error)
     return released
+
+
+async def supervise_once() -> dict[str, int]:
+    """v165 Phase 3：API 进程内的一轮后台巡检，返回各条动作的真实条数。
+
+    桌面形态默认只有 API 进程在跑（``BLANK_INPROCESS_RUNNER=1``），而
+    ``release_due_triggers`` / ``inspect_runs`` / ``expire_stale_approvals``
+    原先只挂在独立 worker 的 ``run_once()`` 里——于是「关窗后触发器照样到点」
+    「卡死任务被 Watchdog 记一笔」在真机上根本没执行。这里补上唯一缺口，
+    不新造状态机：三件事都复用既有函数，队列仍只有一条执行路径。
+
+    每一项单独 try：巡检是旁路人，一件坏掉不该让另外两件停摆。
+    """
+    result = {"triggers": 0, "alerts": 0, "expired_approvals": 0}
+    for key, action in (
+        ("triggers", release_due_triggers),
+        ("alerts", inspect_runs),
+        ("expired_approvals", expire_stale_approvals),
+    ):
+        try:
+            result[key] = int(await action())
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - 单项巡检失败不影响其余两项
+            log.warning("后台巡检 %s 失败", key, exc_info=True)
+    return result
 
 
 async def inspect_runs() -> int:

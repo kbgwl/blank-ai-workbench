@@ -26,6 +26,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from blank_api.services.agent.automation import (
+    AUTOMATION_MODES as BACKGROUND_AUTOMATION_MODES,
+    MODE_LABELS as BACKGROUND_AUTOMATION_MODE_LABELS,
+)
 from blank_api.services.permissions import MODE_DEFAULT, MODES as PERMISSION_MODES
 
 GUARDIAN_MODES = ("off", "veto", "auto")
@@ -86,10 +90,16 @@ DEFAULTS: dict[str, Any] = {
         "token_budget": 1_500_000,
         "auto_recoveries": 2,
         "default_model_policy": "default",
+        # v165 §8：三组概念里的「要不要自己动」。它和 permissions.default_mode
+        # （要不要问）互不影响；默认 assist，不因为用户开了「全放行」就自动跑。
+        "automation_mode": "assist",
     },
 }
 
 # 后台执行的合法取值与硬上限。这些是安全边界，不接受"用户说更大就更大"。
+# BACKGROUND_AUTOMATION_MODES / _MODE_LABELS 由 services/agent/automation.py 定义，
+# 这里只做一次别名导出：设置归一化、PATCH 校验、前端 limits 必须共用同一份枚举，
+# 否则界面上能选到服务端不认的档位（v165 P0 的「保存成功但没生效」）。
 BACKGROUND_NOTIFY_POLICIES = ("silent", "milestone", "approval_only", "always")
 BACKGROUND_MODEL_POLICIES = ("default", "fast", "quality", "local", "user_selected")
 BACKGROUND_MIN_SECONDS = 60
@@ -219,6 +229,9 @@ def normalize(raw: Any) -> dict[str, Any]:
     model_policy = str(background.get("default_model_policy") or "").strip().lower()
     if model_policy not in BACKGROUND_MODEL_POLICIES:
         model_policy = DEFAULTS["background"]["default_model_policy"]
+    automation_mode = str(background.get("automation_mode") or "").strip().lower()
+    if automation_mode not in BACKGROUND_AUTOMATION_MODES:
+        automation_mode = DEFAULTS["background"]["automation_mode"]
 
     return {
         "guardian": {
@@ -330,6 +343,10 @@ def normalize(raw: Any) -> dict[str, Any]:
                 )
             ),
             "default_model_policy": model_policy,
+            # 写坏的值一律回落 assist：绝不能让一份手改的设置文件把产品变成
+            # 悄悄自动执行。settings.update() 只合并已存在的键，这一项不在这里
+            # 落盘，PATCH 就会被静默丢掉。
+            "automation_mode": automation_mode,
         },
     }
 

@@ -6,6 +6,7 @@ import os
 import time
 import traceback
 import uuid
+from dataclasses import replace
 from datetime import datetime
 
 import anyio
@@ -54,6 +55,11 @@ from blank_api.services.agent.evidence import (
     questions_can_default,
 )
 from blank_api.services.agent.artifacts import ArtifactStore
+from blank_api.services.agent.background_policy import (
+    budget_override,
+    recovery_limit,
+    resolve_background,
+)
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent import notify
 from blank_api.services.settings import SettingsStore, quiet_hours_active
@@ -65,7 +71,13 @@ from blank_api.services.fork import FORK_EVENT, fork_thread
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
 from blank_api.services.agent.queue import abandon_run, claim_run, enqueue_run, finish_run, renew_run
 from blank_api.services.agent.router import candidate_from_provider
-from blank_api.services.agent.dispatch import ExecutionSnapshot, NOTIFY_APPROVAL_ONLY, explain, route
+from blank_api.services.agent.dispatch import (
+    Budget,
+    ExecutionSnapshot,
+    NOTIFY_APPROVAL_ONLY,
+    explain,
+    route,
+)
 from blank_api.services.features import is_enabled
 from blank_api.services.models.registry import build_adapter
 from blank_api.services.plan import (
@@ -87,9 +99,24 @@ router = APIRouter(tags=["tasks"], dependencies=[Depends(require_token)])
 log = logging.getLogger(__name__)
 
 # 自动重排队的上限：超过就不再无限重试，避免一条坏 run 在后台反复空转。
+# 这是发布时钉死的**硬上限**；设置页的 background.auto_recoveries 只能把它调小。
 MAX_RECOVERY_ATTEMPTS = 3
 # 租约 90 秒，心跳 30 秒：允许一次心跳没写成，不让过期 worker 继续干活。
 LEASE_HEARTBEAT_SECONDS = 30
+
+
+def recovery_attempt_limit() -> int:
+    """本轮实际生效的自动恢复次数（v165 §14 让设置真正被消费）。
+
+    读设置失败按硬上限走：宁可多重试一次，也不要因为配置文件坏了就判死一条
+    本来能恢复的任务。设置只能收紧，不能放宽——否则一份手改的 settings.json
+    就能绕过发布闸门，把一条坏 run 重排到天荒地老。
+    """
+    try:
+        policy = resolve_background(SettingsStore().read())
+    except Exception:  # noqa: BLE001 - 设置读不出来时按硬上限
+        return MAX_RECOVERY_ATTEMPTS
+    return min(MAX_RECOVERY_ATTEMPTS, recovery_limit(policy))
 
 
 def inprocess_runner_enabled() -> bool:
@@ -269,6 +296,16 @@ async def _record_dispatch(db: DbSession, task: Task) -> None:
         max_steps=int(task.max_steps or 0) or None,
         sandbox_tier=default_tier,
     )
+    # v165 §14：设置页的 max_steps / max_seconds / token_budget / auto_recoveries
+    # 折进这份快照。budget_override 逐项取 min，只能收紧；设置读不出来时不改。
+    # route() 保持纯函数（同样的入参永远得到同样的快照），夹取只发生在落库这一层。
+    try:
+        background = resolve_background(SettingsStore().read())
+        tightened = budget_override(background, snapshot.budget.as_dict())
+        snapshot = replace(snapshot, budget=Budget(**tightened))
+        snapshot.guard()
+    except Exception:  # noqa: BLE001 - 设置读坏/夹取异常都不该让任务建不出来
+        log.warning("后台预算夹取失败，按发布默认预算继续", exc_info=True)
     task.dispatch_snapshot = snapshot.as_dict()
     await db.commit()
     # commit 会让 ORM 实例过期，之后序列化 created_at/updated_at 会触发同步懒加载
@@ -1058,6 +1095,7 @@ async def recover_pending_runs() -> int:
     if not inprocess_runner_enabled():
         # 独立 worker 自己会扫这张表；API 再抢一次就是两个执行者。
         return 0
+    attempt_limit = recovery_attempt_limit()
 
     async def load():
         items: list[tuple[str, object]] = []
@@ -1080,7 +1118,7 @@ async def recover_pending_runs() -> int:
             task = task_map.get(run.task_id)
             if task is None:
                 continue
-            if run.attempts >= MAX_RECOVERY_ATTEMPTS:
+            if run.attempts >= attempt_limit:
                 # 反复重排同一个 run 只会无限循环（上次收尾没写成就是这种表现）。
                 # 到这里就停手，把原因交给用户，让他决定是否重试。
                 async with get_session_factory()() as failed_session:

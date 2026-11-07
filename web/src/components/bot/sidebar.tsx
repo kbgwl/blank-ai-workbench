@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Thread } from "../tasks/api";
+import { ThemeToggle } from "../theme-toggle";
 import { isNavActive, NAV_ITEMS, TURN_TONE_LABEL, turnTone, type NavId } from "./nav";
 import { dayBucket } from "./turns";
 
@@ -172,6 +173,7 @@ export function Sidebar(props: SidebarProps) {
             <path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8" />
           </svg>
         </Link>
+        <ThemeToggle compact />
       </aside>
     );
   }
@@ -339,6 +341,7 @@ export function Sidebar(props: SidebarProps) {
           </svg>
           设置
         </Link>
+        <ThemeToggle />
         <p className="px-2 pt-1 font-mono text-[9.5px] text-faint">空白格 bot</p>
       </div>
     </aside>

@@ -25,7 +25,7 @@ import {
   type Thread,
   type ThreadDetail,
 } from "../tasks/api";
-import { threadTitleFrom } from "./turns";
+import { dispatchAutoStart, shouldAutoRunTurn, threadTitleFrom } from "./turns";
 
 /**
  * 打开一条会话时给最近几轮拉事件。
@@ -175,11 +175,15 @@ export async function sendMessage(input: {
   }
 
   let runError = "";
-  try {
-    // 场景随运行请求再带一次：用户刚切过场景时，这一轮就要按新场景跑。
-    await runTask(task.id, { scenario: input.scenario, memoryOptIn: input.memoryOptIn });
-  } catch (error) {
-    runError = error instanceof Error ? error.message : String(error);
+  // 监督者把控制词作用在已有任务上时，返回的是那条任务（不是 draft）。
+  // 再 /start 一次会撤销刚刚的「暂停」，或者撞上「任务已在执行」的 409。
+  if (shouldAutoRunTurn(task.status, dispatchAutoStart(task.goalSpec))) {
+    try {
+      // 场景随运行请求再带一次：用户刚切过场景时，这一轮就要按新场景跑。
+      await runTask(task.id, { scenario: input.scenario, memoryOptIn: input.memoryOptIn });
+    } catch (error) {
+      runError = error instanceof Error ? error.message : String(error);
+    }
   }
   return { thread, task, runError };
 }

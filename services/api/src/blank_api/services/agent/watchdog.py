@@ -302,6 +302,7 @@ async def sweep(db: AsyncSession, *, now: datetime | None = None) -> list[dict]:
     出问题时就没有第三方能说"当时它看到的是什么"。
     """
     from blank_api.services.agent.events import EventRecorder
+    from blank_api.services.agent.background_policy import enforcement
     from blank_api.db import get_session_factory
 
     recorded: list[dict] = []
@@ -328,10 +329,20 @@ async def sweep(db: AsyncSession, *, now: datetime | None = None) -> list[dict]:
                     # 只报"建议动作"，不假装已经执行：改了 run 状态而不改执行者，
                     # 会造出"库里说暂停、进程还在跑"的假象。
                     "enforced": False,
+                    # v165 §15：把「告警等级 → 后台循环该做什么」写进事件。
+                    # 以前只有一个 action 字符串，没有任何消费点，运维看不到
+                    # 「这条诊断最后是被记录、通知、重排队还是判死」。
+                    "disposition": enforcement(verdict.action),
                 },
             )
             recorded.append(
-                {"run_id": pulse.run_id, "task_id": pulse.task_id, "action": verdict.action, "reason": reason}
+                {
+                    "run_id": pulse.run_id,
+                    "task_id": pulse.task_id,
+                    "action": verdict.action,
+                    "reason": reason,
+                    "disposition": enforcement(verdict.action),
+                }
             )
     return recorded
 

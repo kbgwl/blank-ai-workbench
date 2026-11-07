@@ -255,7 +255,21 @@ def questions_for(findings: list[Finding], *, start: int = 1) -> list[dict]:
 
 
 # 用户答案是这三种之一，剩下的都要当成"又是一句话没给值"来处理。
-CONFIRM_MARKS = ("就用这个", "就用它", "是的", "对的", "没错", "可以")
+#
+# 「同意 / 批准 / 确认」必须算放行：审批卡上写的就是「同意」，事实闸门又在同一处
+# 问「这个值哪来的」，用户点完同意回来看到「没同意」——真机实测踩到过（v165 P0）。
+# 单字确认（好 / 行 / 是 / 对）走整句相等，不按子串匹配，否则「不行」「不好」
+# 也会因为含一个「行 / 好」被当成批准。
+CONFIRM_MARKS = (
+    "就用这个", "就用它", "是的", "对的", "没错", "可以",
+    "同意", "批准", "确认", "允许", "通过", "确定", "没问题", "可以执行", "照这个写",
+)
+CONFIRM_EXACT = frozenset({
+    "好", "行", "是", "对", "ok", "yes", "y", "同意", "批准", "确认", "允许",
+    "通过", "确定", "可以", "没问题", "就这样", "按这个",
+})
+# 否定必须排在确认之前：「不同意」「不批准」「不行」「不可以」都含确认词。
+NEGATE_MARKS = ("不同意", "不批准", "不通过", "不允许", "不可以", "不行", "不好", "别写", "不能写")
 BLANK_MARKS = ("留空", "不填", "不写", "去掉", "删掉", "先不", "待补", "不用", "不要")
 # 问题里的第二个选项：用户选了它但没在下面写字时，等于"还没给值"。
 PENDING_MARK = "我另给一个"
@@ -275,13 +289,15 @@ def decide(item: Finding, answer: str) -> str:
     text = (answer or "").strip()
     if not text:
         return "none"
+    if any(mark in text for mark in NEGATE_MARKS):
+        return "blank"
     if any(mark in text for mark in BLANK_MARKS):
         return "blank"
     if any(mark in text for mark in DELEGATE_MARKS):
         return "delegate"
     if text == PENDING_MARK:
         return "none"
-    if any(mark in text for mark in CONFIRM_MARKS):
+    if text.strip().lower() in CONFIRM_EXACT or any(mark in text for mark in CONFIRM_MARKS):
         return "allow"
     if _norm(text) == item.key or item.key in _norm(text):
         return "allow"

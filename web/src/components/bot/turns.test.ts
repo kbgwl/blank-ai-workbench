@@ -5,9 +5,11 @@ import {
   buildSteps,
   composerAction,
   dayBucket,
+  dispatchAutoStart,
   filterSteps,
   isTurnRunning,
   resolveTouchedPath,
+  shouldAutoRunTurn,
   threadTitleFrom,
   touchedFiles,
   turnEvidence,
@@ -287,4 +289,26 @@ test("输入框只有一个按钮：跑着是停止，闲着是发送", () => {
   assert.equal(composerAction(true, false), "stop");
   assert.equal(composerAction(false, true), "send");
   assert.equal(composerAction(false, false), "disabled");
+});
+
+test("只有新草稿要自动跑：控制词返回的是已有任务", () => {
+  // Chat Supervisor 把「暂停 / 继续 / 同意」作用在旧任务上，再 /start 一次
+  // 会把刚暂停的任务拉起来，或者撞上「任务已在执行」的 409。
+  assert.equal(shouldAutoRunTurn("draft"), true);
+  for (const status of ["queued", "running", "paused", "waiting_approval", "failed", "succeeded", "cancelled"]) {
+    assert.equal(shouldAutoRunTurn(status), false, status);
+  }
+});
+
+test("后端下发判定为不自动跑时，draft 也不许替用户点运行", () => {
+  // v165 §5.1 / §8：手动模式、等待审批、等待补充信息都返回 auto_start=false。
+  // 界面不能只看 status 就把「用户明确点击执行」这一档绕过去。
+  assert.equal(shouldAutoRunTurn("draft", false), false);
+  assert.equal(shouldAutoRunTurn("draft", true), true);
+  assert.equal(shouldAutoRunTurn("draft", null), true);
+  assert.equal(dispatchAutoStart({ dispatch: { auto_start: false } }), false);
+  assert.equal(dispatchAutoStart({ dispatch: { auto_start: true } }), true);
+  assert.equal(dispatchAutoStart({}), null);
+  assert.equal(dispatchAutoStart(undefined), null);
+  assert.equal(dispatchAutoStart({ dispatch: "bad" }), null);
 });

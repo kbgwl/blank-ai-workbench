@@ -262,6 +262,35 @@ export function isTurnRunning(status: string, events: readonly RawEvent[]): bool
 }
 
 /**
+ * 只有新建的一轮才需要立刻 `/start`。
+ *
+ * Chat Supervisor（v165 §2）把「继续 / 暂停 / 取消 / 同意」作用在**已有**任务上，
+ * 后端返回的是那条任务而不是新草稿。此时再调一次 `/start`，等于把刚暂停的任务
+ * 重新拉起，或者对一条已经排队/在跑的任务撞 409——用户看到的就是「我点了暂停，
+ * 它又自己跑起来了」。
+ */
+/**
+ * 后端下发的 auto_start（v165 §5.1）：七条前置条件齐备才为 true。
+ * 老任务 / 控制词返回的旧任务没有这个字段，返回 null 表示「按 status 自己判」。
+ */
+export function dispatchAutoStart(goalSpec: Record<string, unknown> | undefined): boolean | null {
+  const dispatch = goalSpec?.dispatch;
+  if (!dispatch || typeof dispatch !== "object") return null;
+  const value = (dispatch as Record<string, unknown>).auto_start;
+  return typeof value === "boolean" ? value : null;
+}
+
+/**
+ * 只有新建的 draft 轮次才自动 /start。
+ * 后端 Dispatcher 明确判了「手动模式 / 等待审批 / 等待补充」时，即使状态是 draft
+ * 也不能替用户点运行——那是 §8 三种自动化模式的边界，不是界面能绕过的。
+ */
+export function shouldAutoRunTurn(status: string, autoStart?: boolean | null): boolean {
+  if (autoStart === false) return false;
+  return status.toLowerCase() === "draft";
+}
+
+/**
  * 输入框右边那个圆钮这一刻是干什么的。
  *
  * 只有一个按钮：闲着是发送，跑着是停止。「停止」和「发送」共用同一个位置，

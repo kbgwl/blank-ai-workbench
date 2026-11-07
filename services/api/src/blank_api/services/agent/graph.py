@@ -83,6 +83,11 @@ from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import HookRunner
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.plan import normalize_goal, normalize_steps, plan_progress
+from blank_api.services.agent.planner import (
+    build_plan,
+    repair_hint as build_repair_hint,
+    revise_plan,
+)
 from blank_api.services.permissions import (
     ASK,
     MODE_DEFAULT,
@@ -257,6 +262,11 @@ class AgentState(TypedDict, total=False):
     # 把孩子的钱并进它，等于让"本回合"开始包含别人的回合——那三个数就不再可比了。
     # 分开记之后，预算看合计，三级口径仍然只说自己：两个问题都有答案，互不污染。
     delegated_usage: dict
+    # v165 §4：结构化执行计划（plan_steps 是给用户看的步骤，manifest 是执行侧的
+    # 风险/工具/预算/改版依据）。两者不能合并，前者要沿用旧 id 保住引用。
+    plan_manifest: dict
+    # v165 §7：当前自动修复轮次的系统侧指令，只进本轮模型调用，不写进用户历史。
+    repair_hint: str
 
 
 async def _never_cancelled() -> bool:
@@ -1571,6 +1581,19 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
     # 「读取代码、修改文件、跑测试」，拿它判意图等于先设好结论再判。
     raw_goal = unwrap_goal(goal)
     quick = guess_intent(raw_goal)
+    # Chat Supervisor（v165 §2）：会话层已经判过这条消息是「上一目标的补充」。
+    # 这类话常常没有动作词（「这个问题还没解决」），只看原话会被判成闲聊、
+    # 一次调用答完就收工，用户只能再催一次。这里把监督者的结构化判定折进
+    # 系统预判——追加的是系统提示，用户原话一个字都不改。
+    from blank_api.services.agent.supervisor import execution_override
+
+    supervisor_spec = getattr(session, "goal_spec", None) or {}
+    override = execution_override(
+        supervisor_spec.get("supervisor") if isinstance(supervisor_spec, dict) else None,
+        quick,
+    )
+    if override:
+        quick = override
     prompt = INTENT_INSTRUCTION
     if raw_goal and raw_goal != goal.strip():
         # 规则能剥掉前缀，但模型看到的是整段消息，同样会被前缀带跑。明说一次。
@@ -1724,18 +1747,34 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
     # "知道要动工作区"的最早时刻——问答类走到上面那个 return 就结束了，不会拍。
     await session.ensure_snapshot(node)
 
-    if steps:
-        await session.recorder.add("plan.created", node, {"plan": steps, "text": result["text"][:2000]})
     # 开局就把步骤转成结构化计划落进状态：后面 update_plan 才有"上一版"可以继承，
     # 收尾时也才有东西可落库——否则第一轮结束任务行上的 plan_steps 永远是空的。
     initial_steps = normalize_steps(steps) if steps else []
     initial_goal = normalize_goal({"objective": parsed.get("objective") or ""}, fallback=raw_goal)
+    # 会话层写进 task.goal_spec 的 supervisor / goal_id / dispatch 是路由与溯源依据。
+    # 计划节点只负责四个判据字段；直接返回 initial_goal 会把它们覆盖掉，
+    # 收尾时 _finish 再写回任务行，goal_id 就永久丢了——目标与任务从此对不上。
+    # 老测试里的 _Session 是鸭子类型替身，没有这个字段；真实 AgentSession 一定有。
+    # 上面 execution_override 也是这么取的，两处必须一致。
+    structured_goal = {**dict(getattr(session, "goal_spec", None) or {}), **initial_goal}
+    manifest = build_plan(
+        steps or [],
+        goal_id=str(structured_goal.get("goal_id") or ""),
+        scenario=str(getattr(session, "scenario", "") or "dev"),
+        max_steps=int(getattr(session, "max_steps", 0) or 30),
+        token_budget=int(getattr(session, "token_budget", 0) or 150_000),
+    )
+    if steps:
+        await session.recorder.add(
+            "plan.created", node, {"plan": steps, "text": result["text"][:2000], **manifest}
+        )
     return {
         "messages": result["messages"],
         "plan": steps,
         "plan_steps": initial_steps,
+        "plan_manifest": manifest,
         "milestones": [],
-        "goal_spec": initial_goal,
+        "goal_spec": structured_goal,
         "usage": usage,
         "pending": result["tool_calls"],
         "status": "running",
@@ -3368,6 +3407,16 @@ async def _ask_run_tests_approval(session: AgentSession, node: str, decision) ->
 async def run_validation_node(state: AgentState, session: AgentSession) -> AgentState:
     node = "run_validation"
     await session.recorder.add("node.started", node, {})
+    manifest_before = state.get("plan_manifest") or {}
+    await session.recorder.add(
+        "verification.started",
+        node,
+        {
+            "goal_id": str((state.get("goal_spec") or {}).get("goal_id") or ""),
+            "plan_id": str(manifest_before.get("plan_id") or ""),
+            "repair_rounds": int(state.get("repair_rounds") or 0),
+        },
+    )
     results = state.get("tool_results") or []
     executed = [item for item in results if item.get("tool") == "run_tests"]
     changed = _changed_paths(results)
@@ -3419,6 +3468,18 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         )
     data = payload.get("data") or {}
     status = str(payload.get("status") or "ok")
+    hint = str(payload.get("message") or payload.get("output") or "")
+    if status == "error" and "未识别到测试命令" in hint:
+        # 工作区里根本没有 pytest 配置，也没有 package.json 的 test 脚本。
+        # 这不是「代码没通过测试」，是「没有测试可跑」：判 failed 会让用户去翻
+        # 一堆刚改好的代码，还会把「已批准并执行的 run_tests」误读成没同意。
+        validation = _skipped_validation(
+            "工作区没有可识别的测试配置（pytest 配置或 package.json 的 test 脚本），本次未做自动化校验",
+            command=data.get("command") or "run_tests",
+            output_tail=hint[-2000:],
+        )
+        await session.recorder.add("validation.completed", node, validation)
+        return {"validation": validation}
     if status == "awaiting_approval":
         # 工具在等你批准，不是失败。判成 failed 的代价是双倍的：模型会去"修复"
         # 一个不存在的问题——重试同一个需要审批的工具、再等、再判失败，直到步数
@@ -3456,8 +3517,52 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
     }
     await session.recorder.add("validation.completed", node, validation)
     update: AgentState = {"validation": validation}
-    if not validation["passed"]:
-        update["repair_rounds"] = int(state.get("repair_rounds") or 0) + 1
+    if validation["passed"]:
+        rounds_done = int(state.get("repair_rounds") or 0)
+        if rounds_done > 0:
+            await session.recorder.add(
+                "repair.completed", node, {"rounds": rounds_done, "passed": True}
+            )
+        return update
+
+    # v165 §7：失败不等用户催，先把计划改版 + 写系统侧修复指令，再回执行节点。
+    # 指令走 hook_context（只进下一次模型调用、不写回历史），用户原话一个字不改。
+    rounds = int(state.get("repair_rounds") or 0) + 1
+    update["repair_rounds"] = rounds
+    failure = {
+        "kind": "test_failed" if status in ("failed", "error", "timeout") else "validation_failed",
+        "detail": str(validation.get("output_tail") or hint)[:160],
+    }
+    manifest = revise_plan(state.get("plan_manifest"), failure=failure, repair_round=rounds)
+    update["plan_manifest"] = manifest
+    await session.recorder.add(
+        "verification.failed",
+        node,
+        {
+            "round": rounds,
+            "status": status,
+            "reason": failure["detail"],
+            "plan_revision": manifest.get("revision"),
+        },
+    )
+    if manifest.get("exhausted") or manifest.get("no_new_evidence"):
+        # §4.4：相同失败重复出现 / 改版到上限，都没有新证据，不能再回执行节点空转。
+        await session.recorder.add(
+            "repair.stopped", node, {"round": rounds, "reason": manifest.get("revision_reason")}
+        )
+        return update
+    instruction = build_repair_hint(failure, rounds)
+    update["repair_hint"] = instruction
+    # 老测试的 _Session 替身没有 hook_context；拿不到就只留 state 里的指令，
+    # 不为了注入把整个验证节点打断（真实 AgentSession 一定有这个列表）。
+    hook_notes = getattr(session, "hook_context", None)
+    if isinstance(hook_notes, list):
+        hook_notes.append({"event": "repair.started", "tool": "", "text": instruction})
+    await session.recorder.add(
+        "repair.started",
+        node,
+        {"round": rounds, "reason": failure["detail"], "plan_revision": manifest.get("revision")},
+    )
     return update
 
 
@@ -3991,9 +4096,15 @@ def route_after_validation(state: AgentState, session: AgentSession) -> str:
     # 硬拉模型去"审查"只会拿到一段散文，被判成不可解析，然后白白修复三轮。
     if validation.get("status") == "skipped":
         return "summarize_result"
-    if validation.get("status") in ("failed", "timeout") and int(
+    # 「error」也是真失败的测试（run_tests 工具返回 error 而不是 failed）。
+    # 以前漏了它：模型改坏了代码，验证报 error，路由直接去审查 -> 整轮判失败，
+    # 用户只能自己再发一句「修一下」。这正是 v165 要消灭的「要一直催」。
+    if validation.get("status") in ("failed", "timeout", "error") and int(
         state.get("repair_rounds") or 0
     ) <= MAX_REPAIR_ROUNDS:
+        manifest = state.get("plan_manifest") or {}
+        if manifest.get("exhausted") or manifest.get("no_new_evidence"):
+            return "review_result"
         return "execute_action"
     return "review_result"
 

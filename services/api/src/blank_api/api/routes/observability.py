@@ -39,6 +39,99 @@ async def observability_ledger(db: DbSession, days: int = 7) -> dict:
     return await build_ledger(db, days=max(1, min(int(days), 90)))
 
 
+@router.get("/goals")
+async def observability_goals(db: DbSession, limit: int = 50) -> dict:
+    """v165 §15：活跃目标、后台任务、队列长度、Worker 健康的同一份读数。
+
+    以前这些数散在会话列表、任务列表、run 表里，回答「现在到底有几个目标在跑、
+    有没有卡住的 worker」要开三个页面对照。这里一次给全，而且全部按库里的状态
+    算，不看 Agent 自述：``orphans`` 是「已结束状态却还留在后台列表」的任务数，
+    正常应为 0。
+    """
+    from datetime import datetime, timezone
+
+    from blank_api.models.goal import TERMINAL_GOAL_STATUSES, Goal
+    from blank_api.models.task import Task
+
+    cap = max(1, min(int(limit), 200))
+    goals = (
+        await db.execute(
+            select(Goal).where(Goal.status.notin_(sorted(TERMINAL_GOAL_STATUSES)))
+            .order_by(Goal.last_active_at.desc()).limit(cap)
+        )
+    ).scalars().all()
+    # draft 也要算：v165 的自动下发是「先建 draft，再由前端按 dispatch.auto_start
+    # 点运行」，把这一段漏掉就会出现「目标说执行中、后台列表是空的」的老毛病。
+    active_statuses = ("draft", "queued", "running", "waiting_approval", "paused", "failed")
+    tasks = (
+        await db.execute(
+            select(Task).where(Task.status.in_(active_statuses))
+            .order_by(Task.updated_at.desc()).limit(cap)
+        )
+    ).scalars().all()
+    run_rows = (
+        await db.execute(select(AgentRun.status, func.count()).group_by(AgentRun.status))
+    ).all()
+    run_counts = {status: count for status, count in run_rows}
+    leased = (
+        await db.execute(
+            select(func.count()).select_from(AgentRun).where(AgentRun.status == "running")
+        )
+    ).scalar_one()
+    stale = (
+        await db.execute(
+            select(func.count()).select_from(AgentRun).where(
+                AgentRun.status == "running",
+                AgentRun.lease_expires_at.is_not(None),
+                AgentRun.lease_expires_at < datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+        )
+    ).scalar_one()
+    by_status: dict[str, int] = defaultdict(int)
+    for task in tasks:
+        by_status[str(task.status)] += 1
+    return {
+        "goals": [
+            {
+                "goal_id": g.id,
+                "conversation_id": g.conversation_id,
+                "project_id": g.project_id,
+                "title": g.title,
+                "status": g.status,
+                "scenario": g.scenario,
+                "automation_mode": g.automation_mode,
+                "current_task_id": g.current_task_id,
+                "blocked_reason": g.blocked_reason,
+                "next_action": g.next_action,
+                "updated_at": g.updated_at.isoformat() if g.updated_at else "",
+            }
+            for g in goals
+        ],
+        "background_tasks": [
+            {
+                "task_id": t.id,
+                "conversation_id": str(t.thread_id or ""),
+                "goal_id": str((t.goal_spec or {}).get("goal_id") or ""),
+                "title": t.title,
+                "status": t.status,
+            }
+            for t in tasks
+        ],
+        "by_status": dict(by_status),
+        "queue_length": run_counts.get("queued", 0),
+        "runs": run_counts,
+        "worker": {"running": leased, "stale_leases": stale, "healthy": stale == 0},
+        # 只数 v0.10.0 的任务：v0.9.1 走 /projects/{id}/tasks 的旧轮次本来就没有
+        # supervisor 段，把它们算成孤儿会让这个读数永远是脏的（同 §16 指标口径）。
+        "orphans": sum(
+            1
+            for t in tasks
+            if (t.goal_spec or {}).get("supervisor")
+            and not str((t.goal_spec or {}).get("goal_id") or "")
+        ),
+    }
+
+
 @router.get("/summary")
 async def observability_summary(db: DbSession) -> dict:
     model_rows = (

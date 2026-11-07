@@ -15,6 +15,10 @@ from blank_api.api.auth import require_token
 from blank_api.api.errors import ApiError
 from blank_api.schemas.settings import AgentSettings, AgentSettingsPatch
 from blank_api.services import features as feature_registry
+from blank_api.services.agent.automation import (
+    AUTOMATION_MODES,
+    MODE_LABELS as AUTOMATION_MODE_LABELS,
+)
 from blank_api.services.guardian import MODES as GUARDIAN_MODES
 from blank_api.services.mcp import manager as mcp_manager
 from blank_api.services.permissions import MODE_LABELS, MODES as PERMISSION_MODES
@@ -56,6 +60,10 @@ def _limits() -> dict:
         },
         "permission_modes": list(PERMISSION_MODES),
         "permission_mode_labels": MODE_LABELS,
+        # v165 §8：前端自动化模式下拉框的合法取值与中文标签。和归一化、PATCH
+        # 校验共用 automation.py 的那份枚举，界面上选得到的必然存得上。
+        "automation_modes": list(AUTOMATION_MODES),
+        "automation_mode_labels": AUTOMATION_MODE_LABELS,
         "trigger_ratio": {
             "min": MIN_TRIGGER_RATIO,
             "max": MAX_TRIGGER_RATIO,

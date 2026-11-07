@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Blank AI · 启动中</title>
+<style>
+  /* 雾白启动屏。故意不引外部字体 / 图片 / JS 库：启动屏必须在静态站和后端
+     都还没就绪时就能独立画出来，资源越少越不会把自己变成启动故障。 */
+  :root {
+    --boot-bg: #e7ecee;
+    --boot-text: #0b1220;
+    --boot-muted: #475569;
+    --boot-faint: #94a3b8;
+    --brand: #4d6bfe;
+    --brand-soft: rgba(77, 107, 254, 0.11);
+    --glow: rgba(255, 255, 255, 0.72);
+    --grid: rgba(15, 23, 42, 0.022);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --boot-bg: #070a11;
+      --boot-text: #e9eef8;
+      --boot-muted: #8d9ab0;
+      --boot-faint: #5d6a7e;
+      --brand: #6b86ff;
+      --brand-soft: rgba(107, 134, 255, 0.16);
+      --glow: rgba(255, 255, 255, 0.10);
+      --grid: rgba(255, 255, 255, 0.022);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+  body {
+    background: var(--boot-bg);
+    color: var(--boot-text);
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    cursor: default; user-select: none;
+  }
+  body::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    /* 启动屏与主窗口同尺寸，光晕也要按大画布铺开，不然中间像贴了张小卡片。 */
+    background: radial-gradient(900px 620px at 50% 44%, var(--brand-soft), transparent 72%);
+  }
+  body::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background-image:
+      linear-gradient(to right, var(--grid) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  /* 收幕由主进程做窗口级交叉溶解（setOpacity），网页里不再自己淡出：
+     只淡 body 会留下窗口自身不透明的 backgroundColor，反而多一块纯色矩形。 */
+
+  .markbox { position: relative; width: 152px; height: 152px; overflow: hidden; }
+  .mark { display: block; width: 100%; height: 100%; }
+  .s { fill: none; stroke: var(--brand); stroke-width: 1.6; stroke-dasharray: 1; stroke-dashoffset: 1; }
+  .f { fill: var(--brand); opacity: 0; transform-box: fill-box; transform-origin: center; }
+  .sweep {
+    position: absolute; top: -12%; left: 0; width: 38%; height: 124%;
+    background: linear-gradient(90deg, transparent, var(--glow), transparent);
+    transform: translateX(-320%) skewX(-18deg); opacity: 0; pointer-events: none;
+  }
+  .wordmark { margin-top: 34px; font-size: 30px; font-weight: 500; letter-spacing: .14em; opacity: 0; }
+  .submark { margin-top: 14px; font-size: 13.5px; letter-spacing: .16em; color: var(--boot-muted); opacity: 0; }
+  .signals { margin-top: 34px; display: flex; gap: 9px; opacity: 0; }
+  .signals i { width: 6px; height: 6px; border-radius: 50%; background: var(--brand); }
+  .status {
+    margin-top: 22px; height: 16px; font-size: 11.5px; letter-spacing: .02em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--boot-faint); opacity: 0;
+  }
+  .hint { margin-top: 26px; font-size: 11px; letter-spacing: .04em; color: var(--boot-faint); }
+
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  @keyframes fadeFill { to { opacity: .42; } }
+  @keyframes fillLast { 0% { opacity: 0; transform: scale(.78); } 70% { opacity: 1; transform: scale(1.07); } 100% { opacity: 1; transform: scale(1); } }
+  @keyframes sweep { 0% { transform: translateX(-320%) skewX(-18deg); opacity: 0; } 18% { opacity: 1; } 82% { opacity: 1; } 100% { transform: translateX(420%) skewX(-18deg); opacity: 0; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes pulse { 0%, 100% { opacity: .28; transform: scale(.85); } 50% { opacity: 1; transform: scale(1.15); } }
+
+  /* 四拍：描边 → 四格点亮（右下角回弹）→ 白光横扫 → 字标落款，约 2.6 秒。
+     run 直接写在 body 上，不依赖脚本执行，沙箱策略收紧也照样播。 */
+  .run .s { animation: draw .62s cubic-bezier(.22,.61,.36,1) forwards; }
+  .run .s1 { animation-delay: .05s; } .run .s2 { animation-delay: .14s; }
+  .run .s3 { animation-delay: .23s; } .run .s4 { animation-delay: .32s; }
+  .run .f { animation: fadeFill .42s ease forwards; }
+  .run .f1 { animation-delay: .70s; } .run .f2 { animation-delay: .78s; } .run .f3 { animation-delay: .86s; }
+  .run .f4 { animation: fillLast .62s cubic-bezier(.34,1.4,.64,1) 1.00s forwards; }
+  .run .sweep { animation: sweep .80s ease-in-out 1.20s forwards; }
+  .run .wordmark { animation: rise .55s cubic-bezier(.22,.61,.36,1) 1.55s both; }
+  .run .submark { animation: rise .55s cubic-bezier(.22,.61,.36,1) 1.70s both; }
+  .run .signals { animation: rise .45s ease 1.95s both; }
+  .run .signals i { animation: pulse 1.3s ease-in-out infinite; }
+  .run .signals i:nth-child(2) { animation-delay: .16s; }
+  .run .signals i:nth-child(3) { animation-delay: .32s; }
+  .run .status { animation: rise .45s ease 1.98s both; }
+
+  /* 系统开了「减少动效」：不播四拍，直接给一个成品落款。 */
+  @media (prefers-reduced-motion: reduce) {
+    .run .s, .run .f, .run .f4, .run .sweep, .run .wordmark,
+    .run .submark, .run .signals, .run .signals i, .run .status { animation: none !important; }
+    .run .s { stroke-dashoffset: 0; }
+    .run .f { opacity: .42; } .run .f4 { opacity: 1; }
+    .run .sweep { display: none; }
+    .run .wordmark, .run .submark, .run .signals, .run .status { opacity: 1; transform: none; }
+  }
+</style>
+</head>
+<body class="run">
+  <div class="markbox">
+    <svg class="mark" viewBox="0 0 120 120" aria-hidden="true">
+      <g>
+        <rect class="s s1" x="14" y="14" width="40" height="40" rx="10" pathLength="1" />
+        <rect class="s s2" x="66" y="14" width="40" height="40" rx="10" pathLength="1" />
+        <rect class="s s3" x="14" y="66" width="40" height="40" rx="10" pathLength="1" />
+        <rect class="s s4" x="66" y="66" width="40" height="40" rx="10" pathLength="1" />
+      </g>
+      <g>
+        <rect class="f f1" x="14" y="14" width="40" height="40" rx="10" />
+        <rect class="f f2" x="66" y="14" width="40" height="40" rx="10" />
+        <rect class="f f3" x="14" y="66" width="40" height="40" rx="10" />
+        <rect class="f f4" x="66" y="66" width="40" height="40" rx="10" />
+      </g>
+    </svg>
+    <div class="sweep"></div>
+  </div>
+  <!-- 应用名字标：与 productName / 窗口标题 / 快捷方式统一为 Blank AI。 -->
+  <div class="wordmark">Blank AI</div>
+  <!-- 宣传语唯一出处：想换只改这一行。不要用任何第三方产品的 slogan。 -->
+  <div class="submark" id="slogan">从空白开始，到完成为止</div>
+  <div class="signals"><i></i><i></i><i></i></div>
+  <div class="status" id="status">[startup] app | ready</div>
+  <div class="hint">点击任意处跳过</div>
+
+  <script>
+    // 主进程把真实启动阶段推进来；注入失败就保留静态文案，不影响揭幕。
+    window.__blankPhase = function (text) {
+      var el = document.getElementById('status');
+      if (el) el.textContent = text;
+    };
+    // 点击 / 按键跳过：走 preload 桥接的 IPC，不依赖 OS 输入层事件是否可达。
+    function skip() {
+      if (window.blankSplash && typeof window.blankSplash.skip === 'function') {
+        window.blankSplash.skip();
+      }
+    }
+    document.addEventListener('pointerdown', skip);
+    document.addEventListener('keydown', skip);
+  </script>
+</body>
+</html>

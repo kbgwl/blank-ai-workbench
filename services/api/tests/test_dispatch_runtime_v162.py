@@ -91,6 +91,24 @@ async def test_flag_on_writes_snapshot_and_decision_event(env, workspace, monkey
     assert events[0]["why"]
 
 
+async def test_background_settings_tighten_the_persisted_budget(env, workspace, monkeypatch, tmp_path):
+    """v165 §14：设置页的预算真的进快照，而不只是留在 settings.json 里好看。"""
+    from blank_api.services.settings import SettingsStore
+
+    monkeypatch.setenv(FLAG, "1")
+    monkeypatch.setenv("BLANK_SETTINGS_FILE", str(tmp_path / "settings.json"))
+    SettingsStore().write(
+        {"background": {"max_steps": 3, "max_seconds": 90, "token_budget": 50_000, "auto_recoveries": 1}}
+    )
+    project_id = await create_project(env, workspace)
+    task = await _create(env, project_id, max_steps=6)
+    budget = task["dispatch_snapshot"]["budget"]
+    assert budget["max_steps"] == 3
+    assert budget["max_seconds"] == 90
+    assert budget["token_budget"] == 50_000
+    assert budget["max_recoveries"] == 1
+
+
 async def test_chitchat_snapshot_is_single_step(env, workspace, monkeypatch):
     monkeypatch.setenv(FLAG, "1")
     project_id = await create_project(env, workspace)

@@ -1,12 +1,12 @@
 {
   "name": "blank-ai-workbench-desktop",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "private": true,
-  "description": "空白格 AI 操作台的桌面壳",
+  "description": "Blank AI（空白格）桌面壳",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "test": "node --test tests/gpu-guard.test.cjs tests/api-base.test.cjs tests/shell-policy.test.cjs tests/update-policy.test.cjs tests/main-wiring.test.cjs",
+    "test": "node --test tests/gpu-guard.test.cjs tests/api-base.test.cjs tests/shell-policy.test.cjs tests/update-policy.test.cjs tests/main-wiring.test.cjs tests/splash.test.cjs tests/app-identity.test.cjs",
     "install:local": "node install-local.cjs",
     "dist": "electron-builder",
     "dist:portable": "electron-builder --win portable",
@@ -19,7 +19,7 @@
   },
   "build": {
     "appId": "ai.blank.workbench",
-    "productName": "空白格 AI 操作台",
+    "productName": "Blank AI",
     "copyright": "Copyright © 2026 Blank AI Workbench contributors",
     "directories": {
       "output": "dist",
@@ -30,6 +30,9 @@
       "api-base.cjs",
       "gpu-guard.cjs",
       "shell-policy.cjs",
+      "splash-policy.cjs",
+      "splash.html",
+      "splash-preload.cjs",
       "preload.cjs",
       "package.json"
     ],
@@ -92,14 +95,14 @@
       ]
     },
     "portable": {
-      "artifactName": "空白格-便携版-${version}.exe"
+      "artifactName": "Blank-AI-便携版-${version}.exe"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "空白格-安装版-${version}.exe",
-      "shortcutName": "空白格 AI 操作台",
+      "artifactName": "Blank-AI-安装版-${version}.exe",
+      "shortcutName": "Blank AI",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }

@@ -16,8 +16,9 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,8 +28,10 @@ from blank_api.api.routes.projects import load_project
 from blank_api.api.routes.tasks import persist_task
 from blank_api.db import get_session_factory
 from blank_api.deps import DbSession
+from blank_api.models.goal import Goal
 from blank_api.models.task import Task
 from blank_api.models.thread import Thread
+from blank_api.schemas.goal import GoalOut
 from blank_api.schemas.task import TaskOut
 from blank_api.schemas.thread import (
     ThreadCreate,
@@ -42,8 +45,19 @@ from blank_api.schemas.thread import (
     ThreadTurnIn,
     ThreadTurnOut,
 )
+from blank_api.services.agent.automation import (
+    effective_policy,
+    resolve_mode as resolve_automation_mode,
+)
+from blank_api.services.agent.dispatcher import (
+    decide_dispatch,
+    dispatch_snapshot,
+)
 from blank_api.services.agent.events import EventRecorder
+from blank_api.services.agent.goals import GoalTracker
+from blank_api.services.agent.supervisor import observe, wants_new_goal
 from blank_api.services.sandbox import SnapshotNotRestorable, SnapshotStore
+from blank_api.services.settings import SettingsStore
 from blank_api.services.threads import rewind_to_turn, thread_or_404, thread_turns
 
 router = APIRouter(tags=["threads"], dependencies=[Depends(require_token)])
@@ -155,17 +169,172 @@ async def read_thread(thread_id: str, db: DbSession) -> ThreadDetailOut:
     return await _detail(db, await thread_or_404(db, thread_id))
 
 
-@router.post("/threads/{thread_id}/turns", response_model=TaskOut, status_code=201)
-async def create_turn(thread_id: str, payload: ThreadTurnIn, db: DbSession) -> TaskOut:
-    """开新的一轮。
+async def _run_control(
+    action: str, task_id: str, status: str, request: Request, db: DbSession
+) -> TaskOut | None:
+    """把控制词路由到**已经存在**的动作，不另写一套状态机（v165 §2.2 / §3.3）。
 
-    走的是同一个 ``persist_task``：多轮会话不该有第二套任务创建逻辑，
-    否则"独立任务"和"会话里的一轮"迟早会在字段默认值上分叉。
+    返回 ``None`` 表示这件事需要新开一轮（上一轮已成功，用户又提了补充要求）；
+    其余情况返回被作用的任务。任务重新查一次：调用方刚 commit 过，拿旧实例
+    读字段在 expire_on_commit 的会话上会触发同步懒加载。
+    """
+    from blank_api.api.routes import tasks as task_routes
+
+    task = await task_routes.load_task(db, task_id)
+    if action == "pause":
+        return await task_routes.pause_task(task_id, db)
+    if action == "cancel":
+        return await task_routes.cancel_task(task_id, db)
+    if action == "resume":
+        if status != "paused":
+            return TaskOut.model_validate(task)
+        return await task_routes.resume_task(task_id, request, db)
+    if action in ("retry", "continue"):
+        # 还在跑的轮次只当作催促，不重开第二份执行。
+        if status in ("queued", "running", "waiting_approval"):
+            return TaskOut.model_validate(task)
+        if status == "paused":
+            return await task_routes.resume_task(task_id, request, db)
+        if status == "succeeded":
+            return None
+        return await task_routes.retry_task(task_id, request, db)
+    if action in ("approve", "reject"):
+        if status != "waiting_approval":
+            return TaskOut.model_validate(task)
+        from blank_api.schemas.task import TaskApprovalIn
+
+        try:
+            result = await task_routes.decide_approval(
+                task_id,
+                TaskApprovalIn(approve=(action == "approve"), scope="once"),
+                request,
+                db,
+            )
+        except ApiError:
+            # 审批过期、证据不齐：「同意」两个字不该把整轮对话打成 500。
+            return TaskOut.model_validate(task)
+        return TaskOut.model_validate(result["task"])
+    return TaskOut.model_validate(task)
+
+
+@router.get("/threads/{thread_id}/goal", response_model=GoalOut | None)
+async def read_goal(thread_id: str, db: DbSession):
+    """当前会话的目标，供顶部状态条显示（v165 §9.1）。没有就是 null。
+
+    先取活跃目标；没有活跃的再退回**最近一个**（含已完成/失败）。状态条是给
+    用户「现在到哪了」用的，任务一成功就把目标格清空，等于在唯一该被看见的
+    时刻收走结论。新建/复用目标的判定不在这里，仍走 ``GoalTracker.active()``。
+    """
+    thread = await thread_or_404(db, thread_id)
+    tracker = GoalTracker(db)
+    goal = await tracker.active(thread.id) or await tracker.latest(thread.id)
+    return GoalOut.model_validate(goal) if goal is not None else None
+
+
+@router.post("/threads/{thread_id}/turns", response_model=TaskOut, status_code=201)
+async def create_turn(
+    thread_id: str, payload: ThreadTurnIn, request: Request, db: DbSession
+) -> TaskOut:
+    """Chat Supervisor 入口：先判断这句话该做什么，再决定要不要开新一轮。
+
+    v0.9.1 是「一句话 = 一个任务」，用户说「继续」「再改一下」也新建一轮，
+    旧目标和失败原因全留在上一轮，只能靠人不停重说。现在每条消息先过
+    ``observe()``：控制词作用于已有任务，补充要求挂回同一个目标，
+    只有明确的新目标才归档旧的另起一条。
+
+    仍然走同一个 ``persist_task``：多轮会话不该有第二套任务创建逻辑。
     """
     thread = await thread_or_404(db, thread_id)
     if thread.status != "active":
         raise ApiError(code="thread_archived", message="该会话已归档，不能再开新的一轮", status_code=409)
     from blank_api.schemas.task import TaskCreate
+
+    text = (payload.goal or payload.title or "").strip()
+    tracker = GoalTracker(db)
+    goal = await tracker.active(thread_id)
+    last_task = await tracker.latest_task(goal)
+    last_task_id = last_task.id if last_task is not None else ""
+    last_status = str(last_task.status or "") if last_task is not None else ""
+    judgement = observe(
+        text,
+        has_active_goal=goal is not None,
+        active_task_status=last_status,
+        scenario=payload.scenario or (goal.scenario if goal is not None else "dev"),
+        automation_mode=(goal.automation_mode if goal is not None else "assist"),
+        goal_id=goal.id if goal is not None else "",
+        related_task_id=last_task_id,
+    )
+
+    # 控制词不新建一轮；作用在已有任务上，事件也挂在那一轮。
+    if judgement.control_action and last_task_id:
+        if goal is not None:
+            if judgement.control_action == "cancel":
+                GoalTracker.transition(goal, "cancelled")
+            elif judgement.control_action == "pause":
+                GoalTracker.transition(goal, "paused")
+            elif judgement.control_action in ("continue", "retry", "resume"):
+                GoalTracker.transition(goal, "executing", blocked_reason="", next_action=text[:200])
+            await db.commit()
+        handled = await _run_control(
+            judgement.control_action, last_task_id, last_status, request, db
+        )
+        if handled is not None:
+            recorder = EventRecorder(get_session_factory(), last_task_id)
+            await recorder.add(
+                "message.observed",
+                "supervisor",
+                {"message": text[:400], "judgement": judgement.as_dict()},
+            )
+            await recorder.add(
+                "supervisor.action",
+                "supervisor",
+                {
+                    "action": judgement.control_action,
+                    "goal_id": judgement.goal_id,
+                    "task_id": last_task_id,
+                    "reason": judgement.reason,
+                },
+            )
+            return handled
+        # handled is None：上一轮已完成，接着开新一轮，但目标仍是同一个。
+
+    created_goal = goal is None or wants_new_goal(text)
+    if created_goal:
+        if goal is not None:
+            GoalTracker.transition(goal, "archived")
+        goal = await tracker.create(
+            project_id=thread.project_id,
+            conversation_id=thread_id,
+            title=text[:200] or "未命名目标",
+            scenario=payload.scenario or "dev",
+        )
+    goal_id = goal.id
+    await db.commit()
+
+    # v165 §5.1：下发前逐条核对七个条件。auto_start 不是「收到消息就开跑」，
+    # 同时留下可回放的下发快照——任务结束后仍能回答「当时凭什么自动跑起来」。
+    settings = SettingsStore().read()
+    permission_mode = str((settings.get("permissions") or {}).get("default_mode") or "default")
+    # 设置页是唯一真源；目标上的存档值只作回落。resolve_mode 与审批矩阵、
+    # PermissionPolicy、runtime 共用同一份枚举，脏值一律回到 assist。
+    automation_mode = resolve_automation_mode(settings, str(goal.automation_mode or ""))
+    policy = effective_policy(automation_mode, permission_mode)
+    project = await load_project(db, thread.project_id)
+    budget_left = not (
+        int(goal.budget_tokens or 0) > 0
+        and int(goal.tokens_used or 0) >= int(goal.budget_tokens)
+    )
+    decision = decide_dispatch(
+        judgement,
+        project_id=thread.project_id,
+        scenario=payload.scenario or str(goal.scenario or "dev"),
+        automation_mode=automation_mode,
+        permission_mode=permission_mode,
+        has_workspace=project.active_workspace is not None,
+        has_clarification=judgement.needs_clarification,
+        has_active_task=last_status in ("queued", "running", "waiting_approval"),
+        budget_left=budget_left,
+    )
 
     next_turn = int(thread.turn_count or 0) + 1
     task = await persist_task(
@@ -183,11 +352,64 @@ async def create_turn(thread_id: str, payload: ThreadTurnIn, db: DbSession) -> T
         thread_id=thread_id,
         turn_index=next_turn,
     )
-    # 轮次计数与序号一起加，而不是每次列表都去 count：列表接口是每次打开页面都调的，
-    # 而计数变化只在创建这一处发生。
+    # persist_task 自己 commit 过：重新取一次目标再挂，别拿可能已过期的实例写字段。
+    stored_goal = (
+        await db.execute(select(Goal).where(Goal.id == goal_id))
+    ).scalar_one_or_none()
+    goal_status_by_decision = {
+        "immediate": "executing",
+        "queue": "planned",
+        "wait_approval": "waiting_approval",
+        "wait_user": "waiting_user",
+        "blocked": "paused",
+    }
+    if stored_goal is not None:
+        tracker.attach(
+            stored_goal,
+            task,
+            status=goal_status_by_decision.get(
+                decision["decision"], "planned" if judgement.needs_execution else "captured"
+            ),
+        )
+    dispatch = dispatch_snapshot(
+        judgement,
+        decision,
+        task_id=task.id,
+        conversation_id=thread_id,
+        goal_id=goal_id,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    # 监督者判定放在结构化目标里（不是用户 prompt 的前缀）。执行侧
+    # create_plan_node 读它来纠正「补充要求被判成闲聊」，见 supervisor.execution_override。
+    # normalize_goal 只保留四个已知键，所以必须在 persist_task 之后补写。
+    task.goal_spec = {
+        **dict(task.goal_spec or {}),
+        "supervisor": judgement.as_dict(),
+        "goal_id": goal_id,
+        "dispatch": dispatch,
+        # v165 §8：下发那一刻真正的执行边界，GUI 状态条与事后取证都读它。
+        "policy": policy,
+    }
     thread.turn_count = next_turn
     await db.commit()
-    await EventRecorder(get_session_factory(), task.id).add(
+    # 这次提交会让服务端生成的 updated_at 过期；不 refresh 就序列化会在
+    # 异步会话里触发同步懒加载（MissingGreenlet → 500）。persist_task 自己
+    # 也 refresh 过一次，这里多一次提交就多一次。
+    await db.refresh(task)
+
+    recorder = EventRecorder(get_session_factory(), task.id)
+    await recorder.add(
+        "message.observed", "supervisor",
+        {"message": text[:400], "judgement": judgement.as_dict()},
+    )
+    if created_goal:
+        await recorder.add("goal.created", "supervisor", {"goal_id": goal_id, "title": text[:200]})
+    await recorder.add(
+        "goal.linked", "supervisor",
+        {"goal_id": goal_id, "task_id": task.id, "intent": judgement.intent},
+    )
+    await recorder.add("task.dispatched", "supervisor", dispatch)
+    await recorder.add(
         "thread.turn", "receive_task", {"thread": thread_id, "turn": next_turn}
     )
     return TaskOut.model_validate(task)

@@ -540,7 +540,14 @@ def parse_decision(raw: object) -> tuple[bool, str]:
             return bool(raw["approve"]), scope
         verdict = str(raw.get("decision") or "").strip().lower()
         # 空值或无法识别的措辞一律视为未批准：静默批准比多问一次危险得多。
-        return verdict in ("approve", "allow", "yes", "true", "1", "ok"), scope
+        # 中文「同意 / 批准 / 确认」是审批卡上的原词，必须认；但否定词要先排除，
+        # 「不同意」里也含「同意」，按子串放行就刚好反了。
+        if verdict in ("不同意", "不批准", "不通过", "拒绝", "驳回", "deny", "reject", "no", "false", "0"):
+            return False, scope
+        return verdict in (
+            "approve", "allow", "yes", "true", "1", "ok",
+            "同意", "批准", "确认", "允许", "通过",
+        ), scope
     if isinstance(raw, str):
         return raw.strip().lower() not in ("", "deny", "reject", "no", "false", "0"), SCOPE_ONCE
     if raw is None:
@@ -625,6 +632,10 @@ class PermissionPolicy:
     denied_prefixes: set[tuple[str, ...]] = field(default_factory=set)
     denied_actions: set[str] = field(default_factory=set)
     approve_high_risk: bool = False
+    # v165 Phase 4：自动化模式（要不要自己动）与权限档位分开存。它只能**收紧**
+    # 判定，永不放宽；默认 assist，老调用方不传时行为与改造前完全一致。
+    automation_mode: str = "assist"
+    automation_allowed: bool = True
     # 人手写的 allow/deny 规则（permissions.rules）。与 approvals.json 分开：
     # 前者只读、可写注释；后者由程序原子替换。文件写坏时整份停用。
     ruleset: "PermissionRuleset" = field(default_factory=empty_ruleset)
@@ -639,6 +650,8 @@ class PermissionPolicy:
         approved_actions=(),
         approved_prefixes=(),
         sandbox_tier: str = DEFAULT_TIER,
+        automation_mode: str = "assist",
+        automation_allowed: bool = True,
     ) -> "PermissionPolicy":
         tier = normalize_tier(sandbox_tier)
         grants: set[tuple[str, str, str]] = set()
@@ -655,6 +668,8 @@ class PermissionPolicy:
             approved_tools=grants,
             approved_actions=set(approved_actions or ()),
             approved_prefixes={prefix_rule(item) for item in (approved_prefixes or ()) if prefix_rule(item)},
+            automation_mode=automation_mode,
+            automation_allowed=bool(automation_allowed),
         )
 
     # -- 状态变更 ----------------------------------------------------------
@@ -711,6 +726,10 @@ class PermissionPolicy:
     def snapshot(self) -> dict:
         return {
             "mode": self.mode,
+            # 审批节奏（mode）和自动化程度（automation_mode）并列写进快照：
+            # 「我明明开了自动驾驶，为什么还弹审批」要能靠这一行解释清楚。
+            "automation_mode": self.automation_mode,
+            "automation_allowed": self.automation_allowed,
             # 免问范围本身就是边界的一部分：只写"批过哪些工具"回答不了
             # "切到 off 之后这些批准还算不算"。三段的形状让读的人一眼看见档位与路径。
             "sandbox_tier": self.sandbox_tier,
@@ -811,6 +830,37 @@ class PermissionPolicy:
         if is_irreversible(command):
             return ask(risk, "irreversible", command_prefix(command))
 
+        # v165 §13 硬闸：只闸「全放行」这一档，不闸 approve_high_risk。
+        #
+        # 两者都是「一次都不问」，但性质不同：bypass 是一条**用户设完就忘**的
+        # 全局持久档位，它无声地把删文件、装依赖、推生产全变成默认动作，
+        # 正是 §13 要禁的「模式跳过高风险审批」。approve_high_risk 则是调用方
+        # 在**本次运行**的请求体里当场写下的授权，它本身就是那次审批——把它
+        # 也挡掉，就又造出「我授权同意了，界面说我没同意」那种谎（本版 P0 之一），
+        # 而且无人值守的评测 harness 靠它对每个样本免审批跑。
+        #
+        # 会话里用户亲手点过「总是允许 git push」仍然走下面的前缀账，那也是一次
+        # 真实审批，不能被这里顶掉——所以闸门只插在这一行之前，不插在 decide 开头。
+        if self.mode == MODE_BYPASS:
+            from blank_api.services.agent.automation import (
+                DECISION_ASK,
+                approval_matrix,
+                classify_action,
+            )
+
+            # 只认 §13 明确列出的动作签名。risk="high" 是既有产品自己的风险标签，
+            # 它由下面 `risk:ask` / `irreversible` 两道闸门负责；把它也送进矩阵会
+            # 让「全放行」连一条普通 curl 都问一遍，等于偷偷改掉用户选的档位。
+            action = classify_action(name, arguments)
+            if action:
+                matrix = approval_matrix(
+                    mode=self.automation_mode,
+                    permission_mode=self.mode,
+                    action=action,
+                    automation_allowed=self.automation_allowed,
+                )
+                if not matrix["bypassable"] and matrix["decision"] == DECISION_ASK:
+                    return ask(risk, "v165:high_risk", command_prefix(command), memo=memo)
         if self.mode == MODE_BYPASS:
             return approve(risk, "mode:bypass", command_prefix(command))
         # 归因要和来源一致：开关就叫 approve_high_risk，别在追踪里冒充"全放行模式"。

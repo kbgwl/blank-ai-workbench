@@ -18,6 +18,7 @@ from sqlalchemy import select
 from blank_api.api.errors import ApiError
 from blank_api.limits import DEFAULT_TOKEN_BUDGET
 from blank_api.models.checkpoint import AgentCheckpoint
+from blank_api.models.goal import Goal
 from blank_api.models.task import AgentEvent, Task
 from blank_api.models.thread import Thread
 from blank_api.services.agent.checkpoints import (
@@ -27,13 +28,20 @@ from blank_api.services.agent.checkpoints import (
 from blank_api.services.agent.context import ContextCompactor
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.evidence import build_evidence
+from blank_api.services.agent.goals import GoalTracker
 from blank_api.services.agent.graph import (
     AgentSession,
+    _changed_paths,
     _with_delivery_notes,
     assumption_ledger,
     build_agent_graph,
     initial_messages,
 )
+from blank_api.services.agent.verifier import (
+    failure_reason as verdict_failure_reason,
+    verify as verify_facts,
+)
+from blank_api.services.agent.automation import resolve_mode as resolve_automation_mode
 from blank_api.services.agent.loadstats import recent_load
 from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agent.scenarios import (
@@ -505,6 +513,9 @@ class AgentRuntime:
             approved_actions=approved_actions,
             approved_prefixes=request.approved_command_prefixes or (),
             sandbox_tier=sandbox.tier,
+            # v165 Phase 4：设置页的自动化模式真正进入审批链。它只可能让
+            # 「全放行」多问一次高风险动作，不会放宽任何既有判定。
+            automation_mode=resolve_automation_mode(settings),
         )
         # 落盘的前缀规则：重启/换任务后仍认得用户以前批准过的命令签名。
         # 读不出来（文件缺失/损坏）就是空集——fail-closed，多问一次而不是少问一次。
@@ -1076,11 +1087,37 @@ class AgentRuntime:
             )
             return await build_evidence(scope.store, task_id)
 
-        status = resolve_status(result)
         validation = result.get("validation") or {}
+        # v165 §6 独立 Verifier：只读磁盘事实/工具结果/测试结论/交付文本，不调模型、
+        # 不看 Agent 自述。放在终态集中点算，才能同时拿到交付文本与验证结果。
+        verdict = verify_facts(
+            goal_spec=result.get("goal_spec") or {},
+            plan=result.get("plan_manifest"),
+            tool_results=result.get("tool_results") or [],
+            validation=validation,
+            changed_paths=_changed_paths(result.get("tool_results") or []),
+            report=str(result.get("summary") or ""),
+            readonly=bool(result.get("readonly")),
+            direct_answer=bool(result.get("direct_answer")),
+            budget_exhausted=bool(result.get("budget_exhausted")),
+        )
+        await scope.recorder.add(
+            "verification.verdict",
+            "complete",
+            {
+                "verdict": verdict["verdict"],
+                "passed": verdict["passed"],
+                "blocking": verdict["blocking"],
+                "checks": verdict["checks"],
+                "findings": verdict["findings"],
+                "evidence": verdict["evidence"],
+                "goal_id": str((result.get("goal_spec") or {}).get("goal_id") or ""),
+            },
+        )
+        status = resolve_status({**result, "verdict": verdict})
         reason = ""
         if status == "failed":
-            reason = _failure_reason(validation)
+            reason = verdict_failure_reason(verdict) or _failure_reason(validation)
         elif status == "cancelled":
             reason = "任务已取消"
         elif status == "paused":
@@ -1098,6 +1135,12 @@ class AgentRuntime:
             extra={
                 "usage": result.get("usage") or {},
                 "validation": validation,
+                "verdict": {
+                    "verdict": verdict["verdict"],
+                    "passed": verdict["passed"],
+                    "blocking": verdict["blocking"],
+                    "findings": verdict["findings"],
+                },
                 "thread_id": scope.thread_id,
                 "context_tokens": scope.session.context_tokens,
                 "steer": scope.session.steer_metrics,
@@ -1252,6 +1295,18 @@ class AgentRuntime:
                 task.milestones = milestones
             if goal_spec:
                 task.goal_spec = goal_spec
+            # v165 §3.2：目标状态必须跟着任务终态走。Phase 1 只在控制词分支改过它，
+            # 于是正常跑完一轮后目标永远停在 planned，界面看起来「还在执行中」。
+            goal_id = _goal_id_of(goal_spec, task.goal_spec)
+            if goal_id:
+                goal = await session.get(Goal, goal_id)
+                goal_status = _GOAL_STATUS_BY_TASK.get(status)
+                if goal is not None and goal_status:
+                    GoalTracker.transition(
+                        goal,
+                        goal_status,
+                        next_action="" if status == "succeeded" else reason[:200],
+                    )
             await session.commit()
         event_type = {
             "succeeded": "task.completed",
@@ -1323,9 +1378,34 @@ def _failure_reason(validation: dict) -> str:
     return f"测试未通过：{command}"
 
 
+# 任务终态 → v165 §3.2 目标状态。目标与任务同寿，但状态不是同一个：
+# 一个目标可以跨多个 task，只有终态才把目标推到对应位置。
+_GOAL_STATUS_BY_TASK = {
+    "succeeded": "succeeded",
+    "failed": "failed",
+    "cancelled": "cancelled",
+    "paused": "paused",
+    "waiting_approval": "waiting_approval",
+}
+
+
+def _goal_id_of(*specs: object) -> str:
+    for spec in specs:
+        if isinstance(spec, dict):
+            value = str(spec.get("goal_id") or "").strip()
+            if value:
+                return value
+    return ""
+
+
 def resolve_status(result: dict) -> str:
     if result.get("status") in ("cancelled", "paused", "failed"):
         return str(result["status"])
+    # v165 §6：独立事实校验发现的硬违规（零改动伪成功、交付假称测试通过）
+    # 不能算成功。判定只读事实，不看模型自述，也不受自动化模式影响。
+    verdict = result.get("verdict") or {}
+    if verdict.get("blocking"):
+        return "failed"
     validation = result.get("validation") or {}
     # skipped = 本次没改文件，校验本就不适用（纯问答），不算失败
     if validation and validation.get("status") not in ("ok", "skipped"):

@@ -1,5 +1,5 @@
 /**
- * 空白格 AI 操作台 · 桌面壳主进程
+ * Blank AI（空白格）· 桌面壳主进程
  *
  * 职责：
  *  1. 用自定义 app:// 协议承载静态导出的前端
@@ -28,6 +28,14 @@ const path = require("node:path");
 const process = require("node:process");
 const { readAttempts, shouldDowngrade, startingState, readyState } = require("./gpu-guard.cjs");
 const { resolveApiBase } = require("./api-base.cjs");
+const {
+  SPLASH_MIN_MS,
+  SPLASH_MAX_MS,
+  SPLASH_FADE_MS,
+  MAIN_WINDOW_SIZE,
+  decideSplashReveal,
+} = require("./splash-policy.cjs");
+const APP_NAME = "Blank AI";
 const {
   DEFAULT_HOTKEY,
   buildTrayMenuModel,
@@ -86,6 +94,22 @@ const PORT = String(process.env.BLANK_BACKEND_PORT ?? "").trim() || "8000";
  *   1) 正常启动一个壳；2) 再启动一次；3) 第二个应无窗口闪现直接退出，
  *   4) 把第一个关进托盘/最小化后再启动第二次，窗口应被唤回并聚焦。
  */
+// 启动屏状态必须声明在最早一次 phase() 调用之前：单实例判定在模块顶层同步调
+// phase()，那时若它们还在 let/const 的暂时性死区里，启动会直接抛 ReferenceError。
+let splashWindow = null;
+/** 收幕永远发生在「主窗口已经 show 之后」，否则启动屏会短暂成为最后一个窗口。 */
+const splashState = {
+  enabled: false,
+  mainReady: false,
+  minElapsed: false,
+  skipped: false,
+  forced: false,
+  failed: false,
+  revealed: false,
+  mainTarget: null,
+  startedAt: 0,
+};
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (shouldAbortSecondaryInstance(gotSingleInstanceLock)) {
   console.log("[desktop] 已有实例在运行，本实例放弃启动（不建窗口、不拉后端）");
@@ -238,7 +262,14 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * 只打阶段名与结果，不打密钥、Token 或完整用户路径。
  */
 function phase(name, detail = "") {
-  console.log(`[startup] ${name}${detail ? ` | ${detail}` : ""}`);
+  const line = `[startup] ${name}${detail ? ` | ${detail}` : ""}`;
+  console.log(line);
+  // 启动屏状态行显示真实启动阶段（不是编好的轮播）。注入失败不影响启动。
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    void splashWindow.webContents
+      .executeJavaScript(`window.__blankPhase && window.__blankPhase(${JSON.stringify(line)})`)
+      .catch(() => {});
+  }
 }
 
 // ── 静态资源协议 ────────────────────────────────────────────────────────────
@@ -418,8 +449,16 @@ function resolveBackendCommand() {
   };
 }
 
-/** 迁移超时：卡住的迁移进程必须被终止，而不是让启动永远停在 migration-start。 */
-const MIGRATION_TIMEOUT_MS = Number(process.env.BLANK_MIGRATION_TIMEOUT_MS ?? "") || 10_000;
+/**
+ * 迁移超时：卡住的迁移进程必须被终止，而不是让启动永远停在 migration-start。
+ *
+ * 默认 60 秒（原 10 秒）。10 秒对"升级到带新迁移的版本"这件事太紧：本机
+ * 0030→0032 实测 5.9 秒已经吃掉六成预算，再叠上换版后首次启动要为上百个新
+ * 源码文件生成 .pyc、以及杀软对 resources\backend 的首扫，就会假超时——日志里
+ * 表现为 `migration-failed | 迁移超时` 之后后端才起来，用户看到的是启动慢且
+ * 迁移"没跑"。真卡住（库被锁、alembic 等输入）仍然会被这个上限打断，行为不变。
+ */
+const MIGRATION_TIMEOUT_MS = Number(process.env.BLANK_MIGRATION_TIMEOUT_MS ?? "") || 60_000;
 
 /**
  * 首次运行要建表。失败/超时不致命（可能已被别的实例迁移过），记下原因继续走
@@ -656,7 +695,7 @@ function createTray() {
     const image = nativeImage.createFromPath(TRAY_ICON_PATH);
     if (image.isEmpty()) throw new Error(`图标读不到或为空：${TRAY_ICON_PATH}`);
     tray = new Tray(image);
-    tray.setToolTip("空白格 AI 操作台");
+    tray.setToolTip(APP_NAME);
     shellState.trayAvailable = true;
     refreshTrayMenu();
     tray.on("double-click", () => showMainWindow("双击托盘图标"));
@@ -698,16 +737,167 @@ function quitApplication(via) {
   app.quit();
 }
 
+// ── 启动屏 ──────────────────────────────────────────────────────────────────
+
+// 页面里的 pointerdown 经 splash-preload.cjs 桥到这里。before-input-event 保留作
+// 兜底，但实测它在这份 Electron 的 frameless 窗口上不可靠，别把它当唯一入口。
+ipcMain.on("splash:skip", () => skipSplash());
+
+/** 自检 / 无 GUI / CI 不该弹启动屏；用户也能显式关掉（BLANK_SPLASH=0）。 */
+function shouldShowSplash() {
+  if (String(process.env.BLANK_SPLASH ?? "") === "0") return false;
+  return String(process.env.BLANK_SHELL_TEST ?? "") !== "1";
+}
+
+function createSplash() {
+  if (!shouldShowSplash()) {
+    splashState.enabled = false;
+    phase("splash", "disabled");
+    return;
+  }
+  let win = null;
+  try {
+    win = new BrowserWindow({
+      // 与主窗口同尺寸同中心：揭幕是「同一块画布换内容」，不是小卡片变大窗口。
+      ...MAIN_WINDOW_SIZE,
+      frame: false,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      center: true,
+      // 先藏起来等首帧，否则会先闪一下纯 backgroundColor 的空窗口。
+      show: false,
+      backgroundColor: "#e7ecee",
+      title: `${APP_NAME} · 启动中`,
+      webPreferences: {
+        preload: path.join(__dirname, "splash-preload.cjs"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+    // 跳过的主通道是 preload 的 IPC；下面这条 OS 输入事件只作兜底。
+    win.webContents.on("before-input-event", (_event, input) => {
+      if (input.type === "mouseDown" || input.type === "keyDown") skipSplash();
+    });
+    win.webContents.on("did-fail-load", (_event, code, desc) => {
+      console.error(`[desktop] 启动屏加载失败 ${code} ${desc}，直接进应用`);
+      splashState.failed = true;
+      maybeRevealSplash();
+    });
+    win.on("closed", () => {
+      if (splashWindow === win) splashWindow = null;
+    });
+    // 首帧画出来再显示，避免先露一块纯底色；极端情况下 ready-to-show 不来，
+    // 半秒后也强制显示——启动屏只是装饰，不能因为它卡住整个启动。
+    let shown = false;
+    const showOnce = () => {
+      if (shown || win.isDestroyed()) return;
+      shown = true;
+      win.show();
+    };
+    win.once("ready-to-show", showOnce);
+    setTimeout(showOnce, 500);
+    splashWindow = win;
+    splashState.enabled = true;
+    splashState.startedAt = Date.now();
+    void win.loadFile(path.join(__dirname, "splash.html"));
+    phase("splash", "shown");
+    // 最短展示保证动画播完；最长兜底保证后端卡住时用户不会被锁在动画里。
+    setTimeout(() => {
+      splashState.minElapsed = true;
+      maybeRevealSplash();
+    }, SPLASH_MIN_MS);
+    setTimeout(() => {
+      splashState.forced = true;
+      maybeRevealSplash();
+    }, SPLASH_MAX_MS);
+  } catch (error) {
+    // 启动屏是装饰，不是启动前置条件；建不出来就当没有，照常进应用。
+    console.error(`[desktop] 启动屏创建失败，直接进应用：${error.message}`);
+    splashWindow = null;
+    splashState.enabled = false;
+    if (win && typeof win.destroy === "function") {
+      try { win.destroy(); } catch { /* 已经没了 */ }
+    }
+  }
+}
+
+function skipSplash() {
+  if (!splashState.enabled || splashState.revealed) return;
+  splashState.skipped = true;
+  console.log("[desktop] 启动屏：用户跳过");
+  maybeRevealSplash();
+}
+
+function requestSplashReveal(win) {
+  splashState.mainReady = true;
+  splashState.mainTarget = win;
+  maybeRevealSplash();
+}
+
+function maybeRevealSplash() {
+  if (decideSplashReveal(splashState) !== "reveal") return;
+  const win = splashState.mainTarget;
+  if (!win || win.isDestroyed()) return;
+  splashState.revealed = true;
+  // 收幕前把启动屏的外框对齐到主窗口：两个窗口完全重合，淡出才是
+  // 「同一块画布换内容」，而不是一块小卡片飘在大窗口上面。
+  const splash = splashWindow;
+  if (splash && !splash.isDestroyed()) {
+    try { splash.setBounds(win.getBounds()); } catch { /* 对齐失败不影响揭幕 */ }
+  }
+  // 顺序不能反：先让主窗口成为可见窗口，再淡出启动屏。
+  win.show();
+  win.focus();
+  console.log("[desktop] 启动屏收幕，主窗口显示");
+  closeSplash();
+}
+
+function closeSplash() {
+  const win = splashWindow;
+  splashWindow = null;
+  if (!win || win.isDestroyed()) return;
+  // 淡出期间启动屏仍置顶，但不能吃掉主窗口的点击。
+  try { win.setIgnoreMouseEvents(true); } catch { /* 平台不支持就算了 */ }
+  // 必须用窗口级透明度做交叉溶解。以前只给网页 body 加 .out，网页淡完之后
+  // 窗口自己的 backgroundColor 仍然不透明，用户看到的是一块纯色矩形硬消失。
+  let canFade = true;
+  try { win.setOpacity(1); } catch { canFade = false; }
+  if (!canFade) {
+    win.destroy();
+    return;
+  }
+  const steps = 10;
+  const stepMs = Math.max(16, Math.round(SPLASH_FADE_MS / steps));
+  let i = 0;
+  const timer = setInterval(() => {
+    if (win.isDestroyed()) { clearInterval(timer); return; }
+    i += 1;
+    try { win.setOpacity(Math.max(0, 1 - i / steps)); } catch { /* 忽略单帧失败 */ }
+    if (i >= steps) {
+      clearInterval(timer);
+      if (!win.isDestroyed()) win.destroy();
+    }
+  }, stepMs);
+}
+
 function createWindow() {
   const win = new BrowserWindow({
-    width: 1280,
-    height: 820,
+    // 与启动屏共用同一组尺寸，别再各自硬编码。
+    ...MAIN_WINDOW_SIZE,
     minWidth: 1024,
     minHeight: 680,
-    backgroundColor: "#f5f6f8",
+    center: true,
+    // 与雾白皮肤的 --bg 对齐：原先的 #f5f6f8 会在首帧闪一下灰底。
+    backgroundColor: "#eef1f2",
     show: false,
     autoHideMenuBar: true,
-    title: "空白格 AI 操作台",
+    title: APP_NAME,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -717,14 +907,19 @@ function createWindow() {
   });
 
   win.once("ready-to-show", () => {
-    console.log("[desktop] 窗口就绪并显示");
+    console.log("[desktop] 窗口就绪");
     // 真正走到这里才说明这次启动没崩在 GPU 上，计数归零（下次仍优先硬件加速）。
     // 降级那次成功也要复位：降级是临时措施，不是判决。旧代码在这里排除了 gpuUnstable，
     // 于是「一旦降级就永远回不到硬件加速」——注释里的承诺并没有兑现。
     if (process.env.BLANK_DISABLE_GPU !== "1") {
       writeGpuState(readyState());
     }
-    win.show();
+    // 有启动屏时由收幕时序决定何时 show（可能要等动画播完）；没有就直接显示。
+    if (splashState.enabled && splashWindow && !splashWindow.isDestroyed()) {
+      requestSplashReveal(win);
+    } else {
+      win.show();
+    }
   });
 
   /**
@@ -1009,6 +1204,11 @@ app.on("second-instance", () => {
     console.log("[desktop] 收到第二实例启动信号（主实例尚未就绪，窗口稍后自会打开）");
     return;
   }
+  // 启动屏阶段主窗口还没揭幕，此刻 showMainWindow 会误建第二个主窗口。
+  if (splashState.enabled && !splashState.revealed) {
+    console.log("[desktop] 收到第二实例启动信号（启动屏阶段，忽略）");
+    return;
+  }
   console.log("[desktop] 收到第二实例启动信号");
   showMainWindow("第二实例唤回");
 });
@@ -1017,6 +1217,8 @@ app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return;
   phase("app", "ready");
   registerAppProtocol();
+  // 后端首启可能要跑几十秒迁移，这期间先有画面，别让用户对着空白桌面等。
+  createSplash();
   console.log(`[desktop] 静态根目录 ${STATIC_ROOT}`);
   console.log(`[desktop] 后端源码目录 ${API_DIR}`);
   console.log(`[desktop] 数据目录 ${DATA_DIR}`);
@@ -1045,12 +1247,16 @@ app.whenReady().then(async () => {
   void checkForUpdates().finally(() => phase("startup", "complete"));
 
   app.on("activate", () => {
+    // 启动屏还在时不把主窗口提前 show 出来，否则动画还没播完界面就跳出来了。
+    if (splashState.enabled && !splashState.revealed) return;
     if (BrowserWindow.getAllWindows().length === 0) showMainWindow("activate");
     else mainWindow?.show();
   });
 });
 
 app.on("window-all-closed", () => {
+  // 启动期启动屏若被提前关掉，主窗口还没建出来，不能当成「用户把窗口都关完了」。
+  if (splashState.enabled && !splashState.revealed) return;
   stopBackend();
   if (process.platform !== "darwin") app.quit();
 });

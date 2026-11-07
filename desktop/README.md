@@ -82,8 +82,8 @@ export PATH="/c/Windows/System32:/c/Windows/System32/WindowsPowerShell/v1.0:/c/W
 
 | 文件 | 说明 |
 |---|---|
-| `空白格-便携版-<版本>.exe` | 单文件，双击即用（约 105MB） |
-| `空白格-安装版-<版本>.exe` | NSIS 安装包，可换安装目录（约 106MB） |
+| `Blank-AI-便携版-<版本>.exe` | 单文件，双击即用（约 105MB） |
+| `Blank-AI-安装版-<版本>.exe` | NSIS 安装包，可换安装目录（约 106MB） |
 | `win-unpacked/` | 免打包目录，调试用 |
 
 进包内容：`resources/web`（前端静态站）、`resources/backend/api`（后端源码，

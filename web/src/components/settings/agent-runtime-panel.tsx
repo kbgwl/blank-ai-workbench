@@ -10,6 +10,13 @@ import {
   type AgentSettings,
 } from "./api";
 
+/** 后端没给 labels 时的兜底文案（v165 §8）。 */
+const AUTOMATION_LABELS: Record<string, string> = {
+  manual: "手动：我点执行才动",
+  assist: "辅助（默认）：低风险自动做",
+  autonomous: "自动驾驶：连续执行与自动修复",
+};
+
 const GUARDIAN_MODES: { value: string; label: string; detail: string }[] = [
   {
     value: "off",
@@ -70,8 +77,21 @@ export function AgentRuntimePanel() {
     try {
       const next = await updateAgentSettings(patch);
       setSettings(next);
-      setNotice(message);
-      setError("");
+      const expected = patch.permissions?.default_mode;
+      const expectedMode = patch.background?.automation_mode;
+      // 以前不管服务端回了什么都提示「已更新」：档位被静默回落到 default 时，
+      // 用户以为开了全放行，实际上每条命令还在弹审批（v165 P0）。
+      // 自动化模式同样要回显校验——「选了自动驾驶却仍在手动」是同一类故障。
+      const badMode = expected && next.permissions.default_mode !== expected;
+      const badAutomation = expectedMode && next.background?.automation_mode !== expectedMode;
+      if (badMode || badAutomation) {
+        const actual = badMode ? next.permissions.default_mode : next.background?.automation_mode;
+        setError(`设置未生效：服务端仍是「${actual ?? "未返回"}」，请检查设置文件是否可写`);
+        setNotice("");
+      } else {
+        setNotice(message);
+        setError("");
+      }
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -237,6 +257,32 @@ export function AgentRuntimePanel() {
         </label>
         <p className="mt-2 text-[11px] leading-relaxed text-faint">
           档位只决定「要不要问」，不决定「能不能做」：不可逆命令在任何档位下都必须人工确认。
+        </p>
+      </Panel>
+
+      <Panel title="自动化模式" hint="v165 §8 · 决定「要不要自己动」">
+        <label className="flex flex-col gap-1 text-[11px] text-muted">
+          <select
+            value={settings.background?.automation_mode ?? "assist"}
+            disabled={busy}
+            onChange={(event) =>
+              void apply(
+                { background: { automation_mode: event.target.value as "manual" | "assist" | "autonomous" } },
+                "自动化模式已更新",
+              )
+            }
+            className="rounded-md border border-line bg-surface px-2 py-1.5 text-[12px] text-text outline-none"
+          >
+            {(limits.automation_modes ?? ["manual", "assist", "autonomous"]).map((mode) => (
+              <option key={mode} value={mode}>
+                {limits.automation_mode_labels?.[mode] ?? AUTOMATION_LABELS[mode] ?? mode}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="mt-2 text-[11px] leading-relaxed text-faint">
+          这和上面的权限档位是两回事：档位决定「要不要问」，模式决定「要不要自己动」。
+          自动驾驶可以连续执行、自动修复失败、后台常驻，但高风险操作仍然必须你审批。
         </p>
       </Panel>
 

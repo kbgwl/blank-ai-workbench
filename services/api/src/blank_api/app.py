@@ -63,18 +63,23 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 continue
 
     recovery_task = asyncio.create_task(recovery_loop(), name="blank-run-recovery")
+    # v165 Phase 3：关窗后 / 独立 worker 不在时，触发器、Watchdog、过期审批
+    # 仍要有人巡。桌面形态只有 API 这一个进程，这些动作以前只挂在独立
+    # worker 的 run_once() 里，真机上等于从不执行。
+    supervisor_task = asyncio.create_task(background_supervisor(), name="blank-background-supervisor")
     # 附件清理单独一个任务、而且不阻断启动：它要扫盘 + 查一遍引用，
     # 让 /health 等着它没有道理。
     sweep_task = asyncio.create_task(sweep_orphan_uploads(), name="blank-upload-sweep")
     # 这台机器到底能不能真的起容器，是开机就该说清的事实：不能等每个任务各自撞一次墙。
     # 单独一个任务，探测要起子进程（最坏等满超时），让 /health 陪它等没有道理。
     probe_task = asyncio.create_task(probe_execution_backend(), name="blank-backend-probe")
+    tasks = (recovery_task, supervisor_task, sweep_task, probe_task)
     try:
         yield
     finally:
-        for task in (recovery_task, sweep_task, probe_task):
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(recovery_task, sweep_task, probe_task, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
         orchestrator = getattr(app.state, "team_orchestrator", None)
         if orchestrator is not None:
             await orchestrator.shutdown()
@@ -91,6 +96,50 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
         from blank_api.services.models.base import aclose_pooled_clients
 
         await aclose_pooled_clients()
+
+
+async def background_supervisor() -> None:
+    """v165 §14/§15：让 ``settings.background`` 在桌面默认链路里真的被消费。
+
+    三个在此之前的真空：
+
+    * ``background.enabled`` 关掉时，触发器 / Watchdog / 过期审批照跑不误；
+    * ``automation_mode = manual`` 时后台仍然自动推进；
+    * 独立 worker 形态与 API 进程形态会同时巡同一批 run（``autonomous_enabled``
+      按 ``inprocess`` 二选一，避免双执行者）。
+
+    免打扰时段不在这里重复实现：``_record_notify_decision`` 已经把
+    ``quiet_hours`` 折进 ``notify.decided``，这里做的是状态维护而不是发通知，
+    把它也压掉会让「审批过期」在夜里无人收敛。
+    """
+    from blank_api.services.agent.automation import resolve_mode as resolve_automation_mode
+    from blank_api.services.agent.background_policy import (
+        AUTONOMOUS_TICK_SECONDS,
+        autonomous_enabled,
+        resolve_background,
+    )
+    from blank_api.services.settings import SettingsStore
+
+    while True:
+        await asyncio.sleep(AUTONOMOUS_TICK_SECONDS)
+        try:
+            settings = SettingsStore().read()
+            policy = resolve_background(settings)
+            from blank_api.api.routes.tasks import inprocess_runner_enabled
+
+            if not autonomous_enabled(policy, inprocess=inprocess_runner_enabled()):
+                continue
+            # 手动模式的承诺是「我点执行才动」：后台也不许替他推进定时任务。
+            if resolve_automation_mode(settings) == "manual":
+                continue
+            from blank_api.worker import supervise_once
+
+            await supervise_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # 后台巡检不能把 API 生命周期带走；下一拍重试。
+            continue
 
 
 async def sweep_orphan_uploads() -> None:

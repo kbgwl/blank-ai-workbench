@@ -13,6 +13,7 @@ import {
   fetchEvidence,
   fetchScenarios,
   fetchTask,
+  fetchThreadGoal,
   steerTask,
   type ApprovalScope,
   type Evidence,
@@ -23,13 +24,17 @@ import {
   type ScenarioInfo,
   type Task,
   type Thread,
+  type ThreadGoal,
 } from "../tasks/api";
+import { fetchAgentSettings } from "../settings/api";
 import { useTaskEvents } from "../tasks/use-task-events";
 import { NEW_CHAT_EVENT } from "@/lib/commands";
 import { canPickDirectory, pickDirectory } from "@/lib/desktop";
 import { activateWorkspace, bindWorkspace } from "../projects/api";
 import { loadBoot, loadConversation, loadConversations, sendMessage, stopTask, type BotTurn, type Conversation } from "./bot-api";
 import { Composer } from "./composer";
+import { GoalStatusBar } from "./goal-status-bar";
+import type { GoalStatusBarData } from "./goal-status";
 import { usableProviderId } from "./provider-choice";
 import { TaskPanel } from "./panel";
 import { Sidebar } from "./sidebar";
@@ -127,6 +132,11 @@ export function BotApp() {
   const [threadsNonce, setThreadsNonce] = useState(0);
   /** 后台任务：关窗后仍在跑的、停在审批上等人的、或者失败没处理的（v164 §2.4）。 */
   const [activeTasks, setActiveTasks] = useState<Task[]>([]);
+  /** v165 §9.1 顶部状态：设置页的自动化模式、当前会话的活跃目标、服务是否在线。 */
+  const [automationMode, setAutomationMode] = useState("assist");
+  // 带上 threadId 存：切会话时读回的值还没到，不能把上一条会话的目标显示到这一条。
+  const [threadGoal, setThreadGoal] = useState<{ threadId: string; goal: ThreadGoal | null } | null>(null);
+  const [serviceOnline, setServiceOnline] = useState(false);
 
   const [conv, setConv] = useState<Conversation | null>(null);
   const [convError, setConvError] = useState<string | null>(null);
@@ -276,11 +286,63 @@ export function BotApp() {
     // 不等那 20 秒的轮询。
   }, [projectId, threadsNonce, activeTaskId]);
 
+  // ── 顶部状态条：自动化模式与服务在线 ──────────────────────────────────
+  // 用户在设置页改了模式再切回来，状态条必须跟着变；用 focus 立刻补一次，
+  // 20 秒轮询兜住「设置页在另一个窗口」的情况。服务在线与否以这次真实请求
+  // 为准，不用 boot 一次的旧结论——后端中途挂掉时状态条不能一直说在线。
+  useEffect(() => {
+    let alive = true;
+    const pull = () =>
+      fetchAgentSettings()
+        .then((settings) => {
+          if (!alive) return;
+          setAutomationMode(settings.background?.automation_mode || "assist");
+          setServiceOnline(true);
+        })
+        .catch(() => {
+          if (alive) setServiceOnline(false);
+        });
+    pull();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") pull();
+    }, 20000);
+    window.addEventListener("focus", pull);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", pull);
+    };
+  }, []);
+
   // ── 当前轮的事件流 ────────────────────────────────────────────────────
   const activeTurn = conv?.turns.find((turn) => turn.id === activeTaskId) ?? null;
   const liveStatus = liveTask?.id === activeTaskId ? liveTask.status : (activeTurn?.status ?? "");
   const live = useTaskEvents(activeTaskId, activeTaskId ? liveStatus : null);
   const running = Boolean(activeTaskId) && isTurnRunning(liveStatus, live.events);
+
+  // ── 顶部状态条：当前会话的活跃目标 ────────────────────────────────────
+  // 目标由服务端 GoalTracker 维护，多轮补充要求会挂回同一个目标。任务状态一变
+  // 就补拉一次，否则「执行中 → 等你批准」这种最需要看见的变化要等 8 秒。
+  useEffect(() => {
+    const threadId = conv?.thread.id ?? "";
+    if (!threadId) return;
+    let alive = true;
+    const pull = () =>
+      fetchThreadGoal(threadId)
+        .then((goal) => {
+          if (alive) setThreadGoal({ threadId, goal });
+        })
+        // 老后端没有这个端点时不显示目标，不能把整页打红。
+        .catch(() => undefined);
+    pull();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") pull();
+    }, 8000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [conv?.thread.id, threadsNonce, activeTaskId, liveStatus]);
 
   // 任务从跑到停：把状态补一次。事件里已经有终态事件，但任务的 status 与失败原因
   // 只有任务详情才有——只靠事件会漏掉"被策略拒绝"这类没有终态事件的情况。
@@ -856,6 +918,19 @@ export function BotApp() {
   const topBackground = backgroundTasks[0] ?? null;
   const backgroundTarget = topBackground ? backgroundTaskTarget(topBackground) : null;
 
+  // v165 §9.1：六项状态全部来自真实读数，不写死、不自己猜。
+  const providerLabel = boot?.providers.find((item) => item.id === providerId)?.model || "";
+  const activeGoal = threadGoal && threadGoal.threadId === conv?.thread.id ? threadGoal.goal : null;
+  const statusBarData: GoalStatusBarData = {
+    scenario: scenarioKey,
+    model: providerLabel,
+    automationMode,
+    goal: activeGoal?.title ?? "",
+    goalStatus: activeGoal?.status ?? "",
+    backgroundCount: activeTasks.length,
+    serviceOnline,
+  };
+
   return (
     <div className="flex h-dvh overflow-hidden bg-bg">
       <Sidebar
@@ -894,6 +969,7 @@ export function BotApp() {
             </svg>
           </button>
         </header>
+        <GoalStatusBar data={statusBarData} />
 
         {/* 后台任务条：还有别的任务在动、或者在等人点，就在这里说一句。
             关窗不等于结束——没有这条，用户重开只会看到当前会话，以为另一条没了。 */}
