@@ -44,6 +44,7 @@ const MANAGED_ENV = [
   "BLANK_LOG_FILE",
   "BLANK_MIGRATION_TIMEOUT_MS",
   "BLANK_NO_SANDBOX",
+  "BLANK_NOTIFY_POLL_MS",
   "BLANK_PROBE",
   "BLANK_SHELL_TEST",
   "BLANK_SHOT",
@@ -67,6 +68,40 @@ function buildElectronStub({ lock, trayMode, hotkeyMode, userData }) {
   const trayRecords = { created: 0, menus: [], tooltips: [], handlers: {} };
   const shortcut = { registered: [], callback: null, unregisterAll: 0 };
   const dialogs = [];
+  // 通知一律记账：谁弹出去了、标题正文是什么、点没点得到——这三件事都要能在
+  // 测试里直接断言，而不是靠日志里那句"弹通知"自我证明。
+  const notifications = [];
+  let appUserModelId = "";
+
+  /**
+   * 假 Notification。`emit("click")` 用来模拟用户点了 toast，
+   * 主进程那边注册的 click 回调会被真的跑一遍。
+   */
+  class FakeNotification {
+    static isSupported() {
+      return true;
+    }
+
+    constructor(options) {
+      this.options = options;
+      this.handlers = {};
+      this.shown = false;
+      notifications.push(this);
+    }
+
+    on(name, fn) {
+      this.handlers[name] = fn;
+    }
+
+    show() {
+      this.shown = true;
+    }
+
+    emit(name) {
+      const fn = this.handlers[name];
+      if (fn) fn();
+    }
+  }
 
   const app = {
     isPackaged: false,
@@ -77,6 +112,10 @@ function buildElectronStub({ lock, trayMode, hotkeyMode, userData }) {
     getPath: () => userData,
     getVersion: () => "0.8.5",
     disableHardwareAcceleration() {},
+    // Windows 通知靠它才有身份；main.cjs 必须在 ready 之前设置，这里记录下来断言。
+    setAppUserModelId(value) {
+      appUserModelId = String(value);
+    },
     isReady: () => app._ready,
     whenReady: () => {
       queueMicrotask(() => {
@@ -115,6 +154,8 @@ function buildElectronStub({ lock, trayMode, hotkeyMode, userData }) {
         setWindowOpenHandler() {},
         executeJavaScript: async () => 0,
         capturePage: async () => ({ toPNG: () => Buffer.alloc(0) }),
+        // 通知跳转前要读当前 URL 判断"是不是已经在看这一条"。
+        getURL: () => this._url ?? "",
       };
       windows.push(this);
       setTimeout(() => {
@@ -160,6 +201,13 @@ function buildElectronStub({ lock, trayMode, hotkeyMode, userData }) {
 
     loadURL(url) {
       this.loadedUrl = url;
+      this._url = url;
+      // 真实 Electron 返回 Promise；main.cjs 对它会挂 .catch 做跳转失败降级。
+      return Promise.resolve();
+    }
+
+    getURL() {
+      return this._url ?? "";
     }
 
     isDestroyed() {
@@ -250,6 +298,7 @@ function buildElectronStub({ lock, trayMode, hotkeyMode, userData }) {
     BrowserWindow: FakeBrowserWindow,
     Menu: { buildFromTemplate: (template) => template },
     Tray: FakeTray,
+    Notification: FakeNotification,
     nativeImage: {
       createFromPath: () => ({ isEmpty: () => trayMode === "empty" }),
     },
@@ -278,7 +327,7 @@ function buildElectronStub({ lock, trayMode, hotkeyMode, userData }) {
     clipboard: { writeText() {} },
   };
 
-  return { electron, windows, app, trayRecords, shortcut, dialogs };
+  return { electron, windows, app, trayRecords, shortcut, dialogs, notifications, getAumid: () => appUserModelId };
 }
 
 async function waitFor(predicate, label, timeoutMs = 8000) {
@@ -296,6 +345,8 @@ async function bootShell(options = {}) {
     tray = "ok",
     hotkey = "ok",
     update = null,
+    notify = null,
+    notifyAfter = 0,
     hotkeyValue = "ctrl+alt+b",
     health = "live",
     // shellTest=false 走真实模式分支（配合 child_process 桩，绝不碰真 Python）。
@@ -306,6 +357,7 @@ async function bootShell(options = {}) {
 
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "blank-shell-"));
   const requests = [];
+  const notifyRequests = { count: 0 };
   const healthProbes = { count: 0 };
   const server = http.createServer((request, response) => {
     requests.push(request.url);
@@ -324,6 +376,27 @@ async function bootShell(options = {}) {
       return send(200, '{"status":"connected"}');
     }
     if (request.url === "/feed500") return send(500, '{"error":"boom"}');
+    // 通知取数口。桩一律返回同一批 items（不推进），正好用来钉"同一批被读到
+    // 两次时不能弹两次"——真实的秒级游标就是会重读。
+    //
+    // ``notifyAfter`` 让前 N 次请求先返回空：壳启动第一次取数时窗口通常已经
+    // 显示出来了（按设计不弹、且记账），要模拟"用户切走了才来通知"就得让那条
+    // 通知在 hide 之后才出现。
+    if (request.url.startsWith("/api/v1/notifications")) {
+      if (notify === "500") return send(500, '{"error":"boom"}');
+      notifyRequests.count += 1;
+      if (notifyRequests.count <= notifyAfter) {
+        return send(200, JSON.stringify({ now: "2026-01-01T00:00:00", items: [], cursor: "" }));
+      }
+      return send(
+        200,
+        JSON.stringify({
+          now: "2026-01-01T00:00:00",
+          items: Array.isArray(notify) ? notify : [],
+          cursor: Array.isArray(notify) && notify.length ? "2026-01-01T00:00:00" : "",
+        }),
+      );
+    }
     if (request.url === "/feed") {
       if (update === "500") return send(500, '{"error":"boom"}');
       if (update === "garbage") return send(200, '{"foo":1}');
@@ -370,6 +443,8 @@ async function bootShell(options = {}) {
     BLANK_LOG_FILE: "",
     BLANK_MIGRATION_TIMEOUT_MS: "",
     BLANK_NO_SANDBOX: "",
+    // 轮询压到几十毫秒：真实默认 15 秒，测试里等不起，也不该等。
+    BLANK_NOTIFY_POLL_MS: "40",
     BLANK_PROBE: "",
     // 硬闸：桩环境里健康检查万一失手，main.cjs 也绝不能去迁移/拉起真实 Python——
     // services/api/.venv 在源码树里真实存在，那是 6 个用例一起超时的根因。
@@ -487,6 +562,10 @@ async function bootShell(options = {}) {
     app: stub.app,
     tray: stub.trayRecords,
     shortcut: stub.shortcut,
+    // 弹过的通知（含还没 show 的）+ AUMID：Windows 上这两样任何一个没设对，
+    // toast 都会静默消失，没有报错可看。
+    notifications: stub.notifications,
+    aumid: stub.getAumid(),
     get win() {
       return stub.windows[0] ?? null;
     },
@@ -506,6 +585,14 @@ async function bootShell(options = {}) {
   };
 
   async function cleanup() {
+    // 通知轮询是 setInterval：不清掉的话 node --test 收不了尾（进程永远退不出去）。
+    // 走正规路径（before-quit 里 main.cjs 自己会 stopNotificationLoop），
+    // 而不是在这边偷偷 clearInterval——顺带也验证了退出路径确实会收掉轮询。
+    try {
+      stub.app.emit("before-quit");
+    } catch {
+      /* 退出路径上的异常不该挡住清理 */
+    }
     try {
       await new Promise((resolve) => server.close(resolve));
     } catch {
@@ -893,5 +980,151 @@ test("更新的失败形态：500 / 版本读不懂 / 同版本 / 未配置都�
     );
   } finally {
     await off.cleanup();
+  }
+});
+
+// ── 桌面通知 ────────────────────────────────────────────────────────────────
+//
+// 这一段以前完全是空的：判定层（notify.py）和 IM 投递都测过，但"到点了到底
+// 有没有东西弹出来"从来没被验证过。真机上模型甚至编过一句"提醒已弹出"——
+// 因为壳里连一行 Notification 都没有。
+//
+// 这里用内存 Notification 桩 + 真 HTTP 取数口，把"取 → 判 → 弹 → 点开"整条
+// 链路跑一遍。判据都是可观察的：谁被 new 出来、show 有没有调、URL 变没变。
+
+const notifyItem = (over = {}) => ({
+  id: "evt-1",
+  task_id: "task-1",
+  thread_id: "thread-1",
+  title: "检查部署",
+  goal: "40秒后提醒我检查一下部署",
+  status: "succeeded",
+  kind: "deliverable",
+  origin: "schedule",
+  reason: "命中 milestone 策略",
+  policy: "milestone",
+  created_at: "2026-01-01T00:00:00",
+  ...over,
+});
+
+test("AUMID 与安装器的 appId 一致（不一致 Windows 会静默丢弃通知）", async () => {
+  const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8"));
+  const shell = await bootShell();
+  try {
+    assert.equal(shell.aumid, pkg.build.appId, "壳里写死的 AUMID 必须跟打包 appId 一个字不差");
+    assert.ok(shell.aumid.length > 0, "没设 AUMID，Windows 上通知根本不会出现");
+  } finally {
+    await shell.cleanup();
+  }
+});
+
+test("后端说该打扰，桌面就真的弹出来", async () => {
+  // notifyAfter=1：壳启动那一拍窗口是显示着的（按设计不弹、且记账），所以把这条
+  // 通知留到用户把窗口收走之后再出现——那才是"该弹"的时刻。
+  const shell = await bootShell({ notify: [notifyItem()], notifyAfter: 1 });
+  try {
+    shell.win.hide();
+    await waitFor(() => shell.notifications.length > 0, `通知被创建｜请求：${shell.requests.join(",")}｜日志：${shell.logs.slice(-14).join(" ~ ")}`);
+    const toast = shell.notifications[0];
+    assert.equal(toast.shown, true, "创建了不等于弹出来了，show 必须调到");
+    assert.equal(toast.options.title, "到点了", "定时起的任务要弹「到点了」，不是「做完了」");
+    assert.equal(toast.options.body, "40秒后提醒我检查一下部署");
+    assert.equal(toast.options.silent, true, "完成类通知不出声，否则用户第一件事就是关掉通知");
+    assert.ok(
+      shell.requests.some((url) => url.startsWith("/api/v1/notifications")),
+      "得真的去后端取过",
+    );
+  } finally {
+    await shell.cleanup();
+  }
+});
+
+test("同一批通知被读到多次也只弹一次（游标是秒精度，必然重读）", async () => {
+  const shell = await bootShell({ notify: [notifyItem()], notifyAfter: 1 });
+  try {
+    shell.win.hide();
+    await waitFor(() => shell.notifications.length > 0, "第一条通知被创建");
+    // 等过好几个轮询周期：桩每次都返回同一批。
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(shell.notifications.length, 1, "重复读到同一条不能再弹，否则用户在收通知雨");
+    assert.ok(
+      shell.requests.filter((url) => url.startsWith("/api/v1/notifications")).length >= 3,
+      "这段等待里应该真的轮询了多次，否则这个用例什么也没证明",
+    );
+  } finally {
+    await shell.cleanup();
+  }
+});
+
+test("窗口正被看着时不弹——界面上任务卡已经变了", async () => {
+  const shell = await bootShell({ notify: [notifyItem({ kind: "deliverable", origin: "user" })] });
+  try {
+    // 桩里窗口建完之后是显示状态；这里再显式 show 一次，确保"可见且聚焦"这个前提成立。
+    shell.win.show();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(shell.notifications.length, 0, "用户就盯着界面，弹窗纯属打扰");
+    assert.ok(shell.logIncludes("不打断") || shell.logIncludes("正看着"), "日志要说明为什么没弹");
+  } finally {
+    await shell.cleanup();
+  }
+});
+
+test("审批通知带提示音：那是卡住等你的那一条", async () => {
+  const shell = await bootShell({
+    notify: [notifyItem({ kind: "approval", status: "waiting_approval", origin: "watch" })],
+    notifyAfter: 1,
+  });
+  try {
+    shell.win.hide();
+    await waitFor(() => shell.notifications.length > 0, "审批通知被创建");
+    const toast = shell.notifications[0];
+    assert.equal(toast.options.title, "等你批准", "审批比来源更急，不能被「有变化了」盖掉");
+    assert.equal(toast.options.silent, false, "审批要出声");
+  } finally {
+    await shell.cleanup();
+  }
+});
+
+test("点通知会把窗口唤回来并跳到那条对话", async () => {
+  const shell = await bootShell({ notify: [notifyItem({ thread_id: "thread-abc" })], notifyAfter: 1 });
+  try {
+    shell.win.hide();
+    await waitFor(() => shell.notifications.length > 0, `通知被创建｜请求：${shell.requests.join(",")}｜日志：${shell.logs.slice(-14).join(" ~ ")}`);
+    const windowsBefore = shell.windows.length;
+    shell.notifications[0].emit("click");
+    await waitFor(() => shell.logIncludes("通知跳转 thread="), `跳转日志｜日志：${shell.logs.slice(-8).join(" ~ ")}`);
+    assert.equal(shell.windows.length, windowsBefore, "唤回已有窗口，不该再建一个");
+    assert.ok(
+      String(shell.win.loadedUrl || "").includes("thread-abc"),
+      `应该跳到 thread-abc，实际 ${shell.win.loadedUrl}｜全部窗口：${shell.windows.map((w) => w.loadedUrl).join(" , ")}`,
+    );
+  } finally {
+    await shell.cleanup();
+  }
+});
+
+test("没有 thread_id 时点通知只唤窗口，不乱跳", async () => {
+  const shell = await bootShell({ notify: [notifyItem({ thread_id: "" })], notifyAfter: 1 });
+  try {
+    shell.win.hide();
+    await waitFor(() => shell.notifications.length > 0, `通知被创建｜请求：${shell.requests.join(",")}｜日志：${shell.logs.slice(-14).join(" ~ ")}`);
+    const before = shell.win.loadedUrl;
+    shell.notifications[0].emit("click");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(shell.win.loadedUrl, before, "没指定对话就不该重载页面（会丢输入框里的字）");
+  } finally {
+    await shell.cleanup();
+  }
+});
+
+test("通知接口挂了只是少一个提醒，不影响壳继续跑", async () => {
+  const shell = await bootShell({ notify: "500" });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(shell.notifications.length, 0);
+    assert.ok(shell.logIncludes("通知轮询失败"), "失败要留痕，但不能把主流程带走");
+    assert.equal(shell.app._quitCalled, false, "取数失败绝不能导致退出");
+  } finally {
+    await shell.cleanup();
   }
 });

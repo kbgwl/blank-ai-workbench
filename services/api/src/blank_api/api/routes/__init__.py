@@ -7,6 +7,7 @@ from blank_api.api.routes import (
     files,
     maintenance,
     monitor,
+    notifications,
     observability,
     plan_templates,
     projects,
@@ -62,6 +63,9 @@ api_router.include_router(skills.router)
 api_router.include_router(observability.router)
 # 监控（v0.10.2）：监督者判定流 + 在跑任务 + 待触发项 + 触发源是否接通
 api_router.include_router(monitor.router)
+# 桌面通知（v0.11.1）：把 notify.decided 里 disturb=true 的那几条交给壳去弹。
+# 判定仍只在 agent/notify.py，这个接口只做取数，不做判断。
+api_router.include_router(notifications.router)
 # 消息通道（v0.10.3）：企业微信/钉钉/飞书 + 通用 Webhook，配置即用。
 # public_router 里只有两条厂商回调：它们拿不到 Bearer 令牌，靠 URL 里的
 # 回调令牌与厂商签名把关（见 routes/channels.py 文件头）。

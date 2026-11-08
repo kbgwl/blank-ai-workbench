@@ -18,6 +18,31 @@ const AUTOMATION_LABELS: Record<string, string> = {
   autonomous: "自动驾驶：连续执行与自动修复",
 };
 
+/**
+ * 通知策略的四种口径（对应 agent/notify.py 的 NOTIFY_*）。
+ *
+ * 文案按「用户会不会被打扰」写，而不是按枚举名直译——`approval_only` 译成
+ * 「只在等你批准时」比「仅审批」更容易判断自己要不要开。
+ */
+const NOTIFY_LABELS: Record<string, { label: string; detail: string }> = {
+  silent: {
+    label: "安静：只报审批",
+    detail: "除了「任务停在这里等你批准」，什么都不弹。审批是唯一压不得的那类。",
+  },
+  milestone: {
+    label: "里程碑：失败和交付物",
+    detail: "任务失败、跑完有结果时才弹；中间进度不打扰。桌面版平时用这个就够。",
+  },
+  approval_only: {
+    label: "只报审批（默认）",
+    detail: "后台任务默认不打扰，只有需要你点批准时才弹出来。",
+  },
+  always: {
+    label: "全都说：含中间进度",
+    detail: "每一步都通知。长任务里会持续弹窗，通常是调试时才开。",
+  },
+};
+
 const GUARDIAN_MODES: { value: string; label: string; detail: string }[] = [
   {
     value: "off",
@@ -54,6 +79,9 @@ export function AgentRuntimePanel() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
+  // 免打扰时段是自由文本，逐字提交会把「22:0」这种半成品写进设置文件，
+  // 所以这里留草稿，失焦或按回车才真的保存。
+  const [quietDraft, setQuietDraft] = useState("");
 
   // token 触发刷新，避免在 effect 体内同步 setState（与 feature-flags-panel 一致）。
   useEffect(() => {
@@ -62,6 +90,7 @@ export function AgentRuntimePanel() {
       .then((next) => {
         if (!alive) return;
         setSettings(next);
+        setQuietDraft(next.background?.quiet_hours ?? "");
         setError("");
       })
       .catch((err: unknown) => {
@@ -78,6 +107,11 @@ export function AgentRuntimePanel() {
     try {
       const next = await updateAgentSettings(patch);
       setSettings(next);
+      // 免打扰是文本输入：回读服务端归一化之后的值，用户才能看见「22:0-8」
+      // 这种半成品到底被接受了还是被清掉了。
+      if (patch.background?.quiet_hours !== undefined) {
+        setQuietDraft(next.background?.quiet_hours ?? "");
+      }
       const expected = patch.permissions?.default_mode;
       const expectedMode = patch.background?.automation_mode;
       // 以前不管服务端回了什么都提示「已更新」：档位被静默回落到 default 时，
@@ -103,7 +137,9 @@ export function AgentRuntimePanel() {
   async function reset() {
     setBusy(true);
     try {
-      setSettings(await resetAgentSettings());
+      const next = await resetAgentSettings();
+      setSettings(next);
+      setQuietDraft(next.background?.quiet_hours ?? "");
       setNotice("已恢复默认值");
       setError("");
     } catch (err) {
@@ -111,6 +147,23 @@ export function AgentRuntimePanel() {
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * 保存免打扰时段。
+   *
+   * 空串是合法值（= 不设免打扰），所以不能拿 falsy 当"没填"。格式对不对由后端
+   * `_clean_quiet_hours` 判，坏值会被清成空串——这里按服务端回读的结果同步草稿，
+   * 用户能立刻看见自己那句话有没有被接受。
+   */
+  function saveQuietHours() {
+    const current = settings?.background?.quiet_hours ?? "";
+    const next = quietDraft.trim();
+    if (next === current) return;
+    void apply(
+      { background: { quiet_hours: next } },
+      next ? "免打扰时段已更新" : "免打扰已关闭",
+    );
   }
 
   if (!settings) {
@@ -280,6 +333,58 @@ export function AgentRuntimePanel() {
         <p className="mt-2 text-[11px] leading-relaxed text-faint">
           这和上面的权限档位是两回事：档位决定「要不要问」，模式决定「要不要自己动」。
           自动驾驶可以连续执行、自动修复失败、后台常驻，但高风险操作仍然必须你审批。
+        </p>
+      </Panel>
+
+      {/* v0.11.1：通知与免打扰。
+          后端的 notify.py 与 quiet_hours 早就在跑（判定写进 notify.decided 事件），
+          但设置页一直没有入口——用户想设免打扰只能去手改 settings.json。 */}
+      <Panel title="通知与免打扰" hint="什么时候该弹出来打扰你">
+        <Row
+          label="通知时机"
+          hint={NOTIFY_LABELS[settings.background?.notify_policy ?? "approval_only"]?.detail ?? "认不出的策略按「只报审批」处理"}
+        >
+          <SelectPopover
+            ariaLabel="通知时机"
+            value={settings.background?.notify_policy ?? "approval_only"}
+            disabled={busy}
+            options={Object.entries(NOTIFY_LABELS).map(([value, item]) => ({
+              value,
+              label: item.label,
+            }))}
+            onChange={(policy) =>
+              void apply({ background: { notify_policy: policy } }, "通知时机已更新")
+            }
+            menuMinWidth={240}
+          />
+        </Row>
+        <Row label="免打扰时段" hint="HH:MM-HH:MM；跨零点也行（22:00-08:00）。留空表示不设">
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={quietDraft}
+              placeholder="22:00-08:00"
+              disabled={busy}
+              onChange={(event) => setQuietDraft(event.target.value)}
+              onBlur={() => saveQuietHours()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") saveQuietHours();
+              }}
+              className="w-36 rounded-md border border-line bg-surface px-2 py-1 text-center font-mono text-[12px] text-text outline-none"
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => saveQuietHours()}
+              className="rounded-md border border-line bg-surface px-2.5 py-1 text-[11px] text-muted hover:border-line-strong"
+            >
+              保存
+            </button>
+          </div>
+        </Row>
+        <p className="mt-1 text-[11px] leading-relaxed text-faint">
+          免打扰只压「做完了 / 有变化了」这类通知。<span className="text-text">审批永远会响</span>
+          ——任务停在那儿等你点，压到第二天早上等于白跑一晚。
         </p>
       </Panel>
 

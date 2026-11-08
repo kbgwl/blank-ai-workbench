@@ -1035,6 +1035,33 @@ def _notify_kind(status: str) -> str:
     return notify.EVENT_PROGRESS
 
 
+async def _origin_from_trigger(session, task_id: str) -> str:
+    """快照里没有 ``intent`` 时，从触发器行反推"这一次是谁起的"。
+
+    ``super_agent_dispatch`` 关着时快照是空的（见 ``_record_notify_decision``
+    里那段注释），但"定时到点"和"盯着工作区"起的那一轮，触发器行里明明白白
+    写着 intent。不补这一步，所有桌面通知都只能写"做完了"——用户设了九点的
+    提醒，到点弹出来的却是一句"任务完成"，读起来根本不像提醒。
+
+    ``release_one`` 要求触发器必须已关联 task_id 才放行，所以这个反查是可靠的：
+    查不到的说明它不是触发器起的（人自己发的），返回空串即可。
+    """
+    try:
+        row = (
+            await session.execute(
+                select(AgentTrigger)
+                .where(AgentTrigger.task_id == task_id)
+                .order_by(AgentTrigger.created_at.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+    except Exception:  # noqa: BLE001 - 反查失败只影响文案分档，不该影响通知本身
+        return ""
+    if row is None:
+        return ""
+    return str((row.payload or {}).get("intent") or "")
+
+
 async def _record_notify_decision(task_id: str, status: str) -> None:
     """把「这一次该不该打扰用户」写成事件，并把它真的投递出去（任务书 §5）。
 
@@ -1048,16 +1075,27 @@ async def _record_notify_decision(task_id: str, status: str) -> None:
     title = goal = detail = ""
     disturb = False
     kind = notify.EVENT_PROGRESS
+    origin = ""
     try:
         async with get_session_factory()() as session:
             task = await session.get(Task, task_id)
             if task is None:
                 return
             snapshot = dict(task.dispatch_snapshot or {})
-            policy = str(snapshot.get("notify_policy") or "") or NOTIFY_APPROVAL_ONLY
-            window = str((SettingsStore().read().get("background") or {}).get("quiet_hours") or "")
+            background = SettingsStore().read().get("background") or {}
+            window = str(background.get("quiet_hours") or "")
             quiet = quiet_hours_active(window)
             kind = _notify_kind(status)
+            # 策略的来源顺序（2026-11-08 修）：任务快照 > 设置里的「通知时机」> approval_only。
+            #
+            # 以前只有第一档，没有就硬兜 approval_only——而 ``super_agent_dispatch``
+            # 默认是**关**的（BETA），关着时快照恒为 ``{}``。于是设置页那个「通知时机」
+            # 下拉框选了 milestone / always 也毫无作用，桌面通知永远按"只报审批"走，
+            # 用户选了"全都说"却什么都收不到。这是"设置项没人消费"的典型，
+            # 不是"默认保守"就能解释过去的。
+            policy = str(snapshot.get("notify_policy") or "").strip().lower()
+            if not policy:
+                policy = str(background.get("notify_policy") or "").strip().lower() or NOTIFY_APPROVAL_ONLY
             decision = notify.explain(policy, kind, quiet_hours=quiet)
             # 先把要发的内容取出来：会话关掉之后还要用它拼消息，而 Task 实例
             # 在会话外读字段会触发一次同步懒加载。
@@ -1065,10 +1103,16 @@ async def _record_notify_decision(task_id: str, status: str) -> None:
             goal = str(task.goal or "")
             detail = str(task.failure_reason or task.result_summary or "")
             disturb = bool(decision["disturb"])
+            # 「这一次是谁起的」——定时到点、工作区变了、还是人自己发的。
+            # 桌面通知要靠它决定标题写「提醒：检查部署」还是「任务已完成」：
+            # 同一句"任务完成"扣在定时提醒上，读起来就不像提醒了。
+            origin = str(snapshot.get("intent") or "")
+            if not origin:
+                origin = await _origin_from_trigger(session, task_id)
             await EventRecorder(get_session_factory(), task_id).add(
                 "notify.decided",
                 "finish",
-                {**decision, "status": status},
+                {**decision, "status": status, "origin": origin},
             )
     except Exception:  # 通知判定是旁路，坏了也不能把任务的终态带走
         log.warning("记录通知判定失败 task=%s", task_id, exc_info=True)

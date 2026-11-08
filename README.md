@@ -3,16 +3,34 @@
 面向开发者的 AI 工程操作台：自然语言下达任务，Agent 读取和修改项目文件、执行命令与测试、
 展示 Diff，高风险操作需人工审批。完整方案见 [ai-workbench-plan.md](ai-workbench-plan.md)。
 
-当前发布版本：**0.11.0**（真源是 `desktop/package.json`，安装包文件名与「关于」都取这一处；
+当前发布版本：**0.11.1**（真源是 `desktop/package.json`，安装包文件名与「关于」都取这一处；
 `pnpm check:versions` 在 CI 里钉住 README 与根 `package.json` 不许各说各话）。
 
-本版重点：**v0.11.0 Super Agent 补齐「会自己醒」**——定时真的到点（不再登记一条永远不响的
+本版重点：**v0.11.1 通知通道——「到点了」终于真的会弹出来**。
+
+上一版把「会自己醒」修通了（定时到点、盯着工作区、桌面自起跑），但醒来之后**没有任何东西告诉用户**：
+任务确实跑了，结果只在界面里，用户切走就看不见。这一版补上最后一段：
+
+- **原生系统通知**：桌面壳直接弹 Windows toast，点一下唤回窗口并跳到那条对话（`?thread=` 深链）。
+- **判定仍在后端，壳只负责投递**：要不要打扰由 `agent/notify.py` 判（策略 + 免打扰），结论连同理由
+  写进 `notify.decided` 事件；`GET /api/v1/notifications` 只吐 `disturb=true` 的那几条。壳不复判——
+  两套规则各判一次，迟早会漂成「设置里说静默、屏幕却在响」。
+- **文案按来源分档**：定时起的弹「到点了」，盯梢的弹「有变化了」，审批弹「等你批准」（并出声）。
+  同一句「任务完成」扣在定时提醒上，读起来就不像提醒。
+- **三条降噪**：跨轮询按 id 去重（秒级游标必然重读）、窗口正被看着就不弹、一分钟超过 3 条先压着
+  （审批例外——压着等于让任务白等）。
+- **免打扰终于有入口**：设置 → 执行与智能体 →「通知与免打扰」，填 `22:00-08:00`（跨零点也行）。
+  免打扰只压「做完/有变化」，审批永远响。
+
+上一版本：**v0.11.0 Super Agent 补齐「会自己醒」**——定时真的到点（不再登记一条永远不响的
 待触发）、「盯着工作区」有了真实的事件生产者（每拍扫一次文件 mtime）、到点在桌面形态下自己起跑
 （以前只入队、没有 worker 认领，任务永远 `queued`）、企业微信/钉钉/飞书做成配置项（设置 → 消息通道，
 填完即用），以及自动更新接上真实下载与摘要校验（默认不碰网络，须配 `BLANK_UPDATE_FEED_URL`）。
-配置与边界见 [docs/channels.md](docs/channels.md)。
+配置与边界见 [docs/channels.md](docs/channels.md)，唤醒链路的验收记录见
+[docs/v0.11.0-wake-up.md](docs/v0.11.0-wake-up.md)，通知通道的缺口分析与真机验收（含 toast 截图）见
+[docs/v0.11.1-notifications.md](docs/v0.11.1-notifications.md)。
 
-上一版本：**v0.10.0 Autonomous Super Agent**——Chat Supervisor + Goal Tracker 多轮目标、
+更早：**v0.10.0 Autonomous Super Agent**——Chat Supervisor + Goal Tracker 多轮目标、
 Autonomous Planner / Task Dispatcher / 独立 Verifier、测试失败自动修复闭环、后台持续巡检、
 三种自动化模式与审批矩阵、顶部状态条与 §15 可观测读数。功能清单见
 [docs/workbuddy-v165-autonomous-super-agent.md](docs/workbuddy-v165-autonomous-super-agent.md)，

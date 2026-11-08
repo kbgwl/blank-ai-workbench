@@ -79,7 +79,7 @@ if (!existsSync(ASAR)) {
     readSync(fd, headerBuf, 0, headerSize, 16);
     closeSync(fd);
     const entries = Object.keys(JSON.parse(headerBuf.toString("utf8")).files ?? {});
-    for (const name of ["main.cjs", "gpu-guard.cjs", "shell-policy.cjs", "splash-policy.cjs", "splash.html", "splash-preload.cjs", "preload.cjs"]) {
+    for (const name of ["main.cjs", "gpu-guard.cjs", "shell-policy.cjs", "notify-policy.cjs", "splash-policy.cjs", "splash.html", "splash-preload.cjs", "preload.cjs"]) {
       entries.includes(name) ? ok(`asar 含 ${name}`) : bad(`asar 缺 ${name}`, "壳启动时会 require 失败");
     }
   } catch (error) {
@@ -113,7 +113,7 @@ function asarFile(asarPath, name) {
 }
 
 if (existsSync(ASAR)) {
-  for (const name of ["api-base.cjs", "gpu-guard.cjs", "shell-policy.cjs", "splash-policy.cjs", "splash.html", "splash-preload.cjs", "main.cjs", "preload.cjs"]) {
+  for (const name of ["api-base.cjs", "gpu-guard.cjs", "shell-policy.cjs", "notify-policy.cjs", "splash-policy.cjs", "splash.html", "splash-preload.cjs", "main.cjs", "preload.cjs"]) {
     const packed = asarFile(ASAR, name);
     const source = path.join(__dirname, name);
     if (packed === null) {

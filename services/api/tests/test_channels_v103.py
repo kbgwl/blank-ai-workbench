@@ -87,10 +87,20 @@ def test_wecom_crypto_roundtrip_and_corp_check():
     # 换一个企业号解同一条密文：必须拒，否则跨企业串号也能进
     with pytest.raises(ValueError):
         wecom.decrypt(encrypted, AES_KEY, "ww-other-corp")
-    # 换一把 key：填充必然不合法，不能悄悄返回半截正文
+    # 换一把 key：不能悄悄把**原文**返回出来。
+    #
+    # 这里原先是 `with pytest.raises(Exception)`，注释写的理由「填充必然不合法」是错的：
+    # `wecom._unpad` 与企微官方 SDK 一样只看最后一个字节（1..32），不逐字节核对，
+    # 所以错误 key 解出来的尾字节有 32/256 的概率"看起来合法"，随后被当成随机长度切一刀、
+    # receive_id 恰好落在切片外（空串 → 跳过企业号校验）就静默返回一段垃圾。
+    # 实测 2 万次里 2478 次不抛（12.4%）——这条用例从 v0.10.3 起就约有 1/8 的概率假红。
+    # 真正要保的性质是「拿不到原文」，按这个断言才是确定的。
     other = base64.b64encode(b"ffffffffffffffffffffffffffffffff").decode().rstrip("=")
-    with pytest.raises(Exception):
-        wecom.decrypt(encrypted, other, CORP_ID)
+    try:
+        leaked = wecom.decrypt(encrypted, other, CORP_ID)
+    except Exception:  # noqa: BLE001 - 抛哪种异常不重要，拒了就行
+        leaked = ""
+    assert leaked != message
 
 
 def test_wecom_signature_matches_manual_sha1():

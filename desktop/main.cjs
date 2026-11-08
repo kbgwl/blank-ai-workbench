@@ -17,6 +17,7 @@ const {
   globalShortcut,
   ipcMain,
   nativeImage,
+  Notification,
   protocol,
   shell,
   Tray,
@@ -53,6 +54,7 @@ const {
   planSecondInstanceReveal,
   shouldAbortSecondaryInstance,
 } = require("./shell-policy.cjs");
+const { decideNotification, noticeText, rememberSeen } = require("./notify-policy.cjs");
 
 /**
  * 主进程日志落文件。
@@ -111,6 +113,21 @@ const splashState = {
   mainTarget: null,
   startedAt: 0,
 };
+
+/**
+ * Windows 通知的 AUMID（AppUserModelID）。
+ *
+ * 必须**在 ready 之前**设为与安装器 `build.appId` 完全一致的值，否则
+ * `new Notification()` 不报错、也不显示——通知被系统静默丢弃，日志里一个字都
+ * 不会有。这是 Windows 上"代码看着对、就是没弹窗"的第一号原因。
+ *
+ * 与 NSIS 装的开始菜单快捷方式对上之后，toast 才会以本应用的身份出现，
+ * 点击也能唤回正确的进程。
+ */
+const APP_USER_MODEL_ID = "ai.blank.workbench";
+if (process.platform === "win32") {
+  app.setAppUserModelId(APP_USER_MODEL_ID);
+}
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (shouldAbortSecondaryInstance(gotSingleInstanceLock)) {
@@ -1293,6 +1310,181 @@ async function checkForUpdates() {
   }
 }
 
+// ── 桌面通知 ────────────────────────────────────────────────────────────────
+
+/**
+ * 轮询「有没有该告诉用户的事」。
+ *
+ * 为什么不走后端推：后端的 ``delivery.fanout`` 是**服务端主动发**的模式（企业微信/
+ * 钉钉/飞书都是这样），而桌面壳活在用户机器上、后端并不知道它在哪。拉取是这类
+ * "客户端就住在旁边"的唯一稳妥形态——壳重启、后端重启、端口变了，都只是下一拍
+ * 再连，不需要任何注册与心跳。
+ *
+ * 15 秒是折中：再短就是空转（任务完成通常以分钟计），再长会让"审批等你"的
+ * 通知迟到，用户已经切走才弹出来。
+ */
+const NOTIFY_POLL_MS = Number(process.env.BLANK_NOTIFY_POLL_MS ?? "") || 15_000;
+
+const notifyState = {
+  /** 已读到的位置（``created_at`` 的 ISO 串）。空串 = 还没读过，后端按默认窗口给。 */
+  cursor: "",
+  /** 弹过（或判定为不必再谈）的通知 id，跨轮询去重。 */
+  seen: [],
+  /** 最近弹过的时刻，给防刷屏用。 */
+  shownAt: [],
+  timer: null,
+  /** 连续失败次数，只为把日志降噪——后端没起来时不该每 15 秒刷一条。 */
+  failures: 0,
+};
+
+/** 后端开了 API token 才带；桌面默认是本机单用户模式（空 token 放行）。 */
+function apiHeaders() {
+  const token = String(process.env.BLANK_API_TOKEN ?? "").trim();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/**
+ * 点通知之后去哪儿：把窗口唤回来，并跳到那条任务所在的对话。
+ *
+ * 前端早就支持 ``?thread=<id>`` 深链（bot-app.tsx 里读写它），所以这里只需要
+ * 换一次 URL。已经在看同一条对话时**不重载**——重载会丢掉输入框里没发出去的字。
+ */
+function openThreadFromNotification(item) {
+  showMainWindow("通知");
+  const threadId = String((item && item.thread_id) || "").trim();
+  if (!threadId) return;
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+  try {
+    const current = new URL(win.webContents.getURL());
+    if (current.searchParams.get("thread") === threadId) {
+      console.log(`[desktop] 通知跳转跳过：已经在看这一条（thread=${threadId}）`);
+      return;
+    }
+    const target = new URL("app://bundle/");
+    target.searchParams.set("thread", threadId);
+    console.log(`[desktop] 通知跳转 thread=${threadId}`);
+    win.loadURL(target.toString()).catch((error) => {
+      console.error(`[desktop] 通知跳转失败：${error?.message ?? error}`);
+    });
+  } catch (error) {
+    console.error(`[desktop] 通知跳转异常：${error?.message ?? error}`);
+  }
+}
+
+/** 真的弹一条系统通知。判定已经做完了，这里只管发。 */
+function showNotification(item) {
+  if (!Notification.isSupported()) {
+    console.log("[desktop] 当前系统不支持通知，跳过（任务本身不受影响）");
+    return;
+  }
+  const text = noticeText(item);
+  try {
+    const notification = new Notification({
+      title: text.title,
+      body: text.body,
+      // 只有"卡住等你"才出声。完成一条响一下，用户第一件事就是关掉通知，
+      // 那之后连审批也收不到了。
+      silent: String((item && item.kind) || "") !== "approval",
+    });
+    notification.on("click", () => openThreadFromNotification(item));
+    notification.show();
+    notifyState.shownAt.push(Date.now());
+    if (notifyState.shownAt.length > 30) {
+      notifyState.shownAt = notifyState.shownAt.slice(-30);
+    }
+    console.log(`[desktop] 弹通知：${text.title}｜${text.body}（task=${item.task_id}）`);
+  } catch (error) {
+    // 通知失败是旁路：任务结果在界面上仍然是对的，不该把它变成别的问题。
+    console.error(`[desktop] 弹通知失败：${error?.message ?? error}`);
+  }
+}
+
+async function pollNotifications() {
+  let body = null;
+  try {
+    const params = new URLSearchParams({ limit: "20" });
+    if (notifyState.cursor) params.set("since", notifyState.cursor);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/notifications?${params.toString()}`, {
+        signal: controller.signal,
+        headers: apiHeaders(),
+      });
+      if (!response.ok) {
+        console.log(`[desktop] 通知轮询失败：HTTP ${response.status}`);
+        return;
+      }
+      body = await response.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (error) {
+    // 后端还没起来、正在重启、或刚被迁移挡住：都算正常，降噪记日志。
+    if (notifyState.failures % 20 === 0) {
+      console.log(`[desktop] 通知轮询暂不可用（第 ${notifyState.failures + 1} 次）：${error?.message ?? error}`);
+    }
+    notifyState.failures += 1;
+    return;
+  }
+  notifyState.failures = 0;
+
+  const items = Array.isArray(body?.items) ? body.items : [];
+  if (items.length === 0) return;
+
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  const windowFocused = win ? win.isFocused() : false;
+  const windowVisible = win ? win.isVisible() : false;
+
+  let settled = true;
+  for (const item of items) {
+    const decision = decideNotification({
+      item,
+      seenIds: notifyState.seen,
+      windowFocused,
+      windowVisible,
+      shownAt: notifyState.shownAt,
+      nowMs: Date.now(),
+    });
+    if (!decision.settle) {
+      // 被防刷屏压着：这一轮先不说，但**不能**推进游标，否则下一轮就读不到它了。
+      console.log(`[desktop] 通知暂缓 ${item.id}：${decision.reason}`);
+      settled = false;
+      continue;
+    }
+    // 先记账再决定弹不弹：判定为"不必再谈"的（比如用户正看着）也要落下，
+    // 否则每一轮都会重新评估同一条。
+    notifyState.seen = rememberSeen(notifyState.seen, item.id);
+    if (!decision.show) {
+      console.log(`[desktop] 通知不弹 ${item.id}：${decision.reason}`);
+      continue;
+    }
+    showNotification(item);
+  }
+
+  // 全批处理完才推进游标。有被压住的就停在原地，等下一轮重读。
+  if (settled && body.cursor) notifyState.cursor = String(body.cursor);
+}
+
+function startNotificationLoop() {
+  if (notifyState.timer) return;
+  // 先立刻取一次再进循环：否则装上软件之后的第一条完成通知要等满一个轮询
+  // 间隔才出现，用户会以为它不会响。
+  void pollNotifications();
+  notifyState.timer = setInterval(() => {
+    void pollNotifications();
+  }, NOTIFY_POLL_MS);
+  console.log(`[desktop] 通知轮询已启动：每 ${NOTIFY_POLL_MS} 毫秒一次`);
+}
+
+function stopNotificationLoop() {
+  if (!notifyState.timer) return;
+  console.log("[desktop] 通知轮询已停止");
+  clearInterval(notifyState.timer);
+  notifyState.timer = null;
+}
+
 // ── 生命周期 ────────────────────────────────────────────────────────────────
 
 /**
@@ -1348,6 +1540,8 @@ app.whenReady().then(async () => {
   }
 
   registerGlobalShortcut();
+  // 后端起来了才轮询通知：连不上时每 15 秒问一次没有意义，失败对话框才是该走的路。
+  if (started.ok) startNotificationLoop();
   // 更新检查只在配了 BLANK_UPDATE_FEED_URL 时真的发请求；不下载、不安装。
   void checkForUpdates().finally(() => phase("startup", "complete"));
 
@@ -1370,6 +1564,7 @@ app.on("before-quit", () => {
   // 任何 app.quit()（截图自检、失败对话框、系统关机）都会先走到这里。
   // 置位之后窗口 close 不再进托盘——否则退出会永远停在「隐藏最后一个窗口」上。
   shellState.explicitQuit = true;
+  stopNotificationLoop();
   stopBackend();
 });
 
