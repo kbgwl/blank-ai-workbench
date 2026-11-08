@@ -13,6 +13,7 @@ from blank_api.api.routes import api_router
 from blank_api.config import get_settings
 from blank_api.helpers.middleware import RateLimitMiddleware
 from blank_api.services.agent.manager import run_manager
+from blank_api.services.channels.stream import StreamSupervisor
 
 
 @asynccontextmanager
@@ -73,13 +74,30 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 这台机器到底能不能真的起容器，是开机就该说清的事实：不能等每个任务各自撞一次墙。
     # 单独一个任务，探测要起子进程（最坏等满超时），让 /health 陪它等没有道理。
     probe_task = asyncio.create_task(probe_execution_backend(), name="blank-backend-probe")
-    tasks = (recovery_task, supervisor_task, sweep_task, probe_task)
+    # 消息通道的长连接（v0.10.3）。钉钉 Stream 是本机唯一"不折腾公网"的收消息方式：
+    # 客户在设置页填完凭据，这里每 20 秒对一次账，起停连接。没有配置时不建任何连接。
+    stream_supervisor = StreamSupervisor()
+
+    async def stream_loop() -> None:
+        while True:
+            await asyncio.sleep(20)
+            try:
+                await stream_supervisor.sync()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # 连不上不该带走 API 生命周期；下一拍重试。
+                continue
+
+    stream_task = asyncio.create_task(stream_loop(), name="blank-channel-stream")
+    tasks = (recovery_task, supervisor_task, sweep_task, probe_task, stream_task)
     try:
         yield
     finally:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await stream_supervisor.shutdown()
         orchestrator = getattr(app.state, "team_orchestrator", None)
         if orchestrator is not None:
             await orchestrator.shutdown()

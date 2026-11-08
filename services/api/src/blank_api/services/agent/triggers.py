@@ -30,18 +30,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from blank_api.models.trigger import AgentTrigger
 
-# P0 支持的触发源。邮件/日历/IM 只留接口：没有授权与真实测试前不声称支持。
+# P0 支持的触发源。邮件/日历只留接口：没有授权与真实测试前不声称支持。
 EVENT_USER_TASK = "user_task"
 EVENT_TASK_FAILED = "task_failed"
 EVENT_APPROVAL_EXPIRED = "approval_expired"
 EVENT_WORKSPACE_CHANGED = "workspace_changed"
 EVENT_SCHEDULE = "schedule"
+# v0.10.3：客户自己的 IM 里来了一句话。这条以前只在任务书里"留位置"，
+# 现在有真实生产者（channels 包的 inbound），所以它必须进枚举——
+# 不在枚举里的事件类型会被 normalize() 拒掉，也就意味着通道收到消息也开不了任务。
+EVENT_IM_MESSAGE = "im_message"
 EVENT_TYPES = (
     EVENT_USER_TASK,
     EVENT_TASK_FAILED,
     EVENT_APPROVAL_EXPIRED,
     EVENT_WORKSPACE_CHANGED,
     EVENT_SCHEDULE,
+    EVENT_IM_MESSAGE,
 )
 
 STATUS_PENDING = "pending"

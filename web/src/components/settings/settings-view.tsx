@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Panel } from "@/components/panel";
 import { AgentRuntimePanel } from "./agent-runtime-panel";
+import { ChannelsPanel } from "./channels-panel";
 import { FeatureFlagsPanel } from "./feature-flags-panel";
 import { McpPanel } from "./mcp-panel";
 import { ProvidersView } from "./providers-view";
@@ -10,7 +11,7 @@ import { RoleModelSettings } from "./role-model-settings";
 import { RoutingEvidencePanel } from "./routing-evidence-panel";
 import { SafetyPanel } from "./safety-panel";
 
-type SectionKey = "models" | "safety" | "runtime" | "tools" | "advanced";
+type SectionKey = "models" | "safety" | "runtime" | "channels" | "tools" | "advanced";
 
 type Section = {
   key: SectionKey;
@@ -75,6 +76,21 @@ const SECTIONS: Section[] = [
     ),
   },
   {
+    key: "channels",
+    label: "消息通道",
+    hint: "企业微信 / 钉钉 / 飞书",
+    description:
+      "把任务提醒推到客户自己的聊天软件，也可以在那边发一句话让它动手。填完凭据点「验证」就能用；收消息的方式各家不同——钉钉的长连接不需要公网地址。",
+    status: "保存即生效",
+    icon: (
+      <svg {...iconProps}>
+        <path d="M20 12a8 8 0 1 1-3.1-6.3" />
+        <path d="M4 20l1.6-3.2A8 8 0 0 0 12 20h8" />
+        <path d="M9 10h.01M13 10h.01M17 10h.01" />
+      </svg>
+    ),
+  },
+  {
     key: "tools",
     label: "外部工具",
     hint: "MCP 服务端连接",
@@ -130,6 +146,8 @@ function SectionBody({ active }: { active: SectionKey }) {
       return <SafetyPanel />;
     case "runtime":
       return <AgentRuntimePanel />;
+    case "channels":
+      return <ChannelsPanel />;
     case "tools":
       return <McpPanel />;
     case "advanced":

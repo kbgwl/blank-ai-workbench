@@ -235,6 +235,37 @@ async def run_once(worker: str | None = None) -> int:
     return handled
 
 
+async def release_one(trigger_id: str, *, start_runner: bool = False) -> bool:
+    """放行一条触发器。返回是否真的入队。
+
+    抽出来是为了让 IM 入站能复用完全相同的入队动作：那条路是"人发了一句话"，
+    不该受 ``background_execution`` 这个**后台自主**闸门约束（默认关着，
+    关着时客户配好通道发消息会一直没反应）。执行路径仍然只有这一条。
+    """
+    async with get_session_factory()() as session:
+        row = await session.get(AgentTrigger, trigger_id)
+        if row is None or row.status != triggers_module.STATUS_PENDING:
+            return False
+        task = await session.get(Task, row.task_id) if row.task_id else None
+        if task is None:
+            row.status = triggers_module.STATUS_SKIPPED
+            row.payload = {**dict(row.payload or {}), "error": "关联任务不存在"}
+            await session.commit()
+            return False
+        if task.status in ("running", "queued"):
+            # 已经有人在跑：标记成已放行即可，不重复入队。
+            await triggers_module.mark_fired(session, row)
+            await session.commit()
+            return False
+        payload = TaskRunIn.model_validate(row.run_payload or {})
+        await task_routes.launch_task(
+            session, task, payload, None, start_runner=start_runner
+        )
+        await triggers_module.mark_fired(session, row)
+        await session.commit()
+        return True
+
+
 async def release_due_triggers() -> int:
     """把到点的触发器推进 run 队列（v162 §5 的本地定时器）。
 
@@ -253,25 +284,7 @@ async def release_due_triggers() -> int:
         trigger_ids = [row.id for row in rows]
     for trigger_id in trigger_ids:
         try:
-            async with get_session_factory()() as session:
-                row = await session.get(AgentTrigger, trigger_id)
-                if row is None or row.status != triggers_module.STATUS_PENDING:
-                    continue
-                task = await session.get(Task, row.task_id) if row.task_id else None
-                if task is None:
-                    row.status = triggers_module.STATUS_SKIPPED
-                    row.payload = {**dict(row.payload or {}), "error": "关联任务不存在"}
-                    await session.commit()
-                    continue
-                if task.status in ("running", "queued"):
-                    # 已经有人在跑：标记成已放行即可，不重复入队。
-                    await triggers_module.mark_fired(session, row)
-                    await session.commit()
-                    continue
-                payload = TaskRunIn.model_validate(row.run_payload or {})
-                await task_routes.launch_task(session, task, payload, None, start_runner=False)
-                await triggers_module.mark_fired(session, row)
-                await session.commit()
+            if await release_one(trigger_id):
                 released += 1
         except Exception as error:  # noqa: BLE001 - 单条失败不该带走整轮
             log.warning("触发器放行失败 trigger=%s: %s", trigger_id, error)

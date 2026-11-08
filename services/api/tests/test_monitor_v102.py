@@ -154,14 +154,19 @@ async def test_pending_is_empty_and_explained_when_background_is_off(env, worksp
 
 
 async def test_im_channels_are_reported_as_not_connected(env, workspace):
-    """三个 IM 渠道都必须明说未接通：这是「监控聊天软件」这件事的诚实读数。"""
+    """三个 IM 渠道在没配的时候都必须明说未接通：这是「监控聊天软件」这件事的诚实读数。
+
+    v0.10.3 起这三行不再是写死的常量，而是"库里没有对应通道时的兜底行"。
+    所以判据从「写着未接通」改成「没接通 + 说清去哪儿配」——话变了，要求没松：
+    没配就不能显示已接通。
+    """
     project_id = await create_project(env, workspace)  # noqa: F841  只要库在
     data = await _get(env)
 
     im = {item["id"]: item for item in data["sources"] if item["kind"] == "im"}
     assert set(im) == {"wecom", "dingtalk", "feishu"}
     assert all(item["connected"] is False for item in im.values())
-    assert all("未接通" in item["note"] for item in im.values())
+    assert all("未配置" in item["note"] and "消息通道" in item["note"] for item in im.values())
 
     builtin = [item for item in data["sources"] if item["kind"] == "builtin"]
     assert {"user_task", "task_failed", "approval_expired", "workspace_changed", "schedule"} <= {

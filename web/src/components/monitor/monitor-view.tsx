@@ -265,10 +265,10 @@ export function MonitorView() {
           </div>
         </Panel>
 
-        <Panel title="触发源：它到底能收到什么" hint={`${builtin.length} 个内置 · ${im.length} 个聊天软件`}>
+        <Panel title="触发源：它到底能收到什么" hint={`${builtin.length} 个内置 · ${im.length} 个外部接入`}>
           <p className="mb-2 text-[11px] leading-relaxed text-faint">
-            这一栏是这一页最该看的地方。下面「已接通」的才会真的把事件送进来；「未接通」的只是留了位置，
-            说「监控聊天软件」时它读不到任何消息。
+            这一栏是这一页最该看的地方。下面「已接通」的才会真的把事件送进来；「未接通」的读不到任何消息——
+            要接的话去设置里的「消息通道」，填完凭据点一次验证，这里的状态会跟着变。
           </p>
           <div className="space-y-1">
             {builtin.map((item) => (
@@ -304,9 +304,17 @@ export function MonitorView() {
             ))}
           </div>
           {imOff > 0 && (
-            <p className="mt-2 rounded-md border border-line/60 bg-surface-2/50 px-2.5 py-1.5 text-[10.5px] leading-relaxed text-muted">
-              {`${imOff} 个聊天软件还没接通。要接的话需要：开放平台应用凭证 + 消息回调（长连接或公网地址）+ 一轮真机联调——没有这三样，登记了也收不到消息。`}
-            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-line/60 bg-surface-2/50 px-2.5 py-1.5">
+              <p className="min-w-0 flex-1 text-[10.5px] leading-relaxed text-muted">
+                {`${imOff} 个还没接通。企业微信/钉钉/飞书都在设置里配，不需要改代码：填凭据 → 验证 → 选收消息的方式。`}
+              </p>
+              <a
+                href="/settings#channels"
+                className="shrink-0 rounded border border-line-strong bg-surface px-2 py-0.5 text-[10.5px] text-muted transition-colors hover:text-text"
+              >
+                去配置
+              </a>
+            </div>
           )}
         </Panel>
       </div>

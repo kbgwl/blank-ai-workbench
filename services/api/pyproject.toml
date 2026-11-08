@@ -16,6 +16,10 @@ dependencies = [
     "pypdf>=6.21.1",
     "sqlalchemy[asyncio]>=2.0.46",
     "uvicorn[standard]>=0.54.0",
+    # 钉钉 Stream 长连接直接 import 这个包。以前只是 uvicorn[standard] 的传递依赖，
+    # 靠"装 uvicorn 顺便带上"是运气：换个 extras 组合就读不到，而症状是
+    # 通道配好了、消息永远不来。
+    "websockets>=13.0",
 ]
 
 [project.optional-dependencies]

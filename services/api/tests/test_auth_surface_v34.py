@@ -13,7 +13,13 @@ from blank_api.config import get_settings
 from blank_api.db import Base, get_engine
 
 # 设计上就匿名可读的公共面；任何别的路径落进「匿名不是 401」都算漏网。
-PUBLIC_OPERATIONS = {"/api/v1/health"}
+PUBLIC_OPERATIONS = {
+    "/api/v1/health",
+    # 厂商回调（v0.10.3）：企业微信/飞书不可能带我们的 Bearer 令牌。它靠另外两把锁
+    # ——URL 里的 callback_token（不可猜，错了回 404）与厂商签名/校验 Token。
+    # 把它列在这里不是放宽，而是承认"这个面的鉴权方式不是 Bearer"。
+    "/api/v1/channels/{channel_id}/callback/{token}",
+}
 DOC_SURFACE = ("/openapi.json", "/docs", "/redoc")
 METHODS = ("get", "post", "put", "patch", "delete")
 

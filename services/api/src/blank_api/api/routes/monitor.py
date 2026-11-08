@@ -76,31 +76,95 @@ _SOURCES: tuple[dict, ...] = (
         "connected": True,
         "note": "只有带 fire_at 的定时项才会被扫到；fire_at 为空的不算到点",
     },
+)
+
+# IM 三家的兜底行：客户还没配的时候也要出现在这一栏。
+# v0.10.3 之前这里是写死的 ``connected=False``——于是「监控页说没接通」永远是假话，
+# 客户配好了也还是那一句。现在这三行只是**兜底**：真配了通道就用库里的状态替换。
+_IM_DEFAULTS: tuple[dict, ...] = (
     {
         "id": "wecom",
         "label": "企业微信",
         "kind": "im",
         "connected": False,
-        "note": "未接通：只留了触发源位置，没有授权与真实回调，不会读你的聊天",
+        "note": "未配置：设置 → 消息通道，填企业 ID 与应用 Secret 即可",
     },
     {
         "id": "dingtalk",
         "label": "钉钉",
         "kind": "im",
         "connected": False,
-        "note": "未接通：同上，需要开放平台应用与长连接",
+        "note": "未配置：设置 → 消息通道，填 Client ID/Secret 即可（长连接不需要公网）",
     },
     {
         "id": "feishu",
         "label": "飞书",
         "kind": "im",
         "connected": False,
-        "note": "未接通：同上，需要事件订阅与应用凭证",
+        "note": "未配置：设置 → 消息通道，填 App ID/Secret 即可",
     },
 )
 
 # 这些事件类型没有对应的外部生产者：登记进来了也没有人放行。
 _WITHOUT_PRODUCER = ("schedule",)
+
+
+def _channel_row(channel) -> dict:
+    """一条真实存在的通道。连接与否按库里的事实说，不按"配了就算通"。"""
+    from blank_api.services.channels import adapter_for
+
+    adapter = adapter_for(channel.kind)
+    label = adapter.label if adapter else channel.kind
+    inbound_at = _iso(channel.last_inbound_at)
+    connected = bool(channel.status == "ok" or inbound_at)
+    parts: list[str] = []
+    if channel.status == "ok":
+        parts.append("凭据已验证")
+    elif channel.status == "failed":
+        parts.append("上次验证失败")
+    else:
+        parts.append("未验证")
+    if channel.receive and channel.receive_mode == "stream":
+        parts.append("长连接收消息")
+    elif channel.receive and channel.receive_mode == "webhook":
+        parts.append("回调收消息")
+    if inbound_at:
+        parts.append(f"最近收到消息 {inbound_at}")
+    else:
+        parts.append("还没收到过消息")
+    if channel.last_inbound_error:
+        parts.append(f"最近入站错误：{channel.last_inbound_error[:120]}")
+    elif channel.status == "failed" and not inbound_at:
+        # 有消息进来之后，"上次验证失败"就是旧读数了——回调通了比一次凭据探测更有说服力。
+        parts.append(channel.status_note[:160])
+    return {
+        "id": f"channel:{channel.id}",
+        "label": f"{label} · {channel.name}",
+        "kind": "im",
+        "connected": connected,
+        "note": "｜".join(parts),
+    }
+
+
+async def _im_sources(db) -> list[dict]:
+    """IM 一栏的真实读数。没配的仅保留兜底行（说清去哪儿配），不假装接通。"""
+    from blank_api.models.channel import Channel
+
+    rows = (await db.execute(select(Channel).order_by(Channel.created_at))).scalars().all()
+    by_kind: dict[str, list] = {}
+    for row in rows:
+        by_kind.setdefault(row.kind, []).append(row)
+    out: list[dict] = []
+    for default in _IM_DEFAULTS:
+        configured = by_kind.pop(default["id"], [])
+        if not configured:
+            out.append(dict(default))
+            continue
+        out.extend(_channel_row(item) for item in configured)
+    # 通用 Webhook 之类没写进兜底表的类型，配了就照实列出来。
+    for items in by_kind.values():
+        out.extend(_channel_row(item) for item in items)
+    return out
 
 
 def _iso(moment: datetime | None) -> str:
@@ -234,7 +298,7 @@ async def monitor(db: DbSession, limit: int = Query(default=30, ge=1, le=200)) -
         "watching": watching,
         "running": running,
         "pending": pending,
-        "sources": [dict(item) for item in _SOURCES],
+        "sources": [dict(item) for item in _SOURCES] + await _im_sources(db),
         "counts": counts,
         "background_execution": background_on,
     }

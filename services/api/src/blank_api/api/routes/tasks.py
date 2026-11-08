@@ -1036,12 +1036,18 @@ def _notify_kind(status: str) -> str:
 
 
 async def _record_notify_decision(task_id: str, status: str) -> None:
-    """把「这一次该不该打扰用户」写成事件（任务书 §5）。
+    """把「这一次该不该打扰用户」写成事件，并把它真的投递出去（任务书 §5）。
 
-    判断与投递分开：这里只落判定，前端/未来的推送通道读 ``notify.decided`` 决定要不要
-    出声。没有这条事件，低打扰就只是一句配置——谁也不知道某次通知是被策略压掉的、
-    还是压根没触发。写事件失败绝不影响任务本身的终态。
+    判断与投递分开，但**都在这里收口**：``agent/notify.py`` 只回答该不该出声，
+    ``channels/delivery.py`` 只负责发。任何一个通道发失败都不影响任务终态，
+    也不会写坏判定——判定是事实（"策略说要打扰"），投递结果另记一条事件。
+
+    v0.10.3 起这里多了一件事：IM 里问的那句话，结论要回到原会话。它不看
+    notify 策略——用户在聊天里问了一句，答案就该出现在聊天里，那不叫打扰。
     """
+    title = goal = detail = ""
+    disturb = False
+    kind = notify.EVENT_PROGRESS
     try:
         async with get_session_factory()() as session:
             task = await session.get(Task, task_id)
@@ -1053,6 +1059,12 @@ async def _record_notify_decision(task_id: str, status: str) -> None:
             quiet = quiet_hours_active(window)
             kind = _notify_kind(status)
             decision = notify.explain(policy, kind, quiet_hours=quiet)
+            # 先把要发的内容取出来：会话关掉之后还要用它拼消息，而 Task 实例
+            # 在会话外读字段会触发一次同步懒加载。
+            title = str(task.title or "")
+            goal = str(task.goal or "")
+            detail = str(task.failure_reason or task.result_summary or "")
+            disturb = bool(decision["disturb"])
             await EventRecorder(get_session_factory(), task_id).add(
                 "notify.decided",
                 "finish",
@@ -1060,6 +1072,49 @@ async def _record_notify_decision(task_id: str, status: str) -> None:
             )
     except Exception:  # 通知判定是旁路，坏了也不能把任务的终态带走
         log.warning("记录通知判定失败 task=%s", task_id, exc_info=True)
+        return
+
+    from blank_api.services.channels import delivery
+
+    # ── 1. 提醒推到开了推送的通道 ────────────────────────────────────────
+    results: list[dict] = []
+    if disturb:
+        try:
+            results = await delivery.fanout(
+                delivery.notification_text(title=title, goal=goal, kind=kind, detail=detail)
+            )
+        except Exception:  # noqa: BLE001 - 投递失败只影响"有没有收到"，不影响任务
+            log.warning("通道投递失败 task=%s", task_id, exc_info=True)
+    if results:
+        try:
+            await EventRecorder(get_session_factory(), task_id).add(
+                "notify.delivered",
+                "finish",
+                {
+                    "delivered": results,
+                    "ok": sum(1 for item in results if item.get("ok")),
+                    "failed": sum(1 for item in results if not item.get("ok")),
+                },
+            )
+        except Exception:
+            log.warning("记录投递结果失败 task=%s", task_id, exc_info=True)
+
+    # ── 2. 结论回到消息进来的那个会话 ────────────────────────────────────
+    if status in ("succeeded", "failed", "cancelled", "waiting_approval"):
+        try:
+            sent = await delivery.reply_to_source(
+                task_id,
+                delivery.reply_text(
+                    status=status, summary=detail if status == "succeeded" else "",
+                    failure=detail if status != "succeeded" else "", task_id=task_id,
+                ),
+            )
+            if sent is not None:
+                await EventRecorder(get_session_factory(), task_id).add(
+                    "channel.replied", "finish", sent
+                )
+        except Exception:  # noqa: BLE001
+            log.warning("回话失败 task=%s", task_id, exc_info=True)
 
 
 @router.post("/tasks/{task_id}/start", status_code=202)
