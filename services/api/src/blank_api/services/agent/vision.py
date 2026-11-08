@@ -23,7 +23,12 @@ _VISION_MODEL = re.compile(
     r"|gemini"
     r"|[-_]vl\b|vl-\d|qwen.*vl"  # Qwen-VL / 任何 *-vl 变体
     r"|glm-4v|glm-4\.\dv|glm-4\.\d-v"  # 智谱视觉
-    r"|vision"  # doubao-vision / yi-vision / moonshot-*-vision
+    # DeepSeek 当前多模态模型叫 deepseek-flash（官方 vision 文档，2026-11-08 核实）：
+    # 名字里既没有 vision 也没有 vl，但官方明确说它接受图片。legacy 名
+    # deepseek-v4-flash-vision-exp 由下面的 |vision 接住，两者都认。
+    # 注意 deepseek-chat / deepseek-reasoner 仍是纯文本，别放宽到 deepseek 前缀。
+    r"|deepseek-flash"
+    r"|vision"  # doubao-vision / yi-vision / moonshot-*-vision / legacy deepseek-*-vision-exp
     r"|kimi-latest|kimi-vl"
     r"|hunyuan.*vision|step-1[vo]|step-2-vision"
     r"|ernie.*vl|yi-vl|internvl|llava|minicpm-v"

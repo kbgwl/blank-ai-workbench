@@ -37,6 +37,8 @@ from blank_api.services.agent.vision import model_looks_vision, supports_vision
         "moonshot-v1-8k-vision-preview",
         "hunyuan-vision",
         "ernie-4.5-turbo-vl",
+        "deepseek-flash",
+        "deepseek-v4-flash-vision-exp",
     ],
 )
 def test_known_vision_models_are_recognised(model: str) -> None:
@@ -85,3 +87,16 @@ def test_shipped_presets_declare_vision_for_their_default_model() -> None:
 def test_text_presets_do_not_claim_vision() -> None:
     for key in ("deepseek", "qwen", "zhipu", "moonshot"):
         assert PROVIDER_PRESETS[key]["supports_vision"] is False, key
+
+
+def test_deepseek_flash_is_not_silently_downgraded() -> None:
+    """本机 DeepSeek 配置的现状：model=deepseek-flash，开关还勾着 false。
+
+    官方该模型接受图片。漏认这个名字的病象不是报错，而是产品降级成「当前模型
+    不支持看图」，模型转头去 list_files 找文件——看起来像「这台机器没有视觉模型」，
+    其实是模型名正则没跟上。deepseek-chat / reasoner 必须继续判成纯文本。
+    """
+    assert supports_vision(False, "deepseek-flash"), "deepseek-flash 官方支持图片输入"
+    assert not supports_vision(False, "deepseek-chat")
+    assert not supports_vision(False, "deepseek-reasoner")
+    assert not model_looks_vision("deepseek-chat"), "别放宽到整个 deepseek 前缀"
