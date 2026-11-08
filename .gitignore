@@ -22,6 +22,9 @@ logs/
 .pytest_cache/
 .mypy_cache/
 coverage/
+# 后端测试在 services/api 下按轮次建的临时工作区（含临时库与 fixture 数据）。
+# 本机 safe-delete 钩子拦下 pytest 收尾时这些目录会残留，不能跟着 git add -A 入库。
+services/api/.tmp-test-temp*/
 evals/workspaces/
 evals/results/
 evals/regression/*.json
