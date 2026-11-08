@@ -1,6 +1,6 @@
 {
   "name": "blank-ai-workbench-desktop",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "private": true,
   "description": "Blank AI（空白格）桌面壳",
   "main": "main.cjs",

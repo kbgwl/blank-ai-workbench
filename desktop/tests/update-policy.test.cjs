@@ -1,11 +1,13 @@
 "use strict";
 
 /**
- * 自动更新骨架的判定测试（decideUpdate / 版本比较 / feed 解析）。
+ * 自动更新的判定测试（decideUpdate / planInstall / 版本比较 / feed 解析）。
  *
- * 守的核心契约只有一句话：**这个骨架在任何分支都不安装**（install 恒为 false），
- * 且每种「不能更新」都要给出人能读懂的原因。下面最后一条把不变量扫成循环——
- * 哪天有人接上真实下载却忘了收口，这条先红。
+ * 两条契约：
+ * 1. 每种「不能更新」都要给出人能读懂的原因，且 install 为 false；
+ * 2. 元数据说可以更新（install=true）**不等于**可以装：真正执行安装器前必须
+ *    用 planInstall 拿实际下载文件的摘要再过一遍。元数据里的 sha256 是"应该是
+ *    多少"，只有算一遍手上这个文件才知道"实际是多少"。
  */
 
 const test = require("node:test");
@@ -18,6 +20,7 @@ const {
   parseVersion,
   pickLatestEntry,
   compareVersions,
+  planInstall,
 } = require("../shell-policy.cjs");
 
 const SHA_OK = "a".repeat(64);
@@ -134,7 +137,7 @@ test("新版本但下载/签名信息不全：缺地址、非 http(s)、缺摘�
   }
 });
 
-test("一切合规也仅仅是 available：骨架只给提示，明写不下载不安装", () => {
+test("一切合规：available 且允许下载，但摘要要归一成小写", () => {
   const decision = decideUpdate({
     current: "0.8.5",
     entry: { version: "0.9.0", url: "https://example.com/setup-0.9.0.exe", sha256: SHA_OK.toUpperCase() },
@@ -142,13 +145,11 @@ test("一切合规也仅仅是 available：骨架只给提示，明写不下载�
   assert.equal(decision.action, "available");
   assert.equal(decision.version, "0.9.0");
   assert.equal(decision.sha256, SHA_OK, "摘要归一成小写十六进制，比对时大小写不该咬人");
-  assert.match(decision.reason, /不下载、不安装/);
-  assert.equal(decision.install, false);
+  assert.equal(decision.install, true, "校验全过之后要允许下载，否则自动更新永远是骨架");
 });
 
-test("不变量：把每条分支都走一遍，install 没有一次为真", () => {
+test("不变量：拿不到可用元数据的分支，install 一次都不许为真", () => {
   const inputs = [
-    { current: "0.8.5", entry: { version: "0.9.0", url: "https://x", sha256: SHA_OK } },
     { current: "0.8.5", entry: { version: "0.8.5" } },
     { current: "0.8.5", entry: {}, fetchError: "超时" },
     { current: "0.8.5", entry: null },
@@ -158,8 +159,51 @@ test("不变量：把每条分支都走一遍，install 没有一次为真", () 
   for (const input of inputs) {
     const decision = decideUpdate(input);
     assert.ok(["available", "none", "unavailable"].includes(decision.action), JSON.stringify(decision));
-    assert.equal(decision.install, false, `出现了会安装的分支：${JSON.stringify(input)}`);
+    assert.equal(decision.install, false, `不该允许安装却允许了：${JSON.stringify(input)}`);
     assert.equal(typeof decision.reason, "string");
     assert.ok(decision.reason.length > 0, "每一条判定都得说人话");
+  }
+});
+
+test("planInstall：摘要对不上就拒绝执行安装器", () => {
+  const decision = decideUpdate({
+    current: "0.8.5",
+    entry: { version: "0.9.0", url: "https://x/setup.exe", sha256: SHA_OK },
+  });
+  const good = planInstall({
+    decision,
+    downloadedPath: "C:/tmp/blank-update/setup.exe",
+    actualSha256: SHA_OK.toUpperCase(),
+  });
+  assert.equal(good.ok, true);
+  assert.deepEqual(good.args, ["/S"], "NSIS 静默安装开关");
+
+  const cases = [
+    [{ downloadedPath: "", actualSha256: SHA_OK }, /没有下载成功/],
+    [{ downloadedPath: "C:/tmp/setup.zip", actualSha256: SHA_OK }, /不是 \.exe\/\.msi/],
+    [{ downloadedPath: "C:/tmp/setup.exe", actualSha256: "" }, /没有算出.*摘要/],
+    [{ downloadedPath: "C:/tmp/setup.exe", actualSha256: "b".repeat(64) }, /摘要不匹配/],
+  ];
+  for (const [extra, pattern] of cases) {
+    const plan = planInstall({ decision, ...extra });
+    assert.equal(plan.ok, false, JSON.stringify(extra));
+    assert.match(plan.reason, pattern);
+    assert.equal(plan.path, "", "拒绝时不能给出可执行路径");
+  }
+});
+
+test("planInstall：没有 available 的判定时，任何文件都不许装", () => {
+  for (const decision of [
+    null,
+    { action: "none", install: false },
+    { action: "unavailable", install: false },
+    { action: "available", install: false },
+  ]) {
+    const plan = planInstall({
+      decision,
+      downloadedPath: "C:/tmp/setup.exe",
+      actualSha256: SHA_OK,
+    });
+    assert.equal(plan.ok, false, JSON.stringify(decision));
   }
 });

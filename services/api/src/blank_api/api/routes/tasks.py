@@ -1211,19 +1211,95 @@ def _defer_intent(task: Task) -> str:
     return intent if intent in (INTENT_WATCH, INTENT_SCHEDULE) else ""
 
 
+def _when_of(task: Task):
+    """从任务原话里解析到点时间。解析不出返回 None。
+
+    只对「定时」意图解析：「盯着构建结果」是等外部事件，它没有"几点"，
+    硬塞一个时间会在到点时把一件本来该由变化触发的事按钟表跑一遍。
+    """
+    from blank_api.services.agent import schedule
+
+    return schedule.parse_when(task.goal or "")
+
+
 async def _defer_if_needed(db: DbSession, task: Task, payload: TaskRunIn) -> dict | None:
-    """监控/定时类请求：登记为待触发，返回给调用方，而不是现在就跑。"""
-    if not is_enabled("background_execution"):
-        return None
-    if not _defer_intent(task):
+    """监控/定时类请求：登记为待触发，返回给调用方，而不是现在就跑。
+
+    定时意图必须解析出 ``fire_at`` 才算登记成功。解析不出就**退化为立即执行**：
+    一条 ``fire_at=None`` + ``event_type=schedule`` 的登记既不会被时间扫到、
+    也没有事件源唤醒，等于在监控页上摆一条「等一个不会到来的事件」——用户看到
+    的是"说好了提醒我，结果一声不响"，这比当场跑一次糟得多。
+
+    **不看 ``background_execution``。** 那个 flag 的语义是「后台自己发起的事」
+    （自动修复、自动继续），而「9 点提醒我」「盯着这个文件」是人明确下的指令。
+    让一个默认关闭的 BETA 开关挡住它，表现就是：用户说设个提醒，程序当场做掉了
+    一件本来该在九点做的事——而且没有任何地方告诉他"我没听你的时间"。
+    同一条判断在 IM 入站那次已经定过（见 channels/inbound.py）。
+    """
+    intent = _defer_intent(task)
+    if not intent:
         return None
     from blank_api.models.trigger import AgentTrigger  # 局部导入：路由与触发器互相引用
     from blank_api.services.agent import triggers
 
+    when = _when_of(task) if intent == INTENT_SCHEDULE else None
+    if intent == INTENT_SCHEDULE and when is None:
+        # 说了"每天汇总一次"却没说几点、或整句读不出时间：现在就做一次，
+        # 并在事件里留下"没定时"这个事实，别让它变成一条永远不响的登记。
+        await EventRecorder(get_session_factory(), task.id).add(
+            "dispatch.immediate",
+            "receive_task",
+            {
+                "intent": intent,
+                "reason": "定时意图但原话里读不出到点时间，改为立即执行一次",
+                "goal": (task.goal or "")[:200],
+            },
+        )
+        return None
+
+    fire_at = when.fire_at if when is not None else None
+    repeat = when.repeat_payload() if when is not None else {}
+    from datetime import timedelta
+
+    from blank_api.services.agent import triggers as _triggers  # 已导入，仅取 utc_now
+
+    extra: dict = {}
+    if intent == INTENT_WATCH:
+        # 「盯着」靠文件变化唤醒：记下"从现在起"，巡检才有比较的起点。
+        # 没有这个时刻，第一拍只能建基线，用户刚交代就改的那一下会被吃掉。
+        extra["watch_since"] = _triggers.utc_now().isoformat()
+        # 把**登记时**的工作区路径固化下来。巡检时再按 active_workspace 现查，
+        # 用户中途切换活动目录就会让这条盯着悄悄换了地方——他明明说的是
+        # 「盯着 README」，系统去盯另一个仓库，而且看不出哪里错了。
+        from sqlalchemy import select as _select
+
+        from blank_api.models.project import Workspace as _Workspace
+
+        target = (
+            await db.execute(
+                _select(_Workspace)
+                .where(_Workspace.project_id == task.project_id)
+                .order_by(_Workspace.is_active.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if target is not None and (target.path or "").strip():
+            extra["watch_root"] = target.path
     event = triggers.normalize(
         event_type=triggers.EVENT_SCHEDULE,
         source="task.start",
-        payload={"task_id": task.id, "goal": task.goal[:200]},
+        payload={
+            "task_id": task.id,
+            "goal": task.goal[:200],
+            # intent 写进 payload：监控页要能区分"等变化"（watch，合理）与
+            # "等一个没定下来的时间"（schedule 缺 fire_at，是缺陷）。
+            "intent": intent,
+            **extra,
+            **({"repeat": repeat} if repeat else {}),
+            **({"shifted": True} if when is not None and when.shifted else {}),
+        },
+        # 盯着可能要等好几天，24 小时窗口会让「盯着」在第二天自己作废。
+        expires_at=_triggers.utc_now() + timedelta(days=7) if intent == INTENT_WATCH else None,
         dedupe_key=f"task:{task.id}",
     )
     row, created = await triggers.ingest(
@@ -1233,7 +1309,7 @@ async def _defer_if_needed(db: DbSession, task: Task, payload: TaskRunIn) -> dic
         task_id=task.id,
         provider_id=payload.provider_id or "",
         run_payload=payload.model_dump(mode="json"),
-        fire_at=None,
+        fire_at=fire_at,
     )
     await db.commit()
     await EventRecorder(get_session_factory(), task.id).add(
@@ -1242,15 +1318,26 @@ async def _defer_if_needed(db: DbSession, task: Task, payload: TaskRunIn) -> dic
         {
             "trigger_id": row.id,
             "created": created,
-            "intent": _defer_intent(task),
-            "reason": "定时/监控类请求，已登记为待触发；确认后再执行",
+            "intent": intent,
+            "fire_at": fire_at.isoformat() if fire_at else "",
+            "repeat": repeat,
+            "shifted": bool(when is not None and when.shifted),
+            "reason": (
+                "定时请求已登记，到点自动执行"
+                if fire_at is not None
+                else "监控请求已登记，等外部事件"
+            ),
         },
     )
     return {
         "task_id": task.id,
         "trigger_id": row.id,
         "status": "deferred",
-        "reason": "定时/监控类请求已登记，未立即执行",
+        "fire_at": fire_at.isoformat() if fire_at else "",
+        "repeat": repeat,
+        "reason": (
+            "已登记定时，到点执行" if fire_at is not None else "已登记待触发，等外部事件"
+        ),
     }
 
 

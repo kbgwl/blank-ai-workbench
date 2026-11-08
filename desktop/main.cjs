@@ -24,6 +24,7 @@ const {
 const { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { readFile, writeFile } = require("node:fs/promises");
 const { spawn } = require("node:child_process");
+const { createHash } = require("node:crypto");
 const path = require("node:path");
 const process = require("node:process");
 const { readAttempts, shouldDowngrade, startingState, readyState } = require("./gpu-guard.cjs");
@@ -48,6 +49,7 @@ const {
   pickInterpreterOrder,
   pickLatestEntry,
   planHotkeyToggle,
+  planInstall,
   planSecondInstanceReveal,
   shouldAbortSecondaryInstance,
 } = require("./shell-policy.cjs");
@@ -676,6 +678,9 @@ function refreshTrayMenu() {
   if (!tray) return;
   const actions = {
     show: () => showMainWindow("托盘菜单「显示主窗口」"),
+    // 只有"已下载且摘要对过"时这一项才是 enabled（判定在 shell-policy），
+    // 所以这里不需要再挡一次，点进来必然有东西可装。
+    update: () => applyUpdate(),
     quit: () => quitApplication("托盘菜单「退出」"),
   };
   const template = buildTrayMenuModel({
@@ -1125,17 +1130,113 @@ function toggleMainWindowFromHotkey() {
   showMainWindow("全局快捷键");
 }
 
-// ── 自动更新（骨架）──────────────────────────────────────────────────────────
+// ── 自动更新 ────────────────────────────────────────────────────────────────
 
 /**
- * 只取元数据、只做决策、只写日志：**不下载、不安装、不接 electron-updater**。
- * 决策函数 decideUpdate 是纯函数（shell-policy.cjs），所有失败形态
- * （网络失败 / 元数据缺字段 / 签名摘要缺失或不对 / 版本号读不懂）都归成
- * action=unavailable + 可读原因，且 install 恒为 false——这两条都有单测钉住。
+ * 检查 → 下载 → 校验 → 一键安装。决策与"能不能装"都在 shell-policy.cjs 里
+ * （纯函数、有单测），这里只负责搬字节和起进程。
  *
- * 默认不碰网络：必须显式配 BLANK_UPDATE_FEED_URL 才检查一次。
- * ⚠️ 未验：真实 feed 的取回与解析没跑过（没有发布通道可指），拿到 feed 地址后要人工
- * 复核一次日志里的 action/reason，并确认桌面端依旧什么都不下载。
+ * 三道刻意的保守：
+ * 1. **下载不装。** 拿到更新包只把它放好并亮出托盘那一行，安装必须用户点一下——
+ *    静默替换客户正在用的程序，出问题连回退的入口都没有。
+ * 2. **装前重算摘要。** 校验不过就拒绝执行。元数据里的 sha256 是"应该是多少"，
+ *    只有算一遍手上这个文件才知道"实际是多少"。
+ * 3. **默认不碰网络。** 必须显式配 BLANK_UPDATE_FEED_URL 才检查一次。
+ */
+const UPDATE_DIR = () => path.join(app.getPath("temp"), "blank-update");
+
+async function downloadUpdate(decision) {
+  if (!decision || decision.action !== "available" || !decision.install) return null;
+  const dir = UPDATE_DIR();
+  const fallback = `blank-${String(decision.version || "update")}.exe`;
+  let name = fallback;
+  try {
+    const parsed = new URL(decision.url);
+    name = path.basename(parsed.pathname) || fallback;
+  } catch {
+    /* URL 合法性已由 decideUpdate 把关；这里只是取个文件名 */
+  }
+  const target = path.join(dir, name.replace(/[^\w.\-]/g, "_"));
+
+  shellState.update = { ...decision, downloading: true };
+  refreshTrayMenu();
+  try {
+    mkdirSync(dir, { recursive: true });
+    const controller = new AbortController();
+    // 安装包几十 MB，8 秒的元数据超时不适用；给 10 分钟，够慢网下完。
+    const timer = setTimeout(() => controller.abort(), 10 * 60 * 1000);
+    let buffer;
+    try {
+      const response = await fetch(decision.url, { signal: controller.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      buffer = Buffer.from(await response.arrayBuffer());
+    } finally {
+      clearTimeout(timer);
+    }
+    writeFileSync(target, buffer);
+    const actual = createHash("sha256").update(buffer).digest("hex");
+    const plan = planInstall({ decision, downloadedPath: target, actualSha256: actual });
+    if (!plan.ok) {
+      shellState.update = { ...decision, action: "unavailable", reason: plan.reason };
+      console.log(`[desktop] 更新包校验失败，已丢弃：${plan.reason}`);
+      phase("update", `download | rejected`);
+      refreshTrayMenu();
+      return null;
+    }
+    shellState.update = { ...decision, ready: true, path: target };
+    console.log(`[desktop] 更新包已就绪 v=${decision.version} path=${target}`);
+    phase("update", `downloaded | v=${decision.version}`);
+    refreshTrayMenu();
+    return target;
+  } catch (error) {
+    const reason = `下载失败：${error?.message ?? error}`;
+    shellState.update = { ...decision, action: "unavailable", reason };
+    console.log(`[desktop] ${reason}`);
+    phase("update", "download | failed");
+    refreshTrayMenu();
+    return null;
+  }
+}
+
+/** 装之前重新算一遍手上文件的摘要——不信上一拍算过的数。 */
+function applyUpdate() {
+  const state = shellState.update || {};
+  if (!state.ready || !state.path) return { ok: false, reason: "没有已下载的更新" };
+  let actual = "";
+  try {
+    actual = createHash("sha256").update(readFileSync(state.path)).digest("hex");
+  } catch (error) {
+    console.log(`[desktop] 读不到安装包：${error?.message ?? error}`);
+    return { ok: false, reason: `读不到安装包：${error?.message ?? error}` };
+  }
+  const plan = planInstall({ decision: state, downloadedPath: state.path, actualSha256: actual });
+  if (!plan.ok) {
+    // 文件在下载之后变了（磁盘错误、被替换）：不能装，并且要把状态说清楚，
+    // 否则托盘会一直挂着"点此安装"却点了没反应。
+    console.log(`[desktop] 拒绝安装：${plan.reason}`);
+    shellState.update = { ...state, ready: false, action: "unavailable", reason: plan.reason };
+    refreshTrayMenu();
+    return plan;
+  }
+  console.log(`[desktop] 启动安装器：${plan.path}`);
+  try {
+    spawn(plan.path, plan.args, { detached: true, stdio: "ignore" }).unref();
+  } catch (error) {
+    console.log(`[desktop] 安装器启动失败：${error?.message ?? error}`);
+    shellState.update = { ...state, ready: false, reason: `安装器启动失败：${error?.message ?? error}` };
+    refreshTrayMenu();
+    return { ok: false, reason: `安装器启动失败：${error?.message ?? error}` };
+  }
+  phase("update", "installing");
+  // 稍等一下再退：让安装器先把进程拉起来，避免它去写一个还在用的目录。
+  setTimeout(() => quitApplication("安装更新"), 800);
+  return plan;
+}
+
+/**
+ * 检查一次更新。必须显式配 BLANK_UPDATE_FEED_URL 才碰网络。
+ * 所有失败形态（网络失败 / 元数据缺字段 / 摘要缺失或格式不对 / 版本号读不懂）
+ * 都归成 action=unavailable + 可读原因，由 decideUpdate 统一给。
  */
 async function checkForUpdates() {
   try {
@@ -1179,6 +1280,10 @@ async function checkForUpdates() {
     console.log(`[desktop] 更新决策 action=${decision.action}｜${decision.reason}`);
     phase("update", `checked | action=${decision.action}`);
     refreshTrayMenu();
+    if (decision.action === "available") {
+      // 不 await：下载几十 MB 不该把窗口首帧拖住。失败会自己把状态写回托盘。
+      void downloadUpdate(decision);
+    }
     return decision;
   } catch (error) {
     // 更新检查的任何意外都不许影响窗口已创建的启动主流程。

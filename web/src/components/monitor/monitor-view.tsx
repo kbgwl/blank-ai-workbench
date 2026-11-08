@@ -228,17 +228,12 @@ export function MonitorView() {
         </Panel>
 
         <Panel
-          title="待触发（说「盯着某件事」之后登记在这里）"
-          hint={data.background_execution ? `${pending.length} 条 pending` : "后台执行未开启"}
+          title="待触发（说「盯着某件事」「9 点提醒我」之后登记在这里）"
+          hint={`${pending.length} 条等待中`}
         >
-          {!data.background_execution && (
-            <p className="py-3 text-[11.5px] leading-relaxed text-warn">
-              后台执行关着：待触发项不会有人消费。在设置里打开「后台主动执行」，这里才会有意义。
-            </p>
-          )}
-          {data.background_execution && loaded && pending.length === 0 && (
+          {loaded && pending.length === 0 && (
             <p className="py-5 text-center text-[12px] leading-relaxed text-faint">
-              没有待触发项。说一句「盯着 XX，有变化就告诉我」会登记一条到这里。
+              没有待触发项。说一句「盯着 XX，有变化就告诉我」或「30 分钟后提醒我」会登记一条到这里。
             </p>
           )}
           <div className="space-y-1">

@@ -102,6 +102,7 @@ def test_supervise_once_runs_all_three_jobs_and_survives_one_failure(monkeypatch
     import asyncio
 
     from blank_api import worker
+    from blank_api.services.agent import watch_scan
 
     calls: list[str] = []
 
@@ -113,11 +114,12 @@ def test_supervise_once_runs_all_three_jobs_and_survives_one_failure(monkeypatch
         raise RuntimeError("db down")
 
     monkeypatch.setattr(worker, "release_due_triggers", lambda: ok("triggers"))
+    monkeypatch.setattr(watch_scan, "watch_once", lambda: ok("watch"))
     monkeypatch.setattr(worker, "inspect_runs", lambda: ok("alerts"))
     monkeypatch.setattr(worker, "expire_stale_approvals", broken)
     result = asyncio.run(worker.supervise_once())
-    assert calls == ["triggers", "alerts"]
-    assert result == {"triggers": 1, "alerts": 1, "expired_approvals": 0}
+    assert calls == ["triggers", "watch", "alerts"]
+    assert result == {"triggers": 1, "watch": 1, "alerts": 1, "expired_approvals": 0}
 
 
 def test_settings_normalize_keeps_automation_mode_and_rejects_dirty_values():

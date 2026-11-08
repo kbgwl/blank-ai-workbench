@@ -67,14 +67,14 @@ _SOURCES: tuple[dict, ...] = (
         "label": "工作区文件变化",
         "kind": "builtin",
         "connected": True,
-        "note": "需要 watch 任务指定要盯的路径",
+        "note": "每拍巡检扫一次：登记之后有文件改动才动，跳过 node_modules 等依赖目录",
     },
     {
         "id": "schedule",
         "label": "定时到点",
         "kind": "builtin",
         "connected": True,
-        "note": "只有带 fire_at 的定时项才会被扫到；fire_at 为空的不算到点",
+        "note": "带 fire_at 的到点自动执行；每天/每周的跑完自动排下一次",
     },
 )
 
@@ -180,13 +180,24 @@ def _supervisor_of(task: Task) -> dict:
 def _waiting_for(row: AgentTrigger) -> tuple[str, bool]:
     """这条触发器在等什么，以及它是不是永远等不到。
 
-    `triggers.due()` 只捞 ``fire_at <= now`` 的行，注释写得很清楚：
-    「fire_at 为空 = 等外部事件，不是等时间」。而 watch/schedule 被登记时
-    一律是 ``event_type=schedule`` + ``fire_at=None``——没有到点时间，也没有
-    对应的事件生产者，于是它既不会被时间扫到，也不会被事件唤醒。
+    ``triggers.due()`` 只捞 ``fire_at <= now`` 的行，注释写得很清楚：
+    「fire_at 为空 = 等外部事件，不是等时间」。所以 ``fire_at`` 为空的行到底
+    有没有救，取决于**它等的是什么事件**：
+
+    * ``intent=watch``：等工作区文件变化。v0.10.4 起 ``watch_scan`` 每拍巡检
+      真的会扫并对上 mtime —— 它等得到。
+    * ``intent=schedule`` 却没有 ``fire_at``：既不被时间扫到，也没有事件源唤醒。
+      这是缺陷，必须如实标出来，而不是让人以为它在等。
     """
+    intent = str((row.payload or {}).get("intent") or "")
     if row.fire_at is not None:
-        return f"到点 {_iso(row.fire_at)} 放行", False
+        return f"到点 {_iso(row.fire_at)} 自动执行", False
+    if intent == "watch":
+        since = str((row.payload or {}).get("watch_since") or "")
+        return (
+            f"盯着工作区：{since[11:16]} 之后有文件变化就动（不是定时）" if since else
+            "盯着工作区：文件有变化就动（不是定时）"
+        ), False
     if row.event_type in _WITHOUT_PRODUCER:
         return "等一个不会到来的事件：没有到点时间，也没有对应的事件源", True
     return f"等外部事件：{row.event_type}", False
@@ -255,35 +266,37 @@ async def monitor(db: DbSession, limit: int = Query(default=30, ge=1, le=200)) -
     ]
 
     # ── 3. 待触发的 watch / schedule ────────────────────────────────────
+    # 不再按 ``background_execution`` 决定显不显示：定时/盯着是用户明确交代的，
+    # 那条 flag 关不关，这些行都真实存在、也真的会醒（由 watch_scan / 到点扫描负责）。
+    # 拿 flag 决定"显不显示"，只会让关着开关的用户看不到自己设的提醒。
     pending: list[dict] = []
     background_on = is_enabled(FEATURE)
-    if background_on:
-        rows = (
-            await db.execute(
-                select(AgentTrigger)
-                .where(AgentTrigger.status == triggers_module.STATUS_PENDING)
-                .order_by(AgentTrigger.created_at.desc())
-                .limit(cap)
-            )
-        ).scalars().all()
-        for row in rows:
-            waiting, never = _waiting_for(row)
-            payload = dict(row.payload or {})
-            pending.append(
-                {
-                    "trigger_id": row.id,
-                    "project_id": row.project_id,
-                    "task_id": row.task_id or "",
-                    "event_type": row.event_type,
-                    "source": row.source,
-                    "goal": str(payload.get("goal") or "")[:200],
-                    "fire_at": _iso(row.fire_at),
-                    "created_at": _iso(row.created_at),
-                    "waiting_for": waiting,
-                    "never_fires": never,
-                    "can_release": True,
-                }
-            )
+    rows = (
+        await db.execute(
+            select(AgentTrigger)
+            .where(AgentTrigger.status == triggers_module.STATUS_PENDING)
+            .order_by(AgentTrigger.created_at.desc())
+            .limit(cap)
+        )
+    ).scalars().all()
+    for row in rows:
+        waiting, never = _waiting_for(row)
+        payload = dict(row.payload or {})
+        pending.append(
+            {
+                "trigger_id": row.id,
+                "project_id": row.project_id,
+                "task_id": row.task_id or "",
+                "event_type": row.event_type,
+                "source": row.source,
+                "goal": str(payload.get("goal") or "")[:200],
+                "fire_at": _iso(row.fire_at),
+                "created_at": _iso(row.created_at),
+                "waiting_for": waiting,
+                "never_fires": never,
+                "can_release": True,
+            }
+        )
 
     counts = {
         "watching": len(watching),

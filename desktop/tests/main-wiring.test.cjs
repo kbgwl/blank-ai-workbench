@@ -1,13 +1,13 @@
 "use strict";
 
 /**
- * 桌面壳主进程的接线装置（单实例 / 托盘 / 全局快捷键 / 更新骨架）。
+ * 桌面壳主进程的接线装置（单实例 / 托盘 / 全局快捷键 / 自动更新）。
  *
  * 为什么不是「再补几条纯函数用例」：shell-policy.test.cjs 已经钉住了判定，
  * 但 main.cjs 里「把 Electron 的状态递给判定、再执行返回的动作」这一段从来没被跑过——
  * 注释里四处写着「本机不许启动壳，未验」。那些没验的正是接线：close 有没有真
  * preventDefault、second-instance 有没有真 show/focus、快捷键回调是不是真挂上了、
- * 更新骨架会不会偷偷下载。
+ * 更新会不会真的下载、下载后有没有拿实际字节的摘要复核。
  *
  * 办法：把 `electron` 模块换成内存里的假实现（窗口/托盘/快捷键/生命周期都是可观测的
  * 桩），用**真 HTTP**（127.0.0.1 随机端口）当健康检查与更新源，然后 require 真的 main.cjs。
@@ -22,6 +22,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const http = require("node:http");
+const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -55,6 +56,10 @@ const MANAGED_ENV = [
 ];
 
 const SHA_64 = "a".repeat(64);
+// 更新包的假内容与它的真实摘要：feed 里给的就是这个摘要，下载下来才对得上。
+// 用「先有字节、后有摘要」的顺序，才能真的验证"算一遍手上文件"这一步有没有做。
+const PACKAGE_BODY = '{"binary":true}';
+const PACKAGE_SHA = createHash("sha256").update(PACKAGE_BODY).digest("hex");
 
 function buildElectronStub({ lock, trayMode, hotkeyMode, userData }) {
   const windows = [];
@@ -323,18 +328,22 @@ async function bootShell(options = {}) {
       if (update === "500") return send(500, '{"error":"boom"}');
       if (update === "garbage") return send(200, '{"foo":1}');
       if (update === "same") return send(200, JSON.stringify([{ version: "0.8.5" }]));
+      // tampered：元数据里的摘要是对的，但下下来的字节不是那一份。
+      const pkg = update === "tampered" ? "/package-tampered.exe" : "/package.exe";
       return send(
         200,
         JSON.stringify([
           {
             version: "9.9.9",
-            url: `http://127.0.0.1:${server.address().port}/package.exe`,
-            sha256: SHA_64,
+            url: `http://127.0.0.1:${server.address().port}${pkg}`,
+            sha256: PACKAGE_SHA,
           },
         ]),
       );
     }
-    if (request.url.startsWith("/package")) return send(200, '{"binary":true}');
+    // 顺序要紧：/package-tampered 也 startsWith("/package")。
+    if (request.url.startsWith("/package-tampered")) return send(200, '{"binary":false}');
+    if (request.url.startsWith("/package")) return send(200, PACKAGE_BODY);
     return send(404, "{}");
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -686,7 +695,7 @@ test("真实模式：后端就绪超时必须终止子进程并记 failed", asyn
   }
 });
 
-test("启动接线：复用已有后端、托盘就绪、更新骨架只取元数据不下载", async () => {
+test("启动接线：复用已有后端、托盘就绪、更新走完检查→下载→校验", async () => {
   const shell = await bootShell({ update: "available" });
   try {
     assert.equal(shell.windows.length, 1, "主实例要建一个窗口");
@@ -704,9 +713,15 @@ test("启动接线：复用已有后端、托盘就绪、更新骨架只取元�
     assert.equal(shell.spawnCalls.length, 0, "复用已有后端时一次 spawn 都不许有");
     assert.equal(shell.tray.created, 1, "托盘要真的建出来");
     assert.ok(shell.trayLabels().includes("后端状态：运行中"), "托盘菜单要反映后端在线");
+    // v0.11.0：配上更新源、摘要又对得上时，必须真的把包取下来并亮出"可安装"。
+    // 以前这里断言「一次都不许下载」——那是骨架期的口径，现在是功能期。
+    await waitFor(
+      () => shell.trayLabels().some((label) => label.includes("已下载")),
+      "托盘显示更新包已下载",
+    );
     assert.ok(
-      shell.trayLabels().some((label) => label.includes("更新：发现新版本 9.9.9")),
-      `托盘菜单应显示更新决策，实际：${JSON.stringify(shell.trayLabels())}`,
+      shell.trayLabels().some((label) => label.includes("更新：v9.9.9 已下载，点此安装")),
+      `托盘菜单应显示可安装的更新，实际：${JSON.stringify(shell.trayLabels())}`,
     );
     assert.equal(
       shell.requests.filter((url) => url === "/feed").length,
@@ -715,9 +730,10 @@ test("启动接线：复用已有后端、托盘就绪、更新骨架只取元�
     );
     assert.equal(
       shell.requests.filter((url) => url.startsWith("/package")).length,
-      0,
-      "更新骨架不许下载安装包（install 恒为 false）",
+      1,
+      "摘要对得上时必须下载一次安装包",
     );
+    assert.ok(shell.logIncludes("更新包已就绪"), "下载并通过校验后要留下可追溯的一行");
     assert.ok(shell.logIncludes("更新决策 action=available"));
   } finally {
     await shell.cleanup();
@@ -818,7 +834,32 @@ test("全局快捷键：注册成功时真能唤出/隐藏，被占用与抛异�
   }
 });
 
-test("更新骨架的失败形态：500 / 版本读不懂 / 同版本 / 未配置都不安装", async () => {
+test("更新包摘要对不上：下下来也丢掉，绝不给安装入口", async () => {
+  // 这条是自动更新的安全底线：元数据说 sha256=X，实际字节算出来是 Y。
+  // 只有"下载后拿真字节算一遍"才会发现——少这一步就是闭着眼睛替换客户的程序。
+  const shell = await bootShell({ update: "tampered" });
+  try {
+    await waitFor(() => shell.logIncludes("更新包校验失败"), "校验失败日志");
+    assert.equal(
+      shell.requests.filter((url) => url.startsWith("/package-tampered")).length,
+      1,
+      "要先真的下载，才谈得上校验",
+    );
+    assert.ok(
+      shell.trayLabels().some((label) => typeof label === "string" && label.includes("更新：不可用")),
+      `校验失败必须显示不可用，实际：${JSON.stringify(shell.trayLabels())}`,
+    );
+    assert.ok(
+      !shell.trayLabels().some((label) => typeof label === "string" && label.includes("已下载")),
+      "摘要不对的包不许出现安装入口",
+    );
+    assert.ok(shell.logIncludes("摘要不匹配"), "日志要写清是摘要不匹配，而不是笼统的失败");
+  } finally {
+    await shell.cleanup();
+  }
+});
+
+test("更新的失败形态：500 / 版本读不懂 / 同版本 / 未配置都不下载", async () => {
   const cases = [
     { update: "500", expect: "更新：不可用（原因见日志）", log: "更新源请求失败" },
     { update: "garbage", expect: "更新：不可用（原因见日志）", log: "feed JSON 既不是条目数组，也不是 entries 数组" },

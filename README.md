@@ -3,14 +3,14 @@
 面向开发者的 AI 工程操作台：自然语言下达任务，Agent 读取和修改项目文件、执行命令与测试、
 展示 Diff，高风险操作需人工审批。完整方案见 [ai-workbench-plan.md](ai-workbench-plan.md)。
 
-当前发布版本：**0.10.1**（真源是 `desktop/package.json`，安装包文件名与「关于」都取这一处；
+当前发布版本：**0.11.0**（真源是 `desktop/package.json`，安装包文件名与「关于」都取这一处；
 `pnpm check:versions` 在 CI 里钉住 README 与根 `package.json` 不许各说各话）。
 
-本版重点：**v0.10.1 Autonomous Execution & Unified UI**——任务创建即由后端接管执行（前端不再补
-`/run`，关掉窗口任务照样跑到底）、审批身份四元组（`approval_id` / `tool_call_id` / `tool_name` /
-`arguments_hash`）与重放幂等、发送栏权限模式贯通为任务快照、原生 `<select>` 全部换成统一自定义下拉，
-以及修掉「先跑测试看到失败、再改代码」被误判为未通过（校验通道复用了改文件之前那条结果）。
-验收记录见 [docs/workbuddy-v101-acceptance-report.md](docs/workbuddy-v101-acceptance-report.md)。
+本版重点：**v0.11.0 Super Agent 补齐「会自己醒」**——定时真的到点（不再登记一条永远不响的
+待触发）、「盯着工作区」有了真实的事件生产者（每拍扫一次文件 mtime）、到点在桌面形态下自己起跑
+（以前只入队、没有 worker 认领，任务永远 `queued`）、企业微信/钉钉/飞书做成配置项（设置 → 消息通道，
+填完即用），以及自动更新接上真实下载与摘要校验（默认不碰网络，须配 `BLANK_UPDATE_FEED_URL`）。
+配置与边界见 [docs/channels.md](docs/channels.md)。
 
 上一版本：**v0.10.0 Autonomous Super Agent**——Chat Supervisor + Goal Tracker 多轮目标、
 Autonomous Planner / Task Dispatcher / 独立 Verifier、测试失败自动修复闭环、后台持续巡检、

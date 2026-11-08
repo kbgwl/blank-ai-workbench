@@ -111,7 +111,23 @@ _ACTION = re.compile(
 _INSPECT = re.compile(r"(看一下|看看|检查一下|检查|分析|读一下|读读|搜一下|找一下|列出|统计|对比|排查)")
 _BRAINSTORM = re.compile(r"(头脑风暴|发散|给几个方案|多给几个|有哪些思路|想想办法)")
 _SCHEDULE = re.compile(r"(定时|每天|每周|每天几点|设个闹钟|到点)")
+# 时间表达 + 提醒动词同样是定时信号：「30 分钟后提醒我」「明天下午 3 点叫我」。
+# 只认「定时/每天/到点」这几个词的话，最常见的一类定时请求根本进不了这条路，
+# 最后按普通任务当场跑一次——用户以为设好了提醒，实际是现在就做掉了。
+_REMIND = re.compile(r"(提醒|叫我|喊我|通知我|到时候|到点)")
 _WATCH = re.compile(r"(持续监控|盯着|文件(?:一)?变化|一直看着|监控这个)")
+
+
+def _has_time(text: str) -> bool:
+    """句子里有没有一个能落到日历上的时间点。
+
+    用同一套解析器判断，不另写一份"像时间"的正则：判定说这是定时，
+    后面登记时却解析不出时间，两条口径分叉，用户看到的就是"说好了提醒我，
+    结果一声不响"。
+    """
+    from blank_api.services.agent.schedule import parse_when
+
+    return parse_when(text) is not None
 _REMEMBER = re.compile(r"^(?:记住|记一下|以后都|记住这个)")
 _FORGET = re.compile(r"^(?:忘掉|别记了|删除这个习惯|忽略这个习惯)")
 _CHITCHAT = re.compile(r"^\s*(?:你好|您好|hi|hello|hey|在吗|谢谢|多谢|感谢|thanks|ok|好的|收到|明白|嗯+)\s*[!！。.~～,，]*\s*$", re.IGNORECASE)
@@ -193,7 +209,7 @@ def observe(
         return _judgement(INTENT_FORGET, "要求删除习惯", needs_execution=False, confidence=0.9, **common)
     if _REMEMBER.search(text):
         return _judgement(INTENT_REMEMBER, "要求记住偏好", needs_execution=False, confidence=0.9, **common)
-    if _SCHEDULE.search(text):
+    if _SCHEDULE.search(text) or (_REMIND.search(text) and _has_time(text)):
         return _judgement(INTENT_SCHEDULE, "定时意图", confidence=0.85, **common)
     if _WATCH.search(text):
         return _judgement(INTENT_WATCH, "监控意图", confidence=0.85, **common)

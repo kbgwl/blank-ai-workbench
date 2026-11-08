@@ -417,8 +417,9 @@ export function ChannelsPanel() {
           凭据加密存在本机；「已接通」只有在真打过厂商接口之后才会出现。
         </p>
         {!list.triggers_enabled && (
-          <p className="mt-2 rounded border border-warn/30 bg-warn/[0.05] px-2 py-1 text-[11px] leading-relaxed text-warn">
-            后台执行关着：通道里发来的消息仍会立刻开任务（那是你主动发的），但「盯着某件事」这类待触发项不会自己放行。
+          <p className="mt-2 rounded border border-line/70 bg-surface-2/40 px-2 py-1 text-[11px] leading-relaxed text-faint">
+            通道收发不依赖「后台主动执行」那个开关：消息是你主动发的，定时与盯着也是你交代的。
+            那个开关管的是 Agent 自己发起的事（自动修复等）。
           </p>
         )}
         {list.channels.length === 0 ? (

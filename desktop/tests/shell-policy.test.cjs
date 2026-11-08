@@ -89,13 +89,25 @@ test("托盘菜单含显示主窗口/后端状态/退出三项，退出必须在
 test("后端掉线后托盘菜单文案跟着变，更新行只随决策出现", () => {
   const model = buildTrayMenuModel({
     backendOnline: false,
-    update: { action: "available", version: "0.9.0", install: false },
+    update: { action: "available", version: "0.9.0", install: true },
   });
   assert.match(model.find((item) => item.id === "backend").label, /未运行/);
   const update = model.find((item) => item.id === "update");
   assert.ok(update, "有决策就该在菜单里给一行状态");
   assert.match(update.label, /0\.9\.0/);
-  assert.match(update.label, /不会自动安装/);
+  // 发现新版本但还没下载完：只是读数，可点等于骗人。
+  assert.equal(update.enabled, false, "没下载完不该可点");
+});
+
+test("更新包下载并校验完成后，托盘那一行才变成可点的「安装」", () => {
+  const model = buildTrayMenuModel({
+    backendOnline: true,
+    update: { action: "available", version: "0.9.0", install: true, ready: true },
+  });
+  const update = model.find((item) => item.id === "update");
+  assert.ok(update);
+  assert.match(update.label, /已下载，点此安装/);
+  assert.equal(update.enabled, true, "验过摘要的包必须给一个能点的入口");
 });
 
 // ── 全局快捷键 ──────────────────────────────────────────────────────────────

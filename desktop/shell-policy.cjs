@@ -69,18 +69,22 @@ function buildTrayMenuModel({ backendOnline, update } = {}) {
     { id: "backend", label: `后端状态：${backendOnline ? "运行中" : "未运行"}`, enabled: false },
   ];
   if (update && typeof update === "object") {
-    items.push({ id: "update", label: trayUpdateLabel(update), enabled: false });
+    // 只有"已经下载并验过摘要"这一种状态可点：其余（检查中/发现新版本/下载中）
+    // 都只是读数，点了也没有动作，做成可点只会让人以为坏了。
+    items.push({ id: "update", label: trayUpdateLabel(update), enabled: Boolean(update.ready) });
   }
   items.push({ type: "separator" });
   items.push({ id: "quit", label: "退出" });
   return items;
 }
 
-/** 更新决策在托盘里的一行文案。任何分支都不承诺会安装。 */
+/** 更新决策在托盘里的一行文案。 */
 function trayUpdateLabel(decision) {
   switch (decision && decision.action) {
     case "available":
-      return `更新：发现新版本 ${decision.version}（骨架不会自动安装）`;
+      if (decision.ready) return `更新：v${decision.version} 已下载，点此安装`;
+      if (decision.downloading) return `更新：正在下载 v${decision.version}…`;
+      return `更新：发现 v${decision.version}`;
     case "none":
       return "更新：已是最新";
     case "unavailable":
@@ -330,13 +334,42 @@ function decideUpdate({ current, entry, fetchError } = {}) {
     return unavailable(`新版本签名摘要不是 64 位十六进制（实际 ${digest.length} 字符），拒绝更新`);
   }
   return {
-    install: false,
+    // v0.11.0：不再只是骨架。校验全过之后允许下载与安装，但**下载和安装是两个
+    // 独立动作**：这里的 true 只表示"这份元数据允许被下载"，真正执行前还要
+    // 用 planInstall 再按实际文件摘要过一遍——元数据说 sha256=a，下下来的文件
+    // 是不是 a，只能算完才知道。
+    install: true,
     action: "available",
     version: versionText,
     url,
     sha256: digest.toLowerCase(),
-    reason: `发现新版本 ${versionText}（高于当前 ${String(current).trim()}）。骨架只记录/提示，不下载、不安装`,
+    reason: `发现新版本 ${versionText}（高于当前 ${String(current).trim()}）`,
   };
+}
+
+/**
+ * 真正执行安装器之前最后一道闸。纯函数：下载与校验由调用方做完，这里只判断
+ * "手上这个文件到底能不能拿去装"。
+ *
+ * 为什么还要再验一次：``decideUpdate`` 验的是**元数据**里的摘要，而安装器要装的是
+ * **下载下来的字节**。两者之间隔着一次网络传输，中间被换掉、被截断、下成半包，
+ * 元数据都不会知道。少这一步，等于把"更新源说了算"当成"文件没问题"。
+ */
+function planInstall({ decision, downloadedPath, actualSha256 } = {}) {
+  const reject = (reason) => ({ ok: false, reason, path: "", args: [] });
+  if (!decision || decision.action !== "available" || !decision.install) {
+    return reject("没有可安装的更新");
+  }
+  const file = typeof downloadedPath === "string" ? downloadedPath.trim() : "";
+  if (!file) return reject("安装包没有下载成功");
+  if (!/\.(exe|msi)$/i.test(file)) return reject(`安装包不是 .exe/.msi，拒绝执行：${file}`);
+  const actual = typeof actualSha256 === "string" ? actualSha256.trim().toLowerCase() : "";
+  if (!actual) return reject("没有算出安装包摘要，无法确认完整性");
+  if (actual !== String(decision.sha256 || "").toLowerCase()) {
+    return reject(`安装包摘要不匹配：元数据 ${decision.sha256}，实际 ${actual}`);
+  }
+  // /S 是 NSIS 的静默安装开关。装完由主进程退出并让安装器拉起新版本。
+  return { ok: true, path: file, args: ["/S"], reason: "" };
 }
 
 // ── 6. 后端解释器优先级 ──────────────────────────────────────────────────────
@@ -376,6 +409,7 @@ module.exports = {
   pickInterpreterOrder,
   pickLatestEntry,
   planHotkeyToggle,
+  planInstall,
   planSecondInstanceReveal,
   shouldAbortSecondaryInstance,
   trayUpdateLabel,

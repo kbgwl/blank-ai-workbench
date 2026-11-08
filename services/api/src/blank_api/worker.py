@@ -175,7 +175,8 @@ async def run_once(worker: str | None = None) -> int:
         log.exception("审批过期收敛失败（不影响本轮认领）")
     # 先放到点的触发器（v162）：它们会产生新的 queued run，紧接着的那一轮扫描
     # 就能认领，不必等下一次轮询。开关关着时这一步什么都不做。
-    await release_due_triggers()
+    # start_runner=False：这一轮马上就要认领，放行时再起一个执行者就是两个人在抢。
+    await release_due_triggers(start_runner=False)
     # 巡检（v162）：只看已存在的 run，不改状态。放在认领之前，这样"刚刚到期"的
     # 租约能先被记一笔诊断，而不是被下一轮认领之后再也看不到。
     await inspect_runs()
@@ -262,20 +263,75 @@ async def release_one(trigger_id: str, *, start_runner: bool = False) -> bool:
             session, task, payload, None, start_runner=start_runner
         )
         await triggers_module.mark_fired(session, row)
+        await _reschedule_repeat(session, row)
         await session.commit()
         return True
 
 
-async def release_due_triggers() -> int:
+async def _reschedule_repeat(session, row: AgentTrigger) -> str:
+    """重复任务（每天/每周）放行后登记下一次。返回新触发器 id，没登记返回空串。
+
+    重复不是"一条记录反复放行"：那条行已经是 fired，改回 pending 会让
+    「第几次」变得不可考，而且两次执行之间会共用同一个 fired_at。所以新登记
+    一条，dedupe_key 带上下次到点时间——既不会和旧的撞唯一约束，也能一眼看出
+    这是排给哪个时刻的。
+    """
+    from blank_api.services.agent import schedule as schedule_module
+
+    body = dict(row.payload or {})
+    repeat = body.get("repeat") or {}
+    if not isinstance(repeat, dict) or not repeat:
+        return ""
+    if row.fire_at is None:
+        return ""
+    next_at = schedule_module.next_fire(row.fire_at, repeat)
+    if next_at is None:
+        # 读不懂的重复说明：停止再登记，别按错误周期狂刷。
+        row.payload = {**body, "repeat_error": "重复说明读不懂，已停止排下一次"}
+        return ""
+    event = triggers_module.normalize(
+        event_type=row.event_type,
+        source=row.source,
+        payload=body,
+        dedupe_key=f"{row.dedupe_key}:{next_at.strftime('%Y%m%d%H%M')}",
+        # 窗口要盖住到点那一刻：默认 24 小时窗口对"每天"刚好卡在边界上，
+        # 「每周」更是必然过期。这里给到点后一周。
+        expires_at=next_at + timedelta(days=7),
+    )
+    fresh, _ = await triggers_module.ingest(
+        session,
+        row.project_id,
+        event,
+        task_id=row.task_id,
+        provider_id=row.provider_id,
+        run_payload=row.run_payload,
+        fire_at=next_at,
+    )
+    return fresh.id
+
+
+async def release_due_triggers(*, start_runner: bool | None = None) -> int:
     """把到点的触发器推进 run 队列（v162 §5 的本地定时器）。
 
     只入队、不在这里执行：执行路径必须只有一条（worker 的认领循环），否则
     "谁在跑这条任务"会出现两个答案，而租约只能挡住其中一个。
 
+    ``start_runner`` 的决定权在调用方：
+    * ``run_once``（独立 worker 进程）传 False——它自己马上就会认领，这里再起一个
+      就是两个执行者抢同一条 run；
+    * ``supervise_once``（桌面形态）不传——按 ``BLANK_INPROCESS_RUNNER`` 判断，
+      桌面默认没有第二个进程来认领，放行时必须自己起跑。
+
     失败一条不影响其他条：触发器是个别事件，一条跑不起来不该让整轮扫描停下。
+
+    这里**不看 ``background_execution``**：那条 flag 管的是「后台自己发起的事」，
+    而到点该跑的触发器是人明确交代过的（「9 点提醒我」）。被一个默认关闭的 BETA
+    开关挡住，表现就是「设了提醒永远不响」——比不提供这个功能更糟。
     """
-    if not is_enabled("background_execution"):
-        return 0
+    # 局部导入：routes.tasks 反向依赖 worker（放行要复用 launch_task），模块级会成环。
+    from blank_api.api.routes.tasks import inprocess_runner_enabled
+
+    run_now = inprocess_runner_enabled() if start_runner is None else bool(start_runner)
     released = 0
     async with get_session_factory()() as session:
         await triggers_module.expire_stale(session)
@@ -284,7 +340,10 @@ async def release_due_triggers() -> int:
         trigger_ids = [row.id for row in rows]
     for trigger_id in trigger_ids:
         try:
-            if await release_one(trigger_id):
+            # 桌面形态只有 API 进程在跑（没有独立 worker 认领队列）。这里若不入队即起跑，
+            # "到点"只会把任务变成一条永远 queued 的记录——界面上一直在等，实际没人动。
+            # 执行路径仍然只有 launch_task 一条，只是不再依赖外部轮询。
+            if await release_one(trigger_id, start_runner=run_now):
                 released += 1
         except Exception as error:  # noqa: BLE001 - 单条失败不该带走整轮
             log.warning("触发器放行失败 trigger=%s: %s", trigger_id, error)
@@ -302,9 +361,14 @@ async def supervise_once() -> dict[str, int]:
 
     每一项单独 try：巡检是旁路人，一件坏掉不该让另外两件停摆。
     """
-    result = {"triggers": 0, "alerts": 0, "expired_approvals": 0}
+    result = {"triggers": 0, "watch": 0, "alerts": 0, "expired_approvals": 0}
+    # watch 扫描要在同一拍里跑：它和「到点」是同一件事的两种唤醒方式（时间 / 变化），
+    # 分开两次巡检会让"盯着"最多晚一拍才反应。
+    from blank_api.services.agent.watch_scan import watch_once
+
     for key, action in (
         ("triggers", release_due_triggers),
+        ("watch", watch_once),
         ("alerts", inspect_runs),
         ("expired_approvals", expire_stale_approvals),
     ):

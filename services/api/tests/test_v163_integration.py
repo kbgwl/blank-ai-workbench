@@ -134,9 +134,15 @@ def project(env, workspace: Path):
 async def test_trigger_to_router_to_worker_finishes_the_task(
     env, project: Path, monkeypatch
 ):
-    """到点的触发器经 worker 跑完，一条任务只跑一次，快照留在任务上。"""
+    """到点的触发器经 worker 跑完，一条任务只跑一次，快照留在任务上。
+
+    这是**独立 worker** 链路：``BLANK_INPROCESS_RUNNER=0`` 让放行只入队，
+    由这一轮的 ``run_once`` 认领。桌面形态（默认 1）会自己起跑，那条路由
+    ``test_due_trigger_runs_itself_when_no_worker_will_claim_it`` 覆盖。
+    """
     monkeypatch.setenv(BACKGROUND, "1")
     monkeypatch.setenv(DISPATCH, "1")
+    monkeypatch.setenv("BLANK_INPROCESS_RUNNER", "0")
     _use_mock_model(monkeypatch, env)
     project_id = await create_project(env, project)
     provider_id = await create_provider(env)

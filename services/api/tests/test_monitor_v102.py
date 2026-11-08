@@ -140,17 +140,23 @@ async def test_trigger_with_fire_time_is_a_real_schedule(env, workspace, monkeyp
     assert data["counts"]["never_fires"] == 0
 
 
-async def test_pending_is_empty_and_explained_when_background_is_off(env, workspace, monkeypatch):
-    """后台执行关着时，待触发项不会有人消费——接口要把这件事说清楚。"""
+async def test_pending_is_listed_even_when_background_is_off(env, workspace, monkeypatch):
+    """后台**自主**关着时，待触发项照样要列出来。
+
+    这条口径 v0.11.0 反转了。以前 ``background_execution`` 关着就不显示 pending，
+    理由是"没人消费"。但那个 flag 管的是「Agent 自己发起」，而定时/盯着是人明确
+    交代的指令——拿它去决定"显不显示"，等于让关着开关的用户看不到自己设的提醒：
+    设了、也在库里、到点也会醒，界面上却一片空白。
+    """
     monkeypatch.delenv(FEATURE, raising=False)
     project_id = await create_project(env, workspace)
     await _make_trigger(project_id)
 
     data = await _get(env)
 
-    assert data["background_execution"] is False
-    assert data["pending"] == []
-    assert data["counts"]["pending"] == 0
+    assert data["background_execution"] is False, "自主开关仍要如实反映"
+    assert len(data["pending"]) == 1, "关着自主开关也要看得见自己设的提醒"
+    assert data["counts"]["pending"] == 1
 
 
 async def test_im_channels_are_reported_as_not_connected(env, workspace):
@@ -223,7 +229,46 @@ async def test_watch_turn_is_registered_instead_of_running(env, workspace, monke
 
     data = await _get(env)
     item = next(p for p in data["pending"] if p["task_id"] == task["id"])
-    assert item["never_fires"] is True, "没有事件源就必须说破，不能装作在盯"
+    # v0.10.4：watch 现在**有**生产者（watch_scan 每拍扫工作区 mtime），
+    # 所以它不再是"永不到来"。之前这条断言为 True，是因为当时确实没人扫——
+    # 断言跟着事实改，但"没有事件源就必须说破"这条守卫不能丢，下面单独钉。
+    assert item["never_fires"] is False, "watch 已有真实事件源，不该再报永远等不到"
+    assert "盯着工作区" in item["waiting_for"]
+    assert item["fire_at"] == ""
+
+
+async def test_schedule_without_fire_at_is_still_reported_as_never_firing(env, workspace, monkeypatch):
+    """定时意图却没有到点时间：必须继续说破。
+
+    这是「等一个不会到来的事件」的守卫。defer 路径现在解析不出时间会退化成
+    立即执行，但手工调 ``POST /triggers`` 仍能造出这种行——它必须出现在
+    ``never_fires`` 里，而不是安静地躺着。
+    """
+    monkeypatch.setenv(FEATURE, "1")
+    project_id = await create_project(env, workspace)
+    task_id = await _make_task(project_id, goal="每天汇总一次", status="draft")
+    async with get_session_factory()() as session:
+        session.add(
+            AgentTrigger(
+                id=str(uuid4()),
+                project_id=project_id,
+                event_type="schedule",
+                source="task.start",
+                payload={"task_id": task_id, "intent": "schedule"},
+                dedupe_key=f"task:{task_id}",
+                task_id=task_id,
+                provider_id="",
+                run_payload={},
+                fire_at=None,
+                status="pending",
+            )
+        )
+        await session.commit()
+
+    data = await _get(env)
+    item = next(p for p in data["pending"] if p["task_id"] == task_id)
+    assert item["never_fires"] is True
+    assert "不会到来" in item["waiting_for"]
 
 
 async def test_defer_intent_reads_both_snapshot_shapes(env, workspace):

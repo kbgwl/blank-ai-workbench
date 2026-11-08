@@ -198,7 +198,13 @@ async def test_fire_endpoint_queues_the_task_once(env, workspace, monkeypatch):
 
 
 async def test_worker_releases_due_trigger_once(env, workspace, monkeypatch):
+    """独立 worker 形态：到点只入队，执行由认领循环负责。
+
+    ``BLANK_INPROCESS_RUNNER=0`` 是这条的前提（多进程部署）。桌面形态下
+    没有第二个进程来认领，放行时就必须自己起跑——那一条另有用例覆盖。
+    """
     monkeypatch.setenv(FEATURE, "1")
+    monkeypatch.setenv("BLANK_INPROCESS_RUNNER", "0")
     project_id = await create_project(env, workspace)
     provider_id = await create_provider(env)
     created = (
@@ -227,6 +233,44 @@ async def test_worker_releases_due_trigger_once(env, workspace, monkeypatch):
     async with get_session_factory()() as session:
         runs = (await session.execute(select(AgentRun))).scalars().all()
     assert len(runs) == 1
+
+
+async def test_due_trigger_runs_itself_when_no_worker_will_claim_it(env, workspace, monkeypatch):
+    """桌面形态：到点必须自己起跑，否则那条 run 永远停在 queued。
+
+    桌面进程里没有独立 worker，``recover_pending_runs`` 也只在启动时扫一次。
+    放行时若不入队即起跑，界面上会一直显示"排队中"，而没有任何东西会来认领。
+    """
+    import asyncio
+
+    from blank_api.api.routes import tasks as task_routes
+
+    monkeypatch.setenv(FEATURE, "1")
+    monkeypatch.delenv("BLANK_INPROCESS_RUNNER", raising=False)  # 默认 = 桌面形态
+    project_id = await create_project(env, workspace)
+    provider_id = await create_provider(env)
+    await _post(
+        env,
+        project_id,
+        event_type="schedule",
+        goal="跑一下测试",
+        provider_id=provider_id,
+        dedupe_key="due-desktop-1",
+        fire_at=(trg.utc_now() - timedelta(seconds=5)).isoformat(),
+    )
+    executed: list[str] = []
+
+    async def fake_execute(run_id, worker_id, request, **kwargs):
+        executed.append(run_id)
+
+    monkeypatch.setattr(task_routes, "_execute_claimed_run", fake_execute)
+
+    assert await worker_module.release_due_triggers() == 1
+    for _ in range(40):
+        if executed:
+            break
+        await asyncio.sleep(0.05)
+    assert executed, "到点只入队没人认领：桌面形态下这条任务会永远 queued"
 
 
 async def test_pending_without_fire_at_is_not_released(env, workspace, monkeypatch):
