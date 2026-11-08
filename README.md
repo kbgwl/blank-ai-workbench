@@ -3,20 +3,26 @@
 面向开发者的 AI 工程操作台：自然语言下达任务，Agent 读取和修改项目文件、执行命令与测试、
 展示 Diff，高风险操作需人工审批。完整方案见 [ai-workbench-plan.md](ai-workbench-plan.md)。
 
-当前发布版本：**0.10.0**（真源是 `desktop/package.json`，安装包文件名与「关于」都取这一处；
+当前发布版本：**0.10.1**（真源是 `desktop/package.json`，安装包文件名与「关于」都取这一处；
 `pnpm check:versions` 在 CI 里钉住 README 与根 `package.json` 不许各说各话）。
 
-本版重点：**v0.10.0 Autonomous Super Agent**——Chat Supervisor + Goal Tracker 多轮目标、
+本版重点：**v0.10.1 Autonomous Execution & Unified UI**——任务创建即由后端接管执行（前端不再补
+`/run`，关掉窗口任务照样跑到底）、审批身份四元组（`approval_id` / `tool_call_id` / `tool_name` /
+`arguments_hash`）与重放幂等、发送栏权限模式贯通为任务快照、原生 `<select>` 全部换成统一自定义下拉，
+以及修掉「先跑测试看到失败、再改代码」被误判为未通过（校验通道复用了改文件之前那条结果）。
+验收记录见 [docs/workbuddy-v101-acceptance-report.md](docs/workbuddy-v101-acceptance-report.md)。
+
+上一版本：**v0.10.0 Autonomous Super Agent**——Chat Supervisor + Goal Tracker 多轮目标、
 Autonomous Planner / Task Dispatcher / 独立 Verifier、测试失败自动修复闭环、后台持续巡检、
 三种自动化模式与审批矩阵、顶部状态条与 §15 可观测读数。功能清单见
 [docs/workbuddy-v165-autonomous-super-agent.md](docs/workbuddy-v165-autonomous-super-agent.md)，
 验收记录见 [docs/workbuddy-v165-acceptance-report.md](docs/workbuddy-v165-acceptance-report.md)。
 
-上一版本：**v0.9.1 Super Agent Completion**——真实 Electron GUI 18 项闭环、coding-035 口径修复、
+再上一版：**v0.9.1 Super Agent Completion**——真实 Electron GUI 18 项闭环、coding-035 口径修复、
 后台任务暂停/恢复/重试、审批同步、模型/场景切换与日常记忆端到端验证，详细任务见
 [docs/workbuddy-v163-super-agent-completion.md](docs/workbuddy-v163-super-agent-completion.md)，
 验收记录见 [docs/workbuddy-v163-acceptance-report.md](docs/workbuddy-v163-acceptance-report.md)。
-再上一版 **v0.9.0 Super Agent Upgrade**（Router/Worker、事件触发、Watchdog、断点恢复、低打扰交付）
+更早：**v0.9.0 Super Agent Upgrade**（Router/Worker、事件触发、Watchdog、断点恢复、低打扰交付）
 见 [docs/workbuddy-v162-super-agent-upgrade.md](docs/workbuddy-v162-super-agent-upgrade.md)。
 
 当前进度：**v1.1（核心任务工作台 + 头脑风暴 + 按需功能中心 + CLI 骨架）**。REA Reverse Lab 已有独立入口，

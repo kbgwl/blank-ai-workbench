@@ -236,7 +236,7 @@ build rc=0
 
 ## 9. 未完成问题
 
-1. **桌面安装版未重装**：本轮 GUI 验收用 web 前端 + 独立后端，`D:\Softwares\kbg\blank-ai-workbench-desktop` 里仍是 v0.10.0 的包。要交付桌面版需按 `MEMORY.md` 的打包流程重跑 electron-builder（含 winCodeSign 手工补包），本轮未做。**因此 `package.json` / `desktop/package.json` 的版本仍是 `0.10.0` 未动**——改版本号却不发包，只会让安装目录里实际跑的东西和声明的版本对不上，等真打包时一并改成 `0.10.1`。
+1. ~~**桌面安装版未重装**~~ **已补做，见 §12**：0.10.1 安装包已打出、装到 `D:\Softwares\kbg\blank-ai-workbench-desktop`，并在装完的窗口里用真实模型跑通一轮。
 2. **未跑 55 项 Benchmark**：模型侧行为（自主循环质量）没有用评测集复测，基线文件仍是 `evals/benchmarks/last-run-v163.json`。
 3. **`run_tests` 审批**：GUI 验收里第二次 `approval.required`（`run_tests`）未被点击（那是 mock 脚本在第 3 步返回交付文本后仍触发的验证动作）——不影响结论，但说明「验证命令也要审批」这条路径只有单测覆盖（§6.5 那轮用的是完全访问，同样没点审批卡）。
 
@@ -281,3 +281,84 @@ build rc=0
 首跑出现 **17/32 例 `http_429: Too Many Requests`**：`scripts/local_ci.mjs` 起 API 时没带 CI 里那条 `BLANK_RATE_LIMIT_RPM=0`（`.github/workflows/ci.yml` 的 eval-gate job 有，注释也写了「批量客户端会把 120 rpm 打满」）。命中后门禁只能落「今天没法判」，等于本机永远复现不出 CI 的读数。
 
 已给装置补上该环境变量（只作用于这个受控实例，**产品默认限流仍是 120，一个字没改**），补后读数回到 0.875、红 4 条与基线一致；装置自检 `--self-test` 仍 rc=0。
+
+---
+
+## 12. 桌面安装版重装验证（2026-11-08 补做）
+
+§9.1 当时挂着「安装版未重装」，理由是「改版本号却不发包，只会让安装目录里跑的东西和声明的版本对不上」。这一节把这条补齐：**版本号改了，包也真的打出来、装进去、启动、跑通了一轮**。
+
+### 12.1 版本口径
+
+| 位置 | 改前 | 改后 |
+| --- | --- | --- |
+| `desktop/package.json`（真源） | 0.10.0 | **0.10.1** |
+| 根 `package.json`（镜像） | 0.10.0 | **0.10.1** |
+| `README.md`「当前发布版本」 | 0.10.0 | **0.10.1** |
+
+`node scripts/check_versions.mjs` → rc=0，6 项全 ok（含 README 里的 CLI tarball 仍是 `0.1.0`，未被误升）。README 的版本链一并改了：v0.10.1 成为「本版重点」，v0.10.0 降为「上一版本」，v0.9.1 降为「再上一版」。
+
+### 12.2 打包与产物校验
+
+| 步骤 | 命令 | 退出码 | 结果 |
+| --- | --- | --- | --- |
+| 静态导出 | 复用本日 10:09 `pnpm build:web` 的 `web/out`（13 路由） | — | 前端源码自 `9ca4751` 后零改动，产物即当前源码 |
+| 打 NSIS 包 | `node node_modules/electron-builder/cli.js --win nsis` | 0 | `dist/Blank-AI-安装版-0.10.1.exe`（128,052,365 字节）+ blockmap，耗时 6m19s |
+| 产物校验 | `node verify-package.cjs` | 0 | **38 项全 ok**（迁移脚本 33 个同版、asar 内 7 份 `.cjs` 逐字节一致、包内 `api-base.cjs` 真跑六种 env 同解、八条沙箱边界无不确定项、前端抽样文案齐全） |
+| 覆盖安装 | `node install-local.cjs` | 0 | 装到 `D:\Softwares\kbg\blank-ai-workbench-desktop`，耗时 6m24s |
+
+打包的两个已知坑本轮仍要绕：`PATH` 必须同时含 `System32\WindowsPowerShell\v1.0`（electron-builder 的 node-module-collector 要 `powershell.exe`）与 `System32`，并显式 export `SystemRoot`/`PATHEXT`；`NODE_OPTIONS` 必须清空（否则本机 safe-delete 钩子会拦 `rmdir`）。`winCodeSign-2.6.0` 上一轮已手工补进 cache，这次直接命中，没再撞 502。
+
+### 12.3 装的是不是这一版（比对，而不是「应该」）
+
+- **exe 版本**：`FileVersion 0.10.1` / `ProductVersion 0.10.1.0`；卸载登记 `Blank AI 0.10.1 | 0.10.1`。
+- **后端源码**：仓库 `services/api/src/blank_api` 与安装目录 `resources/backend/api/src/blank_api` 逐文件 md5 对比，**170 个 `.py` 全部一致，0 个缺失/不一致**。
+- **迁移脚本**：仓库 `services/api/alembic` 与安装目录逐文件对比，只差两处 `__pycache__`（工作区产物，本就不该进包），脚本与 `env.py` 全同。
+
+### 12.4 启动链（装完第一次启动）
+
+`%APPDATA%\blank-ai-workbench-desktop\blank.db` 里有存量数据（39 条任务、`alembic_version=0033_chat_goals`），所以重点看迁移会不会挡启动：
+
+```text
+[startup] splash | shown                       03:03:04
+[startup] backend | migration-start            03:03:05
+[backend] INFO [alembic.runtime.migration] Context impl SQLiteImpl.
+[backend] 后端就绪                             03:03:27（22s，MIGRATION_TIMEOUT 60s 内）
+[desktop] 窗口就绪                             03:03:28
+[desktop] 启动屏收幕，主窗口显示                03:03:28
+```
+
+启动后 `alembic_version` 仍是 `0033_chat_goals`（v0.10.1 无新迁移，`upgrade head` 是空操作），`tasks` 仍是 39 条——**装前数据没丢**。
+
+### 12.5 装完的窗口里核对了什么
+
+用 `--remote-debugging-port=9222` 连真实窗口（CDP），只读地取 DOM：
+
+| 检查点 | 读数 |
+| --- | --- |
+| 窗口标题 / 视口 | `Blank AI`，1266×784，`body` 文本 3214 字符（不是白屏、不是卡在 splash） |
+| 发送栏控件 | `aria-label` 为「发送」/「场景」/「权限模式」/「用哪个模型」四项全部存在 |
+| 原生 `<select>` | **0 个**（v0.10.1 的下拉替换在包里生效） |
+| 控件当前值 | 场景「开发」、模型「glm-4.5-flash · glm-4.5-flash」、权限「询问」 |
+| 权限下拉真的能弹 | `role="listbox"` 出现，三项（询问 / 完全访问 / 计划）连说明文字一起渲染；挂在 portal（父节点非 `#__next`）；`bottom=695` 在发送按钮之上，**不遮挡** |
+| 后端健康 | `GET /api/v1/health` → `{"status":"ok","database":"connected"}` |
+| 历史数据 | `GET /api/v1/tasks` → 39 条，侧栏「最近 7 天 / 更早」分组正常 |
+
+### 12.6 真机真模型跑一轮
+
+不是 mock：安装版里配的是真实供应商（`glm-4.5-flash`）。在窗口里输入「你好」，**只点一次发送**：
+
+- 任务 `c3fadfec-6b3b-4ddd-a4d8-b07433f4ecc5` → **`succeeded`**，耗时 24s，TOKEN 5,540；
+- 事件链：`task.created → task.dispatched → run.created → run.started → intent.classified → model.streamed → model.usage → delivery.recorded → verification.verdict → task.completed`，**无 `*fail*` 事件**；
+- 界面回了「你好！有什么我可以帮助你的吗？」，右侧「最新一轮 · 完成」。
+
+这一条同时反证了 §2 的后端接管：前端没有补 `/run`，`run.created` 紧跟 `task.dispatched`，是后端自己启动的。
+
+截图：`docs/acceptance/v101/60-installed-home.png`、`61-installed-permission-popover.png`、`62-installed-before-send.png`、`63-installed-after-send.png`。
+
+### 12.7 这一节没验的
+
+1. **便携版没打**（只打 `--win nsis`）：`dist` 里的便携版仍是 0.9.1。
+2. **自动更新没验**：没配 `BLANK_UPDATE_FEED_URL`，`checkForUpdates()` 走的是 `skipped` 分支。
+3. **托盘 / GPU 降级 / 卸载**这些壳行为没逐项复验，只确认日志里有「托盘已就绪」、窗口正常显示（说明没掉进软件渲染降级）。
+4. §10.6 那条限制**依然成立**：§6 的五组验收仍是脚本化 mock；§12.6 这轮虽然用了真模型，但只跑了一句闲聊，**不能替代 55 项 Benchmark**。
