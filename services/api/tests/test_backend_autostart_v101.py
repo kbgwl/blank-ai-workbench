@@ -127,9 +127,10 @@ async def _dump_state(task_id: str, reason: str) -> str:
         # 点名的字段一个都不少：没有 run 行也是一条事实，写成「（无）」而不是
         # 让看日志的人猜这一行是漏打了还是压根没建。
         lines.append("run 行不存在：auto_start 没有被消费（没人建 run）")
-        lines += ["run.status=（无）", "run.worker_id=（无）", "run.last_beat=（无）"]
+        lines += ["run_id=（无）", "run.status=（无）", "run.worker_id=（无）", "run.last_beat=（无）"]
     else:
         lines += [
+            f"run_id={run.id}",
             f"run.id={run.id}",
             f"run.status={run.status}",
             f"run.worker_id={run.worker_id or '（没人认领）'}",
@@ -138,6 +139,50 @@ async def _dump_state(task_id: str, reason: str) -> str:
             # updated_at 是这条 run 最后一次被写的时刻，等于一次心跳。
             f"run.last_beat={run.updated_at}",
         ]
+    # ---- §2.2 的运行态事实：DB 里的状态回答不了「到底谁在跑」 ---- #
+    # 独立 worker 是另一个进程，API 进程内探不到它的存活性；这里用「有没有人
+    # 认领这条 run」加后台巡检任务作为可复核的事实，并写明口径，不假装做了进程探测。
+    from sqlalchemy import text
+
+    from blank_api.api.routes.tasks import inprocess_runner_enabled
+
+    try:
+        async with get_session_factory()() as session:
+            await session.execute(text("SELECT 1"))
+        db_state = "connected"
+    except Exception as exc:  # noqa: BLE001 - 诊断本身不能因为库挂了而崩
+        db_state = f"error {type(exc).__name__}: {exc}"
+
+    try:
+        current = asyncio.current_task()
+        alive = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
+        task_names = [t.get_name() for t in alive]
+    except RuntimeError as exc:  # 没有运行中的事件循环
+        alive, task_names = [], [f"（无事件循环：{exc}）"]
+
+    runner_tasks = [
+        name for name in task_names if name.startswith(("blank-run-", "blank-lease-"))
+    ]
+    supervisor_tasks = [
+        name
+        for name in task_names
+        if name.startswith(("blank-background-supervisor", "blank-run-recovery"))
+    ]
+    claimed = bool(run is not None and (run.worker_id or ""))
+    first = events[0] if events else None
+    lines += [
+        f"worker.started={'yes' if claimed else 'no'}（依据：run.worker_id 认领；独立进程不可从 API 内探测）",
+        f"worker.claimed_by={(run.worker_id if run is not None else '') or '（无）'}",
+        f"inprocess_runner.enabled={inprocess_runner_enabled()}",
+        f"inprocess_runner.started={'yes' if runner_tasks or supervisor_tasks else 'no'}",
+        f"inprocess_runner.tasks={runner_tasks or '（无）'}",
+        f"background_supervisor.tasks={supervisor_tasks or '（无）'}",
+        f"db.connection={db_state}",
+        f"pending_asyncio_tasks={len(alive)}: {task_names[:20]}",
+        f"last_code_node={(first.node if first is not None else '') or '（无事件或无节点）'}"
+        f" (seq={first.seq if first is not None else '（无）'},"
+        f" type={first.type if first is not None else '（无）'})",
+    ]
     lines.append(f"最近 {len(events)} 条事件（新→旧）：")
     lines += [f"  seq={event.seq} {event.type} {event.payload}" for event in events]
     return "\n".join(lines)

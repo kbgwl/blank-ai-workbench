@@ -274,7 +274,11 @@ async def monitor(db: DbSession, limit: int = Query(default=30, ge=1, le=200)) -
     rows = (
         await db.execute(
             select(AgentTrigger)
-            .where(AgentTrigger.status == triggers_module.STATUS_PENDING)
+            .where(
+                AgentTrigger.status.in_(
+                    (triggers_module.STATUS_PENDING, triggers_module.STATUS_PAUSED)
+                )
+            )
             .order_by(AgentTrigger.created_at.desc())
             .limit(cap)
         )
@@ -294,7 +298,9 @@ async def monitor(db: DbSession, limit: int = Query(default=30, ge=1, le=200)) -
                 "created_at": _iso(row.created_at),
                 "waiting_for": waiting,
                 "never_fires": never,
-                "can_release": True,
+                # v0.11.2 §8：暂停过的触发器也要留在页面上，否则用户没有地方点恢复。
+                "status": row.status,
+                "can_release": row.status == triggers_module.STATUS_PENDING,
             }
         )
 

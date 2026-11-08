@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from blank_api.models.trigger import AgentTrigger
@@ -53,6 +53,11 @@ STATUS_PENDING = "pending"
 STATUS_FIRED = "fired"
 STATUS_SKIPPED = "skipped"
 STATUS_EXPIRED = "expired"
+# v0.11.2 §8：用户主动停掉的两种状态。行不删（「我那件事后来怎样了」要能查），
+# 但既不能被 due()/watch_once 捞到，也不能挡住同名事件重新登记。
+STATUS_PAUSED = "paused"
+STATUS_CANCELLED = "cancelled"
+STOPPED_STATUSES = (STATUS_PAUSED, STATUS_CANCELLED)
 
 # 默认有效期：一次失败的提醒留一天。太短会让用户第二天才看到时打不开，
 # 太长会让"同一个 key 又发生一次"被当成重复而吞掉。
@@ -168,8 +173,15 @@ def normalize(
 
 
 def _active_clause(now: datetime):
-    """「还没过期」的判定。空 expires_at 读作永久有效（显式登记的常驻触发器）。"""
-    return or_(AgentTrigger.expires_at.is_(None), AgentTrigger.expires_at > now)
+    """「还没过期」的判定。空 expires_at 读作永久有效（显式登记的常驻触发器）。
+
+    暂停/取消的行一律不算活跃：否则用户取消「每天 9 点」后，同一句话再说一遍
+    会被去重吞掉，界面上就是「我明明重新设了，它却装死」。
+    """
+    return and_(
+        AgentTrigger.status.notin_(STOPPED_STATUSES),
+        or_(AgentTrigger.expires_at.is_(None), AgentTrigger.expires_at > now),
+    )
 
 
 async def find_active(
@@ -212,8 +224,10 @@ async def ingest(
     ).scalar_one_or_none()
 
     moment = _as_naive_utc(fire_at)
-    if existing is not None and (
-        existing.expires_at is None or existing.expires_at > utc_now()
+    if (
+        existing is not None
+        and existing.status not in STOPPED_STATUSES
+        and (existing.expires_at is None or existing.expires_at > utc_now())
     ):
         return existing, False
 

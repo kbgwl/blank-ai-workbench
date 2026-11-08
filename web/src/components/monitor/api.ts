@@ -48,6 +48,9 @@ export type MonitorPending = {
   waiting_for: string;
   never_fires: boolean;
   can_release: boolean;
+  // v0.11.2 §8：暂停过的触发器也留在这张表里，前端据此显示「恢复」而不是「放行」。
+  // 老后端没有这个字段，缺省按 pending 处理。
+  status?: string;
 };
 
 export type MonitorSource = {
@@ -138,6 +141,22 @@ export type ReleaseResult = { task_id?: string; status?: string };
 /** 现在放行一条待触发项。走的就是 worker 到点放行的同一段逻辑。 */
 export function releaseTrigger(triggerId: string): Promise<ReleaseResult> {
   return request<ReleaseResult>(`${api}/triggers/${triggerId}/fire`, {
+    method: "POST",
+    ...jsonInit,
+  });
+}
+
+export type TriggerAction = "pause" | "resume" | "cancel";
+export type TriggerControlResult = {
+  trigger_id?: string;
+  status?: string;
+  previous_status?: string;
+  action?: string;
+};
+
+/** 暂停 / 恢复 / 取消：停掉的触发器不再到点、也不再被 watch 唤醒。 */
+export function controlTrigger(triggerId: string, action: TriggerAction): Promise<TriggerControlResult> {
+  return request<TriggerControlResult>(`${api}/triggers/${triggerId}/${action}`, {
     method: "POST",
     ...jsonInit,
   });

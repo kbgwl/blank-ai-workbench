@@ -226,3 +226,75 @@ async def fire_trigger(trigger_id: str, db: DbSession) -> dict:
         {"trigger_id": row.id, "run_id": run.get("run_id"), "source": "manual"},
     )
     return {"trigger_id": row.id, "task_id": task.id, "run_id": run.get("run_id"), "status": row.status}
+
+
+# --------------------------------------------------------------------------- #
+# v0.11.2 §8：取消 / 暂停 / 恢复
+#
+# 以前触发器只有「等着」和「跑过了」两种活法：用户交代错了「每天 9 点」，
+# 除了把项目删掉没有任何办法让它停下来，而它每天都会真的开一个任务。
+# 行不删（还要能查「后来怎样了」），只把状态挪出 due()/watch_once 的扫描面。
+# --------------------------------------------------------------------------- #
+
+
+async def _set_trigger_status(
+    trigger_id: str,
+    db,
+    *,
+    target: str,
+    allowed: tuple[str, ...],
+    action: str,
+) -> dict:
+    row = await db.get(AgentTrigger, trigger_id)
+    if row is None:
+        raise ApiError(code="trigger_not_found", message="触发器不存在", status_code=404)
+    if row.status not in allowed:
+        raise ApiError(
+            code="trigger_status_unchanged",
+            message=f"这条触发器当前状态是 {row.status}，不能{action}",
+            status_code=409,
+        )
+    previous = row.status
+    row.status = target
+    await db.commit()
+    if row.task_id:
+        await EventRecorder(get_session_factory(), row.task_id).add(
+            f"trigger.{action}",
+            "receive_event",
+            {"trigger_id": row.id, "previous_status": previous, "status": target},
+        )
+    return {
+        "trigger_id": row.id,
+        "task_id": row.task_id or None,
+        "previous_status": previous,
+        "status": row.status,
+        "action": action,
+    }
+
+
+@router.post("/triggers/{trigger_id}/pause", response_model=dict)
+async def pause_trigger(trigger_id: str, db: DbSession) -> dict:
+    """暂停：不再到点、不再被 watch 唤醒，但随时能恢复。"""
+    return await _set_trigger_status(
+        trigger_id, db, target=triggers.STATUS_PAUSED, allowed=(triggers.STATUS_PENDING,), action="paused"
+    )
+
+
+@router.post("/triggers/{trigger_id}/resume", response_model=dict)
+async def resume_trigger(trigger_id: str, db: DbSession) -> dict:
+    """恢复：回到 pending，原来的 fire_at / watch_since 原样保留。"""
+    return await _set_trigger_status(
+        trigger_id, db, target=triggers.STATUS_PENDING, allowed=(triggers.STATUS_PAUSED,), action="resumed"
+    )
+
+
+@router.post("/triggers/{trigger_id}/cancel", response_model=dict)
+async def cancel_trigger(trigger_id: str, db: DbSession) -> dict:
+    """取消：终态，不恢复；同名事件再说一次会重新登记（不挡去重）。"""
+    return await _set_trigger_status(
+        trigger_id,
+        db,
+        target=triggers.STATUS_CANCELLED,
+        allowed=(triggers.STATUS_PENDING, triggers.STATUS_PAUSED),
+        action="cancelled",
+    )

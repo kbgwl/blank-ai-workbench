@@ -8,6 +8,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+
 from tests.test_agent_v04 import create_project, create_task, env  # noqa: F401
 from tests.test_backend_autostart_v101 import _dump_state
 
@@ -27,8 +30,14 @@ async def test_timeout_dump_names_every_required_fact(env, workspace):  # noqa: 
         "provider_id=",
         "dispatch.auto_start=",
         "dispatch.decision=",
+        "run_id=",
         "run.status=",
         "run.last_beat=",
+        "worker.started=",
+        "inprocess_runner.started=",
+        "db.connection=",
+        "pending_asyncio_tasks=",
+        "last_code_node=",
         "最近 ",
         "条事件",
     ):
@@ -40,3 +49,25 @@ async def test_timeout_dump_survives_a_missing_task(env, workspace):  # noqa: F8
     text = await _dump_state("task-never-created", "创建就没落库")
     assert "task 行不存在" in text, text
     assert "run 行不存在" in text, text
+    assert "run_id=（无）" in text, text
+    assert "db.connection=connected" in text, text
+
+
+async def test_timeout_dump_sees_a_live_inprocess_runner(env):  # noqa: F811
+    """运行态字段不能恒为 no：真起一个 blank-run-* 任务时必须看得见（§1.6）。"""
+
+    async def idle() -> None:
+        await asyncio.sleep(30)
+
+    probe = asyncio.create_task(idle(), name="blank-run-diagnostics-probe")
+    try:
+        await asyncio.sleep(0)  # 让任务真的进事件循环，而不是只拿到一个句柄
+        text = await _dump_state("task-never-created", "有活着的进程内 runner")
+        assert "inprocess_runner.started=yes" in text, text
+        assert "blank-run-diagnostics-probe" in text, text
+        assert "db.connection=connected" in text, text
+        assert "last_code_node=" in text, text
+    finally:
+        probe.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await probe

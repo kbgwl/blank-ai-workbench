@@ -55,6 +55,29 @@ def _epoch(moment: datetime) -> float:
     return moment.replace(tzinfo=timezone.utc).timestamp()
 
 
+def allowed_watch_root(root: str | Path, workspace_paths: list[str]) -> bool:
+    """扫描目录必须落在项目登记的某个工作区里（v0.11.2 §8 权限边界）。
+
+    以前 ``watch_root`` 是 payload 里的一个字符串，谁写进去就扫哪儿：一个被改坏的
+    行指向盘根，一轮巡检就会去遍历整个盘。现在只认 Workspace 表登记过的路径，
+    且只允许工作区本身或其子目录；反过来「工作区是它的子目录」不算——那是越界。
+    """
+    try:
+        candidate = Path(root).expanduser().resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    for raw in workspace_paths:
+        if not raw:
+            continue
+        try:
+            base = Path(raw).expanduser().resolve(strict=False)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if candidate == base or base in candidate.parents:
+            return True
+    return False
+
+
 def changed_files(
     root: str | Path,
     since: datetime,
@@ -151,6 +174,16 @@ async def watch_once(*, now: datetime | None = None) -> int:
                 ).scalar_one_or_none()
                 root = (workspace.path or "").strip() if workspace is not None else ""
             if not root:
+                continue
+            workspaces = (
+                await session.execute(
+                    select(Workspace).where(Workspace.project_id == task.project_id)
+                )
+            ).scalars().all()
+            if not allowed_watch_root(root, [str(w.path or "") for w in workspaces]):
+                log.warning("watch 路径不在项目工作区内，跳过 trigger=%s root=%s", row.id, root)
+                row.payload = {**body, "watch_blocked_reason": "root_outside_workspace"}
+                await session.commit()
                 continue
             hits = changed_files(root, since)
             if not hits:

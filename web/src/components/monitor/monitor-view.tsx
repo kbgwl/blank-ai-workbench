@@ -4,7 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Panel } from "@/components/panel";
 import { errorMessage } from "@/lib/http";
-import { emptyOverview, fetchMonitor, releaseTrigger, type MonitorOverview } from "./api";
+import {
+  controlTrigger,
+  emptyOverview,
+  fetchMonitor,
+  releaseTrigger,
+  type MonitorOverview,
+  type TriggerAction,
+} from "./api";
 import {
   clockTime,
   intentLabel,
@@ -33,6 +40,8 @@ const STATUS_CLASS: Record<ReturnType<typeof statusTone>, string> = {
 };
 
 const REFRESH_MS = 5000;
+const CONTROL_BUTTON =
+  "shrink-0 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-[10.5px] text-muted transition-colors hover:text-text disabled:opacity-50";
 
 function Stat({ label, value, hint, tone }: { label: string; value: number; hint?: string; tone?: "warn" }) {
   return (
@@ -57,6 +66,7 @@ export function MonitorView() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [releasing, setReleasing] = useState("");
+  const [controlling, setControlling] = useState("");
   const alive = useRef(true);
 
   const load = useCallback(async () => {
@@ -99,6 +109,21 @@ export function MonitorView() {
         setError(errorMessage(cause));
       } finally {
         if (alive.current) setReleasing("");
+      }
+    },
+    [load],
+  );
+
+  const control = useCallback(
+    async (triggerId: string, action: TriggerAction) => {
+      setControlling(`${triggerId}:${action}`);
+      try {
+        await controlTrigger(triggerId, action);
+        await load();
+      } catch (cause) {
+        setError(errorMessage(cause));
+      } finally {
+        if (alive.current) setControlling("");
       }
     },
     [load],
@@ -243,17 +268,49 @@ export function MonitorView() {
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[12.5px]">{item.goal || "（没有写要盯什么）"}</p>
                     <p className={`mt-0.5 text-[10.5px] leading-relaxed ${item.never_fires ? "text-warn" : "text-faint"}`}>
+                      {item.status === "paused" ? "已暂停 · " : ""}
                       {pendingLine(item)}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    disabled={releasing === item.trigger_id}
-                    onClick={() => void release(item.trigger_id)}
-                    className="shrink-0 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-[10.5px] text-muted transition-colors hover:text-text disabled:opacity-50"
-                  >
-                    {releasing === item.trigger_id ? "放行中…" : "立即放行"}
-                  </button>
+                  <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                    {(item.status ?? "pending") === "paused" ? (
+                      <button
+                        type="button"
+                        disabled={controlling !== ""}
+                        onClick={() => void control(item.trigger_id, "resume")}
+                        className={CONTROL_BUTTON}
+                      >
+                        {controlling === `${item.trigger_id}:resume` ? "恢复中…" : "恢复"}
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          disabled={releasing === item.trigger_id || item.can_release === false}
+                          onClick={() => void release(item.trigger_id)}
+                          className={CONTROL_BUTTON}
+                        >
+                          {releasing === item.trigger_id ? "放行中…" : "立即放行"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={controlling !== ""}
+                          onClick={() => void control(item.trigger_id, "pause")}
+                          className={CONTROL_BUTTON}
+                        >
+                          {controlling === `${item.trigger_id}:pause` ? "暂停中…" : "暂停"}
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      disabled={controlling !== ""}
+                      onClick={() => void control(item.trigger_id, "cancel")}
+                      className={CONTROL_BUTTON}
+                    >
+                      {controlling === `${item.trigger_id}:cancel` ? "取消中…" : "取消"}
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

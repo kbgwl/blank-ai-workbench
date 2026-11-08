@@ -152,14 +152,26 @@ async def test_watch_uses_the_path_recorded_at_registration(env, workspace, monk
 
     project_id = await create_project(env, workspace)
     async with get_session_factory()() as session:
-        session.add(
-            Workspace(
-                id=str(uuid4()),
-                project_id=project_id,
-                label="另一个",
-                path=str(other),
-                is_active=True,
-            )
+        # v0.11.2 §8：登记时固化的 watch_root 现在必须是项目登记过的工作区，
+        # 所以这里补上 watched 的 Workspace 行（真实登记流程本来就会写这一行）。
+        # 断言一字未改：active 仍是 other，测的还是「登记路径优先」。
+        session.add_all(
+            [
+                Workspace(
+                    id=str(uuid4()),
+                    project_id=project_id,
+                    label="另一个",
+                    path=str(other),
+                    is_active=True,
+                ),
+                Workspace(
+                    id=str(uuid4()),
+                    project_id=project_id,
+                    label="登记时盯的目录",
+                    path=str(watched),
+                    is_active=False,
+                ),
+            ]
         )
         await session.commit()
 
