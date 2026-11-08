@@ -102,6 +102,8 @@ export type Block =
       /** v0.10.1 §3 审批身份：提交审批时原样带回，后端按它精确匹配这张卡。 */
       approvalId: string;
       argumentsHash: string;
+      /** 四元匹配的第四元；老卡为空串，不随请求发出。 */
+      toolName: string;
       /** 独立审查的意见。undefined=这张卡早于审查进载荷，null=审查关着，对象=审查员说了话。 */
       guardian?: GuardianVerdictInfo | null;
     }
@@ -741,6 +743,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
         prefix: textOf(source, "suggested_prefix", "prefix"),
         approvalId: textOf(source, "approval_id"),
         argumentsHash: textOf(source, "arguments_hash"),
+        toolName: textOf(source, "tool_name"),
         scopes: arrayOf(source, "approval_options", "scopes")
           .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
           .map((item) => ({

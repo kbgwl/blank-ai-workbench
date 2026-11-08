@@ -804,6 +804,7 @@ export function BotApp() {
         approvalId: approval.approvalId,
         toolCallId: approval.toolCallId,
         argumentsHash: approval.argumentsHash,
+        toolName: approval.toolName,
       })
         .then(() => {
           setEvidence(null);

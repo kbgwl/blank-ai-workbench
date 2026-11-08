@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint src",
-    "test": "node --test --import ./test-bootstrap.mjs \"src/**/*.test.ts\""
+    "test": "node --test --test-concurrency=2 --import ./test-bootstrap.mjs \"src/**/*.test.ts\""
   },
   "dependencies": {
     "clsx": "^2.1.1",

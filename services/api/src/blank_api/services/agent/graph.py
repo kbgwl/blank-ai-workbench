@@ -2258,9 +2258,23 @@ def approval_identity(
         "approval_id": approval_id,
         "tool_call_id": call_key,
         "tool": tool,
+        # 任务单 §3.2 用的字段名是 tool_name；历史代码一路用 tool。两个都给，
+        # 不改旧消费点，也不让「按四元匹配」少一元（tool_name 进得了校验侧）。
+        "tool_name": tool,
         "arguments_hash": args_hash,
         "resource_path": approval_resource_path(tool, arguments),
     }
+
+
+def _call_identity(session: "AgentSession", call: dict, name: str, arguments: dict) -> dict[str, str]:
+    """一次工具调用的稳定身份，与审批门用的是同一个纯函数、同一组参数。
+
+    ``tool.requested`` / ``tool.completed`` 带上它，审计才能把「这张卡批了」
+    和「这条命令真的跑了」按 approval_id 对上号（任务单 §3.4）。它没有副作用，
+    也没有「这张卡真的弹过」的语义——只是把这次调用定址，未审批的调用同样有号。
+    """
+    task_id = str(getattr(getattr(session, "context", None), "task_id", "") or "")
+    return approval_identity(task_id, _call_key(call), name, arguments)
 
 
 def approval_ttl_seconds() -> int:
@@ -2845,7 +2859,11 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
             # 不重发 tool.requested：模型/前端看到的那次请求仍然只有一条
             planned.append(_PlannedCall(call, name, arguments, "replay"))
             continue
-        await session.recorder.add("tool.requested", node, {"tool": name, "arguments": arguments})
+        await session.recorder.add(
+            "tool.requested",
+            node,
+            {"tool": name, "arguments": arguments, **_call_identity(session, call, name, arguments)},
+        )
 
         if name == "request_user_input" and answers:
             planned.append(
@@ -3017,6 +3035,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 "tool.completed",
                 node,
                 {
+                    **_call_identity(session, item.call, name, item.arguments),
                     "tool": name,
                     "call_id": _call_key(item.call),
                     "status": payload.get("status"),
@@ -3112,6 +3131,9 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 "tool.completed",
                 node,
                 {
+                    # 身份放在最前：下面显式的 tool_call_id 是网关账本行 id（崩溃续跑
+                    # 与前端配对都认它），不能被身份里的模型调用 id 覆盖掉。
+                    **_call_identity(session, item.call, name, item.arguments),
                     "tool": name,
                     # call_id 是模型的调用 id（tool_call_id 是网关账本 id）：崩溃续跑按
                     # call_id 才能把"这一轮这次调用"对回检查点里的 pending，前者不唯一。
@@ -3415,7 +3437,9 @@ def _skipped_validation(reason: str, *, command: str = "", output_tail: str = ""
     }
 
 
-async def _ask_run_tests_approval(session: AgentSession, node: str, decision) -> bool:
+async def _ask_run_tests_approval(
+    session: AgentSession, node: str, decision
+) -> tuple[bool, dict[str, str]]:
     """校验通道的 run_tests 审批中断：与主循环审批门同一张卡、同一条决定通道。
 
     修改过工作区之后的自动校验也属于「执行命令」，没批准就是没跑。以前校验
@@ -3426,17 +3450,40 @@ async def _ask_run_tests_approval(session: AgentSession, node: str, decision) ->
 
     重放安全性：批准先记进会话权限再执行；节点重放时 decide 直接放行，
     不会二次走到中断，测试也只执行一次。
+
+    2026-11-08 真机抓到这条通道产出的卡**一个身份字段都没有**：证据包里
+    approval_id / tool_call_id / arguments_hash / resource_path 全空，审批 API
+    的精确匹配被 `if provided and identity` 整段跳过，退回「任务里当前那张卡」。
+    主循环那条路早就带身份，两组审批测试也只测了主循环，所以一直没红。
+    身份与有效期必须与主循环同源，不能各写一份。
     """
     name = "run_tests"
     arguments: dict = {}
     fingerprint = approval_key(name, arguments)
-    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+    # 校验阶段没有模型调用 id，用「本轮 trace + 节点」当定址键。
+    # **不能用 run_id**：中断前是 AgentRun 的 UUID，审批恢复后 runtime 传的是
+    # `task:<id>:attempt:1`，两次算出的 approval_id 会不一样——真机实测
+    # required=apr-31648be1…、granted/tool.*=apr-ca6c5025…，同一张卡的身份断成两截。
+    # trace_id 在中断前后恒定（task:…:attempt:N），换一次重试/新任务又会变，
+    # 所以既稳得住重放，也不会让旧授权套在新卡上。
+    recorder = getattr(session, "recorder", None)
+    scope = (
+        getattr(recorder, "trace_id", "")
+        or getattr(recorder, "run_id", "")
+        or "run"
+    )
+    task_id = str(getattr(getattr(session, "context", None), "task_id", "") or "")
+    identity = approval_identity(task_id, f"validation:{scope}:{node}", name, arguments)
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(seconds=approval_ttl_seconds())
+    ).isoformat()
     answer = interrupt(
         {
             "tool": name,
             "arguments": arguments,
             "risk_level": decision.risk,
             "approval_key": fingerprint,
+            **identity,
             "permission_mode": session.permission_mode,
             "permission_rule": decision.rule,
             "approval_options": approval_options(
@@ -3456,6 +3503,7 @@ async def _ask_run_tests_approval(session: AgentSession, node: str, decision) ->
                 "tool": name,
                 "arguments": arguments,
                 "approval_key": fingerprint,
+                **identity,
                 "scope": scope,
                 "expires_at": expires_at,
             },
@@ -3465,9 +3513,9 @@ async def _ask_run_tests_approval(session: AgentSession, node: str, decision) ->
         await session.recorder.add(
             "approval.denied",
             node,
-            {"tool": name, "arguments": arguments, "scope": scope},
+            {"tool": name, "arguments": arguments, **identity, "scope": scope},
         )
-    return granted
+    return granted, identity
 
 
 async def run_validation_node(state: AgentState, session: AgentSession) -> AgentState:
@@ -3516,15 +3564,26 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         # 校验通道的 run_tests 与主循环走同一张审批卡：先判定，要批就走中断，
         # 批准后这一次真的会跑。驳回记 skipped 而不是 failed——代码没问题，
         # 是命令没获批，判 failed 会把模型引去「修」一个不存在的 bug。
+        validation_identity: dict[str, str] = {}
         validation_tool = session.gateway.get("run_tests")
         if validation_tool is not None:
             validation_decision = _decision(session, validation_tool, {})
-            if validation_decision.outcome == ASK and not await _ask_run_tests_approval(
-                session, node, validation_decision
-            ):
-                validation = _skipped_validation("命令执行未获授权，测试没有执行", command="run_tests")
-                await session.recorder.add("validation.completed", node, validation)
-                return {"validation": validation}
+            if validation_decision.outcome == ASK:
+                granted, validation_identity = await _ask_run_tests_approval(
+                    session, node, validation_decision
+                )
+                if not granted:
+                    validation = _skipped_validation("命令执行未获授权，测试没有执行", command="run_tests")
+                    await session.recorder.add("validation.completed", node, validation)
+                    return {"validation": validation}
+        # 批准后必须有「开始执行」这一半事件，否则前端只看到 granted + completed，
+        # 配不上一条完整动作。名字与主循环统一用 tool.requested（前端按它与
+        # tool.completed 配对；另造一个 tool.started 会多出一条永远停在 running 的卡）。
+        await session.recorder.add(
+            "tool.requested",
+            node,
+            {"tool": "run_tests", "arguments": {}, **validation_identity},
+        )
         payload = await session.gateway.execute("run_tests", {}, session.context, node)
         await session.recorder.add(
             "tool.completed",
@@ -3536,6 +3595,7 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
                 # 带 id 才能把这次测试和台账里那一行对上：证据包靠它贴回执行边界，
                 # 「测试到底在哪跑的」是用户最关心的一条，不能只留给主循环那一路。
                 "tool_call_id": payload.get("tool_call_id"),
+                **validation_identity,
                 **sandbox_backend_event_field(payload),
             },
         )

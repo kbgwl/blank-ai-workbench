@@ -20,9 +20,12 @@ from __future__ import annotations
 import asyncio
 import uuid
 
+import pytest
 from sqlalchemy import select
 
 from blank_api.db import get_session_factory
+from blank_api.models.goal import Goal
+from blank_api.models.run import AgentRun
 from blank_api.models.task import AgentEvent, Task
 from blank_api.services.settings import SettingsStore
 
@@ -73,7 +76,75 @@ async def _task_status(task_id: str) -> str:
         return str(task.status or "") if task is not None else ""
 
 
+async def _dump_state(task_id: str, reason: str) -> str:
+    """任务没到终态时，把「为什么没跑完」一次打全（任务单 §2.3）。
+
+    这条用例曾经"跑不完也不说话"，只能重跑一遍再手查库：停在哪一步、有没有
+    被认领、派发判定了什么，全靠猜。超时时必须一次性给出这些事实，否则下一次
+    仍然是在盲等。
+    """
+    lines = [f"任务没有到达终态：{reason}", f"task_id={task_id}"]
+    async with get_session_factory()() as session:
+        task = await session.get(Task, task_id)
+        run = (
+            await session.execute(select(AgentRun).where(AgentRun.task_id == task_id))
+        ).scalars().first()
+        goal = None
+        if task is not None and task.thread_id:
+            goal = (
+                await session.execute(
+                    select(Goal)
+                    .where(Goal.conversation_id == task.thread_id)
+                    .order_by(Goal.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().first()
+        events = list(
+            (
+                await session.execute(
+                    select(AgentEvent)
+                    .where(AgentEvent.task_id == task_id)
+                    .order_by(AgentEvent.seq.desc())
+                    .limit(20)
+                )
+            ).scalars()
+        )
+
+    if task is None:
+        lines.append("task 行不存在：创建就没落库")
+    else:
+        snapshot = task.dispatch_snapshot or {}
+        lines += [
+            f"task.status={task.status}",
+            f"goal_id={goal.id if goal is not None else '（无）'}",
+            f"goal.status={goal.status if goal is not None else '（无）'}",
+            f"provider_id={task.provider_id or '（空）'}",
+            f"scenario={task.scenario}",
+            f"dispatch.auto_start={snapshot.get('auto_start')}",
+            f"dispatch.decision={snapshot.get('decision') or snapshot or '（空快照）'}",
+        ]
+    if run is None:
+        # 点名的字段一个都不少：没有 run 行也是一条事实，写成「（无）」而不是
+        # 让看日志的人猜这一行是漏打了还是压根没建。
+        lines.append("run 行不存在：auto_start 没有被消费（没人建 run）")
+        lines += ["run.status=（无）", "run.worker_id=（无）", "run.last_beat=（无）"]
+    else:
+        lines += [
+            f"run.id={run.id}",
+            f"run.status={run.status}",
+            f"run.worker_id={run.worker_id or '（没人认领）'}",
+            f"run.attempts={run.attempts}",
+            f"run.lease_expires_at={run.lease_expires_at}",
+            # updated_at 是这条 run 最后一次被写的时刻，等于一次心跳。
+            f"run.last_beat={run.updated_at}",
+        ]
+    lines.append(f"最近 {len(events)} 条事件（新→旧）：")
+    lines += [f"  seq={event.seq} {event.type} {event.payload}" for event in events]
+    return "\n".join(lines)
+
+
 async def _wait_terminal(task_id: str, seconds: float = 15.0) -> str:
+    """等任务到终态；超时**带着诊断失败**，不允许静默返回或无限等待。"""
     deadline = asyncio.get_event_loop().time() + seconds
     status = ""
     while asyncio.get_event_loop().time() < deadline:
@@ -81,7 +152,8 @@ async def _wait_terminal(task_id: str, seconds: float = 15.0) -> str:
         if status in ("succeeded", "failed", "cancelled"):
             return status
         await asyncio.sleep(0.1)
-    return status
+    pytest.fail(await _dump_state(task_id, f"等待 {seconds} 秒仍在 {status or '（状态为空）'}"))
+    raise AssertionError("unreachable")  # pytest.fail 已经抛了，这里只为类型收窄
 
 
 async def _events(task_id: str) -> list[AgentEvent]:

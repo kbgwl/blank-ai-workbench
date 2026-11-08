@@ -131,6 +131,8 @@ class TaskApprovalIn(BaseModel):
     approval_id: str = Field(default="", max_length=64)
     tool_call_id: str = Field(default="", max_length=128)
     arguments_hash: str = Field(default="", max_length=128)
+    # 四元匹配的第四元：带上就一起校验；老客户端不带时不改变既有行为。
+    tool_name: str = Field(default="", max_length=64)
     # 批准作用域：仅本次 / 本会话该命令前缀 / 本会话该工具。
     scope: Literal["once", "prefix", "tool"] = "once"
 

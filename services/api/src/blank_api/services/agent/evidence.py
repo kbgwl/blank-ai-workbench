@@ -1115,7 +1115,7 @@ def _approval_identity_fields(context: dict, tool: str) -> dict[str, Any]:
     if not context or str(context.get("tool") or "") != tool:
         return {}
     fields: dict[str, Any] = {}
-    for key in ("approval_id", "arguments_hash", "resource_path"):
+    for key in ("approval_id", "arguments_hash", "resource_path", "tool_name"):
         value = context.get(key)
         if value:
             fields[key] = str(value)

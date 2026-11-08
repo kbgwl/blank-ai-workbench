@@ -784,6 +784,8 @@ export type PendingApproval = {
   approvalId: string;
   argumentsHash: string;
   resourcePath: string;
+  /** 四元匹配的第四元。老卡没有这个字段（空串），提交时就不带，行为与从前一致。 */
+  toolName: string;
   /** 独立审查员的话。undefined=这张卡是"审查进载荷之前"的老任务；null=记过了、当时审查关着。 */
   guardian?: GuardianVerdictInfo | null;
 };
@@ -1363,6 +1365,7 @@ function normalizeApprovals(container: unknown): PendingApproval[] {
         approvalId: textOf(item, "approval_id"),
         argumentsHash: textOf(item, "arguments_hash"),
         resourcePath: textOf(item, "resource_path"),
+        toolName: textOf(item, "tool_name"),
         ...(guardian === undefined ? {} : { guardian }),
       };
     });
@@ -1931,6 +1934,7 @@ export function decideApproval(
     approvalId?: string;
     toolCallId?: string;
     argumentsHash?: string;
+    toolName?: string;
   },
 ): Promise<{ used: string }> {
   const body: Record<string, unknown> = { approve: input.decision === "approve" };
@@ -1940,6 +1944,7 @@ export function decideApproval(
   // tool_call_id 发回去必然 mismatch，不如不发（后端按 approval_id 对号）。
   if (input.toolCallId && input.toolCallId !== input.approvalId) body.tool_call_id = input.toolCallId;
   if (input.argumentsHash) body.arguments_hash = input.argumentsHash;
+  if (input.toolName) body.tool_name = input.toolName;
   return request<unknown>(`${api}/tasks/${taskId}/approval`, {
     method: "POST",
     ...jsonInit,

@@ -388,6 +388,7 @@ export function Workbench() {
           approvalId: block.approvalId,
           toolCallId: block.toolCallId,
           argumentsHash: block.argumentsHash,
+          toolName: block.toolName,
         });
         refresh(selectedId);
       } catch (error: unknown) {

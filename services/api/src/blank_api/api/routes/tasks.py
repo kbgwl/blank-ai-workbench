@@ -1684,6 +1684,7 @@ async def _decide_approval_locked(
             ("approval_id", payload.approval_id),
             ("tool_call_id", payload.tool_call_id),
             ("arguments_hash", payload.arguments_hash),
+            ("tool_name", payload.tool_name),
         )
         if value
     }
@@ -1726,7 +1727,14 @@ async def _decide_approval_locked(
     decided_identity = (
         {
             key: str(identity.get(key) or "")
-            for key in ("approval_id", "tool_call_id", "arguments_hash", "resource_path")
+            for key in (
+                "approval_id",
+                "tool_call_id",
+                "tool",
+                "tool_name",
+                "arguments_hash",
+                "resource_path",
+            )
         }
         if identity
         else {"approval_id": payload.approval_id}
@@ -1768,10 +1776,21 @@ async def _current_approval_identity(task_id: str) -> dict:
         ).scalar_one_or_none()
     if row is None or not isinstance(row.payload, dict):
         return {}
-    return {
+    identity = {
         key: str(row.payload.get(key) or "")
-        for key in ("approval_id", "tool_call_id", "tool", "arguments_hash", "resource_path")
+        for key in (
+            "approval_id",
+            "tool_call_id",
+            "tool",
+            "tool_name",
+            "arguments_hash",
+            "resource_path",
+        )
     }
+    # 老中断事件只写了 tool（v0.11.1 之前没有 tool_name 这个别名）。不带身份的
+    # 老卡不该因为多一个字段名就批不动：用 tool 补齐，语义完全一致。
+    identity["tool_name"] = identity["tool_name"] or identity["tool"]
+    return identity
 
 
 async def _prior_decision(task_id: str, approval_id: str) -> dict | None:

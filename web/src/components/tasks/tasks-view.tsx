@@ -231,6 +231,7 @@ export function TasksView({ initialTaskId = null }: Props) {
           approvalId: block?.approvalId,
           toolCallId: block?.toolCallId,
           argumentsHash: block?.argumentsHash,
+          toolName: block?.toolName,
         });
         await loadDetail(selectedId);
         reload();

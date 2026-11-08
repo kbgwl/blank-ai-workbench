@@ -150,6 +150,26 @@ async def test_wrong_arguments_hash_is_rejected(env, workspace):  # noqa: F811
     assert not (workspace / ".env").exists()
 
 
+async def test_wrong_tool_name_is_rejected(env, workspace):  # noqa: F811
+    """四元匹配的第四元：拿 A 卡的工具名去批 B 卡，必须 409，不能只按 id 放行。"""
+    task_id = await _waiting_task(env, workspace)
+    card = await _pending_card(env, task_id)
+
+    resp = await env.client.post(
+        f"{API}/tasks/{task_id}/approval",
+        json={
+            "approve": True,
+            "approval_id": card["approval_id"],
+            "tool_call_id": card["tool_call_id"],
+            "arguments_hash": card["arguments_hash"],
+            "tool_name": "run_shell",
+        },
+    )
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"]["code"] == "approval_mismatch", resp.text
+    assert not (workspace / ".env").exists()
+
+
 # ------------------------------------------------------------------ #
 # 3：身份匹配才执行；重复点击幂等
 # ------------------------------------------------------------------ #
@@ -214,3 +234,35 @@ async def test_decided_event_carries_identity(env, workspace):  # noqa: F811
     assert decided, "没有 approval.decided 事件"
     assert decided[-1]["approval_id"] == card["approval_id"]
     assert decided[-1]["arguments_hash"] == card["arguments_hash"]
+    assert decided[-1]["tool_name"] == card["tool"]
+
+
+async def test_granted_is_followed_by_a_tool_execution_with_the_same_identity(env, workspace):  # noqa: F811
+    """§3.4：granted 后面必须真的有工具开始/完成，且三处身份逐字相同。
+
+    没有这条，审批链路可以「批了、记了、什么都没跑」还一路绿灯；前端也配不出
+    一条完整动作。后端把开始那一半叫 tool.requested（前端按它与 tool.completed
+    配对），另造一个 tool.started 只会多出一条永远停在 running 的卡。
+    """
+    task_id = await _waiting_task(env, workspace)
+    card = await _pending_card(env, task_id)
+    resp = await env.client.post(
+        f"{API}/tasks/{task_id}/approval",
+        json={"approve": True, "approval_id": card["approval_id"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # 后面还有校验通道的 run_tests 请求（那次没走审批，自然不带身份）。
+    # 按工具名挑出被批准的那次调用，别拿时间线上最后一条当它。
+    requested = [
+        p for p in await _events(env, task_id, "tool.requested") if p.get("tool") == card["tool"]
+    ]
+    completed = [
+        p for p in await _events(env, task_id, "tool.completed") if p.get("tool") == card["tool"]
+    ]
+    granted = await _events(env, task_id, "approval.granted")
+    assert requested and completed and granted
+    for payload in (requested[-1], completed[-1]):
+        assert payload["approval_id"] == card["approval_id"], payload
+        assert payload["arguments_hash"] == card["arguments_hash"], payload
+        assert payload["tool_name"] == card["tool"], payload
