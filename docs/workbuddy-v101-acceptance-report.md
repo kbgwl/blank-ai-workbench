@@ -248,3 +248,36 @@ build rc=0
 4. **越界路径是硬禁止**（`capability:path_escape`），不会生成审批卡。任务单里「读上传截图要点允许」在本产品语义下是「不许读」，不是「问一下」——实测记录在 §6.4 的排查过程中。
 5. **`auto_start` 压不过 `blocked` / `wait_user`**：环境本身不成立（没工作区/没场景/没目标）时，用户显式要求立即执行也只会留在 draft。这是刻意的。
 6. **五组 GUI 验收用的都是脚本化 mock 模型**（8090，OpenAI 兼容）。因此验收证明的是「产品侧链路真的会这样做」——后端接管、审批身份、校验重跑、下拉渲染；它不证明「真实模型会写出正确的修复补丁」。后者只能靠 55 项 Benchmark，本轮未跑（§9.2）。
+
+---
+
+## 11. 全流程测试读数（2026-11-08 复跑）
+
+任务单要求「所有命令都要记录退出码和结果」。下面是仓库里**全部**可执行的测试层在同一台机器上一次性复跑的读数，顺序按「快 → 慢」。
+
+| 层 | 命令 | 退出码 | 结果 |
+| --- | --- | --- | --- |
+| 前端单测 | `pnpm test:web` | 0 | 281 passed / 0 failed |
+| 桌面端单测 | `pnpm test:desktop` | 0 | 57 passed |
+| 评测判定单测 | `pnpm test:evals` | 0 | 21 passed |
+| 版本口径 | `pnpm check:versions` | 0 | 6 项全 ok，发布版本 0.10.0 |
+| 前端 lint | `pnpm lint:web` | 0 | 0 problems |
+| 类型检查 | `pnpm typecheck:web` | 0 | next typegen + tsc 均通过 |
+| 前端构建 | `pnpm build:web`（`BLANK_DESKTOP_BUILD=1`） | 0 | 13 路由静态导出，`out/` 13 个 html |
+| 后端全量 | `pytest -q` | 0 | **2216 passed, 23 skipped**（729s） |
+| 迁移往返 | `alembic upgrade head → downgrade base → upgrade head`（SQLite 隔离库） | 0 / 0 / 0 | `0033_chat_goals` ↔ `0001_projects` 干净往返 |
+| 方言门禁 | `node scripts/local_ci.mjs --job api-dialect` | 2 | **今天没法判**：本机无 PostgreSQL（无 docker、5432 无监听）、MySQL 格缺 `KBGAI_MYSQL_ROOT_PASSWORD` |
+| 评测门禁 | `node scripts/local_ci.mjs --job eval-gate --with-eval-run` | 1 | `success_rate=0.875 < 阈值 0.938`（红 4 条，原因见下） |
+| 装置自检 | `node scripts/local_ci.mjs --self-test` | 0 | 8 项判定组合器全通过 |
+
+### 评测门禁为什么是红（三条都不是 v0.10.1 回归）
+
+- **T11 / T28**：Go 任务，本机没有 `go` 工具链（`run_tests` 已支持 `go.mod → go test`，但没装 Go 就必然红）；
+- **T07 / T29**：脚本化桩不会合成多文件任务的第二份文件（`metrics/daily.py`、`docs/toc.md`），`evals/gate_config.json` 的阈值出处里早就写明了这两条属「桩的确定形状」；
+- 阈值本身（0.938）是「装了 Go 的 CI 环境」实测值，本机 0.875 与 10-31 那次读数一致。
+
+### 顺带修掉一个装置缺陷
+
+首跑出现 **17/32 例 `http_429: Too Many Requests`**：`scripts/local_ci.mjs` 起 API 时没带 CI 里那条 `BLANK_RATE_LIMIT_RPM=0`（`.github/workflows/ci.yml` 的 eval-gate job 有，注释也写了「批量客户端会把 120 rpm 打满」）。命中后门禁只能落「今天没法判」，等于本机永远复现不出 CI 的读数。
+
+已给装置补上该环境变量（只作用于这个受控实例，**产品默认限流仍是 120，一个字没改**），补后读数回到 0.875、红 4 条与基线一致；装置自检 `--self-test` 仍 rc=0。

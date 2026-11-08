@@ -238,6 +238,10 @@ async function jobEvalGate(opts) {
           BLANK_SETTINGS_FILE: path.join(SCRATCH, "settings.json"),
           BLANK_SECRET_KEY_FILE: path.join(SCRATCH, "secret.key"),
           BLANK_SANDBOX_ENABLED: "false", // 本机无 docker：桌面壳/装置同款姿态，否则一切任务在装配层 409
+          // 与 ci.yml 的 eval-gate job 对齐：32 例在几十秒内打出 200+ 请求，撞上默认 120 rpm
+          // 就是一片 429，门禁会把「装置和限流打架」读成「产品成功率掉了」（2026-11-08 本机实测
+          // 17/32 例 http_429）。产品默认限流一个字没改，只把这个受控实例的闸打开。
+          BLANK_RATE_LIMIT_RPM: "0",
         },
       });
       children.push(api);
