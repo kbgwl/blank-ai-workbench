@@ -3417,6 +3417,22 @@ def _mutated_after(results: list[dict], entry: dict) -> bool:
     return False
 
 
+def _tests_were_working(results: list[dict]) -> bool:
+    """本轮有没有过一次跑通的 run_tests。
+
+    有就说明测试配置**本来可用**。之后再报「未识别到测试命令」不是环境没配测试，
+    而是这一轮把 package.json / pytest 配置改坏了：v0.11.2 §7 真机先 npm test 通过
+    （seq 131），后面 8 次改动把 package.json 弄成非法 JSON，最后一次校验通道却把
+    「未识别到测试命令」一律判 skipped，任务带着「页面未修好」的交付文本判了 succeeded。
+    """
+    return any(
+        str(item.get("tool") or "") == "run_tests"
+        and str(item.get("status") or "") == "ok"
+        for item in results
+        if isinstance(item, dict)
+    )
+
+
 def _skipped_validation(reason: str, *, command: str = "", output_tail: str = "") -> dict:
     """构造「本次没有自动化校验」的结论。
 
@@ -3602,7 +3618,17 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
     data = payload.get("data") or {}
     status = str(payload.get("status") or "ok")
     hint = str(payload.get("message") or payload.get("output") or "")
-    if status == "error" and "未识别到测试命令" in hint:
+    # 本轮改过文件、且之前真的跑通过测试时，这不是「环境本来没配测试」，
+    # 是这一轮把配置改坏了。不能 skipped：skipped 会直接 summarize → resolve_status
+    # 判 succeeded，于是「页面未修好 / 请从备份恢复」的交付文本配上一个绿色成功。
+    # 落到下面的正常 error 构造：预算没耗尽就进修复回路，耗尽也至少判 failed。
+    config_broken_by_this_run = (
+        status == "error"
+        and "未识别到测试命令" in hint
+        and bool(changed)
+        and _tests_were_working(results)
+    )
+    if status == "error" and "未识别到测试命令" in hint and not config_broken_by_this_run:
         # 工作区里根本没有 pytest 配置，也没有 package.json 的 test 脚本。
         # 这不是「代码没通过测试」，是「没有测试可跑」：判 failed 会让用户去翻
         # 一堆刚改好的代码，还会把「已批准并执行的 run_tests」误读成没同意。
@@ -3648,6 +3674,13 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         "summary": data.get("summary") or {},
         "output_tail": str(payload.get("output") or payload.get("message") or "")[-2000:],
     }
+    if config_broken_by_this_run:
+        # 让事件、证据页、交付文本都能说清「为什么这次不能算没测试」：
+        # 不是环境缺配置，是本轮把原本能跑的配置改坏了。
+        validation["broken_by_this_run"] = True
+        validation["output_tail"] = (
+            "本轮改动后测试命令无法识别（改动前曾跑通过测试）：" + validation["output_tail"]
+        )[-2000:]
     await session.recorder.add("validation.completed", node, validation)
     update: AgentState = {"validation": validation}
     if validation["passed"]:

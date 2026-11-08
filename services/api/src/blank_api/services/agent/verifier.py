@@ -24,6 +24,8 @@ CHECKS = (
     "diff_matches",
     "no_overreach",
     "no_false_claim",
+    "delivery_says_done",
+    "tests_still_runnable",
     "not_zero_change",
     "delivery_evidence",
 )
@@ -35,6 +37,18 @@ _REFUSED_STATUSES = frozenset({"denied", "blocked", "awaiting_approval", "refuse
 # 只列「成功就等于声称改了文件」的工具。run_shell 是命令执行，ls/echo/git status
 # 都不落盘，把它算进来会把每一条只读命令都误判成零改动伪成功。
 _WRITE_TOOLS = frozenset({"apply_patch", "write_file", "delete_file", "create_file"})
+
+# 四行交付（agent/delivery.py::render）里「完成：」自己说没做完，「需要你：」把烂摊子
+# 交回用户手工恢复。这是产品固定格式、不是模型自由散文，所以判据敢收紧。
+# v0.11.2 §7 真机：正文写「完成：页面未修好…需要你：从 .blank_backups 恢复」，
+# 任务状态却判 succeeded；旧 no_false_claim 只抓「假称测试通过」，抓不到这种真话。
+_INCOMPLETE_MARKS = (
+    "未修好", "没修好", "未修复", "没有修复", "未完成", "没完成",
+    "无法完成", "未解决", "没解决", "改坏了",
+)
+_HANDOFF_MARKS = ("恢复", "重做", "重新落", "手工", "手动", "自行修复", "自己修")
+# 校验通道把「本轮把测试配置改坏」误写成 skipped 时用；见 graph.run_validation_node。
+_UNTESTABLE_STATUSES = frozenset({"skipped", "error"})
 
 
 def _results(tool_results: Iterable[Any]) -> list[dict[str, Any]]:
@@ -67,6 +81,43 @@ def _false_claim(report: str, validation: dict[str, Any]) -> bool:
     if not any(mark in low for mark in _PASS_CLAIMS):
         return False
     return validation.get("status") != "ok" or validation.get("passed") is not True
+
+
+def _delivery_is_incomplete(report: str) -> bool:
+    """交付正文自己说没完成，或要求用户手工接手恢复。
+
+    只认四行格式的「完成：」「需要你：」两行：别的段落里顺口提一句「未修复的历史问题」
+    不该把一轮有效改动判成失败。
+    """
+    completed = ""
+    needs = ""
+    for raw in str(report or "").splitlines():
+        line = raw.strip()
+        if line.startswith("完成："):
+            completed = line[len("完成："):].strip()
+        elif line.startswith("需要你："):
+            needs = line[len("需要你："):].strip()
+    if any(mark in completed for mark in _INCOMPLETE_MARKS):
+        return True
+    return bool(needs) and any(mark in needs for mark in _HANDOFF_MARKS)
+
+
+def _broke_test_config(
+    rows: list[dict[str, Any]], validation_status: str, paths: list[str]
+) -> bool:
+    """本轮本来能跑测试，改完却认不出测试命令 —— 配置被这一轮改坏了。
+
+    真·环境没配（第一条测试就报「未识别到测试命令」）不算，那是 v0.9.1 明确
+    不许改判成代码失败的情形。只有「已有一次 ok 的 run_tests + 有文件改动 +
+    最后没有可采信的测试结果」三条同时成立才拦。
+    """
+    if validation_status not in _UNTESTABLE_STATUSES or not paths:
+        return False
+    return any(
+        str(row.get("tool") or "") == "run_tests"
+        and str(row.get("status") or "") == "ok"
+        for row in rows
+    )
 
 
 def verify(
@@ -167,12 +218,27 @@ def verify(
         findings.append("交付文本声称测试通过，但验证结果不支持")
         blocking = True
 
-    # ⑥ 最终交付证据
+    # ⑥ 交付文本自己说没做完 / 要求用户手工恢复（v0.11.2 §7 真机缺陷）
+    # 这是比「假称通过」更硬的事实：模型都写「页面未修好」了，状态不能是 succeeded。
+    checks["delivery_says_done"] = not _delivery_is_incomplete(report)
+    if not checks["delivery_says_done"]:
+        findings.append("交付文本自述未完成或要求用户手工恢复")
+        blocking = True
+
+    # ⑦ 本轮把测试配置改坏：曾有测试跑通，最后却没有可采信的测试结果。
+    # 与 graph 的校验通道同源，但这里是独立的最后一道闸——预算耗尽、修复回路
+    # 没机会跑时，也不能让任务带着「测试没跑成」判成功。
+    checks["tests_still_runnable"] = not _broke_test_config(rows, status, paths)
+    if not checks["tests_still_runnable"]:
+        findings.append("本轮改动前有测试可用，改完后测试命令无法识别（配置被改坏）")
+        blocking = True
+
+    # ⑧ 最终交付证据
     checks["delivery_evidence"] = bool(str(report or "").strip())
     if not checks["delivery_evidence"]:
         findings.append("没有最终交付文本")
 
-    # ⑦ 目标是否完成：没有硬性违规则认为已达成；有明确验收标准时还得有交付文本可核对。
+    # ⑨ 目标是否完成：没有硬性违规则认为已达成；有明确验收标准时还得有交付文本可核对。
     # 这一项只记 finding、不设 blocking——「目标没完成」和「伪成功」是两件事。
     done_when = [
         str(item).strip() for item in ((goal_spec or {}).get("done_when") or []) if str(item).strip()
@@ -214,4 +280,8 @@ def failure_reason(verdict: dict[str, Any] | None) -> str:
         return "目标要求改动，但工作区没有任何文件变化"
     if any("假称" in item or "声称测试" in item for item in findings):
         return "交付文本声称测试通过，实际验证结果不支持"
+    if any("自述未完成" in item or "手工恢复" in item for item in findings):
+        return "交付文本自述未完成、需要用户接手，任务不能判成功"
+    if any("配置被改坏" in item or "测试命令无法识别" in item for item in findings):
+        return "本轮改动把测试配置弄坏了，最后没能跑出可采信的测试结果"
     return findings[0] if findings else "独立事实验证未通过"
