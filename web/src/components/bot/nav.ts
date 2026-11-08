@@ -5,7 +5,7 @@
  * 证据库 / 技能 / 连接器 · 设置。顺序就是信息架构，乱序等于让用户每次重新找。
  */
 
-export type NavId = "workspace" | "evidence" | "skills" | "connectors";
+export type NavId = "workspace" | "monitor" | "evidence" | "skills" | "connectors";
 
 export type NavItem = {
   id: NavId;
@@ -16,6 +16,9 @@ export type NavItem = {
 
 export const NAV_ITEMS: NavItem[] = [
   { id: "workspace", href: "/projects", label: "工作区", hint: "项目与目录" },
+  // 监控放在「现在发生什么」的位置：工作区是"在哪做"，监控是"它现在在盯什么"，
+  // 证据库是"过去做成了什么"。三者的时态从当下往回退，顺序不能乱。
+  { id: "monitor", href: "/monitor", label: "监控", hint: "它现在在盯什么" },
   { id: "evidence", href: "/evidence", label: "证据库", hint: "每次交付的验收、改动与用量" },
   { id: "skills", href: "/skills", label: "技能", hint: "你确认过的做法" },
   { id: "connectors", href: "/settings#tools", label: "连接器", hint: "外部工具与数据源" },

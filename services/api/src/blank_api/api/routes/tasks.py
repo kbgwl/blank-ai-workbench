@@ -73,7 +73,10 @@ from blank_api.services.agent.queue import abandon_run, claim_run, enqueue_run, 
 from blank_api.services.agent.router import candidate_from_provider
 from blank_api.services.agent.dispatch import (
     Budget,
+    DISPATCH_DEFER,
     ExecutionSnapshot,
+    INTENT_SCHEDULE,
+    INTENT_WATCH,
     NOTIFY_APPROVAL_ONLY,
     explain,
     route,
@@ -1134,12 +1137,30 @@ async def launch_task(
     return {"task_id": task_id, "run_id": run.id, "status": "queued"}
 
 
+def _defer_intent(task: Task) -> str:
+    """这条任务要不要「等事件再跑」。返回 ``watch`` / ``schedule`` / 空串。
+
+    正常路径读 ``task.dispatch_snapshot``；但对话轮次（``create_turn``）只把派发
+    快照写进 ``goal_spec.dispatch``，``dispatch_snapshot`` 字段一直是空的。于是
+    「盯着 X，一旦有变化就告诉我」这句：判定对了（intent=watch），却在这里读到
+    None 直接放行——任务当场跑起来，既没有登记待触发，也没有任何界面痕迹。
+
+    兜底只认 watch / schedule 两个意图，不放宽其它类型：defer 的语义是「等一个
+    现在还不存在的事件」，多认一种意图就多一条"点了没反应"的路径。
+    """
+    snapshot = dispatch_of(task)
+    if snapshot is not None:
+        return snapshot.intent if snapshot.dispatch == DISPATCH_DEFER else ""
+    dispatch = (task.goal_spec or {}).get("dispatch") or {}
+    intent = str(dispatch.get("intent") or "")
+    return intent if intent in (INTENT_WATCH, INTENT_SCHEDULE) else ""
+
+
 async def _defer_if_needed(db: DbSession, task: Task, payload: TaskRunIn) -> dict | None:
     """监控/定时类请求：登记为待触发，返回给调用方，而不是现在就跑。"""
     if not is_enabled("background_execution"):
         return None
-    snapshot = dispatch_of(task)
-    if snapshot is None or snapshot.dispatch != "defer":
+    if not _defer_intent(task):
         return None
     from blank_api.models.trigger import AgentTrigger  # 局部导入：路由与触发器互相引用
     from blank_api.services.agent import triggers
@@ -1166,7 +1187,7 @@ async def _defer_if_needed(db: DbSession, task: Task, payload: TaskRunIn) -> dic
         {
             "trigger_id": row.id,
             "created": created,
-            "intent": snapshot.intent,
+            "intent": _defer_intent(task),
             "reason": "定时/监控类请求，已登记为待触发；确认后再执行",
         },
     )

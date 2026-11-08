@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from blank_api.api.auth import require_token
 from blank_api.api.errors import ApiError
 from blank_api.api.routes.projects import load_project
-from blank_api.api.routes.tasks import _defer_if_needed, launch_task, persist_task
+from blank_api.api.routes.tasks import _defer_if_needed, _defer_intent, launch_task, persist_task
 from blank_api.db import get_session_factory
 from blank_api.deps import DbSession
 from blank_api.models.goal import Goal
@@ -434,7 +434,10 @@ async def create_turn(
     # 不再依赖前端读快照后二次调用 /start——窗口关了、前端崩了、网络断了，
     # 任务照常执行。启动失败记 task.dispatch_failed，任务留在 draft/queued
     # 可重试的状态，绝不让它停在 planned 无人接管。
-    if auto_start and judgement.needs_execution:
+    # 监控/定时类的判定是 needs_execution=False（「现在别动手」），但它不能就
+    # 这么停着——那句话的意义是「等事件」，所以也要进 defer 分支登记一条待触发。
+    # 只判 needs_execution 会让「盯着 X，有变化就告诉我」变成一句什么都不发生的话。
+    if auto_start and (judgement.needs_execution or _defer_intent(task)):
         # rollback/commit 都会过期 ORM 实例；id 先取成普通值，except 里才不会
         # 触发同步懒加载（MissingGreenlet）。
         auto_task_id = task.id

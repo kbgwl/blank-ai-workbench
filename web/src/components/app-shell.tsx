@@ -12,6 +12,7 @@ import { isEditableTarget, PALETTE_SHORTCUT, shortcutHint, shouldHandleEscape } 
 const TITLES: Record<string, string> = {
   "/settings": "设置",
   "/projects": "项目与工作区",
+  "/monitor": "监控",
   "/evidence": "证据库",
   "/skills": "技能",
   "/tasks/detail": "任务详情",

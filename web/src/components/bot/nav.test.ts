@@ -6,7 +6,7 @@ import { cleanPath, isNavActive, navPath, NAV_ITEMS, turnTone } from "./nav.ts";
 test("导航顺序就是设计稿的信息架构，少一项或多一项都要被这里挡住", () => {
   assert.deepEqual(
     NAV_ITEMS.map((item) => item.id),
-    ["workspace", "evidence", "skills", "connectors"],
+    ["workspace", "monitor", "evidence", "skills", "connectors"],
   );
   for (const item of NAV_ITEMS) {
     assert.ok(item.label, `${item.id} 必须有中文标签，否则侧栏上是个空按钮`);

@@ -5,6 +5,7 @@ from blank_api.api.auth import require_token
 from blank_api.api.routes import (
     files,
     maintenance,
+    monitor,
     observability,
     plan_templates,
     projects,
@@ -58,6 +59,8 @@ api_router.include_router(tasks.router)
 api_router.include_router(plan_templates.router)
 api_router.include_router(skills.router)
 api_router.include_router(observability.router)
+# 监控（v0.10.2）：监督者判定流 + 在跑任务 + 待触发项 + 触发源是否接通
+api_router.include_router(monitor.router)
 api_router.include_router(maintenance.router)
 api_router.include_router(settings.router)
 api_router.include_router(threads.router)
