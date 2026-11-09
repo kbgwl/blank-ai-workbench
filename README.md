@@ -169,7 +169,7 @@ Windows 注意：`uvicorn --reload` 的监视器在本机偶发停止热重载�
 | `pnpm regression --evals` | 追加评测样例集 |
 | `pnpm evals` | 仅跑评测，`node evals/run_evals.mjs --provider <id> --concurrency 5` |
 | `pnpm eval:gate` | 评测成功率门禁（退出码 0/1/2，2 表示"今天没法判"） |
-| **评测环境要求** | `evals` / `eval:gate` 含 Go 样例（T11/T28），评测机需先装 Go 工具链；`run_tests` 现已支持 `go.mod→go test`，缺 Go 时这 2 条会红（详见 `evals/gate_config.json` 出处说明） |
+| **评测环境要求** | `evals` / `eval:gate` 含 Go 样例（T11/T28）：`run_tests` 识别 `go.mod→go test`，本机没有 Go 工具链时这 2 条按 `skipped` 收尾（`validation.completed` 带缺工具链理由、不空转修复回路）；但**样例最终仍会 `failed`**——脚本化桩的固定交付文案声称「测试通过」，被 `no_false_claim` 拦下。装 Go 后才会真跑并转绿（详见 `evals/gate_config.json` 出处说明） |
 | `pnpm e2e:team` | 团队链路端到端门禁：stub 模型 + 隔离库 + 真实 HTTP + 浏览器点验（详见 `CONTRIBUTING.md`） |
 | `pnpm runtime:desktop` | 组装随包分发的 Python 运行时（约 129MB，不入库；`--check` 只体检） |
 | `pnpm verify:desktop` | 打包后自检 14 项，按包内产物对账 |
@@ -307,12 +307,18 @@ uv run alembic revision --autogenerate -m "描述"
 - **评测门禁 2026-10-31 实测是红的，原因不在门禁本身**：同一天用仓库自带脚本化桩跑全集
   （32 例、并发 3、隔离库 :8050），`success_rate 0.875`（succeeded 26 + expected_denied 2 = 28/32，
   阈值 0.938），红的是 T07/T29 `files_missing`（桩的确定形状，与 `evals/gate_config.json` 里记的一致）
-  **外加 T11/T28 `failed`**。后两条是 Go 样例：`run_tests` 只认 pytest 配置与 `package.json` 的
-  test 脚本（`services/tools/testing.py:67`），遇到 `go.mod` 直接报「未识别到测试命令」并按 error 处理，
-  于是任务失败。这是**既有的产品缺口**（基线 0.938 是 2026-10-26 在工作区另一版上量的，之后
-  「计划持久化/里程碑」几波让这类样例真的走到了验证节点），不是阈值该改。
-  正确修法是让 `run_tests` 认出 Go 项目并报 `skipped`（附「本机没有 Go 工具链」理由），
-  或给评测装置装 Go；**不许顺手把 0.938 调低**。在那之前 CI 的 `eval-gate` 这一格会红。
+  **外加 T11/T28 `failed`**。后两条是 Go 样例：当时代码已能识别 `go.mod`，但缺 Go 工具链时
+  执行层把"跑不了"归成了失败，任务据此被判 `failed`。这是**产品缺口**
+  （基线 0.938 是 2026-10-26 在工作区另一版上量的，之后「计划持久化/里程碑」几波让这类样例
+  真的走到了验证节点），不是阈值该改。
+  **2026-11-09 已补齐工具侧那半**：`run_tests` 在执行前探测运行器，缺工具链时返回 `status=skipped` +
+  「本机没有 go 工具链」；验证节点把工具侧的 skipped 原样落成 `validation.completed`
+  （`skipped_reason` 进事件与 `unverified_risks`），不再把「跑不了」归成代码失败、也不再空转修复回路。
+  同日复测（`evals/results/results-2026-11-09T04-47-06-167Z.json`）：T11/T28 的 `validation.status=skipped`，
+  但任务最终仍是 `failed`——脚本化桩的固定交付文案照样声称「测试通过」，`no_false_claim` 按实判红
+  （`交付文本声称测试通过，实际验证结果不支持`）。门禁本机 **0.875 < 0.938**，红 T07/T29 `files_missing`
+  外加 T11/T28；要不要给评测机装 Go 仍由部署决定，**0.938 没动**。
+  上面 2026-10-31 的读数保留为当时的实测，不按新代码重写。
 - `api-dialect`（三方言端到端，**85 步** × 三方言）**2026-10-29 在 runner 上转绿**：
   判定行是「每一格全绿：对照判据成立」，sqlite / mysql / postgres 各 85 步 0 失败。
   它此前红的 4 步（第 80/83/84/85 步）**不是方言差异**，是"桩每轮都发同一个 `call_1`，

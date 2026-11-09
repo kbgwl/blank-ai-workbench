@@ -216,7 +216,8 @@ printf '../../../api/src\n' > desktop/build/runtime/Lib/site-packages/blank_api.
   后端守护（探测 → 迁移 → 拉起 → 健康检查 → 故障对话框 → 退出回收）；自检开关；
   单实例（`requestSingleInstanceLock`，第二实例让位并把已有窗口从最小化/托盘中唤回）、
   托盘（显示主窗口 / 后端状态 / 退出；关窗默认进托盘，退出只走显式路径）、
-  全局快捷键（默认 `Control+Alt+B`，注册失败一律降级写日志）、自动更新骨架（见下）。
+  全局快捷键（默认 `Control+Alt+B`，注册失败一律降级写日志）、
+  自动更新（检查 → 下载 → 校验 → 用户点击安装，见下）。
 - `shell-policy.cjs` —— 壳策略层：单实例唤回计划、关窗路由、快捷键规范化与三态注册结果、
   更新决策（版本比较 + 元数据/签名校验，**每个分支 `install:false`**）。
   纯函数、不 require electron，判定全部在 `tests/shell-policy.test.cjs` 与
@@ -228,12 +229,13 @@ printf '../../../api/src\n' > desktop/build/runtime/Lib/site-packages/blank_api.
   托盘运行期读它：开发态读 `build/`，打包态读 extraResources 的 `resources/shell/icon.ico`
   （nativeImage 吃 asar 路径不可靠）。
 
-## 桌面壳四项（#107）：单实例 / 托盘 / 全局快捷键 / 自动更新骨架
+## 桌面壳四项（#107）：单实例 / 托盘 / 全局快捷键 / 自动更新
 
 判定与执行的分层是刻意的：「怎么决定」全在 `shell-policy.cjs`（可单测），
-main.cjs 只做「读 Electron 状态 → 调策略 → 执行动作」。更新骨架**不接发布通道、
-不下载、不安装**：只有配了 `BLANK_UPDATE_FEED_URL` 才取一次 JSON 元数据，
-决策结果进日志和托盘一行状态。
+main.cjs 只做「读 Electron 状态 → 调策略 → 执行动作」。自动更新是**检查 → 下载 →
+校验 → 用户点击安装**：只有配了 `BLANK_UPDATE_FEED_URL` 才碰网络；下载完只把包放好、
+把托盘那一行点亮，**不会自动替换正在用的程序**。三道保守都在 `main.cjs` 的
+`downloadUpdate` / `applyUpdate` 里：下载不装、装前按实际字节重算 sha256、默认不碰网络。
 
 **接线装置**（`tests/main-wiring.test.cjs`）：把 `electron` 换成内存假实现（窗口、托盘、
 快捷键、生命周期都可观测），健康检查与更新源用 127.0.0.1 随机端口的**真 HTTP**，
@@ -241,7 +243,8 @@ main.cjs 只做「读 Electron 状态 → 调策略 → 执行动作」。更新
 第二实例在**建窗口/建托盘/探后端之前**退出；健康桩可达时复用而不是 spawn；第二实例信号与
 托盘双击都能把隐藏窗口 show+focus 唤回；托盘可用时 ✕ 被拦下、托盘「退出」后 ✕ 放行；
 托盘不可用时关窗退回退出；快捷键注册成功时回调真挂上并能隐藏/唤回，被占用/抛异常都降级；
-更新骨架只取一次元数据、**从不请求安装包**，500/读不懂/同版本/未配置四种形态各自有可读原因。
+更新链路只取一次元数据，摘要对得上时下载一次安装包、被篡改的包丢弃、**任何分支都不自动安装**，
+500/读不懂/同版本/未配置四种形态各自有可读原因。
 变异电池 6/6：第二实例不让位、收到信号不唤回、关窗不路由、快捷键假注册成功、更新时真下载、
 托盘退出不置位——每条都至少让一条判据变红，红集合实测后写死（`E:/tmp/m92/battery-check.json`）。
 
@@ -254,12 +257,31 @@ main.cjs 只做「读 Electron 状态 → 调策略 → 执行动作」。更新
 | `Control+Alt+B` 真按唤出/隐藏；与另一热键助手撞车时日志出现「已被其他程序占用…降级」且应用照常可用 | 同上；撞车那条需故意先占住该组合 | 快捷键按了没反应且日志没有降级行 = 三态没收住 |
 | 后端起不来时的故障对话框（重试 / 复制日志并退出）与真实 spawn/回收 | 故意让解释器缺失或迁移失败，且允许起壳 | 白屏、无对话框，或退出后残留后端进程 |
 
-## 尚未实现
+## 代码签名（已接线，待证书）
 
-代码签名。单实例 / 托盘 / 全局快捷键 / 自动更新骨架已落在
-`shell-policy.cjs` + `main.cjs`（#107）：判定与 main.cjs 接线都已有可失败判据
-（`tests/main-wiring.test.cjs` + 变异电池 6/6），剩 GUI 观感与真实进程交互待点验（见上表）；
-自动更新的下载与安装**刻意不做**，等发布通道与签名定了再接 `electron-updater`。
+`package.json` 的 `win.signtoolOptions` 已按发布者「无锡空白格人工智能科技有限公司」写死
+`publisherName` / `certificateSubjectName`，摘要用 `sha256`，并带 RFC3161 时间戳
+（没有时间戳，证书过期后已发布安装包的签名会一起失效）。判定与配置一致性钉在
+`sign-policy.cjs` + `tests/sign-policy.test.cjs`；发布前先跑：
 
-> 目前未配代码签名证书，打出来的 exe 会被 Windows SmartScreen 拦成"未知发布者"，
-> 用户需要点"仍要运行"。正式分发前要解决。
+    npm run sign:check
+
+退出码：`0` 证书就绪；`2` 本机没有该公司的代码签名证书；`1` 配置或查询本身有问题。
+
+`dist` 走 `dist-build.cjs`，用同一份判定决定签或不签：证书在库里就按指纹签；
+配了 `CSC_LINK` 就交给外部证书；都没有就只关签名（`signExecutable: false`，图标与版本
+元数据照常写入），并打印一行「本次只出未签名包」。不能直接跑 `electron-builder`：
+只要配了 `certificateSubjectName`，它就会去证书库找、找不到直接让打包失败——
+本机实测（2026-11-09）直接跑的报错是
+`Cannot find certificate 无锡空白格人工智能科技有限公司, all certs:`、退出码 1；
+走 `npm run dist` 同一棵树能出未签名包（`dist/win-unpacked/Blank AI.exe`，退出码 0）。
+
+**本机实测（2026-11-09）`sign:check` 退出码为 `2`**：`Cert:\CurrentUser\My` 里只有 `CN=localhost`
+（服务器用途）与一张无 EKU 的自签证书，`Cert:\LocalMachine\My` 为空；按代码签名用途过滤后
+**0 张**，`E:/env` 与项目目录下也没有 `.pfx/.p12/.cer`。正式分发前必须把公司证书（含私钥）
+装进 `Cert:\CurrentUser\My`，或用 `CSC_LINK` + `CSC_KEY_PASSWORD` 指向 pfx——
+私钥不在仓库里，也不能在代码里凭空生成。装好证书后跑一次 `npm run dist` 并核对产物
+`Get-AuthenticodeSignature` 的签名主体，才算「已签名」；那一步本机现在给不出证据。
+
+单实例 / 托盘 / 全局快捷键 / 自动更新的判定与接线都已有可失败判据
+（`tests/main-wiring.test.cjs` + 变异电池 6/6），剩 GUI 观感与真实进程交互待人工点验（见上表）。

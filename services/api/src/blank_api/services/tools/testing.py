@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, ok
@@ -71,6 +72,21 @@ def summarize_exit_codes(output: str) -> dict:
     return counts
 
 
+def missing_test_runner(argv: list[str], tier: str = "") -> str:
+    """检测到的运行器不在 PATH 上时返回它的名字，否则空串。
+
+    只查裸命令名（`go`、`npm`）：带路径分隔符的（`.venv/Scripts/python`）由
+    ``normalize_relative_executable`` 负责，用 which 判只会制造假红。
+    容器档不查宿主 PATH——命令在镜像里跑，宿主有没有这个工具与它无关。
+    """
+    if not argv or runs_in_docker(tier):
+        return ""
+    name = str(argv[0])
+    if not name or "/" in name or "\\" in name:
+        return ""
+    return "" if shutil.which(name) else name
+
+
 async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
     blocked = policy_gate(context, "run_tests", arguments)
     if blocked is not None:
@@ -93,6 +109,22 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
         if runs_in_docker(tier) and argv and argv[0] in (sys.executable, project_python(context.root)):
             # 宿主虚拟环境不在容器里，测试要改用镜像自带的解释器
             argv = [CONTAINER_PYTHON, *argv[1:]]
+        absent = missing_test_runner(argv, tier)
+        if absent:
+            # 识别出了测试命令、但本机根本没装这个运行器（典型：Go 项目没有 go）。
+            # 判 failed 会让任务去"修"一段本来是对的代码；判 error 会进修复回路，
+            # 模型重试同一个不存在的命令直到步数烧完。跳过并说清缺什么才诚实。
+            reason = f"本机没有 {absent} 工具链，测试没有执行（不是代码没通过）"
+            return ToolOutcome(
+                ok=False,
+                status="skipped",
+                message=reason,
+                data={
+                    "command": " ".join(argv),
+                    "skipped_reason": reason,
+                    "missing_test_runner": absent,
+                },
+            )
         if shell:
             argv = " ".join(argv)
     result = await execute_command(

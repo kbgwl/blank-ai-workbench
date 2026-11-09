@@ -3639,6 +3639,18 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         )
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}
+    if status == "skipped":
+        # 工具自己判定「这次跑不了」（典型：Go 项目，而本机没有 go 工具链）。
+        # 必须把工具给的 reason 带出来：收尾文案会读它，不能让用户只看到一句
+        # 空泛的「未做自动化校验」，然后自己翻证据包才知道缺的是 Go。
+        validation = _skipped_validation(
+            str(data.get("skipped_reason") or payload.get("message") or "")
+            or "本次没有执行自动化校验",
+            command=data.get("command") or "run_tests",
+            output_tail=str(payload.get("message") or payload.get("output") or "")[-2000:],
+        )
+        await session.recorder.add("validation.completed", node, validation)
+        return {"validation": validation}
     if status == "awaiting_approval":
         # 工具在等你批准，不是失败。判成 failed 的代价是双倍的：模型会去"修复"
         # 一个不存在的问题——重试同一个需要审批的工具、再等、再判失败，直到步数

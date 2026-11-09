@@ -6,11 +6,12 @@
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "test": "node --test tests/gpu-guard.test.cjs tests/api-base.test.cjs tests/shell-policy.test.cjs tests/update-policy.test.cjs tests/main-wiring.test.cjs tests/splash.test.cjs tests/app-identity.test.cjs",
+    "test": "node --test tests/gpu-guard.test.cjs tests/api-base.test.cjs tests/shell-policy.test.cjs tests/update-policy.test.cjs tests/main-wiring.test.cjs tests/splash.test.cjs tests/app-identity.test.cjs tests/sign-policy.test.cjs",
     "install:local": "node install-local.cjs",
-    "dist": "electron-builder",
-    "dist:portable": "electron-builder --win portable",
-    "dist:nsis": "electron-builder --win nsis",
+    "dist": "node dist-build.cjs",
+    "dist:portable": "node dist-build.cjs portable",
+    "dist:nsis": "node dist-build.cjs nsis",
+    "sign:check": "node check-signing.cjs",
     "verify": "node verify-package.cjs"
   },
   "devDependencies": {
@@ -80,6 +81,14 @@
     ],
     "win": {
       "icon": "build/icon.ico",
+      "signtoolOptions": {
+        "publisherName": "无锡空白格人工智能科技有限公司",
+        "certificateSubjectName": "无锡空白格人工智能科技有限公司",
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "rfc3161TimeStampServer": "http://timestamp.digicert.com"
+      },
       "target": [
         {
           "target": "portable",

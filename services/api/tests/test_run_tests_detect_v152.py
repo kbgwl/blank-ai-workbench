@@ -170,3 +170,63 @@ async def test_run_tests_keeps_failed_for_real_test_failure(tmp_path: Path, monk
     outcome = await testing_mod._run_tests(context, {"command": "python -m pytest -q"})
     assert outcome.status == "failed"
     assert outcome.data["passed"] is False
+
+
+# ── 识别出了测试命令、但本机没有这个运行器（Go 样例在评测机上的真实形态）──
+# 以前直接交给执行层：shell=False 时 create_subprocess_exec 找不到 go 会直接抛，
+# 被记成 error/failed，任务去"修"一段本来对的代码。跳过的判据必须落在工具层，
+# 因为"缺哪个工具"只有这里知道。
+
+
+def test_missing_test_runner_only_checks_bare_names_on_path(monkeypatch):
+    absent = "definitely-not-installed-runner-xyz"
+    # 带路径的由 normalize_relative_executable 负责，不能在这里误判成缺失。
+    assert testing_mod.missing_test_runner(["/abs/path/to/runner"], "") == ""
+    assert testing_mod.missing_test_runner([], "") == ""
+    assert testing_mod.missing_test_runner([absent], "") == absent
+    # 容器档在镜像里执行，宿主有没有这个工具与它无关（档位能不能真落到 docker
+    # 由部署与 tiers 决定，这里直接钉住"容器里就不查宿主 PATH"这条分支）。
+    monkeypatch.setattr(testing_mod, "runs_in_docker", lambda tier: True)
+    assert testing_mod.missing_test_runner([absent], "workspace") == ""
+
+
+async def test_go_project_without_go_toolchain_is_skipped_not_failed(tmp_path: Path, monkeypatch):
+    root = tmp_path / "goproj"
+    root.mkdir()
+    (root / "go.mod").write_text("module example.com/strutil\n\ngo 1.23\n", encoding="utf-8")
+    monkeypatch.setattr(testing_mod, "policy_gate", lambda *a, **k: None)
+    monkeypatch.setattr(testing_mod.shutil, "which", lambda name: None)
+    called = []
+
+    async def _never(argv, *args, **kwargs):
+        called.append(argv)
+        raise AssertionError("缺少工具链时不该起进程")
+
+    monkeypatch.setattr(testing_mod, "execute_command", _never)
+    context = ToolContext(root=root, task_id="t-go", session_factory=None)
+    outcome = await testing_mod._run_tests(context, {})
+    assert outcome.status == "skipped"
+    assert outcome.ok is False
+    assert called == []
+    assert outcome.data["missing_test_runner"] == "go"
+    assert "go" in outcome.data["skipped_reason"]
+    assert "本机没有" in outcome.data["skipped_reason"]
+
+
+async def test_go_project_with_go_toolchain_still_runs(tmp_path: Path, monkeypatch):
+    # 反向守卫：别把"Go 项目"一律跳过——装了工具链就必须真的跑。
+    root = tmp_path / "goproj"
+    root.mkdir()
+    (root / "go.mod").write_text("module example.com/strutil\n\ngo 1.23\n", encoding="utf-8")
+    monkeypatch.setattr(testing_mod, "policy_gate", lambda *a, **k: None)
+    monkeypatch.setattr(testing_mod.shutil, "which", lambda name: f"C:/fake/{name}.exe")
+    monkeypatch.setattr(
+        testing_mod,
+        "execute_command",
+        await _fake_execute({"stdout": "ok  example.com/strutil  0.01s", "exit_code": 0}),
+    )
+    context = ToolContext(root=root, task_id="t-go-ok", session_factory=None)
+    outcome = await testing_mod._run_tests(context, {})
+    assert outcome.status == "ok"
+    assert outcome.data["passed"] is True
+    assert outcome.data["command"].startswith("go test")

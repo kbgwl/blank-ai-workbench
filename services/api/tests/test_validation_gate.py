@@ -138,6 +138,50 @@ def test_a_real_pass_still_reports_passed() -> None:
     assert update["validation"]["status"] == "ok"
 
 
+# ── 工具自己报 skipped：缺 Go 工具链的样例不能再被判成失败 ─────────────────
+def test_tool_reported_skip_keeps_its_reason_and_is_not_a_failure() -> None:
+    from blank_api.services.agent.graph import route_after_validation
+
+    result = {
+        "tool": "run_tests",
+        "status": "skipped",
+        "ok": False,
+        "output": "",
+        "message": "本机没有 go 工具链，测试没有执行（不是代码没通过）",
+        "data": {
+            "command": "go test ./... -count=1",
+            "skipped_reason": "本机没有 go 工具链，测试没有执行（不是代码没通过）",
+            "missing_test_runner": "go",
+        },
+    }
+    update, session = _run({"tool_results": [result], "repair_rounds": 1})
+    validation = update["validation"]
+    assert validation["status"] == "skipped"
+    assert validation["passed"] is None
+    # 理由必须原样带出来：收尾文案要让用户知道缺的是 Go，而不是一句空泛的"未校验"。
+    assert "go 工具链" in validation["skipped_reason"]
+    assert validation["command"] == "go test ./... -count=1"
+    assert "repair_rounds" not in update
+    assert route_after_validation({"validation": validation}, session) == "summarize_result"
+    assert resolve_status({"validation": validation}) == "succeeded"
+    recorded = [p for k, _, p in session.recorder.events if k == "validation.completed"]
+    assert len(recorded) == 1 and recorded[0]["skipped_reason"] == validation["skipped_reason"]
+
+
+def test_tool_reported_skip_without_reason_still_says_something() -> None:
+    # 第三值兜底：工具没给理由时也不能落成空串，否则交付文案会变成"未执行（）"。
+    result = {
+        "tool": "run_tests",
+        "status": "skipped",
+        "ok": False,
+        "output": "",
+        "data": {"command": "go test ./..."},
+    }
+    update, _ = _run({"tool_results": [result]})
+    assert update["validation"]["status"] == "skipped"
+    assert update["validation"]["skipped_reason"] == "本次没有执行自动化校验"
+
+
 # ── 交付正文必须说出"校验没跑"（v161 §2.2：没有验证证据不得输出成功）──
 def _note(state: dict, report: str = "结论\n- 改好了") -> str:
     from blank_api.services.agent.graph import _validation_note
