@@ -103,6 +103,12 @@ def _isolate_permission_rules(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_shell_policy(monkeypatch):
+    """命令级默认拒绝档默认回 ask：开着 allowlist 的进程会让所有普通命令都挂卡。"""
+    monkeypatch.delenv("BLANK_SHELL_POLICY", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_upload_root(tmp_path, monkeypatch):
     """每个用例一份附件目录。
 

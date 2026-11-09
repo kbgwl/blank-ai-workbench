@@ -76,19 +76,16 @@ class PermissionRule:
         if not self.spec:
             return True
         if tool == "run_shell":
-            from blank_api.services.permissions import covered_by_rules
+            from blank_api.services.permissions import covered_by_any, covered_by_rules
 
             command = str((arguments or {}).get("command") or "")
             if not command:
                 return False
-            # allow 必须逐段覆盖且规则本身可免问；deny 保留拒绝力（哪怕规则
-            # 本身不适合当"免问"——比如裸解释器名）。
-            return (
-                covered_by_rules(
-                    command, {self.tokens}, refuse_inadmissible=self.action == "allow"
-                )
-                is not None
-            )
+            # deny 是"只要有一处命中就拒"，包括壳载荷里展开出来的内层命令；
+            # allow 仍要求每一段都被覆盖（含壳载荷展开），不许搭顺风车。
+            if self.action == "deny":
+                return covered_by_any(command, {self.tokens}) is not None
+            return covered_by_rules(command, {self.tokens}) is not None
         return _path_matches(self.spec, str((arguments or {}).get("path") or ""))
 
 

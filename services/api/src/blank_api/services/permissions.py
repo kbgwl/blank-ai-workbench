@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 import posixpath
 import re
 from typing import TYPE_CHECKING, Any
@@ -42,6 +43,16 @@ MODE_LABELS = {
 ALLOW = "allow"
 ASK = "ask"
 DENY = "deny"
+
+# 命令级默认拒绝档（`BLANK_SHELL_POLICY=allowlist`）：没有命中批准的 run_shell
+# 一律询问，不再因为风险标签是 low/medium 就自动放行。默认 ask 保持产品现状，
+# 因为它会改变"低频命令自动跑"的交互节奏，必须由部署方显式打开。
+SHELL_POLICY_ASK = "ask"
+SHELL_POLICY_ALLOWLIST = "allowlist"
+
+
+def shell_policy() -> str:
+    return os.environ.get("BLANK_SHELL_POLICY", SHELL_POLICY_ASK).strip().lower()
 
 SCOPE_ONCE = "once"
 SCOPE_PREFIX = "prefix"
@@ -188,6 +199,111 @@ def tokenize(segment: str) -> list[str]:
     return tokens
 
 
+# 包一层壳再交载荷的入口。`cmd /c "..."`、`powershell -Command "..."`、`bash -c "..."`
+# 里真正执行的是引号内那段；只看外层首词，`deny run_shell(rm -rf build)` 就抓不到
+# `cmd /c "rm -rf build"`——审批卡问的是 cmd，规则匹配的也是 cmd，内层动作整个隐身。
+_WRAPPER_FLAGS = {
+    "cmd": frozenset({"/c", "/k"}),
+    "powershell": frozenset({"-command", "-c"}),
+    "pwsh": frozenset({"-command", "-c"}),
+    "sh": frozenset({"-c"}),
+    "bash": frozenset({"-c"}),
+    "zsh": frozenset({"-c"}),
+    "dash": frozenset({"-c"}),
+}
+_MAX_UNWRAP_DEPTH = 4
+_MAX_EXPANDED_SEGMENTS = 64
+
+
+def unwrap_payload(tokens: list[str]) -> str:
+    """外层是已知壳且带内联载荷时返回载荷原文，否则空串。
+
+    载荷可能被拆成多个 token（`cmd /c echo hi`）；用空格拼回去只用于**规则匹配**，
+    不用于执行，所以不必还原原命令的每一种引号形状。认不出的形状返回空串 =
+    不做内层展开，由外层规则照常判定（收紧不动，放宽不放）。
+    """
+    if not tokens:
+        return ""
+    exe = _basename(tokens[0]).lower()
+    flags = _WRAPPER_FLAGS.get(exe)
+    if not flags:
+        return ""
+    for index, token in enumerate(tokens[1:], start=1):
+        lowered = token.lower()
+        if lowered in flags:
+            payload = " ".join(tokens[index + 1 :]).strip()
+            return payload
+        # 旗标之前出现非旗标 ⇒ 这是脚本路径（`bash script.sh`），没有内联载荷。
+        if not lowered.startswith(("-", "/")):
+            return ""
+    return ""
+
+
+def expand_command(command: str, _depth: int = 0) -> list[str]:
+    """把一条命令展开成"真正会被执行的每一段"。
+
+    返回顺序：先是原命令的每一段（保留下层规则对 `cmd /c ...` 这种整串的批准），
+    再递归展开每个壳载荷里的内层片段。去重后截断到上限——展开是给人看的判定输入，
+    不是解释器，不允许一条命令靠嵌套把规则匹配拖爆。
+    """
+    if _depth > _MAX_UNWRAP_DEPTH or not str(command or "").strip():
+        return []
+    out: list[str] = []
+    for segment in split_segments(command):
+        out.append(segment)
+        payload = unwrap_payload(tokenize(segment))
+        if payload:
+            out.extend(expand_command(payload, _depth + 1))
+    seen: list[str] = []
+    for item in out:
+        if item and item not in seen:
+            seen.append(item)
+        if len(seen) >= _MAX_EXPANDED_SEGMENTS:
+            break
+    return seen
+
+
+_QUOTE_ESCAPE_CHARS = ('"', "'", "`", "\\", "^")
+
+
+def _deny_views(command: str) -> list[str]:
+    """驳回侧的多个比对视图：原文 + 去掉引号/转义字符的视图。
+
+    `powershell -Command "cmd /c \\"rm -rf build\\""` 这种多层引号在真壳里的语义
+    取决于哪一层先解析，但意图很清楚。原文视图先行（保住原有规则形状），
+    去引号视图只**追加**——它只会让 deny 多拒，不会让 allow 多放。
+    引号在壳里只负责分组，去掉以后词序不变；引号内的空格会被拆成多个词，
+    对"段首前缀"比对同样只会更保守。
+    """
+    views = [command]
+    stripped = command
+    for char in _QUOTE_ESCAPE_CHARS:
+        stripped = stripped.replace(char, "")
+    if stripped and stripped != command:
+        views.append(stripped)
+    return views
+
+
+def covered_by_any(command: str, rules, *, refuse_inadmissible: bool = False) -> str | None:
+    """**任一**展开片段命中规则就返回该规则串（驳回用）。
+
+    deny 的语义是"这条命令里只要有一处是我永远不碰的，整条就拒"；要求每一段都命中
+    才能拒，会让 `echo hi && rm -rf build` 里真正的删除动作搭上无害段的便车。
+    """
+    usable = [rule for rule in rules if rule and (not refuse_inadmissible or _rule_admissible(rule))]
+    if not usable:
+        return None
+    for view in _deny_views(command):
+        for segment in expand_command(view):
+            tokens = tokenize(segment)
+            if not tokens:
+                continue
+            matched = next((rule for rule in usable if _starts_with(tokens, rule)), None)
+            if matched is not None:
+                return render_rule(matched)
+    return None
+
+
 # 能当"子命令"看的第二段 token：git status / npm run / docker compose。
 # 带斜杠、点、冒号或是绝对路径的一律不算——否则 curl https://x 会变成 "curl https://x"。
 _SUBCOMMAND = re.compile(r"^[a-z][a-z0-9_-]{0,24}$")
@@ -299,28 +415,55 @@ def _rule_admissible(rule: tuple[str, ...]) -> bool:
     return not any(token.lower() in _OPAQUE_CODE_FLAGS for token in rule[1:])
 
 
+def _leaf_segments(command: str, _depth: int = 0) -> list[str]:
+    """把外层壳剥掉后的执行片段；没有壳就是原片段本身。"""
+    if _depth > _MAX_UNWRAP_DEPTH:
+        return []
+    out: list[str] = []
+    for segment in split_segments(command):
+        payload = unwrap_payload(tokenize(segment))
+        if payload:
+            out.extend(_leaf_segments(payload, _depth + 1))
+        else:
+            out.append(segment)
+        if len(out) >= _MAX_EXPANDED_SEGMENTS:
+            return out[:_MAX_EXPANDED_SEGMENTS]
+    return [item for item in out if item.strip()]
+
+
 def covered_by_rules(command: str, rules, *, refuse_inadmissible: bool = True) -> str | None:
     """整条命令的每个子命令都被规则覆盖时返回命中的规则串，否则返回 None。
 
     只覆盖第一段是不够的：``npm test && rm -rf src`` 若只对第一段放行，
     第二段就搭了顺风车。所以这里要求逐段命中。
 
+    壳的内联载荷按**内层命令**判定：规则写 ``git status`` 可以覆盖
+    ``cmd /c "git status"``，但覆盖不了 ``cmd /c "git status && rm -rf src"``。
+    旧形状的整串规则（``cmd /c "git status"``）仍然有效：只要每个原始片段都被
+    同一套规则覆盖，也照样放行——那是用户当时批准的**那一条命令**，不是放宽。
+
     `refuse_inadmissible` 只对**免问**（批准）那一路为真；驳回那一路传 False——
     用户在本会话里明说"powershell 别问了"，一条不配免问的规则也得保住它的拒绝力。
     """
-    segments = [tokenize(item) for item in split_segments(command)]
-    if not segments or any(not segment for segment in segments):
-        return None
     usable = [rule for rule in rules if rule and (not refuse_inadmissible or _rule_admissible(rule))]
     if not usable:
         return None
-    hits: list[str] = []
-    for segment in segments:
-        matched = next((rule for rule in usable if _starts_with(segment, rule)), None)
-        if matched is None:
-            return None
-        hits.append(render_rule(matched))
-    return ", ".join(dict.fromkeys(hits))
+    for candidates in (
+        [tokenize(item) for item in split_segments(command)],
+        [tokenize(item) for item in _leaf_segments(command)],
+    ):
+        if not candidates or any(not segment for segment in candidates):
+            continue
+        hits: list[str] = []
+        for segment in candidates:
+            matched = next((rule for rule in usable if _starts_with(segment, rule)), None)
+            if matched is None:
+                hits = []
+                break
+            hits.append(render_rule(matched))
+        if hits:
+            return ", ".join(dict.fromkeys(hits))
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -875,7 +1018,10 @@ class PermissionPolicy:
 
         if name == "run_shell" and command:
             prefix = command_prefix(command)
-            denied = covered_by_rules(command, self.denied_prefixes, refuse_inadmissible=False)
+            # 会话驳回与手写 deny 同一口径：任一段命中就拒，包括壳载荷里的内层命令。
+            # 用逐段全覆盖的话，`echo hi && rm -rf build` 会把用户刚驳回的删除动作
+            # 挂在无害段后面偷偷放行。
+            denied = covered_by_any(command, self.denied_prefixes)
             if denied:
                 return deny(
                     risk,
@@ -909,6 +1055,11 @@ class PermissionPolicy:
         # 但敏感路径 / 含密钥的补丁仍是高风险，不能被这一档静默吞掉。
         if self.mode == MODE_ACCEPT_EDITS and name in EDIT_TOOLS and risk not in ("high", "critical"):
             return approve(risk, "mode:accept_edits")
+
+        # 命令级默认拒绝：只对 run_shell 生效，且排在所有显式批准之后——
+        # 规则、会话批准、工具档都还能放行；没被任何东西放行的命令回到人手里。
+        if name == "run_shell" and command and shell_policy() == SHELL_POLICY_ALLOWLIST:
+            return ask(risk, "policy:shell_allowlist", command_prefix(command), memo=memo)
 
         if risk not in ("high", "critical"):
             return approve(risk, "risk:auto", command_prefix(command))
