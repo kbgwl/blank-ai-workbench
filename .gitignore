@@ -86,5 +86,8 @@ web/out-old*/
 # 打包日志：每次出包一份，里面是本机路径与时间戳，不属于源码
 desktop/build*.log
 
+# 验收脚本偶尔把 JSON 报告写进仓库根（正常应落 .acceptance/），别让它们混进提交
+/v0112-*.json
+
 # WorkBuddy 的会话目录（含本项目记忆），里面写的是本机路径与用户名
 .workbuddy/

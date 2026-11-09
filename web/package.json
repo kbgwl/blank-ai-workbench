@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/build.mjs",
     "start": "next start",
     "lint": "eslint src",
     "test": "node --test --test-concurrency=2 --import ./test-bootstrap.mjs \"src/**/*.test.ts\""
