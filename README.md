@@ -285,6 +285,10 @@ uv run alembic revision --autogenerate -m "描述"
   0 失败。报告见 `evals/results/results-2026-10-22T07-43-54-994Z.json`。
 - 本机没有 `docker` 命令行，容器隔离这条路径当前无法就地复核；没有容器时默认走宿主退路（LocalSandbox）：
   Windows 上内存/进程数/进程树由 Job Object 强制，文件与网络边界只靠路径闸门、审批与证据链，界面上如实标注。
+- **内核升级里未验的七项**：网络出口强制、Linux 原生沙箱后端、CPU/磁盘/IO 配额、任务级隔离、
+  远程 MCP 的 OAuth、更新包签名与 SBOM、第二台机器差异对账。它们依赖管理员权限、第二台机器或
+  真实证书，全部冻结在 `CHANGELOG.md` 的「未验证」一节，逐项写了判据、红了长啥样与哑弹风险，
+  **不计入「已完成」**。
 - **数据库：普通用户什么都不用装。** 这里要说的是**服务端**：默认与桌面版都是单个 SQLite 文件（开发库
   `sqlite+aiosqlite:///./data/blank_dev.db`；桌面包内由壳层把 `BLANK_DATABASE_URL` 指到数据目录下的
   `blank.db`，见 `desktop/main.cjs`）。`MySQL` / `PostgreSQL` 是**可选部署形态**——形态的代价是服务端要你自己起。
