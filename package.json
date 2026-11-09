@@ -1,6 +1,6 @@
 {
   "name": "blank-ai-workbench",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "private": true,
   "packageManager": "pnpm@10.4.1",
   "scripts": {
@@ -12,6 +12,7 @@
     "test:desktop": "node --test desktop/tests/gpu-guard.test.cjs desktop/tests/api-base.test.cjs desktop/tests/shell-policy.test.cjs desktop/tests/update-policy.test.cjs desktop/tests/main-wiring.test.cjs",
     "test:evals": "node --test evals/tests/judgement.test.mjs",
     "check:versions": "node scripts/check_versions.mjs",
+    "feed:update": "node scripts/make_update_feed.mjs",
     "runtime:desktop": "node scripts/prepare_desktop_runtime.mjs",
     "verify:desktop": "node desktop/verify-package.cjs",
     "smoke:api": "uv run --project services/api python scripts/smoke_health.py",

@@ -135,14 +135,18 @@ pnpm regression --evals   # 追加跑 32 个评测样例（需要后端已在运
 ```bash
 # 1. 前端静态导出（这两个变量缺一不可）
 BLANK_DESKTOP_BUILD=1 NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000 pnpm build:web
-# 2. 组装随包 Python 运行时（约 129MB，不入库；本机第一次要下载独立 CPython）
+# 2. 组装随包 Python 运行时（约 123MB，不入库；本机第一次要下载独立 CPython）
 pnpm runtime:desktop
 # 3. 出包（版本号只改 desktop/package.json）
-cd desktop && node node_modules/electron-builder/cli.js --win nsis
-# 4. 打包后自检 14 项：产物齐不齐、asar 里是不是仓库这一版、包内有没有本机痕迹
+cd desktop && node node_modules/electron-builder/cli.js --win nsis portable
+# 4. 打包后自检 44 项：产物齐不齐、asar 里是不是仓库这一版、包内有没有本机痕迹
 pnpm verify:desktop
 ```
 
+- **打包器需要 `npm` 在 PATH 里**：electron-builder 收集依赖时会调 `npm ls --json`，
+  找不到 `npm` 只报 `⨯ No JSON content found in output`（看起来像构建坏了，实际是 PATH 少一项）。
+  本机 Node 装在 `E:/env/node/node-v24.20.0-win-x64` 时，先把该目录加进 PATH 再出包；
+  包内 Electron 也可以用本地解压目录（`--config.electronDist=<dir>`）省掉联网下载。
 - **版本号只有一处**：`desktop/package.json`。安装包文件名、托盘「关于」都取它；
   根 `package.json` 与 README 的「当前发布版本」必须同值，`pnpm check:versions` 会拦。
 - **运行时不再靠手搓**：`scripts/prepare_desktop_runtime.mjs` 用 uv 的独立 CPython +
@@ -154,6 +158,44 @@ pnpm verify:desktop
   客户端读的是它。
 - CI 两格：`desktop`（单测 + 版本口径）与 `desktop-package`（静态导出 → 组装运行时 →
   `--dir` 出包 → `verify-package`）。
+
+### 9.1 代码签名（发公开版前必做）
+
+electron-builder 原生认两个环境变量，不需要改 `package.json`：
+
+```bash
+CSC_LINK=<pfx 文件路径或 base64> CSC_KEY_PASSWORD=<口令> \
+  node node_modules/electron-builder/cli.js --win nsis portable
+```
+
+签名是否真的生效，按产物断言，不看构建日志（日志里即使没证书也会打印 `signing with signtool.exe`）：
+
+```powershell
+Get-AuthenticodeSignature 'dist\Blank-AI-安装版-<version>.exe' | Select-Object Status
+# 期望 Valid；没有证书时是本机的 NotSigned
+```
+
+没有证书也能出包、能运行，但用户首次安装会撞 SmartScreen「未知发布者」。
+**这是外部采购项（OV/EV 证书），仓库里没有、也不应有证书与口令。**
+
+### 9.2 自动更新源
+
+桌面壳只在配置了 `BLANK_UPDATE_FEED_URL` 时检查一次更新；feed 必须给
+`version` / `url` / `sha256` 三样，缺一样就拒装（`desktop/shell-policy.cjs::decideUpdate`）。
+用脚本生成，别手写：
+
+```bash
+BLANK_UPDATE_BASE_URL=https://dl.example.com/blank pnpm feed:update
+# → desktop/dist/latest.json（含 version / url / sha256 / size）
+```
+
+脚本会把安装包的实际 sha256 算进 feed，并用壳端同一套纯函数自检
+（旧版本能升级、同版本不提示、缺摘要被拒、半包被拒）；自检不过不写文件。
+把 `latest.json` 与安装包一起放到 `BLANK_UPDATE_BASE_URL` 指向的目录，
+客户端侧再配同名环境变量即可。
+
+已知边界：下载与安装由用户点托盘确认（不静默替换），摘要不符会丢弃；
+本仓库未内置更新服务器，托管地址属于部署方配置。
 
 ## 10. 数据生命周期与磁盘占用
 

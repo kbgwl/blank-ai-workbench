@@ -41,6 +41,8 @@ services/api/data/*
 
 # 但随包分发的 Python 运行时是构建产物（约 125MB），绝不入库。
 desktop/build/runtime/
+# 重新组装时旧运行时改名留档（prepare_desktop_runtime.mjs 不删旧目录），同样不入库。
+desktop/build/runtime-old-*/
 
 # electron-builder 产物（含改名隔离用的 dist-prev 等）
 desktop/dist*/
