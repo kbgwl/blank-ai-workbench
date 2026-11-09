@@ -15,6 +15,7 @@ import sys
 import pytest
 
 from blank_api.services.sandbox import boundary
+from blank_api.services.sandbox.tiers import TIER_WORKSPACE, resolve_tier
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="边界探针依赖 Windows Job/AC")
 
@@ -135,21 +136,28 @@ def test_exit_code_fails_on_unknown_or_inconsistent_only():
 # 真执行：八条边界都跑，结论跟着本机能力走
 # --------------------------------------------------------------------------- #
 async def test_every_boundary_is_attacked_and_matches_the_account(monkeypatch):
-    """期望值不是写死的：本机是 job_only 就必须报"未强制"，是 os_enforced 就必须报"拦住"。"""
+    """期望值不是写死的：跟着**本次生效后端**的账走，探针行为必须与账对得上。
+
+    local 后端只承诺 Job 那三项；受限令牌后端才承诺文件边界。机器能造受限令牌不等于
+    local 那条命令进了受限令牌——按机器能力写期望，就会把"未强制"读成"拦住"。
+    """
     # 测试夹具默认 BLANK_SANDBOX_ENABLED=0；doctor 不替部署开关做决定，所以这里显式打开，
     # 否则 execute_command 会把 workspace 折成 off，P-PROC 的限额根本不会挂 Job。
     monkeypatch.setenv("BLANK_SANDBOX_ENABLED", "1")
     monkeypatch.setenv("BLANK_SANDBOX_ALLOW_LOCAL", "1")
     cap = boundary.measure(force=True)
     assert cap.apparatus_ok, "探测装置自己不可信，这组断言不成立"
+    resolution = resolve_tier(TIER_WORKSPACE, cap=cap)
+    assert resolution.available, resolution.notice
     report = await collect()
     rows = {item["id"]: item for item in report["boundaries"]}
     assert list(rows) == list(BOUNDARY_IDS), "八条边界缺一条就是少跑了一次攻击"
 
-    file_status = ENFORCED if cap.strength == "os_enforced" else NOT_ENFORCED
+    file_status = ENFORCED if resolution.filesystem_enforced else NOT_ENFORCED
     for probe_id in ("P-READ", "P-WRITE", "P-ESCAPE"):
         assert rows[probe_id]["status"] == file_status, rows[probe_id]
-    assert rows["P-NET"]["status"] == file_status
+    net_status = ENFORCED if resolution.network_enforced else NOT_ENFORCED
+    assert rows["P-NET"]["status"] == net_status
     job_status = ENFORCED if cap.job else NOT_ENFORCED
     assert rows["P-PROC"]["status"] == job_status, rows["P-PROC"]
     assert rows["P-INHERIT"]["status"] == job_status, rows["P-INHERIT"]

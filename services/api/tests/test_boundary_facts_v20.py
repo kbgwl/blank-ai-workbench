@@ -16,6 +16,7 @@ M1a 把 Job Object 接进执行层以后，剩下的风险全在"搬运"这一�
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import time
 
@@ -29,7 +30,8 @@ from blank_api.services.agent.evidence import build_evidence
 from blank_api.services.agent.governance import digest, sandbox_boundary
 from blank_api.services.sandbox import boundary, windows_job
 from blank_api.services.sandbox.boundary import Capability
-from blank_api.services.sandbox.runner import limits_not_applied
+from blank_api.services.sandbox.policy import SandboxPolicy
+from blank_api.services.sandbox.runner import LocalSandbox, limits_not_applied
 from blank_api.services.tools import build_default_tools
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ok
 from blank_api.services.tools.gateway import ToolGateway, sandbox_backend_event_field
@@ -123,20 +125,34 @@ def test_job_only_marks_three_of_seven(cap):
     assert boundary.enforcement_source("local") == "measured_job_object"
 
 
-def test_os_enforced_marks_the_six_it_really_covers(cap):
-    """os_enforced 也不等于七项全亮：CPU 限速与磁盘配额本期不做，档位再高也是 False。
+def test_local_does_not_borrow_machine_identity_boundary(cap):
+    """本机能造受限令牌/进 AC，不等于 local 后端这次执行就受它管。
 
-    这一条反过来钉 `enforced_fields`：把它写成"强度够就全 True"（docker 分支就是这么写的）
-    会让面板在 AC 机器上点亮一个没有任何东西执行的 cpus。
+    local 以宿主令牌 + Job 执行：机器能力只能背书 Job 那三项。把 os_enforced 的
+    filesystem/network 借过来，面板就会在一条根本没进受限令牌的命令上点亮"文件被拒"。
+    CPU 限速与磁盘配额本期不做，档位再高也是 False。
     """
     cap(_cap())
     enforced = boundary.enforced_fields("local")
     assert set(enforced) == ALL_LIMIT_FIELDS
     assert enforced["cpu"] is False and enforced["disk"] is False
-    assert {key: value for key, value in enforced.items() if key not in ("cpu", "disk")} == dict.fromkeys(
-        ("memory", "pids", "tree_kill", "network", "filesystem"), True
-    )
-    assert boundary.enforcement_source("local") == "measured_appcontainer_or_restricted_token"
+    assert {key for key, value in enforced.items() if value} == {"memory", "pids", "tree_kill"}
+    assert boundary.enforcement_source("local") == "measured_job_object"
+
+
+def test_restricted_backend_claims_files_but_never_network(cap):
+    """受限令牌后端：文件边界来自行为自检，网络一律不承诺（没有 AC 就拦不住）。"""
+    cap(_cap(appcontainer=False, file_boundary=True))
+    enforced = boundary.enforced_fields("restricted")
+    assert enforced["filesystem"] is True
+    assert enforced["network"] is False
+    assert enforced["memory"] is True and enforced["pids"] is True and enforced["tree_kill"] is True
+    assert enforced["cpu"] is False and enforced["disk"] is False
+    assert boundary.enforcement_source("restricted") == "measured_restricted_token_file_boundary"
+
+    cap(_cap(appcontainer=False, file_boundary=False))
+    assert boundary.enforced_fields("restricted")["filesystem"] is False
+    assert boundary.enforcement_source("restricted") == "measured_job_object"
 
 
 def test_no_job_means_no_limits_at_all(cap):
@@ -316,8 +332,51 @@ async def test_windows_job_limits_reach_the_event(seeded, workspace, monkeypatch
     assert facts["tree_kill_enforced"] is True
     # 本期不做的两项即使在 Job 档位上也不能亮。
     assert facts["cpu_enforced"] is False and facts["disk_enforced"] is False
-    assert facts["boundary_strength"] in {"job_only", "os_enforced"}
+    # local 以宿主令牌执行：即便机器能造受限令牌，这次执行也只有 Job 这一层。
+    assert facts["boundary_strength"] == "job_only", facts["boundary_strength"]
     assert set(sandbox_backend_event_field(payload)["sandbox_enforcement"]) <= EVENT_KEYS
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Job Object 只在 Windows 上存在")
+async def test_a_slow_boundary_probe_does_not_stall_the_event_loop(workspace, monkeypatch):
+    """算账用的探测要起子进程（行为自检 0.2s 起步，机器忙时更久），不许在事件循环里同步等。
+
+    真实现里 local 后端起完进程就同步调 `boundary.measure()`；那段时间同进程的团队轮次、
+    SSE 推送全部停摆。2026-11-09 全量里团队轮次偶发卡满 30s，就沿着这条缝在查。
+    只数"替身探测正在睡"期间的空转次数：起进程那次 await 也会让事件循环转，
+    不设这道边界的话撤掉 to_thread 这条判据照样绿，等于什么都没钉。
+    """
+    probing = False
+    ticks = 0
+
+    def slow_measure(*args, **kwargs):
+        nonlocal probing
+        probing = True
+        try:
+            time.sleep(0.6)
+        finally:
+            probing = False
+        return _cap(appcontainer=False, restricted_token=False)
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            if probing:
+                ticks += 1
+
+    monkeypatch.setattr(boundary, "measure", slow_measure)
+    watcher = asyncio.create_task(ticker())
+    try:
+        result = await LocalSandbox(SandboxPolicy()).run("echo tick", workspace=str(workspace))
+    finally:
+        watcher.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await watcher
+
+    assert result.backend == "local"
+    assert result.enforcement["memory_enforced"] is True, "账没算出来，这条就没测到调度那段"
+    assert ticks >= 10, f"探测期间事件循环只转了 {ticks} 次：算账把整个进程冻住了"
 
 
 @pytest.mark.skipif(

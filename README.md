@@ -134,8 +134,16 @@ node scripts/register_mock_provider.mjs   # 写入「本地脚本化模型（演
 命令执行默认走沙箱，但 **Docker 是可选的加固档，不是安装前提**：探测不到可用容器后端时退回本机执行
 （Windows 上由 Job Object 强制内存上限、活跃进程数上限与整棵进程树回收；文件与网络边界在设置页和
 证据包里如实标注「未由系统强制」）。装了 Docker 并启动守护进程后会自动改用容器隔离，不用改配置。
-要"只准容器"的部署设置 `BLANK_SANDBOX_ALLOW_LOCAL=0`——那种情况下没有容器就整任务拒绝（409，
-`error.code = sandbox_tier_unavailable`），不会退回宿主执行。
+要"只准容器或受限令牌"的部署设置 `BLANK_SANDBOX_ALLOW_LOCAL=0`——那种情况下两者都不可用就整任务拒绝
+（409，`error.code = sandbox_tier_unavailable`），不会退回宿主执行。
+
+非管理员的 Windows 上还有第三个后端：`BLANK_SANDBOX_RESTRICTED=1` 打开**受限令牌**执行（默认关）。
+启用后先跑一次行为自检——同一个受限子进程里「合成私钥读不到」且「工作区读写成功」，外加宿主令牌、
+授权后、去掉限制 SID 三条对照；全绿才会被选中，任何一条对照红掉整次判定作废。之后文件边界由 NTFS
+真的拒（读 `~/.ssh`、`~/.aws` 等受保护路径失败），内存/进程数/进程树仍由 Job 强制；网络没有
+AppContainer 就拦不住，账本固定写 `network_enforced=false`。可写/可读根与保护路径由规则文件定义
+（`BLANK_SANDBOX_RULES_FILE`，不设则用包内 `rules.default.json`：默认拒绝、拒绝任何覆盖 `~/.ssh`
+的授权、认不出的字段或占位符直接报错）。
 
 想用容器档时，镜像需要先构建一次：
 
@@ -145,7 +153,8 @@ docker build --build-arg BASE_IMAGE=node:24-alpine -t blank-sandbox:dev sandbox
 
 沙箱策略：工作区是唯一可写挂载点，默认 `--network none`，CPU/内存/PID/文件大小/时长均有上限，
 超时立即 `docker rm -f` 回收整棵进程树，环境变量按白名单透传且带 KEY/TOKEN/SECRET 等特征的一律拒绝进入。
-其余可调项：`BLANK_SANDBOX_IMAGE`、`BLANK_SANDBOX_ALLOW_LOCAL`、`BLANK_SANDBOX_CPUS/MEMORY/PIDS`、
+其余可调项：`BLANK_SANDBOX_IMAGE`、`BLANK_SANDBOX_ALLOW_LOCAL`、`BLANK_SANDBOX_RESTRICTED`、
+`BLANK_SANDBOX_RULES_FILE`、`BLANK_SANDBOX_CPUS/MEMORY/PIDS`、
 `BLANK_SANDBOX_NETWORK`、`BLANK_SANDBOX_TIMEOUT`、`BLANK_SANDBOX_MAX_FILE_KB`、`BLANK_SANDBOX_TMPFS`、
 `BLANK_SANDBOX_READ_ONLY_ROOT`、`BLANK_SANDBOX_ENV_ALLOWLIST`。
 

@@ -46,6 +46,13 @@ class SandboxPolicy:
     # （内存/进程数/进程树由内核强制，文件与网络边界如实标注未强制）。要"只准容器"的
     # 部署显式设 BLANK_SANDBOX_ALLOW_LOCAL=0，那种情况下没有容器就整任务拒绝。
     allow_local: bool = field(default_factory=lambda: _env("SANDBOX_ALLOW_LOCAL", "true").lower() in {"1", "true", "yes"})
+    # Windows 受限令牌后端：文件边界由 NTFS 真的拒（自检全绿才启用）。默认关——它会拒绝
+    # 工作区之外的写入（例如往 venv 里 pip install），要部署方按需打开并对规则文件负责。
+    restricted_enabled: bool = field(
+        default_factory=lambda: _env("SANDBOX_RESTRICTED", "false").lower() in {"1", "true", "yes"}
+    )
+    # 受限后端的规则文件（可写/可读根 + 保护路径）。空 = 用包内 rules.default.json。
+    rules_file: str = field(default_factory=lambda: _env("SANDBOX_RULES_FILE", ""))
     # 单次越界宿主执行的部署开关。默认关：模型传了也不执行，交给人工在部署时显式打开。
     allow_host_bypass: bool = field(
         default_factory=lambda: _env("SANDBOX_ALLOW_HOST_BYPASS", "false").lower() in {"1", "true", "yes"}

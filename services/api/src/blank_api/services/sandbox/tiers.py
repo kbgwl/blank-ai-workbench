@@ -34,6 +34,9 @@ REASON_BACKEND_UNAVAILABLE = "sandbox_backend_unavailable"
 REASON_NET_UNAVAILABLE = "workspace_net_unavailable"
 REASON_JOB_ONLY = "measured_job_only"
 REASON_OS_ENFORCED = "measured_os_enforced"
+# 文件边界被系统强制、网络仍放行：受限令牌后端就是这一格。它不是"完全没隔离"，
+# 也不能写成"文件与网络都由系统拒"——两个方向都是谎。
+REASON_FILE_ONLY = "measured_file_boundary_only"
 
 
 class UnknownTier(ValueError):
@@ -214,12 +217,24 @@ def resolve_tier(
         )
 
     docker = backend == "docker"
-    strength = "os_enforced" if docker else cap.strength
-    label = "容器隔离（由 Docker 强制）" if docker else cap.label
+    restricted = backend == "restricted"
+    if docker:
+        strength = "os_enforced"
+        label = "容器隔离（由 Docker 强制）"
+        filesystem = network = True
+    elif restricted:
+        # 受限令牌后端承诺文件边界（行为自检过才有资格被选中），网络没有 AppContainer 就拦不住。
+        strength = cap.strength
+        label = cap.label
+        filesystem = cap.filesystem_boundary
+        network = cap.network_boundary
+    else:
+        # local 以宿主令牌执行：机器上"能造出受限令牌"与本次执行无关，不许借来背书。
+        strength = "job_only" if (cap.apparatus_ok and cap.job) else ("unknown" if not cap.apparatus_ok else "none")
+        label = boundary.strength_label(strength)
+        filesystem = network = False
     os_level = strength == "os_enforced"
     limits = docker or strength in ("job_only", "os_enforced")
-    filesystem = docker or os_level
-    network = docker or os_level
 
     if name == TIER_WORKSPACE_NET and not network:
         return TierResolution(
@@ -249,6 +264,12 @@ def resolve_tier(
             "文件与网络边界未由系统强制（边界强度={}），越界拦截靠路径闸门、审批与证据链"
         ).format(strength)
         reason = REASON_JOB_ONLY if strength == "job_only" else "measured_" + strength
+    elif filesystem and not network:
+        notice = (
+            "文件边界由系统强制：受限令牌 + NTFS 默认拒绝，读写根之外（含 ~/.ssh）被内核拒绝；"
+            "网络仍由系统放行（本机没有可用的网络隔离原语，边界强度={}）"
+        ).format(strength)
+        reason = REASON_FILE_ONLY
     else:
         notice = "内核强制边界：文件与网络由系统拒绝（边界强度={}）".format(strength)
         reason = REASON_OS_ENFORCED if not docker else "docker_container"
@@ -276,6 +297,7 @@ __all__ = [
     "HOST_BYPASS",
     "PERMISSIVENESS",
     "REASON_BACKEND_UNAVAILABLE",
+    "REASON_FILE_ONLY",
     "REASON_GLOBAL_DISABLED",
     "REASON_JOB_ONLY",
     "REASON_NET_UNAVAILABLE",

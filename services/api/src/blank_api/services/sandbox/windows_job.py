@@ -177,6 +177,21 @@ def assign_pid(job: Job, pid: int) -> tuple[bool, str]:
     return True, ""
 
 
+def assign_handle(job: Job, process_handle: int) -> tuple[bool, str]:
+    """按**进程句柄**挂进 Job——CREATE_SUSPENDED 起进程后用它，没有 pid 竞态。
+
+    runner 化之后不再先起再查 pid：进程起来时是挂起的，句柄一直在我们手里，
+    `AssignProcessToJobObject` 成功后才会 `ResumeThread`，所以第一个子进程也一定在 Job 里。
+    """
+    if not job.ok:
+        return False, job.error or "Job 句柄无效"
+    if not process_handle:
+        return False, "进程句柄为空"
+    if not _k32.AssignProcessToJobObject(job.handle, ctypes.c_void_p(process_handle)):
+        return False, "AssignProcessToJobObject(handle=%#x) -> %s" % (process_handle, _err())
+    return True, ""
+
+
 def close_job(job: Job) -> None:
     """关句柄 = 沙箱生命周期结束：挂了 KILL_ON_JOB_CLOSE 时整棵树被带走（P6.7 实测生效）。"""
     if job.handle:

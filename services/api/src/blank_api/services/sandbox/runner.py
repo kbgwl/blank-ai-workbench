@@ -17,10 +17,14 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from blank_api.services.log_safety import redact
 from blank_api.services.sandbox import boundary, docker_probe, windows_job
 from blank_api.services.sandbox.policy import SandboxPolicy
+
+if TYPE_CHECKING:
+    from blank_api.services.sandbox.windows_restricted import CommandReport
 
 MAX_OUTPUT_CHARS = 20000
 
@@ -228,7 +232,9 @@ class LocalSandbox:
         # 必须在 close_job 之前算：关句柄会把 job.handle 置 0，之后再读 Job 就永远是"没建成"，
         # 于是这条命令明明被内核限着 48MB，账上却写成"限额未强制"——反向说谎同样是谎。
         # 变异验证：把这一行挪到 close_job 之后，本文件三条 enforcement 断言立刻变红。
-        enforcement = _enforcement(job, assigned, assign_error)
+        # 走线程：`boundary.measure()` 冷启动要起子进程做行为自检（实测 0.2s 起，机器忙时更久），
+        # 直接在事件循环里跑会把同进程的团队轮次/SSE 一起冻住。
+        enforcement = await asyncio.to_thread(_enforcement, job, assigned, assign_error)
         timed_out = False
         try:
             raw_out, raw_err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -262,6 +268,105 @@ class LocalSandbox:
         return 0
 
 
+class RestrictedSandbox:
+    """Windows 受限令牌执行：文件边界由 NTFS 真的拒，资源/生命周期由 Job 强制。
+
+    它只在自检全绿时被选中（`windows_restricted.available()`），而自检本身就是准入证：
+    同一个受限子进程里必须同时出现「合成私钥读不到」与「工作区读写成功」，外加宿主令牌、
+    授权后两条对照。网络没有 AppContainer 就拦不住，账本里必须写 False——拿受限令牌
+    冒充网络隔离，就是本立项要消灭的那类谎。
+    """
+
+    name = "restricted"
+
+    def __init__(self, policy: SandboxPolicy | None = None) -> None:
+        self.policy = policy or SandboxPolicy()
+
+    async def run(
+        self,
+        command: str | list[str],
+        *,
+        workspace: str,
+        env: dict[str, str] | None = None,
+        timeout_seconds: float | None = None,
+    ) -> SandboxResult:
+        from blank_api.services.sandbox import rules as rules_module
+        from blank_api.services.sandbox import windows_restricted as wr
+
+        script = join_for_shell(command)
+        timeout = timeout_seconds or self.policy.timeout_seconds
+        base = {key: value for key, value in os.environ.items() if key in self.policy.env_allowlist}
+        base.update(self.policy.filter_env(env or {}))
+        rules = rules_module.load(self.policy.rules_file or None)
+        started = time.perf_counter()
+        report = await asyncio.to_thread(
+            wr.run_command,
+            script,
+            workspace=workspace,
+            env=base,
+            timeout=timeout,
+            memory=self.policy.memory,
+            pids=self.policy.pids,
+            rule_set=rules,
+        )
+        duration = int((time.perf_counter() - started) * 1000)
+        # 同上：探测可能现场起子进程，不能在事件循环里同步等。
+        enforcement = await asyncio.to_thread(_enforcement_restricted, report)
+        stdout, trunc_out = _clip(_decode_host(report.stdout))
+        stderr, trunc_err = _clip(_decode_host(report.stderr))
+        if report.error:
+            stderr = (stderr + "\n" + report.error).strip() if stderr else report.error
+        return SandboxResult(
+            command=redact(script),
+            exit_code=None if report.timed_out else report.exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            duration_ms=duration,
+            timed_out=report.timed_out,
+            backend=self.name,
+            truncated=trunc_out or trunc_err,
+            notes=_enforcement_notes(enforcement) + list(report.notes),
+            enforcement=enforcement,
+        )
+
+    async def cleanup(self) -> int:
+        # 每次 run 的 finally 都关 Job 句柄（KILL_ON_JOB_CLOSE 带走整棵树），没有跨 run 的残留。
+        return 0
+
+
+def _enforcement_restricted(report: "CommandReport") -> dict[str, object]:
+    """受限令牌后端这一次执行的账：Job 事实来自执行本身，文件/网络来自行为自检。"""
+    cap = boundary.measure()
+    job = report.job
+    enforced = bool(job.created and job.assigned)
+    return {
+        "boundary_strength": cap.strength,
+        "boundary_strength_label": cap.label,
+        "boundary_measured_seconds_ago": cap.as_dict().get("age_seconds"),
+        "boundary_apparatus_ok": cap.apparatus_ok,
+        "limits_applied": True,
+        "job_created": job.created,
+        "job_assigned": job.assigned,
+        "job_error": job.error,
+        "memory_enforced": enforced and "memory_bytes" in job.enforced,
+        "memory_bytes": int(job.enforced.get("memory_bytes", 0)),
+        "pids_enforced": enforced and "active_process_limit" in job.enforced,
+        "pids_limit": int(job.enforced.get("active_process_limit", 0)),
+        "tree_kill_enforced": enforced and "kill_on_close" in job.enforced,
+        "filesystem_enforced": cap.filesystem_boundary,
+        "network_enforced": cap.network_boundary,
+        "cpu_enforced": False,
+        "disk_enforced": False,
+    }
+
+
+def _local_strength(cap: boundary.Capability) -> str:
+    """local 这次执行的真实强度：Job 在就 job_only；机器能造受限令牌也不借来冒充。"""
+    if not cap.apparatus_ok:
+        return "unknown"
+    return "job_only" if cap.job else "none"
+
+
 def limits_not_applied(reason: str) -> dict[str, object]:
     """沙箱开关为关（命令直接跑在宿主进程上）时的账：每一项都写 False，并写清为什么。
 
@@ -270,9 +375,10 @@ def limits_not_applied(reason: str) -> dict[str, object]:
     读的一方不用分两种形状。
     """
     cap = boundary.measure()
+    strength = "none"
     return {
-        "boundary_strength": cap.strength,
-        "boundary_strength_label": cap.label,
+        "boundary_strength": strength,
+        "boundary_strength_label": boundary.strength_label(strength),
         "boundary_measured_seconds_ago": cap.as_dict().get("age_seconds"),
         "boundary_apparatus_ok": cap.apparatus_ok,
         "limits_applied": False,
@@ -294,10 +400,11 @@ def limits_not_applied(reason: str) -> dict[str, object]:
 def _enforcement(job: windows_job.Job, assigned: bool, assign_error: str) -> dict[str, object]:
     """把"哪几条真的被内核强制了"算成结构化事实。测不出来就写 unknown，不许默认成真。"""
     cap = boundary.measure()
+    strength = _local_strength(cap)
     enforced = bool(job.ok and assigned)
     return {
-        "boundary_strength": cap.strength,
-        "boundary_strength_label": cap.label,
+        "boundary_strength": strength,
+        "boundary_strength_label": boundary.strength_label(strength),
         "boundary_measured_seconds_ago": cap.as_dict().get("age_seconds"),
         "boundary_apparatus_ok": cap.apparatus_ok,
         "limits_applied": True,
@@ -309,9 +416,10 @@ def _enforcement(job: windows_job.Job, assigned: bool, assign_error: str) -> dic
         "pids_enforced": enforced and "active_process_limit" in job.enforced,
         "pids_limit": int(job.enforced.get("active_process_limit", 0)),
         "tree_kill_enforced": enforced and "kill_on_close" in job.enforced,
-        # 这两条由 M0 直接定死：拿不到 AC/受限令牌的机器上，OS 不会替我们拒文件与网络。
-        "filesystem_enforced": cap.strength == "os_enforced",
-        "network_enforced": cap.strength == "os_enforced",
+        # local 后端以宿主令牌启动命令：机器上"能造出受限令牌"与本次执行无关，不许借来冒充。
+        # 文件边界只有在 backend=restricted（见 _enforcement_restricted）成立。
+        "filesystem_enforced": False,
+        "network_enforced": False,
         "cpu_enforced": False,
         "disk_enforced": False,
     }
@@ -356,8 +464,9 @@ def get_sandbox(policy: SandboxPolicy | None = None):
 
     容器后端能不能用由现场探测决定，不看 PATH 里有没有那个文件：装了 Docker 但守护进程
     没起来时返回 DockerSandbox，只会让每条命令各自撞一次墙（`docs/COST.md` 记的那条）。
-    探测不到可用容器就退 LocalSandbox（产品默认）；`allow_local=False` 才是"只准容器"的
-    部署选择，那种情况下没有容器只能拒绝。
+    探测不到可用容器时，如果部署打开了受限令牌后端（`BLANK_SANDBOX_RESTRICTED=1`）且本机
+    自检全绿，就用它（文件边界由 NTFS 强制）；否则退 LocalSandbox（产品默认）。
+    `allow_local=False` 才是"只准容器/受限令牌"的部署选择，那种情况下都没有只能拒绝。
     """
     chosen = policy or SandboxPolicy()
     if not chosen.enabled:
@@ -370,12 +479,17 @@ def get_sandbox(policy: SandboxPolicy | None = None):
         # 就当容器后端——宁可少拦一次，也不要在没测过的情况下宣称"不可用"而拦住正常机器。
         if shutil_which("docker") is not None:
             return DockerSandbox(chosen)
+    if chosen.restricted_enabled:
+        from blank_api.services.sandbox import windows_restricted as wr
+
+        if wr.available():
+            return RestrictedSandbox(chosen)
     if chosen.allow_local:
         return LocalSandbox(chosen)
     raise SandboxUnavailable(
         "Docker 沙箱不可用"
         + docker_probe.notice_suffix(info)
-        + "；本部署要求容器隔离（BLANK_SANDBOX_ALLOW_LOCAL=0）；"
+        + "；本部署要求容器或受限令牌隔离（BLANK_SANDBOX_ALLOW_LOCAL=0）；"
         "如需本机受限额执行，请设置 BLANK_SANDBOX_ALLOW_LOCAL=1 或删除该变量"
     )
 

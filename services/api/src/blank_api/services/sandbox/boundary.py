@@ -48,6 +48,11 @@ class Capability:
     appcontainer: bool = False
     appcontainer_error: str = ""
     carrier_control: bool = False        # 不带属性的同载体必须起得来
+    # 文件边界是**行为证据**，不是"能造出受限令牌"这种能力推断：自检在同一个受限子进程里
+    # 同时验证「读合成私钥被拒」与「工作区读写成功」，再跑宿主令牌/授权后两条对照。
+    file_boundary: bool = False
+    file_boundary_error: str = ""
+    file_check: dict[str, Any] = field(default_factory=dict)
     measured_at: float = 0.0
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -57,12 +62,22 @@ class Capability:
         return self.carrier_control and self.token_control
 
     @property
+    def filesystem_boundary(self) -> bool:
+        """文件边界此刻真的被系统强制吗（AC 或行为自检通过的受限令牌）。"""
+        return self.apparatus_ok and (self.appcontainer or self.file_boundary)
+
+    @property
+    def network_boundary(self) -> bool:
+        """网络边界只有 AppContainer 这一条实测路径；受限令牌不拦网络，不许混着报。"""
+        return self.apparatus_ok and self.appcontainer
+
+    @property
     def strength(self) -> str:
         if not self.apparatus_ok:
             return "unknown"
-        if self.appcontainer or (self.restricted_token and self.job):
-            # 进 AC = 文件边界由 NTFS 拒；受限令牌 + Job 至少能把身份和资源一起收窄。
-            # 只拿到受限令牌而没有 Job，说明连挂都挂不上，不算 os_enforced。
+        if self.appcontainer or (self.restricted_token and self.job and self.file_boundary):
+            # 进 AC = 文件边界由 NTFS 拒；受限令牌 + Job + 行为自检通过 = 身份、文件与资源一起收窄。
+            # 只拿到受限令牌而没有 Job 或没有行为证据，不算 os_enforced。
             return "os_enforced"
         if self.job:
             return "job_only"
@@ -127,18 +142,25 @@ def enforced_fields(backend: str, *, limits_enabled: bool = True) -> dict[str, b
         return no_limits()
     if backend == "docker":
         return dict.fromkeys(_LIMIT_FIELDS, True)
-    strength = measure().strength
-    if strength == "unknown":
+    cap = measure()
+    if not cap.apparatus_ok:
         # 探测装置自己不可信 ⇒ 一项都不许承诺。宁可全红，不许"默认当成生效"。
         return no_limits()
-    job = strength in ("job_only", "os_enforced")
-    os_level = strength == "os_enforced"
+    if backend == "restricted":
+        # 受限令牌后端：文件边界来自行为自检，网络仍由系统放行（没有 AppContainer 就拦不住）。
+        return {
+            "memory": True, "pids": True, "tree_kill": True,
+            # 非管理员拿不到可靠的 job CPU 限速，磁盘配额也拿不到：设计稿 §8 明确本期不做。
+            "cpu": False, "disk": False,
+            "network": cap.network_boundary,
+            "filesystem": cap.filesystem_boundary,
+        }
+    # local：命令真的以宿主令牌执行，机器上"能造出受限令牌"与本次执行无关，不许借来冒充。
+    job = cap.job
     return {
         "memory": job, "pids": job, "tree_kill": job,
-        # 非管理员拿不到可靠的 job CPU 限速，磁盘配额也拿不到：设计稿 §8 明确本期不做，
-        # 所以这里必须是 False，而不是"看起来像 True"。
         "cpu": False, "disk": False,
-        "network": os_level, "filesystem": os_level,
+        "network": False, "filesystem": False,
     }
 
 
@@ -151,21 +173,26 @@ def enforcement_source(backend: str, *, limits_enabled: bool = True) -> str:
         return "no_backend"
     if backend == "docker":
         return "docker_flags"
+    if backend == "restricted":
+        cap = measure()
+        if not cap.apparatus_ok:
+            return "probe_apparatus_failed"
+        return "measured_restricted_token_file_boundary" if cap.filesystem_boundary else "measured_job_object"
     cap = measure()
     if not cap.apparatus_ok:
         return "probe_apparatus_failed"
-    return {
-        "os_enforced": "measured_appcontainer_or_restricted_token",
-        "job_only": "measured_job_object",
-        "none": "nothing_enforced",
-        "unknown": "probe_apparatus_failed",
-    }[cap.strength]
+    # local 只借 Job 这一层：机器上能不能造受限令牌/进 AC 与本次执行无关。
+    return "measured_job_object" if cap.job else "nothing_enforced"
 
 
 def _measure_once() -> Capability:
     cap = Capability(platform=sys.platform, measured_at=time.time())
     cap.job, cap.job_error = _probe_job()
     cap.restricted_token, cap.token_control, cap.restricted_token_error = _probe_restricted_token()
+    if cap.restricted_token and cap.job:
+        cap.file_boundary, cap.file_boundary_error, cap.file_check = _probe_file_boundary()
+    else:
+        cap.file_boundary_error = "受限令牌或 Job 不可用，文件边界未做行为自检"
     if sys.platform == "win32":
         cap.appcontainer, cap.carrier_control, cap.appcontainer_error = _probe_appcontainer()
     else:
@@ -194,42 +221,29 @@ def _probe_job() -> tuple[bool, str]:
 
 
 def _probe_restricted_token() -> tuple[bool, bool, str]:
-    """`CreateRestrictedToken(flags=0)` 是任何 Windows 都该成功的最小形状。
+    """用真正要用的形状造一枚受限令牌，并跑 `DuplicateTokenEx` 阳性对照。
 
-    对照 `DuplicateTokenEx` 用同一枚句柄：它失败说明我们的令牌句柄就是坏的，
-    那时 `CreateRestrictedToken` 的失败不能归因于机器（M0 的 P5.1b 就是为这个存在的）。
+    旧版本在这里手搓 `CreateRestrictedToken` 并多传了一个实参（10 个对 9 个形参），
+    于是这个探针恒失败——"机器不支持"其实只是探针自己写错了。现在委托给执行后端，
+    探针与真正启动命令用的是同一段代码：能造出来才算数，对照失败就说明句柄本身不可信。
     """
     if sys.platform != "win32":
         return False, True, "非 Windows：无内核令牌对象"
-    adv = ctypes.WinDLL("advapi32", use_last_error=True)
-    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    k32.GetCurrentProcess.restype = ctypes.c_void_p
-    current = ctypes.c_void_p(-1)  # 伪句柄；按 c_int 取会被 64 位截断成无效句柄
-    adv.OpenProcessToken.restype = ctypes.c_bool
-    adv.OpenProcessToken.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_void_p)]
-    tok = ctypes.c_void_p()
-    # TOKEN_ASSIGN_PRIMARY|TOKEN_DUPLICATE|TOKEN_QUERY
-    if not adv.OpenProcessToken(current, ctypes.c_uint32(0x0001 | 0x0002 | 0x0008), ctypes.byref(tok)):
-        return False, False, "OpenProcessToken -> %d" % ctypes.get_last_error()
-    dup = ctypes.c_void_p()
-    adv.DuplicateTokenEx.restype = ctypes.c_bool
-    adv.DuplicateTokenEx.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
-                                     ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)]
-    control = bool(adv.DuplicateTokenEx(tok, ctypes.c_uint32(0x000F00FF | 0x0002), None, 2, 1,
-                                        ctypes.byref(dup)))
-    adv.CreateRestrictedToken.restype = ctypes.c_bool
-    adv.CreateRestrictedToken.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
-                                          ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
-                                          ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
-    newtok = ctypes.c_void_p()
-    ok = bool(adv.CreateRestrictedToken(tok, ctypes.c_uint32(0), ctypes.c_uint32(0), None,
-                                        ctypes.c_uint32(0), None, ctypes.c_uint32(0), None, None,
-                                        ctypes.byref(newtok)))
-    err = "" if ok else "CreateRestrictedToken -> %d" % ctypes.get_last_error()
-    for h in (tok, dup, newtok):
-        if h.value:
-            k32.CloseHandle(h)
-    return ok, control, err
+    from blank_api.services.sandbox import windows_restricted as wr
+
+    return wr.token_probe()
+
+
+def _probe_file_boundary() -> tuple[bool, str, dict[str, Any]]:
+    """文件边界的行为自检：读合成私钥被拒 + 工作区读写成功 + 三条对照。
+
+    这是"文件边界"唯一的准入证。能造出限制 SID 不等于命令真的被拒；只有同一个受限
+    子进程里同时看到"私钥读不到"和"工作区能写"，边界才算被系统强制。
+    """
+    from blank_api.services.sandbox import windows_restricted as wr
+
+    check = wr.self_check()
+    return check.ok, check.error, check.as_dict()
 
 
 class _SecCaps(ctypes.Structure):

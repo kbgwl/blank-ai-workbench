@@ -3,6 +3,7 @@ from blank_api.services.sandbox.policy import SandboxPolicy
 from blank_api.services.sandbox.runner import (
     DockerSandbox,
     LocalSandbox,
+    RestrictedSandbox,
     SandboxResult,
     SandboxUnavailable,
     cleanup_containers,
@@ -15,6 +16,7 @@ __all__ = [
     "AuditRecord",
     "DockerSandbox",
     "LocalSandbox",
+    "RestrictedSandbox",
     "SandboxPolicy",
     "SandboxResult",
     "SandboxUnavailable",

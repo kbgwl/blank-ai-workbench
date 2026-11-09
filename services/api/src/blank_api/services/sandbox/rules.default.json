@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "capability_sid": "logon",
+  "default_action": "deny",
+  "write_allow": ["{workspace}"],
+  "read_allow": ["{python_base}", "{python_prefix}", "{appdata}/npm"],
+  "protected": [
+    "{home}/.ssh",
+    "{home}/.gnupg",
+    "{home}/.aws",
+    "{home}/.kube",
+    "{home}/.netrc",
+    "{home}/.config/gcloud",
+    "{home}/.docker/config.json"
+  ]
+}
