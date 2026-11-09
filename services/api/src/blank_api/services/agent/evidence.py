@@ -41,6 +41,7 @@ SUMMARY_EVENT_TYPES = frozenset(
     {
         "approval.required",
         "approval.requested",
+        "boundary.downgraded",
         "context.compacted",
         "context.measured",
         "context.microcompacted",
@@ -689,6 +690,12 @@ async def build_evidence(
         event for event in events if event.type == "turn.context" and isinstance(event.payload, dict)
     ]
     snapshots = [event.payload for event in snap_events]
+    # 降级事件单独计数并列出原因：只看快照条数回答不了「中途有没有变弱」，
+    # 而这是回看任务时最该先看到的一行。
+    downgrade_events = [
+        event for event in events
+        if event.type == "boundary.downgraded" and isinstance(event.payload, dict)
+    ]
     governance_summary: dict[str, Any] = {
         "snapshots": len(snapshots),
         "first": snapshots[0] if snapshots else None,
@@ -705,6 +712,28 @@ async def build_evidence(
         ],
         "models": sorted({str(item.get("model") or "") for item in snapshots if item.get("model")}),
         "modes": sorted({str(item.get("permission_mode") or "") for item in snapshots}),
+        # 手写规则的版本号：第一条快照里的 sha 就是当时生效的那一版。
+        # 规则文件坏了/改过，这条能把它与「策略自己变了」分开。
+        "rules_sha": (
+            ((snapshots[0].get("permissions") or {}).get("ruleset") or {}).get("sha", "")
+            if snapshots else ""
+        ),
+        "boundary_downgrades": {
+            "count": len(downgrade_events),
+            "events": [
+                {
+                    "seq": event.seq,
+                    "step": (event.payload or {}).get("step"),
+                    "node": event.node,
+                    "reasons": [
+                        item.get("kind")
+                        for item in (event.payload or {}).get("reasons") or []
+                        if isinstance(item, dict)
+                    ],
+                }
+                for event in downgrade_events
+            ],
+        },
     }
     # 环境快照（对标 Codex world_state）：每条都是当时那个世界的**全量**，
     # 所以最后一条就是终态，不必往前拼增量；条数本身说明中途环境换过几次。

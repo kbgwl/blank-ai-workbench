@@ -21,6 +21,10 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 CACHE_TTL_SECONDS = 60.0
+# 探针口径版本：判定逻辑或阳性对照改了就必须加一。
+# 证据包里没有它，就分不清「这台机器变了」和「量它的尺子变了」——两份读数放在一起
+# 会看起来像同一件事。只在语义变化时递增，纯重构不动它。
+PROBE_VERSION = 1
 
 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020008
 EXTENDED_STARTUPINFO_PRESENT = 0x00080000
@@ -40,6 +44,9 @@ class Capability:
     """一次探测的全部事实。字段就是证据，别在 UI 里重新推导。"""
 
     platform: str = ""
+    # 哪个版本的探针给的这个结论（见 PROBE_VERSION）。默认值让老测试无需改动，
+    # 但真实探测一律由 `_measure_once` 显式写当前版本。
+    probe_version: int = PROBE_VERSION
     job: bool = False
     job_error: str = ""
     restricted_token: bool = False
@@ -186,7 +193,7 @@ def enforcement_source(backend: str, *, limits_enabled: bool = True) -> str:
 
 
 def _measure_once() -> Capability:
-    cap = Capability(platform=sys.platform, measured_at=time.time())
+    cap = Capability(platform=sys.platform, probe_version=PROBE_VERSION, measured_at=time.time())
     cap.job, cap.job_error = _probe_job()
     cap.restricted_token, cap.token_control, cap.restricted_token_error = _probe_restricted_token()
     if cap.restricted_token and cap.job:

@@ -201,7 +201,12 @@ async def test_evidence_exposes_the_governance_trail(seeded, tmp_path):
 async def test_evidence_on_an_old_task_does_not_invent_history(seeded, tmp_path):
     """这个特性上线前的任务一条快照都没有：证据包必须是 0 条，而不是编一个默认值。"""
     evidence = await build_evidence(get_session_factory(), TASK_ID)
-    assert evidence["governance"] == {"snapshots": 0, "first": None, "changes": [], "models": [], "modes": []}
+    assert evidence["governance"] == {
+        "snapshots": 0, "first": None, "changes": [], "models": [], "modes": [],
+        # 老任务没有快照，也就没有规则版本；降级计数必须是 0 而不是缺键——
+        # 前端与对账脚本按固定形状读，缺键会被读成"这个版本还没有这项"。
+        "rules_sha": "", "boundary_downgrades": {"count": 0, "events": []},
+    }
 
 
 async def test_probe_cache_age_never_counts_as_a_policy_change(seeded, tmp_path, monkeypatch):
@@ -233,7 +238,10 @@ async def test_the_wire_contract_is_what_the_panel_reads(seeded, tmp_path):
     session = _session(tmp_path)
     await session.emit_governance("call_model", 0, _adapter(), "")
     block = (await build_evidence(get_session_factory(), TASK_ID))["governance"]
-    assert set(block) == {"snapshots", "first", "changes", "models", "modes"}
+    assert set(block) == {
+        "snapshots", "first", "changes", "models", "modes",
+        "rules_sha", "boundary_downgrades",
+    }
     first = block["first"]
     assert {"model", "tier", "permission_mode", "sandbox", "features"} <= set(first)
     assert {"backend", "enabled", "isolation", "network", "read_only_root", "denied"} <= set(first["sandbox"])

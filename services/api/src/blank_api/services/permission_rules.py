@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -114,6 +115,11 @@ class PermissionRuleset:
     rules: tuple[PermissionRule, ...] = ()
     error: str = ""
     path: str = ""
+    # 生效规则的版本号（按渲染后的规则算，注释/空行/空白不算）。快照里带上它，
+    # 事后才能回答「这一步被哪一版手写规则管着」；只记路径和条目数，改一条 allow
+    # 与换一版文件看起来会一模一样。空串 = 没加载过规则文件，与「文件存在但为空」
+    # 的 sha 不同——后者是一个真实的策略事实。
+    sha: str = ""
 
     def match(self, action: str, tool: str, arguments: dict) -> PermissionRule | None:
         for rule in self.rules:
@@ -129,11 +135,21 @@ class PermissionRuleset:
             "allow": allow,
             "deny": deny,
             "error": self.error,
+            "sha": self.sha,
         }
 
 
 def empty_ruleset() -> PermissionRuleset:
     return PermissionRuleset()
+
+
+def _rules_sha(rules: list[PermissionRule]) -> str:
+    """生效规则的指纹：只算「哪条规则、什么顺序」，注释和空白不参与。
+
+    顺序要算进去：判定取第一条命中，同样两条规则换个顺序就可能换一个答案。
+    """
+    canonical = "\n".join(rule.render() for rule in rules)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def parse_rules(text: str, source: str = "") -> PermissionRuleset:
@@ -164,7 +180,7 @@ def parse_rules(text: str, source: str = "") -> PermissionRuleset:
         if len(rules) >= MAX_RULES:
             return _failed(source, f"规则超过 {MAX_RULES} 条")
         rules.append(PermissionRule(action=action, tool=tool, spec=spec, line=number))
-    return PermissionRuleset(rules=tuple(rules), path=source)
+    return PermissionRuleset(rules=tuple(rules), path=source, sha=_rules_sha(rules))
 
 
 def _failed(source: str, error: str) -> PermissionRuleset:

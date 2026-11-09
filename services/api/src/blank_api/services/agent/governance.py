@@ -59,6 +59,7 @@ def sandbox_boundary(writable_root: str = "", tier: str = "") -> dict[str, Any]:
     limits_enabled = bool(policy.enabled and resolution.limits_enforced)
     enforced = boundary.enforced_fields(backend, limits_enabled=limits_enabled)
     cap = boundary.measure()
+    cap_facts = cap.as_dict()
     if not policy.enabled:
         source = "sandbox_disabled"
     elif not resolution.available:
@@ -80,7 +81,10 @@ def sandbox_boundary(writable_root: str = "", tier: str = "") -> dict[str, Any]:
         # off 档一律 none：机器能建 Job 不等于这次任务建了 Job。
         "boundary_strength": strength,
         "boundary_strength_label": boundary.strength_label(strength),
-        "boundary_measured_seconds_ago": cap.as_dict().get("age_seconds"),
+        "boundary_measured_seconds_ago": cap_facts.get("age_seconds"),
+        # 量出来的是「哪一版探针」的结论：换机器与换尺子必须能分开。
+        # 进指纹是有意的——换了尺子就是换了一种治理事实，与策略真变同样该留痕。
+        "boundary_probe_version": cap_facts.get("probe_version"),
         "boundary_apparatus_ok": cap.apparatus_ok,
         "enforcement_source": source,
         "enforced": enforced,
@@ -101,6 +105,78 @@ def sandbox_boundary(writable_root: str = "", tier: str = "") -> dict[str, Any]:
         "writable_root": writable_root,
         "denied": denied,
     }
+
+
+# 边界强度只有四档，且方向是确定的：系统强制 > 仅 Job > 无强制；unknown 排在最后——
+# 装置自身不可信时，连「宿主直连」都不敢承诺，比 none 更弱。
+_STRENGTH_RANK = {"os_enforced": 3, "job_only": 2, "none": 1, "unknown": 0}
+
+# 降级事件只抄这几项：回答「哪一侧掉了」用不到整份快照，而整份里带着 cpus/memory
+# 这类配置值——它们没变，贴两遍只会淹掉真正变了的字段。
+_BOUNDARY_FACT_KEYS = (
+    "backend",
+    "boundary_strength",
+    "boundary_apparatus_ok",
+    "boundary_probe_version",
+    "enforced",
+    "tier_available",
+    "denied",
+)
+
+
+def _boundary_facts(sandbox: Any) -> dict[str, Any]:
+    if not isinstance(sandbox, dict):
+        return {}
+    return {key: sandbox.get(key) for key in _BOUNDARY_FACT_KEYS}
+
+
+def boundary_downgrade(before: Any, after: Any) -> dict[str, Any]:
+    """前后两份边界快照之间**失去**了什么；空字典表示没降级。
+
+    为什么单独成事件：turn.context 只记「现在是什么」。两条快照读起来要人肉比对，
+    而最危险的信号恰恰是「原来拦得住，现在拦不住了」——它必须一眼可见。
+    只判单向：升级（例如 Docker 装好了）不是告警，照常由新的 turn.context 记录。
+
+    判据全部来自既有字段，不在这里重新探测：强度档位下降、装置从可信变不可信、
+    后端从有变无、某个 enforced 字段从 True 变 False、档位从可用变不可用。
+    """
+    # 两侧都得是真实快照：缺一侧不是「降级」，是「没有可比的对象」。
+    # 空字典先挡掉——`_boundary_facts({})` 会返回一张全 None 的表，不挡就会被读成变化。
+    if not isinstance(before, dict) or not before or not isinstance(after, dict) or not after:
+        return {}
+    old, new = _boundary_facts(before), _boundary_facts(after)
+    reasons: list[dict[str, Any]] = []
+
+    old_strength = str(old.get("boundary_strength") or "unknown")
+    new_strength = str(new.get("boundary_strength") or "unknown")
+    old_rank = _STRENGTH_RANK.get(old_strength, 0)
+    new_rank = _STRENGTH_RANK.get(new_strength, 0)
+    if new_rank < old_rank:
+        reasons.append({"kind": "strength", "from": old_strength, "to": new_strength})
+
+    if old.get("boundary_apparatus_ok") is True and new.get("boundary_apparatus_ok") is False:
+        reasons.append({"kind": "apparatus_untrusted"})
+
+    old_backend = str(old.get("backend") or "")
+    new_backend = str(new.get("backend") or "")
+    if old_backend and old_backend != "none" and new_backend in ("", "none"):
+        reasons.append({"kind": "backend_lost", "from": old_backend})
+
+    old_enforced = old.get("enforced") if isinstance(old.get("enforced"), dict) else {}
+    new_enforced = new.get("enforced") if isinstance(new.get("enforced"), dict) else {}
+    lost = sorted(
+        key for key, value in old_enforced.items()
+        if value is True and new_enforced.get(key) is not True
+    )
+    if lost:
+        reasons.append({"kind": "enforced_lost", "fields": lost})
+
+    if old.get("tier_available") is True and new.get("tier_available") is False:
+        reasons.append({"kind": "tier_unavailable"})
+
+    if not reasons:
+        return {}
+    return {"from": old, "to": new, "reasons": reasons}
 
 
 def feature_snapshot(settings: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:

@@ -1,6 +1,19 @@
 # 变更日志
 
-## 未发布 — 命令级策略、签名接线、受限令牌后端与「跑不了测试」如实跳过
+## 未发布 — 命令级策略、边界来源证明、签名接线、受限令牌后端与「跑不了测试」如实跳过
+
+- **边界来源证明与降级告警**：治理快照现在能回答「这一步被哪一版手写规则、哪一版探针
+  量出来的」。手写规则新增稳定指纹 `ruleset.sha`（按生效规则与顺序计算，注释/空行不动它；
+  坏文件整份停用、指纹留空，与「文件为空」区分）；`boundary.PROBE_VERSION` 进
+  `Capability`、快照字段 `boundary_probe_version` 与治理指纹——证据包里能把「机器变了」
+  和「量它的尺子变了」分开。边界变弱单独写 `boundary.downgraded` 事件：强度档位下降、
+  装置自可信变不可信、后端从有变无、任一 enforced 字段 True→False、档位可用→不可用，
+  每条原因带前后值；升级不告警，同样的弱边界不重复告警。证据包 `governance` 新增
+  `rules_sha` 与 `boundary_downgrades{count, events[seq, step, node, reasons]}`。
+  探测节奏沿用现有口径：每个模型调用前现查，探针缓存 TTL 60 秒——**不是**独立定时器，
+  这一步没跑模型就不会复查。新增 `tests/test_boundary_attestation_v167.py` 13 例，
+  关联五套件 82 例全绿。变异 5/5 全红且红点对得上：指纹不进快照 → 2 例红，关掉降级判定
+  → 5 例红，不写降级事件 → 2 例红，探针版本写死 → 1 例红，证据包不装载降级事件 → 1 例红。
 
 - **命令级策略（execpolicy，对标 Codex rules）**：规则与会话批准/驳回不再停在外层命令首词。
   壳包装的内联载荷参与匹配：`cmd /c|/k`、`powershell|pwsh -Command|-c`、`sh|bash|zsh|dash -c`

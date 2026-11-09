@@ -393,6 +393,8 @@ class AgentSession:
     trim_events: list[dict] = field(default_factory=list)
     # 上一条 turn.context 快照的指纹：策略没变就不重复发（见 emit_governance）。
     governance_digest: str = ""
+    # 上一条快照里的 sandbox 事实块：降级判定只读这几项，不存整份快照。
+    governance_sandbox: dict = field(default_factory=dict)
     # 上一条 world.state 快照的指纹：环境没变就不重复发（见 emit_world_state）。
     world_digest: str = ""
     # 做这次压缩的那一笔供应商调用的 id（对标 Codex `compaction_response_id`）。
@@ -483,6 +485,15 @@ class AgentSession:
         if digest != self.governance_digest:
             self.governance_digest = digest
             await self.recorder.add("turn.context", node, payload)
+        # 「原来拦得住、现在拦不住」必须是一眼可见的事实，而不是两条快照的差集。
+        # 放在新快照之后：先记下现在的样子，再告警它比刚才弱在哪里；升级不告警。
+        sandbox = payload.get("sandbox")
+        downgrade = governance.boundary_downgrade(self.governance_sandbox, sandbox)
+        self.governance_sandbox = dict(sandbox) if isinstance(sandbox, dict) else {}
+        if downgrade:
+            await self.recorder.add(
+                "boundary.downgraded", node, {"step": step, "tier": tier or "", **downgrade}
+            )
         return payload
 
     async def emit_world_state(self, node: str) -> dict:
