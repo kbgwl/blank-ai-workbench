@@ -1,11 +1,10 @@
 # 桌面壳（Electron）
 
-把静态导出的前端装进一个 Windows 桌面应用，并守护本机后端。设计规格见
-[`../docs/APP-DESIGN.md`](../docs/APP-DESIGN.md)。
+把静态导出的前端装进一个 Windows 桌面应用，并守护本机后端。
 
 ## 为什么是 Electron
 
-见 APP-DESIGN 第 2 节。简要：本机没有 Rust 工具链，而 Windows 上 Tauri 还需要
+简要：本机没有 Rust 工具链，而 Windows 上 Tauri 还需要
 MSVC C++ Build Tools（多 GB、大量写 C 盘）；Electron 零新工具链，且自带 Chromium，
 目标机没有渲染依赖。
 
@@ -257,10 +256,10 @@ main.cjs 只做「读 Electron 状态 → 调策略 → 执行动作」。更新
 
 ## 尚未实现
 
-代码签名（见 APP-DESIGN 第 10.4 节）。单实例 / 托盘 / 全局快捷键 / 自动更新骨架已落在
+代码签名。单实例 / 托盘 / 全局快捷键 / 自动更新骨架已落在
 `shell-policy.cjs` + `main.cjs`（#107）：判定与 main.cjs 接线都已有可失败判据
 （`tests/main-wiring.test.cjs` + 变异电池 6/6），剩 GUI 观感与真实进程交互待点验（见上表）；
 自动更新的下载与安装**刻意不做**，等发布通道与签名定了再接 `electron-updater`。
 
 > 目前未配代码签名证书，打出来的 exe 会被 Windows SmartScreen 拦成"未知发布者"，
-> 用户需要点"仍要运行"。正式分发前要解决 —— 见 APP-DESIGN 第 10.4 节。
+> 用户需要点"仍要运行"。正式分发前要解决。

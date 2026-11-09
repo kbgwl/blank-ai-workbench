@@ -36,7 +36,6 @@ python scripts/token_ledger.py --compare 2026-10-21T06:00,2026-10-21T12:00
 node evals/compare.mjs --only T01,T02,T03 --agents ours,claude
 ```
 
-口径分别写在 `docs/COST.md`（成本）与 `docs/QUALITY.md`（质量）。
 两条都不是"感觉好转"，是要出数字的：台账给三笔账，对标给五个分项。
 
 ## 改代码前

@@ -1,7 +1,7 @@
 # 空白格 AI 操作台
 
 面向开发者的 AI 工程操作台：自然语言下达任务，Agent 读取和修改项目文件、执行命令与测试、
-展示 Diff，高风险操作需人工审批。完整方案见 [ai-workbench-plan.md](ai-workbench-plan.md)。
+展示 Diff，高风险操作需人工审批。
 
 当前发布版本：**0.11.2**（真源是 `desktop/package.json`，安装包文件名与「关于」都取这一处；
 `pnpm check:versions` 在 CI 里钉住 README 与根 `package.json` 不许各说各话）。
@@ -44,35 +44,26 @@
 待触发）、「盯着工作区」有了真实的事件生产者（每拍扫一次文件 mtime）、到点在桌面形态下自己起跑
 （以前只入队、没有 worker 认领，任务永远 `queued`）、企业微信/钉钉/飞书做成配置项（设置 → 消息通道，
 填完即用），以及自动更新接上真实下载与摘要校验（默认不碰网络，须配 `BLANK_UPDATE_FEED_URL`）。
-配置与边界见 [docs/channels.md](docs/channels.md)，唤醒链路的验收记录见
-[docs/v0.11.0-wake-up.md](docs/v0.11.0-wake-up.md)，通知通道的缺口分析与真机验收（含 toast 截图）见
-[docs/v0.11.1-notifications.md](docs/v0.11.1-notifications.md)。
 
 更早：**v0.10.0 Autonomous Super Agent**——Chat Supervisor + Goal Tracker 多轮目标、
 Autonomous Planner / Task Dispatcher / 独立 Verifier、测试失败自动修复闭环、后台持续巡检、
-三种自动化模式与审批矩阵、顶部状态条与 §15 可观测读数。功能清单见
-[docs/workbuddy-v165-autonomous-super-agent.md](docs/workbuddy-v165-autonomous-super-agent.md)，
-验收记录见 [docs/workbuddy-v165-acceptance-report.md](docs/workbuddy-v165-acceptance-report.md)。
+三种自动化模式与审批矩阵、顶部状态条与 §15 可观测读数。
 
 再上一版：**v0.9.1 Super Agent Completion**——真实 Electron GUI 18 项闭环、coding-035 口径修复、
-后台任务暂停/恢复/重试、审批同步、模型/场景切换与日常记忆端到端验证，详细任务见
-[docs/workbuddy-v163-super-agent-completion.md](docs/workbuddy-v163-super-agent-completion.md)，
-验收记录见 [docs/workbuddy-v163-acceptance-report.md](docs/workbuddy-v163-acceptance-report.md)。
-更早：**v0.9.0 Super Agent Upgrade**（Router/Worker、事件触发、Watchdog、断点恢复、低打扰交付）
-见 [docs/workbuddy-v162-super-agent-upgrade.md](docs/workbuddy-v162-super-agent-upgrade.md)。
+后台任务暂停/恢复/重试、审批同步、模型/场景切换与日常记忆端到端验证。
+更早：**v0.9.0 Super Agent Upgrade**（Router/Worker、事件触发、Watchdog、断点恢复、低打扰交付）。
 
 当前进度：**v1.1（核心任务工作台 + 头脑风暴 + 按需功能中心 + CLI 骨架）**。REA Reverse Lab 已有独立入口，
 REA MCP Adapter 已接入 `/api/v1/reverse-lab`（4 个端点走 stdio 子进程里的 `blank_api.services.rea.mcp_server`，默认开着、`BLANK_REA_DISABLE=1` 可关），
 `/reverse-lab` 页面已消费这四个端点（适配器状态 / 候选目标 / 字符串线索 / 带台账的调查，见 `web/src/app/reverse-lab/page.tsx`）。
-stdio 服务端已挂 Windows Job（内存/进程数/生命周期由内核强制，见 `docs/SANDBOX-WINDOWS-DESIGN.md` §7.5），但 Job 不是文件/网络沙箱，这条链路仍不套任务的三档档位。界面是面向开发者的深色三栏操作台：
+stdio 服务端已挂 Windows Job（内存/进程数/生命周期由内核强制），但 Job 不是文件/网络沙箱，这条链路仍不套任务的三档档位。界面是面向开发者的深色三栏操作台：
 顶栏 + 左侧导航 + 三栏工作区（项目/任务 · 执行时间线 · 终端与验收），窄屏退化为上下布局。
 场景选择器只改三件事（`services/agent/scenarios.py`）：系统提示末尾附加一段场景规则、
 按场景禁用工具（只读场景把 apply_patch/run_shell/run_tests/git 从注册表与执行层同时拦下）、
 记忆开关（只有「日常」场景且用户选择记住时开放 `memory_write`）。
 它**绝不向用户的正文拼任何前缀**——用户只写要说的话，Agent 自己判这一句该直接回答、
-该只读看几处再给判断，还是该动手改（判据见 [docs/BOT-VS-AGENT.md](docs/BOT-VS-AGENT.md)），
-成本控制见 [docs/COST.md](docs/COST.md)。
-项目级工作约定（`.blank/harness`）、经验库与离线优化回路见 [docs/HARNESS.md](docs/HARNESS.md)。
+该只读看几处再给判断，还是该动手改。
+项目级工作约定（`.blank/harness`）、经验库与离线优化回路由 `python -m blank_api.services.harness.cli` 提供。
 端到端演示与评测有两条通道，界面与报告里都会标清楚用的是哪条：一条是「本地脚本化模型（演示用）」，
 行为确定、可离线复现；另一条是真实供应商（当前为 DeepSeek），Key 只以密文落库、不外泄。
 真实模型这一轮跑出来的数字与它的口径限制（自动化校验一条都没执行）写在下面「已知限制」里。
@@ -181,10 +172,10 @@ Windows 注意：`uvicorn --reload` 的监视器在本机偶发停止热重载�
 | **评测环境要求** | `evals` / `eval:gate` 含 Go 样例（T11/T28），评测机需先装 Go 工具链；`run_tests` 现已支持 `go.mod→go test`，缺 Go 时这 2 条会红（详见 `evals/gate_config.json` 出处说明） |
 | `pnpm e2e:team` | 团队链路端到端门禁：stub 模型 + 隔离库 + 真实 HTTP + 浏览器点验（详见 `CONTRIBUTING.md`） |
 | `pnpm runtime:desktop` | 组装随包分发的 Python 运行时（约 129MB，不入库；`--check` 只体检） |
-| `pnpm verify:desktop` | 打包后自检 14 项，按包内产物对账（见 [deployment.md](docs/deployment.md) §9） |
+| `pnpm verify:desktop` | 打包后自检 14 项，按包内产物对账 |
 
 项目 harness 的校验、经验库浏览与 Propose–Probe–Reflect–Compose 优化用
-`python -m blank_api.services.harness.cli`，用法与边界见 [docs/HARNESS.md](docs/HARNESS.md)。
+`python -m blank_api.services.harness.cli`（`--help` 看用法）。
 
 数据库迁移（首次需 `pnpm install` 且 Docker 已启动）：
 
@@ -197,8 +188,7 @@ uv run alembic revision --autogenerate -m "描述"
 
 ## API
 
-统一前缀 `/api/v1`，错误响应固定为 `{"error": {"code": ..., "message": ...}}`。逐字段说明见
-[tasks-api.md](docs/tasks-api.md)，部署与运行形态见 [deployment.md](docs/deployment.md)。
+统一前缀 `/api/v1`，错误响应固定为 `{"error": {"code": ..., "message": ...}}`。
 
 - `GET /health` — 服务与数据库连通性
 - `/projects` 系列 — 项目 CRUD、工作区绑定与激活、文件树与预览（`tree`、`file`）
@@ -224,7 +214,7 @@ uv run alembic revision --autogenerate -m "描述"
 | Codex 风格任务工作区 | ✅ | 全高任务页、右侧文件/Diff/终端/证明 Tab、低噪声布局 |
 | 头脑风暴入口 | ✅ | `/brainstorm` 已接真实模型生成、模板降级和转任务 |
 | 按需功能中心 | ✅ | `/features` 支持本机功能开关和依赖提示 |
-| Reverse Lab 入口 | ✅ | 后端 4 个端点已接真 REA MCP Adapter（stdio 子进程，29 条判据全绿，见 `docs/REA-WAVE4-CODEX-RUNTIME.md` §7.51）；前端 `/reverse-lab` 三栏真调这四个端点（挑目标 / 抽线索 / 出结论 + 台账），策略层 8 例见 `web/src/components/reverse-lab/api.test.ts`。🟡 仅剩一格：**Job 只管内存/进程数/生命周期，不提供文件与网络沙箱**（§7.59），界面右下角如实标注 |
+| Reverse Lab 入口 | ✅ | 后端 4 个端点已接真 REA MCP Adapter（stdio 子进程，29 条判据全绿）；前端 `/reverse-lab` 三栏真调这四个端点（挑目标 / 抽线索 / 出结论 + 台账），策略层 8 例见 `web/src/components/reverse-lab/api.test.ts`。🟡 仅剩一格：**Job 只管内存/进程数/生命周期，不提供文件与网络沙箱**，界面右下角如实标注 |
 | CLI 基础入口 | ✅ | `blank init`、`blank doctor`、`blank add/remove`、本地工作区启动 |
 | Bot 团队 `/team` | ✅ | 群聊编排、上下文管家、主 Bot 的团队管理工具、跨群全文搜索与锚点跳转 |
 
@@ -260,7 +250,7 @@ uv run alembic revision --autogenerate -m "描述"
   历史那条「32 个全 skipped」的口径作废，读数保留在 `results-2026-10-22T07-43-54-994Z.json`。
   这一轮还顺带量出一条真缺陷并修掉：本机档用 POSIX 规则拼 argv，`cmd.exe` 不认单引号，
   `python -m pytest -q` 这类带绝对路径的命令一律报「文件名、目录名或卷标语法不正确」——
-  T01 修复前 `validation.passed=false`，修复后 `exit 0 / 7 passed`（见 `docs/REA-WAVE5-CLAUDE-CODE.md` §20）。
+  T01 修复前 `validation.passed=false`，修复后 `exit 0 / 7 passed`。
   跑法有讲究：**别加 `--approve-high`**，它会把 T18/T19 两个「期望被拒」样例直接放行，
   `not_denied` 会看起来像安全缺口（本轮实测过一次）。标准口径是让它挂起、由判据驳回。
 - **T23 / T32 仍停在 `waiting_approval`**：模型用 `request_user_input` 提问，而评测装置不会回答，
@@ -294,8 +284,8 @@ uv run alembic revision --autogenerate -m "描述"
   `asyncpg` **在包里**（它是核心依赖，`pyproject` 第 9 行）——装了驱动不等于用了它，产品默认连的还是那个
   SQLite 文件，这一条只是「包里多一份没人调用的代码」。
   这两种方言的迁移历史、两条建库路径的 schema 对账都实测过，真 HTTP 端到端装置在 MySQL / PostgreSQL
-  上各有 **85 步全绿**的实物（83 步那一版的读数见 `docs/REA-WAVE4-CODEX-RUNTIME.md` §7.13–§7.29；
-  2026-10-29 CI 五格全绿那一轮，三方言各自 85 步 0 失败）。这些不改变一句实话：单机产品用不到它们。
+  上各有 **85 步全绿**的实物（2026-10-29 CI 五格全绿那一轮，三方言各自 85 步 0 失败）。
+  这些不改变一句实话：单机产品用不到它们。
   方言兼容层自 2026-10-26 起**冻结**：只保留 CI 的 `api-dialect` 作为回归防线，不再开新批次。
 - 沙箱镜像带 Python/Node/Git，但没有预装各语言依赖，也没有 Go 工具链：需要 `npm install` 或 Go 的样例仍跑不出真实结果。
 - `.github/workflows/ci.yml` 的五个 job **2026-10-29 才第一次在 GitHub runner 上真跑**（本机没有 `gh`,
@@ -307,7 +297,7 @@ uv run alembic revision --autogenerate -m "描述"
   23 failed / 1601 passed——其中**三处真缺陷**（POSIX 钩子取消只杀外层 `sh`、事件 `seq` 并发撞号、
   MCP 服务端秒退时 stderr 被跳过）、**一处用户名泄漏**（路径掩码只认本平台分隔符），
   其余是只在 Windows 上成立、缺 `skipif` 的判据；修完这些 runner 上 `api` 转为全绿
-  （1611 passed / 83 skipped）。细节见 `docs/REA-WAVE5-CLAUDE-CODE.md` §21。
+  （1611 passed / 83 skipped）。
 - **桌面那两格是后补的，2026-10-31 才进 CI**：`desktop`（`pnpm test:desktop` 52 例 + 版本口径 +
   判分器纯函数单测）与 `desktop-package`（静态导出 → 组装运行时 → `--dir` 出包 → `verify-package`）。
   此前这两类判定只在打包人的机器上跑过。`desktop-package` 能成立的前提是运行时组装有了脚本
@@ -327,8 +317,7 @@ uv run alembic revision --autogenerate -m "描述"
   判定行是「每一格全绿：对照判据成立」，sqlite / mysql / postgres 各 85 步 0 失败。
   它此前红的 4 步（第 80/83/84/85 步）**不是方言差异**，是"桩每轮都发同一个 `call_1`，
   而产品按调用 id 从执行日志里认回上次结果"叠出来的真缺陷：同一任务的第二条命令被当成
-  第一条的重放吞掉——不执行、不进审批门、任务还回 `succeeded`。产品与装置两侧都改了，
-  根因与读数见 `docs/REA-WAVE5-CLAUDE-CODE.md` §21.7。
+  第一条的重放吞掉——不执行、不进审批门、任务还回 `succeeded`。产品与装置两侧都改了。
 - `services/api/tests/test_parallel_tools_v14.py::test_read_only_calls_overlap` 有墙钟依赖：它要求两个 0.25s 的
   只读工具在 0.45s 内跑完。electron-builder 正在压 `7za` 的那一轮全量里它红过一次，同一份代码空机重跑两次
   都绿、单跑也绿（695 passed / 14 skipped）。当时截了 `tail`，断言原文没留下，所以**这条偶发的根因没有定论**。
