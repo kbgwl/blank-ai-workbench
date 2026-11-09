@@ -2,6 +2,10 @@
 
 日期：2026-10-22 拆解对象：本机 `C:\Users\22103\.codex`（`cli_version = 0.162.0-alpha.17.2`，
 `session_meta.originator = "Codex Desktop"`、`source = "vscode"`）
+> **状态说明（2026-11-09）**：正文各批次记录里的「未 commit / HEAD 仍是 `974f684` / 未 push」是**当时**的状态快照，
+> 不代表现在。`#29–#58` 之后已陆续提交并推送，最新发布提交为 `2bd45d8`（已同步 `origin/main`）；
+> 要看当前版本口径请读 `README.md` 与 [`docs/v0.11.2-release-artifacts.md`](v0.11.2-release-artifacts.md)。
+
 方法：只看实物。前三波读的是二进制里的字符串（能证明"有什么"，证明不了"怎么跑的"）。
 这一波读的是 Codex 在自己机器上**跑出来的运行态产物**：会话 rollout、用量账本、压缩记录、
 Windows 沙箱的落盘结构与它自己的日志。凡本文出现的数字与字段名，都能用文末命令复现；
