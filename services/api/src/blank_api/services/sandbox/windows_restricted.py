@@ -24,6 +24,10 @@ M0 的旧探针曾把 `CreateRestrictedToken` 记成"恒 998"，那是探针自�
   本来就有的语义，不是本后端引入的差异。
 - Job Object 用进程句柄直接挂（`CREATE_SUSPENDED` → 挂 Job → `ResumeThread`），消掉
   "按 PID 再 OpenProcess"那段子进程已派生的竞态。
+- `bInheritHandles=True` 是标准输入输出的前提，但它同时把宿主里**所有带继承标志的句柄**
+  递给子进程（浏览器管道、打开的文件、父进程的套接字）。改用 `STARTUPINFOEXW` +
+  `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`，继承范围只剩 NUL/stdout/stderr 三个；属性表建不出来
+  就拒绝启动，不退回"继承全部"——那正是要消灭的泄漏形状。
 
 本模块只承诺**文件边界**。网络没有 AppContainer 就仍由系统放行，账本必须写
 `network_enforced=False`——拿受限令牌去冒充网络隔离，就是本立项要消灭的那类谎。
@@ -48,6 +52,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from blank_api.services.sandbox import rules as rules_module
 from blank_api.services.sandbox import windows_job
@@ -75,6 +80,11 @@ HANDLE_FLAG_INHERIT = 0x00000001
 WAIT_TIMEOUT = 0x00000102
 SE_GROUP_LOGON_ID = 0xC0000000
 CREATE_NO_WINDOW = 0x08000000
+# 句柄白名单：bInheritHandles=True 时，子进程只拿到属性表里列出的这几个。
+# 没有它，宿主进程里每一个带继承标志的句柄（日志、数据库、用户的其它文件）
+# 都会原样漏进受限子进程——边界收窄了文件访问，却把宿主打开的东西递了进去。
+PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
+EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 
 _SELF_CACHE: "SelfCheck | None" = None
 _SELF_LOCK = threading.Lock()
@@ -166,7 +176,7 @@ if sys.platform == "win32":
             ("bInheritHandle", ctypes.c_bool),
         ]
 
-    class _StartupInfoW(ctypes.Structure):
+    class _StartupInfoExW(ctypes.Structure):
         _fields_ = [
             ("cb", ctypes.c_uint32), ("lpReserved", ctypes.c_wchar_p), ("lpDesktop", ctypes.c_wchar_p),
             ("lpTitle", ctypes.c_wchar_p), ("dwX", ctypes.c_int32), ("dwY", ctypes.c_int32),
@@ -175,6 +185,7 @@ if sys.platform == "win32":
             ("dwFlags", ctypes.c_uint32), ("wShowWindow", ctypes.c_uint16), ("cbReserved2", ctypes.c_uint16),
             ("lpReserved2", ctypes.c_void_p), ("hStdInput", ctypes.c_void_p),
             ("hStdOutput", ctypes.c_void_p), ("hStdError", ctypes.c_void_p),
+            ("lpAttributeList", ctypes.c_void_p),
         ]
 
     class _ProcessInformation(ctypes.Structure):
@@ -182,6 +193,18 @@ if sys.platform == "win32":
             ("hProcess", ctypes.c_void_p), ("hThread", ctypes.c_void_p),
             ("dwProcessId", ctypes.c_uint32), ("dwThreadId", ctypes.c_uint32),
         ]
+
+    _k32.InitializeProcThreadAttributeList.restype = wt.BOOL
+    _k32.InitializeProcThreadAttributeList.argtypes = [
+        ctypes.c_void_p, wt.DWORD, wt.DWORD, ctypes.POINTER(ctypes.c_size_t),
+    ]
+    _k32.UpdateProcThreadAttribute.restype = wt.BOOL
+    _k32.UpdateProcThreadAttribute.argtypes = [
+        ctypes.c_void_p, wt.DWORD, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p,
+    ]
+    _k32.DeleteProcThreadAttributeList.restype = None
+    _k32.DeleteProcThreadAttributeList.argtypes = [ctypes.c_void_p]
 
     class _SidAndAttributes(ctypes.Structure):
         _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", ctypes.c_uint32)]
@@ -225,7 +248,7 @@ if sys.platform == "win32":
     _adv.CreateProcessAsUserW.argtypes = [
         ctypes.c_void_p, wt.LPCWSTR, wt.LPWSTR, ctypes.c_void_p, ctypes.c_void_p,
         wt.BOOL, wt.DWORD, ctypes.c_void_p, wt.LPCWSTR,
-        ctypes.POINTER(_StartupInfoW), ctypes.POINTER(_ProcessInformation),
+        ctypes.c_void_p, ctypes.POINTER(_ProcessInformation),
     ]
     _adv.CreateProcessAsUserW.restype = wt.BOOL
 
@@ -241,6 +264,34 @@ def _last_error() -> str:
     buf = ctypes.create_unicode_buffer(512)
     _k32.FormatMessageW(0x0200 | 0x1000, None, code, 0, buf, 512, None)
     return f"{code} {(buf.value or '').strip() or '未知错误'}"
+
+
+def _handle_list(handles: list[int]) -> tuple[Any, Any, str]:
+    """构造只含 `handles` 的句柄白名单属性表。返回 (属性表缓冲, 保存数组, 错误)。
+
+    两个返回值都必须活到 `CreateProcessAsUserW` 返回：属性表缓冲区里存的是数组地址，
+    数组一被回收，内核读到的就是悬空指针。
+    建不出来就**拒绝启动**，不退回"继承全部"——那正是要消灭的泄漏形状。
+    """
+    size = ctypes.c_size_t(0)
+    # 第一次调用按文档就是失败，只回填所需字节数
+    _k32.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
+    if not size.value:
+        return None, None, "InitializeProcThreadAttributeList -> " + _last_error()
+    buffer = ctypes.create_string_buffer(size.value)
+    if not _k32.InitializeProcThreadAttributeList(buffer, 1, 0, ctypes.byref(size)):
+        return None, None, "InitializeProcThreadAttributeList -> " + _last_error()
+    array = (ctypes.c_void_p * len(handles))(*[int(item) for item in handles])
+    if not _k32.UpdateProcThreadAttribute(
+        ctypes.cast(buffer, ctypes.c_void_p), 0,
+        ctypes.c_void_p(PROC_THREAD_ATTRIBUTE_HANDLE_LIST),
+        ctypes.cast(array, ctypes.c_void_p), ctypes.c_size_t(ctypes.sizeof(array)),
+        None, None,
+    ):
+        error = "UpdateProcThreadAttribute(0x20002) -> " + _last_error()
+        _k32.DeleteProcThreadAttributeList(ctypes.cast(buffer, ctypes.c_void_p))
+        return None, None, error
+    return buffer, array, ""
 
 
 # --------------------------------------------------------------------------- 令牌
@@ -560,8 +611,10 @@ def _spawn(
     """起进程、挂 Job、等退出。返回 (退出码, stdout, stderr, 超时, 已挂Job, 挂Job错误, 启动错误)。"""
     out_fd = err_fd = nul_fd = 0
     handles: list[int] = []
+    # 属性表缓冲区里存的是句柄数组的地址。把 `_handle_list` 的三个返回值整体留在局部
+    # 变量里，数组和缓冲区就都活到 CreateProcessAsUserW 返回（提前回收 = 悬空指针）。
+    attr: tuple[Any, Any, str] | None = None
     pi = _ProcessInformation()
-    spawned = False
     try:
         for path in (out_path, err_path):
             out = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
@@ -576,19 +629,26 @@ def _spawn(
         nul_handle = msvcrt.get_osfhandle(nul_fd)
         _k32.SetHandleInformation(ctypes.c_void_p(nul_handle), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)
 
-        si = _StartupInfoW()
+        si = _StartupInfoExW()
         si.cb = ctypes.sizeof(si)
         si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW
         si.wShowWindow = SW_HIDE
         si.hStdInput = nul_handle
         si.hStdOutput = handles[0]
         si.hStdError = handles[1]
+        # bInheritHandles=True 是标准输入输出的前提，但它同时会把宿主里所有带继承标志的
+        # 句柄都递给子进程。属性表白名单把继承范围压到这三个；列出的句柄必须可继承
+        # （上面已逐个 SetHandleInformation），否则 CreateProcess 直接失败。
+        attr = _handle_list([nul_handle, handles[0], handles[1]])
+        if attr[2]:
+            return None, b"", b"", False, False, "", attr[2]
+        si.lpAttributeList = ctypes.cast(attr[0], ctypes.c_void_p)
         cmd_buf = ctypes.create_unicode_buffer(cmdline)
         env_buf = _environment(env)
         # 不能用 DETACHED_PROCESS：本机实测它在受限令牌下让 `python312.dll` DLL 初始化失败
         # （0xC0000142），同一令牌换成 flags=0 就能跑 `python -c "print(7)"`。
         # 也不能用 CREATE_NO_WINDOW：受限令牌下 cmd 直接 0xC0000142。SW_HIDE 负责不弹窗。
-        flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT
+        flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT
         ok = _adv.CreateProcessAsUserW(
             ctypes.c_void_p(token),
             application,
@@ -604,7 +664,6 @@ def _spawn(
         )
         if not ok:
             return None, b"", b"", False, False, "", "CreateProcessAsUserW -> " + _last_error()
-        spawned = True
         if job is not None:
             assigned, assign_error = windows_job.assign_handle(job, int(pi.hProcess))
         else:
@@ -631,11 +690,12 @@ def _spawn(
                     os.close(fd)
                 except OSError:
                     pass
+        if attr is not None:
+            _k32.DeleteProcThreadAttributeList(ctypes.cast(attr[0], ctypes.c_void_p))
         if pi.hThread:
             _k32.CloseHandle(pi.hThread)
         if pi.hProcess:
             _k32.CloseHandle(pi.hProcess)
-        _ = spawned
 
 
 def _job_report(job: windows_job.Job | None, assigned: bool, error: str) -> JobReport:

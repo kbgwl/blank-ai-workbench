@@ -1,6 +1,19 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、签名接线、受限令牌后端与「跑不了测试」如实跳过
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、签名接线、受限令牌后端与「跑不了测试」如实跳过
+
+- **受限子进程只继承三个标准句柄**：`bInheritHandles=True` 是 stdout/stderr 重定向的前提，
+  但它的默认语义是「宿主里所有带继承标志的句柄全递」——浏览器管道、打开的文件、套接字都会
+  漏进被沙箱化的一侧。启动改用 `STARTUPINFOEXW` + `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`，
+  继承范围压到 NUL/stdin/stdout/stderr 三个；属性表建不出来（`InitializeProcThreadAttributeList`
+  或 `UpdateProcThreadAttribute` 失败）就**拒绝启动**，不退回「继承全部」。属性表缓冲区与
+  句柄数组都活到 `CreateProcessAsUserW` 返回（缓冲区存的是数组地址，提前回收就是悬空指针）。
+  本机实测（build 26300，非管理员）：宿主摆 24 个可继承文件句柄，受限子进程句柄数
+  96 → 96（差值 0）；撤掉属性表后 96 → 120（正好多 24）。新增 1 例
+  `test_child_inherits_only_the_three_stdio_handles`（父侧 Toolhelp 找到子 cmd，再读
+  `GetProcessHandleCount`；判据是基线与加料两次的差值 ≤ 4），受限令牌套件 14 例全绿，
+  关联 17 个沙箱/边界/权限套件 246 passed / 14 skipped。变异：撤掉白名单 + 去掉
+  `EXTENDED_STARTUPINFO_PRESENT` → 仅该 1 例红，还原后全绿。
 
 - **边界来源证明与降级告警**：治理快照现在能回答「这一步被哪一版手写规则、哪一版探针
   量出来的」。手写规则新增稳定指纹 `ruleset.sha`（按生效规则与顺序计算，注释/空行不动它；

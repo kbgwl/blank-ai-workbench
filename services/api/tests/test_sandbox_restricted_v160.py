@@ -9,6 +9,8 @@
    因为那就是"这台机器不提供该后端"的正确结果；能造令牌而边界不成立，才是红。
 3. 执行层接线：`get_sandbox` 只在自检全绿时选中它；`RestrictedSandbox` 的账本
    filesystem=True / network=False，绝不拿受限令牌冒充网络隔离。
+4. 句柄继承：属性表白名单让子进程只拿到 NUL/stdout/stderr；宿主里摆 24 个可继承句柄，
+   子进程的句柄数也不许跟着涨（`bInheritHandles=True` 的默认行为就是全递）。
 """
 
 from __future__ import annotations
@@ -144,6 +146,147 @@ def test_run_command_denies_the_synthetic_ssh_and_keeps_the_workspace(tmp_path, 
     assert (workspace / "out.txt").read_text(encoding="utf-8").strip() == "ws-ok"
     assert report.job.created and report.job.assigned, report.job
     assert "memory_bytes" in report.job.enforced and "active_process_limit" in report.job.enforced
+
+
+def _children_named_cmd(parent_pid: int) -> list[int]:
+    """枚举父进程直接派生的 cmd.exe（受限子进程就是我们自己起的那个）。"""
+    import ctypes
+    import ctypes.wintypes as wt
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class ProcessEntry32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wt.DWORD), ("cntUsage", wt.DWORD), ("th32ProcessID", wt.DWORD),
+            ("th32DefaultHeapID", ctypes.c_void_p), ("th32ModuleID", wt.DWORD),
+            ("cntThreads", wt.DWORD), ("th32ParentProcessID", wt.DWORD),
+            ("pcPriClassBase", ctypes.c_long), ("dwFlags", wt.DWORD),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    k.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    k.CreateToolhelp32Snapshot.argtypes = [wt.DWORD, wt.DWORD]
+    k.Process32FirstW.argtypes = [ctypes.c_void_p, ctypes.POINTER(ProcessEntry32W)]
+    k.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(ProcessEntry32W)]
+    k.CloseHandle.argtypes = [ctypes.c_void_p]
+
+    snapshot = k.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+    if snapshot in (None, ctypes.c_void_p(-1).value):
+        raise AssertionError("CreateToolhelp32Snapshot 失败，装置不成立")
+    found: list[int] = []
+    try:
+        entry = ProcessEntry32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        ok = k.Process32FirstW(snapshot, ctypes.byref(entry))
+        while ok:
+            if entry.th32ParentProcessID == parent_pid and entry.szExeFile.lower() == "cmd.exe":
+                found.append(int(entry.th32ProcessID))
+            ok = k.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        k.CloseHandle(snapshot)
+    return found
+
+
+def _handle_count_of(pid: int) -> int:
+    import ctypes
+    import ctypes.wintypes as wt
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenProcess.restype = ctypes.c_void_p
+    k.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+    k.GetProcessHandleCount.argtypes = [ctypes.c_void_p, ctypes.POINTER(wt.DWORD)]
+    k.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return 0
+    try:
+        count = wt.DWORD(0)
+        if not k.GetProcessHandleCount(handle, ctypes.byref(count)):
+            return 0
+        return int(count.value)
+    finally:
+        k.CloseHandle(handle)
+
+
+def _run_and_measure_child_handles(workspace) -> int:
+    """跑一条 ~6 秒的 cmd，父侧读它的句柄数；命令结束后返回读数。
+
+    不用 `ping`：受限令牌下 ICMP 打不通（"无法联系 IP 驱动程序"），命令会瞬间退出。
+    """
+    import os
+    import threading
+
+    from blank_api.services.sandbox.rules import SandboxRules
+
+    rule = SandboxRules(
+        version=1, capability_sid="logon", default_action="deny",
+        write_allow=(), read_allow=(), protected=(), source="test",
+    )
+    box: dict[str, object] = {}
+
+    def run() -> None:
+        box["report"] = wr.run_command(
+            "for /l %i in (1,1,20000000) do @rem",
+            workspace=str(workspace),
+            env={},
+            timeout=60.0,
+            memory="256m",
+            pids=32,
+            rule_set=rule,
+        )
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    measured = 0
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline and not measured:
+        pids = _children_named_cmd(os.getpid())
+        if pids:
+            time.sleep(0.3)  # 等 cmd 把 ping 拉起来，两侧测量点一致
+            measured = _handle_count_of(pids[0])
+        else:
+            time.sleep(0.05)
+    thread.join(60)
+    report = box.get("report")
+    assert report is not None and not report.error, getattr(report, "error", "子进程没跑起来")
+    assert report.exit_code == 0, (report.exit_code, report.stdout, report.stderr)
+    assert measured > 0, "没在主进程侧读到 cmd 子进程的句柄数：装置不成立"
+    return measured
+
+
+def test_child_inherits_only_the_three_stdio_handles(tmp_path) -> None:
+    """宿主摆 24 个可继承句柄，子进程的句柄数也不许跟着涨。
+
+    `bInheritHandles=True` 是 stdio 重定向的前提，默认语义却是"所有带继承标志的句柄全递"。
+    没有 `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 时，父进程里任何可继承句柄（文件、管道、套接字）
+    都会漏进受限子进程。判据只看两次同一命令的差值：基线 vs 加料，涨 20 多个就是白名单没生效。
+    """
+    _skip_if_token_creation_is_unsupported()
+    import ctypes
+    import msvcrt
+    import os
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    baseline = _run_and_measure_child_handles(workspace)
+
+    extra_fds: list[int] = []
+    try:
+        for index in range(24):
+            fd = os.open(workspace / f"extra-{index}.bin", os.O_CREAT | os.O_WRONLY)
+            handle = msvcrt.get_osfhandle(fd)
+            assert wr._k32.SetHandleInformation(
+                ctypes.c_void_p(handle), wr.HANDLE_FLAG_INHERIT, wr.HANDLE_FLAG_INHERIT
+            ), "宿主句柄标不上可继承：装置本身不成立"
+            extra_fds.append(fd)
+        loaded = _run_and_measure_child_handles(workspace)
+    finally:
+        for fd in extra_fds:
+            os.close(fd)
+    assert loaded - baseline <= 4, (
+        f"宿主摆了 24 个可继承句柄，子进程多拿了 {loaded - baseline} 个"
+        f"（基线 {baseline}，加料后 {loaded}）：继承范围没有被句柄白名单压住"
+    )
 
 
 def _stub_backend(monkeypatch, *, restricted: bool) -> None:
