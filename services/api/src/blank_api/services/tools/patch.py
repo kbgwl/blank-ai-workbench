@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import io
 import re
 import uuid
 from pathlib import Path
@@ -11,6 +12,7 @@ from blank_api.models.task import FileChange
 from blank_api.services.log_safety import contains_secret, redact
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, ok
 from blank_api.services.tools.paths import BACKUP_DIRNAME, resolve_for_write
+from blank_api.services.workspace import open_verified, write_verified
 
 HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 CONTEXT_TOLERANCE = 40
@@ -221,7 +223,7 @@ def write_backup(root: Path, task_id: str, relative: str, content: bytes) -> str
     backup_rel = backup_relative(task_id, relative)
     target = resolve_for_write(root, backup_rel)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(content)
+    write_verified(root, backup_rel, content)
     return backup_rel
 
 
@@ -229,14 +231,16 @@ def restore_backup(root: Path, backup_rel: str) -> None:
     """Copy a stored pre-change backup over the live file (undo)."""
     from blank_api.services.tools.paths import resolve_existing
 
-    source = resolve_existing(root, backup_rel)
+    resolve_existing(root, backup_rel)
     parts = Path(backup_rel).parts
     relative = Path(*parts[3:]).as_posix().replace("__", "/") if len(parts) > 3 else ""
     if not relative:
         raise PatchError("备份路径无法解析原始文件")
     destination = resolve_for_write(root, relative)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(source.read_bytes())
+    with open_verified(root, backup_rel, mode="rb") as handle:
+        content = handle.read()
+    write_verified(root, relative, content)
 
 
 def risky_patch_path(relative: str) -> bool:
@@ -258,20 +262,45 @@ def _patch_on_disk(root: Path, task_id: str, arguments: dict) -> dict:
         return {"missing_path": True}
     target = resolve_for_write(root, relative)
     existed = target.exists()
-    original = target.read_text(encoding="utf-8") if existed else ""
+    handle = None
+    text = None
     try:
-        patched = apply_patch_text(original, normalize_codex_patch(patch_text))
-    except PatchError as error:
-        # 失败里带上真实上下文，模型下一次就能改对。只给"不匹配"三个字，
-        # 它只能重读整个文件再盲猜一遍——那一步既是延迟也是成本。
-        return {"patch_error": str(error), "near": error.near, "path": relative}
-    if existed and patched == original:
-        return {"unchanged": True}
-    backup_rel = ""
-    if existed:
-        backup_rel = write_backup(root, task_id, relative, original.encode("utf-8"))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(patched, encoding="utf-8")
+        if existed:
+            try:
+                handle = open_verified(root, relative, mode="r+b")
+            except FileNotFoundError:
+                existed = False
+            else:
+                # 与原先 read_text/write_text 同口径：读时 CRLF→LF，写时再把 \n 换回本机换行。
+                text = io.TextIOWrapper(handle, encoding="utf-8", newline=None)
+        original = text.read() if text is not None else ""
+        try:
+            patched = apply_patch_text(original, normalize_codex_patch(patch_text))
+        except PatchError as error:
+            # 失败里带上真实上下文，模型下一次就能改对。只给"不匹配"三个字，
+            # 它只能重读整个文件再盲猜一遍——那一步既是延迟也是成本。
+            return {"patch_error": str(error), "near": error.near, "path": relative}
+        if existed and patched == original:
+            return {"unchanged": True}
+        backup_rel = ""
+        if existed:
+            backup_rel = write_backup(root, task_id, relative, original.encode("utf-8"))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if text is None:
+            with open_verified(root, relative, mode="wb", create=True) as raw:
+                writer = io.TextIOWrapper(raw, encoding="utf-8", newline=None)
+                writer.write(patched)
+                writer.flush()
+        else:
+            # 复验过的同一个句柄写回：读到的对象与写入的对象是同一个，中间没有路径可换。
+            text.seek(0)
+            text.truncate()
+            text.write(patched)
+    finally:
+        if text is not None:
+            text.close()
+        elif handle is not None:
+            handle.close()
     diff = unified_diff(original, patched, relative)
     if contains_secret(diff):
         # 明文密钥只留在用户批准的文件里，入库的 diff 与事件负载必须脱敏。

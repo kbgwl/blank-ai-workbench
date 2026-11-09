@@ -1,6 +1,26 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、签名接线、受限令牌后端与「跑不了测试」如实跳过
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、签名接线、受限令牌后端与「跑不了测试」如实跳过
+
+- **按句柄复验路径，堵住预检与 open 之间的窗口**：`resolve_inside` / `resolve_for_write`
+  判定的是路径字符串，等真正 `open` 时中间目录可能已被换成指向工作区外的 junction
+  （Windows）或符号链接（POSIX）。新增 `workspace.open_verified`：先 `os.open`，再按
+  **句柄**取最终路径复验——Windows 走 `GetFinalPathNameByHandleW`（剥掉 `\\?\` 与
+  `\\?\UNC\` 前缀），POSIX 走 `realpath` + `(st_dev, st_ino)` 与 `fstat(fd)` 比对；
+  拿不到最终路径一律拒绝（「验不了」不等于「没问题」）。新建用 `O_CREAT|O_EXCL`，
+  任何打开方式都不带 `O_TRUNC`——截断必须发生在复验之后，否则链接会先毁掉外面的文件；
+  复验失败时关句柄并删掉自己刚建的那个空文件，外面不留痕。`write_verified` 先试
+  `r+b`、不存在再 `wb` 新建，写入都落在复验过的同一个句柄上。接线到
+  `read_text_file`、`_patch_on_disk`（读与写共用同一个复验过的句柄，中间没有路径可换）、
+  `write_backup`、`restore_backup`。二进制句柄不做换行转换，补丁读写两侧都包
+  `io.TextIOWrapper(..., newline=None)`，与原先 `read_text`/`write_text` 口径一致
+  （CRLF 读成 LF、写回本机换行），否则 CRLF 仓库里所有补丁都会匹配失败。新增
+  `tests/test_path_verification_v168.py` 6 例：先造真目录（预检能过）、换成链接、
+  再 monkeypatch 掉预检，只看句柄层拦不拦得住——读、补丁改写、补丁新建、
+  备份写四条必须 `path_escape_denied` 且外部内容/文件不变，外加正常读与
+  补丁回滚两条对照。关联 34 个套件 449 passed / 14 skipped。变异：关掉复验判定
+  → 4 条链接用例红、2 条对照绿；撤掉读接线 → 1 红；撤掉补丁读接线 → 1 红；
+  撤掉备份接线 → 1 红；还原后全绿。
 
 - **受限子进程只继承三个标准句柄**：`bInheritHandles=True` 是 stdout/stderr 重定向的前提，
   但它的默认语义是「宿主里所有带继承标志的句柄全递」——浏览器管道、打开的文件、套接字都会

@@ -6,6 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 from blank_api.api.errors import ApiError
 from blank_api.config import get_settings
@@ -109,6 +110,134 @@ def to_relative(root: Path, target: Path) -> str:
     return target.relative_to(root).as_posix() if target != root else ""
 
 
+# 预检（resolve_inside / resolve_for_write）到真正 open 之间有一段窗口：目录可以被
+# 换成指向工作区外的 junction/符号链接，open 照着新目标走，预检却只看过旧路径。
+# 这一层的判据不是"再看一眼路径"，而是**打开的到底是哪个对象**——按句柄问内核要最终
+# 路径（Windows `GetFinalPathNameByHandleW`；POSIX 用 realpath + inode 对上号）。
+_OPEN_FLAGS = {
+    "rb": os.O_RDONLY,
+    "r+b": os.O_RDWR,
+    # 不带 O_TRUNC：截断必须发生在身份复验之后，否则 junction 会先毁掉外面的文件。
+    "wb": os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+}
+if os.name == "nt":
+    for _key in list(_OPEN_FLAGS):
+        _OPEN_FLAGS[_key] |= getattr(os, "O_BINARY", 0)
+
+
+def _inside(path: str, root: str) -> bool:
+    key = os.path.normcase(os.path.abspath(path))
+    root_key = os.path.normcase(os.path.abspath(root))
+    if key == root_key:
+        return True
+    prefix = root_key if root_key.endswith(os.sep) else root_key + os.sep
+    return key.startswith(prefix)
+
+
+def _final_path_of(fd: int, candidate: Path) -> str:
+    """已打开对象的最终路径。拿不到就拒绝——"验不了"不能当作"没问题"。"""
+    if os.name == "nt":
+        import ctypes
+        import ctypes.wintypes as wt
+        import msvcrt
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetFinalPathNameByHandleW.restype = wt.DWORD
+        k32.GetFinalPathNameByHandleW.argtypes = [
+            ctypes.c_void_p, ctypes.c_wchar_p, wt.DWORD, wt.DWORD,
+        ]
+        handle = ctypes.c_void_p(msvcrt.get_osfhandle(fd))
+        need = k32.GetFinalPathNameByHandleW(handle, None, 0, 0)
+        if not need:
+            raise ApiError(code="path_escape_denied", message="无法复验已打开文件的真实路径", status_code=403)
+        buf = ctypes.create_unicode_buffer(int(need) + 1)
+        written = k32.GetFinalPathNameByHandleW(handle, buf, int(need) + 1, 0)
+        if not written or written > need:
+            raise ApiError(code="path_escape_denied", message="无法复验已打开文件的真实路径", status_code=403)
+        text = buf.value
+        if text.startswith("\\\\?\\UNC\\"):
+            return "\\\\" + text[8:]
+        if text.startswith("\\\\?\\"):
+            return text[4:]
+        return text
+    real = os.path.realpath(candidate)
+    try:
+        opened = os.fstat(fd)
+        on_disk = os.stat(real)
+    except OSError:
+        raise ApiError(code="path_escape_denied", message="无法复验已打开文件的真实路径", status_code=403) from None
+    # realpath 与 fd 必须是同一个 inode：否则中间的符号链接在 open 之后又被换过。
+    if (opened.st_dev, opened.st_ino) != (on_disk.st_dev, on_disk.st_ino):
+        raise ApiError(code="path_escape_denied", message="已打开的文件在复验时已被替换", status_code=403)
+    return real
+
+
+def write_verified(root: Path | str, relative: str, content: bytes) -> None:
+    """整文件写入，目标已存在就原地覆盖（句柄复验后才截断）。"""
+    try:
+        handle = open_verified(root, relative, mode="r+b")
+        truncate = True
+    except FileNotFoundError:
+        handle = open_verified(root, relative, mode="wb", create=True)
+        truncate = False
+    with handle:
+        if truncate:
+            handle.seek(0)
+            handle.truncate()
+        handle.write(content)
+
+
+def open_verified(
+    root: Path | str,
+    relative: str,
+    *,
+    mode: str = "rb",
+    create: bool = False,
+) -> BinaryIO:
+    """打开工作区里的文件，并按句柄复验最终路径仍在工作区内。
+
+    返回二进制文件对象（``rb`` / ``r+b`` / ``wb``），调用方用 ``with`` 关它。
+    ``wb`` 仅配 ``create=True``：目标已存在时抛 ``FileExistsError``。
+    O_EXCL 让"这个文件确实是我刚创建的"成为事实，复验失败时才能安全删掉自己留下的空文件。
+    """
+    if mode not in _OPEN_FLAGS or (mode == "wb" and not create):
+        raise ValueError(f"open_verified 不支持的打开方式：{mode}（create={create}）")
+    root_path = Path(root).resolve()
+    candidate = Path(relative)
+    if candidate.is_absolute() or ".." in candidate.parts or not candidate.parts:
+        raise ApiError(code="path_escape_denied", message="不允许越出工作区", status_code=403)
+    path = root_path / candidate
+    fd = os.open(str(path), _OPEN_FLAGS[mode], 0o666)
+    try:
+        try:
+            final = _final_path_of(fd, path)
+        except ApiError:
+            os.close(fd)
+            fd = -1
+            if create:
+                # 只可能删我们自己用 O_EXCL 建出来的那一个空文件。
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            raise
+        if not _inside(final, root_path):
+            os.close(fd)
+            fd = -1
+            if create:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            raise ApiError(code="path_escape_denied", message="目标路径越出工作区", status_code=403)
+        handle = os.fdopen(fd, mode)
+        fd = -1
+        return handle
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def list_tree(root: Path | str, relative: str = "", max_depth: int = 2, limit: int = 500) -> list[FileEntry]:
     root_path = Path(root).resolve()
     base = resolve_inside(root_path, relative)
@@ -170,8 +299,16 @@ def read_text_file(
     target = resolve_inside(root, relative)
     if target.is_dir():
         raise ApiError(code="is_a_directory", message="该路径是目录，无法作为文件读取", status_code=422)
-    size = target.stat().st_size
-    raw = target.read_bytes()[:MAX_READ_BYTES]
+    try:
+        with open_verified(root, relative, mode="rb") as handle:
+            size = os.fstat(handle.fileno()).st_size
+            raw = handle.read(MAX_READ_BYTES)
+    except FileNotFoundError:
+        raise ApiError(code="not_found", message=f"路径不存在：{relative or '.'}", status_code=404) from None
+    except PermissionError:
+        if target.is_dir():
+            raise ApiError(code="is_a_directory", message="该路径是目录，无法作为文件读取", status_code=422) from None
+        raise ApiError(code="path_unreadable", message="该路径无法读取", status_code=403) from None
     truncated = size > MAX_READ_BYTES
     content, encoding, is_binary = _decode_text(raw)
 
