@@ -982,6 +982,9 @@ async def _execute_claimed_run(
                         session, run_id, worker_id, lease_seconds=lease_seconds
                     ):
                         # 租约不再属于我：接着跑下去就是和接管者同时往同一条 run 写账
+                        log.warning(
+                            "租约已失效，停止执行 run=%s worker=%s", run_id, worker_id
+                        )
                         execute.cancel()
                         return
             except Exception:  # 续租失败不该把执行任务带走，下一轮再试

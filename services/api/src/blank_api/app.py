@@ -90,7 +90,27 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 continue
 
     stream_task = asyncio.create_task(stream_loop(), name="blank-channel-stream")
-    tasks = (recovery_task, supervisor_task, sweep_task, probe_task, stream_task)
+    # 沙箱边界里有一项 CPU 限速行为探针，要跑两轮真自旋（约 3 秒）。它是
+    # 同步实现，直接在事件循环里跑会把同一进程里的执行/心跳一起冻住；预热
+    # 放到线程里，之后进程内记忆命中，任务路径上只剩读缓存。
+    async def warm_boundary() -> None:
+        try:
+            from blank_api.services.sandbox import boundary
+
+            await asyncio.to_thread(boundary.measure)
+        except Exception:
+            # 探不出来就按未强制记账，不能挡住启动
+            pass
+
+    boundary_task = asyncio.create_task(warm_boundary(), name="blank-boundary-warm")
+    tasks = (
+        recovery_task,
+        supervisor_task,
+        sweep_task,
+        probe_task,
+        stream_task,
+        boundary_task,
+    )
     try:
         yield
     finally:

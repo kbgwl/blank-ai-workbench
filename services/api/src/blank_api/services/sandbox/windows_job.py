@@ -1,26 +1,32 @@
-"""Windows Job Object：把 policy 里的 memory/pids 变成内核真的会拒的限额。
+"""Windows Job Object：把 policy 里的 memory/pids/cpus 变成内核真的会拒的限额。
 
 为什么只有 Job：M0 探针在这台机器（非管理员 / Windows 11 build 26300）实测，
 AppContainer 入口对任何载荷都返回 575、`CreateRestrictedToken` 返回 998、
 `CreateProcessWithTokenW` 报 1314（见 docs/SANDBOX-WINDOWS-DESIGN.md §2.0）。
-唯一被内核强制的非管理员原语是 Job Object，而且三条限额都有阳性对照：
+唯一被内核强制的非管理员原语是 Job Object，而且限额都有阳性对照：
 `PROCESS_MEMORY`（48MB 上限时 256MB 分配被拒）、`ACTIVE_PROCESS`（第二个进程 assign 被拒）、
-`KILL_ON_JOB_CLOSE`（关句柄带走 600 秒睡眠的子进程）。
+`KILL_ON_JOB_CLOSE`（关句柄带走 600 秒睡眠的子进程）；CPU 限速在 build 26300 上
+实测可设且真的压得住（`JobObjectCpuRateControlInformation`，见 2026-11-10 的实测）。
 
-所以本模块**只承诺这三件事**。文件与网络边界在 local 后端不由系统强制，
+所以本模块承诺的是这四项。文件与网络边界在 local 后端不由系统强制，
 谁在这里写"已隔离文件系统"谁就是在骗用户。
 """
 
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 from dataclasses import dataclass, field
 
 JobObjectExtendedLimitInformation = 9
+JobObjectCpuRateControlInformation = 15
 JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+# CpuRate 的单位是整机总算力的万分之一：16 核机器上 625 = 1 核，10000 = 全部。
+JOB_OBJECT_CPU_RATE_CONTROL_ENABLE = 0x00000001
+JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP = 0x00000004
 PROCESS_SET_QUOTA = 0x00000100
 PROCESS_TERMINATE = 0x00000001
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -30,12 +36,14 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 class Job:
     """一枚 Job 句柄 + 内核**实际接受**的限额。
 
-    `enforced` 只写设成功的东西：设不上就必须留 `error`，不许静默假装设上了。
+    `enforced` 只写设成功的东西：设不上就必须留 `error`/`cpu_error`，不许静默假装设上了。
+    CPU 限速设不上不毁掉整个 Job——内存/进程数仍然有效，但账上必须把 cpu 标成没强制。
     """
 
     handle: int = 0
     enforced: dict[str, int] = field(default_factory=dict)
     error: str = ""
+    cpu_error: str = ""
 
     @property
     def ok(self) -> bool:
@@ -97,6 +105,13 @@ if supported():
             ("PeakJobMemoryUsed", ctypes.c_size_t),
         ]
 
+    class _CpuRateControl(ctypes.Structure):
+        # DWORD ControlFlags + union { DWORD CpuRate; DWORD Weight; }，共 8 字节。
+        _fields_ = [
+            ("ControlFlags", ctypes.c_uint32),
+            ("CpuRate", ctypes.c_uint32),
+        ]
+
     _k32.CreateJobObjectW.restype = ctypes.c_void_p
     _k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
     _k32.SetInformationJobObject.restype = ctypes.c_bool
@@ -121,8 +136,22 @@ def _err() -> str:
     return f"{code} {(buf.value or '').strip() or '未知错误'}"
 
 
+def cpu_rate_for(cpus: float, logical_cpus: int | None = None) -> int:
+    """把"允许几核"换成 Job 的 CpuRate（整机万分之一）。
+
+    这不是拍脑袋的换算：2026-11-10 在本机（16 逻辑核、非管理员、build 26300）实测，
+    16 个自旋子进程的基线合计 40.2 CPU 秒；CpuRate=625（1 核）压到 3.69 秒，
+    1250（2 核）压到 7.13 秒。所以 10000 = 整机全部算力，不是"一个核的 100%"。
+    `cpus` 不小于整机核数时返回 10000——那不是限制，调用方据此不设、也不许记成已强制。
+    """
+    cores = logical_cpus if logical_cpus is not None else (os.cpu_count() or 1)
+    if cpus <= 0 or cores <= 0:
+        return 0
+    return max(1, min(10000, int(round(float(cpus) * 10000.0 / cores))))
+
+
 def create_job(name: str, *, memory_bytes: int = 0, active_process_limit: int = 0,
-               kill_on_close: bool = True) -> Job:
+               kill_on_close: bool = True, cpu_cpus: float = 0.0) -> Job:
     """建 Job 并设限。任何一步失败都返回带 `error` 的 Job——调用方据此把限额标成"未强制"。"""
     if not supported():
         return Job(error=f"本平台不是 Windows（sys.platform={sys.platform!r}），没有 Job Object")
@@ -153,7 +182,24 @@ def create_job(name: str, *, memory_bytes: int = 0, active_process_limit: int = 
         enforced["memory_bytes"] = memory_bytes
     if active_process_limit:
         enforced["active_process_limit"] = active_process_limit
-    return Job(handle=int(handle), enforced=enforced)
+    cpu_rate = cpu_rate_for(cpu_cpus) if cpu_cpus > 0 else 0
+    cpu_error = ""
+    if cpu_cpus > 0 and cpu_rate >= 10000:
+        # 上限不小于整机核数，设了也是摆设。账上必须说清"没构成限制"，不许当成功。
+        cpu_error = f"cpus={cpu_cpus} 不小于整机 {os.cpu_count() or 1} 个逻辑核，未设 CPU 限速"
+    elif cpu_rate:
+        rate_info = _CpuRateControl(
+            JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
+            cpu_rate,
+        )
+        if _k32.SetInformationJobObject(
+            handle, JobObjectCpuRateControlInformation, ctypes.byref(rate_info),
+                ctypes.sizeof(rate_info)):
+            enforced["cpu_rate"] = cpu_rate
+        else:
+            # CPU 设不上不毁掉 Job：内存/进程数仍然有效，但 cpu 这一项必须留成没强制。
+            cpu_error = "SetInformationJobObject(JobObjectCpuRateControlInformation) -> " + _err()
+    return Job(handle=int(handle), enforced=enforced, cpu_error=cpu_error)
 
 
 def assign_pid(job: Job, pid: int) -> tuple[bool, str]:

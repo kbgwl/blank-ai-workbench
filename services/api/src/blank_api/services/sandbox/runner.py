@@ -218,6 +218,7 @@ class LocalSandbox:
             "blank-sandbox-" + uuid.uuid4().hex[:8],
             memory_bytes=memory_bytes,
             active_process_limit=self.policy.pids or 0,
+            cpu_cpus=self.policy.cpus,
         )
         proc = await asyncio.create_subprocess_shell(
             script,
@@ -307,6 +308,7 @@ class RestrictedSandbox:
             timeout=timeout,
             memory=self.policy.memory,
             pids=self.policy.pids,
+            cpus=self.policy.cpus,
             rule_set=rules,
         )
         duration = int((time.perf_counter() - started) * 1000)
@@ -355,7 +357,8 @@ def _enforcement_restricted(report: "CommandReport") -> dict[str, object]:
         "tree_kill_enforced": enforced and "kill_on_close" in job.enforced,
         "filesystem_enforced": cap.filesystem_boundary,
         "network_enforced": cap.network_boundary,
-        "cpu_enforced": False,
+        # Job 接受限速 + 探针证明这台机器压得住，两个都真才算真。
+        "cpu_enforced": enforced and "cpu_rate" in job.enforced and cap.cpu_rate,
         "disk_enforced": False,
     }
 
@@ -420,7 +423,8 @@ def _enforcement(job: windows_job.Job, assigned: bool, assign_error: str) -> dic
         # 文件边界只有在 backend=restricted（见 _enforcement_restricted）成立。
         "filesystem_enforced": False,
         "network_enforced": False,
-        "cpu_enforced": False,
+        # 本次 Job 真接受了限速，且本机探针证明内核压得住；缺一个都不算。
+        "cpu_enforced": enforced and "cpu_rate" in job.enforced and cap.cpu_rate,
         "disk_enforced": False,
     }
 
@@ -434,6 +438,8 @@ def _enforcement_notes(enforcement: dict[str, object]) -> list[str]:
         out.append("限额没生效：子进程没能挂进 Job（{}）".format(enforcement["job_error"]))
     else:
         out.append("限额未由内核强制：{}".format(enforcement["job_error"] or "本平台无 Job Object"))
+    if enforcement.get("cpu_enforced"):
+        out.append("CPU 上限由 Job CPU rate 强制（整棵进程树合计，按整机算力折算）")
     if enforcement["tree_kill_enforced"]:
         out.append("命令结束时整棵进程树被 Job 带走（KILL_ON_JOB_CLOSE 已生效）")
     if not enforcement["filesystem_enforced"]:

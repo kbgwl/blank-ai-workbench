@@ -415,6 +415,14 @@ async def main() -> int:
         LEASE_SECONDS,
         ONCE,
     )
+    # CPU 限速探针要跑两轮真自旋（约 3 秒）。放在认领之前、线程里做完：
+    # 首个 run 的租约只有几秒，让探针在事件循环里同步跑会把心跳饿死。
+    try:
+        from blank_api.services.sandbox import boundary
+
+        await asyncio.to_thread(boundary.measure)
+    except Exception:  # noqa: BLE001 - 探测失败只影响记账，不该挡住认领
+        log.warning("沙箱边界预热失败（不影响认领）", exc_info=True)
     while True:
         try:
             handled = await run_once(worker)

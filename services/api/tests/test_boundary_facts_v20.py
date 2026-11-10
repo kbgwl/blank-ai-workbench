@@ -109,16 +109,18 @@ def _context(root) -> ToolContext:
 
 
 def test_job_only_marks_three_of_seven(cap):
-    """本机档位：内存/进程数/进程树被内核强制，CPU、磁盘、文件、网络都没有。
+    """本机档位：内存/进程数/进程树被内核强制；CPU 由探针现场判定，磁盘/文件/网络没有。
 
-    把 job_only 当成"沙箱已启用"就是立项要消灭的那类谎，所以四项 False 逐条点名。
+    夹具的 `_cap()` 默认 `cpu_rate=False`，代表"这台机器没测出 CPU 限速"，所以这里 CPU 是
+    False——不是"本期不做"。CPU 也点绿的路径由 `test_cpu_quota_v169.py` 钉。
+    把 job_only 当成"沙箱已启用"就是立项要消灭的那类谎，所以 False 的项逐条点名。
     """
     cap(_cap(appcontainer=False, restricted_token=False))
     enforced = boundary.enforced_fields("local")
     assert enforced["memory"] is True
     assert enforced["pids"] is True
     assert enforced["tree_kill"] is True
-    assert enforced["cpu"] is False, "非管理员拿不到可靠的 Job CPU 限速：设计稿 §8 本期不做"
+    assert enforced["cpu"] is False, "探针没证明压得住时，Job 接受过 CpuRate 也不许点绿"
     assert enforced["disk"] is False
     assert enforced["network"] is False
     assert enforced["filesystem"] is False
@@ -128,9 +130,9 @@ def test_job_only_marks_three_of_seven(cap):
 def test_local_does_not_borrow_machine_identity_boundary(cap):
     """本机能造受限令牌/进 AC，不等于 local 后端这次执行就受它管。
 
-    local 以宿主令牌 + Job 执行：机器能力只能背书 Job 那三项。把 os_enforced 的
+    local 以宿主令牌 + Job 执行：机器能力只能背书 Job 那几项。把 os_enforced 的
     filesystem/network 借过来，面板就会在一条根本没进受限令牌的命令上点亮"文件被拒"。
-    CPU 限速与磁盘配额本期不做，档位再高也是 False。
+    CPU 限速是 Job 上的行为证据，夹具默认没测出所以是 False；磁盘配额仍需要管理员。
     """
     cap(_cap())
     enforced = boundary.enforced_fields("local")
@@ -147,6 +149,7 @@ def test_restricted_backend_claims_files_but_never_network(cap):
     assert enforced["filesystem"] is True
     assert enforced["network"] is False
     assert enforced["memory"] is True and enforced["pids"] is True and enforced["tree_kill"] is True
+    # 夹具没测出 CPU 限速，所以这里是 False；磁盘配额仍需要管理员。
     assert enforced["cpu"] is False and enforced["disk"] is False
     assert boundary.enforcement_source("restricted") == "measured_restricted_token_file_boundary"
 
@@ -330,8 +333,13 @@ async def test_windows_job_limits_reach_the_event(seeded, workspace, monkeypatch
     assert facts["memory_enforced"] is True and facts["memory_bytes"] > 0
     assert facts["pids_enforced"] is True and facts["pids_limit"] > 0
     assert facts["tree_kill_enforced"] is True
-    # 本期不做的两项即使在 Job 档位上也不能亮。
-    assert facts["cpu_enforced"] is False and facts["disk_enforced"] is False
+    # CPU 是行为证据：这条命令的账必须和本机探针同口径。机器压得住就是 True，
+    # 压不住（或单核构造不出对照）就是 False——只按"Job 接受了 CpuRate"写死 TRUE 才是谎。
+    cap = boundary.measure()
+    assert facts["cpu_enforced"] is bool(cap.job and cap.cpu_rate), (
+        f"账本与探针不同源：cap.cpu_rate={cap.cpu_rate} facts={facts['cpu_enforced']}")
+    # 磁盘配额仍需要管理员，这一项谁都不许亮。
+    assert facts["disk_enforced"] is False
     # local 以宿主令牌执行：即便机器能造受限令牌，这次执行也只有 Job 这一层。
     assert facts["boundary_strength"] == "job_only", facts["boundary_strength"]
     assert set(sandbox_backend_event_field(payload)["sandbox_enforcement"]) <= EVENT_KEYS

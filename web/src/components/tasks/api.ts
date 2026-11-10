@@ -1630,7 +1630,7 @@ function normalizeGuardianHistory(source: unknown): GuardianHistory {
 /** 边界强度的那半句。空串是老任务：那时后端还没探测过，不能拿今天的值冒充当时。 */
 const STRENGTH_SEGMENT: Record<string, string> = {
   os_enforced: "文件与网络边界由系统强制",
-  job_only: "只有内存/进程数/进程树被内核强制",
+  job_only: "资源与生命周期由内核强制（文件、网络未强制）",
   none: "无任何内核强制",
   unknown: "边界探测装置不可信，不承诺任何边界",
 };

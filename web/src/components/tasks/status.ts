@@ -156,7 +156,7 @@ export function boundaryLabel(boundary: string, facts: BoundaryFacts = {}): stri
   }
   if (boundary === "local") {
     if (facts.strength === "os_enforced") return "宿主执行 + 系统强制的文件/网络边界";
-    if (facts.strength === "job_only") return "宿主执行 + 内核限额（内存/进程数/进程树）· 文件与网络未强制";
+    if (facts.strength === "job_only") return "宿主执行 + 内核限额（内存/进程数/进程树，CPU 视实测）· 文件与网络未强制";
     if (facts.strength === "none") return "宿主执行（无任何内核强制）";
     return "宿主执行（未隔离）";
   }
@@ -438,7 +438,7 @@ const count = (value: number | null): string => (value === null ? "未记" : val
 
 const STRENGTH_TEXT: Record<string, string> = {
   os_enforced: "文件与网络由系统强制",
-  job_only: "仅内存/进程数/进程树由内核强制",
+  job_only: "仅资源与生命周期由内核强制",
   none: "无内核强制",
   unknown: "边界探测不可信，不承诺任何边界",
 };

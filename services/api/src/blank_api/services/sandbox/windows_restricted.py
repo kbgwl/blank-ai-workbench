@@ -717,6 +717,7 @@ def run_command(
     timeout: float,
     memory: str = "",
     pids: int = 0,
+    cpus: float = 0.0,
     rule_set: rules_module.SandboxRules | None = None,
 ) -> CommandReport:
     if not supported():
@@ -727,6 +728,7 @@ def run_command(
         "blank-restricted-" + uuid.uuid4().hex[:8],
         memory_bytes=windows_job.parse_size(memory),
         active_process_limit=pids or 0,
+        cpu_cpus=cpus,
     )
     token = 0
     try:

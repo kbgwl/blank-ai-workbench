@@ -133,8 +133,8 @@ const withSandbox = (sandbox: Record<string, unknown>) =>
   });
 
 test("内核只强制三项时，其余限额逐条标出「未强制」", () => {
-  // 本机档位（M0 实测）：内存/进程数/进程树由 Job Object 拦，CPU、磁盘、文件、网络谁都没管。
-  // 以前 cpus 1.0 就静静躺在那儿，读者以为有人在执行它。
+  // 老快照的形状：内存/进程数/进程树由 Job Object 拦，CPU 探针没测出（或老后端恒 False），
+  // 磁盘、文件、网络谁都没管。以前 cpus 1.0 就静静躺在那儿，读者以为有人在执行它。
   const g = withSandbox({
     backend: "local",
     enabled: true,
@@ -156,8 +156,33 @@ test("内核只强制三项时，其余限额逐条标出「未强制」", () =>
   assert.doesNotMatch(g.sandbox?.limits ?? "", /memory 512m（未强制）/);
   // 超时由我们自己的计时器执行，不属于"内核强制/未强制"这一档，不许标它。
   assert.match(g.sandbox?.limits ?? "", /timeout_seconds 120$/);
-  assert.match(sandboxBoundaryLabel(g.sandbox), /只有内存\/进程数\/进程树被内核强制/);
+  assert.match(sandboxBoundaryLabel(g.sandbox), /资源与生命周期由内核强制/);
   assert.equal(sandboxBoundaryNeedsWarn(g.sandbox), true, "文件与网络没人拦，这行必须是警告色");
+});
+
+test("CPU 限速被探针证明后，cpus 不再标「未强制」", () => {
+  // F 批把 CPU 从"本期不做"改成 Job CpuRate + 行为探针。面板只认快照里的 enforced.cpu：
+  // 这一项为真时，cpus 后面的「未强制」必须消失；否则读者仍会以为没人执行那个数字。
+  const g = withSandbox({
+    backend: "local",
+    enabled: true,
+    isolation: "host",
+    network: false,
+    read_only_root: true,
+    cpus: 1.0,
+    memory: "512m",
+    pids: 128,
+    tmpfs: "128m",
+    timeout_seconds: 120,
+    boundary_strength: "job_only",
+    enforcement_source: "measured_job_object",
+    enforced: { memory: true, pids: true, tree_kill: true, cpu: true, disk: false, network: false, filesystem: false },
+  });
+  assert.match(g.sandbox?.limits ?? "", /cpus 1 ·/);
+  assert.doesNotMatch(g.sandbox?.limits ?? "", /cpus 1（未强制）/);
+  assert.match(g.sandbox?.limits ?? "", /tmpfs 128m（未强制）/);
+  // 文件与网络仍没人拦：这行还是警告色，CPU 生效不会把整行染绿。
+  assert.equal(sandboxBoundaryNeedsWarn(g.sandbox), true);
 });
 
 test("开档但后端是 local 时，边界行不许把代号印成一种沙箱", () => {
@@ -209,7 +234,7 @@ test("系统真强制时不标未强制，也不再报警", () => {
     enforcement_source: "measured_appcontainer_or_restricted_token",
     enforced: { memory: true, pids: true, tree_kill: true, cpu: false, disk: false, network: true, filesystem: true },
   });
-  // 即使档位是 os_enforced，CPU 本期没人执行（后端 cpu_enforced 恒为 False）——标记照样得跟着真值。
+  // 老快照里 CPU 没被强制（当时的后端没有这一项）——标记照样得跟着这份快照的真值，不许拿当前能力补写。
   assert.doesNotMatch(g.sandbox?.limits ?? "", /memory 512m（未强制）/);
   assert.match(g.sandbox?.limits ?? "", /cpus 1（未强制）/);
   assert.match(sandboxBoundaryLabel(g.sandbox), /文件与网络边界由系统强制/);

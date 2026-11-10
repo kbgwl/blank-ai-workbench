@@ -15,16 +15,22 @@ Job 那一层（`docs/SANDBOX-WINDOWS-DESIGN.md` §2.0：非管理员 build 2630
 from __future__ import annotations
 
 import ctypes
+import os
+import subprocess
 import sys
+import tempfile
+import threading
 import time
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 CACHE_TTL_SECONDS = 60.0
 # 探针口径版本：判定逻辑或阳性对照改了就必须加一。
 # 证据包里没有它，就分不清「这台机器变了」和「量它的尺子变了」——两份读数放在一起
 # 会看起来像同一件事。只在语义变化时递增，纯重构不动它。
-PROBE_VERSION = 1
+# 2：CPU 限速从"没做"变成"现场压一次自旋子进程"，见 `_probe_cpu_rate`。
+PROBE_VERSION = 2
 
 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020008
 EXTENDED_STARTUPINFO_PRESENT = 0x00080000
@@ -60,6 +66,11 @@ class Capability:
     file_boundary: bool = False
     file_boundary_error: str = ""
     file_check: dict[str, Any] = field(default_factory=dict)
+    # CPU 限速是**行为证据**：Job 设上 CpuRate 不代表内核真压得住。探针跑一次
+    # "多进程自旋 vs 限速"的对照，只有限速侧真的落在阈值内才算数。
+    cpu_rate: bool = False
+    cpu_rate_error: str = ""
+    cpu_rate_check: dict[str, Any] = field(default_factory=dict)
     measured_at: float = 0.0
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -110,21 +121,51 @@ def strength_label(strength: str) -> str:
 
 _CACHE: tuple[float, Capability] | None = None
 
+# CPU 探针要跑两轮真自旋（约 3 秒），但"这台机器的 Job 压不压得住 CPU"是进程生命周期
+# 内的静态事实。它在事件循环里被同步调用时（治理快照每一步都取），重复跑等于每一步
+# 把循环冻住几秒——跨进程 worker 的短租约甚至会因此续不上、把自己取消。
+# 因此：进程内只探一次；正在探时不阻塞调用方，这一拍如实按"未强制"记账。
+_CPU_MEMO: tuple[bool, str, dict[str, Any]] | None = None
+_CPU_MEMO_LOCK = threading.Lock()
+
+
+def _cpu_probe_memoized() -> tuple[bool, str, dict[str, Any]]:
+    global _CPU_MEMO
+    if _CPU_MEMO is not None:
+        return _CPU_MEMO
+    if not _CPU_MEMO_LOCK.acquire(blocking=False):
+        return False, "CPU 限速探测正在进行，本拍按未强制记账", {}
+    try:
+        if _CPU_MEMO is None:
+            _CPU_MEMO = _probe_cpu_rate()
+        return _CPU_MEMO
+    finally:
+        _CPU_MEMO_LOCK.release()
+
 
 def measure(*, force: bool = False, ttl: float = CACHE_TTL_SECONDS) -> Capability:
-    """带 TTL 的现场探测。缓存命中也要把 `age_seconds` 报出去，别把旧值当现值。"""
-    global _CACHE
+    """带 TTL 的现场探测。缓存命中也要把 `age_seconds` 报出去，别把旧值当现值。
+
+    `force=True` 连 CPU 探针也重跑（doctor 的现场读数用）；平时的 TTL 刷新复用进程内
+    已有的 CPU 结论——机器不会每分钟换一次内核对 CPU 限速的支持。
+    """
+    global _CACHE, _CPU_MEMO
     now = time.time()
     if _CACHE is not None and not force and now - _CACHE[0] < ttl:
         return _CACHE[1]
-    cap = _measure_once()
+    if force:
+        with _CPU_MEMO_LOCK:
+            _CPU_MEMO = None
+    cap = _measure_once(cpu_probe=_cpu_probe_memoized)
     _CACHE = (now, cap)
     return cap
 
 
 def invalidate() -> None:
-    global _CACHE
+    global _CACHE, _CPU_MEMO
     _CACHE = None
+    with _CPU_MEMO_LOCK:
+        _CPU_MEMO = None
 
 
 _LIMIT_FIELDS = ("memory", "pids", "tree_kill", "cpu", "disk", "network", "filesystem")
@@ -153,12 +194,14 @@ def enforced_fields(backend: str, *, limits_enabled: bool = True) -> dict[str, b
     if not cap.apparatus_ok:
         # 探测装置自己不可信 ⇒ 一项都不许承诺。宁可全红，不许"默认当成生效"。
         return no_limits()
+    # CPU 限速的载体仍是 Job：探测说能压住，但这条账只在 Job 真的可用时成立。
+    cpu = bool(cap.job and cap.cpu_rate)
     if backend == "restricted":
         # 受限令牌后端：文件边界来自行为自检，网络仍由系统放行（没有 AppContainer 就拦不住）。
         return {
             "memory": True, "pids": True, "tree_kill": True,
-            # 非管理员拿不到可靠的 job CPU 限速，磁盘配额也拿不到：设计稿 §8 明确本期不做。
-            "cpu": False, "disk": False,
+            # CPU 限速已由 `_probe_cpu_rate` 现场压过；磁盘配额仍需要管理员，照实写 False。
+            "cpu": cpu, "disk": False,
             "network": cap.network_boundary,
             "filesystem": cap.filesystem_boundary,
         }
@@ -166,7 +209,7 @@ def enforced_fields(backend: str, *, limits_enabled: bool = True) -> dict[str, b
     job = cap.job
     return {
         "memory": job, "pids": job, "tree_kill": job,
-        "cpu": False, "disk": False,
+        "cpu": cpu, "disk": False,
         "network": False, "filesystem": False,
     }
 
@@ -192,9 +235,16 @@ def enforcement_source(backend: str, *, limits_enabled: bool = True) -> str:
     return "measured_job_object" if cap.job else "nothing_enforced"
 
 
-def _measure_once() -> Capability:
+def _measure_once(cpu_probe=None) -> Capability:
     cap = Capability(platform=sys.platform, probe_version=PROBE_VERSION, measured_at=time.time())
     cap.job, cap.job_error = _probe_job()
+    if cap.job:
+        # 默认现探（doctor 与单测直接调本函数时就要真读数）；measure() 传进来的
+        # 是进程内复用、探测中不阻塞的那一版。
+        probe = cpu_probe or _probe_cpu_rate
+        cap.cpu_rate, cap.cpu_rate_error, cap.cpu_rate_check = probe()
+    else:
+        cap.cpu_rate_error = "Job 不可用，CPU 限速未测"
     cap.restricted_token, cap.token_control, cap.restricted_token_error = _probe_restricted_token()
     if cap.restricted_token and cap.job:
         cap.file_boundary, cap.file_boundary_error, cap.file_check = _probe_file_boundary()
@@ -225,6 +275,109 @@ def _probe_job() -> tuple[bool, str]:
     err = "" if ok else job.error
     wj.close_job(job)
     return ok, err
+
+
+# 父进程先睡 0.25s，给 `assign_pid` 留出挂 Job 的窗口；之后 N 个自旋子进程必然在 Job 里。
+_SPIN_SCRIPT = """\
+import subprocess, sys, time
+n = int(sys.argv[1])
+seconds = float(sys.argv[2])
+time.sleep(0.25)
+inner = (
+    "import time\\nt=time.time();c=time.process_time()\\n"
+    "while time.time()-t<%s: pass\\n"
+    "print(time.process_time()-c)" % seconds
+)
+kids = [subprocess.Popen([sys.executable, "-c", inner], stdout=subprocess.PIPE, text=True)
+        for _ in range(n)]
+print(sum(float(k.communicate()[0]) for k in kids))
+"""
+
+
+def _run_spin(script: Path, workers: int, seconds: float, job=None) -> tuple[float, str]:
+    """跑一轮多进程自旋，返回合计 CPU 秒。`job` 非空时整棵树挂进去。"""
+    proc = subprocess.Popen(
+        [sys.executable, str(script), str(workers), str(seconds)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    if job is not None:
+        from blank_api.services.sandbox import windows_job as wj
+
+        assigned, error = wj.assign_pid(job, proc.pid)
+        if not assigned:
+            proc.kill()
+            proc.communicate()
+            return 0.0, f"挂进 Job 失败：{error}"
+    try:
+        out, err = proc.communicate(timeout=20)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        return 0.0, "自旋探针超时"
+    if proc.returncode != 0:
+        return 0.0, f"自旋探针退出码 {proc.returncode}：{(err or '')[:200]}"
+    try:
+        return float(out.strip().splitlines()[-1]), ""
+    except (IndexError, ValueError):
+        return 0.0, f"自旋探针输出读不懂：{out[:200]!r}"
+
+
+def _probe_cpu_rate() -> tuple[bool, str, dict[str, Any]]:
+    """CPU 限速的行为自检：同一负载跑两轮，限速侧必须明显低于不限速对照。
+
+    只查 `SetInformationJobObject` 返回 True 是不够的：本机实测过它在某些标志下
+    "设上了但不生效"。判据必须能失败——对照没跑满就判探针不可信，限速侧没掉下来
+    就判机器不支持；单核机器构造不出对照，也照实说"测不了"，不猜成支持。
+    """
+    from blank_api.services.sandbox import windows_job as wj
+
+    cores = os.cpu_count() or 1
+    details: dict[str, Any] = {"logical_cpus": cores}
+    if not wj.supported():
+        return False, "本平台无 Job Object", details
+    if cores < 2:
+        return False, "单核机器无法构造「限速 vs 不限速」对照", details
+    workers = min(4, cores)
+    seconds = 0.5
+    details.update({"workers": workers, "spin_seconds": seconds})
+    fd, path = tempfile.mkstemp(prefix="blank-cpu-probe-", suffix=".py")
+    os.close(fd)
+    script = Path(path)
+    job = None
+    try:
+        script.write_text(_SPIN_SCRIPT, encoding="utf-8")
+        control, error = _run_spin(script, workers, seconds)
+        details["control_cpu_seconds"] = round(control, 3)
+        if error:
+            return False, "对照跑不起来：" + error, details
+        floor = workers * seconds * 0.4
+        if control < floor:
+            return False, f"对照没跑满（{control:.2f} < {floor:.2f} CPU 秒），探针不可信", details
+        job = wj.create_job("blank-cpu-probe", cpu_cpus=1.0)
+        details["cpu_rate"] = int(job.enforced.get("cpu_rate", 0))
+        if not job.ok:
+            return False, f"建 Job 失败：{job.error}", details
+        if "cpu_rate" not in job.enforced:
+            return False, job.cpu_error or "Job 没接受 CPU 限速", details
+        capped, error = _run_spin(script, workers, seconds, job)
+        details["capped_cpu_seconds"] = round(capped, 3)
+        if error:
+            return False, "限速侧跑不起来：" + error, details
+        limit = control * 0.7
+        details["pass_threshold_cpu_seconds"] = round(limit, 3)
+        if capped > limit:
+            return False, (
+                f"限速未生效：限速侧 {capped:.2f} CPU 秒 > 阈值 {limit:.2f}"
+                f"（对照 {control:.2f}）"
+            ), details
+        return True, "", details
+    finally:
+        if job is not None:
+            wj.close_job(job)
+        try:
+            script.unlink()
+        except OSError:
+            pass
 
 
 def _probe_restricted_token() -> tuple[bool, bool, str]:
