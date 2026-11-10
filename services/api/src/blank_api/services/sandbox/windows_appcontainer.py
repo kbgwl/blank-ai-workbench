@@ -473,6 +473,7 @@ def run_command(
     memory: str = "",
     pids: int = 0,
     cpus: float = 0.0,
+    io_bps: int = 0,
     rule_set: rules_module.SandboxRules | None = None,
 ) -> wr.CommandReport:
     """在 AppContainer 里跑一条命令。Job 限额与受限令牌后端同一套。"""
@@ -486,6 +487,7 @@ def run_command(
         memory_bytes=windows_job.parse_size(memory),
         active_process_limit=pids or 0,
         cpu_cpus=cpus,
+        io_bps=io_bps,
     )
     try:
         grants, notes = prepare(workspace, temp_dir, rules)

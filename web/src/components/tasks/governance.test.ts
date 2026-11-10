@@ -185,6 +185,29 @@ test("CPU 限速被探针证明后，cpus 不再标「未强制」", () => {
   assert.equal(sandboxBoundaryNeedsWarn(g.sandbox), true);
 });
 
+test("IO 速率上限被探针证明后，io_bps 按 MB/s 显示且不再标「未强制」", () => {
+  // J1 把 Job IO 速率上限接进账本。面板读的是快照里的 io_bps 与 enforced.io：
+  // 数字要换成 MB/s（后端存的是字节/秒），标记只认 enforced.io，不认"设过就是强制"。
+  const format = (ioEnforced: boolean) => withSandbox({
+    backend: "local",
+    enabled: true,
+    isolation: "host",
+    network: false,
+    read_only_root: true,
+    memory: "512m",
+    pids: 128,
+    io_bps: 134217728,
+    tmpfs: "128m",
+    timeout_seconds: 120,
+    boundary_strength: "job_only",
+    enforcement_source: "measured_job_object",
+    enforced: { memory: true, pids: true, tree_kill: true, cpu: false, io: ioEnforced, disk: false, network: false, filesystem: false },
+  }).sandbox?.limits ?? "";
+  assert.match(format(true), /io_bps 128m\/s ·/, "134217728 B/s 必须显示成 128m/s，不是一长串字节数");
+  assert.doesNotMatch(format(true), /io_bps 128m\/s（未强制）/);
+  assert.match(format(false), /io_bps 128m\/s（未强制）/, "探针没证明节流时，设过的数字照样要标未强制");
+});
+
 test("开档但后端是 local 时，边界行不许把代号印成一种沙箱", () => {
   // 关档那一条早就断过 /local/；开档走的是同一个函数，漏了就会显示「local · 宿主直连…」，
   // 用户读到的是"有一种沙箱叫 local"。这条把开档这一半也钉住。

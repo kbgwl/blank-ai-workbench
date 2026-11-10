@@ -6,9 +6,10 @@ AppContainer 入口对任何载荷都返回 575、`CreateRestrictedToken` 返回
 唯一被内核强制的非管理员原语是 Job Object，而且限额都有阳性对照：
 `PROCESS_MEMORY`（48MB 上限时 256MB 分配被拒）、`ACTIVE_PROCESS`（第二个进程 assign 被拒）、
 `KILL_ON_JOB_CLOSE`（关句柄带走 600 秒睡眠的子进程）；CPU 限速在 build 26300 上
-实测可设且真的压得住（`JobObjectCpuRateControlInformation`，见 2026-11-10 的实测）。
+实测可设且真的压得住（`JobObjectCpuRateControlInformation`）；IO 速率上限同样实测生效
+（`JobObjectIoRateControlInformation`，16/32/8 MB/s 三档实测误差 <1.5%）。
 
-所以本模块承诺的是这四项。文件与网络边界在 local 后端不由系统强制，
+所以本模块承诺的是这五项。文件与网络边界在 local 后端不由系统强制，
 谁在这里写"已隔离文件系统"谁就是在骗用户。
 """
 
@@ -21,12 +22,14 @@ from dataclasses import dataclass, field
 
 JobObjectExtendedLimitInformation = 9
 JobObjectCpuRateControlInformation = 15
+JobObjectIoRateControlInformation = 31
 JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 # CpuRate 的单位是整机总算力的万分之一：16 核机器上 625 = 1 核，10000 = 全部。
 JOB_OBJECT_CPU_RATE_CONTROL_ENABLE = 0x00000001
 JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP = 0x00000004
+JOB_OBJECT_IO_RATE_CONTROL_ENABLE = 0x00000001
 PROCESS_SET_QUOTA = 0x00000100
 PROCESS_TERMINATE = 0x00000001
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -36,14 +39,16 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 class Job:
     """一枚 Job 句柄 + 内核**实际接受**的限额。
 
-    `enforced` 只写设成功的东西：设不上就必须留 `error`/`cpu_error`，不许静默假装设上了。
-    CPU 限速设不上不毁掉整个 Job——内存/进程数仍然有效，但账上必须把 cpu 标成没强制。
+    `enforced` 只写设成功的东西：设不上就必须留 `error`/`cpu_error`/`io_error`，
+    不许静默假装设上了。CPU/IO 限速设不上不毁掉整个 Job——内存/进程数仍然有效，
+    但账上必须把对应项标成没强制。
     """
 
     handle: int = 0
     enforced: dict[str, int] = field(default_factory=dict)
     error: str = ""
     cpu_error: str = ""
+    io_error: str = ""
 
     @property
     def ok(self) -> bool:
@@ -112,6 +117,32 @@ if supported():
             ("CpuRate", ctypes.c_uint32),
         ]
 
+    class _IoRatePublic(ctypes.Structure):
+        # 公共头文件（jobapi2.h）里的 40 字节版。build 26300 上 Set 会回
+        # ERROR_BAD_LENGTH=24——这台机器要的是带 VolumeNameLength 的 NATIVE_V1。
+        _fields_ = [
+            ("MaxIops", ctypes.c_int64),
+            ("MaxBandwidth", ctypes.c_int64),
+            ("ReservationIops", ctypes.c_int64),
+            ("VolumeName", ctypes.c_wchar_p),
+            ("BaseIoSize", ctypes.c_uint32),
+            ("ControlFlags", ctypes.c_uint32),
+        ]
+
+    class _IoRateV1(ctypes.Structure):
+        # NATIVE_V1：在公共版末尾多一个 USHORT VolumeNameLength，按 8 字节对齐后共 48。
+        # 上一轮把 MaxBandwidthStrict 插在 ReservationIops 与 VolumeName 之间，ControlFlags
+        # 落到结构之外：Set 返回成功、限速却根本没开。字段顺序不许凭记忆改。
+        _fields_ = [
+            ("MaxIops", ctypes.c_int64),
+            ("MaxBandwidth", ctypes.c_int64),
+            ("ReservationIops", ctypes.c_int64),
+            ("VolumeName", ctypes.c_wchar_p),
+            ("BaseIoSize", ctypes.c_uint32),
+            ("ControlFlags", ctypes.c_uint32),
+            ("VolumeNameLength", ctypes.c_uint16),
+        ]
+
     _k32.CreateJobObjectW.restype = ctypes.c_void_p
     _k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
     _k32.SetInformationJobObject.restype = ctypes.c_bool
@@ -150,8 +181,31 @@ def cpu_rate_for(cpus: float, logical_cpus: int | None = None) -> int:
     return max(1, min(10000, int(round(float(cpus) * 10000.0 / cores))))
 
 
+def _set_io_rate(handle: int, bps: int) -> str:
+    """把每秒字节上限设进 Job。空串=成功，否则是两种结构布局各自的错误。
+
+    `VolumeName` 传 NULL 表示 Job 内所有卷合计受这条上限约束。2026-11-10 本机实测：
+    对照（不设限）680.9 MB/s；请求 16/32/8 MB/s 时限速侧实测 16.1/32.5/8.0 MB/s。
+    先试 NATIVE_V1（48 字节），失败再试公共 40 字节版——build 26300 上前者可用，
+    后者回 ERROR_BAD_LENGTH=24；老系统上可能反过来。
+    """
+    native = _IoRateV1(0, bps, 0, None, 0, JOB_OBJECT_IO_RATE_CONTROL_ENABLE, 0)
+    if _k32.SetInformationJobObject(
+        handle, JobObjectIoRateControlInformation, ctypes.byref(native), ctypes.sizeof(native)
+    ):
+        return ""
+    native_error = _err()
+    public = _IoRatePublic(0, bps, 0, None, 0, JOB_OBJECT_IO_RATE_CONTROL_ENABLE)
+    if _k32.SetInformationJobObject(
+        handle, JobObjectIoRateControlInformation, ctypes.byref(public), ctypes.sizeof(public)
+    ):
+        return ""
+    return f"NATIVE_V1(48B) -> {native_error}；public(40B) -> {_err()}"
+
+
 def create_job(name: str, *, memory_bytes: int = 0, active_process_limit: int = 0,
-               kill_on_close: bool = True, cpu_cpus: float = 0.0) -> Job:
+               kill_on_close: bool = True, cpu_cpus: float = 0.0,
+               io_bps: int = 0) -> Job:
     """建 Job 并设限。任何一步失败都返回带 `error` 的 Job——调用方据此把限额标成"未强制"。"""
     if not supported():
         return Job(error=f"本平台不是 Windows（sys.platform={sys.platform!r}），没有 Job Object")
@@ -199,7 +253,12 @@ def create_job(name: str, *, memory_bytes: int = 0, active_process_limit: int = 
         else:
             # CPU 设不上不毁掉 Job：内存/进程数仍然有效，但 cpu 这一项必须留成没强制。
             cpu_error = "SetInformationJobObject(JobObjectCpuRateControlInformation) -> " + _err()
-    return Job(handle=int(handle), enforced=enforced, cpu_error=cpu_error)
+    io_error = ""
+    if io_bps > 0:
+        io_error = _set_io_rate(handle, io_bps)
+        if not io_error:
+            enforced["io_bps"] = io_bps
+    return Job(handle=int(handle), enforced=enforced, cpu_error=cpu_error, io_error=io_error)
 
 
 def assign_pid(job: Job, pid: int) -> tuple[bool, str]:

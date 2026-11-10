@@ -1424,6 +1424,7 @@ function normalizeGovernance(source: unknown): Governance {
     ["cpus", "cpu"],
     ["memory", "memory"],
     ["pids", "pids"],
+    ["io_bps", "io"],
     ["tmpfs", "filesystem"],
     ["timeout_seconds", ""],
   ];
@@ -1431,8 +1432,11 @@ function normalizeGovernance(source: unknown): Governance {
     .map(([key, field]) => {
       const value = sandbox[key];
       if (value === undefined || value === null || value === "") return "";
+      const shown = key === "io_bps" && typeof value === "number"
+        ? `${Math.round(value / 1024 / 1024)}m/s`
+        : String(value);
       const mark = field === "" || enforced[field] ? "" : "（未强制）";
-      return `${key} ${String(value)}${mark}`;
+      return `${key} ${shown}${mark}`;
     })
     .filter(Boolean)
     .join(" · ");

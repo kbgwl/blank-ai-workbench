@@ -68,6 +68,7 @@ def _cap(**overrides) -> Capability:
         appcontainer=True,
         carrier_control=True,
         cpu_rate=True,
+        io_rate=True,
         measured_at=time.time(),
     )
     fields.update(overrides)
@@ -160,7 +161,7 @@ def test_enforced_fields_appcontainer_reads_the_behavioral_check(green):
     assert enforced["filesystem"] is True
     assert enforced["network"] is True              # 只因为自检真的量到 PermissionError:13
     assert enforced["memory"] is True and enforced["pids"] is True and enforced["tree_kill"] is True
-    assert enforced["cpu"] is True and enforced["disk"] is False
+    assert enforced["cpu"] is True and enforced["io"] is True and enforced["disk"] is False
     assert boundary.enforcement_source("appcontainer") == "measured_appcontainer_boundary"
 
 
@@ -196,7 +197,7 @@ def test_enforcement_appcontainer_maps_job_facts_and_boundary_together(green):
         job=wr.JobReport(
             created=True, assigned=True, error="",
             enforced={"memory_bytes": 536870912, "active_process_limit": 128,
-                      "kill_on_close": 1, "cpu_rate": 1},
+                      "kill_on_close": 1, "cpu_rate": 1, "io_bps": 134217728},
         ),
     )
     ledger = runner._enforcement_appcontainer(report)
@@ -205,7 +206,9 @@ def test_enforcement_appcontainer_maps_job_facts_and_boundary_together(green):
     assert ledger["memory_enforced"] is True and ledger["memory_bytes"] == 536870912
     assert ledger["pids_enforced"] is True and ledger["pids_limit"] == 128
     assert ledger["tree_kill_enforced"] is True and ledger["cpu_enforced"] is True
-    assert ledger["disk_enforced"] is False, "IO 限速实测不节流，不许写成已强制"
+    # IO 速率上限与 CPU 同一条规则：Job 接受 + 探针证明节流，账上才是 True。
+    assert ledger["io_enforced"] is True and ledger["io_bps"] == 134217728
+    assert ledger["disk_enforced"] is False, "磁盘容量配额仍需要管理员，谁敢写 True 谁就是在编"
 
     failed_job = runner._enforcement_appcontainer(
         wr.CommandReport(

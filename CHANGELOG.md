@@ -1,6 +1,6 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过
 
 - **CPU 限速（Job CpuRate + 行为探针）**：`SandboxPolicy.cpus` 从"只是配置值"变成内核真限。
   Job 通过 `JobObjectCpuRateControlInformation`（ENABLE|HARD_CAP）设限；`CpuRate` 的单位是
@@ -47,12 +47,26 @@
   治理与设置页文案）；关联八套件 165 例全绿；变异 10/10 全红（含"缺自检结论当全绿"与
   "网络事实顶替文件事实"两条补靶）。
 
-- **Job IO 速率上限：接受设置但不节流——如实记为未强制**：按"管理员权限下的可行性"
-  实测 `JobObjectIoRateControlInformation`（1MB/s，20 秒持续写，`E:/tmp/i-probe/io_probe2.json`）。
-  收口当刻复测：对照 834.8 MB/s，限速侧 903.7 MB/s（设置被接受，20 秒内写 18.1GB），
-  没有可测节流；同日上一轮 732.4 / 869.9 MB/s 同向。因此不把 IO 上限接进执行层、
-  不伪造 `disk_enforced=true`；账本固定 False，原因与读数写进下方「未验证」第 3 项。
-  宁可在面板上留一格红，也不拿"设置成功了"冒充"限住了"。
+- **Job IO 速率上限：接进执行层，由行为探针现场证明（J1）**：上一轮冻结的结论
+  「接受设置但不节流」是**假阴性**——`JOBOBJECT_IO_RATE_CONTROL_INFORMATION` 里多插了
+  一个 `MaxBandwidthStrict`，`ControlFlags` 落到结构外，`SetInformationJobObject` 返回 True
+  但限速根本没开。按 48 字节 `NATIVE_V1` 布局重写后，2026-11-10 在本机（管理员、build 26300）
+  用真实执行形状（父进程建 Job → 起子进程 → assign → 持续写盘）复测：对照 680.9 MB/s；
+  请求 16/32/8 MB/s 时限速侧实测 16.1/32.5/8.0 MB/s（误差 <1.5%）。`SandboxPolicy.io_bps`
+  （`BLANK_SANDBOX_IO_BPS`，默认 `128m`，0=不设）经 `windows_job.create_job(io_bps=...)`
+  设进 local / 受限令牌 / AppContainer 三个后端；执行层账本新增
+  `io_enforced` / `io_bps` / `io_error`：Job 接受 `io_bps` **且** `_probe_io_rate` 现场
+  证明节流，两个都真才写 True；docker 命令行没有带宽参数，容器这一档恒 False。
+  探针固定请求 16 MB/s、写 32MB：对照必须 ≥ 2× 限速档（否则如实报"构造不出对照"），
+  限速侧 ≤ 对照×0.7 才算通过；收口当刻读数：对照 507.9 MB/s、限速侧 18.8 MB/s、阈值 355.6。
+  `PROBE_VERSION` 升到 4；`boundary.enforced_fields` 从 7 项扩到 8 项（新增 `io`），
+  治理快照带 `sandbox.io_bps`，面板按 `io_bps → io` 查账并把 134217728 显示成 `128m/s`。
+  探针进程内只跑一次（CPU ~3s + IO ~2.5s），app 启动已在后台线程 `warm_boundary()` 预热。
+  新增 `tests/test_io_rate_v21.py` 12 例；变异 4/4 全红且红点对得上：LocalSandbox 接线
+  删掉（账本 False）、`ControlFlags` 清零（复现旧假阴性：Set 成功、探针报
+  "限速未生效：344.1 > 阈值 240.9"）、`enforced_fields` 丢掉探针证据（Job 在就点绿）、
+  面板漏掉 `io_bps → io` 映射。范围：只覆盖命令执行；fs-broker 的文件工具与 MCP 长驻进程
+  未纳入；磁盘**容量**配额仍冻结（见下方「未验证」第 3 项）。
 
 - **远程 MCP over OAuth 2.0（发现 → client_credentials → 刷新）**：`mcp.json` 的 `auth`
   段从"只有静态 headers"扩到真令牌生命周期。只走无人工的 `client_credentials` +
@@ -214,7 +228,7 @@
 
 以下六项是本轮内核升级里**没有**落地或**没有**在本机真验的部分。冻结在这里，不写进
 「已完成」；每项都留下判据、红了长啥样与哑弹风险，条件具备时照着验。
-（CPU 限速、远程 MCP 的 OAuth、更新源分离签名与 SBOM 已从这张表移出，见上方条目；
+（CPU 限速、IO 速率上限、远程 MCP 的 OAuth、更新源分离签名与 SBOM 已从这张表移出，见上方条目；
 Windows 网络出口强制已由 AppContainer 落地，见上方条目与第 1 项的剩余部分；第 2 项
 Linux 原生后端按项目决定移出范围，判据只作留档。）
 
@@ -237,18 +251,17 @@ Linux 原生后端按项目决定移出范围，判据只作留档。）
    4xx）、对外连接被拒、自检阴性/阳性对照都成立。红了长啥样：探针只走路径字符串判断、
    或内核不支持时用例 `skip` 却被当成通过。哑弹风险：runner 关闭非特权 userns、Landlock
    ABI 低于所需版本、受限令牌代码被错误地当成跨平台后端。
-3. **磁盘 / IO 配额（P2）**——CPU 限速已在本轮落地（见上方 CpuRate 条目：行为探针 10/10
-   变异全红）；磁盘配额与 IO 限速仍冻结，账本 `disk` 恒 False。2026-11-10 管理员权限下
-   用决定性探针复测 `JobObjectIoRateControlInformation`（`E:/tmp/i-probe/io_probe2.json`）：
-   设 1MB/s 被**接受**，但 20 秒持续写对照 834.8 MB/s、限速侧 903.7 MB/s（限速侧写了
-   18.1GB），没有可测节流；同日上一轮 732.4 / 869.9 MB/s 同向——所以不接假限速、
-   也不把 `disk_enforced` 写成 true（见上方 Job IO 条目）。早期非管理员
-   读数（32MB 带/不带 4MB/s 上限都 0.01s、卷句柄 `\\.\E:` 被拒 err 123）同样不支持。
-   需要：真正生效的磁盘配额/IO 限速接口（含按卷配额的误伤评估）。判据：写盘到配额上限后
-   继续写失败且总占用不再增长；带 IO 上限的持续写盘吞吐显著低于对照（对照自己要先跑满，
-   且时限内对照的写入量必须达到阈值，否则装置自检作废）。红了长啥样：磁盘无限增长、
-   吞吐与对照无差别，面板却写 true。哑弹风险：磁盘配额按卷生效会误伤其他用户、
-   IO 限速接口不可用时静默忽略、缓存写入把节流读数洗掉。
+3. **磁盘容量配额（P2）**——IO 速率上限已在本轮落地（见上方 J1 条目：48 字节 NATIVE_V1
+   布局 + 行为探针，账本 `io` 与探针同源）；**磁盘容量**配额仍冻结，账本 `disk` 恒 False。
+   2026-11-10 管理员权限下已用 VHDX 探针证实内核路径可行（`E:/tmp/i-probe/vhd_quota_probe.py`）：
+   64MB 动态 VHDX + diskpart attach/分区/格式化/挂载到目录，写满时内核返回
+   `OSError errno=28 ENOSPC`（容量 62.93MB、写 48MB 后 free 3.14MB、VHD 文件 68MB），
+   detach 成功、无残留盘与目录。尚未接进执行层（每任务卷生命周期、盘符/挂载点回收、
+   与工作区根的合并仍未做）。需要：把固定容量卷接进 workspace 或每任务根，并做生命周期
+   回收。判据：写盘到配额上限后继续写失败且总占用不再增长（ENOSPC，不是我们的路径预检）；
+   detach 后挂载点可删、无残留卷。红了长啥样：磁盘无限增长、失败来自路径闸门而不是内核、
+   卷 detach 不掉。哑弹风险：卷名/挂载点在异常退出后残留、多个任务共用一个卷时互相写爆、
+   把「写满报错」当成「文件边界」写进 `filesystem_enforced`。
 4. **任务级隔离（P3）**——现状：工作区属于项目，同一项目的任务共享可写根；隔离靠路径
    闸门与审批，不是 OS 命名空间。需要：每任务独立根 + 跨任务绝对路径也不可达（受限令牌/
    AppContainer）。判据：任务 A 写入标记文件，任务 B 用绝对路径与相对路径都读

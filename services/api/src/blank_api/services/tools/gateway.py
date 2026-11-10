@@ -121,7 +121,8 @@ def _command_enforcement(payload: dict) -> dict:
         "limits_applied", "boundary_strength", "boundary_strength_label",
         "memory_enforced", "memory_bytes", "pids_enforced", "pids_limit",
         "tree_kill_enforced", "filesystem_enforced", "network_enforced",
-        "cpu_enforced", "disk_enforced", "job_created", "job_assigned", "job_error",
+        "cpu_enforced", "io_enforced", "io_bps", "io_error",
+        "disk_enforced", "job_created", "job_assigned", "job_error",
         # 档位：事件里要能回答"这条命令当时按哪一档跑、降级了没有、为什么"。
         "sandbox_tier", "sandbox_tier_requested", "sandbox_tier_degraded",
         "tier_available", "tier_reason", "tier_notice",

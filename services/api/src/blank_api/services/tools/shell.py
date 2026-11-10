@@ -289,6 +289,10 @@ def _engine_enforcement(facts: dict) -> dict:
         "filesystem_enforced": bool(facts.get("filesystem_enforced")),
         "network_enforced": bool(facts.get("network_enforced")),
         "cpu_enforced": limits,
+        # 容器参数只有 memory/cpus/pids/fsize，没有带宽上限：这一项不许跟着点绿。
+        "io_enforced": False,
+        "io_bps": 0,
+        "io_error": "容器后端未设 IO 带宽上限",
         "disk_enforced": False,
     }
 

@@ -38,6 +38,13 @@ def _env(name: str, default: str) -> str:
     return os.getenv(f"BLANK_{name}", default).strip()
 
 
+def _parse_bps(text: str) -> int:
+    """`"128m"` / `"1g"` / 裸字节数 → 每秒字节数。认不出来按 0（=不设限）。"""
+    from blank_api.services.sandbox.windows_job import parse_size
+
+    return parse_size(text)
+
+
 @dataclass(slots=True)
 class SandboxPolicy:
     image: str = field(default_factory=lambda: _env("SANDBOX_IMAGE", "blank-sandbox:dev"))
@@ -65,6 +72,10 @@ class SandboxPolicy:
     cpus: float = field(default_factory=lambda: float(_env("SANDBOX_CPUS", "1.0")))
     memory: str = field(default_factory=lambda: _env("SANDBOX_MEMORY", "512m"))
     pids: int = field(default_factory=lambda: int(_env("SANDBOX_PIDS", "128")))
+    # 每秒读写字节上限（整棵进程树、所有卷合计）。0 = 不设。默认 128m：比常见 SSD
+    # 顺序写慢得有限，但把"一条命令把盘写满/读爆"关进一个能解释的量级里。
+    # 真限住与否由 Job IO rate 决定，并由行为探针现场证明，不看这个数字。
+    io_bps: int = field(default_factory=lambda: _parse_bps(_env("SANDBOX_IO_BPS", "128m")))
     max_file_bytes: int = field(default_factory=lambda: int(_env("SANDBOX_MAX_FILE_KB", "262144")))
     tmpfs_size: str = field(default_factory=lambda: _env("SANDBOX_TMPFS", "128m"))
     writable_rootfs: bool = field(default_factory=lambda: _env("SANDBOX_READ_ONLY_ROOT", "true").lower() in {"1", "true", "yes"}) is False

@@ -192,6 +192,7 @@ def test_restricted_ledger_uses_the_same_cpu_rule(cached_cap) -> None:
             created=True,
             assigned=True,
             error="",
+            io_error="",
             enforced={"memory_bytes": 1, "active_process_limit": 2, "kill_on_close": 1, "cpu_rate": 625},
         )
     )

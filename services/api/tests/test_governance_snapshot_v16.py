@@ -245,7 +245,7 @@ async def test_the_wire_contract_is_what_the_panel_reads(seeded, tmp_path):
     first = block["first"]
     assert {"model", "tier", "permission_mode", "sandbox", "features"} <= set(first)
     assert {"backend", "enabled", "isolation", "network", "read_only_root", "denied"} <= set(first["sandbox"])
-    assert {"cpus", "memory", "pids", "tmpfs", "timeout_seconds"} <= set(first["sandbox"])
+    assert {"cpus", "memory", "pids", "io_bps", "tmpfs", "timeout_seconds"} <= set(first["sandbox"])
     # M1b 起面板还要读"档位从哪来、哪几项真被强制"：改名不会让前端报错，只会让它安静地
     # 把未强制的限额显示成生效值，所以逐键钉住。
     assert {"boundary_strength", "boundary_strength_label", "enforcement_source", "enforced"} <= set(first["sandbox"])

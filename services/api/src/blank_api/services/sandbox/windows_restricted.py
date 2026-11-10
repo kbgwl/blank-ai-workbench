@@ -151,6 +151,8 @@ class JobReport:
     assigned: bool = False
     error: str = ""
     enforced: dict[str, int] = field(default_factory=dict)
+    # IO 限速单独设、单独失败：设不上时 Job 仍然可用，账本要能说出为什么。
+    io_error: str = ""
 
 
 @dataclass(slots=True)
@@ -706,6 +708,7 @@ def _job_report(job: windows_job.Job | None, assigned: bool, error: str) -> JobR
         assigned=bool(job.ok and assigned),
         error=job.error or error,
         enforced=dict(job.enforced),
+        io_error=job.io_error,
     )
 
 
@@ -718,6 +721,7 @@ def run_command(
     memory: str = "",
     pids: int = 0,
     cpus: float = 0.0,
+    io_bps: int = 0,
     rule_set: rules_module.SandboxRules | None = None,
 ) -> CommandReport:
     if not supported():
@@ -729,6 +733,7 @@ def run_command(
         memory_bytes=windows_job.parse_size(memory),
         active_process_limit=pids or 0,
         cpu_cpus=cpus,
+        io_bps=io_bps,
     )
     token = 0
     try:

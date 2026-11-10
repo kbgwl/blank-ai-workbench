@@ -42,7 +42,8 @@ ENGINE_KEYS = {
     "limits_applied", "boundary_strength", "boundary_strength_label",
     "memory_enforced", "memory_bytes", "pids_enforced", "pids_limit",
     "tree_kill_enforced", "filesystem_enforced", "network_enforced",
-    "cpu_enforced", "disk_enforced", "job_created", "job_assigned", "job_error",
+    "cpu_enforced", "io_enforced", "io_bps", "io_error",
+    "disk_enforced", "job_created", "job_assigned", "job_error",
 }
 # M2：档位事实由 _tier_enforcement 合并进来，与后端名同源；事件里要能回答
 # "当时按哪一档跑、降级没有、为什么"。
@@ -53,7 +54,7 @@ TIER_KEYS = {
 # 事件里允许出现的字段：与 gateway._command_enforcement 的 keep 清单一致，
 # 面板（api.ts / status.ts）只读这些，读不到别的东西。
 EVENT_KEYS = ENGINE_KEYS | TIER_KEYS
-ALL_LIMIT_FIELDS = {"memory", "pids", "tree_kill", "cpu", "disk", "network", "filesystem"}
+ALL_LIMIT_FIELDS = {"memory", "pids", "tree_kill", "cpu", "io", "disk", "network", "filesystem"}
 
 
 def _cap(**overrides) -> Capability:
@@ -108,12 +109,13 @@ def _context(root) -> ToolContext:
 # --------------------------------------------------------------------- 真值表
 
 
-def test_job_only_marks_three_of_seven(cap):
-    """本机档位：内存/进程数/进程树被内核强制；CPU 由探针现场判定，磁盘/文件/网络没有。
+def test_job_only_marks_three_of_eight(cap):
+    """本机档位：内存/进程数/进程树被内核强制；CPU 与 IO 由探针现场判定，磁盘/文件/网络没有。
 
-    夹具的 `_cap()` 默认 `cpu_rate=False`，代表"这台机器没测出 CPU 限速"，所以这里 CPU 是
-    False——不是"本期不做"。CPU 也点绿的路径由 `test_cpu_quota_v169.py` 钉。
-    把 job_only 当成"沙箱已启用"就是立项要消灭的那类谎，所以 False 的项逐条点名。
+    夹具的 `_cap()` 默认 `cpu_rate=False, io_rate=False`，代表"这台机器没测出这两项限速"，
+    所以这里它们是 False——不是"本期不做"。点绿的路径由 `test_cpu_quota_v169.py` 与
+    `test_io_rate_v21.py` 钉。把 job_only 当成"沙箱已启用"就是立项要消灭的那类谎，
+    所以 False 的项逐条点名。
     """
     cap(_cap(appcontainer=False, restricted_token=False))
     enforced = boundary.enforced_fields("local")
@@ -121,6 +123,7 @@ def test_job_only_marks_three_of_seven(cap):
     assert enforced["pids"] is True
     assert enforced["tree_kill"] is True
     assert enforced["cpu"] is False, "探针没证明压得住时，Job 接受过 CpuRate 也不许点绿"
+    assert enforced["io"] is False, "探针没证明节流时，Job 接受过 IO rate 也不许点绿"
     assert enforced["disk"] is False
     assert enforced["network"] is False
     assert enforced["filesystem"] is False
@@ -132,12 +135,12 @@ def test_local_does_not_borrow_machine_identity_boundary(cap):
 
     local 以宿主令牌 + Job 执行：机器能力只能背书 Job 那几项。把 os_enforced 的
     filesystem/network 借过来，面板就会在一条根本没进受限令牌的命令上点亮"文件被拒"。
-    CPU 限速是 Job 上的行为证据，夹具默认没测出所以是 False；磁盘配额仍需要管理员。
+    CPU/IO 限速是 Job 上的行为证据，夹具默认没测出所以是 False；磁盘配额仍需要管理员。
     """
     cap(_cap())
     enforced = boundary.enforced_fields("local")
     assert set(enforced) == ALL_LIMIT_FIELDS
-    assert enforced["cpu"] is False and enforced["disk"] is False
+    assert enforced["cpu"] is False and enforced["io"] is False and enforced["disk"] is False
     assert {key for key, value in enforced.items() if value} == {"memory", "pids", "tree_kill"}
     assert boundary.enforcement_source("local") == "measured_job_object"
 
@@ -202,20 +205,29 @@ def test_backend_none_is_not_measured_job(cap):
 
 
 def test_docker_claims_are_labelled_as_flags(cap):
-    """容器那条路的 True 来自 docker 命令行参数，不是本机实测：来源必须分开写。"""
+    """容器那条路的 True 来自 docker 命令行参数，不是本机实测：来源必须分开写。
+
+    IO 速率上限是例外：docker 启动参数里没有带宽开关（`docker_flags` 无对应项），
+    所以容器后端对 IO 只能说 False——按后端名把整排都写成 True 就是替 docker 撒谎。
+    """
     cap(_cap(job=False, appcontainer=False, carrier_control=False))
-    assert all(boundary.enforced_fields("docker").values())
+    enforced = boundary.enforced_fields("docker")
+    assert enforced["io"] is False, "docker 命令行没有带宽参数，这一项不许跟着整排点绿"
+    assert all(value for key, value in enforced.items() if key != "io")
     assert boundary.enforcement_source("docker") == "docker_flags"
 
 
 def test_panel_reads_exactly_these_field_names():
     """面板的 limitKeys 映射表在后端键名里必须逐个存在。
 
-    `web/src/components/tasks/api.ts` 拿 cpus→cpu、tmpfs→filesystem 去查 enforced；
-    后端改名的话每一项都会安静地长成"（未强制）"——数字还在，标记变了，没人报错。
+    `web/src/components/tasks/api.ts` 拿 cpus→cpu、tmpfs→filesystem、io_bps→io 去查
+    enforced；后端改名的话每一项都会安静地长成"（未强制）"——数字还在，标记变了，没人报错。
     """
     enforced = boundary.no_limits()
-    for panel_key, backend_key in (("cpus", "cpu"), ("memory", "memory"), ("pids", "pids"), ("tmpfs", "filesystem")):
+    for panel_key, backend_key in (
+        ("cpus", "cpu"), ("memory", "memory"), ("pids", "pids"),
+        ("tmpfs", "filesystem"), ("io_bps", "io"),
+    ):
         assert backend_key in enforced, f"面板按 {panel_key}→{backend_key} 查账，后端必须有这个键"
     assert set(enforced) == ALL_LIMIT_FIELDS, "多一项少一项都意味着面板与执行层口径分叉"
 
@@ -233,6 +245,7 @@ def test_off_path_reports_the_same_key_set_as_on_path():
     assert off["tree_kill_enforced"] is False
     assert off["filesystem_enforced"] is False and off["network_enforced"] is False
     assert off["cpu_enforced"] is False and off["disk_enforced"] is False
+    assert off["io_enforced"] is False and off["io_bps"] == 0
     assert "沙箱开关为关" in off["job_error"], "为什么没执行要写在账上，不能只留一串 False"
 
 
@@ -338,6 +351,11 @@ async def test_windows_job_limits_reach_the_event(seeded, workspace, monkeypatch
     cap = boundary.measure()
     assert facts["cpu_enforced"] is bool(cap.job and cap.cpu_rate), (
         f"账本与探针不同源：cap.cpu_rate={cap.cpu_rate} facts={facts['cpu_enforced']}")
+    # IO 同样是行为证据：Job 收下了 io_bps 不算数，探针现场量出节流才算。
+    assert facts["io_enforced"] is bool(cap.job and cap.io_rate), (
+        f"账本与探针不同源：cap.io_rate={cap.io_rate} facts={facts['io_enforced']}")
+    assert facts["io_bps"] > 0
+    assert facts["io_error"] == "" or facts["io_enforced"] is False
     # 磁盘配额仍需要管理员，这一项谁都不许亮。
     assert facts["disk_enforced"] is False
     # local 以宿主令牌执行：即便机器能造受限令牌，这次执行也只有 Job 这一层。
@@ -406,6 +424,7 @@ async def test_governance_snapshot_uses_the_same_source(seeded, tmp_path, cap, m
     assert block["enforcement_source"] == "measured_job_object"
     assert block["enforced"]["memory"] is True
     assert block["enforced"]["cpu"] is False
+    assert block["enforced"]["io"] is False
     assert set(block["enforced"]) == ALL_LIMIT_FIELDS
     assert block["boundary_apparatus_ok"] is True
     assert isinstance(block["boundary_measured_seconds_ago"], (int, float))

@@ -219,6 +219,7 @@ class LocalSandbox:
             memory_bytes=memory_bytes,
             active_process_limit=self.policy.pids or 0,
             cpu_cpus=self.policy.cpus,
+            io_bps=self.policy.io_bps,
         )
         proc = await asyncio.create_subprocess_shell(
             script,
@@ -309,6 +310,7 @@ class RestrictedSandbox:
             memory=self.policy.memory,
             pids=self.policy.pids,
             cpus=self.policy.cpus,
+            io_bps=self.policy.io_bps,
             rule_set=rules,
         )
         duration = int((time.perf_counter() - started) * 1000)
@@ -376,6 +378,7 @@ class AppContainerSandbox:
             memory=self.policy.memory,
             pids=self.policy.pids,
             cpus=self.policy.cpus,
+            io_bps=self.policy.io_bps,
             rule_set=rules,
         )
         duration = int((time.perf_counter() - started) * 1000)
@@ -428,6 +431,9 @@ def _enforcement_appcontainer(report: "CommandReport") -> dict[str, object]:
         "filesystem_enforced": ok and check.file_boundary_ok,
         "network_enforced": ok and check.network_ok,
         "cpu_enforced": enforced and "cpu_rate" in job.enforced and cap.cpu_rate,
+        "io_enforced": enforced and "io_bps" in job.enforced and cap.io_rate,
+        "io_bps": int(job.enforced.get("io_bps", 0)),
+        "io_error": job.io_error,
         "disk_enforced": False,
     }
 
@@ -455,6 +461,9 @@ def _enforcement_restricted(report: "CommandReport") -> dict[str, object]:
         "network_enforced": cap.network_boundary,
         # Job 接受限速 + 探针证明这台机器压得住，两个都真才算真。
         "cpu_enforced": enforced and "cpu_rate" in job.enforced and cap.cpu_rate,
+        "io_enforced": enforced and "io_bps" in job.enforced and cap.io_rate,
+        "io_bps": int(job.enforced.get("io_bps", 0)),
+        "io_error": job.io_error,
         "disk_enforced": False,
     }
 
@@ -492,6 +501,9 @@ def limits_not_applied(reason: str) -> dict[str, object]:
         "filesystem_enforced": False,
         "network_enforced": False,
         "cpu_enforced": False,
+        "io_enforced": False,
+        "io_bps": 0,
+        "io_error": reason,
         "disk_enforced": False,
     }
 
@@ -521,6 +533,9 @@ def _enforcement(job: windows_job.Job, assigned: bool, assign_error: str) -> dic
         "network_enforced": False,
         # 本次 Job 真接受了限速，且本机探针证明内核压得住；缺一个都不算。
         "cpu_enforced": enforced and "cpu_rate" in job.enforced and cap.cpu_rate,
+        "io_enforced": enforced and "io_bps" in job.enforced and cap.io_rate,
+        "io_bps": int(job.enforced.get("io_bps", 0)),
+        "io_error": job.io_error,
         "disk_enforced": False,
     }
 
@@ -536,6 +551,12 @@ def _enforcement_notes(enforcement: dict[str, object]) -> list[str]:
         out.append("限额未由内核强制：{}".format(enforcement["job_error"] or "本平台无 Job Object"))
     if enforcement.get("cpu_enforced"):
         out.append("CPU 上限由 Job CPU rate 强制（整棵进程树合计，按整机算力折算）")
+    if enforcement.get("io_enforced"):
+        out.append("读写带宽上限 {}MB/s 由 Job IO rate 强制（整棵进程树、所有卷合计）".format(
+            round(int(enforcement["io_bps"]) / 1024 / 1024, 1)))
+    elif enforcement.get("io_bps"):
+        out.append("IO 速率上限已设进 Job，但本机探针没能现场证明节流（按未强制记账）：{}".format(
+            enforcement.get("io_error") or "探针未通过"))
     if enforcement["tree_kill_enforced"]:
         out.append("命令结束时整棵进程树被 Job 带走（KILL_ON_JOB_CLOSE 已生效）")
     if not enforcement["filesystem_enforced"]:

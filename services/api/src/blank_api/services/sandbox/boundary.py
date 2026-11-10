@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,7 +33,9 @@ CACHE_TTL_SECONDS = 60.0
 # 2：CPU 限速从"没做"变成"现场压一次自旋子进程"，见 `_probe_cpu_rate`。
 # 3：网络边界从"能进 AppContainer"这种能力推断，改成 AppContainer 内的行为证据
 #    （零能力包里外连/私钥都被 PermissionError:13 拒），见 `windows_appcontainer.judge`。
-PROBE_VERSION = 3
+# 4：IO 带宽上限从"设上了但没验"改成现场压一次「对照 vs 16MB/s」的写盘对照，
+#    见 `_probe_io_rate`；尺度变了，之前的报告与这份不可直接比。
+PROBE_VERSION = 4
 
 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020008
 EXTENDED_STARTUPINFO_PRESENT = 0x00080000
@@ -80,6 +83,12 @@ class Capability:
     cpu_rate: bool = False
     cpu_rate_error: str = ""
     cpu_rate_check: dict[str, Any] = field(default_factory=dict)
+    # IO 带宽上限同样是行为证据：`SetInformationJobObject(class=31)` 成功只说明
+    # 内核收下了结构体。2026-11-10 上一版就栽在这——字段顺序错一位，调用返回成功、
+    # 限速根本没开；只有「限速侧写盘明显慢于对照」才算数。
+    io_rate: bool = False
+    io_rate_error: str = ""
+    io_rate_check: dict[str, Any] = field(default_factory=dict)
     measured_at: float = 0.0
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -138,6 +147,10 @@ _CACHE: tuple[float, Capability] | None = None
 # 因此：进程内只探一次；正在探时不阻塞调用方，这一拍如实按"未强制"记账。
 _CPU_MEMO: tuple[bool, str, dict[str, Any]] | None = None
 _CPU_MEMO_LOCK = threading.Lock()
+# IO 探针要写两轮 32MB（限速侧约 2 秒），与 CPU 同理：进程内只探一次，
+# 正在探时这一拍如实按未强制记，不阻塞调用方。
+_IO_MEMO: tuple[bool, str, dict[str, Any]] | None = None
+_IO_MEMO_LOCK = threading.Lock()
 
 
 def _cpu_probe_memoized() -> tuple[bool, str, dict[str, Any]]:
@@ -154,29 +167,47 @@ def _cpu_probe_memoized() -> tuple[bool, str, dict[str, Any]]:
         _CPU_MEMO_LOCK.release()
 
 
+def _io_probe_memoized() -> tuple[bool, str, dict[str, Any]]:
+    global _IO_MEMO
+    if _IO_MEMO is not None:
+        return _IO_MEMO
+    if not _IO_MEMO_LOCK.acquire(blocking=False):
+        return False, "IO 限速探测正在进行，本拍按未强制记账", {}
+    try:
+        if _IO_MEMO is None:
+            _IO_MEMO = _probe_io_rate()
+        return _IO_MEMO
+    finally:
+        _IO_MEMO_LOCK.release()
+
+
 def measure(*, force: bool = False, ttl: float = CACHE_TTL_SECONDS) -> Capability:
     """带 TTL 的现场探测。缓存命中也要把 `age_seconds` 报出去，别把旧值当现值。
 
     `force=True` 连 CPU 探针也重跑（doctor 的现场读数用）；平时的 TTL 刷新复用进程内
     已有的 CPU 结论——机器不会每分钟换一次内核对 CPU 限速的支持。
     """
-    global _CACHE, _CPU_MEMO
+    global _CACHE, _CPU_MEMO, _IO_MEMO
     now = time.time()
     if _CACHE is not None and not force and now - _CACHE[0] < ttl:
         return _CACHE[1]
     if force:
         with _CPU_MEMO_LOCK:
             _CPU_MEMO = None
-    cap = _measure_once(cpu_probe=_cpu_probe_memoized)
+        with _IO_MEMO_LOCK:
+            _IO_MEMO = None
+    cap = _measure_once(cpu_probe=_cpu_probe_memoized, io_probe=_io_probe_memoized)
     _CACHE = (now, cap)
     return cap
 
 
 def invalidate() -> None:
-    global _CACHE, _CPU_MEMO
+    global _CACHE, _CPU_MEMO, _IO_MEMO
     _CACHE = None
     with _CPU_MEMO_LOCK:
         _CPU_MEMO = None
+    with _IO_MEMO_LOCK:
+        _IO_MEMO = None
 
 
 def _appcontainer_check():
@@ -191,7 +222,7 @@ def _appcontainer_check():
     return wac.cached()
 
 
-_LIMIT_FIELDS = ("memory", "pids", "tree_kill", "cpu", "disk", "network", "filesystem")
+_LIMIT_FIELDS = ("memory", "pids", "tree_kill", "cpu", "io", "disk", "network", "filesystem")
 
 
 def no_limits() -> dict[str, bool]:
@@ -212,19 +243,21 @@ def enforced_fields(backend: str, *, limits_enabled: bool = True) -> dict[str, b
     if not limits_enabled or backend in ("none", ""):
         return no_limits()
     if backend == "docker":
-        return dict.fromkeys(_LIMIT_FIELDS, True)
+        # docker_flags 里有 memory/cpus/pids/fsize，没有带宽上限：io 这一项不跟着点绿。
+        return {**dict.fromkeys(_LIMIT_FIELDS, True), "io": False}
     cap = measure()
     if not cap.apparatus_ok:
         # 探测装置自己不可信 ⇒ 一项都不许承诺。宁可全红，不许"默认当成生效"。
         return no_limits()
-    # CPU 限速的载体仍是 Job：探测说能压住，但这条账只在 Job 真的可用时成立。
+    # CPU/IO 限速的载体仍是 Job：探测说能压住，但这条账只在 Job 真的可用时成立。
     cpu = bool(cap.job and cap.cpu_rate)
+    io = bool(cap.job and cap.io_rate)
     if backend == "appcontainer":
         check = _appcontainer_check()
         ok = bool(check and check.ok)
         return {
             "memory": True, "pids": True, "tree_kill": True,
-            "cpu": cpu, "disk": False,
+            "cpu": cpu, "io": io, "disk": False,
             # 目录不可写、外部不可达都由零能力包在系统层拒；两条都来自同一个子进程的行为自检。
             "network": ok and check.network_ok,
             "filesystem": ok and check.file_boundary_ok,
@@ -234,8 +267,8 @@ def enforced_fields(backend: str, *, limits_enabled: bool = True) -> dict[str, b
         # 这次执行也没走 AC，借它的证据来点绿灯就是拿另一个后端的边界给这个后端背书。
         return {
             "memory": True, "pids": True, "tree_kill": True,
-            # CPU 限速已由 `_probe_cpu_rate` 现场压过；磁盘配额仍需要管理员，照实写 False。
-            "cpu": cpu, "disk": False,
+            # CPU/IO 限速已由行为探针现场压过；磁盘**容量**配额仍是另一件事，照实写 False。
+            "cpu": cpu, "io": io, "disk": False,
             "network": False,
             "filesystem": cap.filesystem_boundary,
         }
@@ -243,7 +276,7 @@ def enforced_fields(backend: str, *, limits_enabled: bool = True) -> dict[str, b
     job = cap.job
     return {
         "memory": job, "pids": job, "tree_kill": job,
-        "cpu": cpu, "disk": False,
+        "cpu": cpu, "io": io, "disk": False,
         "network": False, "filesystem": False,
     }
 
@@ -272,7 +305,7 @@ def enforcement_source(backend: str, *, limits_enabled: bool = True) -> str:
     return "measured_job_object" if cap.job else "nothing_enforced"
 
 
-def _measure_once(cpu_probe=None) -> Capability:
+def _measure_once(cpu_probe=None, io_probe=None) -> Capability:
     cap = Capability(platform=sys.platform, probe_version=PROBE_VERSION, measured_at=time.time())
     cap.job, cap.job_error = _probe_job()
     if cap.job:
@@ -280,8 +313,11 @@ def _measure_once(cpu_probe=None) -> Capability:
         # 是进程内复用、探测中不阻塞的那一版。
         probe = cpu_probe or _probe_cpu_rate
         cap.cpu_rate, cap.cpu_rate_error, cap.cpu_rate_check = probe()
+        io = io_probe or _probe_io_rate
+        cap.io_rate, cap.io_rate_error, cap.io_rate_check = io()
     else:
         cap.cpu_rate_error = "Job 不可用，CPU 限速未测"
+        cap.io_rate_error = "Job 不可用，IO 限速未测"
     cap.restricted_token, cap.token_control, cap.restricted_token_error = _probe_restricted_token()
     if cap.restricted_token and cap.job:
         cap.file_boundary, cap.file_boundary_error, cap.file_check = _probe_file_boundary()
@@ -424,6 +460,112 @@ def _probe_cpu_rate() -> tuple[bool, str, dict[str, Any]]:
             script.unlink()
         except OSError:
             pass
+
+
+# 子进程先睡 0.25s，给父进程 assign 进 Job 留窗口；之后每写 1MB 就 flush+fsync，
+# 避免"全在页缓存里"把节流读数洗掉。输出最后一行是实测 MB/s。
+_IO_WRITE_SCRIPT = """\
+import os, sys, time
+path, mb = sys.argv[1], int(sys.argv[2])
+time.sleep(0.25)
+chunk = b"\\xa5" * (1024 * 1024)
+start = time.monotonic()
+with open(path, "wb", buffering=0) as fh:
+    for _ in range(mb):
+        fh.write(chunk)
+        fh.flush()
+        os.fsync(fh.fileno())
+elapsed = time.monotonic() - start
+print("%.3f" % (mb / elapsed))
+"""
+
+
+def _run_io_write(script: Path, target: str, mb: int, job=None) -> tuple[float, str]:
+    """跑一轮写盘，返回实测 MB/s。`job` 非空时整棵树挂进去受 IO 上限约束。"""
+    proc = subprocess.Popen(
+        [sys.executable, str(script), target, str(mb)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    if job is not None:
+        from blank_api.services.sandbox import windows_job as wj
+
+        assigned, error = wj.assign_pid(job, proc.pid)
+        if not assigned:
+            proc.kill()
+            proc.communicate()
+            return 0.0, f"挂进 Job 失败：{error}"
+    try:
+        out, err = proc.communicate(timeout=180)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        return 0.0, "写盘探针超时"
+    if proc.returncode != 0:
+        return 0.0, f"写盘探针退出码 {proc.returncode}：{(err or '')[:200]}"
+    try:
+        return float(out.strip().splitlines()[-1]), ""
+    except (IndexError, ValueError):
+        return 0.0, f"写盘探针输出读不懂：{out[:200]!r}"
+
+
+def _probe_io_rate() -> tuple[bool, str, dict[str, Any]]:
+    """IO 带宽上限的行为自检：同一次写盘，限速侧必须明显慢于不限速对照。
+
+    只看 `SetInformationJobObject(class=31)` 返回 True 是上一轮踩过的坑：结构体字段
+    错一位时调用照样成功、限速根本没开。2026-11-10 本机实测：对照 680.9 MB/s；
+    请求 16 MB/s 时限速侧 16.1 MB/s。这里把请求值固定为 16 MB/s、写 32MB，
+    限速侧约 2 秒；对照必须至少是它的 2 倍，否则这台机器的磁盘本身慢于限速档，
+    构造不出对照——如实写"测不了"，不猜成支持。
+    """
+    from blank_api.services.sandbox import windows_job as wj
+
+    limit_bps = 16 * 1024 * 1024
+    mb = 32
+    details: dict[str, Any] = {"write_mb": mb, "limit_mb_per_s": 16}
+    if not wj.supported():
+        return False, "本平台无 Job Object", details
+    fd, raw_path = tempfile.mkstemp(prefix="blank-io-probe-", suffix=".py")
+    os.close(fd)
+    script = Path(raw_path)
+    workdir = tempfile.mkdtemp(prefix="blank-io-work-")
+    target = os.path.join(workdir, "probe.bin")
+    job = None
+    try:
+        script.write_text(_IO_WRITE_SCRIPT, encoding="utf-8")
+        control, error = _run_io_write(script, target, mb)
+        details["control_mb_per_s"] = round(control, 1)
+        if error:
+            return False, "对照跑不起来：" + error, details
+        if control < 2 * (limit_bps / 1024 / 1024):
+            return False, (
+                f"本机写速 {control:.1f} MB/s 不足限速档 16MB/s 的 2 倍，构造不出对照"
+            ), details
+        job = wj.create_job("blank-io-probe", io_bps=limit_bps)
+        details["io_bps"] = int(job.enforced.get("io_bps", 0))
+        if not job.ok:
+            return False, f"建 Job 失败：{job.error}", details
+        if "io_bps" not in job.enforced:
+            return False, job.io_error or "Job 没接受 IO 限速", details
+        capped, error = _run_io_write(script, target, mb, job)
+        details["limited_mb_per_s"] = round(capped, 1)
+        if error:
+            return False, "限速侧跑不起来：" + error, details
+        limit = control * 0.7
+        details["pass_threshold_mb_per_s"] = round(limit, 1)
+        if capped > limit:
+            return False, (
+                f"限速未生效：限速侧 {capped:.1f} MB/s > 阈值 {limit:.1f}"
+                f"（对照 {control:.1f}）"
+            ), details
+        return True, "", details
+    finally:
+        if job is not None:
+            wj.close_job(job)
+        try:
+            script.unlink()
+        except OSError:
+            pass
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def _probe_restricted_token() -> tuple[bool, bool, str]:

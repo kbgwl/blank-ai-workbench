@@ -154,8 +154,10 @@ AppContainer**（固定包名 `BlankSandbox`）。工作区/临时目录授 `M`�
 `filesystem_enforced` / `network_enforced` 为 true 只因为这份行为证据。`workspace-net` 档在 AC 下
 **拒绝**而不是降级（零能力包的方向与"要联网"相反）。命令经 `cmd /d /s /c` 执行，路径型首词会统一
 补引号——未引号的绝对路径 exe 在 AC 里会被 cmd 的搜索解析撞成「拒绝访问。」（同一命令在宿主与受限
-令牌后端正常）。磁盘/IO 配额仍未强制：Job 的 IO 速率上限实测"接受设置但不节流"，账本固定
-`disk_enforced=false`。
+令牌后端正常）。IO 读写带宽上限由 Job Object 强制（`BLANK_SANDBOX_IO_BPS`，默认 `128m`，
+整棵进程树、所有卷合计；Job 接受设置不算数，`_probe_io_rate` 现场写两轮盘证明节流后账本才是
+`io_enforced=true`，docker 档没有带宽参数所以恒 false）。磁盘**容量**配额仍未强制：账本固定
+`disk_enforced=false`（VHDX 路径已做可行性实测，见 CHANGELOG「未验证」第 3 项）。
 
 想用容器档时，镜像需要先构建一次：
 
@@ -167,8 +169,8 @@ docker build --build-arg BASE_IMAGE=node:24-alpine -t blank-sandbox:dev sandbox
 超时立即 `docker rm -f` 回收整棵进程树，环境变量按白名单透传且带 KEY/TOKEN/SECRET 等特征的一律拒绝进入。
 其余可调项：`BLANK_SANDBOX_IMAGE`、`BLANK_SANDBOX_ALLOW_LOCAL`、`BLANK_SANDBOX_RESTRICTED`、
 `BLANK_SANDBOX_APPCONTAINER`、`BLANK_SANDBOX_RULES_FILE`、`BLANK_SANDBOX_CPUS/MEMORY/PIDS`、
-`BLANK_SANDBOX_NETWORK`、`BLANK_SANDBOX_TIMEOUT`、`BLANK_SANDBOX_MAX_FILE_KB`、`BLANK_SANDBOX_TMPFS`、
-`BLANK_SANDBOX_READ_ONLY_ROOT`、`BLANK_SANDBOX_ENV_ALLOWLIST`。
+`BLANK_SANDBOX_IO_BPS`、`BLANK_SANDBOX_NETWORK`、`BLANK_SANDBOX_TIMEOUT`、`BLANK_SANDBOX_MAX_FILE_KB`、
+`BLANK_SANDBOX_TMPFS`、`BLANK_SANDBOX_READ_ONLY_ROOT`、`BLANK_SANDBOX_ENV_ALLOWLIST`。
 
 Windows 注意：`uvicorn --reload` 的监视器在本机偶发停止热重载，改代码后若行为没变请重启进程；
 子进程事件循环已用线程兜底（`services/tools/shell.py`），不要再依赖 Selector 循环。
@@ -300,15 +302,16 @@ uv run alembic revision --autogenerate -m "描述"
   管理员权限下显式打开 `BLANK_SANDBOX_APPCONTAINER=1` 时改走 AppContainer（零能力包），
   文件与网络边界由内核拒，两条账本只认同一个子进程里的行为自检（见下条）。
 - **内核升级里已落地与仍冻结的项**：CPU 限速（Job `CpuRate` + 行为探针，账本要求
-  "Job 接受限速"与"本机实测压得住"同时成立）、**Windows 网络出口强制**（管理员 +
-  `BLANK_SANDBOX_APPCONTAINER=1`：零能力包里外连被 `PermissionError:13` 拒、回环自连正常、
-  宿主对照外连成功；文件与网络两条账本只认这份行为证据）、远程 MCP 的 OAuth（RFC 9728/8414
-  发现 → `client_credentials` → 401 刷新一次；受众与过期在本机核对，令牌只进内存）已落地；
-  更新源改成 Ed25519 **分离签名**（公钥钉在桌面壳里，下载前验签、装前复验）并随包生成
-  CycloneDX SBOM（由 `package-lock.json` 与 `uv.lock` 生成，带安装包摘要）。
-  仍冻结的三项是：磁盘/IO 配额（Job 的 IO 速率上限在管理员下实测接受 1MB/s 设置但
-  不节流——对照 834.8 MB/s、限速侧 903.7 MB/s，20 秒写 18.1GB，账本固定
-  `disk_enforced=false`）、任务级隔离、第二台机器差异对账；Linux 原生后端按项目决定
+  "Job 接受限速"与"本机实测压得住"同时成立）、IO 速率上限（Job IO rate 48 字节
+  `NATIVE_V1` 布局，默认 128MB/s；行为探针写两轮盘，限速侧 ≤ 对照×0.7 才写
+  `io_enforced=true`；docker 命令行没有带宽参数，容器档恒 false）、**Windows 网络出口强制**
+  （管理员 + `BLANK_SANDBOX_APPCONTAINER=1`：零能力包里外连被 `PermissionError:13` 拒、
+  回环自连正常、宿主对照外连成功；文件与网络两条账本只认这份行为证据）、远程 MCP 的 OAuth
+  （RFC 9728/8414 发现 → `client_credentials` → 401 刷新一次；受众与过期在本机核对，
+  令牌只进内存）已落地；更新源改成 Ed25519 **分离签名**（公钥钉在桌面壳里，下载前验签、
+  装前复验）并随包生成 CycloneDX SBOM（由 `package-lock.json` 与 `uv.lock` 生成，带安装包摘要）。
+  仍冻结的是：磁盘**容量**配额（VHDX + diskpart 已实测内核返回 ENOSPC，尚未接进执行层；
+  账本 `disk_enforced=false`）、任务级隔离、第二台机器差异对账；Linux 原生后端按项目决定
   **移出范围**，判据只在 CHANGELOG 留档，不计入待办；
   另有一项发布外部条件：exe 的 Authenticode 代码签名需要公司证书（本机 `sign:check`
   退出码 2，只出未签名包）。它们依赖尚不可用的内核接口、第二台机器或真实证书，
