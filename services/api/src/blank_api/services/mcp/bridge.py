@@ -41,6 +41,7 @@ from blank_api.services.mcp.client import (
     ServerConfig,
     build_client,
 )
+from blank_api.services.mcp.oauth import OAuthConfig
 from blank_api.services.mcp.protocol import (
     flatten_result,
     is_mcp_name,
@@ -225,6 +226,51 @@ def _as_memory(raw: Any) -> str:
     return text if text and windows_job.parse_size(text) > 0 else ""
 
 
+def _as_oauth(entry: dict, transport: str) -> tuple[OAuthConfig | None, str]:
+    """``auth``/``oauth`` 段 → OAuthConfig；配置错误返回可读原因（服务端会被跳过）。
+
+    client_credentials 需要机密客户端，所以 client_secret 必填；交互式授权
+    （authorization_code/PKCE）没有人工点击的场所，明确拒绝而不是假装支持。
+    """
+    raw = entry.get("auth") if entry.get("auth") is not None else entry.get("oauth")
+    if raw is None:
+        return None, ""
+    if transport != "http":
+        return None, "auth 只用于远程 http 服务端；stdio 服务端不需要 OAuth"
+    if not isinstance(raw, dict):
+        return None, "auth 必须是对象"
+    kind = str(raw.get("type") or "oauth").strip().lower()
+    if kind in ("none", "off"):
+        return None, ""
+    if kind not in ("oauth", "client_credentials"):
+        return None, f"auth.type 只支持 oauth/client_credentials（实际 {kind}；交互式授权没有人工点击的场所）"
+    client_id = _expand(str(raw.get("client_id") or "")).strip()
+    if not client_id:
+        return None, "auth 缺少 client_id"
+    client_secret = _expand(str(raw.get("client_secret") or "")).strip()
+    if not client_secret:
+        return None, "auth 的 client_credentials 缺少 client_secret"
+    method = str(raw.get("auth_method") or raw.get("token_endpoint_auth_method") or "").strip().lower()
+    if method in ("client_secret_basic", "basic"):
+        method = "basic"
+    elif method in ("client_secret_post", "post"):
+        method = "post"
+    elif method:
+        return None, f"auth_method 只支持 basic 或 post（实际 {method}）"
+    return (
+        OAuthConfig(
+            client_id=client_id,
+            client_secret=client_secret,
+            token_url=_expand(str(raw.get("token_url") or raw.get("tokenEndpoint") or "")).strip(),
+            scope=_expand(str(raw.get("scope") or "")).strip(),
+            audience=_expand(str(raw.get("audience") or raw.get("resource") or "")).strip(),
+            resource_metadata_url=_expand(str(raw.get("resource_metadata_url") or "")).strip(),
+            auth_method=method,
+        ),
+        "",
+    )
+
+
 def parse_servers(payload: dict) -> tuple[list[ServerConfig], list[MCPStatus]]:
     """配置文件 → 服务端列表 + 一眼能看懂的跳过原因。
 
@@ -285,6 +331,10 @@ def parse_servers(payload: dict) -> tuple[list[ServerConfig], list[MCPStatus]]:
         risk = str(entry.get("risk") or entry.get("riskLevel") or "high").strip().lower()
         if risk not in ("low", "medium", "high", "critical"):
             risk = "high"
+        oauth, auth_error = _as_oauth(entry, transport)
+        if auth_error:
+            statuses.append(MCPStatus(server_name, transport, STATE_SKIPPED, error=auth_error))
+            continue
         servers.append(
             ServerConfig(
                 name=server_name,
@@ -299,6 +349,7 @@ def parse_servers(payload: dict) -> tuple[list[ServerConfig], list[MCPStatus]]:
                 risk=risk,
                 memory=_as_memory(entry.get("memory") or entry.get("memory_limit")),
                 pids=_as_pids(entry.get("pids") or entry.get("pids_limit")),
+                oauth=oauth,
             )
         )
     return servers, statuses

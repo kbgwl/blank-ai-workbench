@@ -35,6 +35,7 @@ from typing import Any
 
 import httpx
 
+from blank_api.services.mcp.oauth import AuthError, OAuthConfig, OAuthProvider
 from blank_api.services.mcp.protocol import (
     CLIENT_NAME,
     CLIENT_VERSION,
@@ -88,6 +89,8 @@ class ServerConfig:
     pids: int = 0
     # 只给测试用：HTTP 传输要能塞一个 MockTransport 进来，否则验证协议就得真联网
     client_factory: Any = None
+    # 远程 http 服务端的出站身份；None＝沿用 headers 里的静态 Authorization（如果有）
+    oauth: OAuthConfig | None = None
 
 
 def _job_limits(config: ServerConfig) -> tuple[int, int]:
@@ -527,15 +530,29 @@ class HttpClient(_JSONRPCClient):
         super().__init__(config)
         self._client: httpx.AsyncClient | None = None
         self._session_id = ""
+        self._auth: OAuthProvider | None = None
 
     async def start(self) -> None:
         factory = self.config.client_factory or httpx.AsyncClient
-        self._client = factory(timeout=float(self.config.timeout or DEFAULT_TIMEOUT))
+        # OAuth 令牌请求不能被环境里的代理劫持：token 只走直连（或显式配置的传输）。
+        kwargs = {"timeout": float(self.config.timeout or DEFAULT_TIMEOUT)}
+        if self.config.oauth is not None:
+            kwargs["trust_env"] = False
+        self._client = factory(**kwargs)
+        if self.config.oauth is not None:
+            try:
+                self._auth = OAuthProvider(
+                    self.config.oauth, server_url=self.config.url, name=self.config.name
+                )
+                await self._auth.start(self._client)
+            except AuthError as error:
+                await self.close()
+                raise MCPError(error.code, error.message) from None
         await self.handshake()
 
     def boundary_facts(self) -> dict[str, Any]:
         """HTTP 服务端的进程在远端：本机 Job 管不到，也不许写成"已纳入边界"。"""
-        return {
+        facts = {
             "transport": "http",
             "boundary": BOUNDARY_REMOTE,
             "limits_applied": False,
@@ -552,6 +569,10 @@ class HttpClient(_JSONRPCClient):
                 "本机只保证每次出站请求走同一套审批与审计"
             ),
         }
+        if self._auth is not None:
+            # 只报令牌的类型/有效期/核对结论；令牌本身永不进状态与证据。
+            facts["auth"] = self._auth.facts()
+        return facts
 
     def _headers(self) -> dict:
         headers = {
@@ -559,21 +580,39 @@ class HttpClient(_JSONRPCClient):
             "Accept": "application/json, text/event-stream",
             **self.config.headers,
         }
+        if self._auth is not None:
+            try:
+                headers["Authorization"] = self._auth.authorization()
+            except AuthError as error:
+                raise MCPError(error.code, error.message) from None
         if self._session_id:
             # 服务端给了会话 id 就必须回带，否则每个请求都被当成一次新会话
             headers["Mcp-Session-Id"] = self._session_id
         return headers
 
-    async def _post(self, message: dict) -> list[dict]:
+    async def _post(self, message: dict, *, retried: bool = False) -> list[dict]:
         client = self._client
         if client is None or self._closed:
             raise MCPError("mcp_closed", f"{self.config.name} 的连接已关闭")
+        if self._auth is not None:
+            try:
+                await self._auth.ensure_fresh(client)
+            except AuthError as error:
+                raise MCPError(error.code, error.message) from None
         try:
             response = await client.post(self.config.url, json=message, headers=self._headers())
         except httpx.HTTPError as error:
             raise MCPError(
                 "mcp_transport", f"{self.config.name} 请求失败：{error.__class__.__name__}：{error}"
             ) from error
+        if response.status_code == 401 and self._auth is not None and not retried:
+            # 401 说明手上的令牌失效了（服务端提前吊销/时钟偏差）。刷新一次再试；
+            # 只重试一次，第二次还 401 就把原因交出去，不许无限重试。
+            try:
+                await self._auth.refresh(client)
+            except AuthError as error:
+                raise MCPError(error.code, error.message) from None
+            return await self._post(message, retried=True)
         session_id = response.headers.get("mcp-session-id")
         if session_id:
             self._session_id = session_id
@@ -606,6 +645,9 @@ class HttpClient(_JSONRPCClient):
 
     async def close(self) -> None:
         self._closed = True
+        if self._auth is not None:
+            self._auth.close()
+            self._auth = None
         client, self._client = self._client, None
         if client is not None:
             try:
