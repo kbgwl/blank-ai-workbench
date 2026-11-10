@@ -1,6 +1,74 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、签名接线、受限令牌后端与「跑不了测试」如实跳过
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、签名接线、受限令牌后端与「跑不了测试」如实跳过
+
+- **CPU 限速（Job CpuRate + 行为探针）**：`SandboxPolicy.cpus` 从"只是配置值"变成内核真限。
+  Job 通过 `JobObjectCpuRateControlInformation`（ENABLE|HARD_CAP）设限；`CpuRate` 的单位是
+  **整机算力的万分之一**（16 核：625 = 1 核，10000 = 整机），不是"单核的百分比"——第一版探针
+  按后者读，2000/5000 两档在单线程上毫无变化。换算进 `windows_job.cpu_rate_for`；`cpus`
+  不小于整机核数时不设限，并在 `cpu_error` 里说清"没构成限制"，不许记成已强制。
+  账本要求两个都真：本次 Job 真接受了 `cpu_rate`，且 `_probe_cpu_rate` 现场压过——同一负载
+  （4 个自旋子进程 × 0.5s）跑两轮，对照必须跑满 `workers×seconds×0.4`（装置自检），限速侧
+  必须 ≤ 对照的 70%；单核机器构造不出对照，如实报"测不了"而不是猜成支持。收口当刻实测
+  （非管理员，build 26300，16 逻辑核）：对照 1.984 CPU 秒 → 限速侧 1.016，阈值 1.389，
+  `cpu_rate=625`。`cpu_enforced` 与 `enforced_fields` 的 `cpu` 同口径；生效时 notes 写
+  "CPU 上限由 Job CPU rate 强制（整棵进程树合计，按整机算力折算）"。`PROBE_VERSION` 升到 2
+  （探针语义变了，进治理指纹）；面板 `job_only` 文案从"只有内存/进程数/进程树"改为
+  "资源与生命周期由内核强制"，cpus 只有在 `enforced.cpu=true` 时才不再标「未强制」。
+  新增 `tests/test_cpu_quota_v169.py` 11 例，关联四套件 45 例全绿；变异 10/10 全红且红点
+  对得上（整机换算、整机核数边界、LocalSandbox 接线、local/restricted 两处账本、机器账本
+  的 Job 前提、探针结论抄写、notes、对照自检、限速阈值各至少 1 例）。
+
+- **远程 MCP over OAuth 2.0（发现 → client_credentials → 刷新）**：`mcp.json` 的 `auth`
+  段从"只有静态 headers"扩到真令牌生命周期。只走无人工的 `client_credentials` +
+  `refresh_token`：桌面/后端进程里没人能点浏览器授权页，`authorization_code` 明确拒绝
+  （`MCPStatus.skipped` 带原因），不假装支持。发现按 MCP 授权规范走两跳：RFC 9728
+  受保护资源元数据（`/.well-known/oauth-protected-resource`，路径感知候选 + 同源兜底）
+  给出授权服务器，RFC 8414 / OIDC 元数据给出 `token_endpoint` 与
+  `token_endpoint_auth_methods_supported`；元数据的 `issuer` 与发现到的 issuer 不一致就拒。
+  非 loopback 一律要求 https（只有 `http://127.0.0.1`/localhost 放行），令牌与发现请求都走
+  `trust_env=False` 的客户端——环境里的代理变量不该把 Bearer 令牌捎到别处。
+  令牌侧：`client_secret_basic` / `client_secret_post` 两法（显式 `token_url` 时也按
+  `auth_method` 生效）；RFC 8707 `resource` 绑定目标服务端。JWT **只解包、不验签**——
+  令牌是刚经 TLS 从令牌端点取回的，本机要核的是"是不是发给我、是不是还活着"：`aud`
+  缺失或不符一律拒（期望值与实际值都写进错误），`exp` 已过拒，未写 `expires_in` 时用
+  `exp - now` 调度，提前 30 秒刷新；opaque 令牌无法在本机核对，状态里如实写
+  `audience_checked=false`，靠服务端 401 驱动。401 后只刷新重试一次（先 `refresh_token`，
+  被拒退回 `client_credentials`），不做刷新风暴。令牌、刷新令牌与 client_secret 不进错误
+  文案（`_redact`）、不进状态/证据（`facts()` 只有类型、剩余秒数与核对结论），
+  `OAuthConfig.client_secret` 的 `repr` 已关。新增 `tests/test_mcp_oauth_v170.py` 24 例
+  （假授权服务器覆盖发现两跳、两种客户端认证、受众/过期/opaque、refresh 被拒回退、
+  401 只刷一次、令牌不入状态与错误）。测试当场揪出三个实现缺陷：显式 `token_url` 配
+  `auth_method=post` 会静默退回 Basic；同一秒内签发的 JWT 逐字节相同，"拒绝第一枚"
+  会把刷新后的新令牌一起拒掉（改每个测试令牌带唯一 `jti`）；`close()` 抹掉令牌后
+  再读 `facts()` 会 KeyError。
+
+- **更新源分离签名（Ed25519）与 CycloneDX SBOM**：原来的更新只校验 `sha256`——摘要与
+  feed 来自同一个源，源被攻陷时两者可以一起改。现在 feed 条目必须带 Ed25519 **分离签名**：
+  签名覆盖 `{version,url,sha256,size,sbom}` 固定顺序、无空白的规范字节
+  （`canonicalUpdatePayload` 由壳端与发版脚本共用），`size` 必须是正整数、摘要统一小写。
+  公钥钉死在 `desktop/shell-policy.cjs`（`UPDATE_PUBKEY_PEM`，Ed25519），私钥只在发版人
+  手上、不进仓库；未打包时允许 `BLANK_UPDATE_PUBKEY_PEM` 注入公钥供接线测试，
+  `app.isPackaged` 为真时这条旁路关闭。`verifyUpdateSignature` 对缺签名、缺 size、坏
+  base64、非 64 字节、公钥不可解析各给可读原因且绝不抛。`main.cjs` 两道闸：
+  **下载前**验签（不过就不取包、托盘写「更新：不可用」、不留安装入口），**装前**再验一次
+  签名并按实际字节重算摘要。`scripts/make_update_feed.mjs` 现在必须给
+  `--sign-key`/`BLANK_UPDATE_SIGNING_KEY`，自检含"改任一被签字段必拒"与"未签名必拒"，
+  私钥与壳内公钥不配对时当场失败、不产出装不上的 feed。
+  随包 SBOM 由 `scripts/make_sbom.mjs` 生成 CycloneDX 1.5：npm 组件逐条来自
+  `desktop/package-lock.json` 的 `packages`（含传递依赖），Python 组件来自
+  `services/api/uv.lock`；serialNumber 由组件集合哈希派生（同组件集合同序号）；
+  `metadata.properties` 写入安装包文件名、sha256 与字节数，SBOM 与二进制能对上号。
+  自检当场揪出一个口径错误：同名同版本在锁文件里因嵌套 `node_modules` 出现多次
+  （392 条 purl 只有 344 个唯一值），组件是"库"不是"安装位置"，改为按 purl 去重后才写出。
+  实测（2026-11-10，真产物 `desktop/dist/Blank-AI-安装版-0.11.2.exe`，131457034 字节
+  sha256=`3746586e…bbf40`）：SBOM 344 个组件（npm 272 + pypi 72）自检全过；用仓库外私钥
+  签发 feed 后，壳内钉住的公钥验签通过，改 version/url/sha256/size/sbom 任一项都被拒，
+  未签名条目被拒，`planInstall` 对换包（摘要全 0）被拒；缺安装包时脚本退出码 2。
+  桌面套件 101 例全绿（新增 `update-policy` 6 例 + `main-wiring` 1 例：unsigned/badsig
+  必须在下载之前拒绝）；关键路径变异：撤掉下载前验签，接线用例立刻变红。
+  仍未落地的是 exe 的 Authenticode 证书（`sign:check` 退出码 2，只出未签名包），
+  见下方「未验证」第 5 项。
 
 - **按句柄复验路径，堵住预检与 open 之间的窗口**：`resolve_inside` / `resolve_for_write`
   判定的是路径字符串，等真正 `open` 时中间目录可能已被换成指向工作区外的 junction
@@ -109,8 +177,9 @@
 
 ### 未验证（需外部条件，不计入「已完成」）
 
-以下七项是本轮内核升级里**没有**落地或**没有**在本机真验的部分。冻结在这里，不写进
+以下六项是本轮内核升级里**没有**落地或**没有**在本机真验的部分。冻结在这里，不写进
 「已完成」；每项都留下判据、红了长啥样与哑弹风险，条件具备时照着验。
+（CPU 限速、远程 MCP 的 OAuth、更新源分离签名与 SBOM 已从这张表移出，见上方条目。）
 
 1. **网络出口强制（P0）**——现状：`local` / `restricted` 后端账本都是
    `network_enforced=false`，只有 Docker 档靠 `--network none` 成立。需要：管理员权限 +
@@ -125,32 +194,30 @@
    4xx）、对外连接被拒、自检阴性/阳性对照都成立。红了长啥样：探针只走路径字符串判断、
    或内核不支持时用例 `skip` 却被当成通过。哑弹风险：runner 关闭非特权 userns、Landlock
    ABI 低于所需版本、受限令牌代码被错误地当成跨平台后端。
-3. **CPU / 磁盘 / IO 配额（P2）**——现状：Job Object 只强制内存、进程数与进程树；
-   `cpu` / `disk` 在账本里恒 False（非管理员拿不到可靠限速，磁盘配额需要管理员）。需要：
-   管理员权限或可用的磁盘配额/IO 限速接口。判据：持续压满 CPU 的子进程在 N 秒窗口内被
-   压到约定比例；写盘到配额上限后继续写失败且总占用不再增长；账本与实测一致。红了长啥样：
-   压测进程吃满全部核心、磁盘无限增长，面板却写 true。哑弹风险：Job CPU 限速只在部分
-   系统版本有效、磁盘配额按卷生效会误伤其他用户、IO 限速接口不可用时静默忽略。
+3. **磁盘 / IO 配额（P2）**——CPU 限速已在本轮落地（见上方 CpuRate 条目：行为探针 10/10
+   变异全红）；磁盘配额与 IO 限速仍冻结。现状：`disk` 在账本里恒 False；本机实测
+   `SetIoRateControlInformationJobObject` 在非管理员下"接受设置但不产生可测节流"
+   （32MB 写入带/不带 4MB/s 上限都 0.01s），卷句柄 `\\.\E:` 被拒（err 123）。需要：
+   管理员权限与可用的磁盘配额/IO 限速接口。判据：写盘到配额上限后继续写失败且总占用不再
+   增长；带 IO 上限的持续写盘吞吐显著低于对照（对照自己要先跑满）。红了长啥样：磁盘无限
+   增长、吞吐与对照无差别，面板却写 true。哑弹风险：磁盘配额按卷生效会误伤其他用户、
+   IO 限速接口不可用时静默忽略、缓存写入把节流读数洗掉。
 4. **任务级隔离（P3）**——现状：工作区属于项目，同一项目的任务共享可写根；隔离靠路径
    闸门与审批，不是 OS 命名空间。需要：每任务独立根 + 跨任务绝对路径也不可达（受限令牌/
    AppContainer/Linux 后端）。判据：任务 A 写入标记文件，任务 B 用绝对路径与相对路径都读
    不到、写不进；同机另一 OS 用户同样不可达。红了长啥样：只拦相对路径/`..`，同用户进程
    用绝对路径照样打开。哑弹风险：工作区根互相嵌套、junction/符号链接绕过、同一 OS 用户
    下文件权限天然可读。
-5. **远程 MCP 的 OAuth 与令牌生命周期（P3）**——现状：`http` 传输已支持，但鉴权只有
-   静态 `headers`（含 `${VAR}` 展开），没有发现、刷新、audience/过期校验。需要：可用的
-   IdP 或测试授权服务器。判据：过期令牌与错误 audience 必须被拒，刷新成功后旧令牌失效，
-   令牌不进入日志/事件/证据包。红了长啥样：过期或错 audience 的令牌仍被接受，或令牌原文
-   出现在事件负载里。哑弹风险：发现地址可被 SSRF、把静态 Header 当成 OAuth、刷新令牌
-   落盘明文。
-6. **供应链：更新包签名与 SBOM（P3）**——现状：更新 feed 带 `sha256`，下载后按实际文件
-   重算比对；代码签名配置已接线（发布者=无锡空白格人工智能科技有限公司），但本机没有
-   证书（`sign:check` 退出码 2，只出未签名包），没有 SBOM。需要：真实代码签名证书 +
-   可复现的构建产物。判据：干净机器上 `signtool verify` 通过；篡改安装包后更新被拒；
-   篡改 feed 里的摘要并同时换包也必须被拒（摘要需另有签名，否则同源篡改测不出来）；
-   SBOM 与安装包实际依赖一致。红了长啥样：未签名包可安装、签名坏掉仍继续、SBOM 与包内
-   文件对不上。哑弹风险：摘要与包来自同一被攻陷的源、开发构建绕过校验、SBOM 只生成不比对。
-7. **第二台机器差异验证（#76，外部机器）**——现状：边界对账装置已进仓库，但只在本机
+5. **Authenticode 代码签名与干净机装包复核（P3）**——更新源的**分离签名**（Ed25519）与
+   CycloneDX SBOM 已在本轮落地（见上方条目：下载前验签、装前复验、篡改任一被签字段即拒；
+   SBOM 由锁文件生成并带上安装包摘要）。仍冻结的是 exe 本身的 Authenticode 签名：配置已
+   接线（发布者=无锡空白格人工智能科技有限公司），但本机没有证书（`sign:check` 退出码 2，
+   只出未签名包）。需要：真实代码签名证书 + 一台干净机器。判据：干净机器上
+   `signtool verify /pa` 通过；篡改安装包后更新被拒（本机已用真产物与真私钥验过，见上）；
+   Windows SmartScreen 不再报未知发布者。红了长啥样：未签名包可安装、签名坏掉仍继续、
+   证书过期后旧包验不过（缺 RFC3161 时间戳时）。哑弹风险：证书主体与发布者名不一致、
+   时间戳服务不可用导致签名静默降级、开发构建绕过校验。
+6. **第二台机器差异验证（#76，外部机器）**——现状：边界对账装置已进仓库，但只在本机
    （build 26300、非管理员）跑过；Windows 版本、ACL 语义、AppContainer/受限令牌可用性
    差异没有实测。需要：第二台干净机器（建议不同 Windows 版本）。判据：同一装置在第二台
    机器上输出逐项一致的边界账（或差异有明确原因），受限令牌后端自检全绿才启用。红了长

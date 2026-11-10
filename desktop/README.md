@@ -179,7 +179,8 @@ printf '../../../api/src\n' > desktop/build/runtime/Lib/site-packages/blank_api.
 | `BLANK_SHELL_ENABLED` | 临时覆盖「允许执行命令」这一项，便于排查；日常用设置页 |
 | `BLANK_TRAY` | 设为 `0` 时不建托盘，关窗行为退回退出（无托盘可隐藏，不能造出关不掉的窗口） |
 | `BLANK_HOTKEY` | 唤出/隐藏主窗口的全局快捷键，默认 `Control+Alt+B`；被占用时自动降级并写日志 |
-| `BLANK_UPDATE_FEED_URL` | 更新源 feed（JSON）。**不配则完全不碰网络**；配了也只取元数据做决策，骨架不下载、不安装 |
+| `BLANK_UPDATE_FEED_URL` | 更新源 feed（JSON）。**不配则完全不碰网络**；配了先验元数据签名，过了才下载，安装必须用户点一下 |
+| `BLANK_UPDATE_PUBKEY_PEM` | 仅未打包时可用：覆盖更新验签公钥（测试用）。`app.isPackaged` 为真时忽略 |
 
 > **GPU 自动降级**：应用启动前会在用户数据目录写 `gpu-state.json`（`ok:false`），
 > 真正打开窗口后才改写成 `ok:true`。如果上一次启动崩在显卡初始化（没有窗口、也没有日志），
@@ -219,7 +220,7 @@ printf '../../../api/src\n' > desktop/build/runtime/Lib/site-packages/blank_api.
   全局快捷键（默认 `Control+Alt+B`，注册失败一律降级写日志）、
   自动更新（检查 → 下载 → 校验 → 用户点击安装，见下）。
 - `shell-policy.cjs` —— 壳策略层：单实例唤回计划、关窗路由、快捷键规范化与三态注册结果、
-  更新决策（版本比较 + 元数据/签名校验，**每个分支 `install:false`**）。
+  更新决策（版本比较 + 摘要格式 + 分离签名验签，`install:true` 只表示"允许下载"）。
   纯函数、不 require electron，判定全部在 `tests/shell-policy.test.cjs` 与
   `tests/update-policy.test.cjs` 里钉住；main.cjs 的**接线**由 `tests/main-wiring.test.cjs`
   用假 Electron + 真 HTTP 驱动（见下）。
@@ -234,19 +235,22 @@ printf '../../../api/src\n' > desktop/build/runtime/Lib/site-packages/blank_api.
 判定与执行的分层是刻意的：「怎么决定」全在 `shell-policy.cjs`（可单测），
 main.cjs 只做「读 Electron 状态 → 调策略 → 执行动作」。自动更新是**检查 → 下载 →
 校验 → 用户点击安装**：只有配了 `BLANK_UPDATE_FEED_URL` 才碰网络；下载完只把包放好、
-把托盘那一行点亮，**不会自动替换正在用的程序**。三道保守都在 `main.cjs` 的
-`downloadUpdate` / `applyUpdate` 里：下载不装、装前按实际字节重算 sha256、默认不碰网络。
+把托盘那一行点亮，**不会自动替换正在用的程序**。四道保守都在 `main.cjs` 的
+`downloadUpdate` / `applyUpdate` 里：下载前验签、下载不装、装前按实际字节重算 sha256
+并复验签名、默认不碰网络。
 
 **接线装置**（`tests/main-wiring.test.cjs`）：把 `electron` 换成内存假实现（窗口、托盘、
 快捷键、生命周期都可观测），健康检查与更新源用 127.0.0.1 随机端口的**真 HTTP**，
-然后 require 真的 `main.cjs`——不建 GUI、不碰 :8000/:3000、不起后端进程。7 条判据钉住：
+然后 require 真的 `main.cjs`——不建 GUI、不碰 :8000/:3000、不起后端进程。22 条判据钉住：
 第二实例在**建窗口/建托盘/探后端之前**退出；健康桩可达时复用而不是 spawn；第二实例信号与
 托盘双击都能把隐藏窗口 show+focus 唤回；托盘可用时 ✕ 被拦下、托盘「退出」后 ✕ 放行；
 托盘不可用时关窗退回退出；快捷键注册成功时回调真挂上并能隐藏/唤回，被占用/抛异常都降级；
 更新链路只取一次元数据，摘要对得上时下载一次安装包、被篡改的包丢弃、**任何分支都不自动安装**，
-500/读不懂/同版本/未配置四种形态各自有可读原因。
-变异电池 6/6：第二实例不让位、收到信号不唤回、关窗不路由、快捷键假注册成功、更新时真下载、
+未签名/签名对不上在下载前就拒，500/读不懂/同版本/未配置四种形态各自有可读原因。
+原有变异电池 6/6：第二实例不让位、收到信号不唤回、关窗不路由、快捷键假注册成功、更新时真下载、
 托盘退出不置位——每条都至少让一条判据变红，红集合实测后写死（`E:/tmp/m92/battery-check.json`）。
+新增的下载前验签单独做过变异（2026-11-10）：撤掉 `rejectUnsignedUpdate` 调用后
+「没签名或签名对不上：下载之前就拒绝」立刻红（21 过 1 红），复原后 22 全绿。
 
 **仍需真机点验的**（装置给不了 GUI 观感与真实进程交互）：
 
@@ -256,6 +260,45 @@ main.cjs 只做「读 Electron 状态 → 调策略 → 执行动作」。自动
 | 托盘图标肉眼可见、深浅色任务栏下不糊；真实 ✕ 进托盘、托盘「退出」真退（后端被回收、无孤儿进程） | 同上；且包内 `resources/shell/icon.ico` 存在（`npm run verify` 第 1 节已断言） | ✕ 之后图标不在/窗口找不回/退出后 uvicorn 还活着 |
 | `Control+Alt+B` 真按唤出/隐藏；与另一热键助手撞车时日志出现「已被其他程序占用…降级」且应用照常可用 | 同上；撞车那条需故意先占住该组合 | 快捷键按了没反应且日志没有降级行 = 三态没收住 |
 | 后端起不来时的故障对话框（重试 / 复制日志并退出）与真实 spawn/回收 | 故意让解释器缺失或迁移失败，且允许起壳 | 白屏、无对话框，或退出后残留后端进程 |
+
+## 更新源签名（Ed25519）与 SBOM（未发布）
+
+摘要只能证明"文件与这份元数据一致"；元数据与文件来自同一个源时，两者可以一起被改。
+现在 feed 条目必须带发版人的 **Ed25519 分离签名**，壳里钉着公钥：
+
+- 签名覆盖 `{version,url,sha256,size,sbom}`——固定字段、固定顺序、无空白，
+  `canonicalUpdatePayload` 由壳与 `scripts/make_update_feed.mjs` 共用；摘要统一小写，
+  `size` 必须是正整数（0/缺失直接拒）。改任一被签字段，签名立刻对不上。
+- 公钥在 `shell-policy.cjs` 的 `UPDATE_PUBKEY_PEM`。**私钥不在仓库里**、也不在任何构建
+  产物里；本机发版私钥在 `E:/tmp/blank-release/update-signing-key.pem`（仓库外，权限由
+  操作系统管）。`update-public-key.pem` 是同一目录下的公钥副本，仅用于核对。
+- 轮换：用新私钥重新签发 feed，同时替换壳里的公钥并发版。旧客户端必须先升到带新公钥的
+  版本，否则它手里的旧公钥验不过新签名——这是刻意付出的代价，换"公钥不会被下载物改掉"。
+- `main.cjs` 两道闸：下载前验签（不过就不取包、托盘写不可用）；安装前再验一次，并按实际
+  字节重算摘要。打包后只认钉死公钥，未打包才允许 `BLANK_UPDATE_PUBKEY_PEM` 覆盖。
+
+发版步骤（仓库根目录）：
+
+    node scripts/make_sbom.mjs --artifact "desktop/dist/Blank-AI-安装版-<版本>.exe" \
+      --out desktop/dist/sbom.json
+    node scripts/make_update_feed.mjs --base-url https://<域名>/<前缀> \
+      --sign-key E:/tmp/blank-release/update-signing-key.pem \
+      --sbom desktop/dist/sbom.json --out desktop/dist/latest.json
+
+SBOM 是 CycloneDX 1.5：npm 组件来自 `desktop/package-lock.json` 的 `packages`（含传递
+依赖），Python 组件来自 `services/api/uv.lock`；serialNumber 由组件集合哈希派生，
+`metadata.properties` 写入安装包文件名、sha256 与字节数。同名同版本出现在嵌套
+`node_modules` 里按 purl 去重（组件是"库"不是"安装位置"）。
+
+两个脚本都自检后才会写文件：SBOM 缺锁文件/产物退出码 2、自检失败退出码 1；
+feed 脚本缺私钥/产物/SBOM 退出码 2，并用壳端 `verifyUpdateSignature` 现场验一遍
+（改 version/url/sha256/size/sbom 必拒、未签名必拒、同版本不提示、换包被 `planInstall` 拒）。
+
+**本机实测（2026-11-10，真产物 0.11.2）**：安装包 131457034 字节、
+sha256 `3746586e…bbf40`；SBOM 344 个组件（npm 272 + pypi 72）；用仓库外私钥签发的 feed
+被壳内公钥验过，五类字段篡改全部被拒；`main-wiring` 里 unsigned/badsig 两态在下载之前
+即被拒。变异：撤掉下载前验签，该用例立刻红（21 过 1 红），复原后 22 全绿。
+桌面套件 101 例全绿。
 
 ## 代码签名（已接线，待证书）
 

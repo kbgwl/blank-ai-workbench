@@ -168,7 +168,7 @@ Windows 注意：`uvicorn --reload` 的监视器在本机偶发停止热重载�
 | `pnpm dev` | 启动前端 + 后端 + PostgreSQL + Redis |
 | `pnpm test:api` | 后端 pytest |
 | `pnpm test:web` | 前端单测（`node --test`） |
-| `pnpm test:desktop` | 桌面壳单测（52 例，只读仓库文件，不装 electron） |
+| `pnpm test:desktop` | 桌面壳单测（101 例，只读仓库文件，不装 electron） |
 | `pnpm test:evals` | 评测判分器的纯函数单测（`evals/lib/judgement.mjs`） |
 | `pnpm check:versions` | 版本口径一致性（`desktop/package.json` 为真源） |
 | `pnpm typecheck:web` | 前端类型检查 |
@@ -285,9 +285,15 @@ uv run alembic revision --autogenerate -m "描述"
   0 失败。报告见 `evals/results/results-2026-10-22T07-43-54-994Z.json`。
 - 本机没有 `docker` 命令行，容器隔离这条路径当前无法就地复核；没有容器时默认走宿主退路（LocalSandbox）：
   Windows 上内存/进程数/进程树由 Job Object 强制，文件与网络边界只靠路径闸门、审批与证据链，界面上如实标注。
-- **内核升级里未验的七项**：网络出口强制、Linux 原生沙箱后端、CPU/磁盘/IO 配额、任务级隔离、
-  远程 MCP 的 OAuth、更新包签名与 SBOM、第二台机器差异对账。它们依赖管理员权限、第二台机器或
-  真实证书，全部冻结在 `CHANGELOG.md` 的「未验证」一节，逐项写了判据、红了长啥样与哑弹风险，
+- **内核升级里已落地与仍冻结的项**：CPU 限速（Job `CpuRate` + 行为探针，账本要求
+  "Job 接受限速"与"本机实测压得住"同时成立）、远程 MCP 的 OAuth（RFC 9728/8414 发现 →
+  `client_credentials` → 401 刷新一次；受众与过期在本机核对，令牌只进内存）已落地；
+  更新源改成 Ed25519 **分离签名**（公钥钉在桌面壳里，下载前验签、装前复验）并随包生成
+  CycloneDX SBOM（由 `package-lock.json` 与 `uv.lock` 生成，带安装包摘要）。
+  仍冻结的五项是：网络出口强制、Linux 原生沙箱后端、磁盘/IO 配额、任务级隔离、
+  第二台机器差异对账；另有一项发布外部条件：exe 的 Authenticode 代码签名需要公司证书
+  （本机 `sign:check` 退出码 2，只出未签名包）。它们依赖管理员权限、第二台机器或真实证书，
+  全部冻结在 `CHANGELOG.md` 的「未验证」一节，逐项写了判据、红了长啥样与哑弹风险，
   **不计入「已完成」**。
 - **数据库：普通用户什么都不用装。** 这里要说的是**服务端**：默认与桌面版都是单个 SQLite 文件（开发库
   `sqlite+aiosqlite:///./data/blank_dev.db`；桌面包内由壳层把 `BLANK_DATABASE_URL` 指到数据目录下的
