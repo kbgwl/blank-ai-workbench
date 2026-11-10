@@ -1,5 +1,7 @@
 "use strict";
 
+const crypto = require("node:crypto");
+
 /**
  * 桌面壳的「策略层」：单实例、托盘/关闭路由、全局快捷键、更新判定里
  * 所有能纯函数化的判断。
@@ -209,7 +211,62 @@ function planHotkeyToggle({ hasWindow, visible, focused } = {}) {
   return { create: false, hide: false, show: true, focus: true };
 }
 
-// ── 4. 自动更新（仅决策骨架，永不安装）─────────────────────────────────────
+// ── 4. 自动更新（决策 + 摘验 + 签名）───────────────────────────────────────
+
+/**
+ * 更新源的**固定公钥**。公钥不是秘密，钉在代码里比"跟着安装包放个文件"更难被
+ * 顺手替换：攻击者要换掉验签逻辑，得先改代码本身。私钥不在仓库里，放在发版人
+ * 手上的仓库外路径（见 desktop/README.md 的「更新源签名」）。
+ *
+ * 轮换：用新私钥重新签名 feed，同时替换这里的公钥并发版——旧客户端必须先升级
+ * 到带新公钥的版本，否则它手里的旧公钥验不过新签名。这是刻意付出的代价，
+ * 换取"公钥不会被下载下来的东西改掉"。
+ */
+const UPDATE_PUBKEY_PEM = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEA1BwGUmY8H+UpBqi4tuzCkuqeeTA76xCEkmxPmNwdUXY=
+-----END PUBLIC KEY-----
+`;
+
+/**
+ * 签名覆盖的字节：一组固定字段、固定顺序、无空白。签名端与验签端共用这一个函数，
+ * 任何一边"顺手"改了字段或顺序，签名立刻对不上——这正是想要的效果。
+ * size 进签名是为了把"声称的大小"也绑住；0/缺失视为不完整，验签直接拒。
+ */
+function canonicalUpdatePayload(entry) {
+  if (!entry || typeof entry !== "object") return "";
+  const version = typeof entry.version === "string" ? entry.version.trim() : "";
+  const url = typeof entry.url === "string" ? entry.url.trim() : "";
+  const sha256 = typeof entry.sha256 === "string" ? entry.sha256.trim().toLowerCase() : "";
+  const size = Number.isInteger(entry.size) && entry.size > 0 ? entry.size : 0;
+  const sbom = typeof entry.sbom === "string" ? entry.sbom.trim() : "";
+  return JSON.stringify({ version, url, sha256, size, sbom });
+}
+
+/**
+ * 下载之前的第一道闸：这条元数据是不是发版人签过的。
+ * 纯函数，失败一律 `ok:false` + 可读原因，绝不抛——main.cjs 只负责把结论写进状态。
+ */
+function verifyUpdateSignature({ entry, signature, publicKeyPem } = {}) {
+  const reject = (reason) => ({ ok: false, reason });
+  if (!entry || typeof entry !== "object") return reject("没有可验签的更新条目");
+  const sig = typeof signature === "string" ? signature.trim() : "";
+  if (!sig) return reject("更新条目缺 signature：拒绝未签名的更新");
+  const size = Number.isInteger(entry.size) && entry.size > 0 ? entry.size : 0;
+  if (!size) return reject("更新条目缺 size（或 size 非法）：签名负载不完整");
+  const key = String(publicKeyPem || UPDATE_PUBKEY_PEM || "").trim();
+  if (!key.includes("BEGIN PUBLIC KEY")) return reject("没有可用的更新签名公钥");
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(sig)) return reject("signature 不是合法的 base64");
+  const raw = Buffer.from(sig, "base64");
+  if (raw.length !== 64) return reject(`Ed25519 签名应为 64 字节（实际 ${raw.length} 字节）`);
+  const payload = canonicalUpdatePayload(entry);
+  try {
+    return crypto.verify(null, Buffer.from(payload, "utf8"), key, raw)
+      ? { ok: true, reason: "" }
+      : reject("更新签名与条目内容不匹配：元数据被改过或签名不属于这把公钥");
+  } catch (error) {
+    return reject(`更新签名无法验证：${error?.message ?? error}`);
+  }
+}
 
 /** 解析 "0.8.5" / "v0.8.5-rc.1"；不合规返回 null。 */
 function parseVersion(value) {
@@ -333,16 +390,28 @@ function decideUpdate({ current, entry, fetchError } = {}) {
   if (!/^[0-9a-fA-F]{64}$/.test(digest)) {
     return unavailable(`新版本签名摘要不是 64 位十六进制（实际 ${digest.length} 字符），拒绝更新`);
   }
+  const sbom = typeof entry.sbom === "string" ? entry.sbom.trim() : "";
+  if (sbom && !/^https?:\/\//i.test(sbom)) {
+    return unavailable(`新版本 SBOM 地址不是 http(s)，拒绝更新：${sbom}`);
+  }
   return {
     // v0.11.0：不再只是骨架。校验全过之后允许下载与安装，但**下载和安装是两个
     // 独立动作**：这里的 true 只表示"这份元数据允许被下载"，真正执行前还要
     // 用 planInstall 再按实际文件摘要过一遍——元数据说 sha256=a，下下来的文件
     // 是不是 a，只能算完才知道。
+    // v0.11.8：另加一道 verifyUpdateSignature——摘要把"文件"绑在元数据上，
+    // 签名把"元数据"绑在发版人的密钥上；两者缺一，更新源仍然可以自说自话。
     install: true,
     action: "available",
     version: versionText,
     url,
     sha256: digest.toLowerCase(),
+    size: Number.isInteger(entry.size) && entry.size > 0 ? entry.size : 0,
+    sbom,
+    // 签名原样带出去，由 main.cjs 在下载前交给 verifyUpdateSignature 判定；
+    // 这里不验签，因为"元数据可用"与"来源可信"是两件事，混在一起会让
+    // 每个读这个返回值的人都以为签名已经核过。
+    signature: typeof entry.signature === "string" ? entry.signature.trim() : "",
     reason: `发现新版本 ${versionText}（高于当前 ${String(current).trim()}）`,
   };
 }
@@ -397,7 +466,9 @@ function pickInterpreterOrder({ hasEnvCmd, hasBundled, hasVenv, hasUv, hasPython
 
 module.exports = {
   DEFAULT_HOTKEY,
+  UPDATE_PUBKEY_PEM,
   buildTrayMenuModel,
+  canonicalUpdatePayload,
   compareVersions,
   decideUpdate,
   decideWindowClose,
@@ -413,4 +484,5 @@ module.exports = {
   planSecondInstanceReveal,
   shouldAbortSecondaryInstance,
   trayUpdateLabel,
+  verifyUpdateSignature,
 };

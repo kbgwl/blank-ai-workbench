@@ -40,6 +40,7 @@ const {
 const APP_NAME = "Blank AI";
 const {
   DEFAULT_HOTKEY,
+  UPDATE_PUBKEY_PEM,
   buildTrayMenuModel,
   decideUpdate,
   decideWindowClose,
@@ -53,6 +54,7 @@ const {
   planInstall,
   planSecondInstanceReveal,
   shouldAbortSecondaryInstance,
+  verifyUpdateSignature,
 } = require("./shell-policy.cjs");
 const { decideNotification, noticeText, rememberSeen } = require("./notify-policy.cjs");
 
@@ -1153,17 +1155,45 @@ function toggleMainWindowFromHotkey() {
  * 检查 → 下载 → 校验 → 一键安装。决策与"能不能装"都在 shell-policy.cjs 里
  * （纯函数、有单测），这里只负责搬字节和起进程。
  *
- * 三道刻意的保守：
+ * 四道刻意的保守：
  * 1. **下载不装。** 拿到更新包只把它放好并亮出托盘那一行，安装必须用户点一下——
  *    静默替换客户正在用的程序，出问题连回退的入口都没有。
- * 2. **装前重算摘要。** 校验不过就拒绝执行。元数据里的 sha256 是"应该是多少"，
- *    只有算一遍手上这个文件才知道"实际是多少"。
- * 3. **默认不碰网络。** 必须显式配 BLANK_UPDATE_FEED_URL 才检查一次。
+ * 2. **下载前验签。** 元数据必须带发版人用 Ed25519 签过的 `signature`；壳里钉着公钥。
+ *    摘要把"文件"绑在元数据上，签名把"元数据"绑在发版人的密钥上，缺一不可。
+ * 3. **装前重算摘要 + 再验一次签名。** 校验不过就拒绝执行。元数据里的 sha256 是
+ *    "应该是多少"，只有算一遍手上这个文件才知道"实际是多少"；签名则防止下载期间
+ *    状态里的元数据被替换。
+ * 4. **默认不碰网络。** 必须显式配 BLANK_UPDATE_FEED_URL 才检查一次。
  */
 const UPDATE_DIR = () => path.join(app.getPath("temp"), "blank-update");
 
+/**
+ * 打包后的程序只认代码里钉死的公钥；开发/测试允许用环境变量注入公钥，
+ * 否则接线测试拿不到"私钥在我手上"的签名。这条旁路在 app.isPackaged 为真时关闭。
+ */
+function updatePublicKey() {
+  if (app.isPackaged) return UPDATE_PUBKEY_PEM;
+  return String(process.env.BLANK_UPDATE_PUBKEY_PEM || "").trim() || UPDATE_PUBKEY_PEM;
+}
+
+/** 签名不过就锁死在 unavailable：不下载、也不留"点此安装"的假入口。 */
+function rejectUnsignedUpdate(decision) {
+  const check = verifyUpdateSignature({
+    entry: decision,
+    signature: decision.signature,
+    publicKeyPem: updatePublicKey(),
+  });
+  if (check.ok) return false;
+  shellState.update = { ...decision, action: "unavailable", reason: check.reason };
+  console.log(`[desktop] 更新签名校验失败，拒绝下载：${check.reason}`);
+  phase("update", "download | unsigned");
+  refreshTrayMenu();
+  return true;
+}
+
 async function downloadUpdate(decision) {
   if (!decision || decision.action !== "available" || !decision.install) return null;
+  if (rejectUnsignedUpdate(decision)) return null;
   const dir = UPDATE_DIR();
   const fallback = `blank-${String(decision.version || "update")}.exe`;
   let name = fallback;
@@ -1215,10 +1245,21 @@ async function downloadUpdate(decision) {
   }
 }
 
-/** 装之前重新算一遍手上文件的摘要——不信上一拍算过的数。 */
+/** 装之前重新算一遍摘要、再验一次签名——两样都不信上一拍算过的数。 */
 function applyUpdate() {
   const state = shellState.update || {};
   if (!state.ready || !state.path) return { ok: false, reason: "没有已下载的更新" };
+  const signed = verifyUpdateSignature({
+    entry: state,
+    signature: state.signature,
+    publicKeyPem: updatePublicKey(),
+  });
+  if (!signed.ok) {
+    console.log(`[desktop] 拒绝安装（签名）：${signed.reason}`);
+    shellState.update = { ...state, ready: false, action: "unavailable", reason: signed.reason };
+    refreshTrayMenu();
+    return { ok: false, reason: signed.reason };
+  }
   let actual = "";
   try {
     actual = createHash("sha256").update(readFileSync(state.path)).digest("hex");

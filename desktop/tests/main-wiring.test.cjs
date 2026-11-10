@@ -22,10 +22,11 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const http = require("node:http");
-const { createHash } = require("node:crypto");
+const { createHash, generateKeyPairSync, sign } = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { canonicalUpdatePayload } = require("../shell-policy.cjs");
 
 const MAIN = path.resolve(__dirname, "..", "main.cjs");
 const MAIN_OVERRIDE = process.env.BLANK_MAIN_OVERRIDE
@@ -54,6 +55,7 @@ const MANAGED_ENV = [
   "BLANK_START_PATH",
   "BLANK_TRAY",
   "BLANK_UPDATE_FEED_URL",
+  "BLANK_UPDATE_PUBKEY_PEM",
 ];
 
 const SHA_64 = "a".repeat(64);
@@ -61,6 +63,23 @@ const SHA_64 = "a".repeat(64);
 // 用「先有字节、后有摘要」的顺序，才能真的验证"算一遍手上文件"这一步有没有做。
 const PACKAGE_BODY = '{"binary":true}';
 const PACKAGE_SHA = createHash("sha256").update(PACKAGE_BODY).digest("hex");
+const PACKAGE_SIZE = Buffer.byteLength(PACKAGE_BODY);
+
+// 测试自己的签名密钥对：壳在未打包分支允许用 BLANK_UPDATE_PUBKEY_PEM 注入公钥，
+// 这样 main.cjs 走的是真的 verifyUpdateSignature，而不是被桩掉的假验签。
+const TEST_KEYS = generateKeyPairSync("ed25519");
+const TEST_PUBKEY_PEM = TEST_KEYS.publicKey.export({ type: "spki", format: "pem" });
+
+/** 按壳端同一个规范函数签名；返回值就是 feed 条目的形状。 */
+function signedEntry(entry) {
+  const full = { size: PACKAGE_SIZE, ...entry };
+  full.signature = sign(
+    null,
+    Buffer.from(canonicalUpdatePayload(full), "utf8"),
+    TEST_KEYS.privateKey,
+  ).toString("base64");
+  return full;
+}
 
 function buildElectronStub({ lock, trayMode, hotkeyMode, userData }) {
   const windows = [];
@@ -403,16 +422,18 @@ async function bootShell(options = {}) {
       if (update === "same") return send(200, JSON.stringify([{ version: "0.8.5" }]));
       // tampered：元数据里的摘要是对的，但下下来的字节不是那一份。
       const pkg = update === "tampered" ? "/package-tampered.exe" : "/package.exe";
-      return send(
-        200,
-        JSON.stringify([
-          {
-            version: "9.9.9",
-            url: `http://127.0.0.1:${server.address().port}${pkg}`,
-            sha256: PACKAGE_SHA,
-          },
-        ]),
-      );
+      const entry = {
+        version: "9.9.9",
+        url: `http://127.0.0.1:${server.address().port}${pkg}`,
+        sha256: PACKAGE_SHA,
+      };
+      if (update === "unsigned") return send(200, JSON.stringify([entry]));
+      if (update === "badsig") {
+        // 签名之后又改版本：签名覆盖的字节与条目对不上，下载前就该拒。
+        const signed = signedEntry(entry);
+        return send(200, JSON.stringify([{ ...signed, version: "9.9.8" }]));
+      }
+      return send(200, JSON.stringify([signedEntry(entry)]));
     }
     // 顺序要紧：/package-tampered 也 startsWith("/package")。
     if (request.url.startsWith("/package-tampered")) return send(200, '{"binary":false}');
@@ -455,6 +476,7 @@ async function bootShell(options = {}) {
     BLANK_START_PATH: "",
     BLANK_TRAY: tray === "disabled" ? "0" : "",
     BLANK_UPDATE_FEED_URL: update === null ? "" : `${origin}/feed`,
+    BLANK_UPDATE_PUBKEY_PEM: TEST_PUBKEY_PEM,
   };
   const savedEnv = new Map();
   for (const key of MANAGED_ENV) {
@@ -573,7 +595,12 @@ async function bootShell(options = {}) {
       return stub.trayRecords.menus[stub.trayRecords.menus.length - 1] ?? [];
     },
     trayLabels() {
-      return this.latestTrayMenu().map((item) => item.label);
+      // 菜单里有分隔项（没有 label）。不滤掉的话，只要断言在更新行转成
+      // 「已下载」之前求值，就会在 undefined 上调 includes 而抛错——绿不绿
+      // 取决于下载赛跑谁先到，不是判定本身。
+      return this.latestTrayMenu()
+        .map((item) => item.label)
+        .filter((label) => typeof label === "string");
     },
     trayItem(id) {
       return this.latestTrayMenu().find((item) => item.id === id) ?? null;
@@ -943,6 +970,43 @@ test("更新包摘要对不上：下下来也丢掉，绝不给安装入口", as
     assert.ok(shell.logIncludes("摘要不匹配"), "日志要写清是摘要不匹配，而不是笼统的失败");
   } finally {
     await shell.cleanup();
+  }
+});
+
+test("更新包没签名或签名对不上：下载之前就拒绝", async () => {
+  // 摘要只能证明"文件与元数据一致"，证明不了"元数据是发版人写的"。
+  // 签名不过时连包都不该取——不能让一个自说自话的更新源把字节搬上台面。
+  for (const [mode, logText] of [
+    ["unsigned", "缺 signature"],
+    ["badsig", "签名与条目内容不匹配"],
+  ]) {
+    const shell = await bootShell({ update: mode });
+    try {
+      await waitFor(
+        () => shell.logIncludes("更新签名校验失败"),
+        `${mode} 的签名拒绝日志`,
+      );
+      assert.ok(shell.logIncludes(logText), `${mode} 的日志应说明拒绝原因：${logText}`);
+      assert.equal(
+        shell.requests.filter((url) => url.startsWith("/package")).length,
+        0,
+        `${mode} 绝不许下载安装包`,
+      );
+      assert.ok(
+        shell.trayLabels().some(
+          (label) => typeof label === "string" && label.includes("更新：不可用"),
+        ),
+        "签名不过必须显示不可用",
+      );
+      assert.ok(
+        !shell.trayLabels().some(
+          (label) => typeof label === "string" && label.includes("已下载"),
+        ),
+        "签名不过不许出现安装入口",
+      );
+    } finally {
+      await shell.cleanup();
+    }
   }
 });
 

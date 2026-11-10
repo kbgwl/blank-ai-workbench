@@ -207,3 +207,120 @@ test("planInstall：没有 available 的判定时，任何文件都不许装", (
     assert.equal(plan.ok, false, JSON.stringify(decision));
   }
 });
+
+// ── Ed25519 更新签名（v0.11.8）───────────────────────────────────────────────
+//
+// 摘要回答"文件是不是这份元数据说的那份"，签名回答"这份元数据是不是发版人写的"。
+// 两条链缺一条，更新源仍然可以自说自话。
+
+const { generateKeyPairSync, sign, createPublicKey } = require("node:crypto");
+const {
+  UPDATE_PUBKEY_PEM,
+  canonicalUpdatePayload,
+  verifyUpdateSignature,
+} = require("../shell-policy.cjs");
+
+const TEST_KEYS = generateKeyPairSync("ed25519");
+const TEST_PUBKEY = TEST_KEYS.publicKey.export({ type: "spki", format: "pem" });
+
+function signedEntry(overrides = {}) {
+  const entry = {
+    version: "0.9.0",
+    url: "https://example.com/setup-0.9.0.exe",
+    sha256: SHA_OK,
+    size: 123456,
+    ...overrides,
+  };
+  entry.signature = sign(
+    null,
+    Buffer.from(canonicalUpdatePayload(entry), "utf8"),
+    TEST_KEYS.privateKey
+  ).toString("base64");
+  return entry;
+}
+
+test("规范负载：字段顺序固定、无空白，size 必须为正整数，多出来的字段不进签名", () => {
+  const payload = canonicalUpdatePayload({
+    version: " 0.9.0 ",
+    url: " https://x/setup.exe ",
+    sha256: SHA_OK.toUpperCase(),
+    size: 42,
+    notes: "不该进签名",
+  });
+  assert.equal(
+    payload,
+    JSON.stringify({
+      version: "0.9.0",
+      url: "https://x/setup.exe",
+      sha256: SHA_OK,
+      size: 42,
+      sbom: "",
+    })
+  );
+  assert.equal(canonicalUpdatePayload({ ...JSON.parse(payload), size: 0 }).includes('"size":0'), true);
+  assert.equal(canonicalUpdatePayload({ ...JSON.parse(payload), size: -1 }).includes('"size":0'), true);
+  assert.equal(canonicalUpdatePayload({ ...JSON.parse(payload), size: 1.5 }).includes('"size":0'), true);
+});
+
+test("自签密钥：正确签名通过，改任一个被签字段都拒绝", () => {
+  const entry = signedEntry();
+  assert.equal(
+    verifyUpdateSignature({ entry, signature: entry.signature, publicKeyPem: TEST_PUBKEY }).ok,
+    true
+  );
+  for (const field of ["version", "url", "sha256", "size", "sbom"]) {
+    const tampered = { ...entry, [field]: field === "size" ? 123457 : `${entry[field]}-x` };
+    const check = verifyUpdateSignature({
+      entry: tampered,
+      signature: entry.signature,
+      publicKeyPem: TEST_PUBKEY,
+    });
+    assert.equal(check.ok, false, `改 ${field} 之后签名仍然通过`);
+    assert.match(check.reason, /不匹配/);
+  }
+});
+
+test("未签名、坏 base64、长度不对、没 size、公钥缺失都拒绝且各说各的原因", () => {
+  const entry = signedEntry();
+  const cases = [
+    [{ entry, signature: "" }, /缺 signature/],
+    [{ entry, signature: "not base64!!" }, /不是合法的 base64/],
+    [{ entry, signature: Buffer.alloc(32).toString("base64") }, /64 字节/],
+    [{ entry: { ...entry, size: undefined }, signature: entry.signature }, /缺 size/],
+    [{ entry, signature: entry.signature, publicKeyPem: "-----BEGIN PUBLIC KEY-----\nX\n-----END PUBLIC KEY-----" }, /无法验证|不匹配/],
+  ];
+  for (const [input, pattern] of cases) {
+    const check = verifyUpdateSignature({ ...input, publicKeyPem: input.publicKeyPem ?? TEST_PUBKEY });
+    assert.equal(check.ok, false, JSON.stringify(input));
+    assert.match(check.reason, pattern);
+  }
+});
+
+test("别人的密钥签名不算数：默认公钥是壳里钉住的那把，不是测试自己的", () => {
+  const entry = signedEntry();
+  const pinned = verifyUpdateSignature({ entry, signature: entry.signature });
+  assert.equal(pinned.ok, false, "自签的签名绝不能凭默认公钥通过");
+  assert.match(pinned.reason, /不匹配/);
+});
+
+test("壳里钉住的公钥真的是一把可解析的 Ed25519 公钥", () => {
+  const key = createPublicKey(UPDATE_PUBKEY_PEM);
+  assert.equal(key.asymmetricKeyType, "ed25519");
+});
+
+test("decideUpdate 把 size/sbom/signature 原样带出，SBOM 不是 http(s) 就拒绝", () => {
+  const entry = signedEntry({ sbom: "https://example.com/sbom.json" });
+  const decision = decideUpdate({ current: "0.8.5", entry });
+  assert.equal(decision.install, true);
+  assert.equal(decision.size, 123456);
+  assert.equal(decision.sbom, "https://example.com/sbom.json");
+  assert.equal(decision.signature, entry.signature);
+
+  const badSbom = decideUpdate({
+    current: "0.8.5",
+    entry: signedEntry({ sbom: "file:///D:/sbom.json" }),
+  });
+  assert.equal(badSbom.action, "unavailable");
+  assert.match(badSbom.reason, /SBOM/);
+  assert.equal(badSbom.install, false);
+});
