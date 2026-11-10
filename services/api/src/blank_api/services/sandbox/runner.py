@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from blank_api.services.log_safety import redact
-from blank_api.services.sandbox import boundary, docker_probe, windows_job
+from blank_api.services.sandbox import boundary, docker_probe, windows_job, windows_volume
 from blank_api.services.sandbox.policy import SandboxPolicy
 
 if TYPE_CHECKING:
@@ -210,6 +210,12 @@ class LocalSandbox:
         timeout = timeout_seconds or self.policy.timeout_seconds
         base = {key: value for key, value in os.environ.items() if key in self.policy.env_allowlist}
         base.update(self.policy.filter_env(env or {}))
+        # 临时区放进容量受限卷：第一次要跑 diskpart（几秒），放到线程里，别冻事件循环。
+        volume = await asyncio.to_thread(windows_volume.quota_volume().ensure, self.policy.disk_mb)
+        scratch = await asyncio.to_thread(windows_volume.quota_volume().new_dir, "blank-run-")
+        if scratch:
+            base["TEMP"] = base["TMP"] = scratch
+            base["BLANK_SCRATCH"] = scratch
         started = time.perf_counter()
         creationflags = 0x00000200 if sys.platform == "win32" else 0
 
@@ -236,7 +242,9 @@ class LocalSandbox:
         # 变异验证：把这一行挪到 close_job 之后，本文件三条 enforcement 断言立刻变红。
         # 走线程：`boundary.measure()` 冷启动要起子进程做行为自检（实测 0.2s 起，机器忙时更久），
         # 直接在事件循环里跑会把同进程的团队轮次/SSE 一起冻住。
-        enforcement = await asyncio.to_thread(_enforcement, job, assigned, assign_error)
+        enforcement = await asyncio.to_thread(
+            _enforcement, job, assigned, assign_error, volume, scratch
+        )
         timed_out = False
         try:
             raw_out, raw_err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -248,6 +256,8 @@ class LocalSandbox:
             # 关句柄 = 沙箱生命周期结束。挂了 KILL_ON_JOB_CLOSE 时，还活着的整棵树一起走；
             # M0 的 P6.7 证明这条在内核层生效，对照（不挂 Job）的同种进程则活得好好的。
             windows_job.close_job(job)
+            if scratch:
+                windows_volume.quota_volume().drop_dir(scratch)
         duration = int((time.perf_counter() - started) * 1000)
         stdout, trunc_out = _clip(_decode_host(raw_out))
         stderr, trunc_err = _clip(_decode_host(raw_err))
@@ -311,6 +321,7 @@ class RestrictedSandbox:
             pids=self.policy.pids,
             cpus=self.policy.cpus,
             io_bps=self.policy.io_bps,
+            disk_mb=self.policy.disk_mb,
             rule_set=rules,
         )
         duration = int((time.perf_counter() - started) * 1000)
@@ -379,6 +390,7 @@ class AppContainerSandbox:
             pids=self.policy.pids,
             cpus=self.policy.cpus,
             io_bps=self.policy.io_bps,
+            disk_mb=self.policy.disk_mb,
             rule_set=rules,
         )
         duration = int((time.perf_counter() - started) * 1000)
@@ -434,7 +446,12 @@ def _enforcement_appcontainer(report: "CommandReport") -> dict[str, object]:
         "io_enforced": enforced and "io_bps" in job.enforced and cap.io_rate,
         "io_bps": int(job.enforced.get("io_bps", 0)),
         "io_error": job.io_error,
-        "disk_enforced": False,
+        # 临时区落在容量卷上 + 本机探针真的把 64MB 卷写满过，两条同真才算。
+        "disk_enforced": bool(cap.disk_quota and report.disk_on_quota),
+        "disk_bytes": int(report.disk_bytes) if report.disk_on_quota else 0,
+        "disk_error": "" if (cap.disk_quota and report.disk_on_quota) else (
+            report.disk_error or cap.disk_quota_error or "容量卷未经行为探针证明"
+        ),
     }
 
 
@@ -464,7 +481,12 @@ def _enforcement_restricted(report: "CommandReport") -> dict[str, object]:
         "io_enforced": enforced and "io_bps" in job.enforced and cap.io_rate,
         "io_bps": int(job.enforced.get("io_bps", 0)),
         "io_error": job.io_error,
-        "disk_enforced": False,
+        # 临时区落在容量卷上 + 本机探针真的把 64MB 卷写满过，两条同真才算。
+        "disk_enforced": bool(cap.disk_quota and report.disk_on_quota),
+        "disk_bytes": int(report.disk_bytes) if report.disk_on_quota else 0,
+        "disk_error": "" if (cap.disk_quota and report.disk_on_quota) else (
+            report.disk_error or cap.disk_quota_error or "容量卷未经行为探针证明"
+        ),
     }
 
 
@@ -505,14 +527,33 @@ def limits_not_applied(reason: str) -> dict[str, object]:
         "io_bps": 0,
         "io_error": reason,
         "disk_enforced": False,
+        "disk_bytes": 0,
+        "disk_error": reason,
     }
 
 
-def _enforcement(job: windows_job.Job, assigned: bool, assign_error: str) -> dict[str, object]:
+def _enforcement(
+    job: windows_job.Job,
+    assigned: bool,
+    assign_error: str,
+    volume: windows_volume.VolumeReport | None = None,
+    scratch: str = "",
+) -> dict[str, object]:
     """把"哪几条真的被内核强制了"算成结构化事实。测不出来就写 unknown，不许默认成真。"""
     cap = boundary.measure()
     strength = _local_strength(cap)
     enforced = bool(job.ok and assigned)
+    disk_ok = bool(cap.disk_quota and volume is not None and volume.ok and scratch)
+    if disk_ok:
+        disk_error = ""
+    elif volume is None:
+        disk_error = "本次执行未准备容量卷"
+    elif not volume.ok:
+        disk_error = volume.error or cap.disk_quota_error or "容量卷挂载失败"
+    elif not scratch:
+        disk_error = "容量卷已挂载，但临时目录没建在卷上"
+    else:
+        disk_error = cap.disk_quota_error or "容量卷未经行为探针证明"
     return {
         "boundary_strength": strength,
         "boundary_strength_label": boundary.strength_label(strength),
@@ -536,7 +577,11 @@ def _enforcement(job: windows_job.Job, assigned: bool, assign_error: str) -> dic
         "io_enforced": enforced and "io_bps" in job.enforced and cap.io_rate,
         "io_bps": int(job.enforced.get("io_bps", 0)),
         "io_error": job.io_error,
-        "disk_enforced": False,
+        # 容量卷只在"卷真的挂上 + 临时目录真的落在卷上 + 探针把 64MB 卷写满过"时才算强制；
+        # 它约束的是沙箱临时区，与工作区容量无关。
+        "disk_enforced": disk_ok,
+        "disk_bytes": int(volume.capacity_bytes) if (volume is not None and volume.ok) else 0,
+        "disk_error": disk_error,
     }
 
 
@@ -557,6 +602,12 @@ def _enforcement_notes(enforcement: dict[str, object]) -> list[str]:
     elif enforcement.get("io_bps"):
         out.append("IO 速率上限已设进 Job，但本机探针没能现场证明节流（按未强制记账）：{}".format(
             enforcement.get("io_error") or "探针未通过"))
+    if enforcement.get("disk_enforced"):
+        out.append("沙箱临时区（TEMP/TMP）容量上限 {}MB 由独立 NTFS 卷强制；工作区写入不受这条上限约束".format(
+            round(int(enforcement.get("disk_bytes", 0)) / 1024 / 1024)))
+    else:
+        out.append("临时区容量上限未由内核强制：{}".format(
+            enforcement.get("disk_error") or "未启用容量卷"))
     if enforcement["tree_kill_enforced"]:
         out.append("命令结束时整棵进程树被 Job 带走（KILL_ON_JOB_CLOSE 已生效）")
     if not enforcement["filesystem_enforced"]:

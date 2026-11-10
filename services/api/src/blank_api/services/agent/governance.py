@@ -54,8 +54,9 @@ def sandbox_boundary(writable_root: str = "", tier: str = "") -> dict[str, Any]:
             backend, denied = "none", str(exc)
     strength = resolution.strength if policy.enabled and resolution.available else "none"
     # 配置值 ≠ 生效值。下面这些数字是 policy 里写着的目标，`enforced` 才回答"谁真的在执行它"：
-    # Windows Job Object 强制内存/进程数/进程树，CPU 与 IO 带宽由行为探针现场证明；
-    # 磁盘**容量**配额、文件与网络边界在 local 档仍无人强制——继续把配置值当成生效值展示就是撒谎。
+    # Windows Job Object 强制内存/进程数/进程树，CPU 与 IO 带宽、磁盘容量由行为探针现场证明；
+    # 文件与网络边界在 local 档仍无人强制——继续把配置值当成生效值展示就是撒谎。
+    # `disk` 只指沙箱临时区（TEMP/TMP）的容量卷，不承诺工作区容量。
     limits_enabled = bool(policy.enabled and resolution.limits_enforced)
     enforced = boundary.enforced_fields(backend, limits_enabled=limits_enabled)
     cap = boundary.measure()
@@ -102,6 +103,8 @@ def sandbox_boundary(writable_root: str = "", tier: str = "") -> dict[str, Any]:
         "pids": policy.pids,
         "io_bps": policy.io_bps,
         "tmpfs": policy.tmpfs_size,
+        # 沙箱临时区容量上限（MB）；0 表示不启用。工作区容量不在它的范围内。
+        "disk_mb": policy.disk_mb,
         # 语义按 policy 的说法回报：writable_rootfs 为假时容器根目录只读、仅工作区可写。
         "read_only_root": not policy.writable_rootfs,
         "network": policy.allow_network,

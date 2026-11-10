@@ -208,6 +208,29 @@ test("IO 速率上限被探针证明后，io_bps 按 MB/s 显示且不再标「�
   assert.match(format(false), /io_bps 128m\/s（未强制）/, "探针没证明节流时，设过的数字照样要标未强制");
 });
 
+test("临时区容量卷被探针证明后，disk_mb 按 MB 显示且不再标「未强制」", () => {
+  // J2 把容量卷接进账本：这一项只指沙箱临时区（TEMP/TMP）的容量上限，不承诺工作区容量。
+  // 面板读的是快照里的 disk_mb 与 enforced.disk，标记只认后者，不认"配置了就是强制"。
+  const format = (diskEnforced: boolean) => withSandbox({
+    backend: "local",
+    enabled: true,
+    isolation: "host",
+    network: false,
+    read_only_root: true,
+    memory: "512m",
+    pids: 128,
+    disk_mb: 2048,
+    tmpfs: "128m",
+    timeout_seconds: 120,
+    boundary_strength: "job_only",
+    enforcement_source: "measured_job_object",
+    enforced: { memory: true, pids: true, tree_kill: true, cpu: false, io: false, disk: diskEnforced, network: false, filesystem: false },
+  }).sandbox?.limits ?? "";
+  assert.match(format(true), /disk_mb 2048m ·/, "后端存的是 MB，显示成 2048m 而不是补一层换算");
+  assert.doesNotMatch(format(true), /disk_mb 2048m（未强制）/);
+  assert.match(format(false), /disk_mb 2048m（未强制）/, "探针没证明写满会失败时，配置的数字照样要标未强制");
+});
+
 test("开档但后端是 local 时，边界行不许把代号印成一种沙箱", () => {
   // 关档那一条早就断过 /local/；开档走的是同一个函数，漏了就会显示「local · 宿主直连…」，
   // 用户读到的是"有一种沙箱叫 local"。这条把开档这一半也钉住。

@@ -101,6 +101,18 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             # 探不出来就按未强制记账，不能挡住启动
             pass
+        try:
+            from blank_api.services.sandbox import windows_volume
+            from blank_api.services.sandbox.policy import SandboxPolicy
+            from blank_api.services.sandbox.runner import get_sandbox
+
+            policy = SandboxPolicy()
+            # 容器后端不建容量卷；提前挂上是为了让第一条沙箱命令不必等 diskpart。
+            if policy.enabled and policy.disk_mb > 0 and get_sandbox(policy).name != "docker":
+                await asyncio.to_thread(windows_volume.quota_volume().ensure, policy.disk_mb)
+        except Exception:
+            # 挂不上就由执行层按"未强制"记账，不影响启动
+            pass
 
     boundary_task = asyncio.create_task(warm_boundary(), name="blank-boundary-warm")
     tasks = (

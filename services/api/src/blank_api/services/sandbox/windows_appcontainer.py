@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from blank_api.services.sandbox import rules as rules_module
-from blank_api.services.sandbox import windows_job
+from blank_api.services.sandbox import windows_job, windows_volume
 from blank_api.services.sandbox import windows_restricted as wr
 
 PROFILE_NAME = "BlankSandbox"
@@ -265,11 +265,15 @@ def prepare(
     workspace: str,
     temp_dir: str,
     rule_set: rules_module.SandboxRules,
+    temp_root: str = "",
 ) -> tuple[dict[str, list[str]], list[str]]:
     """按规则给包 SID 授权。工作区/临时目录可写，工具链根可读，其余默认拒绝。
 
     工具链根取 realpath：`%APPDATA%\\uv\\python\\...` 是重解析点，ACE 写在链接本身
     不会跟着生效。读根失败只记账，工作区失败是致命的。
+
+    `temp_root` 是临时目录所在的容量卷挂载点：AC 令牌虽有遍历特权，但卷根的自检授权
+    仍要写出来，否则临时区一旦不在系统卷上就会出现"能启动、写不了 TEMP"的形状。
     """
     sid, _ = profile()
     ctx = rule_set.context(workspace, temp_dir)
@@ -289,6 +293,13 @@ def prepare(
 
     granted_read: list[str] = []
     notes: list[str] = []
+    if temp_root:
+        for path in dict.fromkeys((temp_root, os.path.dirname(temp_root))):
+            if not os.path.isdir(path):
+                continue
+            ok, detail = wr._grant(path, "RX", sid)
+            if not ok:
+                notes.append(f"容量卷根授权失败（临时区可能不可用）：{path}：{detail}")
     for root in read_roots:
         if not os.path.exists(root) or wr._within(root, workspace):
             continue
@@ -474,6 +485,7 @@ def run_command(
     pids: int = 0,
     cpus: float = 0.0,
     io_bps: int = 0,
+    disk_mb: int = 0,
     rule_set: rules_module.SandboxRules | None = None,
 ) -> wr.CommandReport:
     """在 AppContainer 里跑一条命令。Job 限额与受限令牌后端同一套。"""
@@ -481,7 +493,7 @@ def run_command(
         raise AppContainerUnavailable("AppContainer 后端只在 Windows 上存在")
     rules = rule_set or rules_module.load()
     sid, sid_ptr = profile()
-    temp_dir = tempfile.mkdtemp(prefix="blank-ac-")
+    temp_dir, disk_on_quota, disk_bytes, disk_error = windows_volume.temp_dir_for("blank-ac-", disk_mb)
     job = windows_job.create_job(
         "blank-ac-" + uuid.uuid4().hex[:8],
         memory_bytes=windows_job.parse_size(memory),
@@ -490,7 +502,14 @@ def run_command(
         io_bps=io_bps,
     )
     try:
-        grants, notes = prepare(workspace, temp_dir, rules)
+        grants, notes = prepare(
+            workspace,
+            temp_dir,
+            rules,
+            temp_root=os.path.dirname(temp_dir) if disk_on_quota else "",
+        )
+        if disk_mb and not disk_on_quota:
+            notes.append(f"临时区未放进容量卷，容量上限未生效：{disk_error}")
         application, cmdline = wr._command_line(quote_leading_path(script))
         out_path = str(Path(temp_dir) / "stdout.txt")
         err_path = str(Path(temp_dir) / "stderr.txt")
@@ -514,6 +533,9 @@ def run_command(
             error=spawn_error,
             notes=notes,
             grants=grants,
+            disk_on_quota=disk_on_quota,
+            disk_bytes=disk_bytes,
+            disk_error=disk_error,
         )
         return report
     finally:

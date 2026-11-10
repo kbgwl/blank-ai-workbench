@@ -293,7 +293,10 @@ def _engine_enforcement(facts: dict) -> dict:
         "io_enforced": False,
         "io_bps": 0,
         "io_error": "容器后端未设 IO 带宽上限",
+        # 容器参数没有给临时区单独划容量；不许因为"跑在容器里"就把这一项点绿。
         "disk_enforced": False,
+        "disk_bytes": 0,
+        "disk_error": "容器后端未设磁盘容量上限",
     }
 
 

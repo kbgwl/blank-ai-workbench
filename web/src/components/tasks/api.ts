@@ -1425,6 +1425,8 @@ function normalizeGovernance(source: unknown): Governance {
     ["memory", "memory"],
     ["pids", "pids"],
     ["io_bps", "io"],
+    // 沙箱临时区（TEMP/TMP）的容量上限，不是工作区容量；field=disk 与 enforced.disk 同源。
+    ["disk_mb", "disk"],
     ["tmpfs", "filesystem"],
     ["timeout_seconds", ""],
   ];
@@ -1434,7 +1436,9 @@ function normalizeGovernance(source: unknown): Governance {
       if (value === undefined || value === null || value === "") return "";
       const shown = key === "io_bps" && typeof value === "number"
         ? `${Math.round(value / 1024 / 1024)}m/s`
-        : String(value);
+        : key === "disk_mb" && typeof value === "number"
+          ? `${value}m`
+          : String(value);
       const mark = field === "" || enforced[field] ? "" : "（未强制）";
       return `${key} ${shown}${mark}`;
     })

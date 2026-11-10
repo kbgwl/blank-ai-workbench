@@ -1,6 +1,37 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过
+
+- **沙箱临时区容量上限：固定容量 VHDX 卷 + 写满 ENOSPC 行为探针（J2）**：NTFS 没有目录级
+  容量配额（`fsutil quota` 只按用户/卷记，按用户设会误伤同一用户的工作区写盘），所以容量上限
+  落到**独立卷**上：`create vdisk maximum=N type=expandable` + `attach` + 分区 + `format fs=ntfs
+  quick` + `assign mount=<目录>`，每次执行在卷上建独立临时目录并把它设成子进程的 `TEMP`/`TMP`/
+  `BLANK_SCRATCH`。只约束临时区，**不约束用户工作区**——工作区容量仍冻结（见「未验证」第 3 项）。
+  容量上限由 `SandboxPolicy.disk_mb`（`BLANK_SANDBOX_DISK_MB`，默认 2048，0=关）控制，卷与
+  挂载点默认放 `%ProgramData%\blank-quota`（可用 `BLANK_SANDBOX_DISK_ROOT` 改）：受限令牌/AC
+  子进程要能**穿过**上级目录才能用挂载点里的临时目录，而 `%LOCALAPPDATA%\Temp` 的 ACL 不给
+  Users 遍历权；非管理员退回 `%TEMP%\blank-quota`（挂载本身需要管理员，失败只记账不静默）。
+  探针是行为证据：挂一个 64MB 卷、按 4MB 块写满再追加，必须拿到 `OSError errno=28`
+  （WinError 112/39）且**第二次写仍失败**才算通过；收口当刻实测（管理员，build 26300）：
+  容量 62.93MB、写入 48MB 后 free 3.14MB、`errno=28`、`second_write_failed=true`，耗时 3.8s。
+  执行层账本新增 `disk_enforced` / `disk_bytes` / `disk_error`：卷挂载成功、本次临时目录真的
+  落在卷上、探针证明写满会失败，三条同时成立才写 True；docker 命令行没有容量参数，容器档恒
+  False。受限令牌与 AppContainer 后端的 `prepare` 同时给临时目录授 `M`、给卷根与上级目录授
+  `RX`（原先受限子进程根本写不进 TEMP，这一条是接线时真机抓到的）。`PROBE_VERSION` 升到 5；
+  app 启动 `warm_boundary()` 在开档且非 docker 时后台预热容量卷；治理快照带 `sandbox.disk_mb`
+  与 `enforced.disk`，面板按 `disk_mb → disk` 查账并显示成 `2048m`，未证明时标「未强制」。
+  新增 `tests/test_disk_quota_v23.py` 22 例（策略解析、卷缓存与失败不重试、临时区回退、
+  假容量卷/非管理员/挂载失败三种负例、真实 64MB ENOSPC、三后端账本真值表、网关白名单、治理
+  快照、真实 LocalSandbox 与真实受限子进程写 TEMP、悬空挂载点回收与孤儿清扫）；关联六套件
+  （`test_disk_quota_v23` 22 + `test_boundary_facts_v20` 18 + `test_cpu_quota_v169` 11 +
+  `test_io_rate_v21` 12 + `test_appcontainer_v22` 29 + `test_governance_snapshot_v16` 13）
+  105 例全绿。变异 3/3 全红：拆掉 `scratch`、`cap.disk_quota`、`volume.ok` 任一条件，账本判据
+  分别变红；其中 `volume.ok` 第一次**没红**——挂载失败用例传了空 scratch，被另一个条件遮成
+  死判据，改成真实形状（临时区退回宿主目录、scratch 非空、卷 ok=False）后才可失败。
+  回收路径也抓到一个真缺陷：卷卸下后挂载点变成**悬空目录联接**，`Path.exists()` 跟随联接返回
+  False，旧实现整段 `rmdir` 被跳过，本机实测在 `%ProgramData%\blank-quota` 留下 16 个空壳；
+  改用 `lexists` 收联接，并让 `_sweep_stale` 顺带清死进程的孤儿挂载点。判据
+  `test_detach_removes_a_dangling_mount_junction` 在改回 `exists()` 时实测变红。
 
 - **CPU 限速（Job CpuRate + 行为探针）**：`SandboxPolicy.cpus` 从"只是配置值"变成内核真限。
   Job 通过 `JobObjectCpuRateControlInformation`（ENABLE|HARD_CAP）设限；`CpuRate` 的单位是
@@ -251,17 +282,18 @@ Linux 原生后端按项目决定移出范围，判据只作留档。）
    4xx）、对外连接被拒、自检阴性/阳性对照都成立。红了长啥样：探针只走路径字符串判断、
    或内核不支持时用例 `skip` 却被当成通过。哑弹风险：runner 关闭非特权 userns、Landlock
    ABI 低于所需版本、受限令牌代码被错误地当成跨平台后端。
-3. **磁盘容量配额（P2）**——IO 速率上限已在本轮落地（见上方 J1 条目：48 字节 NATIVE_V1
-   布局 + 行为探针，账本 `io` 与探针同源）；**磁盘容量**配额仍冻结，账本 `disk` 恒 False。
-   2026-11-10 管理员权限下已用 VHDX 探针证实内核路径可行（`E:/tmp/i-probe/vhd_quota_probe.py`）：
-   64MB 动态 VHDX + diskpart attach/分区/格式化/挂载到目录，写满时内核返回
-   `OSError errno=28 ENOSPC`（容量 62.93MB、写 48MB 后 free 3.14MB、VHD 文件 68MB），
-   detach 成功、无残留盘与目录。尚未接进执行层（每任务卷生命周期、盘符/挂载点回收、
-   与工作区根的合并仍未做）。需要：把固定容量卷接进 workspace 或每任务根，并做生命周期
+3. **工作区磁盘容量配额（P2）**——沙箱**临时区**（TEMP/TMP/`BLANK_SCRATCH`）的容量上限
+   已在本轮落地（见上方 J2 条目：固定容量 VHDX 卷 + 写满 ENOSPC 行为探针，账本
+   `disk_enforced` 与探针同源）；仍冻结的是**工作区/每任务根**的容量上限：命令往工作区
+   写盘不受这个卷约束，`disk` 只承诺临时区。2026-11-10 管理员权限下已用 VHDX 探针证实
+   内核路径可行（`E:/tmp/i-probe/vhd_quota_probe.py`）：64MB 动态 VHDX + diskpart
+   attach/分区/格式化/挂载到目录，写满时内核返回 `OSError errno=28 ENOSPC`（容量 62.93MB、
+   写 48MB 后 free 3.14MB、VHD 文件 68MB），detach 成功、无残留盘与目录。需要：把固定
+   容量卷扩到工作区或每任务根（与 J3 任务级隔离一起做更自然），并做多任务卷生命周期
    回收。判据：写盘到配额上限后继续写失败且总占用不再增长（ENOSPC，不是我们的路径预检）；
-   detach 后挂载点可删、无残留卷。红了长啥样：磁盘无限增长、失败来自路径闸门而不是内核、
-   卷 detach 不掉。哑弹风险：卷名/挂载点在异常退出后残留、多个任务共用一个卷时互相写爆、
-   把「写满报错」当成「文件边界」写进 `filesystem_enforced`。
+   detach 后挂载点可删、无残留卷。红了长啥样：工作区磁盘无限增长、失败来自路径闸门而
+   不是内核、卷 detach 不掉。哑弹风险：卷名/挂载点在异常退出后残留、多个任务共用一个卷
+   时互相写爆、把「写满报错」当成「文件边界」写进 `filesystem_enforced`。
 4. **任务级隔离（P3）**——现状：工作区属于项目，同一项目的任务共享可写根；隔离靠路径
    闸门与审批，不是 OS 命名空间。需要：每任务独立根 + 跨任务绝对路径也不可达（受限令牌/
    AppContainer）。判据：任务 A 写入标记文件，任务 B 用绝对路径与相对路径都读

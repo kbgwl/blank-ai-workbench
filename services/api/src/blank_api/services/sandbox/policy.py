@@ -45,6 +45,19 @@ def _parse_bps(text: str) -> int:
     return parse_size(text)
 
 
+def _parse_mb(text: str) -> int:
+    """`"2048"` 或 `"2g"` → MB。认不出来按 0（=不启用），不拿默认值替用户做主。"""
+    raw = str(text or "").strip().lower()
+    try:
+        if raw.endswith("g"):
+            return int(float(raw[:-1]) * 1024)
+        if raw.endswith("m"):
+            return int(float(raw[:-1]))
+        return int(raw)
+    except ValueError:
+        return 0
+
+
 @dataclass(slots=True)
 class SandboxPolicy:
     image: str = field(default_factory=lambda: _env("SANDBOX_IMAGE", "blank-sandbox:dev"))
@@ -76,6 +89,9 @@ class SandboxPolicy:
     # 顺序写慢得有限，但把"一条命令把盘写满/读爆"关进一个能解释的量级里。
     # 真限住与否由 Job IO rate 决定，并由行为探针现场证明，不看这个数字。
     io_bps: int = field(default_factory=lambda: _parse_bps(_env("SANDBOX_IO_BPS", "128m")))
+    # 沙箱临时区的容量上限（MB）。临时区放在一个独立 VHDX 卷上，写满由内核返回 ENOSPC；
+    # 0 = 不启用。只约束 TEMP/TMP，不约束用户工作区——工作区不是我们挑的目录，不能换挂载点。
+    disk_mb: int = field(default_factory=lambda: _parse_mb(_env("SANDBOX_DISK_MB", "2048")))
     max_file_bytes: int = field(default_factory=lambda: int(_env("SANDBOX_MAX_FILE_KB", "262144")))
     tmpfs_size: str = field(default_factory=lambda: _env("SANDBOX_TMPFS", "128m"))
     writable_rootfs: bool = field(default_factory=lambda: _env("SANDBOX_READ_ONLY_ROOT", "true").lower() in {"1", "true", "yes"}) is False

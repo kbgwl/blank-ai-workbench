@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Any
 
 from blank_api.services.sandbox import rules as rules_module
-from blank_api.services.sandbox import windows_job
+from blank_api.services.sandbox import windows_job, windows_volume
 
 DEFAULT_CAPABILITY_SID = rules_module.DEFAULT_SID
 RESTRICTING_SIDS = ("S-1-5-32-545", "S-1-1-0", "S-1-5-11")  # Users / Everyone / Authenticated Users
@@ -165,6 +165,11 @@ class CommandReport:
     error: str = ""
     notes: list[str] = field(default_factory=list)
     grants: dict[str, list[str]] = field(default_factory=dict)
+    # 临时区是否真的落在容量卷上，以及卷容量；`disk_error` 说明为什么没落上。
+    # 账本不按 policy 里的 disk_mb 推断，只认这三项。
+    disk_on_quota: bool = False
+    disk_bytes: int = 0
+    disk_error: str = ""
 
 
 if sys.platform == "win32":
@@ -538,8 +543,12 @@ def prepare(
     workspace: str,
     temp_dir: str,
     rule_set: rules_module.SandboxRules,
+    temp_root: str = "",
 ) -> tuple[dict[str, list[str]], list[str]]:
     """按规则给工作区/临时目录/工具链根授权。工作区失败是致命的，工具链根失败只记账。
+
+    `temp_root` 是临时目录所在的容量卷挂载点：临时区落在卷上时补一条 RX，否则受限令牌
+    连卷根都进不去（祖先路径上没有它的 ACE），临时目录形同虚设。
 
     授权是一次性写进 DACL 的持久 ACE：解除沙箱不会回收它（收窄去删 ACE 反而会误伤别人加的
     权限）。默认能力 SID 是登录会话 SID，所以每多一次登录，目录上会多一条对旧会话惰性的 ACE；
@@ -554,8 +563,18 @@ def prepare(
         ok, detail = _grant(root, "M", capability)
         if not ok:
             raise RestrictedUnavailable(f"工作区授权失败，拒绝在无法写工作区的边界里执行：{root}：{detail}")
+    ok, detail = _grant(temp_dir, "M", capability)
+    if not ok:
+        raise RestrictedUnavailable(f"临时目录授权失败：{temp_dir}：{detail}")
     granted_read: list[str] = []
     notes: list[str] = []
+    if temp_root:
+        for path in dict.fromkeys((temp_root, os.path.dirname(temp_root))):
+            if not os.path.isdir(path):
+                continue
+            ok, detail = _grant(path, "RX", capability)
+            if not ok:
+                notes.append(f"容量卷根授权失败（临时区可能不可用）：{path}：{detail}")
     for root in read_roots:
         if not os.path.exists(root) or _within(root, workspace):
             continue
@@ -722,12 +741,15 @@ def run_command(
     pids: int = 0,
     cpus: float = 0.0,
     io_bps: int = 0,
+    disk_mb: int = 0,
     rule_set: rules_module.SandboxRules | None = None,
 ) -> CommandReport:
     if not supported():
         raise RestrictedUnavailable("受限令牌后端只在 Windows 上存在")
     rules = rule_set or rules_module.load()
-    temp_dir = tempfile.mkdtemp(prefix="blank-restricted-")
+    temp_dir, disk_on_quota, disk_bytes, disk_error = windows_volume.temp_dir_for(
+        "blank-restricted-", disk_mb
+    )
     job = windows_job.create_job(
         "blank-restricted-" + uuid.uuid4().hex[:8],
         memory_bytes=windows_job.parse_size(memory),
@@ -737,7 +759,14 @@ def run_command(
     )
     token = 0
     try:
-        grants, notes = prepare(workspace, temp_dir, rules)
+        grants, notes = prepare(
+            workspace,
+            temp_dir,
+            rules,
+            temp_root=os.path.dirname(temp_dir) if disk_on_quota else "",
+        )
+        if disk_mb and not disk_on_quota:
+            notes.append(f"临时区未放进容量卷，容量上限未生效：{disk_error}")
         child_env = dict(env)
         child_env["TEMP"] = temp_dir
         child_env["TMP"] = temp_dir
@@ -767,6 +796,9 @@ def run_command(
             error=spawn_error,
             notes=notes,
             grants=grants,
+            disk_on_quota=disk_on_quota,
+            disk_bytes=disk_bytes,
+            disk_error=disk_error,
         )
         return report
     finally:

@@ -43,7 +43,8 @@ ENGINE_KEYS = {
     "memory_enforced", "memory_bytes", "pids_enforced", "pids_limit",
     "tree_kill_enforced", "filesystem_enforced", "network_enforced",
     "cpu_enforced", "io_enforced", "io_bps", "io_error",
-    "disk_enforced", "job_created", "job_assigned", "job_error",
+    "disk_enforced", "disk_bytes", "disk_error",
+    "job_created", "job_assigned", "job_error",
 }
 # M2：档位事实由 _tier_enforcement 合并进来，与后端名同源；事件里要能回答
 # "当时按哪一档跑、降级没有、为什么"。
@@ -209,24 +210,26 @@ def test_docker_claims_are_labelled_as_flags(cap):
 
     IO 速率上限是例外：docker 启动参数里没有带宽开关（`docker_flags` 无对应项），
     所以容器后端对 IO 只能说 False——按后端名把整排都写成 True 就是替 docker 撒谎。
+    磁盘容量同理：容器参数没给临时区单独划容量。
     """
     cap(_cap(job=False, appcontainer=False, carrier_control=False))
     enforced = boundary.enforced_fields("docker")
     assert enforced["io"] is False, "docker 命令行没有带宽参数，这一项不许跟着整排点绿"
-    assert all(value for key, value in enforced.items() if key != "io")
+    assert enforced["disk"] is False, "docker 命令行没有容量参数，这一项也不许跟着整排点绿"
+    assert all(value for key, value in enforced.items() if key not in ("io", "disk"))
     assert boundary.enforcement_source("docker") == "docker_flags"
 
 
 def test_panel_reads_exactly_these_field_names():
     """面板的 limitKeys 映射表在后端键名里必须逐个存在。
 
-    `web/src/components/tasks/api.ts` 拿 cpus→cpu、tmpfs→filesystem、io_bps→io 去查
-    enforced；后端改名的话每一项都会安静地长成"（未强制）"——数字还在，标记变了，没人报错。
+    `web/src/components/tasks/api.ts` 拿 cpus→cpu、tmpfs→filesystem、io_bps→io、disk_mb→disk
+    去查 enforced；后端改名的话每一项都会安静地长成"（未强制）"——数字还在，标记变了，没人报错。
     """
     enforced = boundary.no_limits()
     for panel_key, backend_key in (
         ("cpus", "cpu"), ("memory", "memory"), ("pids", "pids"),
-        ("tmpfs", "filesystem"), ("io_bps", "io"),
+        ("tmpfs", "filesystem"), ("io_bps", "io"), ("disk_mb", "disk"),
     ):
         assert backend_key in enforced, f"面板按 {panel_key}→{backend_key} 查账，后端必须有这个键"
     assert set(enforced) == ALL_LIMIT_FIELDS, "多一项少一项都意味着面板与执行层口径分叉"
@@ -245,6 +248,7 @@ def test_off_path_reports_the_same_key_set_as_on_path():
     assert off["tree_kill_enforced"] is False
     assert off["filesystem_enforced"] is False and off["network_enforced"] is False
     assert off["cpu_enforced"] is False and off["disk_enforced"] is False
+    assert off["disk_bytes"] == 0 and "沙箱开关为关" in off["disk_error"]
     assert off["io_enforced"] is False and off["io_bps"] == 0
     assert "沙箱开关为关" in off["job_error"], "为什么没执行要写在账上，不能只留一串 False"
 
@@ -356,8 +360,21 @@ async def test_windows_job_limits_reach_the_event(seeded, workspace, monkeypatch
         f"账本与探针不同源：cap.io_rate={cap.io_rate} facts={facts['io_enforced']}")
     assert facts["io_bps"] > 0
     assert facts["io_error"] == "" or facts["io_enforced"] is False
-    # 磁盘配额仍需要管理员，这一项谁都不许亮。
-    assert facts["disk_enforced"] is False
+    # 磁盘容量是行为证据：探针证明写满即 ENOSPC，且本进程的容量卷已经挂上，两条同真才亮。
+    # 非管理员或挂载失败的机器上这里必须是 False，并且带一句为什么。
+    from blank_api.services.sandbox import windows_volume
+
+    volume = windows_volume.quota_volume()
+    expected_disk = bool(cap.disk_quota and volume.ready())
+    assert facts["disk_enforced"] is expected_disk, (
+        f"账本与探针不同源：cap.disk_quota={cap.disk_quota} "
+        f"volume_ready={volume.ready()} facts={facts['disk_enforced']}")
+    # 卷挂上但探针没证实时，容量数字照报、强制写 False；只有卷没挂上才是 0。
+    assert facts["disk_bytes"] == (volume.report().capacity_bytes if volume.ready() else 0)
+    if expected_disk:
+        assert facts["disk_error"] == ""
+    else:
+        assert facts["disk_error"]
     # local 以宿主令牌执行：即便机器能造受限令牌，这次执行也只有 Job 这一层。
     assert facts["boundary_strength"] == "job_only", facts["boundary_strength"]
     assert set(sandbox_backend_event_field(payload)["sandbox_enforcement"]) <= EVENT_KEYS

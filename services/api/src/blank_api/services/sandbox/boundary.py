@@ -35,7 +35,9 @@ CACHE_TTL_SECONDS = 60.0
 #    （零能力包里外连/私钥都被 PermissionError:13 拒），见 `windows_appcontainer.judge`。
 # 4：IO 带宽上限从"设上了但没验"改成现场压一次「对照 vs 16MB/s」的写盘对照，
 #    见 `_probe_io_rate`；尺度变了，之前的报告与这份不可直接比。
-PROBE_VERSION = 4
+# 5：磁盘容量配额从"没做"改成现场把一个 64MB 的 VHDX 写满，只认 ENOSPC 与写入停止，
+#    见 `_probe_disk_quota`；尺度变了，之前的报告与这份不可直接比。
+PROBE_VERSION = 5
 
 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020008
 EXTENDED_STARTUPINFO_PRESENT = 0x00080000
@@ -89,6 +91,11 @@ class Capability:
     io_rate: bool = False
     io_rate_error: str = ""
     io_rate_check: dict[str, Any] = field(default_factory=dict)
+    # 磁盘容量配额是行为证据：挂上一个 64MB 的 VHDX，写满后必须拿到 ENOSPC 且继续写不再增长。
+    # "VHD 能建"、"卷能挂"都不算数——容量上限要真的让写盘失败才算。
+    disk_quota: bool = False
+    disk_quota_error: str = ""
+    disk_quota_check: dict[str, Any] = field(default_factory=dict)
     measured_at: float = 0.0
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -151,6 +158,10 @@ _CPU_MEMO_LOCK = threading.Lock()
 # 正在探时这一拍如实按未强制记，不阻塞调用方。
 _IO_MEMO: tuple[bool, str, dict[str, Any]] | None = None
 _IO_MEMO_LOCK = threading.Lock()
+# 磁盘容量探针要建卷、格式化、写满 64MB，比 CPU/IO 还重；同理只探一次，
+# 正在探时这一拍如实按未强制记，不阻塞调用方。
+_DISK_MEMO: tuple[bool, str, dict[str, Any]] | None = None
+_DISK_MEMO_LOCK = threading.Lock()
 
 
 def _cpu_probe_memoized() -> tuple[bool, str, dict[str, Any]]:
@@ -181,13 +192,27 @@ def _io_probe_memoized() -> tuple[bool, str, dict[str, Any]]:
         _IO_MEMO_LOCK.release()
 
 
+def _disk_probe_memoized() -> tuple[bool, str, dict[str, Any]]:
+    global _DISK_MEMO
+    if _DISK_MEMO is not None:
+        return _DISK_MEMO
+    if not _DISK_MEMO_LOCK.acquire(blocking=False):
+        return False, "磁盘容量探测正在进行，本拍按未强制记账", {}
+    try:
+        if _DISK_MEMO is None:
+            _DISK_MEMO = _probe_disk_quota()
+        return _DISK_MEMO
+    finally:
+        _DISK_MEMO_LOCK.release()
+
+
 def measure(*, force: bool = False, ttl: float = CACHE_TTL_SECONDS) -> Capability:
     """带 TTL 的现场探测。缓存命中也要把 `age_seconds` 报出去，别把旧值当现值。
 
     `force=True` 连 CPU 探针也重跑（doctor 的现场读数用）；平时的 TTL 刷新复用进程内
     已有的 CPU 结论——机器不会每分钟换一次内核对 CPU 限速的支持。
     """
-    global _CACHE, _CPU_MEMO, _IO_MEMO
+    global _CACHE, _CPU_MEMO, _IO_MEMO, _DISK_MEMO
     now = time.time()
     if _CACHE is not None and not force and now - _CACHE[0] < ttl:
         return _CACHE[1]
@@ -196,18 +221,26 @@ def measure(*, force: bool = False, ttl: float = CACHE_TTL_SECONDS) -> Capabilit
             _CPU_MEMO = None
         with _IO_MEMO_LOCK:
             _IO_MEMO = None
-    cap = _measure_once(cpu_probe=_cpu_probe_memoized, io_probe=_io_probe_memoized)
+        with _DISK_MEMO_LOCK:
+            _DISK_MEMO = None
+    cap = _measure_once(
+        cpu_probe=_cpu_probe_memoized,
+        io_probe=_io_probe_memoized,
+        disk_probe=_disk_probe_memoized,
+    )
     _CACHE = (now, cap)
     return cap
 
 
 def invalidate() -> None:
-    global _CACHE, _CPU_MEMO, _IO_MEMO
+    global _CACHE, _CPU_MEMO, _IO_MEMO, _DISK_MEMO
     _CACHE = None
     with _CPU_MEMO_LOCK:
         _CPU_MEMO = None
     with _IO_MEMO_LOCK:
         _IO_MEMO = None
+    with _DISK_MEMO_LOCK:
+        _DISK_MEMO = None
 
 
 def _appcontainer_check():
@@ -243,8 +276,8 @@ def enforced_fields(backend: str, *, limits_enabled: bool = True) -> dict[str, b
     if not limits_enabled or backend in ("none", ""):
         return no_limits()
     if backend == "docker":
-        # docker_flags 里有 memory/cpus/pids/fsize，没有带宽上限：io 这一项不跟着点绿。
-        return {**dict.fromkeys(_LIMIT_FIELDS, True), "io": False}
+        # docker_flags 里有 memory/cpus/pids/fsize，没有带宽/容量上限：这两项不跟着点绿。
+        return {**dict.fromkeys(_LIMIT_FIELDS, True), "io": False, "disk": False}
     cap = measure()
     if not cap.apparatus_ok:
         # 探测装置自己不可信 ⇒ 一项都不许承诺。宁可全红，不许"默认当成生效"。
@@ -252,12 +285,14 @@ def enforced_fields(backend: str, *, limits_enabled: bool = True) -> dict[str, b
     # CPU/IO 限速的载体仍是 Job：探测说能压住，但这条账只在 Job 真的可用时成立。
     cpu = bool(cap.job and cap.cpu_rate)
     io = bool(cap.job and cap.io_rate)
+    # 磁盘容量：探针证明这台机器上"写满即 ENOSPC"，且本进程的容量卷已经真的挂上。
+    disk = bool(cap.disk_quota and _quota_ready())
     if backend == "appcontainer":
         check = _appcontainer_check()
         ok = bool(check and check.ok)
         return {
             "memory": True, "pids": True, "tree_kill": True,
-            "cpu": cpu, "io": io, "disk": False,
+            "cpu": cpu, "io": io, "disk": disk,
             # 目录不可写、外部不可达都由零能力包在系统层拒；两条都来自同一个子进程的行为自检。
             "network": ok and check.network_ok,
             "filesystem": ok and check.file_boundary_ok,
@@ -267,8 +302,8 @@ def enforced_fields(backend: str, *, limits_enabled: bool = True) -> dict[str, b
         # 这次执行也没走 AC，借它的证据来点绿灯就是拿另一个后端的边界给这个后端背书。
         return {
             "memory": True, "pids": True, "tree_kill": True,
-            # CPU/IO 限速已由行为探针现场压过；磁盘**容量**配额仍是另一件事，照实写 False。
-            "cpu": cpu, "io": io, "disk": False,
+            # CPU/IO 限速已由行为探针现场压过；磁盘容量由「探针证明 + 容量卷已挂上」两条同真。
+            "cpu": cpu, "io": io, "disk": disk,
             "network": False,
             "filesystem": cap.filesystem_boundary,
         }
@@ -276,7 +311,7 @@ def enforced_fields(backend: str, *, limits_enabled: bool = True) -> dict[str, b
     job = cap.job
     return {
         "memory": job, "pids": job, "tree_kill": job,
-        "cpu": cpu, "io": io, "disk": False,
+        "cpu": cpu, "io": io, "disk": disk,
         "network": False, "filesystem": False,
     }
 
@@ -305,7 +340,7 @@ def enforcement_source(backend: str, *, limits_enabled: bool = True) -> str:
     return "measured_job_object" if cap.job else "nothing_enforced"
 
 
-def _measure_once(cpu_probe=None, io_probe=None) -> Capability:
+def _measure_once(cpu_probe=None, io_probe=None, disk_probe=None) -> Capability:
     cap = Capability(platform=sys.platform, probe_version=PROBE_VERSION, measured_at=time.time())
     cap.job, cap.job_error = _probe_job()
     if cap.job:
@@ -318,6 +353,9 @@ def _measure_once(cpu_probe=None, io_probe=None) -> Capability:
     else:
         cap.cpu_rate_error = "Job 不可用，CPU 限速未测"
         cap.io_rate_error = "Job 不可用，IO 限速未测"
+    # 容量卷不依赖 Job：它是一条独立的挂载路径，只要求 Windows + 管理员。
+    disk = disk_probe or _probe_disk_quota
+    cap.disk_quota, cap.disk_quota_error, cap.disk_quota_check = disk()
     cap.restricted_token, cap.token_control, cap.restricted_token_error = _probe_restricted_token()
     if cap.restricted_token and cap.job:
         cap.file_boundary, cap.file_boundary_error, cap.file_check = _probe_file_boundary()
@@ -566,6 +604,96 @@ def _probe_io_rate() -> tuple[bool, str, dict[str, Any]]:
         except OSError:
             pass
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _quota_ready() -> bool:
+    """本进程的容量卷此刻是否真的挂上了（不触发挂载，避免在事件循环里跑 diskpart）。"""
+    try:
+        from blank_api.services.sandbox import windows_volume
+
+        return windows_volume.quota_volume().ready()
+    except Exception:  # noqa: BLE001 - 读不到就是"没有"，不许推断成有
+        return False
+
+
+def _probe_disk_quota() -> tuple[bool, str, dict[str, Any]]:
+    """容量上限的行为自检：挂一个 64MB 卷、写满，只认 ENOSPC 与"继续写仍然失败"。
+
+    挂得上、容量读得到都不够：判据是写满后的错误必须是 ENOSPC（errno 28 /
+    WinError 112/39），且同样的写再试一次仍然失败。2026-11-10 本机实测：容量 62.93MB，
+    写 48MB 后剩 3.14MB，继续写 `OSError errno 28`。
+    """
+    from blank_api.services.sandbox import windows_volume as wv
+
+    size_mb = 64
+    details: dict[str, Any] = {"size_mb": size_mb, "admin": wv.is_admin()}
+    if sys.platform != "win32":
+        return False, "非 Windows：没有 VHDX 容量卷这条路", details
+    if not wv.is_admin():
+        return False, "需要管理员权限才能挂载容量受限卷", details
+    base = tempfile.mkdtemp(prefix="blank-disk-probe-")
+    vhdx = os.path.join(base, "probe.vhdx")
+    mount_dir = os.path.join(base, "mnt")
+    report = wv.mount(vhdx, mount_dir, size_mb)
+    details["capacity_mb"] = round(report.capacity_bytes / 1024 / 1024, 2)
+    if not report.ok:
+        details["mount_error"] = report.error
+        # mount() 自己会 detach 并删挂载点，但探针的临时基目录要在这里收掉。
+        shutil.rmtree(base, ignore_errors=True)
+        return False, report.error, details
+    chunk = b"\xa5" * (4 * 1024 * 1024)
+    written = 0
+    error: OSError | None = None
+    zero_write = False
+    try:
+        target = os.path.join(mount_dir, "fill.bin")
+        try:
+            with open(target, "wb", buffering=0) as handle:
+                while written < report.capacity_bytes + 16 * 1024 * 1024:
+                    try:
+                        count = handle.write(chunk)
+                    except OSError as exc:
+                        error = exc
+                        break
+                    if not count:
+                        zero_write = True
+                        break
+                    written += int(count)
+        except OSError as exc:
+            error = exc
+        details["written_mb"] = round(written / 1024 / 1024, 2)
+        try:
+            details["free_mb"] = round(shutil.disk_usage(mount_dir).free / 1024 / 1024, 2)
+        except OSError as exc:
+            details["free_error"] = str(exc)[:200]
+        if zero_write:
+            return False, "写盘返回 0 字节且没有错误，这个判据不可信", details
+        if error is None:
+            return False, "写满容量后仍能继续写：容量上限没有生效", details
+        winerror = getattr(error, "winerror", None)
+        details["write_error"] = {
+            "errno": error.errno,
+            "winerror": winerror,
+            "strerror": str(error)[:200],
+        }
+        enospc = error.errno == 28 or winerror in (112, 39)
+        details["enospc"] = bool(enospc)
+        if not enospc:
+            return False, f"写满后的错误不是 ENOSPC：{error}", details
+        # 写满后继续写必须继续失败，而不是"报过一次就又能写"。
+        again_failed = False
+        try:
+            with open(target, "ab", buffering=0) as handle:
+                handle.write(chunk)
+        except OSError:
+            again_failed = True
+        details["second_write_failed"] = again_failed
+        if not again_failed:
+            return False, "写满后第二次写入仍然成功：容量上限没拦住", details
+        return True, "", details
+    finally:
+        wv.detach_and_remove(vhdx, mount_dir)
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def _probe_restricted_token() -> tuple[bool, bool, str]:

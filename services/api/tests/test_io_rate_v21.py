@@ -202,7 +202,10 @@ def test_restricted_and_appcontainer_ledgers_use_the_same_io_rule(cached_cap, mo
             io_error="",
             enforced={"memory_bytes": 1, "active_process_limit": 2,
                       "kill_on_close": 1, "io_bps": ONE_HUNDRED_TWENTY_EIGHT_MBPS},
-        )
+        ),
+        disk_on_quota=False,
+        disk_bytes=0,
+        disk_error="用例没有容量卷",
     )
     cached_cap(_cap(io_rate=True))
     assert _enforcement_restricted(report)["io_enforced"] is True

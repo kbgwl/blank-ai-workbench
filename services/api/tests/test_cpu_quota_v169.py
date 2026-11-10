@@ -194,7 +194,10 @@ def test_restricted_ledger_uses_the_same_cpu_rule(cached_cap) -> None:
             error="",
             io_error="",
             enforced={"memory_bytes": 1, "active_process_limit": 2, "kill_on_close": 1, "cpu_rate": 625},
-        )
+        ),
+        disk_on_quota=False,
+        disk_bytes=0,
+        disk_error="用例没有容量卷",
     )
     cached_cap(_cap(cpu_rate=True))
     assert _enforcement_restricted(report)["cpu_enforced"] is True
