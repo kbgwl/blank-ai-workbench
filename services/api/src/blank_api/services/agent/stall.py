@@ -142,27 +142,50 @@ def missing_command(payload: dict) -> str:
 
 _COMMAND_TOOLS = frozenset({"run_shell", "run_tests"})
 _SEPARATORS = re.compile(r"[\s|&;()<>]+")
+# 这些词后面跟着的才是"真正被执行的程序"。`cmd /c node`、`powershell -Command ...`
+# 和 `pnpm exec node` 里 node 都是被调用的那一个，只跳过这些位置会漏拦。
+_WRAPPERS = frozenset(
+    {"cmd", "/c", "/k", "call", "start", "powershell", "pwsh", "-command", "-c", "exec", "run"}
+)
+
+
+def _program_name(token: str) -> str:
+    base = str(token or "").strip("\"'").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if base.endswith((".exe", ".cmd", ".bat", ".ps1")):
+        base = base.rsplit(".", 1)[0]
+    return base
 
 
 def _uses_command(name: str, arguments: dict, missing: str) -> bool:
-    """这次调用会不会用到那条已知不存在的命令。
+    """这次调用会不会**执行**那条已知不存在的命令。
 
-    只对命令类工具判，且只看 `command` 字段——别的工具参数里出现 "node" 两个字
-    说明不了任何事（读一个名为 node 的文件完全合法）。切词后比 basename，
-    所以 `E:\\env\\node\\node.exe` 也认成 node：缺的是这个名字，不是那个路径。
+    只认命令位（每段第一个词，或 `cmd /c` / `powershell -Command` / `pnpm exec`
+    这类包装词后面的那个），不认参数位。真实回执里的误伤就是这一条：
+
+        `where /R C:\\ node.exe`   ← 在磁盘上找现成安装，被当成"又用了 node"拦掉
+
+    切词后比 basename，所以 `E:\\env\\node\\node.exe` 也认成 node：缺的是这个名字，
+    不是那个路径。参数位里出现同名文件（`if exist ...\\node.exe`、`findstr node`）
+    不影响判定——那些正是在找它，不是要再失败一次。
     """
     if name not in _COMMAND_TOOLS or not missing:
         return False
     command = str((arguments or {}).get("command") or "")
     if not command:
         return False
-    for token in _SEPARATORS.split(command):
-        if not token:
+    wanted = missing.lower()
+    tokens = [token for token in _SEPARATORS.split(command) if token]
+    for index, token in enumerate(tokens):
+        base = _program_name(token)
+        if not base:
             continue
-        base = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
-        if base.endswith((".exe", ".cmd", ".bat")):
-            base = base.rsplit(".", 1)[0]
-        if base == missing.lower():
+        # 包装词有两种写法：`exec` / `-Command` 用程序名比对，`/c` / `/k` 是开关，
+        # 过一遍 basename 会变成 `c`——所以原样也要比一次。
+        previous = tokens[index - 1].strip("\"'").lower() if index else ""
+        at_program_position = (
+            index == 0 or previous in _WRAPPERS or _program_name(previous) in _WRAPPERS
+        )
+        if at_program_position and base == wanted:
             return True
     return False
 

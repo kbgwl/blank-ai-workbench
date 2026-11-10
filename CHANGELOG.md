@@ -1,6 +1,31 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过
+
+- **环境缺口不再停在「做不了」（K 批）**：真实读数（安装版 `blank.db`，任务 `4378855e…`，43 步）
+  里，agent 确认本机没有 `node`/`npm` 后最终交付只剩「需要你：装上 Node 后重跑 `npm test`」；
+  用户催办原话「为什么你看到没有后你不想办法自己装呢」「你怎么不自己装呢」被判成 answer/advise，
+  而 advise 会打开只读开关，`run_shell` 连调都调不了。四处改动：
+  1. **意图**：`intent.demands_action` 识别两种语序的催办（「你为什么/怎么不……」与
+     「为什么/怎么你……」），在 `guess_intent` 里早于 `_OPINION`/advise 判定；`create_plan`
+     再加一道确定性覆盖——模型把催办判成 answer/advise 时改判 `act` 并记 `intent.overridden`
+     事件。提示词也补了「这类「为什么」不是在要解释，是在说「你去做」」。
+  2. **空转断路器**：`where /R C:\ node.exe`、`if exist …`、`dir /s /b` 这类**找程序**不再被当成
+     「又用了一次程序」；`cmd /c node -v`、`powershell -NoProfile -Command node -v`、
+     `pnpm exec node -v` 仍按使用拦（包装词按原样与 basename 双比，修掉 `/c` 被剥成 `c` 的漏拦）。
+  3. **环境缺口闸门**（`services/agent/remediation.py` + `execute_action`）：本任务有**真实的**
+     `env_missing` 回执、答复是在把活交回用户（需要你装/装上后/装不了/做不了）、且整个任务没有
+     一次安装/下载尝试——三条同时成立就把任务推回执行，并在系统侧注入补齐顺序（现场确认 →
+     包管理器/portable/磁盘上找现成的 → 绝对路径或加 PATH 重跑），上限 2 轮；readonly、预算耗尽、
+     已经试过安装时豁免。推回只进下一次模型调用，不改用户原话与历史。
+  4. **系统提示词**：把「缺东西不是结论，是要做的工作」写成规则；仓库注释/README/记忆里写着
+     「本机没有它」只能当线索，不能当证据；确实装不上才收尾，且必须写清试过什么、报错是什么。
+  测试：新增 `tests/test_agent_remediation_v24.py` 11 例（真实交付原文 + 真实 `where node` 回执做
+  输入，真实 AgentSession/网关跑执行节点），`test_stall_v151.py` 44 例、`test_intent_and_reply.py`
+  37 例，合计 92 例全绿；变异 4/4 全红（拆闸门 / 答复不再交回 / 把确认算成安装 / 去掉意图覆盖）。
+  后端全量 2512 passed / 24 skipped。**真模型点验未完成**：隔离实例 `:8061` 里存的 DeepSeek Key
+  返回 401（invalid api key，2026-11-10 两轮均在第一次模型调用失败），换有效 Key 后按
+  `E:/tmp/k_probe.py` 的同一目标重跑；在那之前本条只算单测与装置层证据，不算真模型已验证。
 
 - **沙箱临时区容量上限：固定容量 VHDX 卷 + 写满 ENOSPC 行为探针（J2）**：NTFS 没有目录级
   容量配额（`fsutil quota` 只按用户/卷记，按用户设会误伤同一用户的工作区写盘），所以容量上限

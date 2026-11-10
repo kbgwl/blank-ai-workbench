@@ -16,6 +16,7 @@ from blank_api.services.agent.intent import (
     INTENT_ADVISE,
     INTENT_ANSWER,
     as_report,
+    demands_action,
     format_report,
     guess_intent,
     normalize_answer,
@@ -52,6 +53,49 @@ def test_short_concept_question_is_answer() -> None:
 def test_ambiguous_text_is_left_to_model() -> None:
     # 既无动作词也不是短问句：不在这里拍板，交给模型判
     assert guess_intent("这个登录流程看起来不太对，你怎么看") is None
+
+
+# ── 1b. 「为什么你不自己装呢」是催办，不是问概念 ────────────────────
+# 真实读数（安装版任务 4378855e… / 6ce4cc16…）：这句被判成 answer，一次调用直接答；
+# 模型又改判 advise，只读模式下 run_shell 全被拒——它连"去装 Node"这一步都做不到，
+# 最后交付「需要你：装上 Node 后重跑 npm test」。
+
+
+def test_rebuke_demands_action() -> None:
+    for text in (
+        "为什么你看到没有后你不想办法自己装呢",
+        "你怎么不自己装呢",
+        "为什么你不能自己测试",
+        "你为什么不自己跑一遍",
+        "为什么你遇到问题不自己解决",
+    ):
+        assert demands_action(text) is True, text
+        assert guess_intent(text) == INTENT_ACT, text
+
+
+def test_opinion_with_a_negative_is_not_a_rebuke() -> None:
+    # 否定词后面不是动作，仍按征求意见处理：不能因为一个「不」就判成派活。
+    assert demands_action("为什么你觉得这个方案不好呢") is False
+    assert guess_intent("你觉得这个方案有什么可以优化的") == INTENT_ADVISE
+
+
+def test_rebuke_overrides_a_planner_that_says_advise() -> None:
+    """提示词管不住这一步，规则要兜住。
+
+    真实链路上模型先被判 answer、又自己改判 advise；advise 会打开只读开关，
+    于是"自己去装"这条唯一的出路被封死。意图必须是 act。
+    """
+    session = _Session(
+        '{"intent":"advise","note":"用户在抱怨没装依赖","steps":["查看 package.json"]}'
+    )
+    result = _run(session, "为什么你看到没有后你不想办法自己装呢")
+
+    assert result["direct_answer"] is False
+    assert result.get("readonly") is not True
+    assert not getattr(session, "readonly", False)
+    assert "intent.overridden" in [item[0] for item in session.recorder.events]
+    # 真要动手才拍快照；只读调研不拍。
+    assert session.snapshot_calls == ["create_plan"]
 
 
 # ── 2. 意图 JSON 解析要容忍模型的写法差异 ───────────────────────────

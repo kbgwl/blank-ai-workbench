@@ -200,6 +200,30 @@ class TestEnvironmentFailures:
         breaker.record("run_shell", {"command": "node -v"}, NODE_MISSING)
         assert breaker.verdict("run_shell", {"command": "E:\\env\\node\\node.exe -v"}).block is True
 
+    def test_searching_for_the_binary_is_not_using_it(self) -> None:
+        """在磁盘上找现成安装不是"又用了 node"。
+
+        真实读数（任务 4378855e…）：agent 确认本机没有 node 之后，下一条
+        `where /R C:\\ node.exe & if exist "...\\node.exe" ...` 被这条规则当成
+        "又用了 node" 拦掉——它正要找的就是装好的那份 node。找是补齐的前提，
+        拦掉找就等于逼它停在"需要你装"。
+        """
+        breaker = StallBreaker()
+        breaker.record("run_shell", {"command": "node -v"}, NODE_MISSING)
+        for command in (
+            "where /R C:\\ node.exe 2>nul",
+            'if exist "C:\\Program Files\\nodejs\\node.exe" (echo FOUND) else (echo NO)',
+            "dir /s /b node.exe",
+        ):
+            assert breaker.verdict("run_shell", {"command": command}).block is False, command
+
+    def test_wrapped_invocations_still_blocked(self) -> None:
+        # 包装词后面的 node 是真的会被执行的那个，不能因为只认程序位就漏拦。
+        breaker = StallBreaker()
+        breaker.record("run_shell", {"command": "node -v"}, NODE_MISSING)
+        for command in ("cmd /c node -v", "powershell -NoProfile -Command node -v", "pnpm exec node -v"):
+            assert breaker.verdict("run_shell", {"command": command}).block is True, command
+
     def test_success_clears_missing_command(self) -> None:
         breaker = StallBreaker()
         breaker.record("run_shell", {"command": "node -v"}, NODE_MISSING)

@@ -37,6 +37,7 @@ from blank_api.services.agent.scenarios import (
     resolve as resolve_scenario,
 )
 from blank_api.services.agent import governance
+from blank_api.services.agent import remediation
 from blank_api.services.agent.live import OutputRelay
 from blank_api.services.agent.stall import StallBreaker, signature as _stall_signature
 from blank_api.services.agent.intent import (
@@ -47,6 +48,7 @@ from blank_api.services.agent.intent import (
     INTENT_INSTRUCTION,
     REPORT_INSTRUCTION,
     as_report,
+    demands_action,
     derive_answer_fallback,
     guess_intent,
     normalize_answer,
@@ -124,6 +126,10 @@ MAX_REPAIR_ROUNDS = 3
 # 审查最多跑几轮。审查不通过会回到执行，而执行不一定有新东西可改；没有这个上限，
 # 一次"审查没给出结论"就能把 审查→执行 的回路跑到预算耗尽。
 MAX_REVIEW_ROUNDS = 2
+# 环境缺口推回执行的次数上限。缺一条命令却拿「需要你装」收尾时，执行节点会把它
+# 推回一轮并给出补齐顺序；第二次之后仍没有动作就允许如实收尾——断网、没权限这类
+# 真装不上也是一种结论，但必须带着试过什么、报错是什么（见 remediation.py）。
+MAX_REMEDIATION_ROUNDS = 2
 
 # 只读调研允许用的工具。用白名单而不是「排除写类」：新增一个会落盘的工具时，
 # 黑名单会自动放它进来，白名单则默认拦住——后者错了只是少看一处，前者错了是
@@ -186,8 +192,12 @@ SYSTEM_PROMPT = (
     "· 只问「要什么」，不问「怎么做」：技术方案、目录结构、命名、实现细节自己定，"
     "读一遍工作区就能查到的也自己查。问一句显而易见的事，和猜错一样费时间。\n"
     "· 已经问过的不要再问。用户答了什么就按什么做，剩下的自己定。\n"
-    "· 同一个障碍试了两次还过不去（命令跑不起来、环境不可用、依赖装不上），"
-    "停下来问一句，或者用一句话说清卡在哪；不要绕过去，更不要把「没做成」写成「做完了」。\n"
+    "· 环境里缺东西（命令不存在、依赖没装、工具链没有）不是结论，是要做的工作："
+    "先自己补——在磁盘上找现成安装、用包管理器装、下载官方 portable 包解压，"
+    "然后用绝对路径或把它加进 PATH，重跑刚才失败的那一步。仓库注释、README、记忆里"
+    "写着「本机没有它」只能当线索，不能当证据。确实装不上（断网、没权限）才停下来，"
+    "并在交付里写清试过什么、报错是什么、需要用户做什么——不要只剩一句「需要你装」。"
+    "同一个障碍试了两次还是同一个错，再考虑换路子或问一句，但不要把「没做成」写成「做完了」。\n"
     "做事规则：\n"
     "1. 只能通过工具读写工作区，路径一律使用工作区相对路径，禁止绝对路径与 ..。\n"
     "2. 按已确认的步骤调用工具执行，每次拿到结果再决定下一步。\n"
@@ -234,6 +244,9 @@ class AgentState(TypedDict, total=False):
     plan: list[str]
     steps: int
     repair_rounds: int
+    shell_commands: list[str]
+    remediation_rounds: int
+    gap_continue: bool
     tool_results: list[dict]
     pending: list[dict]
     acceptance_results: list[dict]
@@ -1651,6 +1664,17 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
             intent = INTENT_ANSWER
         if intent == INTENT_ACT and not steps:
             steps = parsed_steps
+    # 「为什么你不自己装呢」这类催办必须落到 act：判成 advise 会打开只读开关，
+    # run_shell 连调都调不了——它连"去装"这一步都做不到，只能回一句「需要你装」。
+    # 提示词管不住这一步（真实读数里模型先被判 answer、又自己改判 advise），
+    # 所以规则兜底；能不能写仍由场景与权限决定，这里只拨意图。
+    if intent != INTENT_ACT and demands_action(raw_goal):
+        await session.recorder.add(
+            "intent.overridden",
+            node,
+            {"from": intent or "direct", "to": INTENT_ACT, "goal": raw_goal[:200]},
+        )
+        intent = INTENT_ACT
     if intent == INTENT_ANSWER and not answer:
         # 模型没在 answer 字段里给答案：交给 derive_answer_fallback 决定——
         # 自然语言原文可用就用，只吐了判定 JSON 就给简洁兜底，绝不返回原始协议 JSON。
@@ -2826,6 +2850,9 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     delegated = dict(state.get("delegated_usage") or {})
     results = list(state.get("tool_results") or [])
     pending = list(state.get("pending") or [])
+    # 这个任务里请求过的命令行。环境缺口闸门要用它判断"有没有真的尝试过把缺的东西
+    # 弄到机器上"——只记请求，不记成败：被审批卡住的安装尝试也是尝试。
+    shell_commands = list(state.get("shell_commands") or [])
     readonly = bool(state.get("readonly")) or session.readonly
     # 崩溃续跑：本节点上次已经把工具跑完、只是死在"问模型下一步"之前。检查点落后于
     # 事实，照着重跑会重复执行（写入类工具是用户能看见的重复：多追加一行、多提交一次）。
@@ -2866,6 +2893,12 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         name = tool_call_name(call)
         key = _call_key(call)
         arguments = hook_plan.arguments.get(key, tool_call_args(call))
+        if name in ("run_shell", "run_tests"):
+            command = str((arguments or {}).get("command") or "").strip()
+            if command and command not in shell_commands:
+                shell_commands.append(command)
+                # 只留最近这些条：检查点要跨步带着它，任务跑几百步时不能无限长。
+                del shell_commands[:-remediation.MAX_TRACKED_COMMANDS]
         if key in replayed:
             # 不重发 tool.requested：模型/前端看到的那次请求仍然只有一条
             planned.append(_PlannedCall(call, name, arguments, "replay"))
@@ -3359,6 +3392,42 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     usage = merge_usage(usage, result["usage"])
     # 只有预算真正耗尽时才丢弃工具调用；收尾区仍允许模型完成最后一个动作。
     pending_calls = [] if exhausted else result["tool_calls"]
+    # 环境缺口闸门：模型不再调工具、答复却是「需要你装/装不了」，而本任务确实有
+    # "命令不存在"的回执、又没有一次安装/下载尝试——这不是结论，是还没做完的工作。
+    # 推回一轮并给出补齐顺序（只进下一次模型调用，不改用户原话、不改历史）。
+    gap_continue = False
+    remediation_rounds = int(state.get("remediation_rounds") or 0)
+    stall = getattr(session, "stall", None)
+    if (
+        not pending_calls
+        and not exhausted
+        and not readonly
+        and remediation_rounds < MAX_REMEDIATION_ROUNDS
+    ):
+        gap = remediation.gap_reason(
+            answer=str(result.get("text") or ""),
+            commands=shell_commands,
+            missing=getattr(stall, "missing_commands", ()) or (),
+        )
+        if gap:
+            remediation_rounds += 1
+            gap_continue = True
+            instruction = remediation.hint(gap, remediation_rounds)
+            hook_notes = getattr(session, "hook_context", None)
+            if isinstance(hook_notes, list):
+                hook_notes.append(
+                    {"event": "remediation.required", "tool": "", "text": instruction}
+                )
+            await session.recorder.add(
+                "remediation.required",
+                node,
+                {
+                    "missing": gap,
+                    "round": remediation_rounds,
+                    "max_rounds": MAX_REMEDIATION_ROUNDS,
+                    "answer": str(result.get("text") or "")[:500],
+                },
+            )
     return {
         "messages": result["messages"],
         "steps": steps,
@@ -3368,6 +3437,9 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         "pending": pending_calls,
         "readonly": readonly,
         "budget_exhausted": exhausted,
+        "shell_commands": shell_commands,
+        "remediation_rounds": remediation_rounds,
+        "gap_continue": gap_continue,
         **plan_patch,
     }
 
@@ -4267,6 +4339,10 @@ def route_after_plan(state: AgentState, session: AgentSession) -> str:
 def route_after_act(state: AgentState, session: AgentSession) -> str:
     if state.get("status") in ("cancelled", "paused") or state.get("error"):
         return "finish"
+    # 环境缺口还没补：回执行节点真去装/找，而不是把「需要你装」当成交付。
+    # 排在 pending 之前：两种都是"还有活没干"，原因写进事件里更清楚。
+    if state.get("gap_continue"):
+        return "execute_action"
     if state.get("pending"):
         return "execute_action"
     return "run_validation"
