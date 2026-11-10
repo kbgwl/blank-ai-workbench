@@ -336,6 +336,102 @@ class RestrictedSandbox:
         return 0
 
 
+class AppContainerSandbox:
+    """Windows AppContainer 执行：文件与网络边界都由零能力包在系统层拒。
+
+    只在行为自检全绿时被选中（`windows_appcontainer.available()`）；自检在同一个 AC
+    子进程里量「外连被 PermissionError:13 拒」「合成私钥被拒」「工作区读写成功」，
+    再跑宿主对照——任何一条对照红掉都判装置不可信。账本里的 filesystem/network 直接
+    读那份结论，不从"能不能进 AC"推断。Job 限额与受限令牌后端同一套。
+    """
+
+    name = "appcontainer"
+
+    def __init__(self, policy: SandboxPolicy | None = None) -> None:
+        self.policy = policy or SandboxPolicy()
+
+    async def run(
+        self,
+        command: str | list[str],
+        *,
+        workspace: str,
+        env: dict[str, str] | None = None,
+        timeout_seconds: float | None = None,
+    ) -> SandboxResult:
+        from blank_api.services.sandbox import rules as rules_module
+        from blank_api.services.sandbox import windows_appcontainer as wac
+
+        script = join_for_shell(command)
+        timeout = timeout_seconds or self.policy.timeout_seconds
+        base = {key: value for key, value in os.environ.items() if key in self.policy.env_allowlist}
+        base.update(self.policy.filter_env(env or {}))
+        rules = rules_module.load(self.policy.rules_file or None)
+        started = time.perf_counter()
+        report = await asyncio.to_thread(
+            wac.run_command,
+            script,
+            workspace=workspace,
+            env=base,
+            timeout=timeout,
+            memory=self.policy.memory,
+            pids=self.policy.pids,
+            cpus=self.policy.cpus,
+            rule_set=rules,
+        )
+        duration = int((time.perf_counter() - started) * 1000)
+        enforcement = await asyncio.to_thread(_enforcement_appcontainer, report)
+        stdout, trunc_out = _clip(_decode_host(report.stdout))
+        stderr, trunc_err = _clip(_decode_host(report.stderr))
+        if report.error:
+            stderr = (stderr + "\n" + report.error).strip() if stderr else report.error
+        return SandboxResult(
+            command=redact(script),
+            exit_code=None if report.timed_out else report.exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            duration_ms=duration,
+            timed_out=report.timed_out,
+            backend=self.name,
+            truncated=trunc_out or trunc_err,
+            notes=_enforcement_notes(enforcement) + list(report.notes),
+            enforcement=enforcement,
+        )
+
+    async def cleanup(self) -> int:
+        return 0
+
+
+def _enforcement_appcontainer(report: "CommandReport") -> dict[str, object]:
+    """AppContainer 后端这一次执行的账：边界只认行为自检，不从能力推断。"""
+    from blank_api.services.sandbox import windows_appcontainer as wac
+
+    cap = boundary.measure()
+    check = wac.cached()
+    ok = bool(check and check.ok)
+    job = report.job
+    enforced = bool(job.created and job.assigned)
+    strength = "os_enforced" if ok else "unknown"
+    return {
+        "boundary_strength": strength,
+        "boundary_strength_label": boundary.strength_label(strength),
+        "boundary_measured_seconds_ago": cap.as_dict().get("age_seconds"),
+        "boundary_apparatus_ok": ok,
+        "limits_applied": True,
+        "job_created": job.created,
+        "job_assigned": job.assigned,
+        "job_error": job.error,
+        "memory_enforced": enforced and "memory_bytes" in job.enforced,
+        "memory_bytes": int(job.enforced.get("memory_bytes", 0)),
+        "pids_enforced": enforced and "active_process_limit" in job.enforced,
+        "pids_limit": int(job.enforced.get("active_process_limit", 0)),
+        "tree_kill_enforced": enforced and "kill_on_close" in job.enforced,
+        "filesystem_enforced": ok and check.file_boundary_ok,
+        "network_enforced": ok and check.network_ok,
+        "cpu_enforced": enforced and "cpu_rate" in job.enforced and cap.cpu_rate,
+        "disk_enforced": False,
+    }
+
+
 def _enforcement_restricted(report: "CommandReport") -> dict[str, object]:
     """受限令牌后端这一次执行的账：Job 事实来自执行本身，文件/网络来自行为自检。"""
     cap = boundary.measure()
@@ -470,9 +566,10 @@ def get_sandbox(policy: SandboxPolicy | None = None):
 
     容器后端能不能用由现场探测决定，不看 PATH 里有没有那个文件：装了 Docker 但守护进程
     没起来时返回 DockerSandbox，只会让每条命令各自撞一次墙（`docs/COST.md` 记的那条）。
-    探测不到可用容器时，如果部署打开了受限令牌后端（`BLANK_SANDBOX_RESTRICTED=1`）且本机
-    自检全绿，就用它（文件边界由 NTFS 强制）；否则退 LocalSandbox（产品默认）。
-    `allow_local=False` 才是"只准容器/受限令牌"的部署选择，那种情况下都没有只能拒绝。
+    探测不到可用容器时，如果部署打开了 AppContainer 后端（`BLANK_SANDBOX_APPCONTAINER=1`，
+    需管理员）且行为自检全绿，就用它（文件与网络都由内核拒）；其次是受限令牌后端
+    （`BLANK_SANDBOX_RESTRICTED=1`，文件边界由 NTFS 强制）；都没有才退 LocalSandbox
+    （产品默认）。`allow_local=False` 才是"只准隔离后端"的部署选择，那种情况下都没有只能拒绝。
     """
     chosen = policy or SandboxPolicy()
     if not chosen.enabled:
@@ -485,6 +582,12 @@ def get_sandbox(policy: SandboxPolicy | None = None):
         # 就当容器后端——宁可少拦一次，也不要在没测过的情况下宣称"不可用"而拦住正常机器。
         if shutil_which("docker") is not None:
             return DockerSandbox(chosen)
+    if chosen.appcontainer_enabled:
+        from blank_api.services.sandbox import windows_appcontainer as wac
+
+        # 只认进程内已有的全绿结论；没有就在后台起探测，本拍退回下一档（收紧方向）。
+        if wac.available():
+            return AppContainerSandbox(chosen)
     if chosen.restricted_enabled:
         from blank_api.services.sandbox import windows_restricted as wr
 
@@ -495,7 +598,7 @@ def get_sandbox(policy: SandboxPolicy | None = None):
     raise SandboxUnavailable(
         "Docker 沙箱不可用"
         + docker_probe.notice_suffix(info)
-        + "；本部署要求容器或受限令牌隔离（BLANK_SANDBOX_ALLOW_LOCAL=0）；"
+        + "；本部署要求隔离后端（容器 / AppContainer / 受限令牌）（BLANK_SANDBOX_ALLOW_LOCAL=0）；"
         "如需本机受限额执行，请设置 BLANK_SANDBOX_ALLOW_LOCAL=1 或删除该变量"
     )
 

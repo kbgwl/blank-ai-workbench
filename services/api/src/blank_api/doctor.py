@@ -499,6 +499,13 @@ async def collect(
         from blank_api.services.tools.shell import execute_command
 
         runner = execute_command
+    # 这一份读数被 doctor 拿去当"此刻机器事实"，缓存不能算数：显式重跑一次 AC 行为自检。
+    # 没开这个后端就不跑——它会起子进程（约 4 秒），不该给每台机器都加一笔。
+    from blank_api.services.sandbox import windows_appcontainer as wac
+    from blank_api.services.sandbox.policy import SandboxPolicy
+
+    if SandboxPolicy().appcontainer_enabled and wac.supported():
+        await asyncio.to_thread(wac.self_check, force=True)
     cap = boundary.measure(force=True)
     workspace_tier = resolve_tier(TIER_WORKSPACE, cap=cap)
     seen: list[dict[str, Any]] = []

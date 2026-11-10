@@ -1,6 +1,6 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、签名接线、受限令牌后端与「跑不了测试」如实跳过
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过
 
 - **CPU 限速（Job CpuRate + 行为探针）**：`SandboxPolicy.cpus` 从"只是配置值"变成内核真限。
   Job 通过 `JobObjectCpuRateControlInformation`（ENABLE|HARD_CAP）设限；`CpuRate` 的单位是
@@ -18,6 +18,41 @@
   新增 `tests/test_cpu_quota_v169.py` 11 例，关联四套件 45 例全绿；变异 10/10 全红且红点
   对得上（整机换算、整机核数边界、LocalSandbox 接线、local/restricted 两处账本、机器账本
   的 Job 前提、探针结论抄写、notes、对照自检、限速阈值各至少 1 例）。
+
+- **AppContainer 后端：Windows 上的文件与网络边界由内核拒（需管理员）**：
+  `BLANK_SANDBOX_APPCONTAINER=1` 打开，`runner.get_sandbox` 的选择顺序是容器 → AppContainer
+  → 受限令牌 → local。固定包名 `BlankSandbox`（`CreateAppContainerProfile`，已存在则
+  `DeriveAppContainerSidFromAppContainerName`），`CreateProcessW` + `STARTUPINFOEXW` 挂
+  零能力包 SID 与三句柄白名单，`CREATE_SUSPENDED` → 挂 Job → `ResumeThread`。
+  授权只给工作区/临时目录 `M` 与工具链根 `RX /T`；祖先路径不授权——AC 令牌保留
+  `SeChangeNotifyPrivilege`，实测用全新包名、零祖先授权时 AC 内 Python 照常启动
+  （`E:/tmp/i-probe/no_ancestor.py`），而给祖先写 DACL 会让自检从 3.9s 涨回 200s+。
+  准入是**行为证据**而非能力推断：同一个 AC 子进程里量到 AC `{'bind':'ok','loopback':'ok',
+  'external':'PermissionError:13','secret':'PermissionError:13','ws_write':'ws-ok'}`、
+  宿主对照 `{'external':'ok','secret':'SYNTHETIC-NOT-A-KEY',...}`；任何一条对照红掉整次
+  判定作废（`appcontainer_unverified`），后端不会被选中。账本里 `filesystem_enforced`
+  与 `network_enforced` 只读这份结论；`workspace-net` 在 AC 下明确拒绝（零能力包的方向与
+  "要联网"相反，且不许降级成 off）。`boundary.PROBE_VERSION` 升到 3，新增
+  `appcontainer_file_boundary` / `appcontainer_network_boundary` / `appcontainer_check`
+  三个事实字段；`doctor` 先 `self_check(force=True)` 再取边界账；设置页与任务面板把
+  `isolation=appcontainer` 单列为一种隔离（不再印成宿主直连）。
+  一个必须修的差异：cmd 对**未加引号的路径型首词**会走搜索解析，AC 令牌缺目录访问权时
+  报「拒绝访问。」；同一命令在宿主与受限令牌后端正常（`E:/tmp/i-probe/restricted_quote.json`）。
+  隔离实验证明只有首词引号决定成败（`E:/tmp/i-probe/ac_quote_isolate.json`：`"exe" 参数`
+  成功、`exe 参数` 失败、`"exe" -c print(1)` 正常）。新增 `quote_leading_path` 只给路径型
+  首词补引号（裸名 `npm`/`python` 不动，否则会关掉 PATH 搜索），四种命令形状（字符串/argv
+  列表 × 脚本文件/`-c`）在真实执行层全部 exit 0，读数一致（`E:/tmp/i-probe/ac_runner_e2e.json`）。
+  新增 `tests/test_appcontainer_v22.py` 29 例（judge 真值表与对照优先级、引号归一化、
+  `enforced_fields`/档位两条边界分开记、enforcement 账本、选择门、workspace-net 拒绝、
+  治理与设置页文案）；关联八套件 165 例全绿；变异 10/10 全红（含"缺自检结论当全绿"与
+  "网络事实顶替文件事实"两条补靶）。
+
+- **Job IO 速率上限：接受设置但不节流——如实记为未强制**：按"管理员权限下的可行性"
+  实测 `JobObjectIoRateControlInformation`（1MB/s，20 秒持续写，`E:/tmp/i-probe/io_probe2.json`）。
+  收口当刻复测：对照 834.8 MB/s，限速侧 903.7 MB/s（设置被接受，20 秒内写 18.1GB），
+  没有可测节流；同日上一轮 732.4 / 869.9 MB/s 同向。因此不把 IO 上限接进执行层、
+  不伪造 `disk_enforced=true`；账本固定 False，原因与读数写进下方「未验证」第 3 项。
+  宁可在面板上留一格红，也不拿"设置成功了"冒充"限住了"。
 
 - **远程 MCP over OAuth 2.0（发现 → client_credentials → 刷新）**：`mcp.json` 的 `auth`
   段从"只有静态 headers"扩到真令牌生命周期。只走无人工的 `client_credentials` +
@@ -179,32 +214,44 @@
 
 以下六项是本轮内核升级里**没有**落地或**没有**在本机真验的部分。冻结在这里，不写进
 「已完成」；每项都留下判据、红了长啥样与哑弹风险，条件具备时照着验。
-（CPU 限速、远程 MCP 的 OAuth、更新源分离签名与 SBOM 已从这张表移出，见上方条目。）
+（CPU 限速、远程 MCP 的 OAuth、更新源分离签名与 SBOM 已从这张表移出，见上方条目；
+Windows 网络出口强制已由 AppContainer 落地，见上方条目与第 1 项的剩余部分；第 2 项
+Linux 原生后端按项目决定移出范围，判据只作留档。）
 
-1. **网络出口强制（P0）**——现状：`local` / `restricted` 后端账本都是
-   `network_enforced=false`，只有 Docker 档靠 `--network none` 成立。需要：管理员权限 +
-   WFP（Windows）或 netns/cgroup（Linux）。判据：同一个子进程内，回环监听连接成功、
-   对外 TCP 连接被拒，且账本为 true；撤掉规则后对外连接必须成功（变异对照）。红了长啥样：
-   规则下对外仍连通却记 true，或只拦指定 IP/域名而 IPv6、代理、原始套接字照走。哑弹风险：
-   WFP 规则绑错进程（只拦父不拦子）、Windows 版本差异导致过滤器静默不生效。
-2. **Linux 原生沙箱后端（P1）**——现状：CI `api` job 已在 Ubuntu 上跑全量，但非 Docker
-   的 Linux 后端不存在（代码里没有 landlock/seccomp/unshare），Linux 上拿不到本机文件/
-   网络边界。需要：Linux 内核 ≥ 5.13（Landlock）或可用的非特权 user namespace。判据：
+1. **网络出口强制（P0）**——Windows 已落地（上方 AppContainer 条目：零能力包、
+   同进程内对外 TCP 被拒为 `PermissionError:13`、宿主对照在同一时刻外连成功、
+   账本只读这份行为证据），**仍未成立的是**：`local` 与 `restricted` 后端（未开
+   AppContainer 或没有管理员权限时）账本恒 `network_enforced=false`，面板如实标未强制；
+   WFP 式的「保留宿主文件访问、只拦出口」没有实现。Linux 路径按项目决定不再做。
+   剩余判据：local/restricted 下账本必须为 false、doctor 必须报未强制，不许借
+   「机器能建 AC」冒充本次已强制；若将来接 WFP，同一个子进程内回环监听连接成功、
+   对外 TCP 被拒且账本为 true，撤掉规则后对外连接必须成功（变异对照）。红了长啥样：
+   local 档账本写 true，或只在开启 AppContainer 的机器上把开关关掉仍报已强制。
+   哑弹风险：WFP 规则绑错进程（只拦父不拦子）、Windows 版本差异导致过滤器静默不生效、
+   把「AC 内某一次外连失败」当成「所有出口都被拦」（IPv6、代理、原始套接字未逐一验）。
+2. **Linux 原生沙箱后端（P1，已移出范围，仅留档）**——项目决定不做 Linux 场景；
+   CI `api` job 仍在 Ubuntu 上跑全量，但那只是回归，不构成 Linux 上的边界承诺——
+   代码里没有 landlock/seccomp/unshare，Linux 上非 Docker 后端不提供本机文件/网络边界。
+   若将来重启：需要 Linux 内核 ≥ 5.13（Landlock）或可用的非特权 user namespace；判据是
    在 `ubuntu-latest` 上，子进程写工作区外被内核拒（EACCES/EPERM，不是路径预检返回的
    4xx）、对外连接被拒、自检阴性/阳性对照都成立。红了长啥样：探针只走路径字符串判断、
    或内核不支持时用例 `skip` 却被当成通过。哑弹风险：runner 关闭非特权 userns、Landlock
    ABI 低于所需版本、受限令牌代码被错误地当成跨平台后端。
 3. **磁盘 / IO 配额（P2）**——CPU 限速已在本轮落地（见上方 CpuRate 条目：行为探针 10/10
-   变异全红）；磁盘配额与 IO 限速仍冻结。现状：`disk` 在账本里恒 False；本机实测
-   `SetIoRateControlInformationJobObject` 在非管理员下"接受设置但不产生可测节流"
-   （32MB 写入带/不带 4MB/s 上限都 0.01s），卷句柄 `\\.\E:` 被拒（err 123）。需要：
-   管理员权限与可用的磁盘配额/IO 限速接口。判据：写盘到配额上限后继续写失败且总占用不再
-   增长；带 IO 上限的持续写盘吞吐显著低于对照（对照自己要先跑满）。红了长啥样：磁盘无限
-   增长、吞吐与对照无差别，面板却写 true。哑弹风险：磁盘配额按卷生效会误伤其他用户、
+   变异全红）；磁盘配额与 IO 限速仍冻结，账本 `disk` 恒 False。2026-11-10 管理员权限下
+   用决定性探针复测 `JobObjectIoRateControlInformation`（`E:/tmp/i-probe/io_probe2.json`）：
+   设 1MB/s 被**接受**，但 20 秒持续写对照 834.8 MB/s、限速侧 903.7 MB/s（限速侧写了
+   18.1GB），没有可测节流；同日上一轮 732.4 / 869.9 MB/s 同向——所以不接假限速、
+   也不把 `disk_enforced` 写成 true（见上方 Job IO 条目）。早期非管理员
+   读数（32MB 带/不带 4MB/s 上限都 0.01s、卷句柄 `\\.\E:` 被拒 err 123）同样不支持。
+   需要：真正生效的磁盘配额/IO 限速接口（含按卷配额的误伤评估）。判据：写盘到配额上限后
+   继续写失败且总占用不再增长；带 IO 上限的持续写盘吞吐显著低于对照（对照自己要先跑满，
+   且时限内对照的写入量必须达到阈值，否则装置自检作废）。红了长啥样：磁盘无限增长、
+   吞吐与对照无差别，面板却写 true。哑弹风险：磁盘配额按卷生效会误伤其他用户、
    IO 限速接口不可用时静默忽略、缓存写入把节流读数洗掉。
 4. **任务级隔离（P3）**——现状：工作区属于项目，同一项目的任务共享可写根；隔离靠路径
    闸门与审批，不是 OS 命名空间。需要：每任务独立根 + 跨任务绝对路径也不可达（受限令牌/
-   AppContainer/Linux 后端）。判据：任务 A 写入标记文件，任务 B 用绝对路径与相对路径都读
+   AppContainer）。判据：任务 A 写入标记文件，任务 B 用绝对路径与相对路径都读
    不到、写不进；同机另一 OS 用户同样不可达。红了长啥样：只拦相对路径/`..`，同用户进程
    用绝对路径照样打开。哑弹风险：工作区根互相嵌套、junction/符号链接绕过、同一 OS 用户
    下文件权限天然可读。
@@ -218,8 +265,8 @@
    证书过期后旧包验不过（缺 RFC3161 时间戳时）。哑弹风险：证书主体与发布者名不一致、
    时间戳服务不可用导致签名静默降级、开发构建绕过校验。
 6. **第二台机器差异验证（#76，外部机器）**——现状：边界对账装置已进仓库，但只在本机
-   （build 26300、非管理员）跑过；Windows 版本、ACL 语义、AppContainer/受限令牌可用性
-   差异没有实测。需要：第二台干净机器（建议不同 Windows 版本）。判据：同一装置在第二台
+   （build 26300）跑过，权限覆盖非管理员与管理员两档；Windows 版本、ACL 语义、
+   AppContainer/受限令牌可用性差异没有实测。需要：第二台干净机器（建议不同 Windows 版本）。判据：同一装置在第二台
    机器上输出逐项一致的边界账（或差异有明确原因），受限令牌后端自检全绿才启用。红了长
    啥样：第二台机器上后端自检假绿、文件边界在真实路径上不成立。哑弹风险：只在相同 build
    上复跑、对照项与判定项用同一套代码自证。

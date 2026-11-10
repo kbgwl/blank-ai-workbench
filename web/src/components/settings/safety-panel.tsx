@@ -245,7 +245,7 @@ export function SafetyPanel() {
         <div className="flex flex-wrap items-center gap-2">
           <span
             className={`rounded-md border px-2 py-0.5 font-mono text-[10.5px] ${
-              backend?.isolation === "container"
+              backend?.isolation === "container" || backend?.isolation === "appcontainer"
                 ? "border-ok/40 bg-ok-soft text-ok"
                 : "border-warn/40 bg-warn-soft text-warn"
             }`}

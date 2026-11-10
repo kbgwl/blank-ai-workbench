@@ -53,6 +53,11 @@ class SandboxPolicy:
     )
     # 受限后端的规则文件（可写/可读根 + 保护路径）。空 = 用包内 rules.default.json。
     rules_file: str = field(default_factory=lambda: _env("SANDBOX_RULES_FILE", ""))
+    # AppContainer 后端：需要管理员权限，文件与网络边界都由内核拒（零能力包）。同样默认关：
+    # 它会拒绝工作区之外的写入，且自检（起子进程做行为判定）要几秒，由部署方显式打开。
+    appcontainer_enabled: bool = field(
+        default_factory=lambda: _env("SANDBOX_APPCONTAINER", "false").lower() in {"1", "true", "yes"}
+    )
     # 单次越界宿主执行的部署开关。默认关：模型传了也不执行，交给人工在部署时显式打开。
     allow_host_bypass: bool = field(
         default_factory=lambda: _env("SANDBOX_ALLOW_HOST_BYPASS", "false").lower() in {"1", "true", "yes"}

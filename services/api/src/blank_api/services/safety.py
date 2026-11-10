@@ -478,6 +478,18 @@ def backend_info() -> BackendInfo:
             detail="命令在一次性容器里执行：工作区是唯一可写挂载点，默认无网络，CPU/内存/进程数/时长均有上限。",
             **facts,
         )
+    if resolution.backend == "appcontainer":
+        return BackendInfo(
+            backend="appcontainer",
+            isolation="appcontainer",
+            label="AppContainer 隔离：文件与网络由系统拒绝",
+            detail=(
+                resolution.notice
+                + "。命令在零能力 AppContainer 里执行：工作区与每次执行的专用临时目录是唯一可写位置，"
+                "其余位置的读写与出网都由内核拒绝；内存/进程数/进程树仍由 Job Object 强制。"
+            ),
+            **facts,
+        )
     if not resolution.available:
         # 「该做什么」按探测读数分开说：装了但守护进程没起来的人，你让他去装 Docker 是耍人。
         remedy = (

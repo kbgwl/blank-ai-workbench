@@ -217,17 +217,29 @@ def resolve_tier(
         )
 
     docker = backend == "docker"
+    appcontainer = backend == "appcontainer"
     restricted = backend == "restricted"
     if docker:
         strength = "os_enforced"
         label = "容器隔离（由 Docker 强制）"
         filesystem = network = True
+    elif appcontainer:
+        # AppContainer 后端：两条边界都只认行为自检的事实（被选中本身就要求全绿）。
+        from blank_api.services.sandbox import windows_appcontainer as wac
+
+        check = wac.cached()
+        ok = bool(check and check.ok)
+        strength = "os_enforced" if ok else "unknown"
+        label = boundary.strength_label(strength)
+        filesystem = bool(check and check.file_boundary_ok)
+        network = bool(check and check.network_ok)
     elif restricted:
         # 受限令牌后端承诺文件边界（行为自检过才有资格被选中），网络没有 AppContainer 就拦不住。
         strength = cap.strength
         label = cap.label
         filesystem = cap.filesystem_boundary
-        network = cap.network_boundary
+        # 这台机器上 AC 能不能拦网络与"这次执行走没走 AC"是两件事：没走就一律不承诺。
+        network = False
     else:
         # local 以宿主令牌执行：机器上"能造出受限令牌"与本次执行无关，不许借来背书。
         strength = "job_only" if (cap.apparatus_ok and cap.job) else ("unknown" if not cap.apparatus_ok else "none")
@@ -236,7 +248,18 @@ def resolve_tier(
     os_level = strength == "os_enforced"
     limits = docker or strength in ("job_only", "os_enforced")
 
-    if name == TIER_WORKSPACE_NET and not network:
+    if name == TIER_WORKSPACE_NET and (not network or appcontainer):
+        # AppContainer 是零能力包：它把出网**拒绝**，而 workspace-net 要的是出网。
+        # 网络边界确实"被强制"了，但方向与请求相反——照样不能提供这一档。
+        notice = (
+            "workspace-net 不提供：AppContainer 后端是零能力包，出网被系统拒绝，"
+            "这一档要求的联网无法提供；该档不会降级成 off（off 的权限更大）"
+            if appcontainer
+            else (
+                "workspace-net 不提供：本机实测边界强度为 {}，无法由系统强制网络边界；"
+                "该档不会降级成 off（off 的权限更大）"
+            ).format(strength)
+        )
         return TierResolution(
             requested=name,
             tier=name,
@@ -249,10 +272,7 @@ def resolve_tier(
             limits_enforced=limits,
             filesystem_enforced=filesystem,
             network_enforced=False,
-            notice=(
-                "workspace-net 不提供：本机实测边界强度为 {}，无法由系统强制网络边界；"
-                "该档不会降级成 off（off 的权限更大）"
-            ).format(strength),
+            notice=notice,
             reason=REASON_NET_UNAVAILABLE,
             policy=chosen,
         )

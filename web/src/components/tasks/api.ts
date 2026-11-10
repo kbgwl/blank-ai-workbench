@@ -1655,7 +1655,11 @@ export function sandboxBoundaryLabel(sb: Governance["sandbox"]): string {
         : sb.backend === "local"
           ? "无容器（进程在本机）"
           : sb.backend,
-    sb.isolation === "container" ? "容器隔离" : "宿主直连（不承诺隔离）",
+    sb.isolation === "container"
+      ? "容器隔离"
+      : sb.isolation === "appcontainer"
+        ? "AppContainer 隔离（文件与网络由系统拒）"
+        : "宿主直连（不承诺隔离）",
     sb.network === null ? "" : sb.network ? "可联网" : "断网",
     sb.readOnlyRoot === null ? "" : sb.readOnlyRoot ? "根目录只读" : "根目录可写",
     strength === "" || enforcedAny ? strength : "本次未强制任何限额",
@@ -1671,7 +1675,13 @@ export function sandboxBoundaryLabel(sb: Governance["sandbox"]): string {
 export function sandboxBoundaryNeedsWarn(sb: Governance["sandbox"]): boolean {
   if (!sb) return true;
   if (sb.enabled === false || sb.backend === "none" || sb.network === true) return true;
-  if (sb.isolation !== "container" && sb.boundaryStrength !== "" && sb.boundaryStrength !== "os_enforced") {
+  // AppContainer 与容器都是系统层隔离；只有宿主直连才需要拿强度那半句来解释警告。
+  if (
+    sb.isolation !== "container" &&
+    sb.isolation !== "appcontainer" &&
+    sb.boundaryStrength !== "" &&
+    sb.boundaryStrength !== "os_enforced"
+  ) {
     return true;
   }
   return false;

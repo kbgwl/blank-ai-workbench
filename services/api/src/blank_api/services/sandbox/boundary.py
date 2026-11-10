@@ -30,7 +30,9 @@ CACHE_TTL_SECONDS = 60.0
 # 证据包里没有它，就分不清「这台机器变了」和「量它的尺子变了」——两份读数放在一起
 # 会看起来像同一件事。只在语义变化时递增，纯重构不动它。
 # 2：CPU 限速从"没做"变成"现场压一次自旋子进程"，见 `_probe_cpu_rate`。
-PROBE_VERSION = 2
+# 3：网络边界从"能进 AppContainer"这种能力推断，改成 AppContainer 内的行为证据
+#    （零能力包里外连/私钥都被 PermissionError:13 拒），见 `windows_appcontainer.judge`。
+PROBE_VERSION = 3
 
 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020008
 EXTENDED_STARTUPINFO_PRESENT = 0x00080000
@@ -58,8 +60,15 @@ class Capability:
     restricted_token: bool = False
     restricted_token_error: str = ""
     token_control: bool = False          # DuplicateTokenEx 阳性对照
+    # 能不能把进程塞进 AppContainer（固定包 + 零能力）——这只是**能力**，不是边界。
     appcontainer: bool = False
     appcontainer_error: str = ""
+    # AppContainer 内的行为证据（`windows_appcontainer.self_check` 的缓存结论）。
+    # 网络边界只认这一层：进程"起得来"不等于它真在包里，更不等于出网/读私钥真被拒。
+    appcontainer_file_boundary: bool = False
+    appcontainer_network_boundary: bool = False
+    appcontainer_check: dict[str, Any] = field(default_factory=dict)
+    appcontainer_check_error: str = ""
     carrier_control: bool = False        # 不带属性的同载体必须起得来
     # 文件边界是**行为证据**，不是"能造出受限令牌"这种能力推断：自检在同一个受限子进程里
     # 同时验证「读合成私钥被拒」与「工作区读写成功」，再跑宿主令牌/授权后两条对照。
@@ -81,21 +90,23 @@ class Capability:
 
     @property
     def filesystem_boundary(self) -> bool:
-        """文件边界此刻真的被系统强制吗（AC 或行为自检通过的受限令牌）。"""
-        return self.apparatus_ok and (self.appcontainer or self.file_boundary)
+        """文件边界此刻真的被系统强制吗（AC 行为自检 或 受限令牌行为自检）。"""
+        return self.apparatus_ok and (self.file_boundary or self.appcontainer_file_boundary)
 
     @property
     def network_boundary(self) -> bool:
         """网络边界只有 AppContainer 这一条实测路径；受限令牌不拦网络，不许混着报。"""
-        return self.apparatus_ok and self.appcontainer
+        return self.apparatus_ok and self.appcontainer_network_boundary
 
     @property
     def strength(self) -> str:
         if not self.apparatus_ok:
             return "unknown"
-        if self.appcontainer or (self.restricted_token and self.job and self.file_boundary):
-            # 进 AC = 文件边界由 NTFS 拒；受限令牌 + Job + 行为自检通过 = 身份、文件与资源一起收窄。
-            # 只拿到受限令牌而没有 Job 或没有行为证据，不算 os_enforced。
+        if self.appcontainer_file_boundary and self.appcontainer_network_boundary:
+            # 两条行为证据都在同一个 AC 子进程里量到，另有宿主对照；这才叫系统强制。
+            return "os_enforced"
+        if self.restricted_token and self.job and self.file_boundary:
+            # 受限令牌 + Job + 行为自检通过 = 身份、文件与资源一起收窄。
             return "os_enforced"
         if self.job:
             return "job_only"
@@ -168,6 +179,18 @@ def invalidate() -> None:
         _CPU_MEMO = None
 
 
+def _appcontainer_check():
+    """读 AppContainer 行为自检的进程内结论；**不现场探测**。
+
+    那份自检要起子进程（实测约 4 秒），而本模块的 `measure()` 会在事件循环里被同步调用。
+    谁要一份新读数谁显式调 `windows_appcontainer.self_check(force=True)`（doctor 就这么做），
+    这里只负责把已有事实搬进账本。
+    """
+    from blank_api.services.sandbox import windows_appcontainer as wac
+
+    return wac.cached()
+
+
 _LIMIT_FIELDS = ("memory", "pids", "tree_kill", "cpu", "disk", "network", "filesystem")
 
 
@@ -196,13 +219,24 @@ def enforced_fields(backend: str, *, limits_enabled: bool = True) -> dict[str, b
         return no_limits()
     # CPU 限速的载体仍是 Job：探测说能压住，但这条账只在 Job 真的可用时成立。
     cpu = bool(cap.job and cap.cpu_rate)
+    if backend == "appcontainer":
+        check = _appcontainer_check()
+        ok = bool(check and check.ok)
+        return {
+            "memory": True, "pids": True, "tree_kill": True,
+            "cpu": cpu, "disk": False,
+            # 目录不可写、外部不可达都由零能力包在系统层拒；两条都来自同一个子进程的行为自检。
+            "network": ok and check.network_ok,
+            "filesystem": ok and check.file_boundary_ok,
+        }
     if backend == "restricted":
-        # 受限令牌后端：文件边界来自行为自检，网络仍由系统放行（没有 AppContainer 就拦不住）。
+        # 受限令牌后端：文件边界来自行为自检；网络一律不承诺——这台机器上就算 AC 可用，
+        # 这次执行也没走 AC，借它的证据来点绿灯就是拿另一个后端的边界给这个后端背书。
         return {
             "memory": True, "pids": True, "tree_kill": True,
             # CPU 限速已由 `_probe_cpu_rate` 现场压过；磁盘配额仍需要管理员，照实写 False。
             "cpu": cpu, "disk": False,
-            "network": cap.network_boundary,
+            "network": False,
             "filesystem": cap.filesystem_boundary,
         }
     # local：命令真的以宿主令牌执行，机器上"能造出受限令牌"与本次执行无关，不许借来冒充。
@@ -223,6 +257,9 @@ def enforcement_source(backend: str, *, limits_enabled: bool = True) -> str:
         return "no_backend"
     if backend == "docker":
         return "docker_flags"
+    if backend == "appcontainer":
+        check = _appcontainer_check()
+        return "measured_appcontainer_boundary" if (check and check.ok) else "appcontainer_unverified"
     if backend == "restricted":
         cap = measure()
         if not cap.apparatus_ok:
@@ -252,11 +289,20 @@ def _measure_once(cpu_probe=None) -> Capability:
         cap.file_boundary_error = "受限令牌或 Job 不可用，文件边界未做行为自检"
     if sys.platform == "win32":
         cap.appcontainer, cap.carrier_control, cap.appcontainer_error = _probe_appcontainer()
+        check = _appcontainer_check()
+        if check is not None:
+            cap.appcontainer_file_boundary = check.file_boundary_ok
+            cap.appcontainer_network_boundary = check.network_ok
+            cap.appcontainer_check = check.as_dict()
+            cap.appcontainer_check_error = check.error
+        else:
+            cap.appcontainer_check_error = "AppContainer 行为自检未运行（本模块不现场起探测）"
     else:
         # POSIX 上"进 AC"这条路根本不存在；容器隔离由 backend=docker 表达，不在这里冒充。
         cap.appcontainer = False
         cap.carrier_control = True
         cap.appcontainer_error = "非 Windows：没有 AppContainer 这条路"
+        cap.appcontainer_check_error = "非 Windows：没有 AppContainer 这条路"
     return cap
 
 

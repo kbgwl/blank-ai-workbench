@@ -75,8 +75,12 @@ def sandbox_boundary(writable_root: str = "", tier: str = "") -> dict[str, Any]:
         "tier_notice": resolution.notice,
         "backend": backend,
         "enabled": policy.enabled,
-        # 隔离强度只有两种真实说法：容器，或者宿主直连（宿主直连不承诺隔离）。
-        "isolation": "container" if backend == "docker" else "host",
+        # 三种真实说法：容器、AppContainer（零能力包，文件与网络都由内核拒）、
+        # 宿主直连（宿主直连不承诺隔离）。别把 AppContainer 印成"宿主直连"。
+        "isolation": (
+            "container" if backend == "docker"
+            else ("appcontainer" if backend == "appcontainer" else "host")
+        ),
         # 现场探测出来的档位与来源，与工具事件里的 sandbox_enforcement 同一口径。
         # off 档一律 none：机器能建 Job 不等于这次任务建了 Job。
         "boundary_strength": strength,
