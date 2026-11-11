@@ -36,6 +36,7 @@ COPY_IGNORE = {
     "target",
     ".blank_backups",
     ".blank",
+    ".blank-worktrees",
 }
 MAX_COPY_FILES = 4_000
 MAX_COPY_BYTES = 200 * 1024 * 1024

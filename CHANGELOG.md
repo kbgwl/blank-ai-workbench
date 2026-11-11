@@ -1,6 +1,47 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话
+
+- **任务级工作树会话：`enter_worktree` / `exit_worktree`（Q 批第 2 项）**：
+  把 Claude 的 EnterWorktree / ExitWorktree 落成「这个任务此刻在哪棵树里干活」的一条会话事实。
+  新增 `services/worktree_session.py` 与 `tools/worktree.py`；`tools/base.py`、`tools/__init__.py`、
+  `tools/registry.py`、`agent/runtime.py`、`agent/graph.py`、`services/workspace.py`、
+  `services/worktree.py` 随之接通。
+  1. **换根只换一处**：`ToolContext` 新增 `recorder` 字段；enter 成功后用
+     `object.__setattr__(context, "root", ...)` 切根并重置 `FileStateCache`——shell 的 cwd、文件工具、
+     git、安全策略的路径基准读的都是同一个 `context.root`，不存在「一半在旧树里」。
+  2. **创建语义**：`name` 在 `<repo>/.blank-worktrees/<name>` 新建 `blank/worktree-<name>` 分支
+     （名字只允许字母/数字/点/下划线/短横线、最多 64 字符）；`path` 只能进入 `git worktree list`
+     里已注册、且属于当前仓库或工作区内嵌套仓库的树；`name` 与 `path` 互斥，已在会话里不能再
+     `name` 新建。
+  3. **退出闸门**：`keep` 只摘记录；`remove` 仅对本任务用 `name` 创建的树生效，`path` 进入的只能
+     `keep`；有未提交改动（含未跟踪文件）或未合并提交时拒绝并逐个点名，确认丢弃必须显式传
+     `discard_changes=true`；`remove` 风险等级为 high，走审批。`exit_worktree` 登记进
+     `ARGUMENT_SCOPED_TOOLS`：批准一次 `remove` 不能记成「整个工具以后都免问」；`enter_worktree`
+     的风险与参数无关，风险固定为 medium，不挂 `risk_for`。
+  4. **卫生**：建树后把 `/.blank-worktrees/` 写进仓库本地 `.git/info/exclude`（不动用户的
+     `.gitignore`），搜索/快照（`TREE_IGNORE`）与子代理整树复制（`COPY_IGNORE`）都跳过它。
+  5. **会话生命周期**：按 `task_id` 存在进程内；`runtime._prepare` 先查 `active_root`，审批恢复后
+     仍在同一棵树（目录被外部删掉则退回共享工作区）；`_finish` 只在非 `waiting_approval` 档摘记录、
+     不删树——没合并的工作留给用户。
+  6. **事件与出参**：`worktree.entered` / `worktree.exited` 落事件流（含根、原根、仓库、分支、
+     owned、action/removed/branch_deleted）；回给模型的 data 只带仓库内相对路径，不泄漏主机绝对路径。
+  7. **提示词**：系统提示写死「只在用户或 AGENTS.md 明确要求时开；keep/remove 语义；remove 遇
+     未提交改动会拒绝；不要为了删而删，也不要自己编 discard_changes」。
+  测试：新增 `tests/test_worktree_tools_v32.py` 34 例；相关回归（含本文件）
+  `test_worktree_hooks_v118`、`test_worktree_parallel_v13`、`test_background_shell_v31`、
+  `test_tool_wiring_v150`、`test_tool_search_v13`、`test_tiered_tools` 合计
+  **120 passed（30.86s）**。变异电池 28/28 全红（每条跑完即还原）：去掉 owned/脏树/提交闸门、
+  keep/remove 不摘记录、不删分支、目录树标成非本任务、不写 exclude、目录改名、名字校验失效、
+  会话内重复 enter、链接树拿自己当主仓库、游离 HEAD 报成 HEAD、出参泄漏绝对路径、active_root
+  不识别缺失目录、enter/exit 不换根、换根不重置读状态、discard 默认放行、remove 不按高风险、
+  事件不落、工具不按需登记、提示词漏纪律、恢复退回共享根、收尾不摘会话、遍历不跳过工作树、
+  复制不跳过工作树、工具档漏登记 exit_worktree。全量回归（最终代码）：**2762 passed,
+  24 skipped, PYTEST_RC=0（1117.22s）**。首轮曾有两条 `test_team_midround_v141` 偶发红
+  （已知团队用例抖动，与单跑/子集不符），第二轮不再出现；另修掉首轮暴露的真回归
+  （`enter_worktree` 挂 `risk_for` 未登记工具档）后重跑。
+  偏离：工作树建在 `.blank-worktrees/` 而不是 Claude 的 `.claude/worktrees/`；没有暴露
+  `baseRef`（一律从 HEAD 创建）；`path` 只认已注册的 git 工作树，不接受任意目录。
 
 - **后台 shell：`run_in_background` + 输出/终止配对（Q 批第 1 项）**：
   把 Claude 的 Bash 后台语义落到执行图上：命令先跑起来、拿句柄继续干活、结束由系统通知，

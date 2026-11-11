@@ -78,6 +78,9 @@ DEFERRED_TOOLS = frozenset(
         "spawn_agents",
         # 续聊只在「已经把子代理派出去、还想追问」时才用得上，属于同一类按需能力。
         "send_message",
+        # 工作树会话只在用户明确要求隔离时用；常驻会把"要不要开一棵树"塞进每轮菜单。
+        "enter_worktree",
+        "exit_worktree",
     }
 )
 
@@ -109,6 +112,8 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "request_user_input": ("提问", "询问", "确认", "ask"),
     "update_plan": ("计划", "步骤", "plan", "todo"),
     "set_goal": ("目标", "验收标准", "算做完", "goal", "done when", "objective"),
+    "enter_worktree": ("worktree", "工作树", "隔离目录", "新分支", "enter worktree"),
+    "exit_worktree": ("worktree", "工作树", "退出工作树", "合并工作树", "exit worktree", "keep", "remove"),
     "enter_plan_mode": ("计划模式", "先调研", "只读", "plan mode", "enter plan"),
     "exit_plan_mode": ("退出计划", "开始执行", "确认计划", "exit plan", "plan approved"),
 }

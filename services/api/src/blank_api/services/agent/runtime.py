@@ -43,7 +43,7 @@ from blank_api.services.agent.verifier import (
 )
 from blank_api.services.agent.automation import resolve_mode as resolve_automation_mode
 from blank_api.services.agent.loadstats import recent_load
-from blank_api.services import shell_tasks
+from blank_api.services import shell_tasks, worktree_session
 from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agent.scenarios import (
     excluded_tools,
@@ -516,6 +516,11 @@ class AgentRuntime:
                 isolation.as_dict(),
             )
         run_root = Path(isolation.path) if isolation is not None else Path(request.root)
+        # 上一轮最后停在 worktree 里：恢复后的任务仍然在那棵树上，而不是悄悄退回主工作区。
+        # 会话记录按 task_id 存活（审批恢复会重建 ToolContext），目录不在时这里返回 None。
+        worktree_root = worktree_session.active_root(request.task_id)
+        if worktree_root is not None:
+            run_root = worktree_root
         # 逆向场景：读根仍是用户的工作区（样本在那儿），写根切到独立分析区。
         # 这一层不写在提示词里——提示词只是"别改原文"的建议，换写入根才是约束（v164 §5）。
         write_root = None
@@ -596,6 +601,7 @@ class AgentRuntime:
         context = ToolContext(
             root=run_root,
             task_id=request.task_id,
+            recorder=recorder,
             session_factory=store,
             # 审批回调保留给外部集成；运行时的唯一真源是 permissions（模式 + 前缀 + 会话记忆）。
             approval_policy=permissions.decide,
@@ -1295,6 +1301,9 @@ class AgentRuntime:
         # 后台命令同理：进程还活着、日志还占着盘，也得在这里收走。
         if status != "waiting_approval":
             await shell_tasks.aclose(scope.task_id, reason=f"task_{status}")
+            # worktree 会话只摘记录，工作树留在盘上：删不删由 exit_worktree 决定，
+            # 任务收尾不该替用户丢掉还没合并的工作。
+            worktree_session.release(scope.task_id)
         if status != "waiting_approval" and scope.subagents is not None:
             await scope.subagents.aclose(scope.task_id, reason=f"task_{status}")
         # 任务级隔离根的收尾：成功先合并，再释放副本/卷/包；失败与取消只释放。

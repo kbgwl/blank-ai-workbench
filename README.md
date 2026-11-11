@@ -258,6 +258,7 @@ uv run alembic revision --autogenerate -m "描述"
 | Claude 工具面 Glob / Grep / ListAgents | ✅ | 新增 `glob`（`**/` 命中根部、花括号、mtime 倒序、扫描预算）；`search_code` 补齐 `output_mode` / `glob` / `type` / `-i` / `multiline` / `-A/-B/-C` / `-o` / `-n` / `head_limit` / `offset`；fs-broker 与任务级隔离转发同一套参数；新增 `list_agents` 列出后台子代理状态。判据 `services/api/tests/test_claude_tool_surface_v28.py`（21 例），变异 8/8 红 |
 | 子代理默认后台与续聊 | ✅ | `spawn_agent` 不传参即在后台跑（`run_in_background=false` 才同步等）；任务收尾先给后台子代理 90 秒窗口，结束的结论写进交付提示词、仍在跑的显式取消并点名；新增 `send_message` 续聊（保留上一轮读/写/结论，新 `spawn_agent` 是全新上下文；隔离子代理与仍在跑的句柄如实拒绝）。判据 `test_claude_subagent_default_v29.py`（6 例）+ `test_claude_send_message_v30.py`（9 例），变异 8/8 与 10/10 全红 |
 | 后台 shell | ✅ | `run_shell(run_in_background=true)` 立即返回 `shell-…` 句柄，命令在后台真的跑；宿主路径边跑边流式写日志（系统临时目录、2MB 上限、读回尾部 64KB），结束时在模型调用前注入一次性系统通知（不轮询、不 sleep）；`task_output` / `task_stop` 统一句柄名 `task_id`（旧名 `agent_id` / `shell_id` 继续接受）；`task_stop` 与任务收尾都按进程树杀（cmd 外壳下的孙进程不会残留）、日志删除，等审批那一档不杀；子代理上下文禁用后台命令。判据 `services/api/tests/test_background_shell_v31.py`（20 例），变异 21/21 红 |
+| 任务级工作树会话 | ✅ | `enter_worktree` 用 `name` 在 `<repo>/.blank-worktrees/<name>` 新建 `blank/worktree-<name>` 分支，或用 `path` 进入 `git worktree list` 里已注册的树，之后本任务所有工具（shell cwd、文件工具、git、安全策略路径基准）都换到那棵树；`exit_worktree(action=keep|remove)` 回到原工作区：`remove` 只对本任务创建的树生效、`path` 进入的只能 keep，遇未提交改动/未合并提交默认拒绝并逐文件点名，显式 `discard_changes=true` 才丢弃；审批恢复后仍在同一棵树，任务收尾只摘记录不删树。判据 `services/api/tests/test_worktree_tools_v32.py`（34 例），变异 28/28 红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -286,8 +287,10 @@ uv run alembic revision --autogenerate -m "描述"
   「无斜杠按文件名、带斜杠按相对路径」实现，`search_code` 补齐了
   `output_mode / glob / type / -i / multiline / -A/-B/-C / -o / -n / head_limit / offset`，
   `list_agents` 能看到当前任务的后台子代理，`send_message` 能带着上下文续聊。
-  仍未移植：Skill 工具、EnterWorktree/ExitWorktree、CronCreate/Delete/List 与
-  ScheduleWakeup、ReportFindings、Workflow、NotebookEdit。后台 shell 已于 Q1 补齐
+  仍未移植：Skill 工具、CronCreate/Delete/List 与 ScheduleWakeup、ReportFindings、Workflow、
+  NotebookEdit。EnterWorktree/ExitWorktree 已于 Q2 补齐（见上表；两处偏离：建在
+  `.blank-worktrees/` 而不是 `.claude/worktrees/`、没有暴露 `baseRef`，一律从 HEAD 创建；
+  `path` 只认已注册的 git 工作树）。后台 shell 已于 Q1 补齐
   （`run_in_background` + `task_output`/`task_stop`，见上表），但它有两处与本机实现绑定
   的偏离：沙箱路径不流式（只在结束时整段落日志）、完整输出走 `task_output` 而不是
   Claude 的「Read 输出文件」（临时日志在系统临时目录，Read 只读工作区相对路径）。

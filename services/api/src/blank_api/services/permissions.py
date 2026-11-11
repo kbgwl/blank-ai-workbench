@@ -67,8 +67,10 @@ SCOPES = (SCOPE_ONCE, SCOPE_PREFIX, SCOPE_TOOL)
 # `Bash(git push:*)`）：两边的免问粒度都落在「这一条命令」，没有「总是允许整个 shell」这种卡。
 # 登记制：带 `risk_for` 的工具必须显式进这张表，否则 `test_tool_grant_scope_v52.py`
 # 拿默认工具注册表逐条对账会红——漏登记在这条边界上是看得见的缺陷，不是静默放宽。
+# exit_worktree 的风险由 action 算（keep=medium / remove=high）：批准一次 remove
+# 不能记成「整个工具以后都免问」，否则下一次删除不会再挂卡。
 ARGUMENT_SCOPED_TOOLS = frozenset(
-    {"run_shell", "git", "apply_patch", "edit_file", "write_file", "spawn_agents"}
+    {"run_shell", "git", "apply_patch", "edit_file", "write_file", "spawn_agents", "exit_worktree"}
 )
 
 # 计划模式唯一允许的一类工具：只看不写。

@@ -13,7 +13,18 @@ from blank_api.api.errors import ApiError
 from blank_api.config import get_settings
 
 MAX_READ_BYTES = 512 * 1024
-TREE_IGNORE = {".git", "node_modules", "__pycache__", ".venv", ".next", "dist", "build", ".pytest_cache"}
+TREE_IGNORE = {
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    ".next",
+    "dist",
+    "build",
+    ".pytest_cache",
+    # enter_worktree 建在工作区仓库里；不跳过的话搜索/快照会把整棵树再遍历一遍。
+    ".blank-worktrees",
+}
 
 # 构建/打包残留会带后缀（dist-prev-0.4.3、out-old6、.next-old5），精确名盖不住。
 # 这些目录里常常躺着整份 Python 运行时，几万个文件——一旦被遍历，搜索与快照都会拖到

@@ -19,6 +19,7 @@ from blank_api.services.tools.shell import shell_tools
 from blank_api.services.tools.team_admin import TEAM_ADMIN_TOOL_NAMES, team_admin_tools
 from blank_api.services.tools.testing import test_tools
 from blank_api.services.tools.web import web_tools
+from blank_api.services.tools.worktree import worktree_tools
 
 
 def build_default_tools() -> list[ToolDefinition]:
@@ -35,6 +36,7 @@ def build_default_tools() -> list[ToolDefinition]:
         *git_tools(),
         *test_tools(),
         *web_tools(),
+        *worktree_tools(),
         *team_admin_tools(),
     ]
 

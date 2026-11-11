@@ -40,6 +40,9 @@ class ToolContext:
     extra_secrets: tuple[str, ...] = ()
     approved_actions: frozenset[str] = frozenset()
     trace_id: str = ""
+    # 事件记录器：少数工具会写自己的领域事件（worktree.entered 等），
+    # 拿不到时为空，工具本身照常工作——事件是事实的旁路，不是执行前提。
+    recorder: Any = None
     # PermissionPolicy（延迟注解，避免与 permissions 模块循环导入）
     permissions: "PermissionPolicy | None" = None
     # 能力边界（能不能做），与 permissions（要不要问）是两回事，判定时先过后者
