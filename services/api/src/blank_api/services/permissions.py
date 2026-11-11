@@ -70,7 +70,16 @@ SCOPES = (SCOPE_ONCE, SCOPE_PREFIX, SCOPE_TOOL)
 # exit_worktree 的风险由 action 算（keep=medium / remove=high）：批准一次 remove
 # 不能记成「整个工具以后都免问」，否则下一次删除不会再挂卡。
 ARGUMENT_SCOPED_TOOLS = frozenset(
-    {"run_shell", "git", "apply_patch", "edit_file", "write_file", "spawn_agents", "exit_worktree"}
+    {
+        "run_shell",
+        "git",
+        "apply_patch",
+        "edit_file",
+        "write_file",
+        "notebook_edit",
+        "spawn_agents",
+        "exit_worktree",
+    }
 )
 
 # 计划模式唯一允许的一类工具：只看不写。
@@ -106,7 +115,7 @@ READ_ONLY_TOOLS = frozenset(
     }
 )
 # "接受编辑"模式自动放行的工具：只含工作区内的文件写入（可回滚）。
-EDIT_TOOLS = frozenset({"apply_patch", "edit_file", "write_file"})
+EDIT_TOOLS = frozenset({"apply_patch", "edit_file", "write_file", "notebook_edit"})
 
 # 不可逆操作：不能靠工作区快照回滚，任何模式与任何前缀规则都不放行。
 IRREVERSIBLE = re.compile(
@@ -725,7 +734,7 @@ def parse_decision(raw: object) -> tuple[bool, str]:
 # --------------------------------------------------------------------------- #
 # 策略
 # --------------------------------------------------------------------------- #
-_TOOL_PATH_KEYS = ("path", "file_path", "target")
+_TOOL_PATH_KEYS = ("path", "file_path", "target", "notebook_path")
 
 
 def path_scope(arguments: dict | None) -> str:

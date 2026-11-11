@@ -40,7 +40,7 @@ DEFAULT_BUDGET = (8_000, 0)
 # 整个 payload 的硬上限（JSON 里还有 data 字段，不只是 output）
 MAX_PAYLOAD_CHARS = 9_000
 # 结果里允许内联携带 diff 的工具：补丁的 diff 是冗余的，直接丢
-DROP_DIFF_TOOLS = frozenset({"apply_patch", "edit_file", "write_file", "create_file"})
+DROP_DIFF_TOOLS = frozenset({"apply_patch", "edit_file", "write_file", "notebook_edit", "create_file"})
 
 
 def _head(text: str, head: int) -> str:

@@ -212,6 +212,12 @@ def _op_dispatch(root: Path, request: dict) -> dict:
 
         disk = _edit_on_disk if op == "edit_file" else _write_on_disk
         return {"result": disk(root, str(args.get("task_id", "")), args, guard=args.get("guard"))}
+    if op == "notebook_edit":
+        from blank_api.services.tools.notebook import _notebook_on_disk
+
+        return {"result": _notebook_on_disk(
+            root, str(args.get("task_id", "")), args, guard=args.get("guard"),
+        )}
     raise ValueError(f"fs-broker 不认识的操作：{op!r}")
 
 

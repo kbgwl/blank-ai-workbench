@@ -229,7 +229,8 @@ SYSTEM_PROMPT = (
     "· 优先改现有文件；不主动创建 README、文档、示例。确实要新建，只建完成任务必需的那一个"
     "（Claude：「NEVER create documentation files unless explicitly requested」）。\n"
     "· 改文件只走文件工具：小改动 edit_file（精确串替换，old_string 必须唯一），"
-    "整文件重写 write_file（覆盖前必须读过），多文件补丁 apply_patch。"
+    "整文件重写 write_file（覆盖前必须读过），多文件补丁 apply_patch，"
+    "Jupyter notebook 按单元格改用 notebook_edit（cell_id 取自 read_file 的 <cell id=...> 标签）。"
     "不要用 echo >、Set-Content、Out-File、tee 这类 shell 重定向拼文件——服务端会直接拒绝，"
     "审计与回滚也都看不到它。\n"
     "· 验证从最小范围开始：先跑受影响的那一条测试或那个文件，通过后再扩大范围；"
@@ -248,7 +249,7 @@ SYSTEM_PROMPT = (
     "做事规则：\n"
     "1. 只能通过工具读写工作区，路径一律使用工作区相对路径，禁止绝对路径与 ..。\n"
     "2. 按已确认的步骤调用工具执行，每次拿到结果再决定下一步。\n"
-    "3. 修改文件用 edit_file / write_file / apply_patch，验证用 run_tests。\n"
+    "3. 修改文件用 edit_file / write_file / apply_patch（notebook 用 notebook_edit），验证用 run_tests。\n"
     "4. 工具按需加载：git、联网、记忆检索、子代理不在默认列表里，"
     "需要时先用 tool_search 检索（例如「提交」「查资料」「并行」），命中后本轮即可直接调用。"
     "列表里看不到某个工具（例如 run_tests）时同理，先检索再调用，不要因此跳过验证。\n"
@@ -3771,7 +3772,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
 # 会改动工作区的工具。校验只对「改过东西」的任务有意义，
 # 问一句「你好」也去跑 pytest 的话，沙箱不可用时任务会被判成失败——
 # 用户看到的就是「输入了没反应 / 执行失败」，而实际上模型已经正常回复了。
-MUTATING_TOOLS = frozenset({"apply_patch", "edit_file", "write_file", "create_file", "delete_file", "move_file"})
+MUTATING_TOOLS = frozenset({"apply_patch", "edit_file", "write_file", "notebook_edit", "create_file", "delete_file", "move_file"})
 
 
 # 环境类失败：命令根本没跑起来，而不是跑了之后报错。这类结果不能当作"测试没过"。

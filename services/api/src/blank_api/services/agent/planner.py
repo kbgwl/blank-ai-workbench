@@ -28,7 +28,7 @@ _KIND_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 _TOOLS_BY_KIND: dict[str, tuple[str, ...]] = {
     "inspect": ("list_files", "glob", "read_file", "search_code"),
-    "edit": ("apply_patch", "edit_file", "write_file"),
+    "edit": ("apply_patch", "edit_file", "write_file", "notebook_edit"),
     "verify": ("run_tests", "run_shell"),
     "repair": ("read_file", "apply_patch", "run_tests"),
 }

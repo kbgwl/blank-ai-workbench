@@ -134,17 +134,39 @@ async def _read_file(context: ToolContext, arguments: dict) -> ToolOutcome:
             mtime_ns=int(payload.get("mtime_ns") or 0),
             sha256=str(payload.get("sha256") or ""),
         )
-    return ok(
-        payload["content"],
-        path=payload["path"],
-        size=payload["size"],
-        truncated=payload["truncated"],
-        start_line=payload.get("start_line", 1),
-        end_line=payload.get("end_line", 0),
-        total_lines=payload.get("total_lines", 0),
-        message=payload.get("message", ""),
-        **marker,
-    )
+    fields = {
+        "path": payload["path"],
+        "size": payload["size"],
+        "truncated": payload["truncated"],
+        "start_line": payload.get("start_line", 1),
+        "end_line": payload.get("end_line", 0),
+        "total_lines": payload.get("total_lines", 0),
+        "message": payload.get("message", ""),
+    }
+    content = payload["content"]
+    from blank_api.services.tools.notebook import NOTEBOOK_SUFFIX, render_notebook
+
+    if (
+        not window
+        and not payload["truncated"]
+        and str(payload["path"]).lower().endswith(NOTEBOOK_SUFFIX)
+    ):
+        # notebook 的"读"给的是单元格视图：Read 与 NotebookEdit 共用 cell_ids 口径，
+        # 模型从 <cell id="..."> 里抄到的 id 就是编辑时要传的那个。解析不了就退回原始
+        # JSON——至少让人看见文件确实坏了。
+        rendered = render_notebook(content, path=str(payload["path"]))
+        if rendered is not None:
+            content, ids = rendered
+            fields.update(
+                notebook=True,
+                cells=ids,
+                # 单元格视图没有"第几行"这回事：行号归零，要原始 JSON 时带 offset/limit 重读。
+                start_line=1,
+                end_line=0,
+                total_lines=0,
+                message="已按单元格渲染；需要原始 JSON 行请带 offset/limit 重读。",
+            )
+    return ok(content, **fields, **marker)
 
 
 def _expand_braces(pattern: str) -> list[str]:

@@ -1,6 +1,40 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）
+
+- **NotebookEdit 工具：按单元格编辑 `.ipynb`（Q 批第 6 项）**：
+  按 Claude 原文（`notebook_path` / `cell_id` / `new_source` / `cell_type` / `edit_mode`，
+  `additionalProperties=false`，必须先 Read）落成本地 `notebook_edit`。新增
+  `services/tools/notebook.py`（单元格渲染 / 磁盘侧编辑 / 工具面）；`tools/filesystem.py`、
+  `tools/__init__.py`、`tools/registry.py`、`tools/gateway.py`、`tools/fs_broker.py`、
+  `permissions.py`、`agent/graph.py`、`agent/stall.py`、`agent/verifier.py`、`agent/payload.py`、
+  `agent/planner.py`、`subagent.py` 接线。
+  1. **读**：`read_file` 对 `.ipynb` 默认回单元格视图（`<notebook>` / `<cell id="..." type="...">`，
+     代码格附最多 5 条输出、每条截到 400 字符）；带 `offset/limit` 或内容被截断时仍回原始 JSON 行；
+     解析不了的 `.ipynb` 回退原始内容，坏文件至少看得见。
+  2. **编辑语义**：`replace`（默认）按 id 换源，可顺带改 `cell_type`（代码→markdown 清空
+     `outputs`/`execution_count`，反向补默认值）；`insert` 插在目标格之后、省略 `cell_id` 插最前，
+     新格自动生成 id；`delete` 删一格。`new_source` 始终必填（`delete` 传空字符串）；
+     `replace/delete` 必须有 `cell_id`，`insert` 必须有 `cell_type`；非法模式/类型/缺字段都点名拒绝。
+  3. **闸门与写回**：与 `edit_file`/`write_file`/`apply_patch` 共用同一道读后写硬闸门
+     （size + mtime + sha256），没读过不许改、读过被改过要重读；写前 `write_backup` + 校验后
+     原文件句柄写回；非法 JSON、无 `cells` 数组、单元格不存在（列出可用 id）、无实际变更都拒绝；
+     8MB 写上限；写回沿用原缩进（空格/Tab）与 CRLF、`ensure_ascii=false`，不整份重排；
+     老 notebook 没有真实 id 时合成 `cell-<序号>` 只用于本次定位、不写回。
+  4. **接线**：进写类工具集合（计划模式拦、敏感路径/明文密钥升 high 风险）；gateway 的写目标与
+     写根改写认 `notebook_path`（逆向场景自动落分析区）；进 `MUTATING_TOOLS` / 停滞检测 /
+     verifier / planner 的 edit 工具组；子代理隔离工具表同口径；系统提示要求 notebook 按格编辑、
+     不整份重写；fs-broker 新增 `notebook_edit` 操作并复用同一磁盘函数。
+  5. **工具面**：常驻注册、非延迟加载、中文别名「notebook / ipynb / jupyter / 单元格 / 笔记本」
+     可检索；风险 medium、超时 20 秒；回执给出模式、单元格 id、变更行数与备份路径，Diff 与
+     FileChange 照常落库。
+  测试：新增 `tests/test_notebook_edit_v37.py` 30 例（渲染与 id、三种编辑模式、CRLF 与缩进保留、
+  读后写闸门、错误形状、工具面与各接线点）；相邻 8 个测试文件合计 **202 passed**；
+  变异电池 38/38 全红（每条跑完即按原字节还原并校验 sha）。
+  全量回归（最终代码）：**2937 passed, 24 skipped, PYTEST_RC=0（793.93s）**。
+  偏离：Read 对 `.ipynb` 默认回单元格视图，而不是 Claude 的「原文 + id 显示行」；
+  没有真实 id 的老 notebook 用合成的 `cell-<序号>` 定位、不写回文件；写回保留原缩进与 CRLF
+  而不是统一重排；单文件写上限 8MB；没有 Claude 的「id 显示行号」模式。
 
 - **Workflow 工具：脚本即编排（Q 批第 5b 项）**：
   按 Claude 原文（工具契约、meta 纯字面量、agent/parallel/pipeline/phase、scriptPath 优先、

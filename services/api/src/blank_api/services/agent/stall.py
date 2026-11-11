@@ -71,7 +71,7 @@ IGNORED_ARG_KEYS = ("timeout_seconds", "timeout", "step", "call_id")
 # 因为工作区变了，那条命令（典型是 run_tests）很可能得到不同结果。这是合法重试，不是空转
 # （v162 §三：coding-044 修复——"改完代码再跑测试"必须能继续，不能因为同签名失败两次就拦死）。
 MUTATING_TOOLS = frozenset(
-    {"apply_patch", "edit_file", "write_file", "create_file", "delete_file", "move_file"}
+    {"apply_patch", "edit_file", "write_file", "notebook_edit", "create_file", "delete_file", "move_file"}
 )
 # 同一个签名被"改完再试"最多放行几次：超过就当作确实修不好，安全失败，避免无限重试。
 MAX_DIRTY_RESETS = 3

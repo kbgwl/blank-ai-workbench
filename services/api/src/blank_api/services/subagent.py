@@ -62,6 +62,7 @@ ISOLATED_TOOLS = (
     "apply_patch",
     "edit_file",
     "write_file",
+    "notebook_edit",
     "run_shell",
     "run_tests",
 )

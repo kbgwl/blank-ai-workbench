@@ -238,7 +238,7 @@ def _audit(
 # 带文件路径参数的写类工具。只有它们需要按后缀判场景权限：
 # run_shell / run_tests / git 能不能用是"整件工具准不准"的问题，在 excluded 里解决，
 # 它们没有"改哪个文件"这个参数可判。
-PATH_WRITE_TOOLS = frozenset({"apply_patch", "edit_file", "write_file"})
+PATH_WRITE_TOOLS = frozenset({"apply_patch", "edit_file", "write_file", "notebook_edit"})
 
 
 def _write_target(name: str, arguments: dict) -> str:
@@ -257,6 +257,8 @@ def _write_target(name: str, arguments: dict) -> str:
             return infer_path(str(arguments.get("patch") or "")).strip()
         except Exception:  # noqa: BLE001 - 推断失败就当没有路径，交给工具自身报错
             return ""
+    if name == "notebook_edit":
+        return str(arguments.get("notebook_path") or "").strip()
     return str(arguments.get("path") or "").strip()
 
 
@@ -401,7 +403,8 @@ class ToolGateway:
         if self.write_root is not None and name in PATH_WRITE_TOOLS:
             target = _write_target(name, arguments)
             if target:
-                arguments = {**arguments, "path": _analysis_relative(target)}
+                key = "notebook_path" if name == "notebook_edit" else "path"
+                arguments = {**arguments, key: _analysis_relative(target)}
                 context = dc_replace(context, root=self.write_root)
         tool = self.tools.get(name)
         if tool is None:
