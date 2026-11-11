@@ -140,6 +140,19 @@ def missing_command(payload: dict) -> str:
     return str(match.group(1) or match.group(2) or "").strip()
 
 
+def structured_missing_tool(payload: dict) -> str:
+    """工具回执里**结构化**写明的缺失运行器（run_tests 的 data.missing_test_runner）。
+
+    文字判据认不出 `本机没有 go 工具链，测试没有执行`——它不是 "command not found"，
+    也不是任何一条现有正则。但 run_tests 在 data 里已经把名字写清楚了，比模型转述
+    可靠。只认 data、不认 message 里的自述：让被审的一方自己提供证据，闸门就失效了。
+    """
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("missing_test_runner") or "").strip()
+
+
 _COMMAND_TOOLS = frozenset({"run_shell", "run_tests"})
 _SEPARATORS = re.compile(r"[\s|&;()<>]+")
 # 这些词后面跟着的才是"真正被执行的程序"。`cmd /c node`、`powershell -Command ...`
@@ -306,6 +319,10 @@ class StallBreaker:
     # 已确认不存在的命令名。缺 node 只影响用到 node 的命令，因此单独记，
     # 不升级成"整个 run_shell 不可用"。
     missing_commands: set[str] = field(default_factory=set)
+    # 其中来自 run_tests 结构化回执（data.missing_test_runner）的那些。测试跑通之后
+    # 它们要整批撤掉：工具链已经能用了，留着会让"需要你装 Go"的闸门在真跑通之后
+    # 仍然触发。文字判据认不出的句子靠这一路补。
+    structured_missing: set[str] = field(default_factory=set)
     # 签名 → 是否已经等过审批。用户没批之前，同一调用不可能有别的结果。
     awaiting: set[str] = field(default_factory=set)
     # 工作区被成功改过的总代数。每次 mutate 工具成功 +1；用来判断"失败过的命令之后工作区是否变过"。
@@ -342,6 +359,11 @@ class StallBreaker:
             command = str((arguments or {}).get("command") or "")
             for missing in [item for item in self.missing_commands if item.lower() in command.lower()]:
                 self.missing_commands.discard(missing)
+            # run_tests 跑通 = 工具链现在可用。结构化缺口的回执里没有那条命令行可对，
+            # 只能按"这个工具成功了"整批撤掉。
+            if name == "run_tests" and self.structured_missing:
+                self.missing_commands -= self.structured_missing
+                self.structured_missing.clear()
             return
 
         entry["fail"] += 1
@@ -357,6 +379,12 @@ class StallBreaker:
             missing = missing_command(payload)
             if missing:
                 self.missing_commands.add(missing)
+        # 结构化缺口独立于文字分类：run_tests 的「本机没有 go 工具链」不属于任何一条
+        # 失败正则（它连 KIND_ENV_MISSING 都不是），但 data 里写着名字，得单独收。
+        structured = structured_missing_tool(payload)
+        if structured:
+            self.missing_commands.add(structured)
+            self.structured_missing.add(structured)
 
     def verdict(self, name: str, arguments: dict, schema: dict | None = None) -> Verdict:
         """调用前的判定。顺序即优先级：越确定的证据越先判，理由才说得清。"""

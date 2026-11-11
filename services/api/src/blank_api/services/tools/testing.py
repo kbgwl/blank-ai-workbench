@@ -118,7 +118,15 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
             return ToolOutcome(
                 ok=False,
                 status="skipped",
-                message=reason,
+                # 回执要带上补齐路径，不是只报"缺"。Codex 的原话：「If installation is not
+                # possible in this environment, tell the user which dependency is missing and
+                # how to install it into their active environment.」——先按顺序试，试不动
+                # 才交回用户，而且交回时要写清缺什么、怎么装。
+                message=(
+                    reason + "。先补齐再重跑：在磁盘上找现成安装，或用包管理器装"
+                    "（winget / choco / scoop）；装好后用绝对路径或加进 PATH 重跑。"
+                    "确实装不上，再告诉用户缺什么、怎么装。"
+                ),
                 data={
                     "command": " ".join(argv),
                     "skipped_reason": reason,

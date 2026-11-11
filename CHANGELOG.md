@@ -1,6 +1,39 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过
+
+- **缺口证据与收尾契约：照 Codex / Claude 的原文补 K 批两处盲区（L 批）**：把 Codex
+  0.154.0 与 Claude Code 2.1.271 的真实系统提示词拆了一遍（抓包原文不入库），按它们
+  对「缺东西之后怎么办」和「什么时候才能收尾」的写法，找出 K 批闸门的两处真漏判：
+  1. **run_tests 的缺工具链回执根本不进缺口账本**：`本机没有 go 工具链，测试没有执行`
+     既不匹配任何一条失败正则、也不是 `KIND_ENV_MISSING`，K 批只有文字判据，于是
+     「需要你装 Go」这类交付永远推不回来。现在 `testing.py` 在
+     `data.missing_test_runner` 里写明名字，`stall.structured_missing_tool` 只认这份
+     **结构化**字段（不认 message 里的模型自述——让被审的一方自己交证据，闸门就失效）；
+     `run_tests` 跑通后把这批证据整批撤回，否则真的跑绿了闸门还会触发。
+  2. **项目依赖安装不算「补齐尝试」**：Codex 原文「Install dependencies into that
+     environment with its package manager. In uv-managed environments, `uv pip install ...`
+     remains the preferred path.」；K 批只认 winget/choco/scoop/msi/下载，模型
+     `pip install pytest` 之后如实交付反而被推回一轮。`remediation._OBTAIN` 补
+     pip/uv/poetry/npm/pnpm/yarn/go/dotnet/cargo/gem/composer，`hint()` 第 2 步补项目
+     包管理器路径。
+  3. **回执要带出口**：缺工具链的 skipped 回执不再只有一句「本机没有 X」，补上
+     找现成 → 包管理器 → 绝对路径/PATH → 真装不上再交代的顺序（对应 Codex「tell the
+     user which dependency is missing and how to install it into their active
+     environment」）。
+  4. **收尾契约进系统提示词**：三条——问题没解决、也没说清卡在哪就不收尾（Codex
+     「keep going until the query is completely resolved… Only terminate your turn when
+     you are sure that the problem is solved」）；登录/密钥/拍板这类只有用户能给的信息
+     问一句就是正确的下一步；结果如实，测试没过贴输出、跳过的步骤说跳过（Claude
+     「Report outcomes faithfully: if tests fail, say so with the output; if a step was
+     skipped, say that」）。规则 7 补拒绝语义（Claude「a denied call means the user
+     declined it — adjust, don't retry verbatim」）。
+  测试：新增 `tests/test_agent_continuation_v25.py` 13 例（结构化证据入账与撤账、九种
+  包管理器算尝试而确认不算、go 缺工具链→交回→推回整链、测试成功不推、回执带出口、
+  提示词顺序与措辞），关联九套件 152 例全绿（37.42s）。变异 4/4 全红：结构化缺口不入账
+  红 2 例、跑通不撤账红 1 例、项目包管理器不算尝试红 2 例、删掉收尾条件红 2 例。后端
+  全量 2525 passed / 24 skipped（760.22s，rc=0）。**真模型点验仍未完成**：隔离实例
+  `:8061` 的 DeepSeek Key 仍是 401，K 批与 L 批目前都只算单测与装置层证据。
 
 - **环境缺口不再停在「做不了」（K 批）**：真实读数（安装版 `blank.db`，任务 `4378855e…`，43 步）
   里，agent 确认本机没有 `node`/`npm` 后最终交付只剩「需要你：装上 Node 后重跑 `npm test`」；

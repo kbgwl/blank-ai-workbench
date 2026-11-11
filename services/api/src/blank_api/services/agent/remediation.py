@@ -35,13 +35,22 @@ _HANDOFF = re.compile(
 )
 
 # "把它弄到这台机器上"的尝试。只认真正会改变环境的动作：
-# 包管理器安装、下载安装包、解压、官方 zip/msi/exe 链接。
+# 包管理器安装、项目依赖安装、下载安装包、解压、官方 zip/msi/exe 链接。
+# 项目依赖也算：Codex 的原话是「Install dependencies into that environment with its
+# package manager. In uv-managed environments, `uv pip install ...` remains the preferred
+# path.」——只认全局安装，就会把「已经 pip install pytest 了」当成没试过，
+# 于是模型做对了反而被推回一轮。
 # 刻意不把 `where` / `if exist` / `dir` 算进来——那是确认，不是补齐；
 # 只有确认没有动作时才会被推回，而推回后模型第一件常做的事就是再确认一遍，
 # 把确认算成尝试，等于这条闸门永远不生效。
 _OBTAIN = re.compile(
     r"winget\s+(?:install|add)|choco\s+install|scoop\s+install|"
-    r"msiexec\s+/|npm\s+(?:install|i)\s+-g|pnpm\s+add\s+-g|yarn\s+global\s+add|"
+    r"msiexec\s+/|"
+    r"(?:python(?:3)?\s+-m\s+)?pip\s+install|uv\s+(?:pip\s+install|add|sync)|"
+    r"poetry\s+(?:add|install)|"
+    r"npm\s+(?:install|ci|i)\b|pnpm\s+(?:install|add|i)\b|yarn\s+(?:add|install|global\s+add)\b|"
+    r"go\s+(?:install|get)\b|dotnet\s+(?:tool\s+install|restore|add\s+package)|"
+    r"cargo\s+install|gem\s+install|composer\s+(?:require|install)|"
     r"Invoke-WebRequest|Start-BitsTransfer|Expand-Archive|"
     r"curl\b[^\n]*(?:\s-o\s|\s-O\b|--output)|wget\b|"
     r"https?://\S+\.(?:zip|msi|exe|7z|tar\.gz)|"
@@ -91,7 +100,8 @@ def hint(missing: str, round_number: int) -> str:
         f"1. 现场确认：`where {missing}`、`{missing} --version`，以及常见安装目录；"
         "仓库注释、README、记忆里写着「本机没有它」只能当线索，不能当证据。\n"
         "2. 找现成的：包管理器（winget / choco / scoop）装，或下载官方 portable 包解压；"
-        "也可以先在磁盘上找已有的可执行文件。\n"
+        "也可以先在磁盘上找已有的可执行文件。缺的是项目依赖（pytest、node_modules 这类）时，"
+        "用项目自己的包管理器装：`python -m pip install …`、`npm install`、`uv pip install …`。\n"
         f"3. 装上后直接用绝对路径，或把目录加进 PATH，重跑原来失败的那一步并留下输出。\n"
         "联网、装软件需要审批或开关时，按审批规则申请，不要跳过。"
         "只有真的执行过并且失败，才在交付里写卡在哪、附上命令与报错、再说需要用户做什么。"
