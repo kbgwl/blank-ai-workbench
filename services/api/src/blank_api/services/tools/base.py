@@ -59,6 +59,9 @@ class ToolContext:
     # 团队群聊身份：group_id / bot_id / is_admin / project_id。空表示非团队任务，
     # 团队管理工具只在主理人的任务里可见。
     team_scope: dict = field(default_factory=dict)
+    # 本任务的 Skill 目录（tools/skills.py）。为空表示没有可加载的 Skill，
+    # `skill` 工具也会从这一轮的工具表里被拿掉——模型连"有这个工具"都不该知道。
+    skills: Any = None
     # 本任务的沙箱档位（off / workspace / workspace-net）。命令类工具与子代理读它，
     # 审批的"工具档"授权也按它分桶：在 workspace 下批过的工具，切到 off 不再免问。
     sandbox_tier: str = "workspace"

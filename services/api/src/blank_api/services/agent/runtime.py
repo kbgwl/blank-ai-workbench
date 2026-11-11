@@ -72,7 +72,7 @@ from blank_api.services.subagent import SubAgentRunner
 from blank_api.services.threads import history_for, summarize_history
 from blank_api.services.models.base import ModelAdapter, ModelError
 from blank_api.services.permissions import MODE_DEFAULT, PermissionPolicy
-from blank_api.services.tools import TEAM_ADMIN_TOOL_NAMES, build_default_tools
+from blank_api.services.tools import TEAM_ADMIN_TOOL_NAMES, SkillCatalog, build_default_tools
 from blank_api.services.tools.base import ToolContext
 from blank_api.services.tools.file_state import FileStateCache
 from blank_api.services.tools.gateway import ToolGateway
@@ -210,7 +210,12 @@ class RunRequest:
     # 空串表示"用设置页的默认档"；审批恢复时同样要读回任务首次运行记下的档位，
     # 否则一次恢复就能把 workspace 静默换成 off（或反之）。
     sandbox_tier: str = ""
+    # 旧形状：把启用 Skill 的正文直接注进系统提示。保留给外部集成；主路径改成
+    # skill_catalog——清单进提示、正文由 skill 工具按需加载（对齐 Claude）。
     skill_instructions: Sequence[str] = ()
+    # 可用 Skill 的只读快照 [{name, instructions}]。空表示没有可加载的 Skill，
+    # `skill` 工具会从这一轮的工具表里被拿掉。
+    skill_catalog: Sequence[dict] = ()
     # 团队群聊的强规则（Bot 身份、@ 协议、本轮记录）。空表示行为与原来完全一致。
     system_instructions: Sequence[str] = ()
     role_adapters: dict[str, ModelAdapter] | None = None
@@ -478,6 +483,12 @@ class AgentRuntime:
         # 模型连"有这个工具"都不该知道。工具自身还会再校验一次身份。
         if not (request.team_scope or {}).get("is_admin"):
             tools = [tool for tool in tools if tool.name not in TEAM_ADMIN_TOOL_NAMES]
+        # Skill 目录在这轮装配时定下来：清单进系统提示，正文等模型调用 skill 再加载。
+        # 一个可加载的都没有时，工具也一并拿掉——列不出名字却摆着加载入口，
+        # 只会让模型反复试错。
+        skills = SkillCatalog(request.skill_catalog)
+        if not skills:
+            tools = [tool for tool in tools if tool.name != "skill"]
         # 外部工具（MCP）：走同一个网关、同一套审批、同一份审计。连接失败只影响
         # 那个服务端自己——半份工具表也远好过起不来任务。
         mcp_bundle = await mcp_manager().bundle()
@@ -616,6 +627,7 @@ class AgentRuntime:
             shell=shell,
             tool_registry=gateway.registry,
             team_scope=dict(request.team_scope or {}),
+            skills=skills if skills else None,
             sandbox_tier=sandbox.tier,
             isolation_profile=isolation.profile_name if isolation is not None else "",
             file_state=file_state,
@@ -631,6 +643,7 @@ class AgentRuntime:
             trace_id=thread_id,
             goal=request.goal or request.title,
             skill_instructions=[str(item) for item in request.skill_instructions],
+            skill_catalog=skills.listing(),
             system_instructions=[str(item) for item in request.system_instructions],
             acceptance_criteria=[str(item) for item in request.acceptance_criteria or ()],
             goal_spec=dict(request.goal_spec or {}),
@@ -973,7 +986,8 @@ class AgentRuntime:
                 session.acceptance_criteria,
                 session.skill_instructions,
                 session.instruction_layers,
-                history,
+                history=history,
+                skill_catalog=session.skill_catalog,
                 goal_spec=session.goal_spec,
                 images=request.images,
                 supports_vision=request.supports_vision,

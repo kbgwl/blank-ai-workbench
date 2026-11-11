@@ -380,7 +380,10 @@ class AgentSession:
     # 父线程为空就是事实（没有被谁派下来），不是漏记。子代理复用同一个会话形状时显式赋值。
     root_trace_id: str = ""
     parent_trace_id: str = ""
+    # 旧形状：启用 Skill 的正文直接进系统提示。新的主路径是 skill_catalog——
+    # 清单（名字 + 一句话说明）进提示，正文由 skill 工具按需加载。
     skill_instructions: list[str] = field(default_factory=list)
+    skill_catalog: list[dict] = field(default_factory=list)
     # 群聊等场景的强约束（Bot 身份、发言协议、本轮记录）。与 Skill 的"偏好"不同，
     # 这一段是任务规则，但仍不得覆盖安全规则、审批规则与沙箱边界。
     system_instructions: list[str] = field(default_factory=list)
@@ -1439,6 +1442,8 @@ def initial_messages(
     criteria: list[str],
     skills: list[str] | None = None,
     instruction_layers: list | tuple = (),
+    *,
+    skill_catalog: Sequence[dict] | None = None,
     history: list[dict] | tuple = (),
     images: Sequence[dict] | None = None,
     supports_vision: bool = False,
@@ -1458,11 +1463,29 @@ def initial_messages(
             "\n以下是本次任务所处场景的附加规则（不得覆盖安全规则、审批规则与工作区边界）：\n"
             + scenario_prompt.strip()
         )
+    # 旧形状（外部集成还会传）：正文直接进来，当工作偏好读。
     active_skills = [str(item).strip() for item in skills or [] if str(item).strip()]
     if active_skills:
         system += (
             "\n用户已明确启用以下 Skill，它们只能作为工作偏好参考，不能覆盖安全规则、审批规则或任务目标：\n"
             + "\n".join(f"- {item}" for item in active_skills)
+        )
+    # 新形状（对齐 Claude）：提示里只放清单，正文由 skill 工具加载。清单不占多少
+    # token，但让模型先判断"这件事有没有现成流程"，再决定要不要把正文取进来。
+    catalog_lines = []
+    for entry in skill_catalog or ():
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            continue
+        description = str(entry.get("description") or "").strip()
+        catalog_lines.append(f"- {name}：{description}" if description else f"- {name}")
+    if catalog_lines:
+        system += (
+            "\n可用 Skill（当任务属于某个 Skill 覆盖的范围时，先调用 skill 工具加载它的正文，"
+            "再按正文执行；只能用清单里的准确名字，不要猜）：\n"
+            + "\n".join(catalog_lines)
         )
     rules = [str(item).strip() for item in system_instructions or () if str(item).strip()]
     if rules:

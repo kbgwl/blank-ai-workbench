@@ -93,6 +93,8 @@ READ_ONLY_TOOLS = frozenset(
         "team_status",
         # 检索本身只读：计划模式要靠它把 git / 联网这些能力加载进来做只读取证
         "tool_search",
+        # 加载 Skill 只是读内存里的说明，不碰工作区；计划模式最该知道项目的流程要求。
+        "skill",
         # 模式开关本身不是写操作：计划模式下必须能"退出"，否则模型会卡死在里面。
         # 退出仍需人工批准，由 decide() 里的 mode:switch 特例负责。
         "enter_plan_mode",

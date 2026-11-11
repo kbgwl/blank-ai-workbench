@@ -259,6 +259,7 @@ uv run alembic revision --autogenerate -m "描述"
 | 子代理默认后台与续聊 | ✅ | `spawn_agent` 不传参即在后台跑（`run_in_background=false` 才同步等）；任务收尾先给后台子代理 90 秒窗口，结束的结论写进交付提示词、仍在跑的显式取消并点名；新增 `send_message` 续聊（保留上一轮读/写/结论，新 `spawn_agent` 是全新上下文；隔离子代理与仍在跑的句柄如实拒绝）。判据 `test_claude_subagent_default_v29.py`（6 例）+ `test_claude_send_message_v30.py`（9 例），变异 8/8 与 10/10 全红 |
 | 后台 shell | ✅ | `run_shell(run_in_background=true)` 立即返回 `shell-…` 句柄，命令在后台真的跑；宿主路径边跑边流式写日志（系统临时目录、2MB 上限、读回尾部 64KB），结束时在模型调用前注入一次性系统通知（不轮询、不 sleep）；`task_output` / `task_stop` 统一句柄名 `task_id`（旧名 `agent_id` / `shell_id` 继续接受）；`task_stop` 与任务收尾都按进程树杀（cmd 外壳下的孙进程不会残留）、日志删除，等审批那一档不杀；子代理上下文禁用后台命令。判据 `services/api/tests/test_background_shell_v31.py`（20 例），变异 21/21 红 |
 | 任务级工作树会话 | ✅ | `enter_worktree` 用 `name` 在 `<repo>/.blank-worktrees/<name>` 新建 `blank/worktree-<name>` 分支，或用 `path` 进入 `git worktree list` 里已注册的树，之后本任务所有工具（shell cwd、文件工具、git、安全策略路径基准）都换到那棵树；`exit_worktree(action=keep|remove)` 回到原工作区：`remove` 只对本任务创建的树生效、`path` 进入的只能 keep，遇未提交改动/未合并提交默认拒绝并逐文件点名，显式 `discard_changes=true` 才丢弃；审批恢复后仍在同一棵树，任务收尾只摘记录不删树。判据 `services/api/tests/test_worktree_tools_v32.py`（34 例），变异 28/28 红 |
+| Skill 工具 | ✅ | 系统提示只列「名字 + 一句话说明」（取正文首行、剥前导 markdown、截到 120 字符），模型判断任务属于某个 Skill 时调用 `skill(skill, args)` 按需加载正文；参数替换 `$ARGUMENTS`、无占位符则附在正文末尾；名字必须精确命中，前导斜杠直接拒绝并给出修正名，未知名字 fail-closed 并列出真实清单；同一任务里重复调用只回一行「已加载」、不再贴正文；没有可加载的 Skill 时 `skill` 从工具表里整条移除（子代理同口径）；子代理拿目录副本，加载状态不写回父会话。判据 `services/api/tests/test_skill_tool_v33.py`（30 例，含真实 HTTP 任务运行），变异 24/24 红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -287,8 +288,10 @@ uv run alembic revision --autogenerate -m "描述"
   「无斜杠按文件名、带斜杠按相对路径」实现，`search_code` 补齐了
   `output_mode / glob / type / -i / multiline / -A/-B/-C / -o / -n / head_limit / offset`，
   `list_agents` 能看到当前任务的后台子代理，`send_message` 能带着上下文续聊。
-  仍未移植：Skill 工具、CronCreate/Delete/List 与 ScheduleWakeup、ReportFindings、Workflow、
-  NotebookEdit。EnterWorktree/ExitWorktree 已于 Q2 补齐（见上表；两处偏离：建在
+  仍未移植：CronCreate/Delete/List 与 ScheduleWakeup、ReportFindings、Workflow、
+  NotebookEdit。Skill 工具已于 Q3 补齐（见上表；两处偏离：一句话说明取正文首行，
+  库里没有单独的 description 字段；加载状态只在本任务进程内保留，重开任务会重新加载）。
+  EnterWorktree/ExitWorktree 已于 Q2 补齐（见上表；两处偏离：建在
   `.blank-worktrees/` 而不是 `.claude/worktrees/`、没有暴露 `baseRef`，一律从 HEAD 创建；
   `path` 只认已注册的 git 工作树）。后台 shell 已于 Q1 补齐
   （`run_in_background` + `task_output`/`task_stop`，见上表），但它有两处与本机实现绑定

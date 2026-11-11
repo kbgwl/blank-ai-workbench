@@ -33,6 +33,7 @@ from blank_api.services.sandbox.tiers import TierDowngrade, assert_not_looser
 from blank_api.services.tools.base import ToolContext
 from blank_api.services.tools.file_state import FileStateCache
 from blank_api.services.tools.gateway import ToolGateway, sandbox_backend_event_field
+from blank_api.services.tools.skills import SkillCatalog
 from blank_api.services.worktree import (
     Worktree,
     apply_changes,
@@ -52,6 +53,9 @@ READ_ONLY_TOOLS = (
     "git",
     "web_search",
     "web_fetch",
+    # 子代理也要能按项目现成的流程干活；Skill 只是读内存里的说明，不碰工作区。
+    # 没有可加载的 Skill 时下面会把这条从工具表里拿掉。
+    "skill",
 )
 ISOLATED_TOOLS = (
     *READ_ONLY_TOOLS,
@@ -363,10 +367,20 @@ async def run_subagent(
     hooks: HookRunner | None = None,
     # 续聊：上一轮的完整对话。非空时这一轮接在它后面，而不是从系统提示 + goal 重新开始。
     history: list[dict] | None = None,
+    # 父任务的 Skill 目录。子代理拿一份**拷贝**：加载状态是会话级事实，
+    # 子代理加载过的 Skill 不能让父代理误以为自己也已经见过正文。
+    skill_catalog: SkillCatalog | None = None,
 ) -> SubAgentResult:
     request = request.normalized()
     if not request.goal:
         return SubAgentResult(ok=False, error="子任务目标为空", agent_path=agent_path, depth=depth)
+    # 目录是父目录的独立副本：能加载的 Skill 一样，加载状态从空开始。
+    catalog = SkillCatalog(skill_catalog.entries()) if skill_catalog is not None else None
+    if catalog is not None and not len(catalog):
+        catalog = None
+    if catalog is None:
+        # 没有可加载的 Skill 就别摆着入口：父会话那边也是这条口径。
+        tools = [tool for tool in tools if tool.name != "skill"]
     try:
         sandbox_tier = assert_not_looser(parent_tier, sandbox_tier)
     except TierDowngrade as exc:
@@ -444,6 +458,7 @@ async def run_subagent(
         # 子代理不能成为绕过客户安全设置的侧门：同一台机器、同一份策略。
         safety=SafetyPolicy.load(),
         tool_registry=gateway.registry,
+        skills=catalog,
         # 读后写状态按副本独立记：子代理只在它自己的根里读和写。
         file_state=FileStateCache(),
         # 子树在本轮结束即删除/合并：后台命令活不到有人取结果的时候，入口直接关掉。
@@ -458,6 +473,15 @@ async def run_subagent(
     )
     compactor = ContextCompactor(**(watermark or {}))
     system_message = {"role": "system", "content": SUBAGENT_SYSTEM.format(steps=request.max_steps)}
+    if catalog is not None:
+        lines = [
+            f"- {item['name']}：{item['description']}" if item["description"] else f"- {item['name']}"
+            for item in catalog.listing()
+        ]
+        system_message["content"] += (
+            "\n可用 Skill（任务属于它覆盖的范围时，先调用 skill 工具加载正文再照做；"
+            "只用清单里的准确名字，不要猜）：\n" + "\n".join(lines)
+        )
     if history:
         # 续聊：历史里已经有系统提示与上一轮的读/写/结论，这一轮只追加新问题。
         messages: list[dict] = list(history)
@@ -750,6 +774,7 @@ class SubAgentRunner:
             tracker=tracker,
             hooks=getattr(session, "hooks", None),
             history=history,
+            skill_catalog=getattr(session.context, "skills", None),
         )
         # 留给 send_message：无论这一轮成功还是失败，已经说过的话都要能接上。
         self._remember(prepared, result)
@@ -1259,6 +1284,7 @@ class SubAgentRunner:
                     watermark=_inherited_watermark(session),
                     sandbox_tier=tier,
                     parent_tier=tier,
+                    skill_catalog=getattr(session.context, "skills", None),
                 )
 
         results = await asyncio.gather(

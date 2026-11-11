@@ -796,9 +796,15 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
                 role_provider_ids[role] = role_provider.id
                 routing_rows.setdefault(role_provider.id, role_provider)
                 routing_adapters.setdefault(role_provider.id, role_adapters[role])
+    # 名字与正文一起取：清单（名字 + 一句话说明）进系统提示，正文留给 skill 工具
+    # 按需加载。只取正文的老形状会把每个启用 Skill 的全文注进每一轮。
     active_skills = (
-        await db.execute(select(Skill.instructions).where(Skill.status == "active").order_by(Skill.updated_at))
-    ).scalars().all()
+        await db.execute(
+            select(Skill.name, Skill.instructions)
+            .where(Skill.status == "active")
+            .order_by(Skill.updated_at)
+        )
+    ).all()
     # rollback 会让本事务里的 ORM 实例全部过期，之后再读属性会触发同步懒加载，
     # 在异步会话里直接抛 MissingGreenlet。所以先把要用的字段取成普通值。
     attachment_refs = [dict(item) for item in (task.attachments or [])]
@@ -840,7 +846,10 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         # 能不能看图取决于模型名，不只看那个开关：把模型换成 glm-4.5v 之后，
         # 开关不会自己变，图会被静默降级。见 services/agent/vision.py。
         "supports_vision": supports_vision(bool(provider.supports_vision), provider.default_model),
-        "skill_instructions": [str(item) for item in active_skills],
+        "skill_catalog": [
+            {"name": str(row.name), "instructions": str(row.instructions or "")}
+            for row in active_skills
+        ],
         # 会话上下文由运行时自己读：这里只告诉它"这一轮属于哪条会话"。
         "thread_ref": task.thread_id or "",
         # 场景决定系统提示附加段、工具白名单与记忆权限；只走系统提示与工具层，

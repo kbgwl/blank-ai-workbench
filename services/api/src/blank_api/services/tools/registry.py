@@ -61,6 +61,10 @@ CORE_TOOLS = frozenset(
         "write_file",
         "run_shell",
         "run_tests",
+        # Skill 加载入口属于核心面：清单在系统提示里（见 graph.initial_messages），
+        # 没有这条工具模型就只能看见名字、拿不到正文。lean 视图只从核心集合裁剪，
+        # 所以它必须在这张表里，否则"弱模型也能照流程做"就只写在注释里。
+        "skill",
         "write_notes",
         "read_notes",
     }
@@ -112,6 +116,7 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "request_user_input": ("提问", "询问", "确认", "ask"),
     "update_plan": ("计划", "步骤", "plan", "todo"),
     "set_goal": ("目标", "验收标准", "算做完", "goal", "done when", "objective"),
+    "skill": ("skill", "技能", "工作流", "流程", "检查清单", "slash command"),
     "enter_worktree": ("worktree", "工作树", "隔离目录", "新分支", "enter worktree"),
     "exit_worktree": ("worktree", "工作树", "退出工作树", "合并工作树", "exit worktree", "keep", "remove"),
     "enter_plan_mode": ("计划模式", "先调研", "只读", "plan mode", "enter plan"),
@@ -187,6 +192,9 @@ LEAN_TOOLS = frozenset(
         # 不在 lean 里再占一格。
         "edit_file",
         "run_shell",
+        # 清单里列了 Skill，就必须留一条加载它的路——弱模型最需要照现成流程做，
+        # 只给清单不给工具，等于告诉它"有说明，但你看不到"。
+        "skill",
         # 进出计划模式必须成对出现：只给 enter 会让弱模型进去之后出不来。
         "enter_plan_mode",
         "exit_plan_mode",

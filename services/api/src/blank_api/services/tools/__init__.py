@@ -16,6 +16,7 @@ from blank_api.services.tools.patch import patch_tools
 from blank_api.services.tools.plan import plan_tools
 from blank_api.services.tools.search import search_tools
 from blank_api.services.tools.shell import shell_tools
+from blank_api.services.tools.skills import SkillCatalog, skill_tools
 from blank_api.services.tools.team_admin import TEAM_ADMIN_TOOL_NAMES, team_admin_tools
 from blank_api.services.tools.testing import test_tools
 from blank_api.services.tools.web import web_tools
@@ -36,6 +37,7 @@ def build_default_tools() -> list[ToolDefinition]:
         *git_tools(),
         *test_tools(),
         *web_tools(),
+        *skill_tools(),
         *worktree_tools(),
         *team_admin_tools(),
     ]
@@ -43,6 +45,7 @@ def build_default_tools() -> list[ToolDefinition]:
 
 __all__ = [
     "ApprovalPolicy",
+    "SkillCatalog",
     "TEAM_ADMIN_TOOL_NAMES",
     "ToolContext",
     "ToolDefinition",
