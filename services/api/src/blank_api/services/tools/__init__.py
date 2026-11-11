@@ -22,6 +22,7 @@ from blank_api.services.tools.skills import SkillCatalog, skill_tools
 from blank_api.services.tools.team_admin import TEAM_ADMIN_TOOL_NAMES, team_admin_tools
 from blank_api.services.tools.testing import test_tools
 from blank_api.services.tools.web import web_tools
+from blank_api.services.tools.workflow import workflow_tools
 from blank_api.services.tools.worktree import worktree_tools
 
 
@@ -42,6 +43,7 @@ def build_default_tools() -> list[ToolDefinition]:
         *skill_tools(),
         *review_tools(),
         *cron_tools(),
+        *workflow_tools(),
         *worktree_tools(),
         *team_admin_tools(),
     ]

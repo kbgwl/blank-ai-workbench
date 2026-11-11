@@ -43,6 +43,7 @@ from blank_api.services.agent.verifier import (
 )
 from blank_api.services.agent.automation import resolve_mode as resolve_automation_mode
 from blank_api.services.agent.loadstats import recent_load
+from blank_api.services.agent import workflow as workflow_module
 from blank_api.services import shell_tasks, worktree_session
 from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agent.scenarios import (
@@ -1315,6 +1316,9 @@ class AgentRuntime:
         # 后台命令同理：进程还活着、日志还占着盘，也得在这里收走。
         if status != "waiting_approval":
             await shell_tasks.aclose(scope.task_id, reason=f"task_{status}")
+            # 工作流的脚本进程与它派出的子代理都挂在任务上：任务一收尾就没人取结论了，
+            # 必须在这里取消，否则进程和模型调用会陪着一条已完成的任务继续烧。
+            await workflow_module.aclose(scope.task_id, reason=f"task_{status}")
             # worktree 会话只摘记录，工作树留在盘上：删不删由 exit_worktree 决定，
             # 任务收尾不该替用户丢掉还没合并的工作。
             worktree_session.release(scope.task_id)

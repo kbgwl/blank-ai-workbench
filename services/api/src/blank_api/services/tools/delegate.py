@@ -138,6 +138,93 @@ def _is_shell_handle(arguments: dict, handle_id: str) -> bool:
     return str(arguments.get("shell_id") or "").strip() == handle_id
 
 
+def _is_workflow_handle(handle_id: str) -> bool:
+    # 工作流句柄固定 wf_ 开头（与 Claude 的 resumeFromRunId 同一形态）。
+    return handle_id.startswith("wf_")
+
+
+async def _workflow_output(context: ToolContext, workflow_id: str, arguments: dict) -> ToolOutcome:
+    from blank_api.services.agent import workflow as workflow_module
+
+    try:
+        timeout = float(arguments.get("timeout") or 60)
+    except (TypeError, ValueError):
+        timeout = 60.0
+    snapshot = await workflow_module.output(
+        str(getattr(context, "task_id", "") or ""),
+        workflow_id,
+        block=bool(arguments.get("block", True)),
+        timeout=timeout,
+    )
+    status = str(snapshot.get("status") or "")
+    if status == "not_found":
+        return fail("error", str(snapshot.get("message") or "没有找到该工作流"))
+    data = {
+        key: snapshot[key]
+        for key in (
+            "workflow_id",
+            "name",
+            "description",
+            "status",
+            "agents",
+            "cached",
+            "elapsed_seconds",
+            "phases",
+            "script_path",
+        )
+        if key in snapshot
+    }
+    logs = [str(item) for item in snapshot.get("logs") or []]
+    log_tail = ("\n日志末尾：\n" + "\n".join(logs[-5:])) if logs else ""
+    if status == "running":
+        return ToolOutcome(
+            ok=True,
+            status="ok",
+            output=(
+                f"工作流 {workflow_id}（{snapshot.get('name') or ''}）还在运行："
+                f"已派 {snapshot.get('agents') or 0} 个子代理，已完成阶段 "
+                f"{'、'.join(snapshot.get('phases') or []) or '无'}。"
+                f"结束时你会收到系统通知。{log_tail}"
+            ).strip(),
+            data=data,
+        )
+    body = str(snapshot.get("result") or "") or log_tail
+    if status == "cancelled":
+        return ToolOutcome(ok=False, status="error", output=body, data=data, message="工作流已取消")
+    if not snapshot.get("ok"):
+        return ToolOutcome(
+            ok=False,
+            status="error",
+            output=body,
+            data=data,
+            message=str(snapshot.get("error") or "工作流未能完成"),
+        )
+    return ToolOutcome(ok=True, status="ok", output=body or "工作流完成，没有返回值", data=data)
+
+
+async def _workflow_stop(context: ToolContext, workflow_id: str) -> ToolOutcome:
+    from blank_api.services.agent import workflow as workflow_module
+
+    snapshot = await workflow_module.stop(
+        str(getattr(context, "task_id", "") or ""), workflow_id
+    )
+    status = str(snapshot.get("status") or "")
+    if status == "not_found":
+        return fail("error", str(snapshot.get("message") or "没有找到该工作流"))
+    data = {
+        key: snapshot[key]
+        for key in ("workflow_id", "name", "status", "agents", "elapsed_seconds")
+        if key in snapshot
+    }
+    if status == "cancelled":
+        return ok(f"已取消工作流 {workflow_id}，仍在跑的子代理一并收走。", **data)
+    return ok(
+        f"工作流 {workflow_id} 已经结束（{status}），没有需要取消的运行。"
+        f"结论用 task_output(task_id=\"{workflow_id}\") 取。",
+        **data,
+    )
+
+
 async def _shell_output(context: ToolContext, shell_id: str, arguments: dict) -> ToolOutcome:
     from blank_api.services import shell_tasks
     from blank_api.services.tools.shell import MAX_OUTPUT_CHARS, mask_output
@@ -196,6 +283,8 @@ async def _task_output(context: ToolContext, arguments: dict) -> ToolOutcome:
         return fail("error", "task_output 需要 task_id（后台子代理或后台命令的句柄）")
     if _is_shell_handle(arguments, handle_id):
         return await _shell_output(context, handle_id, arguments)
+    if _is_workflow_handle(handle_id):
+        return await _workflow_output(context, handle_id, arguments)
     runner = getattr(context, "subagent_runner", None)
     if runner is None or not hasattr(runner, "output"):
         return fail("error", "当前运行时没有启用后台子代理")
@@ -264,6 +353,8 @@ async def _task_stop(context: ToolContext, arguments: dict) -> ToolOutcome:
         return fail("error", "task_stop 需要 task_id（后台子代理或后台命令的句柄）")
     if _is_shell_handle(arguments, handle_id):
         return await _shell_stop(context, handle_id)
+    if _is_workflow_handle(handle_id):
+        return await _workflow_stop(context, handle_id)
     runner = getattr(context, "subagent_runner", None)
     if runner is None or not hasattr(runner, "stop"):
         return fail("error", "当前运行时没有启用后台子代理")
@@ -452,8 +543,8 @@ def delegate_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="task_output",
             description=(
-                "取后台任务的现状与输出：后台子代理（spawn_agent）的结论，或后台命令"
-                "（run_shell(run_in_background=true)）的输出。"
+                "取后台任务的现状与输出：后台子代理（spawn_agent）的结论、后台命令"
+                "（run_shell(run_in_background=true)）的输出，或工作流（workflow）的结果。"
                 "block=true 时最多等 timeout 秒；等不到只表示它还在跑，不会因此取消它。"
                 "返回状态 running / completed / failed / timeout / cancelled，未知句柄会如实报找不到。"
                 "后台任务自己结束时你会收到系统通知，这里只在需要更细的进度或拿完整文本时用。"
@@ -462,7 +553,10 @@ def delegate_tools() -> list[ToolDefinition]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "task_id": {"type": "string", "description": "后台任务句柄（agent_id 或 shell_id）"},
+                    "task_id": {
+                        "type": "string",
+                        "description": "后台任务句柄（agent_id、shell_id 或 wf_ 工作流 id）",
+                    },
                     "agent_id": {"type": "string", "description": "task_id 的旧名，只适用于后台子代理"},
                     "shell_id": {"type": "string", "description": "task_id 的旧名，只适用于后台命令"},
                     "block": {"type": "boolean", "description": "是否等待结束，默认 true"},
@@ -510,8 +604,8 @@ def delegate_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="task_stop",
             description=(
-                "终止一个仍在运行的后台任务：后台子代理（隔离副本一并删除并留下 subagent.cancelled），"
-                "或后台命令（进程终止并留下 shell.cancelled）。"
+                "终止一个仍在运行的后台任务：后台子代理（隔离副本一并删除并留下 subagent.cancelled）、"
+                "后台命令（进程终止并留下 shell.cancelled），或工作流（脚本进程终止、仍在跑的子代理收走）。"
                 "已经结束的句柄照实返回它当初的状态，不会谎报取消。"
             ),
             input_schema={

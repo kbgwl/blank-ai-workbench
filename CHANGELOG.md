@@ -1,6 +1,44 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）
+
+- **Workflow 工具：脚本即编排（Q 批第 5b 项）**：
+  按 Claude 原文（工具契约、meta 纯字面量、agent/parallel/pipeline/phase、scriptPath 优先、
+  args 原样、resumeFromRunId 同会话缓存）落成本地 `workflow`。新增
+  `services/agent/workflow.py`（脚本解析 / Node 子进程 / JSON 行协议 / 运行与缓存）与
+  `services/tools/workflow.py`；`tools/__init__.py`、`tools/registry.py`、`tools/delegate.py`、
+  `agent/graph.py`、`agent/runtime.py`、`agent/stall.py` 接线。
+  1. **脚本契约**：必须以 `export const meta = {...}` 纯字面量开头（变量/调用/模板插值一律拒绝）；
+     `name` ≤100、`description` 单行 ≤240、`phases` ≤50 且 title 唯一 ≤80；
+     脚本长度上限 524288 与 NUL 拒绝；正文包进 async 函数，顶层 `await` / `return` 都成立。
+  2. **执行语义**：脚本跑在 Node 子进程（`--permission --allow-fs-read=<temp> --disable-proto=throw`），
+     只走 stdout/stdin 的 JSON 行协议；`agent()` 转成既有的后台子代理（`spawn_background` + `output`），
+     `parallel()` 保序、`pipeline()` 每个 item 内串行而 item 之间并发、`phase()` 必须命中
+     `meta.phases`；`args` 以真正的 JSON 值暴露；`schema` 要求子代理只回 JSON 并做
+     type/required/properties 骨架校验（`integer` / `number` 不接受布尔）；单条工作流最多派
+     50 个子代理、同时在飞 4 个；单个子代理 900 秒、整条 3600 秒上限。
+  3. **边界**：脚本不能写文件、不能起进程（Node 权限模型）；`fetch` / `WebSocket` /
+     `XMLHttpRequest` / `EventSource` 在预置层替换成报错（网络边界不是内核级，见偏离）。
+     工具本身 high 风险、走审批，且只在用户目标里明确出现
+     「workflow / 工作流 / 多代理 / fan out / orchestrate / ultracode」之类的请求时允许调用；
+     仅「这件事适合并行」不算 opt-in，没开口就先说明规模与代价再问。
+  4. **后台与续跑**：启动即返回 `wf_` 句柄；`task_output` / `task_stop` 认该前缀；结束时在
+     下一次模型调用前注入一次系统通知（结论由主代理转述）；任务收尾（等审批除外）取消仍在跑的
+     运行并摘掉句柄；`resumeFromRunId` 只在本进程内有效，按 `(prompt, options)` 哈希复用缓存，
+     旧运行仍在跑时拒绝续跑，传入缓存时先复制、不污染旧运行。
+  5. **脚本落盘**：每次运行写到 `.blank/workflows/.runs/<wf_id>.mjs`，并幂等写入
+     `.git/info/exclude`（不碰用户的 `.gitignore`）；来源优先级 `scriptPath` > `script` > `name`，
+     预定义脚本放在 `.blank/workflows/<name>.mjs`；找不到时列出可用名字。
+  6. **工具面与缺口**：延迟加载（`tool_search` 拉起）、非并行安全、中文别名可检索；
+     缺 Node 时返回 `skipped` + `data.missing_command=node` + `BLANK_NODE_BIN` 补救说明，
+     并接入停滞检测（`workflow` 成功即撤掉结构化缺口，后续命令不再被封）。
+  测试：新增 `tests/test_workflow_tool_v36.py` 50 例（脚本契约、结构化结果、来源与落盘、工具面、
+  真实 Node 的 parallel/pipeline/phase/args/schema、文件与网络边界、缓存续跑、取消与收尾、
+    通知渲染、opt-in 与缺 Node 闸门、任务收尾接线）；变异电池 39/39 全红（每条跑完即还原）。
+  全量回归（最终代码）：**2907 passed, 24 skipped, PYTEST_RC=0（901.87s）**。偏离：脚本落在项目 `.blank/workflows/.runs/` 而不是
+  Claude 的会话目录；续跑缓存只在进程内（重启即失效）；网络边界靠预置层替换 + Node 权限模型，
+  不是内核级网络沙箱；每个 `agent()` 仍是既有的隔离只读子代理工具集，不共享父会话工具面；
+  schema 只做骨架校验，不是完整 JSON Schema 实现；工作流随任务收尾取消，不跨任务/跨进程恢复。
 
 - **定时工具：CronCreate / CronDelete / CronList / ScheduleWakeup（Q 批第 5a 项）**：
   按 Claude 原文（5 段本地 cron、7 天期限、抖动、durable、动态唤醒循环）落成本地四个工具。

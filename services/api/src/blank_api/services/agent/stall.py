@@ -146,11 +146,14 @@ def structured_missing_tool(payload: dict) -> str:
     文字判据认不出 `本机没有 go 工具链，测试没有执行`——它不是 "command not found"，
     也不是任何一条现有正则。但 run_tests 在 data 里已经把名字写清楚了，比模型转述
     可靠。只认 data、不认 message 里的自述：让被审的一方自己提供证据，闸门就失效了。
+
+    workflow 缺 Node 用 ``data.missing_command`` 报同一类缺口（它没有"测试运行器"
+    这层概念，但仍然是一条装得上就能继续的路）。
     """
     data = payload.get("data")
     if not isinstance(data, dict):
         return ""
-    return str(data.get("missing_test_runner") or "").strip()
+    return str(data.get("missing_test_runner") or data.get("missing_command") or "").strip()
 
 
 _COMMAND_TOOLS = frozenset({"run_shell", "run_tests"})
@@ -360,8 +363,8 @@ class StallBreaker:
             for missing in [item for item in self.missing_commands if item.lower() in command.lower()]:
                 self.missing_commands.discard(missing)
             # run_tests 跑通 = 工具链现在可用。结构化缺口的回执里没有那条命令行可对，
-            # 只能按"这个工具成功了"整批撤掉。
-            if name == "run_tests" and self.structured_missing:
+            # 只能按"这个工具成功了"整批撤掉。workflow 成功同理：Node 已经在了。
+            if name in ("run_tests", "workflow") and self.structured_missing:
                 self.missing_commands -= self.structured_missing
                 self.structured_missing.clear()
             return

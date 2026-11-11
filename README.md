@@ -262,6 +262,7 @@ uv run alembic revision --autogenerate -m "描述"
 | Skill 工具 | ✅ | 系统提示只列「名字 + 一句话说明」（取正文首行、剥前导 markdown、截到 120 字符），模型判断任务属于某个 Skill 时调用 `skill(skill, args)` 按需加载正文；参数替换 `$ARGUMENTS`、无占位符则附在正文末尾；名字必须精确命中，前导斜杠直接拒绝并给出修正名，未知名字 fail-closed 并列出真实清单；同一任务里重复调用只回一行「已加载」、不再贴正文；没有可加载的 Skill 时 `skill` 从工具表里整条移除（子代理同口径）；子代理拿目录副本，加载状态不写回父会话。判据 `services/api/tests/test_skill_tool_v33.py`（30 例，含真实 HTTP 任务运行），变异 24/24 红 |
 | ReportFindings 工具 | ✅ | `report_findings(level?, findings[])` 按 Claude 语义补齐：只在当前生效的代码审查说明点名时使用，一批上报、按严重程度从高到低、最多 32 条，空数组表示没有发现通过核验；每条必填 `file`（仓库相对路径）/`summary`/`failure_scenario`，可选 `line`（从 1 起）、`short_summary`（≤60）、`category`（≤40，kebab-case）、`verdict`（CONFIRMED/PLAUSIBLE）、`outcome`（fixed/skipped/no_change_needed，只用于修复后重报）；任一条非法即整批拒绝并点名第几条，未知字段剥掉、顺序保留；回执一行（`已上报 N 条审查发现。`），明确要求不要再把同一批发现以正文打印。只读、可并行、计划模式放行、不进子代理工具表（由主代理统一上报）；清单同时落 `review.findings` 事件与工具产物（沿用打码/gzip/上限）。判据 `services/api/tests/test_report_findings_v34.py`（36 例，含真实 HTTP 任务运行），变异 28/28 红 |
 | 定时工具（Cron + Wakeup） | ✅ | `cron_create / cron_delete / cron_list / schedule_wakeup` 对齐 Claude CronCreate/Delete/List 与 ScheduleWakeup：5 段本地 cron，日/星期同时受限按 Vixie 语义取 OR；`recurring=false` 只触发一次、到点自动结束；重复任务 7 天后结束（期限从排定那一刻算，不随重排往后滚）；抖动确定性（重复最多晚周期的 10%、封顶 900 秒，一次性落在 :00/:30 最多早 90 秒）；`durable=false` 只活到本次进程结束（启动时作废，避免重启后凭空补跑），`durable=true` 跨重启保留并在到点后 24 小时内补跑一次；第一次到点才建任务（prompt 即 goal），后续每一跳沿同一条任务续跑；绑定任务正忙时顺延 60 秒再看，不把这次触发吞掉；执行路径仍只有 `launch_task` 一条。`schedule_wakeup` 的 delaySeconds 夹到 [60,3600]，stop 结束循环，noop 连击折叠。四个工具常驻；`cron_list` 只读、可并行、计划模式放行，子代理工具表不含。判据 `services/api/tests/test_cron_tools_v35.py`（28 例，含到点放行/重排/忙时顺延/启动清理），变异 26/26 红 |
+| Workflow 工具（脚本即编排） | ✅ | `workflow` 对齐 Claude Workflow 契约：脚本必须以 `export const meta = { name, description, phases? }` 纯字面量开头（变量/调用/插值拒绝），正文用 `agent() / parallel() / pipeline() / phase()`；脚本跑在 Node 子进程（`--permission --allow-fs-read=<temp> --disable-proto=throw`），只走 stdout/stdin JSON 行；`agent()` 复用既有后台子代理，`parallel` 保序、`pipeline` 维度内串行维度间并发、`phase` 必须命中 `meta.phases`，`args` 传真正的 JSON 值，`schema` 要求 JSON 并做 type/required/properties 骨架校验；最多 50 个子代理、同时在飞 4 个；脚本不能写文件、不能起进程，网络入口在预置层替换为报错；high 风险走审批且只在用户明确要求多代理编排（workflow / 工作流 / fan out / ultracode 等）时允许调用；启动即返回 `wf_` 句柄，`task_output` / `task_stop` 认该前缀，结束时注入一次系统通知，任务收尾（等审批除外）取消仍在跑的运行；`scriptPath` 优先于 `script`/`name`，脚本幂等落到 `.blank/workflows/.runs/` 并写入 `.git/info/exclude`；`resumeFromRunId` 仅本进程、按 `(prompt, options)` 哈希续跑；缺 Node 报 `skipped` + `data.missing_command=node` 并接入停滞检测。判据 `services/api/tests/test_workflow_tool_v36.py`（50 例，含真实 Node 编排/边界/缓存/取消/收尾），变异 39/39 红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -290,7 +291,11 @@ uv run alembic revision --autogenerate -m "描述"
   「无斜杠按文件名、带斜杠按相对路径」实现，`search_code` 补齐了
   `output_mode / glob / type / -i / multiline / -A/-B/-C / -o / -n / head_limit / offset`，
   `list_agents` 能看到当前任务的后台子代理，`send_message` 能带着上下文续聊。
-  仍未移植：Workflow、NotebookEdit。定时工具已于 Q5a 补齐（见上表；三处偏离：任务编号
+  仍未移植：NotebookEdit。Workflow 已于 Q5b 补齐（见上表；偏离：脚本落在项目
+  `.blank/workflows/.runs/` 而不是 Claude 的会话目录；续跑缓存只在进程内，重启即失效；
+  网络边界靠预置层替换 + Node 权限模型，不是内核级网络沙箱；每个 `agent()` 仍是既有的
+  隔离只读子代理工具集，不共享父会话工具面；`schema` 只做骨架校验；工作流随任务收尾取消，
+  不跨任务/跨进程恢复）。定时工具已于 Q5a 补齐（见上表；三处偏离：任务编号
   用稳定的 `job_id` 而不是行主键，重排后仍能用最初那个 id 取消；没有 REPL「空闲」这层
   对象，用「绑定任务正在跑就顺延 60 秒」近似；`durable` 用库里的触发器行承载，而不是
   `.claude/scheduled_tasks.json`）。ReportFindings 已于 Q4 补齐（见上表；三处偏离：工具名用 snake_case

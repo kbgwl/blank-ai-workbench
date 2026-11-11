@@ -85,6 +85,8 @@ DEFERRED_TOOLS = frozenset(
         # 工作树会话只在用户明确要求隔离时用；常驻会把"要不要开一棵树"塞进每轮菜单。
         "enter_worktree",
         "exit_worktree",
+        # 工作流脚本只在用户明确要求多代理编排时才该出现；默认收着，靠 tool_search 拉。
+        "workflow",
     }
 )
 
@@ -105,6 +107,16 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "read_notes": ("笔记", "交接", "notes"),
     "spawn_agent": ("子代理", "子任务", "委派", "并行", "subagent", "delegate"),
     "spawn_agents": ("子代理", "并行", "多路", "同时", "fanout", "parallel", "subagent"),
+    "workflow": (
+        "工作流",
+        "多代理",
+        "多 agent",
+        "编排",
+        "workflow",
+        "ultracode",
+        "fan out",
+        "orchestrate",
+    ),
     "send_message": ("续聊", "追问", "继续问", "接着查", "子代理", "send message", "continue agent"),
     "list_agents": ("子代理", "代理列表", "谁在跑", "agents", "list agents"),
     "apply_patch": ("修改", "编辑", "patch", "写文件", "替换"),
