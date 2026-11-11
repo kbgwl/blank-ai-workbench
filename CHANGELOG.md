@@ -33,8 +33,11 @@
   安全命令零误伤、bypass 档仍 ASK、前缀不记、blame 参数与真实 `git blame` 集成、提示词
   六条契约），关联七套件 176 例全绿（21.57s）。变异 4/4 全红：去掉 `reset --hard` 红 5 例、
   `checkout` 一律拦红 2 例（误伤反例）、去掉 `blame` 子命令红 1 例、删掉编程纪律段落红
-  6 例。后端全量 2572 passed / 24 skipped（779.00s，rc=0）。**真模型点验仍未完成**：隔离实例 `:8061` 的 DeepSeek
-  Key 仍 401，本条与 K/L 两批一样只算单测与装置层证据。
+  6 例。后端全量 2572 passed / 24 skipped（779.00s，rc=0）。真模型点验（2026-11-11，隔离实例
+  `:8061` + 客户端 DeepSeek Key）：blame 轮 `29a3db21…` succeeded——模型先 `tool_search` 找到 git
+  工具，再调 `{"subcommand":"blame","path":"app.py"}`，`Probe Author` 出现在回执里；reset 轮在模型
+  发出 `git reset --hard` 时弹出审批卡（`permission_rule=irreversible`），探针驳回后任务 `paused`，
+  命令未执行。
 
 - **缺口证据与收尾契约：照 Codex / Claude 的原文补 K 批两处盲区（L 批）**：把 Codex
   0.154.0 与 Claude Code 2.1.271 的真实系统提示词拆了一遍（抓包原文不入库），按它们
@@ -66,8 +69,10 @@
   包管理器算尝试而确认不算、go 缺工具链→交回→推回整链、测试成功不推、回执带出口、
   提示词顺序与措辞），关联九套件 152 例全绿（37.42s）。变异 4/4 全红：结构化缺口不入账
   红 2 例、跑通不撤账红 1 例、项目包管理器不算尝试红 2 例、删掉收尾条件红 2 例。后端
-  全量 2525 passed / 24 skipped（760.22s，rc=0）。**真模型点验仍未完成**：隔离实例
-  `:8061` 的 DeepSeek Key 仍是 401，K 批与 L 批目前都只算单测与装置层证据。
+  全量 2525 passed / 24 skipped（760.22s，rc=0）。真模型点验（2026-11-11）：`run_tests` 的
+  `skipped` 回执把「本机没有 npm 工具链 + 补齐顺序」原样带到模型面前（task `d59fe7a1…`），模型据此
+  去安装而不是交回；交付按「结论 / 下一步」两段写，跳过的步骤与未验证的部分都如实列出，验证闸门
+  按回执把它们记成 `no_false_claim` / `validation.status` 的硬事实。
 
 - **环境缺口不再停在「做不了」（K 批）**：真实读数（安装版 `blank.db`，任务 `4378855e…`，43 步）
   里，agent 确认本机没有 `node`/`npm` 后最终交付只剩「需要你：装上 Node 后重跑 `npm test`」；
@@ -87,12 +92,24 @@
      已经试过安装时豁免。推回只进下一次模型调用，不改用户原话与历史。
   4. **系统提示词**：把「缺东西不是结论，是要做的工作」写成规则；仓库注释/README/记忆里写着
      「本机没有它」只能当线索，不能当证据；确实装不上才收尾，且必须写清试过什么、报错是什么。
-  测试：新增 `tests/test_agent_remediation_v24.py` 11 例（真实交付原文 + 真实 `where node` 回执做
+  5. **补齐之后，验证证据必须走 run_tests（2026-11-11 真模型读数追补）**：上面两轮里模型都把
+     `set "PATH=…" & npm test` 放在 `run_shell` 里跑通，交付写「测试通过」；验证闸门只采信
+     `run_tests`（最后一次是失败/跳过），于是两轮都被判「交付文本声称测试通过，实际验证结果
+     不支持」（task `d59fe7a1…`、`eb4f384a…`）。闸门没判错，是模型不知道证据通道：系统提示词
+     的环境缺口段、`run_tests` 的 skipped 回执、`remediation.hint()` 第 3 步三处原来都只写
+     「加进 PATH 重跑」。现在三处都写明「用 run_tests 重跑（可传 command 覆盖，把 PATH 前置写进
+     同一条命令）；run_shell 里跑通不算验证证据」。
+  测试：新增 `tests/test_agent_remediation_v24.py` 13 例（真实交付原文 + 真实 `where node` 回执做
   输入，真实 AgentSession/网关跑执行节点），`test_stall_v151.py` 44 例、`test_intent_and_reply.py`
-  37 例，合计 92 例全绿；变异 4/4 全红（拆闸门 / 答复不再交回 / 把确认算成安装 / 去掉意图覆盖）。
-  后端全量 2512 passed / 24 skipped。**真模型点验未完成**：隔离实例 `:8061` 里存的 DeepSeek Key
-  返回 401（invalid api key，2026-11-10 两轮均在第一次模型调用失败），换有效 Key 后按
-  `E:/tmp/k_probe.py` 的同一目标重跑；在那之前本条只算单测与装置层证据，不算真模型已验证。
+  37 例，合计 94 例全绿；变异 4/4 全红（拆闸门 / 答复不再交回 / 把确认算成安装 / 去掉意图覆盖）；
+  第 5 条另做变异 3/3 全红（分别删掉提示词 / skip 回执 / 补救指令里的通道句）。
+  真模型点验（2026-11-11，`:8061` + 客户端 DeepSeek Key）：催办两轮均判 `intent=act`；
+  `run_tests` 回执 `skipped`（本机没有 npm 工具链）；模型自己 `where` →
+  `winget install OpenJS.NodeJS.LTS`，真装上 Node v26.13.0 / npm 11.20.0，再跑到 `npm test`
+  退出码 0——不再停在「需要你装」。第 5 条修复后复跑（task `f33bc6c4…`）：`run_tests` 先
+  `skipped` → winget 安装 → `run_tests {"command": "set \"PATH=C:\Program Files\nodejs;%PATH%\" && npm test"}`
+  → `status=ok`、`validation.completed passed=true`、`verification.verdict passed=true`、任务
+  `succeeded`，交付里带命令原文与退出码。后端全量 2574 passed / 24 skipped（852.67s，rc=0）。
 
 - **沙箱临时区容量上限：固定容量 VHDX 卷 + 写满 ENOSPC 行为探针（J2）**：NTFS 没有目录级
   容量配额（`fsutil quota` 只按用户/卷记，按用户设会误伤同一用户的工作区写盘），所以容量上限

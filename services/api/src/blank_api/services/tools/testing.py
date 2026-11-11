@@ -124,7 +124,8 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
                 # 才交回用户，而且交回时要写清缺什么、怎么装。
                 message=(
                     reason + "。先补齐再重跑：在磁盘上找现成安装，或用包管理器装"
-                    "（winget / choco / scoop）；装好后用绝对路径或加进 PATH 重跑。"
+                    "（winget / choco / scoop）；装好后用 run_tests 重跑（可传 command 覆盖，"
+                    "把 PATH 前置写进同一条命令）；run_shell 里跑通不算验证证据。"
                     "确实装不上，再告诉用户缺什么、怎么装。"
                 ),
                 data={

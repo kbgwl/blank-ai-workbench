@@ -102,7 +102,8 @@ def hint(missing: str, round_number: int) -> str:
         "2. 找现成的：包管理器（winget / choco / scoop）装，或下载官方 portable 包解压；"
         "也可以先在磁盘上找已有的可执行文件。缺的是项目依赖（pytest、node_modules 这类）时，"
         "用项目自己的包管理器装：`python -m pip install …`、`npm install`、`uv pip install …`。\n"
-        f"3. 装上后直接用绝对路径，或把目录加进 PATH，重跑原来失败的那一步并留下输出。\n"
+        "3. 装上后用 run_tests 重跑原来失败的测试：可传 command 覆盖，把 PATH 前置写进"
+        "同一条命令（例：`set \"PATH=…;%PATH%\" && npm test`）；run_shell 里跑通不算验证证据。\n"
         "联网、装软件需要审批或开关时，按审批规则申请，不要跳过。"
         "只有真的执行过并且失败，才在交付里写卡在哪、附上命令与报错、再说需要用户做什么。"
     )

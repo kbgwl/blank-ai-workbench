@@ -187,7 +187,33 @@ class TestGapVerdict:
         assert remediation.gap_reason(answer=HANDOFF, commands=commands, missing=set()) == ""
 
 
-# ── 2. 执行节点：什么情况下推回、什么情况下不推 ────────────────────
+# ── 2. 验证通道：补齐后必须走 run_tests，run_shell 跑通不算 ────────
+
+
+class TestEvidenceChannel:
+    """真实模型两次跑出同一形状（2026-11-11，:8061）：
+
+    补装 Node 后用 `run_shell` 跑通 `npm test`（退出码 0），交付写「测试通过」；
+    但验证闸门只采信 run_tests，而最后一次 run_tests 失败/跳过，于是任务被判
+    「交付文本声称测试通过，实际验证结果不支持」。三处上下文都要把通道写清楚，
+    否则模型会一直拿 run_shell 当证据。
+    """
+
+    def test_prompt_names_run_tests_as_the_evidence_channel(self) -> None:
+        from blank_api.services.agent.graph import SYSTEM_PROMPT
+
+        assert "用 run_tests 重跑" in SYSTEM_PROMPT
+        assert "同一条 run_tests 命令" in SYSTEM_PROMPT
+        assert "run_shell 里跑通不算验证证据" in SYSTEM_PROMPT
+
+    def test_remediation_hint_keeps_the_channel(self) -> None:
+        text = remediation.hint("node", 1)
+        assert "run_tests" in text
+        assert "同一条命令" in text
+        assert "run_shell 里跑通不算验证证据" in text
+
+
+# ── 3. 执行节点：什么情况下推回、什么情况下不推 ────────────────────
 
 
 async def test_missing_command_then_handoff_is_pushed_back(seeded, tmp_path):

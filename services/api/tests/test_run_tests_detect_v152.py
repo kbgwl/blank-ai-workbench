@@ -211,6 +211,10 @@ async def test_go_project_without_go_toolchain_is_skipped_not_failed(tmp_path: P
     assert outcome.data["missing_test_runner"] == "go"
     assert "go" in outcome.data["skipped_reason"]
     assert "本机没有" in outcome.data["skipped_reason"]
+    # 回执必须指明验证通道：补装后用 run_tests 重跑，run_shell 跑通不算证据
+    # （真模型读数：模型用 run_shell 跑通后声称通过，被验证闸门判「证据不支持」）。
+    assert "run_tests" in outcome.message
+    assert "run_shell 里跑通不算验证证据" in outcome.message
 
 
 async def test_go_project_with_go_toolchain_still_runs(tmp_path: Path, monkeypatch):
