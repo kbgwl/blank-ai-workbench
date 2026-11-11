@@ -257,6 +257,7 @@ uv run alembic revision --autogenerate -m "描述"
 | 场景模式对齐 Claude Harness | ✅ | 驳回不再暂停整轮（该步记未执行、模型换个做法继续）；工具回执直接续跑、不再每步塞合成「请继续」；后台子代理结束时注入一次性系统通知（结论由主代理转述）；`update_plan` 同时只允许一个 `in_progress`；系统提示补齐 act / 推荐 / 系统提醒边界 / 专职工具优先。判据 `services/api/tests/test_claude_loop_parity_v27.py`（6 例），变异 7/7 红 |
 | Claude 工具面 Glob / Grep / ListAgents | ✅ | 新增 `glob`（`**/` 命中根部、花括号、mtime 倒序、扫描预算）；`search_code` 补齐 `output_mode` / `glob` / `type` / `-i` / `multiline` / `-A/-B/-C` / `-o` / `-n` / `head_limit` / `offset`；fs-broker 与任务级隔离转发同一套参数；新增 `list_agents` 列出后台子代理状态。判据 `services/api/tests/test_claude_tool_surface_v28.py`（21 例），变异 8/8 红 |
 | 子代理默认后台与续聊 | ✅ | `spawn_agent` 不传参即在后台跑（`run_in_background=false` 才同步等）；任务收尾先给后台子代理 90 秒窗口，结束的结论写进交付提示词、仍在跑的显式取消并点名；新增 `send_message` 续聊（保留上一轮读/写/结论，新 `spawn_agent` 是全新上下文；隔离子代理与仍在跑的句柄如实拒绝）。判据 `test_claude_subagent_default_v29.py`（6 例）+ `test_claude_send_message_v30.py`（9 例），变异 8/8 与 10/10 全红 |
+| 后台 shell | ✅ | `run_shell(run_in_background=true)` 立即返回 `shell-…` 句柄，命令在后台真的跑；宿主路径边跑边流式写日志（系统临时目录、2MB 上限、读回尾部 64KB），结束时在模型调用前注入一次性系统通知（不轮询、不 sleep）；`task_output` / `task_stop` 统一句柄名 `task_id`（旧名 `agent_id` / `shell_id` 继续接受）；`task_stop` 与任务收尾都按进程树杀（cmd 外壳下的孙进程不会残留）、日志删除，等审批那一档不杀；子代理上下文禁用后台命令。判据 `services/api/tests/test_background_shell_v31.py`（20 例），变异 21/21 红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -272,12 +273,12 @@ uv run alembic revision --autogenerate -m "描述"
 
 已知限制（不粉饰）：
 
-- **Claude 式编程工具面已落地，但有四项刻意偏离**（N 批，判据
-  `services/api/tests/test_claude_parity_v24.py`）：不做后台 shell（`run_in_background`）、
-  不做 NotebookEdit、Read 不读 PDF/图片、路径仍要求工作区相对路径而不是绝对路径；
-  另外未实现「`old_string` 是上一次 `new_string` 子串」的链式编辑拒绝——当前读后写状态
-  只按文件记，不记「上一次改了什么」。前四项是产品边界（后台进程收尸与附件读取是另一套
-  能力），最后一项不影响「没读过/被改过」这两道硬闸门。
+- **Claude 式编程工具面已落地，但有三项刻意偏离**（N 批，判据
+  `services/api/tests/test_claude_parity_v24.py`）：不做 NotebookEdit、Read 不读 PDF/图片、
+  路径仍要求工作区相对路径而不是绝对路径；另外未实现「`old_string` 是上一次 `new_string`
+  子串」的链式编辑拒绝——当前读后写状态只按文件记，不记「上一次改了什么」。后两项是产品
+  边界（附件读取与编辑历史是另一套能力），最后一项不影响「没读过/被改过」这两道硬闸门。
+  后台 shell（`run_in_background`）已不在偏离项里：Q1 已落地，见上表。
 
 - **P 批把 Glob / Grep 的参数面补齐了，子代理也改成默认后台并支持续聊，但 Claude 工具表里
   还有未移植项**（判据 `services/api/tests/test_claude_tool_surface_v28.py`、
@@ -286,7 +287,10 @@ uv run alembic revision --autogenerate -m "描述"
   `output_mode / glob / type / -i / multiline / -A/-B/-C / -o / -n / head_limit / offset`，
   `list_agents` 能看到当前任务的后台子代理，`send_message` 能带着上下文续聊。
   仍未移植：Skill 工具、EnterWorktree/ExitWorktree、CronCreate/Delete/List 与
-  ScheduleWakeup、ReportFindings、Workflow。这些是「另一套能力」，不是参数没对齐。
+  ScheduleWakeup、ReportFindings、Workflow、NotebookEdit。后台 shell 已于 Q1 补齐
+  （`run_in_background` + `task_output`/`task_stop`，见上表），但它有两处与本机实现绑定
+  的偏离：沙箱路径不流式（只在结束时整段落日志）、完整输出走 `task_output` 而不是
+  Claude 的「Read 输出文件」（临时日志在系统临时目录，Read 只读工作区相对路径）。
   续聊本身的边界：对话只在本进程内保留（每任务最多 20 个会话、每会话 60 条消息、
   单条 8k 字符），隔离子代理副本结束即清理因此明确拒绝续聊，仍在后台跑的句柄要先
   `task_output`；任务收尾的等待窗口是 90 秒，过时未完成的会被取消并在交付正文点名。

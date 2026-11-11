@@ -1,6 +1,47 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell
+
+- **后台 shell：`run_in_background` + 输出/终止配对（Q 批第 1 项）**：
+  把 Claude 的 Bash 后台语义落到执行图上：命令先跑起来、拿句柄继续干活、结束由系统通知，
+  不轮询、不 sleep。新增 `services/shell_tasks.py`，`tools/shell.py`、`tools/delegate.py`、
+  `agent/graph.py`、`agent/runtime.py`、`subagent.py` 随之接通。
+  1. **非阻塞**：`run_shell(run_in_background=true)` 立即返回 `shell-<8hex>` 与 `status=running`，
+     后台协程真正起进程；`description` 进通知便于辨认。未显式给超时按 600 秒上限跑（前台仍是 30 秒：
+     长构建用 30 秒会被直接判死）。
+  2. **流式落盘**：宿主执行路径边跑边写日志（系统临时目录，不进工作区）；单条命令 2MB 上限、
+     超限写截断标记，读回只取尾部 64KB。沙箱路径不流式，结束时整段补写，不会留下空日志。
+  3. **完成通知只投递一次**：`shell_tasks.drain_notifications` 与子代理通知同一注入点——
+     `call_model` 在压缩后的消息尾部补一条 `system` 通知（含句柄、状态、退出码、输出末尾），
+     并落 `shell.notification` 事件；已通知的句柄仍留在表里，`task_output` 照样取完整输出。
+  4. **统一句柄路由**：`task_output` / `task_stop` 接受通用 `task_id`，旧名 `agent_id` / `shell_id`
+     继续接受；`shell-` 前缀或显式 `shell_id` 路由到后台命令分支，其余走子代理。schema 去掉
+     `required: ["agent_id"]`，旧名调用不会被 schema 直接拒掉。
+  5. **终止按进程树**：Windows 下命令走 cmd 外壳，只 terminate 外壳会把 python 等孙进程留下继续
+     写文件——`taskkill /PID <pid> /T /F` 连树杀，超时与取消两条路径共用；`task_stop` 等待协程
+     结束再回报，不谎报「已结束」。
+  6. **收尾不留孤儿**：任务走到终点（成功/失败/取消）时 `runtime._finish` 取消仍在跑的后台命令、
+     删除日志；等待审批不是终点，那一档保留句柄。子代理上下文 `allow_background_shell=False`
+     并在真实装配线判据里钉住：子代理的工作副本本轮结束即清理，后台进程活不到取结果。
+  7. **提示词与工具描述**：系统提示写死「长构建/起服务传 `run_in_background=true`，结束时收到
+     通知，不必轮询、也不要为此 sleep；进度 `task_output`、终止 `task_stop`」；`run_shell`
+     描述同步。
+  测试：新增 `tests/test_background_shell_v31.py` 20 例（15.05s）；相关回归集
+  `test_claude_tool_surface_v28`、`test_background_subagent_v116`、`test_claude_subagent_default_v29`、
+  `test_claude_loop_parity_v27`、`test_shell_dialect`、`test_shell_decode_v149`、
+  `test_shell_quoting_v53`、`test_shell_relative_exec_v161`、`test_host_shell_argv_v145`、
+  `test_sandbox_matrix_v21`、`test_sandbox_bypass_v115` 合计 **146 passed（31.48s）**。
+  变异电池 21/21 全红（每条跑完即还原）：忽略 `run_in_background`、后台超时退回 30 秒、
+  不接流式回调、通知重复投递、只改状态不取消、收尾不点名、收尾不删日志、子代理放行、
+  提示词漏规则、不路由 shell 句柄、旧名优先不认 `task_id`、前缀不识别、通知不注入、
+  超时报失败、非零退出报完成、通知不带输出末尾、收尾不收、审批也收、取消只杀外壳、
+  读到不落盘、schema 缺 `task_id`。其中「收尾后日志不删」第一轮是空判据（无输出的命令
+  根本不建日志），补上「先等日志落盘再收尾」后才按预期变红。
+  全量回归（最终代码）：**2725 passed, 24 skipped, PYTEST_RC=0（802.21s）**。首轮
+  2724 passed / 1 条团队偶发红（先后红了 `test_team_midround_v141` 里两个不同用例，
+  单文件连跑两次 5/5 全绿，二轮全量 rc=0）；未调大任何超时，按已知偶发登记。
+  偏离：沙箱路径不流式（结束时整段写）；完整输出走 `task_output` 而不是 Claude 的
+  「Read 输出文件」（临时日志在系统临时目录，Read 只读工作区相对路径）。
 
 - **Glob / Grep 参数面 / ListAgents 对齐 Claude Code 工具表，子代理默认后台与续聊（P 批）**：
   把 Claude 的 Glob 与带丰富参数的 Grep 拆成可失败判据，broker 边界与宿主同源；

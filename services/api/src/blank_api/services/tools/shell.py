@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key, ok
@@ -191,12 +192,97 @@ def normalize_relative_executable(command: str | list[str], root: Path) -> str |
     return f"{rendered}{sep}{tail}"
 
 
+async def _pump(
+    reader: asyncio.StreamReader | None,
+    sink: list[bytes],
+    on_chunk: Callable[[str, bytes], None],
+    tag: str,
+) -> None:
+    if reader is None:
+        return
+    while True:
+        chunk = await reader.read(65_536)
+        if not chunk:
+            return
+        sink.append(chunk)
+        try:
+            on_chunk(tag, chunk)
+        except Exception:  # noqa: BLE001 - 输出落盘失败不该把命令本身打断
+            pass
+
+
+async def _end_process(process: asyncio.subprocess.Process) -> None:
+    """terminate → 等 5s → kill：超时与取消两条路径共用。"""
+    if os.name == "nt" and process.pid:
+        # 命令走 cmd.exe，terminate() 只杀外壳，python 之类的孙进程会留下来接着写文件。
+        # taskkill /T 按 PID 连树一起杀；失败再退回单进程路径。
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        try:
+            await asyncio.wait_for(process.wait(), 5)
+            return
+        except (asyncio.TimeoutError, ProcessLookupError):
+            pass
+    try:
+        process.terminate()
+        await asyncio.wait_for(process.wait(), 5)
+        return
+    except (asyncio.TimeoutError, ProcessLookupError):
+        pass
+    try:
+        process.kill()
+        await asyncio.wait_for(process.wait(), 5)
+    except (asyncio.TimeoutError, ProcessLookupError):
+        pass
+
+
+async def _stream_process(
+    process: asyncio.subprocess.Process,
+    timeout: float,
+    on_chunk: Callable[[str, bytes], None],
+) -> tuple[bytes, bytes, bool]:
+    """边跑边把输出交给回调（后台命令写日志），结束时返回同一份完整输出。"""
+    out: list[bytes] = []
+    err: list[bytes] = []
+    readers = [
+        asyncio.create_task(_pump(process.stdout, out, on_chunk, "stdout")),
+        asyncio.create_task(_pump(process.stderr, err, on_chunk, "stderr")),
+    ]
+    timed_out = False
+    try:
+        await asyncio.wait_for(asyncio.gather(*readers), timeout)
+        await process.wait()
+    except asyncio.TimeoutError:
+        timed_out = True
+        for reader in readers:
+            reader.cancel()
+        await _end_process(process)
+        await asyncio.gather(*readers, return_exceptions=True)
+    except asyncio.CancelledError:
+        # task_stop 取消的是这条协程，不是子进程：不在这里杀掉，命令会继续跑到
+        # 自然结束——终端里看不见，CPU/磁盘却还在花。
+        for reader in readers:
+            reader.cancel()
+        await _end_process(process)
+        await asyncio.gather(*readers, return_exceptions=True)
+        raise
+    return b"".join(out), b"".join(err), timed_out
+
+
 async def run_process(
     command: str | list[str],
     root: Path,
     timeout: float,
     shell: bool = False,
     env: dict[str, str] | None = None,
+    on_chunk: Callable[[str, bytes], None] | None = None,
 ) -> dict:
     # 命令首段是工作区里的相对可执行文件时要先补成绝对路径（见函数注释）。
     # 放在这里而不是各个工具里：run_shell 与 run_tests、宿主直连与沙箱执行都经过它。
@@ -215,6 +301,14 @@ async def run_process(
     except NotImplementedError:
         # Selector 事件循环（Windows 上 uvicorn --reload 的子进程）不支持 asyncio 子进程，退回线程执行。
         return await asyncio.to_thread(_run_blocking, command, root, timeout, shell, env)
+    if on_chunk is not None:
+        stdout, stderr, timed_out = await _stream_process(process, timeout, on_chunk)
+        return {
+            "exit_code": process.returncode,
+            "stdout": _decode(stdout),
+            "stderr": _decode(stderr),
+            "timed_out": timed_out,
+        }
     timed_out = False
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
@@ -328,6 +422,7 @@ async def execute_command(
     tier: str = "",
     host_bypass: bool = False,
     isolation_profile: str = "",
+    on_chunk: Callable[[str, bytes], None] | None = None,
 ) -> dict:
     """按任务档位执行命令：沙箱 / 宿主直连 / 拒绝，三种结果都带同一本账。
 
@@ -370,7 +465,9 @@ async def execute_command(
             reason = f"经人工批准单次绕过沙箱（原档位 {resolution.tier}），命令在宿主上执行"
         else:
             reason = "当前没有生效的沙箱（档位 off 或部署关闭），命令本就在宿主上执行"
-        result = await run_process(command, root, budget, shell=shell, env=env)
+        result = await run_process(
+            command, root, budget, shell=shell, env=env, on_chunk=on_chunk
+        )
         result["sandbox"] = None
         result["tier"] = facts
         result["sandbox_bypass"] = active
@@ -439,7 +536,9 @@ async def execute_command(
             "enforcement": _tier_enforcement(facts, enforcement),
             "timeout_budget": budget,
         }
-    result = await run_process(command, root, budget, shell=shell, env=env)
+    result = await run_process(
+        command, root, budget, shell=shell, env=env, on_chunk=on_chunk
+    )
     result["sandbox"] = None
     result["tier"] = facts
     result["notes"] = [resolution.notice]
@@ -525,6 +624,38 @@ def _bypass_data(result: dict) -> dict:
     }
 
 
+def _event_recorder(context: ToolContext):
+    """后台命令的生命周期要进事件账；没有会话工厂（单测、外部集成）就不记。"""
+    from blank_api.services.agent.events import EventRecorder
+
+    factory = getattr(context, "session_factory", None)
+    task_id = str(getattr(context, "task_id", "") or "")
+    if factory is None or not task_id:
+        return None
+    return EventRecorder(factory, task_id, trace_id=str(getattr(context, "trace_id", "") or ""))
+
+
+async def _record_shell_started(context: ToolContext, record, command: str) -> None:
+    recorder = _event_recorder(context)
+    if recorder is None:
+        return
+    try:
+        from blank_api.services.log_safety import redact
+
+        await recorder.add(
+            "shell.started",
+            "execute_action",
+            {
+                "shell_id": record.shell_id,
+                "command": redact(command)[:300],
+                "description": record.description[:200],
+                "timeout_seconds": record.timeout_seconds,
+            },
+        )
+    except Exception:  # noqa: BLE001 - 记账失败不该让命令起不来
+        pass
+
+
 async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
     blocked = policy_gate(context, "run_shell", arguments)
     if blocked is not None:
@@ -569,6 +700,57 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
     snapshot = getattr(context, "shell", None)
     env = snapshot.env_for() if hasattr(snapshot, "env_for") else None
     safety = getattr(context, "safety", None)
+    background = bool(arguments.get("run_in_background"))
+    if background:
+        if not getattr(context, "allow_background_shell", True):
+            return ToolOutcome(
+                ok=False,
+                status="denied",
+                message=(
+                    "子代理里不能启动后台命令：它的工作副本在本轮结束时会被清理，"
+                    "后台进程活不到有人取结果的时候。"
+                ),
+            )
+        from blank_api.services import shell_tasks
+
+        if arguments.get("timeout_seconds") is None:
+            # 未显式给超时：30s 的默认值会把长构建/起服务直接判死，后台命令按 600s 给。
+            timeout = shell_tasks.DEFAULT_BACKGROUND_TIMEOUT
+
+        def runner(sink):
+            return execute_command(
+                command,
+                context.root,
+                timeout,
+                env=env,
+                safety=safety,
+                tier=getattr(context, "sandbox_tier", "") or "",
+                host_bypass=approved,
+                isolation_profile=str(getattr(context, "isolation_profile", "") or ""),
+                on_chunk=sink,
+            )
+
+        record = shell_tasks.start(
+            task_id=str(getattr(context, "task_id", "") or ""),
+            command=command,
+            description=str(arguments.get("description") or ""),
+            timeout_seconds=timeout,
+            runner=runner,
+            recorder=_event_recorder(context),
+            mask=lambda text: mask_output(text, context.root),
+        )
+        await _record_shell_started(context, record, command)
+        return ok(
+            f"已在后台启动 {record.shell_id}：{command[:160]}\n"
+            f"它还在运行；结束时你会收到系统通知，不必轮询、也不要为此 sleep。"
+            f'用 task_output(shell_id="{record.shell_id}") 看进度与输出，'
+            f'不要了用 task_stop(shell_id="{record.shell_id}") 终止。',
+            shell_id=record.shell_id,
+            status="running",
+            command=command,
+            description=record.description,
+            timeout_seconds=record.timeout_seconds,
+        )
     result = await execute_command(
         command,
         context.root,
@@ -736,6 +918,9 @@ def shell_tools() -> list[ToolDefinition]:
             name="run_shell",
             description=(
                 f"在工作区根目录执行 Shell 命令，支持超时并回收进程，返回退出码与标准输出/错误。{syntax}"
+                "长构建、起服务这类「下一步不马上需要结果」的命令传 run_in_background=true："
+                "立刻返回 shell_id，结束时你会收到系统通知，不必轮询、也不要为此 sleep；"
+                "进度与输出用 task_output(shell_id=...)，不要了用 task_stop(shell_id=...) 终止。"
                 "只有当沙箱导致命令无法完成、且确有必要时才传 sandbox=\"host\" 请求单次越界："
                 "该请求默认被拒绝，开启后也必须逐条人工批准，仅在宿主上执行这一次。"
             ),
@@ -744,7 +929,18 @@ def shell_tools() -> list[ToolDefinition]:
                 "required": ["command"],
                 "properties": {
                     "command": {"type": "string", "description": "要执行的命令"},
-                    "timeout_seconds": {"type": "number", "description": "超时秒数，默认 30"},
+                    "timeout_seconds": {
+                        "type": "number",
+                        "description": "超时秒数，默认 30；后台命令未传时按 600 秒上限执行",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "这条命令在做什么（后台命令的通知里会带上，便于辨认）",
+                    },
+                    "run_in_background": {
+                        "type": "boolean",
+                        "description": "是否后台执行：立刻返回 shell_id，结束时收到系统通知",
+                    },
                     "sandbox": {
                         "type": "string",
                         "enum": [HOST_BYPASS],

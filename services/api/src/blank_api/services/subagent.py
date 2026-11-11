@@ -446,6 +446,8 @@ async def run_subagent(
         tool_registry=gateway.registry,
         # 读后写状态按副本独立记：子代理只在它自己的根里读和写。
         file_state=FileStateCache(),
+        # 子树在本轮结束即删除/合并：后台命令活不到有人取结果的时候，入口直接关掉。
+        allow_background_shell=False,
     )
     log = _Recorder(
         recorder,

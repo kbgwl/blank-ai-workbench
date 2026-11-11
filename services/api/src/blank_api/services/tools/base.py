@@ -70,6 +70,9 @@ class ToolContext:
     # 「读过没有 / 读过之后被改过没有」两道闸门；生产路径由 runtime 与 subagent 注入，
     # 直接构造 ToolContext 的单测默认不启用，既有行为不变。
     file_state: Any = None
+    # 后台命令（run_shell(run_in_background=true)）：子代理的工作副本在本轮结束时会被
+    # 清理，后台进程活不到有人取结果的时候，所以子代理上下文显式关掉这个入口。
+    allow_background_shell: bool = True
 
 
 @dataclass

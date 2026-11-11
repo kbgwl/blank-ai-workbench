@@ -122,13 +122,84 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
     )
 
 
+def _handle_id(arguments: dict) -> str:
+    """task_output / task_stop 的句柄：task_id 是通用名，旧名 agent_id / shell_id 继续接受。"""
+    for key in ("task_id", "shell_id", "agent_id"):
+        value = str(arguments.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _is_shell_handle(arguments: dict, handle_id: str) -> bool:
+    # 后台命令的句柄带固定前缀；显式传 shell_id 也按命令处理，不靠前缀猜。
+    if handle_id.startswith("shell-"):
+        return True
+    return str(arguments.get("shell_id") or "").strip() == handle_id
+
+
+async def _shell_output(context: ToolContext, shell_id: str, arguments: dict) -> ToolOutcome:
+    from blank_api.services import shell_tasks
+    from blank_api.services.tools.shell import MAX_OUTPUT_CHARS, mask_output
+
+    try:
+        timeout = float(arguments.get("timeout") or 60)
+    except (TypeError, ValueError):
+        timeout = 60.0
+    snapshot = await shell_tasks.output(
+        str(getattr(context, "task_id", "") or ""),
+        shell_id,
+        block=bool(arguments.get("block", True)),
+        timeout=timeout,
+    )
+    status = str(snapshot.get("status") or "")
+    if status == "not_found":
+        return fail("error", str(snapshot.get("message") or "没有找到该后台命令"))
+    body = mask_output(str(snapshot.get("text") or ""), context.root)
+    if len(body) > MAX_OUTPUT_CHARS:
+        body = body[:MAX_OUTPUT_CHARS] + "\n…（输出已截断）"
+    data = {
+        key: snapshot[key]
+        for key in ("shell_id", "command", "description", "status", "exit_code", "timed_out", "elapsed_seconds", "truncated")
+        if key in snapshot
+    }
+    message = str(snapshot.get("message") or "")
+    if status == "running":
+        return ToolOutcome(ok=True, status="ok", output=f"{message}\n{body}".strip(), data=data)
+    if status == "cancelled":
+        return ToolOutcome(ok=False, status="error", output=body, data=data, message=message)
+    if status != "completed":
+        return ToolOutcome(ok=False, status="error", output=body, data=data, message=message)
+    return ToolOutcome(ok=True, status="ok", output=body or "命令执行完成，无输出", data=data)
+
+
+async def _shell_stop(context: ToolContext, shell_id: str) -> ToolOutcome:
+    from blank_api.services import shell_tasks
+
+    snapshot = await shell_tasks.stop(str(getattr(context, "task_id", "") or ""), shell_id)
+    status = str(snapshot.get("status") or "")
+    if status == "not_found":
+        return fail("error", str(snapshot.get("message") or "没有找到该后台命令"))
+    data = {
+        key: snapshot[key]
+        for key in ("shell_id", "command", "description", "status", "exit_code", "elapsed_seconds")
+        if key in snapshot
+    }
+    if status == "cancelled":
+        return ok(f"已取消后台命令 {shell_id}，进程已终止。", **data)
+    return ok(f"后台命令 {shell_id} 已经结束（{status}），没有需要终止的运行。", **data)
+
+
 async def _task_output(context: ToolContext, arguments: dict) -> ToolOutcome:
+    handle_id = _handle_id(arguments)
+    if not handle_id:
+        return fail("error", "task_output 需要 task_id（后台子代理或后台命令的句柄）")
+    if _is_shell_handle(arguments, handle_id):
+        return await _shell_output(context, handle_id, arguments)
     runner = getattr(context, "subagent_runner", None)
     if runner is None or not hasattr(runner, "output"):
         return fail("error", "当前运行时没有启用后台子代理")
-    agent_id = str(arguments.get("agent_id") or "").strip()
-    if not agent_id:
-        return fail("error", "task_output 需要 agent_id")
+    agent_id = handle_id
     try:
         timeout = float(arguments.get("timeout") or 60)
     except (TypeError, ValueError):
@@ -188,12 +259,15 @@ async def _list_agents(context: ToolContext, arguments: dict) -> ToolOutcome:
 
 
 async def _task_stop(context: ToolContext, arguments: dict) -> ToolOutcome:
+    handle_id = _handle_id(arguments)
+    if not handle_id:
+        return fail("error", "task_stop 需要 task_id（后台子代理或后台命令的句柄）")
+    if _is_shell_handle(arguments, handle_id):
+        return await _shell_stop(context, handle_id)
     runner = getattr(context, "subagent_runner", None)
     if runner is None or not hasattr(runner, "stop"):
         return fail("error", "当前运行时没有启用后台子代理")
-    agent_id = str(arguments.get("agent_id") or "").strip()
-    if not agent_id:
-        return fail("error", "task_stop 需要 agent_id")
+    agent_id = handle_id
     snapshot = await runner.stop(agent_id)
     status = str(snapshot.get("status") or "")
     if status == "not_found":
@@ -378,19 +452,21 @@ def delegate_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="task_output",
             description=(
-                "取后台子代理（spawn_agent(background=true)）的结论。"
+                "取后台任务的现状与输出：后台子代理（spawn_agent）的结论，或后台命令"
+                "（run_shell(run_in_background=true)）的输出。"
                 "block=true 时最多等 timeout 秒；等不到只表示它还在跑，不会因此取消它。"
-                "返回状态 completed / failed / cancelled / running，未知 agent_id 会如实报找不到。"
-                "子代理自己结束时会收到系统通知，这里只在需要更细的进度或拿完整文本时用。"
-                "取到的结论由你转述给用户，不要替未结束的子代理编造结果。"
+                "返回状态 running / completed / failed / timeout / cancelled，未知句柄会如实报找不到。"
+                "后台任务自己结束时你会收到系统通知，这里只在需要更细的进度或拿完整文本时用。"
+                "取到的结论由你转述给用户，不要替未结束的任务编造结果。"
             ),
             input_schema={
                 "type": "object",
-                "required": ["agent_id"],
                 "properties": {
-                    "agent_id": {"type": "string", "description": "spawn_agent(background=true) 返回的句柄"},
+                    "task_id": {"type": "string", "description": "后台任务句柄（agent_id 或 shell_id）"},
+                    "agent_id": {"type": "string", "description": "task_id 的旧名，只适用于后台子代理"},
+                    "shell_id": {"type": "string", "description": "task_id 的旧名，只适用于后台命令"},
                     "block": {"type": "boolean", "description": "是否等待结束，默认 true"},
-                    "timeout": {"type": "number", "description": "最多等几秒，默认 60，上限 300"},
+                    "timeout": {"type": "number", "description": "最多等几秒，默认 60，上限 600"},
                 },
             },
             risk_level="low",
@@ -434,14 +510,16 @@ def delegate_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="task_stop",
             description=(
-                "取消一个仍在运行的后台子代理；它的隔离副本会一并删除，并留下 subagent.cancelled 记录。"
+                "终止一个仍在运行的后台任务：后台子代理（隔离副本一并删除并留下 subagent.cancelled），"
+                "或后台命令（进程终止并留下 shell.cancelled）。"
                 "已经结束的句柄照实返回它当初的状态，不会谎报取消。"
             ),
             input_schema={
                 "type": "object",
-                "required": ["agent_id"],
                 "properties": {
-                    "agent_id": {"type": "string", "description": "要停止的后台子代理句柄"},
+                    "task_id": {"type": "string", "description": "要终止的后台任务句柄"},
+                    "agent_id": {"type": "string", "description": "task_id 的旧名，只适用于后台子代理"},
+                    "shell_id": {"type": "string", "description": "task_id 的旧名，只适用于后台命令"},
                 },
             },
             risk_level="low",

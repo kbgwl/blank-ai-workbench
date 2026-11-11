@@ -43,6 +43,7 @@ from blank_api.services.agent.verifier import (
 )
 from blank_api.services.agent.automation import resolve_mode as resolve_automation_mode
 from blank_api.services.agent.loadstats import recent_load
+from blank_api.services import shell_tasks
 from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agent.scenarios import (
     excluded_tools,
@@ -1291,6 +1292,9 @@ class AgentRuntime:
         # 任务走到终点时仍在跑的后台子代理必须收走：否则任务已经显示"完成"，
         # 它们还在调用模型、写事件，账目与界面从此对不上。等待审批不是一个终点——
         # 恢复后还要用同一个句柄取结论，所以那一档不收。
+        # 后台命令同理：进程还活着、日志还占着盘，也得在这里收走。
+        if status != "waiting_approval":
+            await shell_tasks.aclose(scope.task_id, reason=f"task_{status}")
         if status != "waiting_approval" and scope.subagents is not None:
             await scope.subagents.aclose(scope.task_id, reason=f"task_{status}")
         # 任务级隔离根的收尾：成功先合并，再释放副本/卷/包；失败与取消只释放。
