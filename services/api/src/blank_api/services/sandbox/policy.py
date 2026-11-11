@@ -78,6 +78,14 @@ class SandboxPolicy:
     appcontainer_enabled: bool = field(
         default_factory=lambda: _env("SANDBOX_APPCONTAINER", "false").lower() in {"1", "true", "yes"}
     )
+    # 任务级隔离（J3）：每个任务一个独立可写根 + 一个只属于它的 AppContainer 包。
+    # 默认关——它把任务的工作目录换成副本；打开后 AC 不可用就整任务拒绝，不偷偷降级。
+    task_isolation: bool = field(
+        default_factory=lambda: _env("TASK_ISOLATION", "false").lower() in {"1", "true", "yes"}
+    )
+    # 任务根的容量上限（MB）：0 = 普通目录；>0 = 固定容量 VHDX 卷（需要管理员）。
+    # 与临时区容量配额分开配置：临时区经常要开，任务根容量是并发隔离部署才关心的账。
+    task_disk_mb: int = field(default_factory=lambda: _parse_mb(_env("TASK_DISK_MB", "0")))
     # 单次越界宿主执行的部署开关。默认关：模型传了也不执行，交给人工在部署时显式打开。
     allow_host_bypass: bool = field(
         default_factory=lambda: _env("SANDBOX_ALLOW_HOST_BYPASS", "false").lower() in {"1", "true", "yes"}

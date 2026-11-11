@@ -128,12 +128,144 @@ def create_worktree(root: Path, *, label: str = "") -> Worktree:
     )
 
 
+def create_clone(root: Path, *, label: str = "", target: Path | None = None) -> Worktree:
+    """独立仓库副本：`git clone --shared`，对象只读借用主库，写入落在副本自己的 .git。
+
+    任务级隔离不能用 `git worktree`：worktree 的 `.git` 指向主仓库的
+    `.git/worktrees/<name>`，`git add` 会把对象写进**共享**对象库——那等于给任务一把
+    能改整个仓库历史的钥匙（J3 实测：只授权任务根时 git 直接「拒绝访问。」，授权共享
+    对象库 M 后才成功）。克隆副本有自己的对象库，主仓库对象库只给读，写一个字节都落不进来。
+
+    `target` 由调用方给（容量卷挂载点下的空路径）；不给就放临时根。克隆失败退回整树复制，
+    与 `create_worktree` 的兜底同一口径，原因写进 ``notes``。
+    """
+    base = Path(root).resolve()
+    if not base.is_dir():
+        raise ValueError("工作区不存在，无法创建隔离副本")
+    name = f"{label or 'task'}-{uuid.uuid4().hex[:8]}"
+    destination = Path(target) if target is not None else _worktree_root() / name
+    code, output = _run_git(["clone", "--shared", "--quiet", str(base), str(destination)], base.parent)
+    if code == 0 and destination.is_dir():
+        return Worktree(path=destination, mode="git", base=base, name=name)
+    shutil.rmtree(destination, ignore_errors=True)
+    ok, error = _copy_tree(base, destination)
+    if not ok:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise ValueError(error or "无法创建隔离副本")
+    return Worktree(
+        path=destination,
+        mode="copy",
+        base=base,
+        name=name,
+        notes=(output.strip()[:200] if code != 0 else ""),
+    )
+
+
+def _dirty_entries(base: Path) -> list[tuple[str, str]]:
+    """工作区相对 HEAD 的改动清单（含未跟踪文件，逐个文件列出）。读不到就返回空。"""
+    code, output = _run_git(["status", "--porcelain", "-z", "-uall"], base)
+    if code != 0:
+        return []
+    parts = output.split("\0")
+    entries: list[tuple[str, str]] = []
+    index = 0
+    while index < len(parts):
+        entry = parts[index]
+        index += 1
+        if len(entry) < 4:
+            continue
+        status, relative = entry[:2], entry[3:]
+        if "R" in status or "C" in status:
+            # porcelain -z 的重命名/复制把原路径放在下一段，我们只关心新路径
+            index += 1
+        entries.append((status, relative))
+    return entries
+
+
+def overlay_working_tree(tree: Worktree) -> None:
+    """把任务开始时工作区里**未提交**的改动叠到克隆副本上。
+
+    克隆只拿得到 HEAD。用户工作区常常带着未提交的改动，让任务在旧代码上干活再合并回来，
+    等于把别人的半成品覆盖掉。叠完之后，任务看到的就是「此刻的真实工作树」。
+    """
+    if tree.mode != "git":
+        return
+    for status, relative in _dirty_entries(tree.base):
+        if any(part in COPY_IGNORE for part in Path(relative).parts):
+            continue
+        source = tree.base / relative
+        target = tree.path / relative
+        if "D" in status:
+            try:
+                target.unlink()
+            except OSError:
+                pass
+            continue
+        if not source.is_file():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(source, target)
+        except OSError:
+            # 单个文件复制失败不中断整体：任务至少看到其余真实内容，
+            # 漏掉的那份会在基线提交里保留 HEAD 版本，合并时按"未提交改动"跳过。
+            continue
+
+
+def commit_baseline(tree: Worktree) -> str:
+    """在克隆里把当前工作树提交成基线，返回错误文本（空 = 成功或无改动）。
+
+    基线之后，副本里的 `git diff` 只包含**任务自己**的改动——用户带进来的未提交改动
+    已经进了基线，不会被算成任务的产出，也不会被合并回主工作区。
+    """
+    if tree.mode != "git":
+        return ""
+    _run_git(["add", "-A"], tree.path)
+    code, output = _run_git(
+        [
+            "-c", "user.name=Blank Task",
+            "-c", "user.email=blank-task@localhost",
+            "-c", "commit.gpgsign=false",
+            # 这是隔离机制的内部快照，不是用户的提交：跑用户的 commit 钩子只会让
+            # 一个与交付无关的副作用决定任务能不能开始。
+            "commit", "-qm", "blank task baseline", "--no-verify",
+        ],
+        tree.path,
+    )
+    if code == 0:
+        return ""
+    lowered = output.lower()
+    if "nothing to commit" in lowered or "无文件要提交" in output or "干净的工作区" in output:
+        return ""
+    return output.strip()[:300] or f"基线提交失败（rc={code}）"
+
+
+def _remove_tree(path: Path) -> None:
+    """删整棵树，Windows 上先清只读位：git 对象是不可写文件，`rmtree` 会逐个失败。
+
+    `ignore_errors=True` 会把"只删了一半"读成成功——J3 实测：release 报无错误，副本目录
+    还留在 `%TEMP%/blank-worktrees` 里。这里重试失败项（先 chmod 再删），仍删不掉的
+    留给调用方按"目录是否还在"记账，不在这里吞掉。
+    """
+    def _retry(func, target, _exc_info):
+        try:
+            os.chmod(target, 0o700)
+        except OSError:
+            pass
+        try:
+            func(target)
+        except OSError:
+            pass
+
+    shutil.rmtree(path, onerror=_retry)
+
+
 def remove_worktree(tree: Worktree) -> None:
     if tree.mode == "git":
         code, _ = _run_git(["worktree", "remove", "--force", str(tree.path)], tree.base)
         if code == 0:
             return
-    shutil.rmtree(tree.path, ignore_errors=True)
+    _remove_tree(tree.path)
 
 
 async def create_worktree_with_hooks(

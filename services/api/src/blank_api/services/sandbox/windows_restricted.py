@@ -347,6 +347,17 @@ def _token_user_sid(token: int) -> str:
     return _sid_string(int(sid))
 
 
+def current_user_sid() -> str:
+    """当前进程所属用户的 SID。任务根收紧 ACL 时用它保留宿主自己的完全控制权。"""
+    if sys.platform != "win32":
+        raise TokenError("当前用户 SID 只在 Windows 上可取")
+    token = _open_current_token()
+    try:
+        return _token_user_sid(token)
+    finally:
+        _k32.CloseHandle(ctypes.c_void_p(token))
+
+
 def _token_logon_sid(token: int) -> str:
     buf = _token_buffer(token, 2)  # TokenGroups
     count = ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint32)).contents.value

@@ -319,18 +319,22 @@ async def _apply_patch(context: ToolContext, arguments: dict) -> ToolOutcome:
     from blank_api.services.tools import fs_broker as broker
 
     marker: dict = {}
-    if broker.broker_enabled():
-        # 开了 fs-broker：文件动作全在子进程边界里做。失败就是失败——
+    profile = str(getattr(context, "isolation_profile", "") or "")
+    if broker.broker_enabled() or profile:
+        # 开了 fs-broker（或任务级隔离）：文件动作全在子进程/任务包边界里做。失败就是失败——
         # 这里没有任何"回退宿主再试一次"的分支，一条也不许加。
+        request = {
+            "path": str(arguments.get("path") or ""),
+            "patch": str(arguments.get("patch") or ""),
+            "task_id": context.task_id,
+        }
         try:
-            envelope = await broker.call_broker(
-                context.root, context.task_id, "patch",
-                {
-                    "path": str(arguments.get("path") or ""),
-                    "patch": str(arguments.get("patch") or ""),
-                    "task_id": context.task_id,
-                },
-            )
+            if profile:
+                envelope = await broker.call_isolated(
+                    context.root, context.task_id, "patch", request, profile_name=profile
+                )
+            else:
+                envelope = await broker.call_broker(context.root, context.task_id, "patch", request)
         except broker.FsBrokerError as exc:
             return broker.broker_failure_outcome("patch", exc)
         # dispatch 给 patch 的返回是 {"result": <磁盘侧结果>}，envelope 又包一层：

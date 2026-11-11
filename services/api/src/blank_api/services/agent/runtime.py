@@ -7,7 +7,7 @@ import hashlib
 import logging
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dc_replace
 from pathlib import Path
 from typing import Any
 
@@ -253,6 +253,10 @@ class _RunScope:
     sandbox: dict = field(default_factory=dict)
     # 本轮的子代理运行器：收尾时要把仍在跑的后台子代理收走（见 _finish）。
     subagents: Any = None
+    # 任务级隔离根（J3，task_isolation.TaskRoot）；None 表示这一轮跑在共享工作区。
+    isolation: Any = None
+    # 收尾只结算一次：_finish 可能被走到多次（提前取消、异常、正常收尾）。
+    isolation_settled: bool = False
     # 场景 key（scenarios.py）。task.started 记"当时在哪个场景"用，事件与证据都以它为准。
     scenario_key: str = "dev"
 
@@ -480,6 +484,36 @@ class AgentRuntime:
         # 不向用户 prompt 拼前缀。被禁工具在注册表里消失、在网关执行处硬拦。
         scenario = resolve_scenario(request.scenario)
         scenario_excluded = excluded_tools(scenario, memory_opt_in=request.memory_opt_in)
+        # J3 任务级隔离：每个任务一个独立可写根 + 一个只属于它的 AppContainer 包。
+        # 逆向场景的写根已经单独切到分析区（下一步），不再套一层副本；其余场景打开开关
+        # 就整任务迁移到副本里跑，AC 建不起来直接拒绝——不偷偷退回共享根。
+        # 续跑/恢复复用同一个任务的根：换一个新克隆会把审批前做的改动丢掉。
+        isolation = None
+        if sandbox.policy.task_isolation and scenario.key != "reverse":
+            from blank_api.services.sandbox import task_isolation
+
+            isolation = task_isolation.get(request.task_id)
+            reused = isolation is not None and Path(isolation.path).is_dir()
+            if not reused:
+                try:
+                    isolation = await task_isolation.create_async(request.root, request.task_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - 边界建不起来就整任务拒绝
+                    raise ApiError(
+                        code="task_isolation_unavailable",
+                        message=(
+                            "任务级隔离根创建失败，任务未执行："
+                            f"{exc.__class__.__name__}: {exc}"
+                        ),
+                        status_code=409,
+                    ) from None
+            await recorder.add(
+                "isolation.reused" if reused else "isolation.created",
+                "receive_task",
+                isolation.as_dict(),
+            )
+        run_root = Path(isolation.path) if isolation is not None else Path(request.root)
         # 逆向场景：读根仍是用户的工作区（样本在那儿），写根切到独立分析区。
         # 这一层不写在提示词里——提示词只是"别改原文"的建议，换写入根才是约束（v164 §5）。
         write_root = None
@@ -549,14 +583,14 @@ class AgentRuntime:
         subagents = SubAgentRunner()
         notes = NoteStore()
         memory = MemoryStore()
-        shell = capture_shell(request.root)
+        shell = capture_shell(run_root)
         # 能力边界跟着设置页走：没开就是没开，请求里带什么都不放宽。
         # 放在这里读一次，同一任务的网关、工具处理、子代理拿到的是同一份策略。
         safety = SafetyPolicy.load()
         # 用户级 → 项目 AGENTS.md（+ 可选外部指令文件）；任务级偏好走 skill_instructions
-        layers = load_layers(request.root)
+        layers = load_layers(run_root)
         context = ToolContext(
-            root=Path(request.root),
+            root=run_root,
             task_id=request.task_id,
             session_factory=store,
             # 审批回调保留给外部集成；运行时的唯一真源是 permissions（模式 + 前缀 + 会话记忆）。
@@ -573,6 +607,7 @@ class AgentRuntime:
             tool_registry=gateway.registry,
             team_scope=dict(request.team_scope or {}),
             sandbox_tier=sandbox.tier,
+            isolation_profile=isolation.profile_name if isolation is not None else "",
         )
         session = AgentSession(
             adapter=request.adapter,
@@ -637,6 +672,7 @@ class AgentRuntime:
             sandbox=sandbox.as_dict(),
             subagents=subagents,
             scenario_key=scenario.key,
+            isolation=isolation,
         )
 
     async def _fire_hooks(self, scope: _RunScope, event: str, payload: dict) -> None:
@@ -845,6 +881,8 @@ class AgentRuntime:
                 "permissions": session.permissions.snapshot(),
                 # 档位是任务级配置：审批恢复与事后审计都读这一条（requested 优先）。
                 "sandbox": scope.sandbox,
+                # 任务级隔离（J3）：副本模式、包名、容量上限与基线错误。空表示没开。
+                "isolation": scope.isolation.as_dict() if scope.isolation is not None else {},
                 # 扁平一份进去：事件消费方（面板/证据包）不必再钻进 sandbox.tier 里找。
                 "sandbox_mode": getattr(session, "sandbox_tier", ""),
                 "tools": session.gateway.registry.visible_names(),
@@ -1251,6 +1289,15 @@ class AgentRuntime:
         # 恢复后还要用同一个句柄取结论，所以那一档不收。
         if status != "waiting_approval" and scope.subagents is not None:
             await scope.subagents.aclose(scope.task_id, reason=f"task_{status}")
+        # 任务级隔离根的收尾：成功先合并，再释放副本/卷/包；失败与取消只释放。
+        # 暂停与等待审批不释放——恢复后要在同一个根里接着干，换新克隆会丢改动。
+        if (
+            getattr(scope, "isolation", None) is not None
+            and not getattr(scope, "isolation_settled", False)
+            and status in ("succeeded", "failed", "cancelled")
+        ):
+            scope.isolation_settled = True
+            await self._settle_isolation(scope, status)
         async with scope.store() as session:
             task = await session.get(Task, scope.task_id)
             if task is None:
@@ -1344,6 +1391,44 @@ class AgentRuntime:
                     "fs_broker.release_failed", "complete",
                     {"reason": f"{exc.__class__.__name__}: {exc}"},
                 )
+
+
+    async def _settle_isolation(self, scope: _RunScope, status: str) -> None:
+        """收任务根：成功的先合并改动，再释放副本/容量卷/包；失败与取消只释放。
+
+        合并规则复用 `worktree.apply_changes`：同一文件被并发改过、或工作区该文件在任务
+        开始后又被改过，都只交回 diff，不覆盖；删除类改动不自动执行。合并失败要留痕，
+        但不改写任务结论——结论是模型与验证器的事，合并是我们自己的收尾。
+        """
+        from blank_api.services.sandbox import task_isolation
+
+        root = scope.isolation
+        if status == "succeeded":
+            try:
+                harvested = await task_isolation.harvest_async(root)
+                await scope.recorder.add("isolation.harvested", "complete", harvested)
+            except Exception as exc:  # noqa: BLE001 - 合并失败必须可见，但不能吞掉任务结论
+                await scope.recorder.add(
+                    "isolation.harvest_failed",
+                    "complete",
+                    {"reason": f"{exc.__class__.__name__}: {exc}"},
+                )
+        try:
+            released = await task_isolation.release_async(root)
+        except Exception as exc:  # noqa: BLE001
+            await scope.recorder.add(
+                "isolation.release_failed",
+                "complete",
+                {"reason": f"{exc.__class__.__name__}: {exc}"},
+            )
+            return
+        event = "isolation.release_errors" if released.get("errors") else "isolation.released"
+        await scope.recorder.add(event, "complete", released)
+        # 收尾之后还要固化的记忆按工作区取 slug。副本已经删了，换回真实工作区——
+        # 否则记忆会落在一个已不存在的路径名字下。
+        scope.session.context = dc_replace(
+            scope.session.context, root=Path(root.workspace), isolation_profile=""
+        )
 
 
 def _routing_summary(session: AgentSession) -> dict:

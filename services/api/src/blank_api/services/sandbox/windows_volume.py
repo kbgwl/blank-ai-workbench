@@ -230,9 +230,29 @@ def _sweep_stale(base: Path) -> None:
         except OSError:
             continue
         detach_and_remove(vhdx, base / ("mnt-" + vhdx.stem[len("quota-"):]))
+    # 任务级隔离的卷用 task-/taskmnt- 前缀（每个任务一个），异常退出同样要收。
+    for vhdx in base.glob("task-*.vhdx"):
+        match = re.match(r"task-(\d+)-", vhdx.name)
+        if not match or _pid_alive(int(match.group(1))):
+            continue
+        try:
+            if time.time() - vhdx.stat().st_mtime < 60:
+                continue
+        except OSError:
+            continue
+        detach_and_remove(vhdx, base / vhdx.stem.replace("task-", "taskmnt-", 1))
     # 旧版清理只删 VHDX，卸卷后的悬空联接会留在基目录里；这里按 pid 收掉孤儿挂载点。
     for mount in base.glob("mnt-*"):
         match = re.match(r"mnt-(\d+)-", mount.name)
+        if not match or _pid_alive(int(match.group(1))):
+            continue
+        try:
+            if os.path.lexists(os.fspath(mount)):
+                mount.rmdir()
+        except OSError:
+            continue
+    for mount in base.glob("taskmnt-*"):
+        match = re.match(r"taskmnt-(\d+)-", mount.name)
         if not match or _pid_alive(int(match.group(1))):
             continue
         try:

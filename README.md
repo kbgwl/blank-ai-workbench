@@ -160,8 +160,15 @@ AppContainer**（固定包名 `BlankSandbox`）。工作区/临时目录授 `M`�
 还设 `BLANK_SCRATCH`）的容量上限由独立固定容量 VHDX 卷强制（`BLANK_SANDBOX_DISK_MB`，默认 2048，0=关；卷默认放
 `%ProgramData%\blank-quota`，可用 `BLANK_SANDBOX_DISK_ROOT` 改；挂载需要管理员）。探针挂一个
 64MB 卷写满再追加，必须拿到内核 `errno=28 ENOSPC` 且第二次写仍失败，账本才写 `disk_enforced=true`；
-docker 档没有容量参数所以恒 false。**工作区容量仍不设上限**（`disk` 只承诺临时区，见 CHANGELOG
-「未验证」第 3 项）。
+docker 档没有容量参数所以恒 false。**共享工作区仍不设容量上限**（`disk` 只承诺临时区与任务根，见
+CHANGELOG「未验证」第 3 项）。
+
+默认关闭的**任务级隔离**（`BLANK_TASK_ISOLATION=1`，管理员 + AppContainer）给每个任务一个独立可写根：
+`git clone --shared`（不是 `git worktree`——共享对象库可写等于给任务改历史的钥匙）→ 叠上未提交改动 →
+提交基线 → 收紧 ACL 成「宿主 + 本任务包」两方可见。命令与文件工具都换进该任务唯一包执行（文件工具走
+一次性 broker：请求/响应落在只授本任务包的 IPC 目录），收尾先按保守规则 `harvest` 合并改动再删副本/卷/包。
+建根前先跑 AC 行为自检并确认后端确为 AppContainer，不绿或会被 Docker/受限令牌抢走时整任务拒绝，不建
+「没人能进的副本」。`BLANK_TASK_DISK_MB` 给任务根一个固定容量 VHDX 卷（0=关；写满由内核返回 ENOSPC）。
 
 想用容器档时，镜像需要先构建一次：
 
@@ -174,6 +181,7 @@ docker build --build-arg BASE_IMAGE=node:24-alpine -t blank-sandbox:dev sandbox
 其余可调项：`BLANK_SANDBOX_IMAGE`、`BLANK_SANDBOX_ALLOW_LOCAL`、`BLANK_SANDBOX_RESTRICTED`、
 `BLANK_SANDBOX_APPCONTAINER`、`BLANK_SANDBOX_RULES_FILE`、`BLANK_SANDBOX_CPUS/MEMORY/PIDS`、
 `BLANK_SANDBOX_IO_BPS`、`BLANK_SANDBOX_DISK_MB`、`BLANK_SANDBOX_DISK_ROOT`、`BLANK_SANDBOX_NETWORK`、
+`BLANK_TASK_ISOLATION`、`BLANK_TASK_DISK_MB`、
 `BLANK_SANDBOX_TIMEOUT`、`BLANK_SANDBOX_MAX_FILE_KB`、`BLANK_SANDBOX_TMPFS`、
 `BLANK_SANDBOX_READ_ONLY_ROOT`、`BLANK_SANDBOX_ENV_ALLOWLIST`。
 
@@ -317,8 +325,11 @@ uv run alembic revision --autogenerate -m "描述"
   证据）、远程 MCP 的 OAuth（RFC 9728/8414 发现 → `client_credentials` → 401 刷新一次；
   受众与过期在本机核对，令牌只进内存）已落地；更新源改成 Ed25519 **分离签名**（公钥钉在
   桌面壳里，下载前验签、装前复验）并随包生成 CycloneDX SBOM（由 `package-lock.json` 与
-  `uv.lock` 生成，带安装包摘要）。仍冻结的是：**工作区/每任务根**的磁盘容量配额（临时区
-  容量已落地，工作区写盘不受该卷约束）、任务级隔离、第二台机器差异对账；Linux 原生后端按项目决定
+  `uv.lock` 生成，带安装包摘要）。**任务级隔离与任务根容量卷已落地**（见上文；同机另一任务包
+  用绝对路径与 `..\` 相对路径都被 `PermissionError:13` 拒，64MB 任务卷写满拿到内核 `errno=28`，
+  释放后无目录/卷/包残留——2026-11-11 生产路径探针 17/17）。仍冻结的是：**共享工作区**的磁盘
+  容量配额（未开任务隔离时工作区写盘不受卷约束）、第二台机器差异对账、以及任务级隔离还没验的
+  两格（另一 OS 用户不可达、junction/符号链接绕过）；Linux 原生后端按项目决定
   **移出范围**，判据只在 CHANGELOG 留档，不计入待办；
   另有一项发布外部条件：exe 的 Authenticode 代码签名需要公司证书（本机 `sign:check`
   退出码 2，只出未签名包）。它们依赖尚不可用的内核接口、第二台机器或真实证书，

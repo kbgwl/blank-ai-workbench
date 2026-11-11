@@ -59,6 +59,10 @@ class ToolContext:
     # 本任务的沙箱档位（off / workspace / workspace-net）。命令类工具与子代理读它，
     # 审批的"工具档"授权也按它分桶：在 workspace 下批过的工具，切到 off 不再免问。
     sandbox_tier: str = "workspace"
+    # 任务级隔离（J3）：本任务的 AppContainer 包名，空串表示没开隔离。
+    # 非空时命令与文件工具必须在这个包内执行——任务根已收紧 ACL，宿主令牌仍读得到，
+    # 只有换身份才让「另一个任务用绝对路径也读不到」成立。
+    isolation_profile: str = ""
     # 当前计划状态 {steps, milestones, goal}。update_plan 靠它拿到"上一版步骤"，
     # 才能让重新提交时沿用原 id——否则里程碑和验收条件按 id 建起来的引用会被换空。
     plan_state: dict = field(default_factory=dict)

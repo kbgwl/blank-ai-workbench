@@ -36,6 +36,7 @@ from blank_api.services.worktree import (
     Worktree,
     apply_changes,
     changed_files,
+    create_clone,
     create_worktree_with_hooks,
     remove_worktree,
     remove_worktree_with_hooks,
@@ -122,6 +123,10 @@ class SubAgentResult:
     # 实际创建的副本：只在本进程内用于合并，不进事件日志（内容是整份文件）
     tree: Worktree | None = field(default=None, repr=False)
     merge: dict = field(default_factory=dict)
+    # J3：这一位自己的 AppContainer 包名（空 = 跑在共享工作区/父级身份里）。
+    # 收尸时要连带删包；不写进事件正文，包名本身不是证据。
+    isolation_profile: str = field(default="", repr=False)
+
 
     def as_dict(self) -> dict:
         payload = {
@@ -154,6 +159,21 @@ class SubAgentResult:
         if self.error:
             parts.append(f"【异常】{self.error}")
         return "\n\n".join(parts)
+
+
+def _drop_profile(name: str) -> None:
+    """删子代理的任务包；失败只该影响下一次建包，不把它升级成子代理失败。
+
+    包里有 SID 与已授权的 ACL，留着就是一块没有主人、仍然可写的边界。
+    """
+    if not name:
+        return
+    from blank_api.services.sandbox import windows_appcontainer as wac
+
+    try:
+        wac.delete_profile(name)
+    except Exception:  # noqa: BLE001 - 收尸失败不能反过来改写子代理结论
+        return
 
 
 def render_merge(payload: dict) -> str:
@@ -332,12 +352,26 @@ async def run_subagent(
     tree: Worktree | None = None
     run_root = Path(root)
     isolated = request.isolate
+    isolation_profile = ""
     if isolated:
+        from blank_api.services.sandbox import task_isolation
+
+        isolation_on = task_isolation.enabled()
         try:
-            tree, hook_results = await create_worktree_with_hooks(
-                run_root, label=request.label or "sub", hooks=hooks
-            )
-        except ValueError as exc:
+            if isolation_on:
+                # J3：子代理也拿一个只属于它的包。副本必须用独立仓库克隆——worktree 的
+                # `git add` 会写父仓库共享对象库，等于给子代理改历史的钥匙（probe_git.py
+                # 实测）。克隆只读借用源对象库，所以把那一棵子树以 RX 授给子代理包。
+                tree = create_clone(run_root, label=request.label or "sub")
+                isolation_profile, _sid = task_isolation.secure_tree(
+                    tree, f"{task_id}:{uuid.uuid4().hex}", source=run_root
+                )
+                hook_results: list = []
+            else:
+                tree, hook_results = await create_worktree_with_hooks(
+                    run_root, label=request.label or "sub", hooks=hooks
+                )
+        except (ValueError, RuntimeError) as exc:
             return SubAgentResult(
                 ok=False, error=str(exc), agent_path=agent_path, depth=depth
             )
@@ -345,6 +379,8 @@ async def run_subagent(
         if tracker is not None:
             # 先登记再发事件：事件写库也是一个 await，取消落在这里时副本必须已可被找回。
             tracker["tree"] = tree
+            if isolation_profile:
+                tracker["profile"] = isolation_profile
         worktree_log = _Recorder(
             recorder,
             agent_path=agent_path,
@@ -380,6 +416,7 @@ async def run_subagent(
         trace_id=parent_thread_id,
         permissions=permissions,
         sandbox_tier=sandbox_tier,
+        isolation_profile=isolation_profile,
         # 子代理不能成为绕过客户安全设置的侧门：同一台机器、同一份策略。
         safety=SafetyPolicy.load(),
         tool_registry=gateway.registry,
@@ -545,8 +582,12 @@ async def run_subagent(
                         "results": [item.as_dict() for item in removed_hooks],
                     },
                 )
+            # 副本没了，这个包对谁都不再有意义：留着就是一个能写已删目录的空边界。
+            _drop_profile(isolation_profile)
         if tracker is not None:
             tracker.pop("tree", None)
+            if not request.keep_worktree:
+                tracker.pop("profile", None)
 
     result = SubAgentResult(
         ok=not error,
@@ -562,6 +603,7 @@ async def run_subagent(
         parallel_group=request.parallel_group,
         thread_id=thread_id,
         tree=tree if request.keep_worktree else None,
+        isolation_profile=isolation_profile if request.keep_worktree else "",
     )
     await log.add(
         "subagent.completed",
@@ -713,6 +755,7 @@ class SubAgentRunner:
 
     async def _cleanup_cancelled(self, prepared: _PreparedSpawn, tracker: dict) -> None:
         tree = tracker.pop("tree", None)
+        profile = tracker.pop("profile", "")
         recorder = prepared.session.recorder
         if tree is not None:
             try:
@@ -733,6 +776,8 @@ class SubAgentRunner:
                 )
             except Exception:
                 remove_worktree(tree)
+        # 包与副本同生共死：副本已经删掉，包也不能留。
+        _drop_profile(profile)
         try:
             await asyncio.shield(
                 recorder.add(
@@ -997,6 +1042,8 @@ class SubAgentRunner:
                     result.tree, hooks=getattr(session, "hooks", None)
                 )
                 result.tree = None
+                _drop_profile(result.isolation_profile)
+                result.isolation_profile = ""
         return list(results)
 
     async def _merge(self, results: list[SubAgentResult], group: str) -> None:

@@ -105,7 +105,9 @@ print(json.dumps(out))
 _SELF_CACHE: "SelfCheck | None" = None
 _SELF_LOCK = threading.Lock()
 _PROFILE_LOCK = threading.Lock()
-_PROFILE: tuple[str, int] | None = None
+# 名字 → (SID 文本, SID 指针)。默认包只有一个；任务级隔离会按任务再建包，
+# 每个包只在自己任务的根上拿 ACE，别的任务包看不见（J3 实测形状）。
+_PROFILES: dict[str, tuple[str, int]] = {}
 
 if sys.platform == "win32":
     _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -228,37 +230,57 @@ def supported() -> bool:
 # --------------------------------------------------------------------------- 包 SID
 
 
-def profile() -> tuple[str, int]:
-    """固定的 AppContainer 包 SID。进程内只建一次；已存在时按名字反推。
+def profile(name: str = PROFILE_NAME) -> tuple[str, int]:
+    """按名字取 AppContainer 包 SID。进程内每个名字只建一次；已存在时按名字反推。
 
-    用固定名而不是每次随机：包与 ACL 都是持久对象，随机名会让每次启动都在工具链根上
-    再写一条 ACE。代价是同一台机器共用一个包——它只被本工具的沙箱进程使用。
+    默认名 `BlankSandbox` 保持不变：包与 ACL 都是持久对象，随机名会让每次启动都在
+    工具链根上再写一条 ACE。任务级隔离传入按任务派生的名字——每个包只在自己的任务根上
+    有 ACE，于是同一个 OS 用户下的另一个任务包读不到它（不是路径闸门，是内核拒）。
     """
-    global _PROFILE
     if not supported():
         raise AppContainerUnavailable("AppContainer 只在 Windows 上存在")
     with _PROFILE_LOCK:
-        if _PROFILE is not None:
-            return _PROFILE
+        cached = _PROFILES.get(name)
+        if cached is not None:
+            return cached
         sid = ctypes.c_void_p()
         hr = _userenv.CreateAppContainerProfile(
-            PROFILE_NAME, PROFILE_NAME, "blank sandbox profile", None, 0, ctypes.byref(sid)
+            name, name, "blank sandbox profile", None, 0, ctypes.byref(sid)
         )
         if hr < 0 and (hr & 0xFFFFFFFF) != ERROR_ALREADY_EXISTS:
             raise AppContainerUnavailable(
-                f"CreateAppContainerProfile -> {hr & 0xFFFFFFFF:#x}（需要管理员权限）"
+                f"CreateAppContainerProfile({name}) -> {hr & 0xFFFFFFFF:#x}（需要管理员权限）"
             )
         if not sid.value:
-            hr = _userenv.DeriveAppContainerSidFromAppContainerName(PROFILE_NAME, ctypes.byref(sid))
+            hr = _userenv.DeriveAppContainerSidFromAppContainerName(name, ctypes.byref(sid))
             if hr < 0 or not sid.value:
                 raise AppContainerUnavailable(
-                    f"DeriveAppContainerSidFromAppContainerName -> {hr & 0xFFFFFFFF:#x}"
+                    f"DeriveAppContainerSidFromAppContainerName({name}) -> {hr & 0xFFFFFFFF:#x}"
                 )
         text = ctypes.c_wchar_p()
         if not _adv.ConvertSidToStringSidW(sid, ctypes.byref(text)):
             raise AppContainerUnavailable("ConvertSidToStringSidW -> " + wr._last_error())
-        _PROFILE = (text.value or "", int(sid.value))
-        return _PROFILE
+        _PROFILES[name] = (text.value or "", int(sid.value))
+        return _PROFILES[name]
+
+
+def delete_profile(name: str) -> str:
+    """删掉任务包。返回错误文本（空 = 干净）；包不存在不算错。
+
+    失败不抛：任务根已经删掉之后，留一个没有 ACL 指向的包是垃圾但不是安全漏洞；
+    把它升级成异常只会让清理半路停住，留下更难收的目录。
+    """
+    if not supported() or not name:
+        return ""
+    with _PROFILE_LOCK:
+        _PROFILES.pop(name, None)
+    try:
+        hr = _userenv.DeleteAppContainerProfile(name)
+    except (AttributeError, OSError) as exc:
+        return f"DeleteAppContainerProfile({name}) -> {exc.__class__.__name__}"
+    if hr < 0 and (hr & 0xFFFFFFFF) not in {0x80070002, ERROR_ALREADY_EXISTS}:
+        return f"DeleteAppContainerProfile({name}) -> {hr & 0xFFFFFFFF:#x}"
+    return ""
 
 
 def prepare(
@@ -266,6 +288,10 @@ def prepare(
     temp_dir: str,
     rule_set: rules_module.SandboxRules,
     temp_root: str = "",
+    *,
+    profile_name: str = PROFILE_NAME,
+    extra_write: tuple[str, ...] = (),
+    extra_read: tuple[str, ...] = (),
 ) -> tuple[dict[str, list[str]], list[str]]:
     """按规则给包 SID 授权。工作区/临时目录可写，工具链根可读，其余默认拒绝。
 
@@ -274,8 +300,11 @@ def prepare(
 
     `temp_root` 是临时目录所在的容量卷挂载点：AC 令牌虽有遍历特权，但卷根的自检授权
     仍要写出来，否则临时区一旦不在系统卷上就会出现"能启动、写不了 TEMP"的形状。
+
+    `extra_write` 是这一趟额外要写的目录（任务隔离的文件工具 IPC 目录）。它和工作区
+    一样是硬失败：少了它，文件工具会以"读不到请求"的形式失败，看起来像文件边界坏了。
     """
-    sid, _ = profile()
+    sid, _ = profile(profile_name)
     ctx = rule_set.context(workspace, temp_dir)
     write_roots = rule_set.write_roots(ctx)
     read_roots = rule_set.read_roots(ctx)
@@ -290,6 +319,10 @@ def prepare(
     ok, detail = wr._grant(temp_dir, "M", sid)
     if not ok:
         raise AppContainerUnavailable(f"临时目录授权失败：{temp_dir}：{detail}")
+    for path in extra_write:
+        ok, detail = wr._grant(path, "M", sid)
+        if not ok:
+            raise AppContainerUnavailable(f"附加写目录授权失败：{path}：{detail}")
 
     granted_read: list[str] = []
     notes: list[str] = []
@@ -309,6 +342,17 @@ def prepare(
             granted_read.append(real)
         else:
             notes.append(f"工具链根授权失败（命令可能读不到它）：{root}：{detail}")
+    for path in extra_read:
+        # 任务级隔离的 git 安装根 / 用户级 git 配置 / 克隆借用对象库。读不到时 git 会以
+        # 「拒绝访问。」告终，任务看起来像代码坏了——所以失败只记账，但记清楚是哪一个。
+        real = os.path.realpath(path)
+        if not os.path.exists(real):
+            continue
+        ok, detail = wr._grant(real, "RX", sid, recursive=True)
+        if ok:
+            granted_read.append(real)
+        else:
+            notes.append(f"附加只读根授权失败（命令可能读不到它）：{path}：{detail}")
     return {"write": list(write_roots) + [temp_dir], "read": granted_read, "capability": [sid]}, notes
 
 
@@ -487,12 +531,19 @@ def run_command(
     io_bps: int = 0,
     disk_mb: int = 0,
     rule_set: rules_module.SandboxRules | None = None,
+    profile_name: str = PROFILE_NAME,
+    extra_write: tuple[str, ...] = (),
+    extra_read: tuple[str, ...] = (),
 ) -> wr.CommandReport:
-    """在 AppContainer 里跑一条命令。Job 限额与受限令牌后端同一套。"""
+    """在 AppContainer 里跑一条命令。Job 限额与受限令牌后端同一套。
+
+    `profile_name` 为空串时用默认包；任务级隔离传按任务派生的名字。包不同 = 内核眼里
+    是两个互不相干的身份，这是"另一个任务读不到"的根据，不是路径判断。
+    """
     if not supported():
         raise AppContainerUnavailable("AppContainer 后端只在 Windows 上存在")
     rules = rule_set or rules_module.load()
-    sid, sid_ptr = profile()
+    sid, sid_ptr = profile(profile_name or PROFILE_NAME)
     temp_dir, disk_on_quota, disk_bytes, disk_error = windows_volume.temp_dir_for("blank-ac-", disk_mb)
     job = windows_job.create_job(
         "blank-ac-" + uuid.uuid4().hex[:8],
@@ -507,6 +558,9 @@ def run_command(
             temp_dir,
             rules,
             temp_root=os.path.dirname(temp_dir) if disk_on_quota else "",
+            profile_name=profile_name or PROFILE_NAME,
+            extra_write=extra_write,
+            extra_read=extra_read,
         )
         if disk_mb and not disk_on_quota:
             notes.append(f"临时区未放进容量卷，容量上限未生效：{disk_error}")

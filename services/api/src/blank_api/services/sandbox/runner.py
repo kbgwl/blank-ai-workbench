@@ -370,6 +370,8 @@ class AppContainerSandbox:
         workspace: str,
         env: dict[str, str] | None = None,
         timeout_seconds: float | None = None,
+        profile_name: str = "",
+        extra_read: tuple[str, ...] = (),
     ) -> SandboxResult:
         from blank_api.services.sandbox import rules as rules_module
         from blank_api.services.sandbox import windows_appcontainer as wac
@@ -392,6 +394,9 @@ class AppContainerSandbox:
             io_bps=self.policy.io_bps,
             disk_mb=self.policy.disk_mb,
             rule_set=rules,
+            # 任务级隔离：换成这个任务的包，并补上工具链之外的只读根（git 安装与配置）。
+            profile_name=profile_name,
+            extra_read=extra_read,
         )
         duration = int((time.perf_counter() - started) * 1000)
         enforcement = await asyncio.to_thread(_enforcement_appcontainer, report)

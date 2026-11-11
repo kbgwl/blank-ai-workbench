@@ -21,15 +21,34 @@ def _broker():
     return fs_broker
 
 
+def _routed(context: ToolContext) -> bool:
+    """这个任务的读路径要不要出宿主进程。
+
+    任务级隔离下**必须**出去：路径检查跑在宿主里只是策略，只有换进任务包执行，
+    "另一个任务读不到这个根"才是内核拒。broker 开关关着也照走隔离通道。
+    """
+    return _broker().broker_enabled() or bool(getattr(context, "isolation_profile", ""))
+
+
+async def _call(context: ToolContext, op: str, args: dict) -> dict:
+    broker = _broker()
+    profile = str(getattr(context, "isolation_profile", "") or "")
+    if profile:
+        return await broker.call_isolated(
+            context.root, context.task_id, op, args, profile_name=profile
+        )
+    return await broker.call_broker(context.root, context.task_id, op, args)
+
+
 async def _list_files(context: ToolContext, arguments: dict) -> ToolOutcome:
     path = arguments.get("path", "")
     depth = int(arguments.get("depth", 3))
     broker = _broker()
     marker: dict = {}
-    if broker.broker_enabled():
+    if _routed(context):
         try:
-            envelope = await broker.call_broker(
-                context.root, context.task_id, "list_tree",
+            envelope = await _call(
+                context, "list_tree",
                 {"path": str(path), "depth": depth},
             )
         except broker.FsBrokerError as exc:
@@ -54,10 +73,10 @@ async def _read_file(context: ToolContext, arguments: dict) -> ToolOutcome:
         for key in ("offset", "limit")
         if arguments.get(key) is not None
     }
-    if broker.broker_enabled():
+    if _routed(context):
         try:
-            envelope = await broker.call_broker(
-                context.root, context.task_id, "read_text_file",
+            envelope = await _call(
+                context, "read_text_file",
                 {"path": arguments["path"], **window},
             )
         except broker.FsBrokerError as exc:
@@ -91,7 +110,8 @@ async def _search_code(context: ToolContext, arguments: dict) -> ToolOutcome:
     limit = int(arguments.get("max_matches", MAX_MATCHES_DEFAULT))
     broker = _broker()
     marker: dict = {}
-    if mode == "regex" and not broker.broker_enabled():
+    routed = _routed(context)
+    if mode == "regex" and not routed:
         try:
             regex = re.compile(pattern)
         except re.error as exc:
@@ -100,11 +120,11 @@ async def _search_code(context: ToolContext, arguments: dict) -> ToolOutcome:
         regex = None  # 正则编译放进 broker 里做，错误经 IPC 原样重建（同一句模板，两个口径不漂移）
     else:
         regex = None
-    if broker.broker_enabled():
-        # 开了 fs-broker：遍历与读取都在子进程边界里做，失败不回退宿主。
+    if routed:
+        # 开了 fs-broker（或任务级隔离）：遍历与读取都在子进程边界里做，失败不回退宿主。
         try:
-            envelope = await broker.call_broker(
-                context.root, context.task_id, "search",
+            envelope = await _call(
+                context, "search",
                 {"pattern": pattern, "mode": mode, "path": str(prefix), "max_matches": limit},
             )
         except broker.FsBrokerError as exc:

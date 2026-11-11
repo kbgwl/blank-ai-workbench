@@ -78,6 +78,21 @@ SIDE_EFFECTS_NONE = "none"
 SIDE_EFFECTS_UNKNOWN = "unknown"
 
 
+def _raise_envelope_error(response: dict) -> None:
+    """把 broker 回的错误帧原样重建成本地异常类型。stdio 与一次性模式共用这一份口径。"""
+    error = response.get("error") or {}
+    kind = error.get("type")
+    message = str(error.get("message", ""))
+    if kind == "api_error":
+        raise ApiError(code=str(error.get("code", "fs_broker_error")),
+                       message=message, status_code=int(error.get("status_code", 400)))
+    if kind == "value":
+        raise ValueError(message)
+    # internal：流是完好的（响应正常到达），不该把 broker 收尸——它报的是业务异常，
+    # 与宿主路径"handler 抛非受管异常 → 网关记 工具执行失败"同形。
+    raise RuntimeError(f"fs-broker 内部错误：{error.get('type')}: {message}")
+
+
 class FsBrokerError(RuntimeError):
     """broker 侧的失败。layer 回答"是哪一层坏了"，reason 是人读得懂的原文，
     side_effects 回答"这次动作到底发生了没有"。"""
@@ -188,6 +203,30 @@ def _compile_regex(args: dict):
         raise ValueError(_INVALID_REGEX_TEMPLATE.format(exc=exc)) from exc
 
 
+def _dispatch_envelope(root: Path, request: dict) -> dict:
+    """一趟请求 → 一帧响应。业务异常按类型编码，任何异常都回帧，绝不让调用方干等。"""
+    request_id = request.get("id")
+    try:
+        return {"id": request_id, "ok": True, "result": _op_dispatch(root, request)}
+    except ApiError as exc:
+        return {
+            "id": request_id,
+            "ok": False,
+            "error": {
+                "type": "api_error", "code": exc.code, "message": exc.message,
+                "status_code": exc.status_code,
+            },
+        }
+    except ValueError as exc:
+        return {"id": request_id, "ok": False, "error": {"type": "value", "message": str(exc)}}
+    except Exception as exc:  # noqa: BLE001 - 任何异常都要回帧，别让主进程干等到超时
+        return {
+            "id": request_id,
+            "ok": False,
+            "error": {"type": "internal", "message": f"{exc.__class__.__name__}: {exc}"},
+        }
+
+
 def serve(root: str) -> int:
     """broker 主循环：stdin 收帧 → 分派 → stdout 回帧。崩了就退出，由主进程读数留痕。"""
     stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
@@ -205,32 +244,38 @@ def serve(root: str) -> int:
         if body is None:
             return 0
         request = json.loads(body.decode("utf-8"))
-        request_id = request.get("id")
-        try:
-            response = {"id": request_id, "ok": True, "result": _op_dispatch(workspace_root, request)}
-        except ApiError as exc:
-            response = {
-                "id": request_id,
-                "ok": False,
-                "error": {
-                    "type": "api_error", "code": exc.code, "message": exc.message,
-                    "status_code": exc.status_code,
-                },
-            }
-        except ValueError as exc:
-            response = {"id": request_id, "ok": False, "error": {"type": "value", "message": str(exc)}}
-        except Exception as exc:  # noqa: BLE001 - 任何异常都要回帧，别让主进程干等到超时
-            response = {
-                "id": request_id,
-                "ok": False,
-                "error": {"type": "internal", "message": f"{exc.__class__.__name__}: {exc}"},
-            }
+        response = _dispatch_envelope(workspace_root, request)
         if delay_ms > 0 and request.get("op") != "hello":
             # 注入的睡眠只加在业务请求上：握手是被计时的一次成型交换，
             # 让它也睡觉会把"起不来/慢启动"和"业务调用慢"两件事搅在一起。
             time.sleep(delay_ms / 1000.0)
         stdout.write(_encode_frame(response))
         stdout.flush()
+
+
+def once(root: str, request_path: str, response_path: str) -> int:
+    """一次性 broker：读一份请求、写一份响应、退出。
+
+    任务级隔离里 AC 进程只有三个**文件**句柄（`_spawn` 不提供 stdin 管道），没法用
+    stdio 帧协议长期对话；请求与响应因此落在宿主建好、只授给本任务包的 IPC 目录里。
+    响应**必须落盘**（业务异常也照写），否则调用方只能把"进程默默退出"读成超时。
+    """
+    workspace_root = Path(root).resolve()
+    try:
+        request = json.loads(Path(request_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        response = {
+            "id": "",
+            "ok": False,
+            "error": {"type": "internal", "message": f"读取请求失败：{exc.__class__.__name__}: {exc}"},
+        }
+    else:
+        response = _dispatch_envelope(workspace_root, request)
+    try:
+        Path(response_path).write_text(json.dumps(response, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        return 1
+    return 0
 
 
 # --------------------------------------------------------------------------- 客户端
@@ -413,17 +458,7 @@ class FsBrokerClient:
                 ) from exc
             raise
         if not response.get("ok"):
-            error = response.get("error") or {}
-            kind = error.get("type")
-            message = str(error.get("message", ""))
-            if kind == "api_error":
-                raise ApiError(code=str(error.get("code", "fs_broker_error")),
-                               message=message, status_code=int(error.get("status_code", 400)))
-            if kind == "value":
-                raise ValueError(message)
-            # internal：流是完好的（响应正常到达），不该把 broker 收尸——它报的是业务异常，
-            # 与宿主路径"handler 抛非受管异常 → 网关记 工具执行失败"同形。
-            raise RuntimeError(f"fs-broker 内部错误：{error.get('type')}: {message}")
+            _raise_envelope_error(response)
         return response.get("result") or {}
 
     async def _dead_error(
@@ -589,6 +624,117 @@ async def call_broker(root: Path, task_id: str, op: str, args: dict) -> dict:
     return await manager().call(root, task_id, op, args)
 
 
+async def call_isolated(root: Path, task_id: str, op: str, args: dict, *, profile_name: str) -> dict:
+    """在任务专属 AppContainer 包里跑一次 broker（J3 文件工具的 OS 边界）。
+
+    宿主进程与任务包是两个身份：路径检查跑在宿主里只能算策略，只有**换身份执行**，
+    "另一个任务用绝对路径也读不到这个根"才是内核拒。AC 进程只有三个文件句柄，
+    没有 stdin 管道可长期对话，所以一问一答：请求/响应落在宿主建的 IPC 目录里，
+    该目录只授给本任务包；响应文件是唯一结果来源。
+
+    任何一层失败都直接失败，**绝不回退宿主执行**——与 stdio broker 同一红线。
+    """
+    if not profile_name:
+        raise FsBrokerError(LAYER_SPAWN, "任务级隔离未提供包名，本次调用未执行")
+    if sys.platform != "win32":
+        raise FsBrokerError(LAYER_SPAWN, "任务级隔离文件工具只在 Windows AppContainer 上存在")
+
+    import shutil
+    import subprocess
+    import tempfile
+
+    from blank_api.services.sandbox import windows_appcontainer as wac
+
+    workspace = Path(root).resolve()
+    ipc = Path(tempfile.mkdtemp(prefix="blank-fsbroker-"))
+    request_id = uuid.uuid4().hex
+    request_path = ipc / f"{request_id}.request.json"
+    response_path = ipc / f"{request_id}.response.json"
+    try:
+        request_path.write_text(
+            json.dumps({"id": request_id, "op": op, "args": args}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        python = os.environ.get("BLANK_FS_BROKER_PYTHON", "").strip() or sys.executable
+        package_root = str(Path(blank_api_dir()).parent)
+        script = subprocess.list2cmdline([
+            python, "-X", "utf8", "-m", "blank_api.services.tools.fs_broker",
+            "--root", os.fspath(workspace),
+            "--once", os.fspath(request_path), os.fspath(response_path),
+        ])
+        policy = SandboxPolicy()
+        started = time.perf_counter()
+        try:
+            report = await asyncio.to_thread(
+                wac.run_command,
+                wac.quote_leading_path(script),
+                workspace=os.fspath(workspace),
+                env={"PYTHONPATH": package_root, "PYTHONIOENCODING": "utf-8"},
+                timeout=_env_float("BLANK_FS_BROKER_TIMEOUT", DEFAULT_CALL_TIMEOUT_SECONDS),
+                memory=policy.memory,
+                pids=policy.pids,
+                cpus=policy.cpus,
+                io_bps=policy.io_bps,
+                disk_mb=policy.disk_mb,
+                profile_name=profile_name,
+                extra_write=(os.fspath(ipc),),
+                # 隔离包里跑的是同一个模块：解释器与源码树都得可读，否则失败会被误读成文件边界坏了。
+                extra_read=(package_root,),
+            )
+        except asyncio.CancelledError:
+            raise FsBrokerError(
+                LAYER_CANCELLED,
+                f"隔离 broker 调用被取消（op={op}），AC 进程至多跑到超时",
+                side_effects=SIDE_EFFECTS_UNKNOWN,
+            ) from None
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        status = {
+            "executed_by": "fs_broker_appcontainer",
+            "broker_pid": 0,
+            "protocol": PROTOCOL_VERSION,
+            "profile": profile_name,
+            "job_created": report.job.created,
+            "job_assigned": report.job.assigned,
+            "job_error": report.job.error,
+        }
+        if report.error:
+            raise FsBrokerError(
+                LAYER_SPAWN, f"隔离 broker 起不来：{report.error}", side_effects=SIDE_EFFECTS_NONE
+            )
+        if report.timed_out:
+            raise FsBrokerError(
+                LAYER_TIMEOUT,
+                f"隔离 broker 超时（op={op}），AC 进程已被终止，未回退宿主执行",
+                side_effects=SIDE_EFFECTS_UNKNOWN,
+            )
+        if not response_path.is_file():
+            tail = (report.stderr or "").strip()[-300:]
+            raise FsBrokerError(
+                LAYER_KILLED,
+                f"隔离 broker 未写出响应（退出码={report.exit_code!r}）：{tail}",
+                side_effects=SIDE_EFFECTS_UNKNOWN,
+            )
+        try:
+            response = json.loads(response_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise FsBrokerError(
+                LAYER_PROTOCOL,
+                f"隔离 broker 响应不可解析：{exc.__class__.__name__}: {exc}",
+                side_effects=SIDE_EFFECTS_UNKNOWN,
+            ) from exc
+        if not response.get("ok"):
+            _raise_envelope_error(response)
+        latency = {
+            "samples": 1,
+            "p50_ms": round(elapsed_ms, 3),
+            "p95_ms": round(elapsed_ms, 3),
+            "last_ms": round(elapsed_ms, 3),
+        }
+        return {"result": response.get("result") or {}, "latency": latency, "status": status}
+    finally:
+        shutil.rmtree(ipc, ignore_errors=True)
+
+
 def broker_failure_outcome(op: str, error: FsBrokerError) -> ToolOutcome:
     """失败判定的唯一出口：取消还它 CancelledError 的原形，其余一律失败并写下是哪一层坏的。
 
@@ -629,7 +775,11 @@ def broker_success_marker(op: str, envelope: dict) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="fs-broker", description="文件工具子进程执行边界")
     parser.add_argument("--root", required=True, help="工作区绝对路径，所有操作以此为界")
+    parser.add_argument("--once", nargs=2, metavar=("REQUEST", "RESPONSE"),
+                        help="一次性模式：读请求文件、写响应文件后退出（任务级隔离用）")
     args = parser.parse_args(argv)
+    if args.once:
+        return once(args.root, args.once[0], args.once[1])
     return serve(args.root)
 
 

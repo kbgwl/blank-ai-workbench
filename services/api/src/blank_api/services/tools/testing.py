@@ -143,12 +143,22 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
         shell=shell,
         safety=getattr(context, "safety", None),
         tier=tier,
+        isolation_profile=str(getattr(context, "isolation_profile", "") or ""),
     )
     timeout = result.get("timeout_budget", timeout)
     stdout = truncate(mask_output(result["stdout"], context.root))[0]
     stderr = truncate(mask_output(result["stderr"], context.root))[0]
     combined = stdout if not stderr else f"{stdout}\n[stderr]\n{stderr}".strip()
     command_text = argv if isinstance(argv, str) else " ".join(argv)
+    if result.get("isolation_blocked"):
+        return ToolOutcome(
+            ok=False,
+            status="denied",
+            output=combined,
+            message=f"任务级隔离不可用，测试未执行：{result.get('stderr') or ''}".strip(),
+            data={"tier": result.get("tier", {}), "isolation_blocked": True,
+                  "enforcement": result["enforcement"]},
+        )
     if result.get("tier_blocked"):
         return ToolOutcome(
             ok=False,

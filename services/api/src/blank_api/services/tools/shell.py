@@ -300,6 +300,24 @@ def _engine_enforcement(facts: dict) -> dict:
     }
 
 
+def _isolation_blocked(facts: dict, budget: float, reason: str) -> dict:
+    """任务级隔离下命令没跑：与"跑在宿主上"形状不同（不起进程、sandbox 为空）。"""
+    from blank_api.services.sandbox.runner import limits_not_applied
+
+    return {
+        "exit_code": None,
+        "stdout": "",
+        "stderr": reason,
+        "timed_out": False,
+        "sandbox": None,
+        "tier": facts,
+        "isolation_blocked": True,
+        "notes": [reason],
+        "enforcement": _tier_enforcement(facts, limits_not_applied(reason)),
+        "timeout_budget": budget,
+    }
+
+
 async def execute_command(
     command: str | list[str],
     root: Path,
@@ -309,6 +327,7 @@ async def execute_command(
     safety=None,
     tier: str = "",
     host_bypass: bool = False,
+    isolation_profile: str = "",
 ) -> dict:
     """按任务档位执行命令：沙箱 / 宿主直连 / 拒绝，三种结果都带同一本账。
 
@@ -333,7 +352,17 @@ async def execute_command(
     budget = float(timeout)
     if safety is not None:
         budget = min(budget, float(getattr(safety, "timeout_seconds", budget) or budget))
+    # J3：任务根已经收紧成"宿主 + 本任务包"，命令必须以这个包的 SID 执行。后端不是
+    # AppContainer（或档位关掉了沙箱）时退回宿主 = 边界消失，所以整条拒绝、不降级。
+    if isolation_profile and not (resolution.policy.enabled and resolution.tier != TIER_OFF):
+        return _isolation_blocked(
+            facts, budget, "任务级隔离需要启用的命令沙箱，当前档位没有沙箱；命令未执行"
+        )
     if host_bypass:
+        if isolation_profile:
+            return _isolation_blocked(
+                facts, budget, "任务级隔离下不允许单次越界宿主执行；命令未执行"
+            )
         # 被绕过的不是“policy 对象”，而是此刻真正会生效的档位：off / 部署关闭时
         # 本来就没有沙箱可绕，此时 sandbox_bypass 必须是 False，不能借参数造一次假越界。
         active = resolution.policy.enabled and resolution.tier != TIER_OFF
@@ -377,7 +406,24 @@ async def execute_command(
         # 不在这一层拼串：容器档跑在 `sh -c` 里（POSIX 引号），本机档跑在 cmd.exe 里
         # （CreateProcess 规则）。谁知道自己跑在哪种壳里，谁就自己拼——调用方提前
         # 用 shlex.join 拼好，等于把 POSIX 规则硬塞给 cmd（#145 的真缺陷）。
-        result = await get_sandbox(policy).run(command, workspace=str(root), timeout_seconds=budget)
+        sandbox_impl = get_sandbox(policy)
+        run_kwargs: dict = {}
+        if isolation_profile:
+            if sandbox_impl.name != "appcontainer":
+                return _isolation_blocked(
+                    facts,
+                    budget,
+                    f"任务级隔离需要 AppContainer 后端，当前选中 {sandbox_impl.name}；命令未执行",
+                )
+            from blank_api.services.sandbox import task_isolation
+
+            run_kwargs = {
+                "profile_name": isolation_profile,
+                "extra_read": task_isolation.ac_read_roots(),
+            }
+        result = await sandbox_impl.run(
+            command, workspace=str(root), timeout_seconds=budget, **run_kwargs
+        )
         enforcement = getattr(result, "enforcement", {}) or {}
         if not enforcement:
             enforcement = _engine_enforcement(facts)
@@ -531,10 +577,24 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
         safety=safety,
         tier=getattr(context, "sandbox_tier", "") or "",
         host_bypass=approved,
+        isolation_profile=str(getattr(context, "isolation_profile", "") or ""),
     )
     timeout = result.get("timeout_budget", timeout)
     stdout = truncate(mask_output(result["stdout"], context.root))[0]
     stderr = truncate(mask_output(result["stderr"], context.root))[0]
+    if result.get("isolation_blocked"):
+        return ToolOutcome(
+            ok=False,
+            status="denied",
+            output=stdout,
+            message=f"任务级隔离不可用，命令未执行：{result.get('stderr') or ''}".strip(),
+            data={
+                "tier": result.get("tier", {}),
+                "isolation_blocked": True,
+                "enforcement": result["enforcement"],
+                **_bypass_data(result),
+            },
+        )
     if result.get("tier_blocked"):
         # 档位不提供时命令根本没起：不许写成 sandbox=None（那会被读成"跑在宿主上"）。
         return ToolOutcome(
