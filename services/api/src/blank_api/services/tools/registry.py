@@ -52,6 +52,7 @@ CORE_TOOLS = frozenset(
         "request_user_input",
         "read_file",
         "list_files",
+        "glob",
         "search_code",
         "apply_patch",
         # Claude Code 的核心编辑面：精确替换与整文件写入。apply_patch 仍保留，
@@ -75,6 +76,8 @@ DEFERRED_TOOLS = frozenset(
         "memory_write",
         "spawn_agent",
         "spawn_agents",
+        # 续聊只在「已经把子代理派出去、还想追问」时才用得上，属于同一类按需能力。
+        "send_message",
     }
 )
 
@@ -95,11 +98,14 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "read_notes": ("笔记", "交接", "notes"),
     "spawn_agent": ("子代理", "子任务", "委派", "并行", "subagent", "delegate"),
     "spawn_agents": ("子代理", "并行", "多路", "同时", "fanout", "parallel", "subagent"),
+    "send_message": ("续聊", "追问", "继续问", "接着查", "子代理", "send message", "continue agent"),
+    "list_agents": ("子代理", "代理列表", "谁在跑", "agents", "list agents"),
     "apply_patch": ("修改", "编辑", "patch", "写文件", "替换"),
     "edit_file": ("修改", "编辑", "替换", "edit", "replace", "精确修改"),
     "write_file": ("写文件", "新建", "整文件", "覆盖", "write", "create", "保存"),
     "run_shell": ("命令", "shell", "执行", "终端", "bash"),
     "search_code": ("搜索代码", "查找", "grep", "search"),
+    "glob": ("找文件", "文件列表", "按名找", "glob", "通配符", "*.py"),
     "request_user_input": ("提问", "询问", "确认", "ask"),
     "update_plan": ("计划", "步骤", "plan", "todo"),
     "set_goal": ("目标", "验收标准", "算做完", "goal", "done when", "objective"),
@@ -126,9 +132,11 @@ PARALLEL_SAFE_TOOLS = frozenset(
     {
         "read_file",
         "list_files",
+        "glob",
         "search_code",
         "read_notes",
         "memory_search",
+        "list_agents",
         "web_search",
         "web_fetch",
     }
@@ -167,6 +175,7 @@ LEAN_TOOLS = frozenset(
         "request_user_input",
         "read_file",
         "list_files",
+        "glob",
         "search_code",
         "apply_patch",
         # 精确替换是弱模型最省事的一条改文件路径；整文件写入靠 apply_patch 也能做，

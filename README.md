@@ -255,6 +255,8 @@ uv run alembic revision --autogenerate -m "描述"
 | Bot 团队 `/team` | ✅ | 群聊编排、上下文管家、主 Bot 的团队管理工具、跨群全文搜索与锚点跳转 |
 | Claude 式编程工具面 | ✅ | `edit_file` 精确串替换 + `write_file` 整文件写入，两工具与 `apply_patch` 共用「读后写」硬闸门（没读过不许改、读过被改过要重读）；shell 写文件与 git 完整性硬拦截；独立只读调用默认并行。判据 `services/api/tests/test_claude_parity_v24.py`（60 例），变异 8/8 红 |
 | 场景模式对齐 Claude Harness | ✅ | 驳回不再暂停整轮（该步记未执行、模型换个做法继续）；工具回执直接续跑、不再每步塞合成「请继续」；后台子代理结束时注入一次性系统通知（结论由主代理转述）；`update_plan` 同时只允许一个 `in_progress`；系统提示补齐 act / 推荐 / 系统提醒边界 / 专职工具优先。判据 `services/api/tests/test_claude_loop_parity_v27.py`（6 例），变异 7/7 红 |
+| Claude 工具面 Glob / Grep / ListAgents | ✅ | 新增 `glob`（`**/` 命中根部、花括号、mtime 倒序、扫描预算）；`search_code` 补齐 `output_mode` / `glob` / `type` / `-i` / `multiline` / `-A/-B/-C` / `-o` / `-n` / `head_limit` / `offset`；fs-broker 与任务级隔离转发同一套参数；新增 `list_agents` 列出后台子代理状态。判据 `services/api/tests/test_claude_tool_surface_v28.py`（21 例），变异 8/8 红 |
+| 子代理默认后台与续聊 | ✅ | `spawn_agent` 不传参即在后台跑（`run_in_background=false` 才同步等）；任务收尾先给后台子代理 90 秒窗口，结束的结论写进交付提示词、仍在跑的显式取消并点名；新增 `send_message` 续聊（保留上一轮读/写/结论，新 `spawn_agent` 是全新上下文；隔离子代理与仍在跑的句柄如实拒绝）。判据 `test_claude_subagent_default_v29.py`（6 例）+ `test_claude_send_message_v30.py`（9 例），变异 8/8 与 10/10 全红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -276,6 +278,18 @@ uv run alembic revision --autogenerate -m "描述"
   另外未实现「`old_string` 是上一次 `new_string` 子串」的链式编辑拒绝——当前读后写状态
   只按文件记，不记「上一次改了什么」。前四项是产品边界（后台进程收尸与附件读取是另一套
   能力），最后一项不影响「没读过/被改过」这两道硬闸门。
+
+- **P 批把 Glob / Grep 的参数面补齐了，子代理也改成默认后台并支持续聊，但 Claude 工具表里
+  还有未移植项**（判据 `services/api/tests/test_claude_tool_surface_v28.py`、
+  `test_claude_subagent_default_v29.py`、`test_claude_send_message_v30.py`）：`glob` 已按
+  「无斜杠按文件名、带斜杠按相对路径」实现，`search_code` 补齐了
+  `output_mode / glob / type / -i / multiline / -A/-B/-C / -o / -n / head_limit / offset`，
+  `list_agents` 能看到当前任务的后台子代理，`send_message` 能带着上下文续聊。
+  仍未移植：Skill 工具、EnterWorktree/ExitWorktree、CronCreate/Delete/List 与
+  ScheduleWakeup、ReportFindings、Workflow。这些是「另一套能力」，不是参数没对齐。
+  续聊本身的边界：对话只在本进程内保留（每任务最多 20 个会话、每会话 60 条消息、
+  单条 8k 字符），隔离子代理副本结束即清理因此明确拒绝续聊，仍在后台跑的句柄要先
+  `task_output`；任务收尾的等待窗口是 90 秒，过时未完成的会被取消并在交付正文点名。
 
 - 验收条件的「是否覆盖」由模型自报，平台无法判断语义：极端情况下会出现「文件没改但条件判 ✓」。
   时间线里的工具卡片和 Diff 才是可核对的证据，验收结论只作为模型的自我声明展示。

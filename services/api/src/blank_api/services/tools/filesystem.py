@@ -1,17 +1,53 @@
-"""Read-only workspace tools: list_files, read_file, search_code."""
+"""Read-only workspace tools: list_files, glob, read_file, search_code."""
 
 from __future__ import annotations
 
 import asyncio
+import fnmatch
+import os
 import re
+import time
+from functools import lru_cache
 from pathlib import Path
 
-from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, ok
-from blank_api.services.tools.paths import iter_text_files, resolve_existing
+from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, fail, ok
+from blank_api.services.tools.paths import (
+    MAX_SCAN_FILES,
+    MAX_SCAN_SECONDS,
+    _skipped_dir,
+    iter_text_files,
+    resolve_existing,
+)
 from blank_api.services.workspace import list_tree, read_text_file
 
 MAX_MATCHES_DEFAULT = 50
+MAX_GLOB_RESULTS = 200
 _INVALID_REGEX_TEMPLATE = "正则表达式无效：{exc}"
+
+# rg --type 的常用映射。只收编程场景真正会用的类型；未知类型直接报错并列出可用项，
+# 静默返回空列表会让模型以为"项目里没有这个文件"。
+TYPE_EXTENSIONS = {
+    "js": {".js", ".mjs", ".cjs"},
+    "jsx": {".jsx"},
+    "ts": {".ts", ".mts", ".cts"},
+    "tsx": {".tsx"},
+    "py": {".py"},
+    "rust": {".rs"},
+    "go": {".go"},
+    "java": {".java"},
+    "c": {".c", ".h"},
+    "cpp": {".cpp", ".cc", ".cxx", ".hpp", ".hh"},
+    "cs": {".cs"},
+    "ruby": {".rb"},
+    "php": {".php"},
+    "html": {".html", ".htm"},
+    "css": {".css", ".scss", ".sass", ".less"},
+    "json": {".json"},
+    "yaml": {".yml", ".yaml"},
+    "md": {".md", ".markdown"},
+    "sh": {".sh", ".bash", ".zsh"},
+    "sql": {".sql"},
+}
 
 
 def _broker():
@@ -111,30 +147,221 @@ async def _read_file(context: ToolContext, arguments: dict) -> ToolOutcome:
     )
 
 
+def _expand_braces(pattern: str) -> list[str]:
+    """把 `*.{ts,tsx}` 展开成 `*.ts` 与 `*.tsx`；没有花括号就原样返回。"""
+    match = re.search(r"\{([^{}]+)\}", pattern)
+    if not match:
+        return [pattern]
+    head, tail = pattern[: match.start()], pattern[match.end():]
+    return [
+        item
+        for choice in match.group(1).split(",")
+        for item in _expand_braces(head + choice + tail)
+    ]
+
+
+def _glob_match(relative: str, pattern: str) -> bool:
+    name = relative.rsplit("/", 1)[-1]
+    for candidate in _expand_braces(pattern):
+        while candidate.startswith("./"):
+            candidate = candidate[2:]
+        if not candidate:
+            continue
+        # 不带斜杠的模式按文件名匹配（rg --glob 的默认口径）；带斜杠的按相对路径匹配。
+        if "/" not in candidate:
+            if fnmatch.fnmatch(name, candidate):
+                return True
+        elif _glob_regex(candidate).match(relative):
+            return True
+    return False
+
+
+@lru_cache(maxsize=256)
+def _glob_regex(pattern: str) -> re.Pattern[str]:
+    """把带路径的 glob 转成正则：`**/` 要能匹配零层目录（`**/*.md` 命中根部 README.md）。"""
+    out: list[str] = ["^"]
+    index, length = 0, len(pattern)
+    while index < length:
+        char = pattern[index]
+        if char == "*":
+            if index + 1 < length and pattern[index + 1] == "*":
+                index += 2
+                if index < length and pattern[index] == "/":
+                    out.append("(?:.*/)?")
+                    index += 1
+                else:
+                    out.append(".*")
+                continue
+            out.append("[^/]*")
+        elif char == "?":
+            out.append("[^/]")
+        elif char == "[":
+            end = index + 1
+            if end < length and pattern[end] in "!^":
+                end += 1
+            if end < length and pattern[end] == "]":
+                end += 1
+            while end < length and pattern[end] != "]":
+                end += 1
+            if end >= length:
+                out.append(re.escape(char))
+            else:
+                body = pattern[index + 1 : end]
+                if body.startswith("!"):
+                    body = "^" + body[1:]
+                elif body.startswith("^"):
+                    body = "\\" + body
+                out.append("[" + body + "]")
+                index = end
+        else:
+            out.append(re.escape(char))
+        index += 1
+    out.append("$")
+    return re.compile("".join(out))
+
+
+def _glob_blocking(root, pattern: str, prefix: str, limit: int) -> list[dict]:
+    """按 glob 模式列文件，按 mtime 倒序。忽略目录与大目录预算跟搜索同一套。"""
+    root_path = Path(root).resolve()
+    base = resolve_existing(root_path, prefix)
+    if base.is_file():
+        relative = base.relative_to(root_path).as_posix()
+        if _glob_match(relative, pattern):
+            try:
+                return [{"path": relative, "mtime_ns": base.stat().st_mtime_ns}]
+            except OSError:
+                return []
+        return []
+    found: list[dict] = []
+    scanned = 0
+    deadline = time.monotonic() + MAX_SCAN_SECONDS
+    for directory, dirnames, filenames in os.walk(base):
+        dirnames[:] = sorted(d for d in dirnames if not _skipped_dir(d))
+        for filename in sorted(filenames):
+            path = Path(directory) / filename
+            try:
+                if not path.is_file():
+                    continue
+                stat = path.stat()
+            except OSError:
+                continue
+            scanned += 1
+            relative = path.relative_to(root_path).as_posix()
+            if _glob_match(relative, pattern):
+                found.append({"path": relative, "mtime_ns": stat.st_mtime_ns})
+            if scanned >= MAX_SCAN_FILES or time.monotonic() > deadline:
+                break
+        else:
+            continue
+        break
+    found.sort(key=lambda item: item["mtime_ns"], reverse=True)
+    return found[:limit]
+
+
+async def _glob(context: ToolContext, arguments: dict) -> ToolOutcome:
+    pattern = str(arguments.get("pattern") or "").strip()
+    if not pattern:
+        return fail("error", "glob 需要 pattern，例如 **/*.py 或 src/**/*.{ts,tsx}")
+    prefix = str(arguments.get("path") or "")
+    try:
+        limit = max(1, min(int(arguments.get("limit") or MAX_GLOB_RESULTS), 1000))
+    except (TypeError, ValueError):
+        limit = MAX_GLOB_RESULTS
+    broker = _broker()
+    marker: dict = {}
+    if _routed(context):
+        try:
+            envelope = await _call(
+                context, "glob",
+                {"pattern": pattern, "path": prefix, "limit": limit},
+            )
+        except broker.FsBrokerError as exc:
+            return broker.broker_failure_outcome("glob", exc)
+        files = envelope["result"]["files"]
+        marker = broker.broker_success_marker("glob", envelope)
+    else:
+        files = await asyncio.to_thread(_glob_blocking, context.root, pattern, prefix, limit)
+    paths = [item["path"] for item in files]
+    return ok(
+        "\n".join(paths) or "没有匹配的文件",
+        files=paths,
+        count=len(paths),
+        truncated=len(paths) >= limit,
+        **marker,
+    )
+
+
 async def _search_code(context: ToolContext, arguments: dict) -> ToolOutcome:
     pattern = arguments["pattern"]
     mode = arguments.get("mode", "literal")
     prefix = arguments.get("path", "")
-    limit = int(arguments.get("max_matches", MAX_MATCHES_DEFAULT))
+    try:
+        limit = int(arguments.get("max_matches", MAX_MATCHES_DEFAULT))
+    except (TypeError, ValueError):
+        limit = MAX_MATCHES_DEFAULT
+    output_mode = str(arguments.get("output_mode") or "content")
+    if output_mode not in ("content", "files_with_matches", "count"):
+        return fail(
+            "error",
+            "output_mode 只能是 content / files_with_matches / count",
+        )
+    file_glob = str(arguments.get("glob") or "")
+    file_type = str(arguments.get("type") or "")
+    if file_type and file_type not in TYPE_EXTENSIONS:
+        return fail(
+            "error",
+            f"未知文件类型：{file_type}。常用：{', '.join(sorted(TYPE_EXTENSIONS))}",
+        )
+    try:
+        case_insensitive = bool(arguments.get("-i") or arguments.get("case_insensitive"))
+        multiline = bool(arguments.get("multiline"))
+        before = max(0, int(arguments.get("-B") or arguments.get("before_context") or 0))
+        after = max(0, int(arguments.get("-A") or arguments.get("after_context") or 0))
+        context_lines = max(0, int(arguments.get("-C") or arguments.get("context") or 0))
+        only_matching = bool(arguments.get("-o") or arguments.get("only_matching"))
+        with_line_numbers = arguments.get("-n")
+        with_line_numbers = True if with_line_numbers is None else bool(with_line_numbers)
+        head_limit = arguments.get("head_limit")
+        head_limit = limit if head_limit is None else max(0, int(head_limit))
+        offset = max(0, int(arguments.get("offset") or 0))
+    except (TypeError, ValueError):
+        return fail("error", "搜索参数必须是数字或布尔值：-A / -B / -C / head_limit / offset")
+    if context_lines and output_mode != "content":
+        context_lines = 0
+    if context_lines:
+        before = after = context_lines
     broker = _broker()
     marker: dict = {}
     routed = _routed(context)
-    if mode == "regex" and not routed:
-        try:
-            regex = re.compile(pattern)
-        except re.error as exc:
-            raise ValueError(_INVALID_REGEX_TEMPLATE.format(exc=exc)) from exc
-    elif mode == "regex":
-        regex = None  # 正则编译放进 broker 里做，错误经 IPC 原样重建（同一句模板，两个口径不漂移）
-    else:
-        regex = None
+    flags = re.IGNORECASE if case_insensitive else 0
+    regex = None
+    if not routed:
+        if mode == "regex":
+            try:
+                regex = re.compile(pattern, flags)
+            except re.error as exc:
+                raise ValueError(_INVALID_REGEX_TEMPLATE.format(exc=exc)) from exc
+    request = {
+        "pattern": pattern,
+        "mode": mode,
+        "path": str(prefix),
+        # 内容模式要多取一些再去掉 context 与 offset，否则 head_limit 会被早期截断。
+        "max_matches": 0 if head_limit == 0 else max(limit, head_limit + offset) * (before + after + 1),
+        "file_glob": file_glob,
+        "file_type": file_type,
+        "multiline": multiline,
+        "case_insensitive": case_insensitive,
+        "before": before,
+        "after": after,
+        "only_matching": only_matching,
+        "output_mode": "files_with_matches" if output_mode == "files_with_matches" else (
+            "count" if output_mode == "count" else "content"
+        ),
+    }
     if routed:
         # 开了 fs-broker（或任务级隔离）：遍历与读取都在子进程边界里做，失败不回退宿主。
         try:
-            envelope = await _call(
-                context, "search",
-                {"pattern": pattern, "mode": mode, "path": str(prefix), "max_matches": limit},
-            )
+            envelope = await _call(context, "search", request)
         except broker.FsBrokerError as exc:
             return broker.broker_failure_outcome("search", exc)
         matches = envelope["result"]["matches"]
@@ -142,34 +369,176 @@ async def _search_code(context: ToolContext, arguments: dict) -> ToolOutcome:
     else:
         # 搜索是纯同步的文件遍历，必须下放线程：留在事件循环里时，一次全库搜索
         # 就能让后端的 /health 也不回包，界面看起来是"应用卡死"。
-        matches = await asyncio.to_thread(_search_blocking, context.root, pattern, regex, prefix, limit)
-    rendered = "\n".join(f"{m['path']}:{m['line']}: {m['text']}" for m in matches)
+        matches = await asyncio.to_thread(
+            _search_blocking,
+            context.root,
+            pattern,
+            regex,
+            prefix,
+            request["max_matches"],
+            file_glob=file_glob,
+            file_type=file_type,
+            multiline=multiline,
+            case_insensitive=case_insensitive,
+            before=before,
+            after=after,
+            only_matching=only_matching,
+            output_mode=output_mode,
+        )
+    if output_mode == "files_with_matches":
+        entries = [item["path"] for item in matches]
+        entries = entries[offset:]
+        if head_limit:
+            entries = entries[:head_limit]
+        return ok(
+            "\n".join(entries) or "未找到匹配结果",
+            files=entries,
+            count=len(entries),
+            truncated=bool(head_limit) and len(matches) > offset + head_limit,
+            **marker,
+        )
+    if output_mode == "count":
+        entries = [f"{item['path']}: {item['count']}" for item in matches]
+        entries = entries[offset:]
+        if head_limit:
+            entries = entries[:head_limit]
+        return ok(
+            "\n".join(entries) or "未找到匹配结果",
+            counts=matches,
+            count=len(entries),
+            truncated=bool(head_limit) and len(matches) > offset + head_limit,
+            **marker,
+        )
+    lines: list[str] = []
+    for item in matches:
+        if item.get("is_context"):
+            prefix_text = f"{item['path']}-{item['line']}-" if with_line_numbers else f"{item['path']}-"
+        else:
+            prefix_text = f"{item['path']}:{item['line']}:" if with_line_numbers else f"{item['path']}:"
+        lines.append(f"{prefix_text} {item['text']}")
+    lines = lines[offset:]
+    if head_limit:
+        lines = lines[:head_limit]
     return ok(
-        rendered or "未找到匹配结果",
-        matches=matches,
-        count=len(matches),
-        truncated=len(matches) >= limit,
+        "\n".join(lines) or "未找到匹配结果",
+        matches=[item for item in matches if not item.get("is_context")],
+        count=len([item for item in matches if not item.get("is_context")]),
+        truncated=bool(head_limit) and (len(matches) > offset + head_limit),
         **marker,
     )
 
 
-def _search_blocking(root, pattern: str | None, regex, prefix: str, limit: int) -> list[dict]:
-    """一次读取同时用于预过滤与逐行匹配；解码失败的文件直接跳过。"""
+def _file_matches_filters(relative: str, file_glob: str, file_type: str) -> bool:
+    if file_type:
+        extensions = TYPE_EXTENSIONS.get(file_type)
+        if extensions is None:
+            raise ValueError(
+                f"未知文件类型：{file_type}。常用：{', '.join(sorted(TYPE_EXTENSIONS))}"
+            )
+        if Path(relative).suffix.lower() not in extensions:
+            return False
+    if file_glob and not _glob_match(relative, file_glob):
+        return False
+    return True
+
+
+def _search_blocking(
+    root,
+    pattern: str | None,
+    regex,
+    prefix: str,
+    limit: int,
+    *,
+    file_glob: str = "",
+    file_type: str = "",
+    multiline: bool = False,
+    case_insensitive: bool = False,
+    before: int = 0,
+    after: int = 0,
+    only_matching: bool = False,
+    output_mode: str = "content",
+) -> list[dict]:
+    """一次读取同时用于预过滤与逐行匹配；解码失败的文件直接跳过。
+
+    返回形状按 `output_mode`：content 是命中行（可夹 context 行），
+    files_with_matches 是每个文件一条，count 是每个文件一条计数。
+    """
+    if regex is None and pattern is not None:
+        flags = re.IGNORECASE if case_insensitive else 0
+        if multiline:
+            flags |= re.DOTALL
+        regex = re.compile(re.escape(pattern), flags)
+    elif regex is not None and multiline:
+        regex = re.compile(regex.pattern, regex.flags | re.DOTALL)
     matches: list[dict] = []
+    seen_files: set[str] = set()
     for relative, path in iter_text_files(root, prefix):
+        if not _file_matches_filters(relative, file_glob, file_type):
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        if regex is None and pattern not in path.name and pattern not in text:
-            continue
-        for lineno, line in enumerate(text.splitlines(), start=1):
-            hit = regex.search(line) if regex else pattern in line
-            if not hit:
-                continue
-            matches.append({"path": relative, "line": lineno, "text": line.strip()[:200]})
-            if len(matches) >= limit:
-                return matches
+        if multiline:
+            file_hits: list[dict] = []
+            for hit in regex.finditer(text):
+                line = text.count("\n", 0, hit.start()) + 1
+                value = hit.group(0) if only_matching else text.splitlines()[line - 1]
+                file_hits.append({"path": relative, "line": line, "text": value.strip()[:200]})
+                if limit and len(file_hits) >= limit:
+                    break
+        else:
+            lines = text.splitlines()
+            file_hits = []
+            hit_lines: set[int] = set()
+            for index, line in enumerate(lines):
+                found = list(regex.finditer(line))
+                if not found:
+                    continue
+                hit_lines.add(index)
+                if only_matching:
+                    for hit in found:
+                        file_hits.append(
+                            {"path": relative, "line": index + 1, "text": hit.group(0)[:200]}
+                        )
+                else:
+                    file_hits.append(
+                        {"path": relative, "line": index + 1, "text": line.strip()[:200]}
+                    )
+                if limit and len(file_hits) >= limit:
+                    break
+            if before or after:
+                context: list[dict] = []
+                emitted: set[int] = set()
+                for index in sorted(hit_lines):
+                    for near in range(max(0, index - before), min(len(lines), index + after + 1)):
+                        if near in hit_lines or near in emitted:
+                            continue
+                        emitted.add(near)
+                        context.append(
+                            {
+                                "path": relative,
+                                "line": near + 1,
+                                "text": lines[near].strip()[:200],
+                                "is_context": True,
+                            }
+                        )
+                file_hits = sorted([*file_hits, *context], key=lambda item: item["line"])
+        if output_mode == "files_with_matches":
+            if file_hits and relative not in seen_files:
+                seen_files.add(relative)
+                matches.append({"path": relative})
+                if limit and len(matches) >= limit:
+                    return matches
+        elif output_mode == "count":
+            if file_hits:
+                matches.append({"path": relative, "count": len(file_hits)})
+                if limit and len(matches) >= limit:
+                    return matches
+        else:
+            matches.extend(file_hits)
+            if limit and len(matches) >= limit:
+                return matches[:limit]
     return matches
 
 
@@ -212,10 +581,31 @@ def filesystem_tools() -> list[ToolDefinition]:
             handler=_read_file,
         ),
         ToolDefinition(
+            name="glob",
+            description=(
+                "按 glob 模式找文件，返回工作区相对路径，最近修改的排在前面。"
+                "例：**/*.py、src/**/*.{ts,tsx}、*.md。"
+                "不要用 list_files 逐层翻目录来找某类文件——直接用 glob。"
+            ),
+            input_schema={
+                "type": "object",
+                "required": ["pattern"],
+                "properties": {
+                    "pattern": {"type": "string", "description": "glob 模式，支持 ** 与 {a,b}"},
+                    "path": {"type": "string", "description": "限定的子目录，默认整个工作区"},
+                    "limit": {"type": "integer", "description": "最多返回多少个路径，默认 200"},
+                },
+            },
+            risk_level="low",
+            handler=_glob,
+        ),
+        ToolDefinition(
             name="search_code",
             description=(
                 "在工作区内按文本或正则搜索代码，返回文件、行号与命中行。"
                 "path 可以是子目录，也可以直接写某个文件（如 index.html）。"
+                "只想知道哪些文件命中用 output_mode=files_with_matches，要每个文件的命中数用 count。"
+                "用 glob / type 收窄范围；context 给命中行带上前后文。"
             ),
             input_schema={
                 "type": "object",
@@ -224,7 +614,35 @@ def filesystem_tools() -> list[ToolDefinition]:
                     "pattern": {"type": "string", "description": "搜索文本或正则表达式"},
                     "mode": {"type": "string", "enum": ["literal", "regex"]},
                     "path": {"type": "string", "description": "限定的子目录或单个文件"},
-                    "max_matches": {"type": "integer", "description": "最多返回多少条命中"},
+                    "glob": {
+                        "type": "string",
+                        "description": "只搜匹配该 glob 的文件，例如 *.py 或 src/**/*.ts",
+                    },
+                    "type": {
+                        "type": "string",
+                        "description": "只搜某种语言的文件：py / ts / tsx / js / go / rust / java / md …",
+                    },
+                    "output_mode": {
+                        "type": "string",
+                        "enum": ["content", "files_with_matches", "count"],
+                        "description": "content=命中行（默认），files_with_matches=只列文件，count=按文件计数",
+                    },
+                    "multiline": {
+                        "type": "boolean",
+                        "description": "让 . 匹配换行，用于跨行模式；literal 模式下也会按整段文本匹配",
+                    },
+                    "-i": {"type": "boolean", "description": "忽略大小写"},
+                    "-n": {"type": "boolean", "description": "是否显示行号，默认 true"},
+                    "-A": {"type": "integer", "description": "每条命中后附带的上下文行数"},
+                    "-B": {"type": "integer", "description": "每条命中前附带的上下文行数"},
+                    "-C": {"type": "integer", "description": "前后各附带多少行上下文"},
+                    "-o": {"type": "boolean", "description": "只输出命中的那一段文本"},
+                    "head_limit": {"type": "integer", "description": "最多返回多少个结果，0=不限"},
+                    "offset": {"type": "integer", "description": "跳过前多少个结果（先于 head_limit 生效）"},
+                    "max_matches": {
+                        "type": "integer",
+                        "description": "最多返回多少条命中（content 模式的旧参数，等价于 head_limit）",
+                    },
                 },
             },
             risk_level="low",

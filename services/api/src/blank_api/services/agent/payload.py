@@ -31,6 +31,7 @@ TOOL_BUDGETS: dict[str, tuple[int, int]] = {
     "run_tests": (600, 2_000),
     "read_file": (6_000, 0),
     "list_files": (2_500, 0),
+    "glob": (2_500, 0),
     "search_code": (2_500, 0),
     "read_notes": (1_500, 0),
     "git": (1_000, 1_000),

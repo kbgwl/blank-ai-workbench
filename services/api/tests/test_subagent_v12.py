@@ -96,7 +96,10 @@ async def test_read_only_subagent_returns_a_summary(env, workspace: Path):  # no
             {"content": "执行计划：\n1. 派子代理侦察"},
             {
                 "content": "派一个只读子代理看看",
-                "tool_calls": [call("spawn_agent", {"goal": "读取 main.py 并复述内容"})],
+                "tool_calls": [
+                    # 明确关掉后台：这条用例考的是「等到结论」的同步路径。
+                    call("spawn_agent", {"goal": "读取 main.py 并复述内容", "run_in_background": False})
+                ],
             },
             # 子代理的模型调用（只读，可直接给结论）
             {"content": "main.py 里只有一行 print('hi')"},
@@ -132,7 +135,16 @@ async def test_isolated_subagent_writes_only_into_the_copy(env, workspace: Path)
             {
                 "content": "派隔离子代理写方案",
                 "tool_calls": [
-                    call("spawn_agent", {"goal": "写一份 review.md 方案草稿", "isolate": True, "max_steps": 3})
+                    # 旧参数名 background 仍要“传 false 就同步”，别让兼容名变成 bug。
+                    call(
+                        "spawn_agent",
+                        {
+                            "goal": "写一份 review.md 方案草稿",
+                            "isolate": True,
+                            "max_steps": 3,
+                            "background": False,
+                        },
+                    )
                 ],
             },
             # 子代理：写文件

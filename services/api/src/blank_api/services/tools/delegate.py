@@ -81,7 +81,13 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
     if not request.goal.strip():
         return fail("error", "spawn_agent 需要具体的子任务目标")
 
-    if bool(arguments.get("background")):
+    # Claude Code 的 Agent 工具默认后台跑：不传就是后台，只有「下一步马上就要结论、
+    # 期间没有别的事可做」时才显式传 false。旧参数名 background 继续接受。
+    raw_background = arguments.get("run_in_background")
+    if raw_background is None:
+        raw_background = arguments.get("background")
+    background = True if raw_background is None else bool(raw_background)
+    if background:
         if not hasattr(runner, "spawn_background"):
             return fail("error", "当前运行时没有启用后台子代理")
         agent_id, error_result = await runner.spawn_background(request)
@@ -167,6 +173,20 @@ async def _task_output(context: ToolContext, arguments: dict) -> ToolOutcome:
     return ToolOutcome(ok=True, status="ok", output=output, data=data)
 
 
+async def _list_agents(context: ToolContext, arguments: dict) -> ToolOutcome:
+    runner = getattr(context, "subagent_runner", None)
+    if runner is None or not hasattr(runner, "list_agents"):
+        return fail("error", "当前运行时没有启用后台子代理")
+    items = runner.list_agents()
+    if not items:
+        return ok("当前没有后台子代理", agents=[], count=0)
+    lines = [
+        f"{item['agent_id']}  [{item['status']}]  {item['goal']}"
+        for item in items
+    ]
+    return ok("\n".join(lines), agents=items, count=len(items))
+
+
 async def _task_stop(context: ToolContext, arguments: dict) -> ToolOutcome:
     runner = getattr(context, "subagent_runner", None)
     if runner is None or not hasattr(runner, "stop"):
@@ -190,6 +210,31 @@ async def _task_stop(context: ToolContext, arguments: dict) -> ToolOutcome:
     return ok(
         f"子代理 {agent_id} 已经结束（{status}），没有需要取消的运行。",
         **data,
+    )
+
+
+async def _send_message(context: ToolContext, arguments: dict) -> ToolOutcome:
+    runner = getattr(context, "subagent_runner", None)
+    if runner is None or not hasattr(runner, "send_message"):
+        return fail("error", "当前运行时没有启用子代理")
+    agent_id = str(arguments.get("agent_id") or "").strip()
+    if not agent_id:
+        return fail("error", "send_message 需要 agent_id")
+    message = str(arguments.get("message") or "").strip()
+    if not message:
+        return fail("error", "send_message 需要具体的后续问题")
+    result = await runner.send_message(agent_id, message[:MAX_GOAL_CHARS])
+    if not result.ok and not result.summary:
+        return fail("error", result.error or "子代理续聊失败")
+    return ok(
+        result.render()[:8_000],
+        ok=result.ok,
+        summary=result.summary,
+        steps=result.steps,
+        agent_path=result.agent_path,
+        agent_id=result.agent_id or agent_id,
+        error=result.error,
+        usage=result.usage,
     )
 
 
@@ -261,9 +306,9 @@ def delegate_tools() -> list[ToolDefinition]:
                 "把一个可以独立完成、边界清楚的子任务交给子代理，它会返回结论（可带隔离副本中的 diff）。"
                 "适合大范围侦察、反复试错、需要独立上下文的工作；简单一步就能做完的事不要用它。"
                 "isolate=true 时子代理在临时副本里工作，改动不会影响真实工作区。"
-                "background=true 时立即返回 agent_id，之后用 task_output 取结论、task_stop 取消——"
-                "需要同时推进别的事时用它；需要立刻拿到结论时不要用。"
-                "后台子代理结束时你会收到一条系统通知，不必靠反复轮询。"
+                "子代理默认在后台跑：立即返回 agent_id，结束时你会收到一条系统通知，"
+                "不必靠轮询；需要更细的进度或完整文本时用 task_output，不要了用 task_stop。"
+                "只有你的下一步马上就要它的结论、期间没有别的事可做时，才传 run_in_background=false 等它。"
                 "子代理的结论要在你的最终答复里转述给用户；不要重复执行它已经做完的活，"
                 "也不要把它还没给出的结论说成已完成。"
                 "需要同时分头做几件事时改用 spawn_agents。"
@@ -279,9 +324,17 @@ def delegate_tools() -> list[ToolDefinition]:
                     },
                     "max_steps": {"type": "integer", "description": "子代理最多几步，默认 4，上限 8"},
                     "label": {"type": "string", "description": "隔离副本的名字前缀，便于辨认"},
+                    "run_in_background": {
+                        "type": "boolean",
+                        "description": (
+                            "默认 true：立即返回 agent_id 在后台跑，结束时收到系统通知，"
+                            "结论用 task_output 取、task_stop 取消。只有下一步马上要它的结果、"
+                            "期间没有别的事可做时才传 false（等到结束）。"
+                        ),
+                    },
                     "background": {
                         "type": "boolean",
-                        "description": "true=立即返回 agent_id 在后台跑，之后用 task_output/task_stop；默认 false（等到结束）",
+                        "description": "run_in_background 的旧名，等价；新调用请用 run_in_background",
                     },
                 },
             },
@@ -343,6 +396,40 @@ def delegate_tools() -> list[ToolDefinition]:
             risk_level="low",
             handler=_task_output,
             timeout_seconds=330.0,
+        ),
+        ToolDefinition(
+            name="send_message",
+            description=(
+                "给一个已经跑过的子代理发后续消息：它保留原来的上下文（读过的文件、已经给出的结论），"
+                "只接着回答你新问的这一句。要换方向或开一个互不相干的任务请重新 spawn_agent——"
+                "那是一个全新上下文。隔离子代理的副本结束即清理，这类子代理不能续聊，会直接拒绝。"
+                "仍在后台跑的句柄需要先 task_output 等它结束，续聊本身是同步的。"
+            ),
+            input_schema={
+                "type": "object",
+                "required": ["agent_id", "message"],
+                "properties": {
+                    "agent_id": {"type": "string", "description": "spawn_agent 返回的句柄"},
+                    "message": {
+                        "type": "string",
+                        "description": "后续问题或补充要求，子代理会带着上一轮的上下文回答",
+                    },
+                },
+            },
+            risk_level="medium",
+            handler=_send_message,
+            timeout_seconds=330.0,
+        ),
+        ToolDefinition(
+            name="list_agents",
+            description=(
+                "列出本任务派出的后台子代理及各自状态（running / completed / failed / cancelled）。"
+                "用来确认「还有谁在跑、谁已经结束」，不必逐个 task_output 去猜。"
+                "已结束的结论仍用 task_output 取；这里只给状态与摘要，不代替转述。"
+            ),
+            input_schema={"type": "object", "properties": {}},
+            risk_level="low",
+            handler=_list_agents,
         ),
         ToolDefinition(
             name="task_stop",

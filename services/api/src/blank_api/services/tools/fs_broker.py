@@ -173,6 +173,15 @@ def _op_dispatch(root: Path, request: dict) -> dict:
             key: int(args[key]) for key in ("offset", "limit") if args.get(key) is not None
         }
         return {"payload": read_text_file(root, str(args["path"]), **window)}
+    if op == "glob":
+        from blank_api.services.tools.filesystem import _glob_blocking
+
+        return {"files": _glob_blocking(
+            root,
+            str(args["pattern"]),
+            str(args.get("path", "")),
+            int(args.get("limit", 200)),
+        )}
     if op == "search":
         from blank_api.services.tools.filesystem import _search_blocking
 
@@ -182,6 +191,14 @@ def _op_dispatch(root: Path, request: dict) -> dict:
             _compile_regex(args) if args.get("mode") == "regex" else None,
             str(args.get("path", "")),
             int(args.get("max_matches", 50)),
+            file_glob=str(args.get("file_glob", "")),
+            file_type=str(args.get("file_type", "")),
+            multiline=bool(args.get("multiline")),
+            case_insensitive=bool(args.get("case_insensitive")),
+            before=int(args.get("before", 0)),
+            after=int(args.get("after", 0)),
+            only_matching=bool(args.get("only_matching")),
+            output_mode=str(args.get("output_mode", "content")),
         )}
     if op == "patch":
         from blank_api.services.tools.patch import _patch_on_disk
@@ -203,8 +220,13 @@ def _compile_regex(args: dict):
 
     from blank_api.services.tools.filesystem import _INVALID_REGEX_TEMPLATE
 
+    flags = 0
+    if args.get("case_insensitive"):
+        flags |= re.IGNORECASE
+    if args.get("multiline"):
+        flags |= re.DOTALL
     try:
-        return re.compile(str(args["pattern"]))
+        return re.compile(str(args["pattern"]), flags)
     except re.error as exc:
         raise ValueError(_INVALID_REGEX_TEMPLATE.format(exc=exc)) from exc
 

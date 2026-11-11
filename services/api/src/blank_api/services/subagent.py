@@ -47,6 +47,7 @@ from blank_api.services.worktree import (
 READ_ONLY_TOOLS = (
     "read_file",
     "list_files",
+    "glob",
     "search_code",
     "git",
     "web_search",
@@ -68,10 +69,24 @@ MIN_TIMEOUT = 20.0
 # 并行编排上限：四个副本已经是"分头探索"的合理规模，再多就是烧钱而不是加速
 MAX_PARALLEL_AGENTS = 4
 DEFAULT_CONCURRENCY = 3
+# 子代理默认后台跑（对齐 Claude Code 的 Agent 工具），任务收尾前给它一个有界等待窗口：
+# 这个窗口里结束的，结论能进交付；还没结束的才会被取消并点名。窗口不能无限长——
+# 主代理已经写完结论，界面不该再干等十分钟。
+BACKGROUND_SETTLE_SECONDS = 90.0
 # 后台句柄只在本进程内有效：重启后 task_output 会如实说"找不到"，而不是伪造一个结果。
 # 按任务分桶、键是 agent_id。放模块级而不是 runner 实例上，是因为审批恢复会重建
 # 一个 runner——句柄若绑在实例上，恢复之后 task_output 就再也找不到它了。
 _BACKGROUND: dict[str, dict[str, "_BackgroundAgent"]] = {}
+# 续聊（对齐 Claude Code 的 SendMessage）：子代理跑完把它这一轮的对话留在这里，
+# 按任务分桶、键是 agent_id。新的 spawn_agent 从空上下文开始，续聊则接着这一份
+# 往下说——否则「刚才你查到的那条」会让它一脸茫然，用户只能把背景再讲一遍。
+# 只留非隔离子代理的对话：隔离副本跑完就删，上下文还在但文件状态没了，
+# 续聊会给出与磁盘不符的答案。隔离子代理的条目也留（只留标记），用来给出准确拒绝。
+_CONVERSATIONS: dict[str, dict[str, dict]] = {}
+# 内存护栏：一个任务里派十几个子代理、每个几十条消息，不设上限会一路涨到重启。
+MAX_CONVERSATIONS = 20
+MAX_CONVERSATION_MESSAGES = 60
+MAX_CONVERSATION_CHARS = 8_000
 
 SUBAGENT_SYSTEM = (
     "你是一个受限的子代理，只负责完成交给你的单个子任务。\n"
@@ -129,6 +144,9 @@ class SubAgentResult:
     # J3：这一位自己的 AppContainer 包名（空 = 跑在共享工作区/父级身份里）。
     # 收尸时要连带删包；不写进事件正文，包名本身不是证据。
     isolation_profile: str = field(default="", repr=False)
+    # 这一轮结束时的完整对话：续聊（send_message）靠它接着往下说。
+    # 不进 as_dict / 事件：里面是子代理读过的文件内容，写进时间线等于把上下文泄漏给所有人。
+    conversation: list[dict] = field(default_factory=list, repr=False)
 
 
     def as_dict(self) -> dict:
@@ -343,6 +361,8 @@ async def run_subagent(
     tracker: dict | None = None,
     # 隔离副本的创建/删除钩子。为 None 时走默认的 git worktree / 整树复制。
     hooks: HookRunner | None = None,
+    # 续聊：上一轮的完整对话。非空时这一轮接在它后面，而不是从系统提示 + goal 重新开始。
+    history: list[dict] | None = None,
 ) -> SubAgentResult:
     request = request.normalized()
     if not request.goal:
@@ -435,13 +455,21 @@ async def run_subagent(
         root_thread_id=root_thread_id,
     )
     compactor = ContextCompactor(**(watermark or {}))
-    messages: list[dict] = [
-        {"role": "system", "content": SUBAGENT_SYSTEM.format(steps=request.max_steps)},
-        {
-            "role": "user",
-            "content": request.goal + ("\n（你在一个临时隔离副本里工作，改动不会影响真实工作区）" if isolated else ""),
-        },
-    ]
+    system_message = {"role": "system", "content": SUBAGENT_SYSTEM.format(steps=request.max_steps)}
+    if history:
+        # 续聊：历史里已经有系统提示与上一轮的读/写/结论，这一轮只追加新问题。
+        messages: list[dict] = list(history)
+        if not messages or messages[0].get("role") != "system":
+            messages.insert(0, system_message)
+        messages.append({"role": "user", "content": request.goal})
+    else:
+        messages = [
+            system_message,
+            {
+                "role": "user",
+                "content": request.goal + ("\n（你在一个临时隔离副本里工作，改动不会影响真实工作区）" if isolated else ""),
+            },
+        ]
     usage_started = time.perf_counter()
     provider_name = provider_name or adapter.config.name
     # 子代理是一条独立的线程：用量行按 trace_id 归属到"哪一个 agent"，
@@ -610,6 +638,7 @@ async def run_subagent(
         thread_id=thread_id,
         tree=tree if request.keep_worktree else None,
         isolation_profile=isolation_profile if request.keep_worktree else "",
+        conversation=messages,
     )
     await log.add(
         "subagent.completed",
@@ -669,7 +698,13 @@ class SubAgentRunner:
             return prepared
         return await self._run_prepared(prepared)
 
-    async def _run_prepared(self, prepared: _PreparedSpawn, *, tracker: dict | None = None) -> SubAgentResult:
+    async def _run_prepared(
+        self,
+        prepared: _PreparedSpawn,
+        *,
+        tracker: dict | None = None,
+        history: list[dict] | None = None,
+    ) -> SubAgentResult:
         session, request = prepared.session, prepared.request
         # 根线程从父会话一路往下传：孙代理的根仍然是最初那条线程，不是它的父亲。
         root_thread_id = str(getattr(session, "root_thread_id", "") or session.trace_id)
@@ -692,7 +727,7 @@ class SubAgentRunner:
             },
         )
         provider_id, provider_name = _session_provider(session)
-        return await run_subagent(
+        result = await run_subagent(
             adapter=session.adapter,
             tools=tools,
             root=Path(session.context.root),
@@ -712,7 +747,87 @@ class SubAgentRunner:
             agent_id=prepared.agent_id,
             tracker=tracker,
             hooks=getattr(session, "hooks", None),
+            history=history,
         )
+        # 留给 send_message：无论这一轮成功还是失败，已经说过的话都要能接上。
+        self._remember(prepared, result)
+        return result
+
+    # ------------------------------------------------------------------ #
+    # 续聊：把上一轮的上下文接着用
+    # ------------------------------------------------------------------ #
+    def _remember(self, prepared: _PreparedSpawn, result: SubAgentResult) -> None:
+        """把这一轮结束时的对话存进任务桶；隔离子代理只存标记，用于给出准确拒绝。"""
+        session = self.session
+        if session is None or not result.conversation:
+            return
+        task_id = str(getattr(getattr(session, "context", None), "task_id", "") or "")
+        if not task_id:
+            return
+        bucket = _CONVERSATIONS.setdefault(task_id, {})
+        raw = list(result.conversation)
+        if len(raw) > MAX_CONVERSATION_MESSAGES:
+            # 系统提示永远保留：丢了它续聊就没有规矩可依。
+            raw = [raw[0], *raw[-(MAX_CONVERSATION_MESSAGES - 1):]]
+        trimmed: list[dict] = []
+        for item in raw:
+            content = str(item.get("content") or "")
+            if len(content) > MAX_CONVERSATION_CHARS:
+                content = content[:MAX_CONVERSATION_CHARS] + "…（已截断）"
+            trimmed.append({**item, "content": content})
+        bucket[prepared.agent_id] = {
+            "agent_path": prepared.agent_path,
+            "isolate": bool(prepared.request.isolate),
+            "messages": trimmed,
+        }
+        while len(bucket) > MAX_CONVERSATIONS:
+            bucket.pop(next(iter(bucket)))
+
+    async def send_message(self, agent_id: str, message: str) -> SubAgentResult:
+        """给一个已经跑过的子代理发后续消息，保留它原来的上下文。
+
+        新的 ``spawn_agent`` 是全新上下文；续聊则接着上一轮的读、写与结论往下说。
+        隔离子代理的副本跑完就删，上下文在、文件状态不在——那种情况明确拒绝，
+        而不是让它在真实工作区里接着答一个它以为还在副本里的问题。
+        """
+        session = self.session
+        if session is None:
+            return SubAgentResult(ok=False, error="子代理运行器尚未绑定会话")
+        task_id = str(getattr(getattr(session, "context", None), "task_id", "") or "")
+        entry = _CONVERSATIONS.get(task_id, {}).get(agent_id)
+        if entry is None:
+            handle = self._handle(agent_id)
+            if handle is not None and handle.task is not None and not handle.task.done():
+                return SubAgentResult(
+                    ok=False,
+                    error=f"子代理 {agent_id} 还在后台运行，先用 task_output 等它结束再续聊",
+                )
+            return SubAgentResult(
+                ok=False,
+                error=f"没有该子代理的上下文：{agent_id}（只有本进程里跑过的子代理能续聊）",
+            )
+        if entry.get("isolate"):
+            return SubAgentResult(
+                ok=False,
+                error=(
+                    f"子代理 {agent_id} 使用隔离副本，副本跑完已清理，无法续聊；"
+                    "请重新派一个子代理，或让它在这一轮里就把问题问完"
+                ),
+            )
+        depth = int(getattr(session, "depth", 0)) + 1
+        if depth > MAX_DEPTH:
+            return SubAgentResult(ok=False, error="子代理不允许再嵌套子代理", depth=depth)
+        request = SubAgentRequest(goal=message).normalized()
+        if not request.goal:
+            return SubAgentResult(ok=False, error="续聊消息为空")
+        prepared = _PreparedSpawn(
+            session=session,
+            request=request,
+            depth=depth,
+            agent_path=str(entry.get("agent_path") or ""),
+            agent_id=agent_id,
+        )
+        return await self._run_prepared(prepared, history=list(entry["messages"]))
 
     # ------------------------------------------------------------------ #
     # 后台句柄：spawn 立即返回 agent_id，结论后来再取
@@ -851,6 +966,33 @@ class SubAgentRunner:
             notes.append(note)
         return notes
 
+    def list_agents(self) -> list[dict]:
+        """列出本任务的后台子代理（含已结束的），对齐 Claude Code 的 ListAgents。
+
+        只读快照，不等待、不改变通知状态：running 的句柄照实说还在跑，
+        已完成的不在这里重复摘要全文——结论仍由 task_output 取。
+        """
+        session = self.session
+        if session is None:
+            return []
+        task_id = str(getattr(getattr(session, "context", None), "task_id", "") or "")
+        bucket = _BACKGROUND.get(task_id, {})
+        items: list[dict] = []
+        for handle in bucket.values():
+            snapshot = self._snapshot(handle)
+            items.append(
+                {
+                    "agent_id": handle.agent_id,
+                    "agent_path": handle.agent_path,
+                    "goal": handle.request.goal[:200],
+                    "status": str(snapshot.get("status") or ""),
+                    "summary": str(snapshot.get("summary") or "")[:500],
+                    "error": str(snapshot.get("error") or handle.error or "")[:500],
+                    "elapsed_seconds": snapshot.get("elapsed_seconds", 0),
+                }
+            )
+        return items
+
     async def output(self, agent_id: str, *, block: bool = True, timeout: float = 60.0) -> dict:
         """取后台子代理的现状；``block`` 时最多等 ``timeout`` 秒。
 
@@ -871,6 +1013,70 @@ class SubAgentRunner:
             wait_seconds = max(0.0, min(MAX_TIMEOUT, float(60 if timeout is None else timeout)))
             await asyncio.wait({handle.task}, timeout=wait_seconds)
         return self._snapshot(handle)
+
+    async def settle_background(self, timeout: float | None = None) -> dict:
+        """任务收尾前给后台子代理一个有界等待窗口，返回最终快照。
+
+        子代理默认后台跑，但任务一旦收尾，仍在跑的句柄会被 ``aclose`` 取消——结论
+        直接丢失，交付里却看不出来。所以 summarize 之前先等一段有限时间：窗口内结束
+        的，结论能进交付；还没结束的在这里取消，并把它们点名写进交付。等待有上限，
+        主代理已经写完结论时，界面不该再干等十分钟。
+        """
+        session = self.session
+        if session is None:
+            return {"waited_seconds": 0.0, "finished": [], "cancelled": []}
+        # 每次调用时读模块常量：测试与运维都能在不重建 runner 的情况下收紧窗口。
+        budget = BACKGROUND_SETTLE_SECONDS if timeout is None else float(timeout)
+        task_id = str(getattr(getattr(session, "context", None), "task_id", "") or "")
+        bucket = _BACKGROUND.get(task_id, {})
+        pending = [
+            handle
+            for handle in bucket.values()
+            if handle.task is not None and not handle.task.done()
+        ]
+        started = time.perf_counter()
+        if pending and budget > 0:
+            # 和 output 一样用 wait 而不是 wait_for：超时是"没等到"，不是"杀掉"；
+            # 真正要取消的由下面显式处理，取消也要留记录。
+            await asyncio.wait(
+                {handle.task for handle in pending}, timeout=max(0.0, budget)
+            )
+        cancelled_ids: list[str] = []
+        for handle in bucket.values():
+            if handle.task is not None and not handle.task.done():
+                handle.task.cancel()
+                cancelled_ids.append(handle.agent_id)
+        for handle in bucket.values():
+            if handle.task is None:
+                continue
+            try:
+                await handle.task
+            except (asyncio.CancelledError, Exception):
+                pass
+        finished: list[dict] = []
+        cancelled: list[dict] = []
+        for handle in bucket.values():
+            snapshot = self._snapshot(handle)
+            item = {
+                "agent_id": handle.agent_id,
+                "agent_path": handle.agent_path,
+                "goal": handle.request.goal[:200],
+                "status": str(snapshot.get("status") or ""),
+                "ok": bool(snapshot.get("ok")),
+                "summary": str(snapshot.get("summary") or "")[:2000],
+                "error": str(snapshot.get("error") or handle.error or "")[:1000],
+            }
+            # 已通知过的不再重复投递：这里给出的就是最终口径。
+            handle.notified = True
+            if handle.agent_id in cancelled_ids:
+                cancelled.append(item)
+            else:
+                finished.append(item)
+        return {
+            "waited_seconds": round(time.perf_counter() - started, 3),
+            "finished": finished,
+            "cancelled": cancelled,
+        }
 
     def _snapshot(self, handle: _BackgroundAgent) -> dict:
         elapsed = round(time.perf_counter() - handle.started_at, 3)
@@ -934,6 +1140,8 @@ class SubAgentRunner:
         """
         session = self.session
         task_id = task_id or str(getattr(getattr(session, "context", None), "task_id", "") or "")
+        # 任务收尾之后没有任何续聊的合法入口，对话缓存一并摘掉，别把上下文留在进程里。
+        _CONVERSATIONS.pop(task_id, None)
         bucket = _BACKGROUND.pop(task_id, {})
         if not bucket:
             return 0

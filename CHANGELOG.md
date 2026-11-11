@@ -1,6 +1,54 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊
+
+- **Glob / Grep 参数面 / ListAgents 对齐 Claude Code 工具表，子代理默认后台与续聊（P 批）**：
+  把 Claude 的 Glob 与带丰富参数的 Grep 拆成可失败判据，broker 边界与宿主同源；
+  Agent 工具的「默认后台 + SendMessage 续聊」语义也一并落到执行图与工具面上。
+  1. **新增 `glob`**（`tools/filesystem.py`）：`*` / `?` / `[]` / `{a,b}`，`**/` 能匹配零层目录
+     （`**/*.md` 命中根部 README.md）；不带斜杠按文件名、带斜杠按相对路径；忽略目录与
+     扫描预算跟搜索同一套；按 mtime 倒序，limit 1–1000（默认 200），截断标 `truncated`。
+  2. **`search_code` 扩成 Grep 参数面**：`output_mode=content|files_with_matches|count`、
+     `glob`、`type`（未知类型直接报错并列可用项）、`-i`、`multiline`、`-A/-B/-C`、`-o`、
+     `-n`、`head_limit`、`offset`。上下文行以 `path-line-` 渲染但不计入命中数；
+     `offset` 先于 `head_limit` 生效。
+  3. **broker 同源转发**（`tools/fs_broker.py`）：新增 `glob` op；`search` 把全部新参数带进
+     子进程边界（含 `case_insensitive` / `multiline` 的正则编译）。宿主能用的语义，
+     任务级隔离与 fs-broker 通道一样能用。
+  4. **新增 `list_agents`**（`tools/delegate.py` + `subagent.py`）：列出本任务后台子代理的
+     agent_id / agent_path / goal / status / summary，running 与 completed 分得清；
+     只读，进并行安全表，不替代 `task_output` 取完整结论。
+  5. **只读视图同步登记**：CORE / LEAN / PARALLEL_SAFE / 计划模式白名单 / 子代理
+     READ_ONLY_TOOLS / 输出预算 / planner 提示全部包含 `glob`，漏登记会让工具消失或被
+     计划模式误拒。
+  6. **提示词补两条 Claude 规则**：难以撤销或对外的动作先确认，一次批准只覆盖那一次；
+     删除、覆盖、移动文件前先看目标。专职工具清单加入 `glob`。
+  7. **子代理默认后台**（`tools/delegate.py`）：不传 `run_in_background` 即在后台跑，
+     立即返回 agent_id；只有下一步马上要结论时才传 `false`（旧名 `background` 继续接受）。
+     系统提示同步写死这条纪律，`DELEGATE_TOOLS` 记账不因默认值变化而漏掉派出部分。
+  8. **收尾有界等待**（`subagent.settle_background` + `agent/graph.py`）：交付前给后台
+     子代理 90 秒窗口。窗口内结束的结论写进交付提示词并落 `subagent.settled` 事件；
+     仍在跑的显式取消、在交付正文里点名（模型漏写也不影响用户看到事实）；已交付的
+     结论不再作为「后台已结束」通知重复投递。没有后台子代理时交付正文不变。
+  9. **新增 `send_message` 续聊**（`subagent.send_message` + `tools/delegate.py`）：按任务
+     保存子代理对话（上限 20 会话 / 60 消息 / 单条 8k 字符，系统提示永远保留），续聊复用
+     原 agent_id 与 agent_path 并带上 history。隔离子代理副本结束即清理 → 明确拒绝；
+     未知句柄如实说没有上下文；仍在后台跑的句柄提示先 `task_output`；空消息拒绝。
+     工具进 `DEFERRED_TOOLS` 与别名表（续聊/追问/继续问/接着查），用量计入委派账。
+     系统提示补一条「追问用 send_message，重新 spawn 是全新上下文」。
+  测试：新增 `tests/test_claude_tool_surface_v28.py` 21 例（9.61s）、
+  `tests/test_claude_subagent_default_v29.py` 6 例（2.21s）、
+  `tests/test_claude_send_message_v30.py` 9 例（2.14s）；相关回归集
+  `test_claude_loop_parity_v27`、`test_subagent_v12`、`test_background_subagent_v116`、
+  `test_tiered_tools`、`test_tool_search_v13`、`test_parallel_budget_v26`、
+  `test_worktree_parallel_v13`、`test_memory_types_v114`、`test_agent_v04` 合计
+  **143 passed（51.92s，含三个新判据文件）**；P1 另外的 broker/权限回归集见上条 136 passed。
+  变异电池：P1 8/8、P4 8/8、P5 10/10 全红（每条跑完即还原）。P1 见上条；P4 覆默认同步、
+  别名不识别、收尾不取消、不标已通知、交付不等待、提示词不提取消、正文不点名、不发
+  `subagent.settled`；P5 覆续聊不传历史、不保存对话、不区分运行中句柄、隔离也放行、
+  工具未注册、重复注入系统提示、用量不入账、工具变常驻、提示词不教续聊、收尾不摘缓存。
+  全量回归（最终代码）：**2705 passed, 24 skipped, PYTEST_RC=0（780.04s）**；本批新增的
+  36 例（v28 21 + v29 6 + v30 9）全部计入，24 个 skipped 与 P 批之前一致。
 
 - **场景模式对齐 Claude Harness：驳回不再停轮、工具回执即续跑、子代理完成通知、单一 in_progress（O 批）**：
   五条语义各自对应一条可失败判据，全部落在执行图上而不是只改提示词。

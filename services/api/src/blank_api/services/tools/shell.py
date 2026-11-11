@@ -716,7 +716,7 @@ def shell_mismatch_hint(command: str, stderr: str) -> str:
     base = (
         "这条命令用的是 POSIX 写法，本机 shell 是 Windows cmd.exe。"
         "请改成 cmd 命令（如 dir / type / findstr / where），或者直接改用专用工具"
-        "（list_files 列目录、read_file 读文件、search_code 搜代码），不要再用 ls/cat/grep/pwd。"
+        "（list_files 列目录、glob 按名找文件、read_file 读文件、search_code 搜代码），不要再用 ls/cat/grep/pwd。"
     )
     return f"{base} 参考：{tip}" if tip else base
 

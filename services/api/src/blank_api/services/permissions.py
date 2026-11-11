@@ -76,6 +76,7 @@ READ_ONLY_TOOLS = frozenset(
     {
         "list_files",
         "read_file",
+        "glob",
         "search_code",
         "update_plan",
         # 目标只写在任务行上，不碰工作区。计划模式恰恰最该先把判据写清楚。
