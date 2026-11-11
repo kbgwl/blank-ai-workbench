@@ -52,7 +52,89 @@ BUILTIN_DENY: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)\brm\s+(-\S+\s+)*(/|~|\$HOME)\s*$"), "删除根目录或家目录"),
     (re.compile(r"(?i)\bcipher\s+/w\b"), "擦除磁盘空闲区"),
     (re.compile(r"(?i)\btakeown\b|\bicacls\b.*\bgrant\b"), "接管文件所有权或权限"),
+    # git 完整性：Claude Code 的 Bash 工具把这三条写死在拒绝清单里——钩子和签名
+    # 是提交链上唯一由用户配置的检查点，Agent 自己关掉它们，等于把"验证过"改成"看起来验证过"。
+    (re.compile(r"(?i)\bgit\b[^&|;\n]*?--no-verify\b"), "跳过 git 钩子"),
+    (re.compile(r"(?i)\bgit\b[^&|;\n]*?--no-gpg-sign\b"), "跳过 git 签名"),
+    (re.compile(r"(?i)\bgit\b[^&|;\n]*?commit\.gpgsign\s*=\s*false\b"), "关闭 git 提交签名"),
+    # 交互式命令在无终端的子进程里会一直等输入，最后呈现为"超时"而不是"需要人操作"。
+    (re.compile(r"(?i)\bgit\s+rebase\b[^&|;\n]*?\s(?:-i|--interactive)(?:\s|$)"), "使用交互式 git rebase"),
+    (re.compile(r"(?i)\bgit\s+add\b[^&|;\n]*?\s(?:-i|--interactive)(?:\s|$)"), "使用交互式 git add"),
 )
+
+# 用 shell 写文件：重定向与写文件的 cmdlet。Claude 的 Bash 纪律是"文件操作用专用工具"，
+# 因为 shell 写入绕过了备份、diff 与 FileChange 记账——审计里看不到这次改动。
+# 只拦"把内容写进文件"，不拦 mkdir/cp/git 这类本身就要用命令完成的操作。
+_REDIRECT = re.compile(r"(?P<fd>\d?)(?P<op>>{1,2}|>\|)\s*(?P<target>[^\s&|;]+)")
+_SHELL_WRITE_CMDLETS = re.compile(
+    r"(?i)\b(set-content|add-content|out-file|clear-content|tee-object)\b"
+)
+_SHELL_TEE = re.compile(r"(?i)\|\s*tee(?:\.exe)?\b")
+_NULL_TARGETS = frozenset({"nul", "nul:", "$null", "/dev/null"})
+
+
+def _strip_quoted(command: str) -> str:
+    """把引号里的内容抹成空格：``git commit -m "fix --no-verify"`` 说的是文案，不是动作。
+
+    不做它就会把提交说明里的字样当成真实参数——误杀一次提交，用户会直接关掉整条策略。
+    只用于匹配"命令名/参数名"这类**引号外**才算数的模式；路径与重定向必须在
+    原始命令上判定，否则带引号的绝对路径与 ``> "out.txt"`` 都会漏判。
+    """
+    out: list[str] = []
+    quote = ""
+    for ch in command:
+        if quote:
+            if ch == quote:
+                quote = ""
+                out.append(ch)
+            else:
+                out.append(" ")
+        elif ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _quoted_spans(command: str) -> list[tuple[int, int]]:
+    """引号覆盖的区间（含引号本身）。用于区分"写进文件"与"文案里提到了 >"。"""
+    spans: list[tuple[int, int]] = []
+    start = -1
+    quote = ""
+    for index, ch in enumerate(command):
+        if quote:
+            if ch == quote:
+                spans.append((start, index + 1))
+                quote, start = "", -1
+        elif ch in ('"', "'"):
+            quote, start = ch, index
+    if quote:
+        spans.append((start, len(command)))
+    return spans
+
+
+def _redirect_target(command: str) -> str:
+    """命令里第一个"写进文件"的重定向目标；没有（或只写空设备）返回空串。
+
+    在**原始命令**上找操作符：引号里的目标（``echo x > "out.txt"``）同样是写文件，
+    抹掉引号内容就漏掉了它。只有操作符本身落在引号内（``git commit -m "a > b"``）
+    才算文案，不按写文件处理。
+
+    ``2>&1`` / ``>&2`` / ``2>nul`` / ``>/dev/null`` 不算写文件：它们是丢弃或合并输出，
+    每次跑测试都会出现，误杀它们等于把整条命令执行链关掉。
+    """
+    spans = _quoted_spans(command)
+    for match in _REDIRECT.finditer(command):
+        if any(start < match.start() < end for start, end in spans):
+            continue
+        target = match.group("target").strip("\"'")
+        if not target or target.startswith("&"):
+            continue
+        if target.lower() in _NULL_TARGETS:
+            continue
+        return target
+    return ""
 
 # 联网行为：命令会出网，或会从远端拉取内容。
 NETWORK_COMMAND = re.compile(
@@ -228,8 +310,9 @@ class SafetyPolicy:
             )
 
         if command:
+            scan = _strip_quoted(command)
             for pattern, label in BUILTIN_DENY:
-                if pattern.search(command):
+                if pattern.search(scan):
                     return deny(
                         "builtin:destructive",
                         f"该命令会{label}，属于内置禁止项，任何设置都不会放行。",
@@ -244,7 +327,24 @@ class SafetyPolicy:
                         prefix,
                     )
 
-            if not self.network_enabled and NETWORK_COMMAND.search(command):
+            # 计划模式下这个工具本来就会被统一下拒绝，不要抢先给别的理由
+            # （"请用 edit_file 写"在只读模式里是句错误指引）。
+            if mode in _FALLTHROUGH_MODES:
+                return allow("mode:plan")
+
+            # 引号里的目标同样是写文件（`echo x > "out.txt"`），所以在原始命令上找；
+            # cmdlet 名与 tee 则用抹过引号的版本，避免提交说明里的字样误杀。
+            redirect = _redirect_target(command)
+            if redirect or _SHELL_WRITE_CMDLETS.search(scan) or _SHELL_TEE.search(scan):
+                return deny(
+                    "builtin:shell_file_write",
+                    "该命令用 shell 写文件（重定向 / Set-Content / Out-File / tee）。"
+                    "写文件请用 edit_file、write_file 或 apply_patch：shell 写入绕过了备份、"
+                    "diff 与文件变更记账，审计里看不到这次改动。",
+                    prefix,
+                )
+
+            if not self.network_enabled and NETWORK_COMMAND.search(scan):
                 return deny(
                     "capability:network_disabled",
                     "该命令会访问网络（下载、拉取或推送），当前安全设置禁止联网。到「设置 → 安全与权限」打开联网后重试。",
@@ -252,6 +352,8 @@ class SafetyPolicy:
                 )
 
             if self.restrict_to_workspace:
+                # 路径必须在原始命令上找：抹掉引号会把 `type "C:\secret.txt"` 变成空参数，
+                # 引号包起来的绝对路径就成了绕过「仅限工作区」的后门。
                 outside = self._outside_paths(command, workspace)
                 if outside:
                     return deny(

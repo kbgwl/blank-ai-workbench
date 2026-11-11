@@ -245,9 +245,11 @@ def _context(
 async def test_handler_refuses_when_the_switch_is_off(workspace: Path, monkeypatch) -> None:
     _close_bypass(monkeypatch)
     marker = workspace / "must-not-exist.txt"
+    # 用 mkdir 当副作用探针：shell 重定向写文件已被 safety 硬拦（N4），
+    # 那条命令会先在 policy_gate 被拒，走不到越界闸门。目录操作不在拦截范围内。
     outcome = await _run_shell(
         _context(workspace, PermissionPolicy()),
-        {"command": f'echo ran > "{marker}"', "sandbox": HOST_BYPASS},
+        {"command": f'mkdir "{marker}"', "sandbox": HOST_BYPASS},
     )
     assert outcome.ok is False and outcome.status == "denied"
     assert outcome.data["permission_rule"] == "sandbox:host_bypass_disabled"
@@ -259,7 +261,7 @@ async def test_handler_refuses_without_an_approval(workspace: Path, monkeypatch)
     marker = workspace / "must-not-exist.txt"
     outcome = await _run_shell(
         _context(workspace, PermissionPolicy()),
-        {"command": f'echo ran > "{marker}"', "sandbox": HOST_BYPASS},
+        {"command": f'mkdir "{marker}"', "sandbox": HOST_BYPASS},
     )
     assert outcome.ok is False and outcome.status == "denied"
     assert outcome.data["permission_rule"] == "sandbox:host_bypass"

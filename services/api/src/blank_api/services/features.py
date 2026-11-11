@@ -97,8 +97,8 @@ _REGISTRY: tuple[FeatureFlag, ...] = (
     ),
     FeatureFlag(
         name="parallel_read_tools",
-        stage=BETA,
-        default=False,
+        stage=STABLE,
+        default=True,
         summary="只读工具并行执行：同一轮里多个无副作用的工具并发跑，写操作与审批仍严格串行。",
     ),
     FeatureFlag(

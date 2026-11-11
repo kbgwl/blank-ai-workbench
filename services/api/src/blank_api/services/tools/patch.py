@@ -248,13 +248,19 @@ def risky_patch_path(relative: str) -> bool:
     return ".git" in parts or BACKUP_DIRNAME in parts or "env" in parts or ".env" in parts
 
 
-def _patch_on_disk(root: Path, task_id: str, arguments: dict) -> dict:
+def _patch_on_disk(root: Path, task_id: str, arguments: dict, guard: dict | None = None) -> dict:
     """apply_patch 的**文件系统侧全部动作**：解析路径、读原文、算补丁、写备份、写目标、出 diff。
 
     这是宿主路径与 fs-broker 子进程共享的唯一一份语义（#105）——broker 不另造一套补丁逻辑，
     只是把同一个函数搬到子进程里执行。返回结构化结果而不是 ToolOutcome，
     以便跨 IPC 原样带回；`ApiError`/`PatchError` 的抛出口径与旧 handler 一致。
+
+    ``guard`` 是本会话的读后写状态（file_state.FileStateCache.guard）：目标已存在却没读过、
+    或读过之后被改过时直接拒写。它跟着请求一起进 broker，判定因此在子进程边界内发生，
+    与"在哪一层执行"无关。
     """
+    from blank_api.services.tools.file_state import check_write_guard
+
     patch_text = str(arguments.get("patch") or "")
     # 路径可以省略：补丁头里通常已经写了，读出来比让模型再补一次便宜。
     relative = str(arguments.get("path") or "").strip() or infer_path(patch_text)
@@ -271,6 +277,13 @@ def _patch_on_disk(root: Path, task_id: str, arguments: dict) -> dict:
             except FileNotFoundError:
                 existed = False
             else:
+                # 先拿原始字节过闸门（sha256 比的是磁盘上的字节，不是换行归一后的文本），
+                # 再回到起点按文本读。stat 与内容都过一遍，才谈得上"读的是这一份"。
+                raw = handle.read()
+                guard_error = check_write_guard(target, guard, raw)
+                if guard_error is not None:
+                    return {"guard_error": guard_error, "path": relative}
+                handle.seek(0)
                 # 与原先 read_text/write_text 同口径：读时 CRLF→LF，写时再把 \n 换回本机换行。
                 text = io.TextIOWrapper(handle, encoding="utf-8", newline=None)
         original = text.read() if text is not None else ""
@@ -320,6 +333,14 @@ async def _apply_patch(context: ToolContext, arguments: dict) -> ToolOutcome:
 
     marker: dict = {}
     profile = str(getattr(context, "isolation_profile", "") or "")
+    file_state = getattr(context, "file_state", None)
+    guard = None
+    if file_state is not None:
+        # 与磁盘侧同口径推断路径：省略 path 时从补丁头取，闸门才落在同一个文件上。
+        target_path = str(arguments.get("path") or "").strip() or infer_path(
+            str(arguments.get("patch") or "")
+        )
+        guard = file_state.guard(target_path)
     if broker.broker_enabled() or profile:
         # 开了 fs-broker（或任务级隔离）：文件动作全在子进程/任务包边界里做。失败就是失败——
         # 这里没有任何"回退宿主再试一次"的分支，一条也不许加。
@@ -327,6 +348,7 @@ async def _apply_patch(context: ToolContext, arguments: dict) -> ToolOutcome:
             "path": str(arguments.get("path") or ""),
             "patch": str(arguments.get("patch") or ""),
             "task_id": context.task_id,
+            "guard": guard,
         }
         try:
             if profile:
@@ -341,7 +363,7 @@ async def _apply_patch(context: ToolContext, arguments: dict) -> ToolOutcome:
         result = envelope["result"]["result"]
         marker = broker.broker_success_marker("patch", envelope)
     else:
-        result = _patch_on_disk(context.root, context.task_id, arguments)
+        result = _patch_on_disk(context.root, context.task_id, arguments, guard=guard)
     if result.get("missing_path"):
         return ToolOutcome(
             ok=False,
@@ -351,6 +373,15 @@ async def _apply_patch(context: ToolContext, arguments: dict) -> ToolOutcome:
                 "或在补丁开头加一行 `+++ b/相对路径`。"
             ),
             **{"data": marker} if marker else {},
+        )
+    if "guard_error" in result:
+        # 读后写闸门：没读过 / 读过之后被改过。这不是参数错，是缺一步 read_file。
+        guard_error = result["guard_error"]
+        return ToolOutcome(
+            ok=False,
+            status="error",
+            message=str(guard_error.get("message") or "文件状态已变化，先重新读取再修改。"),
+            data={"file_state_error": guard_error, "path": result.get("path", ""), **marker},
         )
     if "patch_error" in result:
         return ToolOutcome(
@@ -379,6 +410,9 @@ async def _apply_patch(context: ToolContext, arguments: dict) -> ToolOutcome:
             )
         )
         await session.commit()
+    if file_state is not None:
+        # 写后重记：后续编辑不必再读一遍，但读到的必须是刚写下去的这一份。
+        file_state.record_write(context.root, relative)
     return ok(
         f"已修改文件：{relative}（{result['changed_lines']} 行变更）",
         path=relative,

@@ -36,7 +36,7 @@ _PASS_CLAIMS = ("测试通过", "测试已通过", "全部通过", "tests passed
 _REFUSED_STATUSES = frozenset({"denied", "blocked", "awaiting_approval", "refused"})
 # 只列「成功就等于声称改了文件」的工具。run_shell 是命令执行，ls/echo/git status
 # 都不落盘，把它算进来会把每一条只读命令都误判成零改动伪成功。
-_WRITE_TOOLS = frozenset({"apply_patch", "write_file", "delete_file", "create_file"})
+_WRITE_TOOLS = frozenset({"apply_patch", "edit_file", "write_file", "delete_file", "create_file"})
 
 # 四行交付（agent/delivery.py::render）里「完成：」自己说没做完，「需要你：」把烂摊子
 # 交回用户手工恢复。这是产品固定格式、不是模型自由散文，所以判据敢收紧。

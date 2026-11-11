@@ -226,6 +226,7 @@ async def test_docs_scenario_writes_markdown_but_not_code(env, workspace):  # no
     env.mock.reset(
         [
             {"content": '{"intent": "act", "steps": ["读取 README", "写入说明"]}'},
+            {"content": "读 README", "tool_calls": [call("read_file", {"path": "README.md"})]},
             {
                 "content": "写入",
                 "tool_calls": [

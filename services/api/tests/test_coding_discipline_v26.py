@@ -210,8 +210,8 @@ class TestPromptContract:
     def test_files_and_write_path(self) -> None:
         assert "NEVER create documentation files unless explicitly requested" in SYSTEM_PROMPT
         assert "优先改现有文件" in SYSTEM_PROMPT
-        # 写文件只走 apply_patch，shell 重定向绕过了审计与回滚。
-        assert "写文件只走 apply_patch" in SYSTEM_PROMPT
+        # 改文件只走文件工具，shell 重定向绕过了审计与回滚。
+        assert "改文件只走文件工具" in SYSTEM_PROMPT
 
     def test_validation_ladder_and_honest_errors(self) -> None:
         assert "验证从最小范围开始" in SYSTEM_PROMPT

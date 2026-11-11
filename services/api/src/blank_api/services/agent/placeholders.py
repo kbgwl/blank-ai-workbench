@@ -26,7 +26,7 @@ SCAN_CHARS = 200_000
 # 写类工具：只有它们的参数会落到工作区里。读类工具的参数是路径和查询词，
 # 扫进来只会把「搜索 example.com 这个域名」判成占位。
 WRITE_TOOLS = frozenset(
-    {"write_file", "create_file", "apply_patch", "run_shell", "spawn_agent", "spawn_agents"}
+    {"write_file", "edit_file", "create_file", "apply_patch", "run_shell", "spawn_agent", "spawn_agents"}
 )
 
 # (标签, 正则)。每条都要求"整词/整串"，宁可漏报也不误报。

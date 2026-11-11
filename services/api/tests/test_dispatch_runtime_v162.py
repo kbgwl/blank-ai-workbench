@@ -186,6 +186,7 @@ async def test_snapshot_readonly_is_not_the_default_path(env, workspace, monkeyp
     await _force_snapshot(task["id"], readonly=False, max_steps=6)
     env.mock.reset(
         [
+            {"content": "", "tool_calls": [call("read_file", {"path": "main.py"})]},
             {"content": "", "tool_calls": [call("apply_patch", {"patch": PATCH})]},
             {"content": "改好了"},
             {"content": "改好了"},

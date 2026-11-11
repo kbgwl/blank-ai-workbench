@@ -65,6 +65,7 @@ async def test_skipping_a_preference_question_moves_on_with_the_default(
         [
             {"content": "先问一句名字"},
             {"content": "先确认公司名", "tool_calls": [_ask("星河科技", recommended=True)]},
+            {"content": "先读现有首页", "tool_calls": [call("read_file", {"path": "index.html"})]},
             {
                 "content": "按默认写了",
                 "tool_calls": [call("apply_patch", {"path": "index.html", "patch": _patch("星河科技")})],
@@ -114,6 +115,7 @@ async def test_skipping_a_fact_question_is_still_refused(env, workspace):  # noq
     env.mock.reset(
         [
             {"content": "执行计划：\n1. 写联系区块"},
+            {"content": "先读现有首页", "tool_calls": [call("read_file", {"path": "index.html"})]},
             {
                 "content": "写联系区块",
                 "tool_calls": [

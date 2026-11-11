@@ -10,6 +10,7 @@ from blank_api.services.tools.filesystem import filesystem_tools
 from blank_api.services.tools.gateway import ToolGateway
 from blank_api.services.tools.git import git_tools
 from blank_api.services.tools.delegate import delegate_tools
+from blank_api.services.tools.editing import editing_tools
 from blank_api.services.tools.memory_tools import memory_tools
 from blank_api.services.tools.patch import patch_tools
 from blank_api.services.tools.plan import plan_tools
@@ -29,6 +30,7 @@ def build_default_tools() -> list[ToolDefinition]:
         *filesystem_tools(),
         *memory_tools(),
         *patch_tools(),
+        *editing_tools(),
         *shell_tools(),
         *git_tools(),
         *test_tools(),

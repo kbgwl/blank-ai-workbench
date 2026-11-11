@@ -2,12 +2,12 @@
 """#140 跨进程崩溃恢复：杀掉真 worker 进程，另一个进程从检查点续跑。
 
 装置形状（与仓库外探针 `E:/tmp/m90/worker/probe_worker.py` 同构，这里落成用例）：
-1. 进程内起真 HTTP 桩模型（OpenAI chat/completions）。第一次调用返回 run_shell；
+1. 进程内起真 HTTP 桩模型（OpenAI chat/completions）。第一次调用返回 write_file；
    收到带 tool 消息的调用时写 marker 并挂住——此时工具已执行、检查点已由 worker 写下。
 2. 父进程建库/项目/供应商/任务/queued run，启动 worker 进程 A。
 3. 看到 marker 后 TerminateProcess 掉 A（不跑 finally、不写终态）。
 4. 等租约过期，启动 worker 进程 B；B 认领同一 run（attempts=2）并从检查点续跑。
-5. 断言：任务完成、`progress.txt` 只多一行、`run_shell` 只执行一次、
+5. 断言：任务完成、`progress.txt` 只多一行、`write_file` 只执行一次、
    `task.resumed` 带 crash_recovery=True。
 """
 
@@ -71,9 +71,9 @@ class _StubModel:
                     "id": f"call_{uuid.uuid4().hex[:8]}",
                     "type": "function",
                     "function": {
-                        "name": "run_shell",
+                        "name": "write_file",
                         "arguments": json.dumps(
-                            {"command": "echo crash-probe>>progress.txt"}, ensure_ascii=False
+                            {"path": "progress.txt", "content": "crash-probe\n"}, ensure_ascii=False
                         ),
                     },
                 }
@@ -315,10 +315,10 @@ async def test_a_killed_worker_is_resumed_by_another_process(tmp_path) -> None:
         )
         assert lines == ["crash-probe"], f"工具应恰好执行一次：{lines}"
 
-        shell_calls = await _count(
-            ToolCall, (ToolCall.task_id == ids["task"]) & (ToolCall.name == "run_shell")
+        write_calls = await _count(
+            ToolCall, (ToolCall.task_id == ids["task"]) & (ToolCall.name == "write_file")
         )
-        assert shell_calls == 1, f"run_shell 工具账应为 1 条，实际 {shell_calls}"
+        assert write_calls == 1, f"write_file 工具账应为 1 条，实际 {write_calls}"
 
         resumed = await _event_payloads(ids["task"], "task.resumed")
         assert len(resumed) == 1, f"task.resumed 应恰好 1 条：{resumed}"

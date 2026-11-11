@@ -54,6 +54,10 @@ CORE_TOOLS = frozenset(
         "list_files",
         "search_code",
         "apply_patch",
+        # Claude Code 的核心编辑面：精确替换与整文件写入。apply_patch 仍保留，
+        # 大批量改动或 Codex 风格的补丁优先用它。
+        "edit_file",
+        "write_file",
         "run_shell",
         "run_tests",
         "write_notes",
@@ -92,6 +96,8 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "spawn_agent": ("子代理", "子任务", "委派", "并行", "subagent", "delegate"),
     "spawn_agents": ("子代理", "并行", "多路", "同时", "fanout", "parallel", "subagent"),
     "apply_patch": ("修改", "编辑", "patch", "写文件", "替换"),
+    "edit_file": ("修改", "编辑", "替换", "edit", "replace", "精确修改"),
+    "write_file": ("写文件", "新建", "整文件", "覆盖", "write", "create", "保存"),
     "run_shell": ("命令", "shell", "执行", "终端", "bash"),
     "search_code": ("搜索代码", "查找", "grep", "search"),
     "request_user_input": ("提问", "询问", "确认", "ask"),
@@ -163,6 +169,9 @@ LEAN_TOOLS = frozenset(
         "list_files",
         "search_code",
         "apply_patch",
+        # 精确替换是弱模型最省事的一条改文件路径；整文件写入靠 apply_patch 也能做，
+        # 不在 lean 里再占一格。
+        "edit_file",
         "run_shell",
         # 进出计划模式必须成对出现：只给 enter 会让弱模型进去之后出不来。
         "enter_plan_mode",

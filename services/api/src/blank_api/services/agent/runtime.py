@@ -73,6 +73,7 @@ from blank_api.services.models.base import ModelAdapter, ModelError
 from blank_api.services.permissions import MODE_DEFAULT, PermissionPolicy
 from blank_api.services.tools import TEAM_ADMIN_TOOL_NAMES, build_default_tools
 from blank_api.services.tools.base import ToolContext
+from blank_api.services.tools.file_state import FileStateCache
 from blank_api.services.tools.gateway import ToolGateway
 from blank_api.services.sandbox import SnapshotStore
 from blank_api.services.sandbox.tiers import (
@@ -589,6 +590,8 @@ class AgentRuntime:
         safety = SafetyPolicy.load()
         # 用户级 → 项目 AGENTS.md（+ 可选外部指令文件）；任务级偏好走 skill_instructions
         layers = load_layers(run_root)
+        # 读后写状态跟着任务走：read_file 记录、edit_file/write_file/apply_patch 前对照。
+        file_state = FileStateCache()
         context = ToolContext(
             root=run_root,
             task_id=request.task_id,
@@ -608,6 +611,7 @@ class AgentRuntime:
             team_scope=dict(request.team_scope or {}),
             sandbox_tier=sandbox.tier,
             isolation_profile=isolation.profile_name if isolation is not None else "",
+            file_state=file_state,
         )
         session = AgentSession(
             adapter=request.adapter,

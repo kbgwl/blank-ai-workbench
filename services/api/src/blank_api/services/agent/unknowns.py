@@ -25,7 +25,7 @@ from pathlib import Path
 
 # 只查"往文件里写字"的工具。run_shell 跑的是命令：命令行里的端口号、时间戳、
 # 路径都会命中电话/地址的正则，把「跑一次测试」判成「编了手机号」。
-CONTENT_TOOLS = frozenset({"write_file", "create_file", "apply_patch"})
+CONTENT_TOOLS = frozenset({"write_file", "edit_file", "create_file", "apply_patch"})
 
 # 只查"拿给人看"的文件。代码文件里的电话邮箱多数是**测试夹具**（表单校验的样例、
 # 单测里的假地址），把它们也拦下来，写测试就变成一轮一轮地答问，这个功能就没人受得了。

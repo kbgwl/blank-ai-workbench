@@ -187,8 +187,14 @@ def _op_dispatch(root: Path, request: dict) -> dict:
         from blank_api.services.tools.patch import _patch_on_disk
 
         return {"result": _patch_on_disk(
-            root, str(args.get("task_id", "")), {"path": args.get("path"), "patch": args.get("patch")}
+            root, str(args.get("task_id", "")), {"path": args.get("path"), "patch": args.get("patch")},
+            guard=args.get("guard"),
         )}
+    if op in ("edit_file", "write_file"):
+        from blank_api.services.tools.editing import _edit_on_disk, _write_on_disk
+
+        disk = _edit_on_disk if op == "edit_file" else _write_on_disk
+        return {"result": disk(root, str(args.get("task_id", "")), args, guard=args.get("guard"))}
     raise ValueError(f"fs-broker 不认识的操作：{op!r}")
 
 

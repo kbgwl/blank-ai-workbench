@@ -60,6 +60,7 @@ async def test_snapshot_success(env, workspace):  # noqa: F811
     env.mock.reset(
         [
             {"content": "执行计划：\n1. 应用补丁"},
+            {"content": "先读一遍", "tool_calls": [call("read_file", {"path": "main.py"})]},
             {"content": "执行", "tool_calls": [call("apply_patch", {"path": "main.py", "patch": "--- a/main.py\n+++ b/main.py\n@@ -1,1 +1,2 @@\n-print('hi')\n+print('hi')\n+print('patched')\n"})]},
             {"content": "补丁已应用"},
             _verdict(),
@@ -225,6 +226,7 @@ async def test_snapshot_partial_completion(env, workspace):  # noqa: F811
     env.mock.reset(
         [
             {"content": "执行计划：\n1. 应用补丁"},
+            {"content": "先读一遍", "tool_calls": [call("read_file", {"path": "main.py"})]},
             {"content": "执行", "tool_calls": [call("apply_patch", {"path": "main.py", "patch": "--- a/main.py\n+++ b/main.py\n@@ -1,1 +1,2 @@\n-print('hi')\n+print('hi')\n+print('patched')\n"})]},
             {"content": "补丁已应用"},
             _verdict(),

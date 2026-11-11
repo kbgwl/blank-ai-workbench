@@ -31,6 +31,7 @@ from blank_api.services.permissions import MODE_ACCEPT_EDITS, MODE_DEFAULT, Perm
 from blank_api.services.safety import SafetyPolicy
 from blank_api.services.sandbox.tiers import TierDowngrade, assert_not_looser
 from blank_api.services.tools.base import ToolContext
+from blank_api.services.tools.file_state import FileStateCache
 from blank_api.services.tools.gateway import ToolGateway, sandbox_backend_event_field
 from blank_api.services.worktree import (
     Worktree,
@@ -54,6 +55,8 @@ READ_ONLY_TOOLS = (
 ISOLATED_TOOLS = (
     *READ_ONLY_TOOLS,
     "apply_patch",
+    "edit_file",
+    "write_file",
     "run_shell",
     "run_tests",
 )
@@ -420,6 +423,8 @@ async def run_subagent(
         # 子代理不能成为绕过客户安全设置的侧门：同一台机器、同一份策略。
         safety=SafetyPolicy.load(),
         tool_registry=gateway.registry,
+        # 读后写状态按副本独立记：子代理只在它自己的根里读和写。
+        file_state=FileStateCache(),
     )
     log = _Recorder(
         recorder,

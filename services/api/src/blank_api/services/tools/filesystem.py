@@ -90,6 +90,14 @@ async def _read_file(context: ToolContext, arguments: dict) -> ToolOutcome:
             ok=False, status="error", message=f"该文件是二进制文件，无法作为文本读取：{payload['path']}",
             data=marker,
         )
+    if context.file_state is not None:
+        # 读到什么就记什么：写工具靠这三格判断"是不是读过、读的是不是这一份"。
+        context.file_state.record_read(
+            payload["path"],
+            size=payload["size"],
+            mtime_ns=int(payload.get("mtime_ns") or 0),
+            sha256=str(payload.get("sha256") or ""),
+        )
     return ok(
         payload["content"],
         path=payload["path"],
@@ -186,6 +194,7 @@ def filesystem_tools() -> list[ToolDefinition]:
                 "读取工作区内的文本文件，参数 path 必须是工作区相对路径。"
                 "长文件不要反复整读：结果被裁剪时会告诉你「已返回第 M–N 行（共 T 行）」，"
                 "接着用 offset=M2 往下读就行（offset 是 1 基起始行，limit 是行数）。"
+                "编辑前必须先读；编辑成功后不要重读验证——write/edit 失败会直接报错。"
             ),
             input_schema={
                 "type": "object",

@@ -165,6 +165,7 @@ async def test_exit_plan_mode_asks_then_unlocks_writes(env, workspace: Path) -> 
         [
             {"content": "先只读调研，不改文件。"},
             {"content": "计划好了", "tool_calls": [call("exit_plan_mode", {"plan": plan_text})]},
+            {"content": "先读一遍", "tool_calls": [call("read_file", {"path": "main.py"})]},
             {"content": "动手", "tool_calls": [call("apply_patch", {"path": "main.py", "patch": PATCH})]},
             {"content": "已完成"},
             {"content": "已完成"},

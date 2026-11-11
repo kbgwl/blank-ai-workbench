@@ -47,6 +47,7 @@ async def test_the_homepage_waits_for_the_phone_number(env, workspace):  # noqa:
     env.mock.reset(
         [
             {"content": "执行计划：\n1. 写联系区块"},
+            {"content": "先读现有首页", "tool_calls": [call("read_file", {"path": "index.html"})]},
             {
                 "content": "先写联系方式",
                 "tool_calls": [
@@ -103,6 +104,7 @@ async def test_leaving_it_blank_never_writes_the_invented_number(env, workspace)
     env.mock.reset(
         [
             {"content": "执行计划：\n1. 写联系区块"},
+            {"content": "先读现有首页", "tool_calls": [call("read_file", {"path": "index.html"})]},
             {
                 "content": "先写联系方式",
                 "tool_calls": [

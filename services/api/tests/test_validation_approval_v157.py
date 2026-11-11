@@ -65,6 +65,7 @@ async def _mutating_task(env, workspace: Path):
     env.mock.reset(
         [
             {"content": "执行计划：\n1. 应用补丁\n2. 运行测试"},
+            {"content": "先读一遍", "tool_calls": [call("read_file", {"path": "main.py"})]},
             {"content": "开始执行", "tool_calls": [call("apply_patch", {"path": "main.py", "patch": PATCH})]},
             {"content": "补丁已应用"},
             # 校验通道的审批中断不打模型调用；恢复后接着消费这里两步。

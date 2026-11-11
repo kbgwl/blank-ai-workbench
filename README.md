@@ -253,6 +253,7 @@ uv run alembic revision --autogenerate -m "描述"
 | Reverse Lab 入口 | ✅ | 后端 4 个端点已接真 REA MCP Adapter（stdio 子进程，29 条判据全绿）；前端 `/reverse-lab` 三栏真调这四个端点（挑目标 / 抽线索 / 出结论 + 台账），策略层 8 例见 `web/src/components/reverse-lab/api.test.ts`。🟡 仅剩一格：**Job 只管内存/进程数/生命周期，不提供文件与网络沙箱**，界面右下角如实标注 |
 | CLI 基础入口 | ✅ | `blank init`、`blank doctor`、`blank add/remove`、本地工作区启动 |
 | Bot 团队 `/team` | ✅ | 群聊编排、上下文管家、主 Bot 的团队管理工具、跨群全文搜索与锚点跳转 |
+| Claude 式编程工具面 | ✅ | `edit_file` 精确串替换 + `write_file` 整文件写入，两工具与 `apply_patch` 共用「读后写」硬闸门（没读过不许改、读过被改过要重读）；shell 写文件与 git 完整性硬拦截；独立只读调用默认并行。判据 `services/api/tests/test_claude_parity_v24.py`（60 例），变异 8/8 红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -267,6 +268,13 @@ uv run alembic revision --autogenerate -m "描述"
 | v1.2 Bot 团队 | 群聊编排（每次发言落一条普通 Task）、上下文管家挑选、主 Bot 的团队管理工具与高风险审批边界、跨群全文检索与锚点跳转 | `tests/test_team.py`、`tests/test_phase2_team_admin.py`、`tests/test_phase2_context.py`、`tests/test_phase2_search.py`；`pnpm e2e:team`（stub 模型 + 隔离库 + Chrome headless 1440×900，38 项判定）；`evals/team_e2e/real_model_check.py`（DeepSeek 真模型 + 隔离实例 :8061，13 项判定，含三次高风险审批连续放行） |
 
 已知限制（不粉饰）：
+
+- **Claude 式编程工具面已落地，但有四项刻意偏离**（N 批，判据
+  `services/api/tests/test_claude_parity_v24.py`）：不做后台 shell（`run_in_background`）、
+  不做 NotebookEdit、Read 不读 PDF/图片、路径仍要求工作区相对路径而不是绝对路径；
+  另外未实现「`old_string` 是上一次 `new_string` 子串」的链式编辑拒绝——当前读后写状态
+  只按文件记，不记「上一次改了什么」。前四项是产品边界（后台进程收尸与附件读取是另一套
+  能力），最后一项不影响「没读过/被改过」这两道硬闸门。
 
 - 验收条件的「是否覆盖」由模型自报，平台无法判断语义：极端情况下会出现「文件没改但条件判 ✓」。
   时间线里的工具卡片和 Diff 才是可核对的证据，验收结论只作为模型的自我声明展示。

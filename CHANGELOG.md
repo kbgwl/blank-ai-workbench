@@ -1,6 +1,46 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面
+
+- **编程工具面照 Claude Code 2.1.271 对齐：读后写硬闸门、edit_file/write_file、shell 写文件拦截（N 批）**：
+  把 Edit / Write / Bash 的语义拆成**可失败的判据**，而不是只改提示词。
+  1. **读后写硬闸门**（`tools/file_state.py`）：`read_file` 成功时记录 `(size, mtime_ns, sha256)`；
+     `edit_file` / `write_file` / `apply_patch` 写前对照磁盘——目标已存在却没读过 → `not_read`，
+     读过之后被改过 → `stale`（stat 一致时再用 sha256 闭合预检到写入之间的替换）。
+     写成功后按磁盘现状重记，连续编辑不必重读；读取被截断（>512KB）时哈希留空，只用 stat 比较。
+  2. **新增 `edit_file`**（`tools/editing.py`）：精确串替换。`old_string` 必须与文件完全一致且唯一；
+     多次出现却未设 `replace_all` → 失败并回报出现行号；0 次 → 失败并带回最接近的上下文；
+     `old == new` → no-op 失败；只能改已有文件（新建走 `write_file`）；CRLF 归一到 LF 匹配、
+     按原换行风格写回；写前自动备份并落 `FileChange`。
+  3. **新增 `write_file`**：整文件写入。新建免读；覆盖已有文件必须先读，读过之后被改过要重读；
+     内容相同返回 `unchanged`（不写备份、不落变更记录）。
+  4. **apply_patch 过同一道闸门**：目标已存在却没读过、或读过之后被改过，直接拒写。守卫随请求
+     进 fs-broker 与 AppContainer 一次性 broker，判定在哪个执行边界都成立。
+  5. **shell 硬拦截**（`safety.py`）：`--no-verify`、`--no-gpg-sign`、`commit.gpgsign=false`、
+     `git rebase -i`、`git add -i` 进内置拒绝（引号内的字样不算动作）；重定向、
+     `Set-Content`/`Add-Content`/`Out-File`/`Clear-Content`/`Tee-Object`、`| tee` 一律拒绝——
+     文件操作走专用工具，备份、diff 与审计才看得到。`2>&1`、`2>nul`、`> /dev/null`
+     与引号内的 `>` 不误杀。
+  6. **提示词与工具描述对齐**：系统提示第 3/6 条改为 `edit_file` / `write_file` / `apply_patch`
+     的分工与「编辑成功后不要重读验证」；新增「互不依赖的只读调用可同批并行」与
+     代码引用写 `路径:行号`；`read_file` 描述补「编辑前必须读、编辑后不要重读」；
+     `parallel_read_tools` 从 beta/默认关提升为 **stable/默认开**（关掉即完全回到串行旧行为）。
+  测试：新增 `tests/test_claude_parity_v24.py` 60 例；关联并行 / 开关 / 补丁三套件合计 91 例全绿。
+  变异 8/8 全红：撤掉闸门红 8 例、撤 `old_string` 唯一性红 1、撤 stale 判定红 5、
+  撤 shell 写文件拦截红 7、并行退回默认关红 1、`read_file` 不记状态红 3、
+  `edit_file` 写后不重记红 1、`write_file` 写后不重记红 1（每条变异跑完即还原源码）。
+  收口回归跑了两轮：首轮 `2660 passed, 24 skipped, 2 failed`——两条都是
+  `test_sandbox_bypass_v115` 拿 `echo > 文件` 当副作用探针，撞上 N4 新增的 shell 写文件硬拦，
+  越界闸门根本没被走到；探针换成 `mkdir`（safety 明确不拦）后
+  **`2662 passed, 24 skipped, 0 failed`（790.98s，pytest_rc=0）**。
+  更早一批 13 条旧红先行修掉：`safety.py` 两处真漏判（引号包住的越界路径、引号包住的重定向
+  目标都按抹引号后的命令判定）与计划模式归因被 `shell_file_write` 抢先；其余是闸门引入后的
+  陈旧夹具（9 处补「先读后写」回合、`crash_resume` 改用 `write_file`、提示词断言同步新文本）。
+  新增的两条 safety 判据做了变异：引号重定向退回抹引号扫描红 2 例、引号路径退回抹引号扫描
+  红 1 例（均已还原源码后复跑 60 例全绿）。
+  偏离项（本轮不移植）：后台 shell（`run_in_background`）、NotebookEdit、PDF/图片 Read；
+  路径仍要求**工作区相对路径**（Claude 用绝对路径）；未实现「`old_string` 是上一次
+  `new_string` 子串」的链式编辑拒绝。抓包原文不入库，只留在 `E:/tmp/rea6`、`E:/tmp/rea7`。
 
 - **任务级隔离：每个任务一个独立可写根 + 一个只属于它的 AppContainer 包（J3）**：此前隔离靠
   路径闸门与审批——同一个 OS 用户下的另一个任务拿到绝对路径就能 `open()`。现在打开

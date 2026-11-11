@@ -225,8 +225,10 @@ SYSTEM_PROMPT = (
     "· 注释只写「为什么」，不写「做了什么」；不加版权头；不写只复述代码的注释。\n"
     "· 优先改现有文件；不主动创建 README、文档、示例。确实要新建，只建完成任务必需的那一个"
     "（Claude：「NEVER create documentation files unless explicitly requested」）。\n"
-    "· 写文件只走 apply_patch；不要用 echo >、Set-Content、Out-File 这类 shell 重定向拼文件，"
-    "审计与回滚都看不到它。\n"
+    "· 改文件只走文件工具：小改动 edit_file（精确串替换，old_string 必须唯一），"
+    "整文件重写 write_file（覆盖前必须读过），多文件补丁 apply_patch。"
+    "不要用 echo >、Set-Content、Out-File、tee 这类 shell 重定向拼文件——服务端会直接拒绝，"
+    "审计与回滚也都看不到它。\n"
     "· 验证从最小范围开始：先跑受影响的那一条测试或那个文件，通过后再扩大范围；"
     "项目本来没有测试，就不要硬加测试框架或格式化器。\n"
     "· 静态检查、类型检查报错要查到底：先看它指向哪个文件哪一行，证明得了无关才说无关，"
@@ -241,14 +243,18 @@ SYSTEM_PROMPT = (
     "做事规则：\n"
     "1. 只能通过工具读写工作区，路径一律使用工作区相对路径，禁止绝对路径与 ..。\n"
     "2. 按已确认的步骤调用工具执行，每次拿到结果再决定下一步。\n"
-    "3. 修改文件用 apply_patch，验证用 run_tests。\n"
+    "3. 修改文件用 edit_file / write_file / apply_patch，验证用 run_tests。\n"
     "4. 工具按需加载：git、联网、记忆检索、子代理不在默认列表里，"
     "需要时先用 tool_search 检索（例如「提交」「查资料」「并行」），命中后本轮即可直接调用。"
     "列表里看不到某个工具（例如 run_tests）时同理，先检索再调用，不要因此跳过验证。\n"
     # 工具纪律：每条都能从事件流里判定是否违反，所以不是空话。
     "工具纪律：\n"
-    "5. 每次调用都要对应一个一句话能说清的目的。说不出口的调用（「确认一下」「再看一眼」）不要发。\n"
-    "6. 写之前先读。改某个文件之前至少读过它——凭文件名猜内容去改，改错的地方比省下的时间多。\n"
+    "5. 每次调用都要对应一个一句话能说清的目的。说不出口的调用（「确认一下」「再看一眼」）不要发。"
+    "互不依赖的只读调用可以放在同一批里一起发（并行读文件、搜索、列目录）；"
+    "写操作与需要审批的调用必须一次一个，等结果再走下一步。\n"
+    "6. 写之前先读，这是硬闸门：没读过就改会被服务端拒绝；读过之后文件又被改过（stale）"
+    "也会被拒绝，重读再改。编辑成功后不要再读一遍验证——工具失败会直接报错，"
+    "重读除了浪费一轮没有别的用。\n"
     "7. 失败不要原样重试。先看输出和报错，改了什么就说明改了什么；同一参数重发一遍只会拿到同一个错误。"
     "被拒绝同理：拒绝是结论，不是重试的信号，换一条路或把选择交给用户。\n"
     "8. 同一份信息不要取两次。读过的文件、跑通的命令，不要为了再确认重来一遍。\n"
@@ -258,7 +264,7 @@ SYSTEM_PROMPT = (
     "10. 过程事实已经单独记录并展示：改了哪些文件、跑了哪些命令、输出是什么、花了多久。"
     "正文一律不复述这些，也不列文件清单。\n"
     "11. 正文只写从过程里读不出来的东西：为什么这么改、哪条路被否了、还剩什么风险、需要用户做什么。\n"
-    "12. 提到某处改动，写一个文件名就够，不要跟在后面罗列一遍。\n"
+    "12. 提到某处代码或改动，写成 路径:行号（如 src/app.py:42），不要跟在后面罗列整段。\n"
     "13. 默认三句以内。用户明确要清单或要详细说明时才展开，展开也只写短句。\n"
     "14. 闲聊、问概念、解释已有代码这类不需要动工作区的请求，直接回答，不要调用工具。\n"
     # 判据：去掉过程事实后还剩什么，剩下的就该是正文。
@@ -322,6 +328,9 @@ class AgentState(TypedDict, total=False):
     plan_manifest: dict
     # v165 §7：当前自动修复轮次的系统侧指令，只进本轮模型调用，不写进用户历史。
     repair_hint: str
+    # 读后写闸门的读状态（路径 → size/mtime_ns/sha256）。放在图状态里跟着检查点走：
+    # 审批/提问会结束这次运行，恢复时是新会话，读过的文件不能因此"没读过"。
+    file_reads: dict
 
 
 async def _never_cancelled() -> bool:
@@ -2891,6 +2900,11 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     delegated = dict(state.get("delegated_usage") or {})
     results = list(state.get("tool_results") or [])
     pending = list(state.get("pending") or [])
+    # 读后写状态先按检查点补回来，再执行这一批工具：恢复后的会话是新建的，
+    # 不补的话"刚才读过、答完问题接着写"会被当成没读过而拒绝。
+    file_state = getattr(session.context, "file_state", None)
+    if file_state is not None:
+        file_state.restore(state.get("file_reads"))
     # 这个任务里请求过的命令行。环境缺口闸门要用它判断"有没有真的尝试过把缺的东西
     # 弄到机器上"——只记请求，不记成败：被审批卡住的安装尝试也是尝试。
     shell_commands = list(state.get("shell_commands") or [])
@@ -3481,6 +3495,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         "shell_commands": shell_commands,
         "remediation_rounds": remediation_rounds,
         "gap_continue": gap_continue,
+        **({"file_reads": file_state.export()} if file_state is not None else {}),
         **plan_patch,
     }
 
@@ -3488,7 +3503,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
 # 会改动工作区的工具。校验只对「改过东西」的任务有意义，
 # 问一句「你好」也去跑 pytest 的话，沙箱不可用时任务会被判成失败——
 # 用户看到的就是「输入了没反应 / 执行失败」，而实际上模型已经正常回复了。
-MUTATING_TOOLS = frozenset({"apply_patch", "write_file", "create_file", "delete_file", "move_file"})
+MUTATING_TOOLS = frozenset({"apply_patch", "edit_file", "write_file", "create_file", "delete_file", "move_file"})
 
 
 # 环境类失败：命令根本没跑起来，而不是跑了之后报错。这类结果不能当作"测试没过"。

@@ -66,6 +66,10 @@ class ToolContext:
     # 当前计划状态 {steps, milestones, goal}。update_plan 靠它拿到"上一版步骤"，
     # 才能让重新提交时沿用原 id——否则里程碑和验收条件按 id 建起来的引用会被换空。
     plan_state: dict = field(default_factory=dict)
+    # 本会话的读后写状态（tools/file_state.py）。非空时写工具执行前必须过
+    # 「读过没有 / 读过之后被改过没有」两道闸门；生产路径由 runtime 与 subagent 注入，
+    # 直接构造 ToolContext 的单测默认不启用，既有行为不变。
+    file_state: Any = None
 
 
 @dataclass

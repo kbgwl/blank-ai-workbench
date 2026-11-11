@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -301,7 +302,9 @@ def read_text_file(
         raise ApiError(code="is_a_directory", message="该路径是目录，无法作为文件读取", status_code=422)
     try:
         with open_verified(root, relative, mode="rb") as handle:
-            size = os.fstat(handle.fileno()).st_size
+            info = os.fstat(handle.fileno())
+            size = int(info.st_size)
+            mtime_ns = int(info.st_mtime_ns)
             raw = handle.read(MAX_READ_BYTES)
     except FileNotFoundError:
         raise ApiError(code="not_found", message=f"路径不存在：{relative or '.'}", status_code=404) from None
@@ -338,6 +341,9 @@ def read_text_file(
     return {
         "path": relative,
         "size": size,
+        # 读后写闸门的两格事实：截断读拿不到全文，哈希留空只比 stat。
+        "mtime_ns": mtime_ns,
+        "sha256": "" if truncated else hashlib.sha256(raw).hexdigest(),
         "encoding": encoding,
         "binary": is_binary,
         "truncated": truncated,
