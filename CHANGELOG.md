@@ -1,6 +1,40 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过
+
+- **编程纪律：照 Codex / Claude 原文补三处（M 批）**：把两家 0.154.0 / 2.1.271 的
+  编程规则逐条比对（抓包原文不入库，只留在 `E:/tmp/rea6`），挑出三处我们代码里真缺的：
+  1. **破坏性 git 进不可逆闸门**：`permissions.IRREVERSIBLE` 原来只拦 `git push --force`，
+     连 `reset --hard`、`checkout -- .`、`clean -fdx` 都算可逆——它们丢掉的是未提交改动，
+     工作区快照赎不回来，却会被 guardian 代批、还会被记成「总是允许」。现在拦
+     `reset --hard`、`checkout --/./-f`、`restore`（`--staged` 除外）、带 `-f` 的 `clean`
+     （`-n` dry-run 放行）、`branch -D`/`--delete --force`、`push --force/-f`，都支持
+     `git -C <repo>` 前缀。不可逆 → 任何模式、任何前缀规则都不放行，也不进免问记忆。
+     判据取自 Claude「NEVER run destructive git commands (push --force, reset --hard,
+     checkout ., restore ., clean -f, branch -D) unless the user explicitly requests these
+     actions」与 Codex「Never use destructive commands like `git reset --hard` or
+     `git checkout --` unless the user has clearly asked」。
+  2. **git 工具补只读 `blame`**：Codex 原文「Use `git log` and `git blame` to search the
+     history of the codebase if additional context is required.」——我们只开了
+     status / diff / log，「这一行为什么是这样」查不了，模型只能猜。`blame` 必须带
+     `path`，并用 `--` 分隔路径防参数注入；仍属只读子命令，不改任何写边界。
+  3. **系统提示词新增「编程纪律（要动代码时）」11 条**：改根因不打表面补丁、无关 bug/坏测试
+     不修只在交付里说一句（Codex「Do not attempt to fix unrelated bugs or broken tests」）；
+     跟随现有风格、不引入没被要求的抽象/依赖/格式化器（Claude「Write code that reads like
+     the surrounding code」）；注释只写为什么、不加版权头；优先改现有文件、不主动建
+     README/文档（Claude「NEVER create documentation files unless explicitly requested」）；
+     写文件只走 apply_patch，不用 shell 重定向（审计与回滚看不到）；验证从最小范围开始，
+     项目没有测试就不硬加框架；静态/类型检查报错查到底（Claude「investigate errors — don't
+     dismiss as 'unrelated'」）；能跑就真跑一遍看行为，跑不了说清哪部分没验证；不提交、
+     不建分支、不推送、不 force push 主分支、不跳钩子、不改 git 配置；工作区已有改动属于
+     用户（Codex「Existing or new changes belong to the user」）；查不到的别猜，先查
+     git log/blame。
+  测试：新增 `tests/test_coding_discipline_v26.py` 47 例（17 条破坏性命令全命中、19 条
+  安全命令零误伤、bypass 档仍 ASK、前缀不记、blame 参数与真实 `git blame` 集成、提示词
+  六条契约），关联七套件 176 例全绿（21.57s）。变异 4/4 全红：去掉 `reset --hard` 红 5 例、
+  `checkout` 一律拦红 2 例（误伤反例）、去掉 `blame` 子命令红 1 例、删掉编程纪律段落红
+  6 例。后端全量 2572 passed / 24 skipped（779.00s，rc=0）。**真模型点验仍未完成**：隔离实例 `:8061` 的 DeepSeek
+  Key 仍 401，本条与 K/L 两批一样只算单测与装置层证据。
 
 - **缺口证据与收尾契约：照 Codex / Claude 的原文补 K 批两处盲区（L 批）**：把 Codex
   0.154.0 与 Claude Code 2.1.271 的真实系统提示词拆了一遍（抓包原文不入库），按它们

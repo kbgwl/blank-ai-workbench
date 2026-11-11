@@ -7,7 +7,7 @@ import asyncio
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, ok
 from blank_api.services.tools.shell import mask_output, truncate
 
-READ_ONLY_SUBCOMMANDS = ("status", "diff", "log")
+READ_ONLY_SUBCOMMANDS = ("status", "diff", "log", "blame")
 MAX_LOG_LINES = 50
 
 
@@ -23,10 +23,21 @@ def _argv(arguments: dict) -> list[str]:
         argv += [f"--max-count={limit}", "--oneline"]
     if subcommand == "diff" and arguments.get("path"):
         argv += ["--", arguments["path"]]
+    # blame 回答「这一行为什么是这样」，和 log 一起用（Codex 的原话：
+    # 「Use `git log` and `git blame` to search the history of the codebase if
+    # additional context is required.」）。-- 分隔路径，防参数注入。
+    if subcommand == "blame" and arguments.get("path"):
+        argv += ["--", arguments["path"]]
     return argv
 
 
 async def _git(context: ToolContext, arguments: dict) -> ToolOutcome:
+    if arguments.get("subcommand") == "blame" and not arguments.get("path"):
+        return ToolOutcome(
+            ok=False,
+            status="error",
+            message="git blame 需要 path：指明要看哪个文件的历史",
+        )
     try:
         process = await asyncio.create_subprocess_exec(
             *_argv(arguments),
@@ -61,7 +72,7 @@ def git_tools() -> list[ToolDefinition]:
     return [
         ToolDefinition(
             name="git",
-            description="查看仓库状态与改动，仅开放只读子命令：status / diff / log",
+            description="查看仓库状态、改动与行历史，仅开放只读子命令：status / diff / log / blame",
             input_schema={
                 "type": "object",
                 "required": ["subcommand"],
@@ -71,7 +82,7 @@ def git_tools() -> list[ToolDefinition]:
                         "enum": list(READ_ONLY_SUBCOMMANDS),
                         "description": "只读子命令",
                     },
-                    "path": {"type": "string", "description": "diff 时限定文件"},
+                    "path": {"type": "string", "description": "diff 限定文件；blame 必填"},
                     "lines": {"type": "integer", "description": "log 条数，最多 50"},
                 },
             },

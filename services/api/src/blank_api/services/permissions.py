@@ -120,7 +120,20 @@ IRREVERSIBLE = re.compile(
     # 只挂在删除类动词上——`echo %USERPROFILE%` 这种读操作不许被连坐。
     r"|\b(del|erase|rd|rmdir|remove-item|ri)\b[^\n]*(?:%[a-z_][^%\n]*%|\$env:|\$home\b)"
     r"|\breg\s+delete\b"
-    r"|\bgit\s+push\b[^\n]*--force"
+    # 破坏性 git：丢掉未提交的改动或已提交的历史，工作区快照赎不回来。两家系统
+    # 提示词都点名禁止——Claude「NEVER run destructive git commands (push --force,
+    # reset --hard, checkout ., restore ., clean -f, branch -D) unless the user
+    # explicitly requests these actions」；Codex「Never use destructive commands like
+    # `git reset --hard` or `git checkout --` unless the user has clearly asked」。
+    # 引号里的同形文字也会命中（比如提交信息里写着 git reset --hard）——宁可多问
+    # 一次，与既有 `git push --force` 的口径一致。
+    r"|\bgit\s+(?:-C\s+\S+\s+)?push\b[^\n]*(?:--force\b|\s-f\b)"
+    r"|\bgit\s+(?:-C\s+\S+\s+)?reset\s+--hard\b"
+    r"|\bgit\s+(?:-C\s+\S+\s+)?checkout\b[^\n]*(?:\s--\s|\s\.(?:\s|$)|(?-i:\s-f\b))"
+    r"|\bgit\s+(?:-C\s+\S+\s+)?restore\b(?!\s+--staged)"
+    # dry-run（-n）不删东西，不能拦；只有带 force 的 clean 才会真删。
+    r"|\bgit\s+(?:-C\s+\S+\s+)?clean\b(?![^\n]*\s-[a-z]*n[a-z]*)(?=[^\n]*\s-[a-z]*f)"
+    r"|\bgit\s+(?:-C\s+\S+\s+)?branch\b[^\n]*(?:(?-i:\s-D\b)|\s--delete\b[^\n]*\s--force\b)"
     r"|\bdd\s+if="
     r"|\bchmod\s+-R\s+777\s+/"
     r"|>\s*/dev/sd[a-z]"
