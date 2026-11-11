@@ -1,6 +1,45 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）
+
+- **定时工具：CronCreate / CronDelete / CronList / ScheduleWakeup（Q 批第 5a 项）**：
+  按 Claude 原文（5 段本地 cron、7 天期限、抖动、durable、动态唤醒循环）落成本地四个工具。
+  新增 `services/agent/cron.py`（纯函数：解析 / 下一次 / 抖动 / 时区）与 `services/tools/cron.py`；
+  `tools/__init__.py`、`tools/registry.py`、`permissions.py`、`worker.py`、`app.py` 接线。
+  1. **时间语义**：标准 5 段「分 时 日 月 周」，按本地墙钟理解再换算成库里的 UTC naive；
+     日与星期同时受限时按 Vixie 语义取 OR；星期 7 映射到 0；解析不了就报错并点名是哪一段，
+     不静默降级成「每分钟」。重复任务 7 天后自动结束（期限钉在排定时算出的 `ends_at`，
+     不随每次重排往后滚）；一次性任务到点后留 24 小时补跑窗口。
+  2. **抖动**：重复任务最多晚「周期的 10%、封顶 15 分钟」，一次性落在 :00/:30 最多早 90 秒；
+     偏移由 `sha256(job_id + 到点时刻)` 决定，同一份输入永远得到同一时间（可复现、可测试）。
+  3. **存储与执行**：复用 `AgentTrigger`（`event_type=schedule`），不新造表；到点仍走
+     `release_due_triggers → release_one → launch_task` 这一条执行路径。第一次到点才建任务
+     （prompt 即 goal），后续每一跳沿同一条任务续跑；绑定任务正在跑时把 `fire_at` 顺延 60 秒
+     再看，不把这次触发吞掉。重复任务放行后登记下一行，`dedupe_key` 带上下次到点时刻，
+     `payload.job_id` 保持稳定——重排后仍能用最初那个 id 取消。
+  4. **会话边界**：`durable=false` 只活到本次进程结束，API 启动时统一作废（连同 `ScheduleWakeup`
+     的循环），避免重启后凭空补跑；`durable=true` 跨重启保留，到点后 24 小时内补跑一次。
+  5. **唤醒**：`delaySeconds` 运行时夹到 [60, 3600]；`stop=true` 结束循环并忽略其他字段；
+     同一任务共用一行（`wakeup:<task_id>`），`noop` 连击累加到 `noop_streak` 供界面折叠；
+     `reason` 与 `prompt` 必填。回执与事件（`cron.created` / `cron.deleted` / `wakeup.scheduled` /
+     `wakeup.stopped`）都给出本地时间，模型与用户看到的是墙上的时刻。
+  6. **工具面**：四个工具常驻注册；`cron_list` 只读、并行安全、计划模式放行；中文别名
+     「定时 / 提醒 / 日程 / 唤醒 / 轮询」可检索；子代理工具表不含（定时登记会改库）。
+  测试：新增 `tests/test_cron_tools_v35.py` 28 例（纯函数 + 工具面 + 工具行为 + worker 接线：
+  到点懒建任务、重排、忙时顺延、期限截止、启动清理）；相关回归
+  `test_triggers_v162` / `test_schedule_v104` / `test_trigger_controls_v112` /
+  `test_claude_tool_surface_v28` / `test_report_findings_v34` / `test_watch_v104`
+  合计 **102 passed（35.24s）**；变异电池 26/26 全红（每条跑完即还原）：下一次不严格晚于基准、
+  日/星期 OR 变 AND、抖动归零、一次性抖动越界、星期 7 不映射、步长 0 放行、重复过期窗口、
+  `ends_at` 缺失、durable 默认反了、列表用行主键、取消不改状态、唤醒不夹取、noop 不累加、
+  stop 不取消、reason 不校验、唤醒 fired 行被原样复用、忙时吞掉提醒、cron 不重排、
+  到点不建任务、7 天期限失效、启动清理漏唤醒、启动清理误删持久任务、重排丢任务绑定、
+  只读/并行/别名三处漏登记。
+  全量回归（最终代码）：**2856 passed, 24 skipped, PYTEST_RC=0（829.33s）**。
+  偏离：任务编号用稳定 `job_id` 而不是行主键（重排后行 id 每跳都变）；没有 REPL「空闲」这层
+  对象，用「绑定任务正在跑就顺延」近似；`durable` 用库里的触发器行承载，而不是
+  `.claude/scheduled_tasks.json`；`ScheduleWakeup` 的 `<<autonomous-loop-dynamic>>` 哨兵未实现
+  （本地循环由调度器持有，不依赖提示词里的哨兵）。
 
 - **ReportFindings 工具：审查清单一次上报（Q 批第 4 项）**：
   按 Claude 原文（工具描述、zod schema、输出映射）落成本地 `report_findings`。新增

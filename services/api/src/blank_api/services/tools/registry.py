@@ -131,6 +131,29 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "exit_worktree": ("worktree", "工作树", "退出工作树", "合并工作树", "exit worktree", "keep", "remove"),
     "enter_plan_mode": ("计划模式", "先调研", "只读", "plan mode", "enter plan"),
     "exit_plan_mode": ("退出计划", "开始执行", "确认计划", "exit plan", "plan approved"),
+    "cron_create": (
+        "定时",
+        "提醒",
+        "日程",
+        "预约",
+        "每天早上",
+        "每周",
+        "cron",
+        "schedule",
+        "reminder",
+    ),
+    "cron_delete": ("取消定时", "删除提醒", "取消提醒", "cancel cron", "delete cron"),
+    "cron_list": ("定时任务", "提醒列表", "日程列表", "cron list", "list crons"),
+    "schedule_wakeup": (
+        "唤醒",
+        "稍后再看",
+        "过一会再查",
+        "循环",
+        "轮询",
+        "wakeup",
+        "wake me",
+        "loop",
+    ),
 }
 
 MAX_SEARCH_RESULTS = 6
@@ -161,6 +184,8 @@ PARALLEL_SAFE_TOOLS = frozenset(
         "web_fetch",
         # 只带一份数据回执、不碰工作区与会话状态；审查时可以和安全读并行跑。
         "report_findings",
+        # 只读数据库里的定时任务清单，不登记/不取消；和别的只读工具并发安全。
+        "cron_list",
     }
 )
 

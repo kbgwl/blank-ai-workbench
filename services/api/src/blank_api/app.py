@@ -30,6 +30,14 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
         pass
 
     await recover_pending_runs()
+    # durable=false 的定时任务与 ScheduleWakeup 的循环只活在进程里：上个进程没了，
+    # 它们没有"下一次"可续。启动时作废，避免重启后突然补跑一条谁也说不清来由的任务。
+    try:
+        from blank_api.worker import discard_session_scoped_jobs
+
+        await discard_session_scoped_jobs()
+    except Exception:
+        pass
     # 存量供应商的输出上限兜底：<=2048 会静默截断输出（表现为"工具参数偶尔是空的"）。
     # 迁移 0027 已经改过一遍，这里防的是"有人把它改回去"和"建库走的是 create_all"。
     try:

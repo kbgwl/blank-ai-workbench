@@ -97,6 +97,8 @@ READ_ONLY_TOOLS = frozenset(
         "skill",
         # 审查报告只产出结构化回执，不写工作区；只读调研阶段也能先记下发现。
         "report_findings",
+        # 列出定时任务只是读库，不登记也不取消；计划模式可以查。
+        "cron_list",
         # 模式开关本身不是写操作：计划模式下必须能"退出"，否则模型会卡死在里面。
         # 退出仍需人工批准，由 decide() 里的 mode:switch 特例负责。
         "enter_plan_mode",

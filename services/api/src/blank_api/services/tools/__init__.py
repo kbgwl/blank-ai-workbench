@@ -6,6 +6,7 @@ from blank_api.services.tools.base import (
     ToolOutcome,
     validate_arguments,
 )
+from blank_api.services.tools.cron import cron_tools
 from blank_api.services.tools.filesystem import filesystem_tools
 from blank_api.services.tools.gateway import ToolGateway
 from blank_api.services.tools.git import git_tools
@@ -40,6 +41,7 @@ def build_default_tools() -> list[ToolDefinition]:
         *web_tools(),
         *skill_tools(),
         *review_tools(),
+        *cron_tools(),
         *worktree_tools(),
         *team_admin_tools(),
     ]

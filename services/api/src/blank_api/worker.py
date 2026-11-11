@@ -19,7 +19,7 @@ import logging
 import os
 import socket
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import or_, select
 
@@ -236,6 +236,34 @@ async def run_once(worker: str | None = None) -> int:
     return handled
 
 
+async def _task_for_trigger(session, row: AgentTrigger, body: dict) -> Task | None:
+    """定时触发在第一次到点时才建任务：prompt 就是这条任务的 goal。
+
+    提前建会在任务列表里多出一条从没跑过的草稿；到点再建，用户看到的第一条
+    记录就是真的跑过的那次。建完把 id 写回触发器，后续每一跳沿用同一条任务
+    （Claude 的 cron prompt 也是在同一个会话里续着跑，不是每次开新会话）。
+    """
+    prompt = str(body.get("prompt") or "").strip()
+    if not prompt:
+        return None
+    from blank_api.api.routes.tasks import persist_task
+    from blank_api.schemas.task import TaskCreate
+
+    title = prompt.splitlines()[0].strip() or prompt
+    created = await persist_task(
+        session,
+        row.project_id,
+        TaskCreate(
+            title=title[:200],
+            goal=prompt,
+            scenario=body.get("scenario") or "",
+            provider_id=row.provider_id or None,
+        ),
+    )
+    row.task_id = created.id
+    return created
+
+
 async def release_one(trigger_id: str, *, start_runner: bool = False) -> bool:
     """放行一条触发器。返回是否真的入队。
 
@@ -243,17 +271,29 @@ async def release_one(trigger_id: str, *, start_runner: bool = False) -> bool:
     不该受 ``background_execution`` 这个**后台自主**闸门约束（默认关着，
     关着时客户配好通道发消息会一直没反应）。执行路径仍然只有这一条。
     """
+    from blank_api.services.agent import cron as cron_module
+
     async with get_session_factory()() as session:
         row = await session.get(AgentTrigger, trigger_id)
         if row is None or row.status != triggers_module.STATUS_PENDING:
             return False
+        body = dict(row.payload or {})
+        kind = body.get("kind")
         task = await session.get(Task, row.task_id) if row.task_id else None
+        if task is None and kind in (cron_module.KIND_CRON, cron_module.KIND_WAKEUP):
+            task = await _task_for_trigger(session, row, body)
         if task is None:
             row.status = triggers_module.STATUS_SKIPPED
-            row.payload = {**dict(row.payload or {}), "error": "关联任务不存在"}
+            row.payload = {**body, "error": "关联任务不存在"}
             await session.commit()
             return False
         if task.status in ("running", "queued"):
+            if kind in (cron_module.KIND_CRON, cron_module.KIND_WAKEUP):
+                # 定时/唤醒绑定的任务还在跑：顺延一会儿再看，而不是把这次触发吞掉。
+                # 直接标记 fired 会让「设了提醒却不响」，比晚一分钟糟得多。
+                row.fire_at = utc_now() + timedelta(seconds=cron_module.BUSY_DEFER_SECONDS)
+                await session.commit()
+                return False
             # 已经有人在跑：标记成已放行即可，不重复入队。
             await triggers_module.mark_fired(session, row)
             await session.commit()
@@ -269,13 +309,14 @@ async def release_one(trigger_id: str, *, start_runner: bool = False) -> bool:
 
 
 async def _reschedule_repeat(session, row: AgentTrigger) -> str:
-    """重复任务（每天/每周）放行后登记下一次。返回新触发器 id，没登记返回空串。
+    """重复任务（每天/每周/cron）放行后登记下一次。返回新触发器 id，没登记返回空串。
 
     重复不是"一条记录反复放行"：那条行已经是 fired，改回 pending 会让
     「第几次」变得不可考，而且两次执行之间会共用同一个 fired_at。所以新登记
     一条，dedupe_key 带上下次到点时间——既不会和旧的撞唯一约束，也能一眼看出
     这是排给哪个时刻的。
     """
+    from blank_api.services.agent import cron as cron_module
     from blank_api.services.agent import schedule as schedule_module
 
     body = dict(row.payload or {})
@@ -284,20 +325,52 @@ async def _reschedule_repeat(session, row: AgentTrigger) -> str:
         return ""
     if row.fire_at is None:
         return ""
-    next_at = schedule_module.next_fire(row.fire_at, repeat)
-    if next_at is None:
-        # 读不懂的重复说明：停止再登记，别按错误周期狂刷。
-        row.payload = {**body, "repeat_error": "重复说明读不懂，已停止排下一次"}
-        return ""
-    event = triggers_module.normalize(
-        event_type=row.event_type,
-        source=row.source,
-        payload=body,
-        dedupe_key=f"{row.dedupe_key}:{next_at.strftime('%Y%m%d%H%M')}",
-        # 窗口要盖住到点那一刻：默认 24 小时窗口对"每天"刚好卡在边界上，
-        # 「每周」更是必然过期。这里给到点后一周。
-        expires_at=next_at + timedelta(days=7),
-    )
+
+    if str(repeat.get("kind") or "") == cron_module.KIND_CRON:
+        try:
+            spec = cron_module.parse(str(repeat.get("expr") or body.get("cron") or ""))
+        except cron_module.CronError as error:
+            row.payload = {**body, "repeat_error": str(error)}
+            return ""
+        offset = cron_module.local_offset()
+        next_at = cron_module.next_local(spec, row.fire_at + offset) - offset
+        job_id = str(body.get("job_id") or row.dedupe_key)
+        next_at = cron_module.jittered(
+            next_at, job_id=job_id, recurring=True, spec=spec, offset=offset
+        )
+        # 重复任务 7 天后自动结束：期限钉在 payload.ends_at（排定那一刻算，
+        # 不跟着每次重排往后滚）。老数据没有 ends_at 时退回行上的 expires_at。
+        deadline = row.expires_at
+        raw_deadline = body.get("ends_at")
+        if raw_deadline:
+            try:
+                deadline = datetime.fromisoformat(str(raw_deadline))
+            except ValueError:
+                deadline = row.expires_at
+        if deadline is not None and next_at > deadline:
+            return ""
+        event = triggers_module.normalize(
+            event_type=row.event_type,
+            source=row.source,
+            payload=body,
+            dedupe_key=f"{job_id}:{next_at.strftime('%Y%m%d%H%M')}",
+            expires_at=next_at + cron_module.RECURRING_LIFETIME + cron_module.EXPIRY_GRACE,
+        )
+    else:
+        next_at = schedule_module.next_fire(row.fire_at, repeat)
+        if next_at is None:
+            # 读不懂的重复说明：停止再登记，别按错误周期狂刷。
+            row.payload = {**body, "repeat_error": "重复说明读不懂，已停止排下一次"}
+            return ""
+        event = triggers_module.normalize(
+            event_type=row.event_type,
+            source=row.source,
+            payload=body,
+            dedupe_key=f"{row.dedupe_key}:{next_at.strftime('%Y%m%d%H%M')}",
+            # 窗口要盖住到点那一刻：默认 24 小时窗口对"每天"刚好卡在边界上，
+            # 「每周」更是必然过期。这里给到点后一周。
+            expires_at=next_at + timedelta(days=7),
+        )
     fresh, _ = await triggers_module.ingest(
         session,
         row.project_id,
@@ -308,6 +381,44 @@ async def _reschedule_repeat(session, row: AgentTrigger) -> str:
         fire_at=next_at,
     )
     return fresh.id
+
+
+async def discard_session_scoped_jobs() -> int:
+    """进程启动时作废「只活在本会话」的定时任务。
+
+    Claude 的 ``durable=false`` 只活在当前 REPL 会话里；``ScheduleWakeup`` 更是
+    会话内循环的一部分，进程没了循环也就断了。本地没有"会话"这层对象，用
+    "API 进程启动"近似：启动时把 pending 的非持久 cron 与唤醒一律取消。
+
+    持久任务（durable=true，落在库里等价于 ``.claude/scheduled_tasks.json``）
+    不动；它们跨重启保留，由 ``due()`` 在到点后补跑一次。
+
+    只碰 agent 自己排的 schedule 事件（payload 里带 kind），别的触发器一概不动。
+    """
+    from blank_api.services.agent import cron as cron_module
+
+    async with get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                select(AgentTrigger)
+                .where(AgentTrigger.event_type == triggers_module.EVENT_SCHEDULE)
+                .where(AgentTrigger.status == triggers_module.STATUS_PENDING)
+            )
+        ).scalars().all()
+        dropped = 0
+        for row in rows:
+            body = dict(row.payload or {})
+            kind = body.get("kind")
+            if kind == cron_module.KIND_WAKEUP or (
+                kind == cron_module.KIND_CRON and not body.get("durable")
+            ):
+                row.status = triggers_module.STATUS_CANCELLED
+                row.payload = {**body, "cancelled_reason": "session_restart"}
+                dropped += 1
+        await session.commit()
+    if dropped:
+        log.info("启动清理：作废 %d 条会话内定时任务", dropped)
+    return dropped
 
 
 async def release_due_triggers(*, start_runner: bool | None = None) -> int:

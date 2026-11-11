@@ -261,6 +261,7 @@ uv run alembic revision --autogenerate -m "描述"
 | 任务级工作树会话 | ✅ | `enter_worktree` 用 `name` 在 `<repo>/.blank-worktrees/<name>` 新建 `blank/worktree-<name>` 分支，或用 `path` 进入 `git worktree list` 里已注册的树，之后本任务所有工具（shell cwd、文件工具、git、安全策略路径基准）都换到那棵树；`exit_worktree(action=keep|remove)` 回到原工作区：`remove` 只对本任务创建的树生效、`path` 进入的只能 keep，遇未提交改动/未合并提交默认拒绝并逐文件点名，显式 `discard_changes=true` 才丢弃；审批恢复后仍在同一棵树，任务收尾只摘记录不删树。判据 `services/api/tests/test_worktree_tools_v32.py`（34 例），变异 28/28 红 |
 | Skill 工具 | ✅ | 系统提示只列「名字 + 一句话说明」（取正文首行、剥前导 markdown、截到 120 字符），模型判断任务属于某个 Skill 时调用 `skill(skill, args)` 按需加载正文；参数替换 `$ARGUMENTS`、无占位符则附在正文末尾；名字必须精确命中，前导斜杠直接拒绝并给出修正名，未知名字 fail-closed 并列出真实清单；同一任务里重复调用只回一行「已加载」、不再贴正文；没有可加载的 Skill 时 `skill` 从工具表里整条移除（子代理同口径）；子代理拿目录副本，加载状态不写回父会话。判据 `services/api/tests/test_skill_tool_v33.py`（30 例，含真实 HTTP 任务运行），变异 24/24 红 |
 | ReportFindings 工具 | ✅ | `report_findings(level?, findings[])` 按 Claude 语义补齐：只在当前生效的代码审查说明点名时使用，一批上报、按严重程度从高到低、最多 32 条，空数组表示没有发现通过核验；每条必填 `file`（仓库相对路径）/`summary`/`failure_scenario`，可选 `line`（从 1 起）、`short_summary`（≤60）、`category`（≤40，kebab-case）、`verdict`（CONFIRMED/PLAUSIBLE）、`outcome`（fixed/skipped/no_change_needed，只用于修复后重报）；任一条非法即整批拒绝并点名第几条，未知字段剥掉、顺序保留；回执一行（`已上报 N 条审查发现。`），明确要求不要再把同一批发现以正文打印。只读、可并行、计划模式放行、不进子代理工具表（由主代理统一上报）；清单同时落 `review.findings` 事件与工具产物（沿用打码/gzip/上限）。判据 `services/api/tests/test_report_findings_v34.py`（36 例，含真实 HTTP 任务运行），变异 28/28 红 |
+| 定时工具（Cron + Wakeup） | ✅ | `cron_create / cron_delete / cron_list / schedule_wakeup` 对齐 Claude CronCreate/Delete/List 与 ScheduleWakeup：5 段本地 cron，日/星期同时受限按 Vixie 语义取 OR；`recurring=false` 只触发一次、到点自动结束；重复任务 7 天后结束（期限从排定那一刻算，不随重排往后滚）；抖动确定性（重复最多晚周期的 10%、封顶 900 秒，一次性落在 :00/:30 最多早 90 秒）；`durable=false` 只活到本次进程结束（启动时作废，避免重启后凭空补跑），`durable=true` 跨重启保留并在到点后 24 小时内补跑一次；第一次到点才建任务（prompt 即 goal），后续每一跳沿同一条任务续跑；绑定任务正忙时顺延 60 秒再看，不把这次触发吞掉；执行路径仍只有 `launch_task` 一条。`schedule_wakeup` 的 delaySeconds 夹到 [60,3600]，stop 结束循环，noop 连击折叠。四个工具常驻；`cron_list` 只读、可并行、计划模式放行，子代理工具表不含。判据 `services/api/tests/test_cron_tools_v35.py`（28 例，含到点放行/重排/忙时顺延/启动清理），变异 26/26 红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -289,8 +290,10 @@ uv run alembic revision --autogenerate -m "描述"
   「无斜杠按文件名、带斜杠按相对路径」实现，`search_code` 补齐了
   `output_mode / glob / type / -i / multiline / -A/-B/-C / -o / -n / head_limit / offset`，
   `list_agents` 能看到当前任务的后台子代理，`send_message` 能带着上下文续聊。
-  仍未移植：CronCreate/Delete/List 与 ScheduleWakeup、Workflow、
-  NotebookEdit。ReportFindings 已于 Q4 补齐（见上表；三处偏离：工具名用 snake_case
+  仍未移植：Workflow、NotebookEdit。定时工具已于 Q5a 补齐（见上表；三处偏离：任务编号
+  用稳定的 `job_id` 而不是行主键，重排后仍能用最初那个 id 取消；没有 REPL「空闲」这层
+  对象，用「绑定任务正在跑就顺延 60 秒」近似；`durable` 用库里的触发器行承载，而不是
+  `.claude/scheduled_tasks.json`）。ReportFindings 已于 Q4 补齐（见上表；三处偏离：工具名用 snake_case
   `report_findings`、回执文案为中文；清单同时落 `review.findings` 事件与工具产物，
   便于界面和证据包读取，而不只是一条文本回执；子代理工具表刻意不含它，发现由主代理
   一次性上报）。Skill 工具已于 Q3 补齐（见上表；两处偏离：一句话说明取正文首行，
