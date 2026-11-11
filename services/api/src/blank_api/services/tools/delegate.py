@@ -263,6 +263,9 @@ def delegate_tools() -> list[ToolDefinition]:
                 "isolate=true 时子代理在临时副本里工作，改动不会影响真实工作区。"
                 "background=true 时立即返回 agent_id，之后用 task_output 取结论、task_stop 取消——"
                 "需要同时推进别的事时用它；需要立刻拿到结论时不要用。"
+                "后台子代理结束时你会收到一条系统通知，不必靠反复轮询。"
+                "子代理的结论要在你的最终答复里转述给用户；不要重复执行它已经做完的活，"
+                "也不要把它还没给出的结论说成已完成。"
                 "需要同时分头做几件事时改用 spawn_agents。"
             ),
             input_schema={
@@ -293,6 +296,7 @@ def delegate_tools() -> list[ToolDefinition]:
                 "最后把各自的结论和 diff 汇总回来。适合「同时摸清几个模块 / 各写一份方案再对比」这类工作。"
                 "merge=true 时会把无冲突、且主工作区对应文件没有未提交改动的改动写回；"
                 "同一文件被多个子代理改过算冲突，不写入，只交回 diff。"
+                "各自的结论由你在最终答复里转述；不要把某个子代理还没给出的结论说成已完成。"
             ),
             input_schema={
                 "type": "object",
@@ -324,6 +328,8 @@ def delegate_tools() -> list[ToolDefinition]:
                 "取后台子代理（spawn_agent(background=true)）的结论。"
                 "block=true 时最多等 timeout 秒；等不到只表示它还在跑，不会因此取消它。"
                 "返回状态 completed / failed / cancelled / running，未知 agent_id 会如实报找不到。"
+                "子代理自己结束时会收到系统通知，这里只在需要更细的进度或拿完整文本时用。"
+                "取到的结论由你转述给用户，不要替未结束的子代理编造结果。"
             ),
             input_schema={
                 "type": "object",

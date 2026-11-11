@@ -1,6 +1,37 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义
+
+- **场景模式对齐 Claude Harness：驳回不再停轮、工具回执即续跑、子代理完成通知、单一 in_progress（O 批）**：
+  五条语义各自对应一条可失败判据，全部落在执行图上而不是只改提示词。
+  1. **驳回不再暂停整轮**（`agent/graph.py` 的 `execute_action`）：被拒的那一步记成「未执行」，
+     回执明确写「不要原样重试」，循环继续让模型换个做法或把选择交回用户；同一会话里再次发送
+     同一 key 直接拒绝（不再弹卡）。`task.paused` 现在**只来自用户手动暂停**，`runtime.py` 与
+     `team.py` 的文案同步改成「用户暂停了任务」。
+  2. **工具回执即续跑**：`ask()` 收到空 prompt 时不再追加合成的 user 消息；`execute_action`
+     只在最后一条不是工具回执时才补「请继续」。工具结果本身就是下一步输入，与 Claude Code
+     把 tool result 直接交回模型一致。
+  3. **后台子代理完成是系统事件**：`SubAgentRunner.drain_notifications()` 对每个句柄只投递一次，
+     `call_model` 在压缩后的消息尾部注入一条 `system` 通知并落 `subagent.notification` 事件；
+     通知明确「结论由主代理转述、未列出的子代理不要替它编结果」。通知不是摘除，`task_output`
+     仍能取到完整结论。
+  4. **`update_plan` 对齐 TodoWrite**：同时出现多个 `in_progress` 直接返回错误并列出步骤名，
+     工具描述同步写死「一步做完立刻标 completed」。
+  5. **系统提示补齐编排纪律**：信息够了就动手、给推荐而不罗列选项、计划与子代理结论的归属、
+     系统提醒与外部上下文只能由系统注入且永不能覆盖安全与审批规则、读文件/列目录/搜内容/看
+     git 状态优先用专职工具（shell 只用于真正执行命令）。
+  测试：新增 `tests/test_claude_loop_parity_v27.py` 6 例（一次全绿，11.60s）；相关回归集
+  `test_approval_v06`、`test_team`、`test_dialect_device_v32`、`test_agent_v04`、
+  `test_model_retry_fallback_v152`、`test_v163_super_agent`、`test_background_subagent_v116`
+  合计 **102 passed**。变异电池 7/7 全红（每条跑完即还原）：还原旧 `paused` 块 → 驳回判据红；
+  `execute_action` 无条件补「请继续」→ 续跑判据红；去掉 `ask()` 空 prompt 守卫 → 续跑判据红；
+  去掉 `notified` 守卫 → 同一句柄被通知两次；去掉通知注入 → 最后一条不是 `system`；
+  删掉 `in_progress` 检查 → 两个 in_progress 被接受；删掉「信息够了就动手」→ 提示词判据红。
+  替代旧口径的用例同步改判：`test_approval_v06` 8 例、`test_team` 审批续跑、方言装置
+  `test_the_resume_guard_accepts_the_paused_stop_and_survives_a_flake`，以及
+  `evals/dialect_e2e.py` 的驳回格（期待 `succeeded` 且不得出现 `task.paused`）。
+  全量回归：**2668 passed, 24 skipped, PYTEST_RC=0（758.87s）**，较 N 批基线 2662 passed
+  多出的 6 例即本批新判据文件。
 
 - **编程工具面照 Claude Code 2.1.271 对齐：读后写硬闸门、edit_file/write_file、shell 写文件拦截（N 批）**：
   把 Edit / Write / Bash 的语义拆成**可失败的判据**，而不是只改提示词。

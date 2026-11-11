@@ -220,6 +220,7 @@ class _BackgroundAgent:
     task: asyncio.Task | None = None
     result: SubAgentResult | None = None
     error: str = ""
+    notified: bool = False
 
 
 class _Recorder:
@@ -804,6 +805,51 @@ class SubAgentRunner:
         if session is None or not agent_id:
             return None
         return _BACKGROUND.get(str(session.context.task_id), {}).get(agent_id)
+
+    def drain_notifications(self) -> list[dict]:
+        """取走「后台子代理已结束」的通知，每个句柄只投递一次。
+
+        主代理不会盯着 task_output 轮询：后台跑完的时刻它往往正在做别的事。
+        这里把刚结束、还没通知过的句柄交回调用方，由它注入下一次模型调用——
+        对齐 Claude Code 的后台 Agent 语义。已通知的句柄仍留在表里，task_output
+        照样能取到完整结论；任务收尾时 aclose 再整批摘除。
+        """
+        session = self.session
+        if session is None:
+            return []
+        task_id = str(getattr(getattr(session, "context", None), "task_id", "") or "")
+        bucket = _BACKGROUND.get(task_id, {})
+        notes: list[dict] = []
+        for handle in bucket.values():
+            if handle.notified:
+                continue
+            task = handle.task
+            if task is None or not task.done():
+                continue
+            if task.cancelled():
+                note = {
+                    "agent_id": handle.agent_id,
+                    "agent_path": handle.agent_path,
+                    "goal": handle.request.goal[:200],
+                    "status": "cancelled",
+                    "ok": False,
+                    "summary": "",
+                    "error": "",
+                }
+            else:
+                snapshot = self._snapshot(handle)
+                note = {
+                    "agent_id": handle.agent_id,
+                    "agent_path": handle.agent_path,
+                    "goal": handle.request.goal[:200],
+                    "status": str(snapshot.get("status") or ""),
+                    "ok": bool(snapshot.get("ok")),
+                    "summary": str(snapshot.get("summary") or "")[:2000],
+                    "error": str(snapshot.get("error") or handle.error or "")[:1000],
+                }
+            handle.notified = True
+            notes.append(note)
+        return notes
 
     async def output(self, agent_id: str, *, block: bool = True, timeout: float = 60.0) -> dict:
         """取后台子代理的现状；``block`` 时最多等 ``timeout`` 秒。

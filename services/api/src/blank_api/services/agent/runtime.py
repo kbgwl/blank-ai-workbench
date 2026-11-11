@@ -1163,7 +1163,7 @@ class AgentRuntime:
         elif status == "cancelled":
             reason = "任务已取消"
         elif status == "paused":
-            reason = "已驳回高风险操作，该步骤未执行，任务已暂停"
+            reason = "用户暂停了任务"
         await self._finish(
             scope,
             status,

@@ -254,6 +254,7 @@ uv run alembic revision --autogenerate -m "描述"
 | CLI 基础入口 | ✅ | `blank init`、`blank doctor`、`blank add/remove`、本地工作区启动 |
 | Bot 团队 `/team` | ✅ | 群聊编排、上下文管家、主 Bot 的团队管理工具、跨群全文搜索与锚点跳转 |
 | Claude 式编程工具面 | ✅ | `edit_file` 精确串替换 + `write_file` 整文件写入，两工具与 `apply_patch` 共用「读后写」硬闸门（没读过不许改、读过被改过要重读）；shell 写文件与 git 完整性硬拦截；独立只读调用默认并行。判据 `services/api/tests/test_claude_parity_v24.py`（60 例），变异 8/8 红 |
+| 场景模式对齐 Claude Harness | ✅ | 驳回不再暂停整轮（该步记未执行、模型换个做法继续）；工具回执直接续跑、不再每步塞合成「请继续」；后台子代理结束时注入一次性系统通知（结论由主代理转述）；`update_plan` 同时只允许一个 `in_progress`；系统提示补齐 act / 推荐 / 系统提醒边界 / 专职工具优先。判据 `services/api/tests/test_claude_loop_parity_v27.py`（6 例），变异 7/7 红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -262,7 +263,7 @@ uv run alembic revision --autogenerate -m "描述"
 | v0.3 阶段2 多模型 | 供应商 CRUD、Key 加密且不外泄、连通性测试、非流式与流式对话、token 记账 | `tests/test_models_v03.py`、`/api/v1/usage/summary` 实测 |
 | v0.4 阶段3 Agent Runtime | 计划 → 执行 → 验证 → 汇总四节点、工具集、SQLAlchemy 检查点、事件流与证据包 | `tests/test_agent_v04.py` |
 | v0.5 阶段4 任务控制台 | 深色三栏（任务列表 / 时间线 / 文件·Diff·证明包）、实时轮询与历史恢复、深链 | 浏览器实测创建并运行任务，时间线折叠为计划/工具/终端/审批/结果区块；382px 视口实测三栏 grid 退化为单列（`grid-cols-1`）、横向溢出 0px |
-| v0.6 阶段5 审批与恢复 | 高风险操作统一走图中断：批准从断点继续并补记 `approval.granted`，驳回则整步不执行并置 `paused`；自动修复上限 3 轮；进程重启后仍可恢复 | `tests/test_approval_v06.py` 5 项 + 浏览器「批准并继续」实测 |
+| v0.6 阶段5 审批与恢复 | 高风险操作统一走图中断：批准从断点继续并补记 `approval.granted`；驳回则该步记「未执行」、模型换个做法继续（对齐 Claude Code：拒绝是结论，不是重试信号），只有用户手动暂停才会 `paused`；自动修复上限 3 轮；进程重启后仍可恢复 | `tests/test_approval_v06.py` 8 项 + 浏览器「批准并继续」实测 |
 | v0.7 阶段6 沙箱与安全 | 一次性容器执行 `run_shell`/`run_tests`（工作区唯一可写挂载、默认无网、CPU/内存/PID/时长上限、超时强杀不留残留容器）、密钥不进容器与输出、审计与快照可回滚 | `tests/test_sandbox_v07.py`（含容器内 `run_tests` 用例）、`tests/test_permissions_v10.py`；容器内 `uname` 为 Linux 是当时装有 Docker 的机器上记录的，本机现在没有 `docker` 命令行，这一条无法就地复核（见下方已知限制）；评测 T18/T19 返回 `expected_denied` |
 | v1.0 阶段7 质量与评测 | 回归门禁一条命令、评测样例集与成功率报告、成本与权限守卫 | `pnpm regression`、`evals/results/`、`tests/test_cost_v10.py` |
 | v1.2 Bot 团队 | 群聊编排（每次发言落一条普通 Task）、上下文管家挑选、主 Bot 的团队管理工具与高风险审批边界、跨群全文检索与锚点跳转 | `tests/test_team.py`、`tests/test_phase2_team_admin.py`、`tests/test_phase2_context.py`、`tests/test_phase2_search.py`；`pnpm e2e:team`（stub 模型 + 隔离库 + Chrome headless 1440×900，38 项判定）；`evals/team_e2e/real_model_check.py`（DeepSeek 真模型 + 隔离实例 :8061，13 项判定，含三次高风险审批连续放行） |

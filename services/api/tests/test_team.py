@@ -374,13 +374,12 @@ async def test_approval_waits_then_resumes_the_same_turn(env, workspace):  # noq
     finished = await wait_round(env, group_id, ("completed", "failed"))
     assert finished["round"]["status"] == "completed", finished["round"]
     resumed = next(row for row in finished["messages"] if row["id"] == message_id)
-    # 驳回高风险操作会让任务停在安全闸门（paused），不是失败；群聊里如实标注，
-    # 随后由主理人收尾。
-    assert resumed["status"] == "paused", json.dumps(
+    # 驳回高风险操作不是暂停：成员收到拒绝回执后换个做法把话说完，任务正常成功。
+    assert resumed["status"] == "succeeded", json.dumps(
         {"resumed": resumed, "round": finished["round"], "messages": finished["messages"]},
         ensure_ascii=False,
     )
-    assert "驳回" in resumed["content"]
+    assert "后端处理完成" in resumed["content"]
     assert messages_of(finished, "bot")[-1]["meta"]["wrap_up"] is True
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()

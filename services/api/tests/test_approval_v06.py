@@ -88,7 +88,13 @@ async def test_second_approval_call_is_rejected_as_idempotent(env, workspace: Pa
     assert (workspace / ".env").read_text(encoding="utf-8") == "TOKEN=plain"
 
 
-async def test_rejection_leaves_the_step_unexecuted_and_pauses(env, workspace: Path):  # noqa: F811
+async def test_rejection_leaves_the_step_unexecuted_and_the_loop_continues(env, workspace: Path):  # noqa: F811
+    """驳回不是暂停：那一步记成「未执行」，模型换个做法把任务收尾。
+
+    Claude Code 的语义是「用户拒绝了这次调用——调整，别原样重试」。这里模型脚本的
+    下一步本来就不会再写 .env，所以任务应当正常走到 succeeded，而不是像早先那样
+    停在 paused 等用户再点一次。
+    """
     task_id, provider_id = await _waiting_task(env, workspace)
 
     resp = await env.client.post(
@@ -97,12 +103,13 @@ async def test_rejection_leaves_the_step_unexecuted_and_pauses(env, workspace: P
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert not (workspace / ".env").exists(), "驳回后不得写入文件"
-    assert body["task"]["status"] == "paused"
-    assert "驳回" in body["task"]["failure_reason"]
+    assert body["task"]["status"] == "succeeded", body["task"]
+    assert body["evidence"]["pending_approvals"] == []
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
     types = [event["type"] for event in events]
-    assert "approval.denied" in types
+    assert "approval.denied" in types, types
+    assert "task.paused" not in types, types
 
 
 async def test_restarted_runtime_resumes_a_waiting_task(env, workspace: Path):  # noqa: F811

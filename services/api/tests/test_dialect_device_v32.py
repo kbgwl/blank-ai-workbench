@@ -436,10 +436,11 @@ def test_the_secret_claim_is_checked_on_both_ends() -> None:
 
 
 def test_the_resume_guard_accepts_the_paused_stop_and_survives_a_flake() -> None:
-    """第 59 步等的那个终态里必须有 `paused`——驳回是当场停轮，不是失败。
+    """用户手动暂停仍是合法终态，而批准那条路必须跑到 succeeded。
 
-    这一条是实测翻出来的：装置第一次跑就在 59 白等 180 秒，红在"没跑到终态（status=paused）"，
-    而被测产品的 `TERMINAL_RUN_STATES` 里 `paused` 从来都算终态。
+    这一条是实测翻出来的：装置第一次跑就白等 180 秒，红在"没跑到终态（status=paused）"，
+    而被测产品的 `TERMINAL_RUN_STATES` 里 `paused` 从来都算终态——暂停是人按下的，
+    驳回则不是（驳回之后模型继续调整，任务会走到 succeeded）。
     顺带钉住"抖了之后第二次报 409 也算放行成功"那条分支，别把它写成"照红"。
     """
     calls: list[str] = []

@@ -980,10 +980,9 @@ class TeamOrchestrator:
                 message.status = "cancelled"
                 message.content = summary or "已停止"
             elif task_status == "paused":
-                # 驳回高风险操作不是失败：这一步没执行，任务停在安全闸门上，
-                # 群聊里要如实说明，主理人随后会收尾。
+                # 暂停只来自用户手动停下：驳回会让模型继续调整，不再停在这一格。
                 message.status = "paused"
-                message.content = summary or failure or "用户驳回了高风险操作，该步骤未执行"
+                message.content = summary or failure or "用户暂停了任务"
             else:
                 message.status = "failed"
                 message.content = failure or summary or error or "这一轮没有完成"

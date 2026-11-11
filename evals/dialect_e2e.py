@@ -1594,11 +1594,11 @@ def _assert_diff_redacted(d: Drive) -> str:
 
 
 def _assert_denied(d: Drive, pid: str) -> str:
-    """驳回必须真的没执行：变更账为空、审批轨迹里有 approval.denied，且这一轮当场停住。
+    """驳回必须真的没执行，但这一轮不能停：变更账为空、审批轨迹里有 approval.denied。
 
-    `paused` 是被测产品自己的口径（graph 里 `if denied: status="paused"` + `task.paused` 事件）：
-    驳回不是失败，也不再给模型一次"换个写法照样写"的机会。这里把它钉成断言，
-    哪天这条规则悄悄改成"继续跑"，这一格会红，而不是让界面继续按 paused 渲染。
+    对齐 Claude Code 的语义——用户驳回的是那一次调用，模型应当换个做法或把选择交回用户。
+    所以任务会继续跑到 succeeded（`paused` 只留给用户手动暂停），这里把它钉成断言：
+    哪天这条规则又悄悄退回"驳回即停轮"，这一格会红，而不是让界面把一次拒绝渲染成暂停。
     """
     goal = f"往工作区写一份配置（{PROBE_APPROVAL}）"
     task = _probe_task(d, pid, "denied_task", "驳回这份写入", goal)
@@ -1606,8 +1606,8 @@ def _assert_denied(d: Drive, pid: str) -> str:
                               goal=goal, wanted=frozenset({"waiting_approval"}))
     status, _ = _resume_with_guard(d, f"/tasks/{task}/approval", {"approve": False, "scope": "once"},
                                    terminal=frozenset({"succeeded", "failed", "cancelled", "paused"}))
-    if status != "paused":
-        raise AssertionError(f"驳回后的停轮口径变了：期望 paused，实际 {status}")
+    if status != "succeeded":
+        raise AssertionError(f"驳回后的续跑口径变了：期望 succeeded，实际 {status}")
     evidence = _pending(d, task)
     count = (evidence.get("changes") or {}).get("count")
     if count:
@@ -1617,9 +1617,9 @@ def _assert_denied(d: Drive, pid: str) -> str:
         raise AssertionError(f"驳回没有留下审计：{sorted(t for t in types if t.startswith('approval'))}")
     if "approval.granted" in types:
         raise AssertionError("驳回的审批卡上还挂着一条 granted，审计自相矛盾")
-    if "task.paused" not in types:
-        raise AssertionError(f"停在 paused 却没发 task.paused，前端只会看到一个没有理由的停轮：{sorted(types)[:8]}")
-    return f"status={status}，变更 0 处，approval.denied + task.paused 在册"
+    if "task.paused" in types:
+        raise AssertionError(f"驳回不是暂停，却发了 task.paused：{sorted(types)[:8]}")
+    return f"status={status}，变更 0 处，approval.denied 在册且无 task.paused"
 
 
 def _assert_question_card(d: Drive, pid: str) -> str:

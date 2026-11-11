@@ -57,6 +57,15 @@ async def _update_plan(context: ToolContext, arguments: dict) -> ToolOutcome:
     steps = normalize_steps(arguments.get("steps"), previous=previous_steps)
     if not steps:
         return fail("error", "update_plan 至少需要一个步骤")
+    # 对齐 Claude TodoWrite：同一时刻只能有一个 in_progress。多个「正在做」等于
+    # 没有正在做——用户看不出现在推进的是哪一步，模型也容易同时拉开几条线。
+    running = [str(item.get("step") or "") for item in steps if item.get("status") == "in_progress"]
+    if len(running) > 1:
+        return fail(
+            "error",
+            f"同一时刻只能有一个 in_progress，收到 {len(running)} 个：{running}。"
+            "把其余仍在做的步骤改回 pending，完成一步就立即把它标成 completed。",
+        )
 
     milestones = resolve_milestone_status(link_milestones(steps, milestones), steps)
     progress = plan_progress(steps, milestones)
@@ -163,6 +172,8 @@ def plan_tools() -> list[ToolDefinition]:
                 "创建或更新当前任务的执行计划。计划是可更新对象："
                 "开始执行前先给出步骤；执行中把已完成的标为 completed、把正在做的标为 "
                 "in_progress；用户中途插话要求新内容时追加步骤。"
+                "同一时刻**只有一个步骤是 in_progress**；一步做完就立刻标 completed，"
+                "不要等都做完才回头补勾。"
                 "每次提交**完整步骤列表**（覆盖旧计划），不要只提交变化的部分。"
                 "步骤可以带 id 保持身份（不改 id 就能保住里程碑与验收条件的引用）。"
                 "工作分阶段时用 milestones 把步骤归组，用户才能看到"
