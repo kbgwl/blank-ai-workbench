@@ -117,6 +117,16 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "update_plan": ("计划", "步骤", "plan", "todo"),
     "set_goal": ("目标", "验收标准", "算做完", "goal", "done when", "objective"),
     "skill": ("skill", "技能", "工作流", "流程", "检查清单", "slash command"),
+    "report_findings": (
+        "代码审查",
+        "审查发现",
+        "审查结论",
+        "报告发现",
+        "问题清单",
+        "review",
+        "findings",
+        "report findings",
+    ),
     "enter_worktree": ("worktree", "工作树", "隔离目录", "新分支", "enter worktree"),
     "exit_worktree": ("worktree", "工作树", "退出工作树", "合并工作树", "exit worktree", "keep", "remove"),
     "enter_plan_mode": ("计划模式", "先调研", "只读", "plan mode", "enter plan"),
@@ -149,6 +159,8 @@ PARALLEL_SAFE_TOOLS = frozenset(
         "list_agents",
         "web_search",
         "web_fetch",
+        # 只带一份数据回执、不碰工作区与会话状态；审查时可以和安全读并行跑。
+        "report_findings",
     }
 )
 

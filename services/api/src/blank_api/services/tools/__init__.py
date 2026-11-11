@@ -14,6 +14,7 @@ from blank_api.services.tools.editing import editing_tools
 from blank_api.services.tools.memory_tools import memory_tools
 from blank_api.services.tools.patch import patch_tools
 from blank_api.services.tools.plan import plan_tools
+from blank_api.services.tools.review import review_tools
 from blank_api.services.tools.search import search_tools
 from blank_api.services.tools.shell import shell_tools
 from blank_api.services.tools.skills import SkillCatalog, skill_tools
@@ -38,6 +39,7 @@ def build_default_tools() -> list[ToolDefinition]:
         *test_tools(),
         *web_tools(),
         *skill_tools(),
+        *review_tools(),
         *worktree_tools(),
         *team_admin_tools(),
     ]

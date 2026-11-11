@@ -95,6 +95,8 @@ READ_ONLY_TOOLS = frozenset(
         "tool_search",
         # 加载 Skill 只是读内存里的说明，不碰工作区；计划模式最该知道项目的流程要求。
         "skill",
+        # 审查报告只产出结构化回执，不写工作区；只读调研阶段也能先记下发现。
+        "report_findings",
         # 模式开关本身不是写操作：计划模式下必须能"退出"，否则模型会卡死在里面。
         # 退出仍需人工批准，由 decide() 里的 mode:switch 特例负责。
         "enter_plan_mode",

@@ -1,6 +1,36 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具
+
+- **ReportFindings 工具：审查清单一次上报（Q 批第 4 项）**：
+  按 Claude 原文（工具描述、zod schema、输出映射）落成本地 `report_findings`。新增
+  `services/tools/review.py`；`tools/__init__.py`、`tools/registry.py`、`permissions.py` 接线。
+  1. **用法语义**：只在当前生效的代码审查说明点名时使用；一次调用提交整批、按严重程度从高到低、
+     最多 32 条；空数组表示没有发现通过核验；回执只说条数，并把「不要再用正文打印同一批发现、
+     不要为审查另建文件」写进描述。
+  2. **输入契约**：每条必填 `file`（仓库相对路径）/`summary`/`failure_scenario`
+     （具体输入或状态 → 错误输出或崩溃）；可选 `line`（从 1 起的整数，bool / 0 / 负数 / 字符串
+     一律拒）、`short_summary`（≤60，只写结论）、`category`（≤40，kebab-case）、`verdict`
+     （CONFIRMED / PLAUSIBLE，跑过复核才有）、`outcome`（fixed / skipped / no_change_needed，
+     只用于修复后重报）；未知字段剥掉、模型给的顺序原样保留；任一条不合法即整批拒绝并点名
+     「第 N 条」——收一半丢一半会让报告比实际核验过的少，界面还说不清缺了什么。
+  3. **输出与取证**：回执 `已上报 N 条审查发现。` / `没有需要上报的审查发现。`；结构化清单经
+     recorder 落 `review.findings`（count / level / findings），同时随工具回执进图与 ToolCall
+     产物（沿用打码、gzip、单份 8MB 上限）。非法批次不落事件。
+  4. **工具面**：只读、并行安全、计划模式放行、常驻注册（不进 deferred / lean 裁剪）；中文别名
+     「代码审查 / 审查发现 / 审查结论 / 报告发现 / 问题清单」可检索；子代理工具表刻意不含它
+     ——发现交回主代理，由主代理一次性上报。
+  测试：新增 `tests/test_report_findings_v34.py` 36 例（含真实 HTTP 任务：工具表里有
+  `report_findings`、事件恰一条、ToolCall 与产物清单一致、合成密钥被打码）；相关回归 218 例
+  全绿；变异电池 28/28 全红（每条跑完即还原）：上限判定失效、空数组文案改错、回执条数 +1、
+  file / 必填表少项、line 放过 0 与 bool、short_summary / category 上限失效、verdict / outcome /
+  level 不校验、未知字段保留、顺序倒置、事件名 / 条数 / 清单走样、level 不进回执、整批校验
+  改成跳过坏条目、风险等级提高、schema maxItems / 嵌套 required 缺失、描述允许重复打印、
+  默认工具表漏注册、计划模式不放行、并行安全漏登记、中文别名漏登记、子代理白名单误加。
+  全量回归（最终代码）：**2828 passed, 24 skipped, PYTEST_RC=0（818.07s）**。
+  偏离：工具名用 snake_case `report_findings`（Claude 为 `ReportFindings`）、回执文案为中文；
+  清单同时落事件与工具产物，而不只是一条文本回执；子代理不直接持有该工具；`level` 只做透传
+  与回执，不改变审查深度本身（审查说明仍由 Skill / 用户指令决定）。
 
 - **Skill 工具：清单进提示、正文按需加载（Q 批第 3 项）**：
   把 Claude 的 Skill 语义从「全部正文每轮注入」改成「先给清单、按名加载」。新增
