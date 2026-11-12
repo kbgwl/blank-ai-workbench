@@ -17,9 +17,12 @@ the point; the parent decides what lands.
 
 from __future__ import annotations
 
+from blank_api.services.agents_defs import BUILTIN_AGENT, BUILTIN_GENERAL_PURPOSE
 from blank_api.services.subagent import (
     DEFAULT_CONCURRENCY,
+    DEFAULT_STEPS,
     MAX_PARALLEL_AGENTS,
+    MAX_STEPS,
     SubAgentRequest,
     batch_usage,
     render_merge,
@@ -29,39 +32,78 @@ from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutco
 MAX_GOAL_CHARS = 2_000
 
 
+def _resolve_agent(context: ToolContext, raw) -> tuple:
+    """把 subagent_type 解析成定义；未知类型 fail-closed 并列出可用名字。
+
+    没有运行时会话时（单测 / 非 runtime 入口）只认内置 general-purpose：
+    宁可明确说"没有这个类型"，也不要凭一个不存在的目录去猜。
+    """
+    name = str(raw or "").strip() or BUILTIN_AGENT
+    catalog = getattr(context, "agents", None)
+    if catalog is not None:
+        definition = catalog.get(name)
+        if definition is not None:
+            return definition, ""
+        return None, f"未知子代理类型 '{name}'。可用类型：{', '.join(catalog.names())}"
+    if name == BUILTIN_AGENT:
+        return BUILTIN_GENERAL_PURPOSE, ""
+    return None, f"未知子代理类型 '{name}'。可用类型：{BUILTIN_AGENT}"
+
+
+def _apply_definition(request: SubAgentRequest, definition) -> SubAgentRequest:
+    """把定义挂到请求上；max_steps 由调用方决定是否让 maxTurns 参与。"""
+    request.agent_name = definition.name
+    request.instructions = definition.instructions
+    request.allowed_tools = definition.tools
+    request.disallowed_tools = definition.disallowed_tools
+    request.agent_ignored = definition.ignored
+    return request
+
+
+def _request_steps(raw, definition) -> int:
+    """没显式传步数时用定义的 maxTurns；两者都受子代理全局上限约束。"""
+    if raw is None or raw == "":
+        return max(1, min(MAX_STEPS, definition.max_turns or DEFAULT_STEPS))
+    return max(1, min(MAX_STEPS, int(raw)))
+
+
 def _spawn_agents_risk(arguments: dict) -> str:
     """只探索不定稿：写回主工作区是要人点头的那一步。"""
     return "high" if bool(arguments.get("merge")) else "medium"
 
 
-def _parse_tasks(raw) -> tuple[list[SubAgentRequest], str]:
+def _parse_tasks(raw, context: ToolContext) -> tuple[list[SubAgentRequest], str]:
     if not isinstance(raw, list) or not raw:
         return [], "spawn_agents 需要至少一个子任务"
     requests: list[SubAgentRequest] = []
     for item in raw[:MAX_PARALLEL_AGENTS]:
         if isinstance(item, str):
             goal = item.strip()
-            isolate, steps, label = True, 4, ""
+            isolate, steps, label, agent_type = True, 4, "", BUILTIN_AGENT
         elif isinstance(item, dict):
             goal = str(item.get("goal") or "").strip()
             isolate = bool(item.get("isolate", True))
-            try:
-                steps = int(item.get("max_steps") or 4)
-            except (TypeError, ValueError):
-                steps = 4
+            steps = item.get("max_steps")
             label = str(item.get("label") or "")
+            agent_type = item.get("subagent_type")
         else:
-            return [], "子任务必须是字符串或 {goal, isolate, max_steps} 对象"
+            return [], "子任务必须是字符串或 {goal, isolate, max_steps, subagent_type} 对象"
         if not goal:
             return [], "每个子任务都需要具体的 goal"
-        requests.append(
-            SubAgentRequest(
-                goal=goal[:MAX_GOAL_CHARS],
-                isolate=isolate,
-                max_steps=max(1, min(8, steps)),
-                label=label or "par",
-            )
+        definition, error = _resolve_agent(context, agent_type)
+        if error:
+            return [], error
+        try:
+            resolved_steps = _request_steps(steps, definition)
+        except (TypeError, ValueError):
+            resolved_steps = DEFAULT_STEPS
+        request = SubAgentRequest(
+            goal=goal[:MAX_GOAL_CHARS],
+            isolate=isolate,
+            max_steps=resolved_steps,
+            label=label or "par",
         )
+        requests.append(_apply_definition(request, definition))
     return requests, ""
 
 
@@ -69,17 +111,21 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
     runner = getattr(context, "subagent_runner", None)
     if runner is None:
         return fail("error", "当前运行时没有启用子代理")
+    definition, error = _resolve_agent(context, arguments.get("subagent_type"))
+    if error:
+        return fail("error", error)
     try:
         request = SubAgentRequest(
             goal=str(arguments.get("goal") or ""),
             isolate=bool(arguments.get("isolate")),
-            max_steps=int(arguments.get("max_steps") or 4),
+            max_steps=_request_steps(arguments.get("max_steps"), definition),
             label=str(arguments.get("label") or ""),
         )
     except (TypeError, ValueError):
         return fail("error", "子代理参数无效")
     if not request.goal.strip():
         return fail("error", "spawn_agent 需要具体的子任务目标")
+    _apply_definition(request, definition)
 
     # Claude Code 的 Agent 工具默认后台跑：不传就是后台，只有「下一步马上就要结论、
     # 期间没有别的事可做」时才显式传 false。旧参数名 background 继续接受。
@@ -102,6 +148,7 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
             agent_id=agent_id,
             status="running",
             goal=request.goal[:200],
+            agent_type=definition.name,
         )
 
     result = await runner(request)
@@ -115,6 +162,7 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
         depth=result.depth,
         agent_path=result.agent_path,
         agent_id=result.agent_id,
+        agent_type=definition.name,
         worktree=result.worktree,
         diff=result.diff[:20_000],
         error=result.error,
@@ -482,7 +530,7 @@ async def _spawn_agents(context: ToolContext, arguments: dict) -> ToolOutcome:
         return fail("error", "当前运行时没有启用子代理")
     if not hasattr(runner, "fan_out"):
         return fail("error", "当前运行时没有启用并行子代理")
-    requests, error = _parse_tasks(arguments.get("tasks"))
+    requests, error = _parse_tasks(arguments.get("tasks"), context)
     if error:
         return fail("error", error)
     try:
@@ -550,12 +598,21 @@ def delegate_tools() -> list[ToolDefinition]:
                 "子代理的结论要在你的最终答复里转述给用户；不要重复执行它已经做完的活，"
                 "也不要把它还没给出的结论说成已完成。"
                 "需要同时分头做几件事时改用 spawn_agents。"
+                "子代理类型由工作区 .blank/agents/*.md（以及用户级 agents 目录）定义；"
+                "不传 subagent_type 就是内置 general-purpose，未知类型会被拒绝并列出可用名字。"
             ),
             input_schema={
                 "type": "object",
                 "required": ["goal"],
                 "properties": {
                     "goal": {"type": "string", "description": "子任务的完整描述，子代理看不到当前对话"},
+                    "subagent_type": {
+                        "type": "string",
+                        "description": (
+                            "子代理类型，默认 general-purpose；"
+                            "工作区 .blank/agents 里定义的名称也可以直接用"
+                        ),
+                    },
                     "isolate": {
                         "type": "boolean",
                         "description": "是否在临时隔离副本中执行（允许写文件，但只影响副本）",
@@ -595,7 +652,12 @@ def delegate_tools() -> list[ToolDefinition]:
                 "properties": {
                     "tasks": {
                         "type": "array",
-                        "description": f"子任务列表，最多 {MAX_PARALLEL_AGENTS} 个；元素可以是字符串或 {{goal, isolate, max_steps}}",
+                        "description": (
+                            f"子任务列表，最多 {MAX_PARALLEL_AGENTS} 个；元素可以是字符串或 "
+                            "{goal, isolate, max_steps, subagent_type}。"
+                            "subagent_type 不传就是内置 general-purpose，"
+                            "也可以用工作区 .blank/agents 里定义的类型；未知类型整批拒绝"
+                        ),
                         "items": {"type": "string"},
                     },
                     "concurrency": {

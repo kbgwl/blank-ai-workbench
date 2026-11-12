@@ -272,6 +272,7 @@ uv run alembic revision --autogenerate -m "描述"
 | 交互问答 AskUserQuestion | ✅ | `request_user_input(questions[])` 对齐 Claude AskUserQuestion：1-4 题、每题至多 4 个选项（下界不卡，事实题可以没有选项）、header 截到 12 字、question 截到 500 字、选项 label/description 截到 120 字；`multiSelect` 与 `preview` 互斥（多选时 preview 一律丢掉），preview 只收片段（拒绝 `html/body/script/iframe` 等整页与脚本标签、注释、代码围栏，≤4000 字），单选「默认/推荐」每题只留一个（多选保留全部），显式 `default` 必须是已列出的 label（多选可逗号分隔）；回执 `{answers: {问题文本→答案}, response?, annotations?}`，多选答案列表按 ", " 合并，注解按问题文本或 header 归位，`notes` 以「备注：」进模型、`response` 以「补充：」进模型、preview 不回贴；问题卡前端多选可切换、自由文本可覆盖、选中项带 preview 时按纯文本 `<pre>` 渲染（不进 innerHTML），每题都有推荐项才给「按默认继续」。判据 `services/api/tests/test_ask_goal_skills_v43.py`（51 例，含真实 HTTP 多选/注解/自由文本往返），变异 14/14 红 |
 | 会话目标提案 ProposeGoal | ✅ | `propose_goal(condition, requiresConfirmation?)` 对齐 Claude ProposeGoal：condition ≤500 字（超出直接拒绝而不是截断），`requiresConfirmation` 缺省为真、只有显式 `false` 才直接设置（本机没有确认通道时如实回 `unanswered`，不假装用户点过头）；确认走普通问题卡（id 合成 `goal1`、header「会话目标」、选项「设为本次会话目标 / 不用」、刻意不设默认值——不答就是不设置）；接受后把目标写回会话（`threads.session_goal`，2000 字截断），下一轮起每轮从库重读并注入「以下是用户在本次会话中确认的目标」（明确不得覆盖安全/审批/工作区边界）；自由文本答案当作用户改写后的目标接受，拒绝或空答不落任何东西；`GET/DELETE /threads/{id}/session-goal` 可读可清，`goal.set` 事件留痕。判据同文件，变异 14/14 红 |
 | 技能提案 ProposeSkills | ✅ | `propose_skills(proposals[])` 对齐 Claude ProposeSkills：一次最多 3 条，每条 `kind` 为 `new` 或 `improvement`、`name`/`description`/`skillMd`（≤20000 字）必填、`evidence` ≤20 条；`new` 落成 `skills.status="proposed"` 的新行，`improvement` 必须 `target` 命中本任务已加载过正文的 Skill（没加载过就不让提改进），否则整批拒绝并点名第几条；frontmatter 的 `description` 等进 `metadata` 留审计；`POST /skills/{id}/accept` 采用：`new` → `draft`（不自动启用），`improvement` 把旧正文 append 进 `history`、`version+1`、换成提案正文并删掉提案行；非提案 409 `skill_not_proposed`、缺 target 409 `skill_proposal_invalid`、target 不存在 409 `skill_target_not_found`；技能页新增「待采用的提案」分区（采用 / 丢弃，丢弃二次确认）。判据同文件，变异 14/14 红 |
+| 文件型子代理定义（`.blank/agents`） | ✅ | `spawn_agent` / `spawn_agents` 的 `subagent_type` 对齐 Claude 的 `.claude/agents`：项目层 `<workspace>/.blank/agents/**/*.md` + 用户层 `~/.blank/agents`（`BLANK_USER_AGENTS_DIR` / `BLANK_USER_INSTRUCTIONS_DIR/agents` 可改），同名项目胜、同层深层文件覆盖浅层；frontmatter 的 `name` / `description` 必填（无 frontmatter 或无 name 静默跳过，声明了 name 但校验失败必须点名），name 不得以 `-` 开头、NFKC 后不得含 `:`；正文即子代理专用说明（≤20000 字，超出截断并标注），只能补充做法、不得放宽规则/审批/工作区边界；`tools` / `disallowedTools` 接受逗号串或列表，`tools:"*"` 表示不限，非法类型按「没有可用工具」fail-closed，禁止项里的 `*` 按全部禁用；`maxTurns` 必须是正整数（非法忽略并告警），没显式传 `max_steps` 时作为步数上限（受子代理全局 8 步约束）；工具池只与只读/隔离基线取交集，定义里写 `run_shell` 也不会让非隔离子代理拿到写工具；未知类型整批拒绝并列出可用名字，不传就是内置 `general-purpose`；运行时每任务在最终运行根上发现一次，只把自定义类型（名字 + 一句话说明）列进系统提示，发现结果与每个子代理实际拿到的工具表分别落 `agents.loaded` / `subagent.started` 事件，续聊保留原定义与工具边界；`model` / `permissionMode` / `hooks` / `mcpServers` / `skills` / `isolation` / `background` / `memory` / `effort` / `color` / `initialPrompt` 不生效但进 `agent_ignored` 审计。判据 `services/api/tests/test_agent_defs_v44.py`（32 例，含真实运行时发现/提示/按类型派发/续聊），变异 12/12 红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -365,7 +366,14 @@ uv run alembic revision --autogenerate -m "描述"
   不会与它抢位、但工具调用 id 不透传；`session_goal` 写入按 2000 字截断，提案正文本身
   的上限是 500 字；提案落库到 `skills` 表而不是写 skill 文件，采用 `new` 提案后状态是
   `draft`、要用户在技能页再启用才生效；会话目标按 thread 记，不跨团队成员共享，
-  Claude 的队友目标那一路没有移植）。
+  Claude 的队友目标那一路没有移植）。文件型子代理定义已于 S1 补齐（见上表；六处偏离：
+  目录用 `.blank/agents` 而不是 `.claude/agents`，用户层是 `~/.blank/agents` 而不是
+  `~/.claude/agents`；Claude 的 plugin / flagSettings / policySettings 三层没有移植，
+  只保留用户层与项目层；工具名沿用本地 snake_case，定义里写 `Read` / `Bash` 这类 Claude
+  别名不会命中本地工具（结果是拿不到工具，不是悄悄放宽）；`model` / `permissionMode` /
+  `hooks` / `mcpServers` / `skills` / `isolation` / `background` / `memory` / `effort` /
+  `color` / `initialPrompt` 只解析不生效、逐条进 `agent_ignored`；正文超过 20000 字截断
+  （Claude 原样使用），fork / remote 两种子代理形态与按 plugin 命名空间引用未移植）。
 
 - 验收条件的「是否覆盖」由模型自报，平台无法判断语义：极端情况下会出现「文件没改但条件判 ✓」。
   时间线里的工具卡片和 Diff 才是可核对的证据，验收结论只作为模型的自我声明展示。

@@ -47,6 +47,7 @@ from blank_api.services.agent import repl as repl_module
 from blank_api.services.agent import workflow as workflow_module
 from blank_api.services import shell_tasks, worktree_session
 from blank_api.services.agent.router import Candidate, Router
+from blank_api.services.agents_defs import discover_agents
 from blank_api.services.agent.scenarios import (
     excluded_tools,
     resolve as resolve_scenario,
@@ -535,6 +536,12 @@ class AgentRuntime:
         worktree_root = worktree_session.active_root(request.task_id)
         if worktree_root is not None:
             run_root = worktree_root
+        # 文件型子代理定义：在最终运行根上发现一次（用户级 agents 目录 + 项目
+        # .blank/agents）。单个坏文件只进 errors 清单，不拖垮整张工具表；
+        # 没有任何自定义类型时仍可用内置 general-purpose。
+        agents = discover_agents(run_root)
+        if agents.custom() or agents.errors:
+            await recorder.add("agents.loaded", "receive_task", agents.as_dict())
         # 逆向场景：读根仍是用户的工作区（样本在那儿），写根切到独立分析区。
         # 这一层不写在提示词里——提示词只是"别改原文"的建议，换写入根才是约束（v164 §5）。
         write_root = None
@@ -641,6 +648,7 @@ class AgentRuntime:
             tool_gateway=gateway,
             team_scope=dict(request.team_scope or {}),
             skills=skills if skills else None,
+            agents=agents,
             sandbox_tier=sandbox.tier,
             isolation_profile=isolation.profile_name if isolation is not None else "",
             file_state=file_state,
@@ -657,6 +665,7 @@ class AgentRuntime:
             goal=request.goal or request.title,
             skill_instructions=[str(item) for item in request.skill_instructions],
             skill_catalog=skills.listing(),
+            agent_catalog=agents.listing(),
             system_instructions=[str(item) for item in request.system_instructions],
             acceptance_criteria=[str(item) for item in request.acceptance_criteria or ()],
             goal_spec=dict(request.goal_spec or {}),
@@ -1006,6 +1015,7 @@ class AgentRuntime:
                 session.instruction_layers,
                 history=history,
                 skill_catalog=session.skill_catalog,
+                agent_catalog=session.agent_catalog,
                 goal_spec=session.goal_spec,
                 session_goal=session.session_goal,
                 images=request.images,

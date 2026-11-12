@@ -25,6 +25,7 @@ from typing import Any
 
 from blank_api.services.agent.context import ContextCompactor
 from blank_api.services.agent.usage import account_call, merge_usage
+from blank_api.services.agents_defs import BUILTIN_AGENT, MAX_INSTRUCTIONS_CHARS
 from blank_api.services.hooks import HookRunner
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.permissions import MODE_ACCEPT_EDITS, MODE_DEFAULT, PermissionPolicy
@@ -112,6 +113,16 @@ class SubAgentRequest:
     # 并行编排：保留副本直到主代理决定是否合并（默认跑完即删，与单发行为一致）
     keep_worktree: bool = False
     parallel_group: str = ""
+    # 自定义子代理类型（.blank/agents/*.md）。解析在工具层完成：这里只带
+    # "已经选中的定义"，运行器据此收窄工具表并追加正文。
+    agent_name: str = ""
+    instructions: str = ""
+    # None = 不限（对应定义里的 tools: "*"）；否则是允许的工具名白名单。
+    allowed_tools: tuple[str, ...] | None = None
+    disallowed_tools: tuple[str, ...] = ()
+    # 定义里写了、但我们不支持因此没有生效的字段（model/permissionMode/...）。
+    # 只用于审计：绝不能悄悄吞掉，否则用户以为那条权限模式起了作用。
+    agent_ignored: tuple[str, ...] = ()
 
     def normalized(self) -> "SubAgentRequest":
         return SubAgentRequest(
@@ -122,6 +133,13 @@ class SubAgentRequest:
             label=self.label,
             keep_worktree=bool(self.keep_worktree),
             parallel_group=self.parallel_group,
+            agent_name=str(self.agent_name or "").strip()[:200],
+            # 定义正文在发现阶段已经截断；这里再夹一次是因为请求也可能来自
+            # 续聊或其他调用方，不能指望它们都走过那条路径。
+            instructions=str(self.instructions or "").strip()[:MAX_INSTRUCTIONS_CHARS],
+            allowed_tools=None if self.allowed_tools is None else tuple(self.allowed_tools),
+            disallowed_tools=tuple(self.disallowed_tools or ()),
+            agent_ignored=tuple(self.agent_ignored or ()),
         )
 
 
@@ -355,6 +373,22 @@ def _child_tools(tools: list, *, skill_catalog: bool) -> list:
     return kept
 
 
+def _child_allowed_tools(request: SubAgentRequest) -> set[str]:
+    """定义只能收窄、不能扩大子代理的工具池。
+
+    基线是只读 / 隔离两套固定表；``allowed_tools`` 与之取交集，所以一个列了
+    ``run_shell`` 的自定义代理在非隔离派发里仍然是只读的。``disallowedTools``
+    再减去；``*`` 出现在禁止项里按"全部禁用"处理（比字面匹配一个叫 * 的工具更
+    符合用户写它的意图）。
+    """
+    allowed = set(ISOLATED_TOOLS if request.isolate else READ_ONLY_TOOLS)
+    if request.allowed_tools is not None:
+        allowed &= set(request.allowed_tools)
+    if "*" in request.disallowed_tools:
+        return set()
+    return allowed - set(request.disallowed_tools)
+
+
 async def run_subagent(
     *,
     adapter: ModelAdapter,
@@ -487,6 +521,14 @@ async def run_subagent(
     )
     compactor = ContextCompactor(**(watermark or {}))
     system_message = {"role": "system", "content": SUBAGENT_SYSTEM.format(steps=request.max_steps)}
+    if request.instructions:
+        # 定义正文是"这个类型怎么做"，不是另一套权限。放在基础规则之后，
+        # 并写死不得放宽上面的规则——定义文件不能变成绕过审批的侧门。
+        label = request.agent_name or "自定义"
+        system_message["content"] += (
+            f"\n以下是子代理类型「{label}」的专用说明（只补充做法，"
+            "不得放宽上面的规则、审批要求与工作区边界）：\n" + request.instructions
+        )
     if catalog is not None:
         lines = [
             f"- {item['name']}：{item['description']}" if item["description"] else f"- {item['name']}"
@@ -749,7 +791,7 @@ class SubAgentRunner:
         # 根线程从父会话一路往下传：孙代理的根仍然是最初那条线程，不是它的父亲。
         root_thread_id = str(getattr(session, "root_thread_id", "") or session.trace_id)
         tier = str(getattr(session, "sandbox_tier", "") or "")
-        allowed = ISOLATED_TOOLS if request.isolate else READ_ONLY_TOOLS
+        allowed = _child_allowed_tools(request)
         tools = [tool for tool in _all_tools() if tool.name in allowed]
         await session.recorder.add(
             "subagent.started",
@@ -758,6 +800,9 @@ class SubAgentRunner:
                 "goal": request.goal[:500],
                 "isolate": request.isolate,
                 "max_steps": request.max_steps,
+                "agent_type": request.agent_name or BUILTIN_AGENT,
+                "agent_ignored": list(request.agent_ignored),
+                "agent_tools": sorted(allowed),
                 "agent_path": prepared.agent_path,
                 "agent_id": prepared.agent_id,
                 "depth": prepared.depth,
@@ -820,6 +865,16 @@ class SubAgentRunner:
             "agent_path": prepared.agent_path,
             "isolate": bool(prepared.request.isolate),
             "messages": trimmed,
+            # 续聊是同一个子代理接着说话：它的类型与工具边界不能悄悄退回默认，
+            # 否则第一轮受限于只读，第二轮却拿到了写入工具。
+            "agent_name": prepared.request.agent_name,
+            "instructions": prepared.request.instructions,
+            "allowed_tools": None
+            if prepared.request.allowed_tools is None
+            else list(prepared.request.allowed_tools),
+            "disallowed_tools": list(prepared.request.disallowed_tools),
+            "agent_ignored": list(prepared.request.agent_ignored),
+            "max_steps": prepared.request.max_steps,
         }
         while len(bucket) > MAX_CONVERSATIONS:
             bucket.pop(next(iter(bucket)))
@@ -858,7 +913,16 @@ class SubAgentRunner:
         depth = int(getattr(session, "depth", 0)) + 1
         if depth > MAX_DEPTH:
             return SubAgentResult(ok=False, error="子代理不允许再嵌套子代理", depth=depth)
-        request = SubAgentRequest(goal=message).normalized()
+        allowed_tools = entry.get("allowed_tools")
+        request = SubAgentRequest(
+            goal=message,
+            max_steps=int(entry.get("max_steps") or DEFAULT_STEPS),
+            agent_name=str(entry.get("agent_name") or ""),
+            instructions=str(entry.get("instructions") or ""),
+            allowed_tools=None if allowed_tools is None else tuple(allowed_tools),
+            disallowed_tools=tuple(entry.get("disallowed_tools") or ()),
+            agent_ignored=tuple(entry.get("agent_ignored") or ()),
+        ).normalized()
         if not request.goal:
             return SubAgentResult(ok=False, error="续聊消息为空")
         prepared = _PreparedSpawn(
@@ -1252,8 +1316,7 @@ class SubAgentRunner:
         )
 
         semaphore = asyncio.Semaphore(limit)
-        allowed = ISOLATED_TOOLS
-        tools = [tool for tool in _all_tools() if tool.name in allowed]
+        all_tools = _all_tools()
         provider_id, provider_name = _session_provider(session)
         root_thread_id = str(getattr(session, "root_thread_id", "") or session.trace_id)
         tier = str(getattr(session, "sandbox_tier", "") or "")
@@ -1265,6 +1328,7 @@ class SubAgentRunner:
                 request = item.normalized()
                 request.keep_worktree = keep
                 request.parallel_group = group
+                allowed = _child_allowed_tools(request)
                 await session.recorder.add(
                     "subagent.started",
                     "subagent",
@@ -1272,6 +1336,9 @@ class SubAgentRunner:
                         "goal": request.goal[:500],
                         "isolate": request.isolate,
                         "max_steps": request.max_steps,
+                        "agent_type": request.agent_name or BUILTIN_AGENT,
+                        "agent_ignored": list(request.agent_ignored),
+                        "agent_tools": sorted(allowed),
                         "agent_path": agent_path,
                         "depth": depth,
                         "parent_thread_id": session.trace_id,
@@ -1283,7 +1350,7 @@ class SubAgentRunner:
                 )
                 return await run_subagent(
                     adapter=session.adapter,
-                    tools=tools,
+                    tools=[tool for tool in all_tools if tool.name in allowed],
                     root=Path(session.context.root),
                     task_id=session.context.task_id,
                     session_factory=session.session_factory,

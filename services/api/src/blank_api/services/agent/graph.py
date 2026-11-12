@@ -405,6 +405,9 @@ class AgentSession:
     # 清单（名字 + 一句话说明）进提示，正文由 skill 工具按需加载。
     skill_instructions: list[str] = field(default_factory=list)
     skill_catalog: list[dict] = field(default_factory=list)
+    # 文件型子代理类型清单（名字 + 一句话说明）。只有自定义类型时才会渲染进提示：
+    # 只列一个内置 general-purpose 是噪音，spawn_agent 的说明已经写了默认值。
+    agent_catalog: list[dict] = field(default_factory=list)
     # 群聊等场景的强约束（Bot 身份、发言协议、本轮记录）。与 Skill 的"偏好"不同，
     # 这一段是任务规则，但仍不得覆盖安全规则、审批规则与沙箱边界。
     system_instructions: list[str] = field(default_factory=list)
@@ -1529,6 +1532,7 @@ def initial_messages(
     instruction_layers: list | tuple = (),
     *,
     skill_catalog: Sequence[dict] | None = None,
+    agent_catalog: Sequence[dict] | None = None,
     history: list[dict] | tuple = (),
     images: Sequence[dict] | None = None,
     supports_vision: bool = False,
@@ -1572,6 +1576,24 @@ def initial_messages(
             "\n可用 Skill（当任务属于某个 Skill 覆盖的范围时，先调用 skill 工具加载它的正文，"
             "再按正文执行；只能用清单里的准确名字，不要猜）：\n"
             + "\n".join(catalog_lines)
+        )
+    # 文件型子代理类型（对齐 Claude 的 .claude/agents）：这里只放清单，专用说明由
+    # spawn_agent 在派发时挂进子代理的系统提示。只列自定义类型——只有内置
+    # general-purpose 时，工具说明已经写了默认值，再列一遍是噪音。
+    agent_lines = []
+    for entry in agent_catalog or ():
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name or str(entry.get("source") or "") == "built-in":
+            continue
+        description = str(entry.get("description") or "").strip()
+        agent_lines.append(f"- {name}：{description}" if description else f"- {name}")
+    if agent_lines:
+        system += (
+            "\n可用子代理类型（spawn_agent / spawn_agents 的 subagent_type 用这里的准确名字；"
+            "它们的专用说明会在派发时提供给子代理）：\n"
+            + "\n".join(agent_lines)
         )
     # 会话目标（ProposeGoal）跨轮保留，但它只是"这一串对话要达成什么"，
     # 不能让模型拿它去覆盖本轮用户明确说的话。放在场景与 Skill 之后、协作规则

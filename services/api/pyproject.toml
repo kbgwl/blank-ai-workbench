@@ -14,6 +14,7 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=3.1.2",
     "pydantic-settings>=2.12.0",
     "pypdf>=6.21.1",
+    "pyyaml>=6.0.3",
     "sqlalchemy[asyncio]>=2.0.46",
     "uvicorn[standard]>=0.54.0",
     # 钉钉 Stream 长连接直接 import 这个包。以前只是 uvicorn[standard] 的传递依赖，

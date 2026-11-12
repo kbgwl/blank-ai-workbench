@@ -1,6 +1,48 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）
+
+- **文件型子代理定义（`.blank/agents`）与 spawn_agent(subagent_type) 对齐 Claude（S 批）**：
+  按 Claude Code 2.1.271 的 `.claude/agents` 契约落成本地定义发现与派发。新增
+  `services/agents_defs.py`（frontmatter 解析、字段校验、两层发现与覆盖、审计投影），
+  改 `services/subagent.py`（`SubAgentRequest` 携带定义、工具池收窄、专用说明进系统提示、
+  续聊保留边界）、`services/tools/delegate.py`（`subagent_type` 解析与整批拒绝、maxTurns
+  折算步数）、`services/tools/base.py`（`ToolContext.agents`）、`services/agent/runtime.py`
+  （每任务发现一次、`agents.loaded` 事件、目录进提示与上下文）、`services/agent/graph.py`
+  （系统提示列自定义类型）；`pyproject.toml` / `uv.lock` 显式声明 `pyyaml`。
+  1. **两层发现**：项目层 `<运行根>/.blank/agents/**/*.md` + 用户层 `~/.blank/agents`
+     （`BLANK_USER_AGENTS_DIR`、`BLANK_USER_INSTRUCTIONS_DIR/agents` 可改）；同名项目层胜
+     用户层，同层深层文件覆盖浅层（按路径段数与字符串排序后者胜）；单个坏文件只进
+     `errors`，不拖垮同目录其余定义。
+  2. **校验口径**：无 frontmatter / 无 `name` 静默跳过；声明了 `name` 但校验失败必须点名
+     （name 去空白后为空、以 `-` 开头、NFKC 后含 `:`、非字符串；缺 `description`；
+     frontmatter 坏 YAML / 未闭合 / 非映射；文件超 1 MiB / 读失败）。`tools` /
+     `disallowedTools` 接受逗号串或列表，`tools:"*"` 表示不限，非法类型按「没有可用工具」
+     fail-closed，禁止项里的 `*` 按全部禁用；`maxTurns` 必须是正整数（`0` / `true` / 字符串
+     一律忽略并告警）；正文超过 20000 字截断并标注。
+  3. **定义不能扩权**：工具池先从只读/隔离基线（`READ_ONLY_TOOLS` / `ISOLATED_TOOLS`）起步，
+     `tools` 取交集、`disallowedTools` 再减；定义里写 `run_shell` 也不会让非隔离子代理拿到
+     写工具。定义正文追加进子代理系统提示，明确「只补充做法，不得放宽上面的规则、审批要求
+     与工作区边界」。
+  4. **派发与审计**：`spawn_agent` / `spawn_agents` 的 `subagent_type` 不传即内置
+     `general-purpose`；未知类型整批拒绝并列出可用名字；没显式传 `max_steps` 时把
+     `maxTurns` 作为步数上限（受子代理全局 8 步约束）。`subagent.started` 记录 `agent_type` /
+     `agent_ignored` / `agent_tools`，发现结果（含错误与路径掩码）落 `agents.loaded`；
+     续聊（`send_message`）保留定义正文与工具白名单，第二轮不会退回默认工具池。
+  5. **只解析不生效的字段**：`model` / `permissionMode` / `hooks` / `mcpServers` / `skills` /
+     `isolation` / `background` / `memory` / `effort` / `color` / `initialPrompt` 逐条进
+     `agent_ignored`，审计里不抄定义正文。
+  测试：新增 `tests/test_agent_defs_v44.py` 32 例（两层覆盖、校验矩阵、工具收窄六组合、
+     未知类型、maxTurns 步数、真实运行时发现/提示/按类型派发/续聊），变异电池 12/12 红
+     （逐条改坏实现，红在指定判据上；跑完按原字节还原并核对 sha256）。全量后端回归：
+     **3187 passed, 28 skipped**（0 failed，rc=0，719.98s）。
+  偏离：目录用 `.blank/agents` 而不是 `.claude/agents`，用户层是 `~/.blank/agents` 而不是
+  `~/.claude/agents`；Claude 的 plugin / flagSettings / policySettings 三层没有移植，只保留
+  用户层与项目层；工具名沿用本地 snake_case，定义里写 `Read` / `Bash` 这类 Claude 别名不会
+  命中本地工具（结果是拿不到工具，不是悄悄放宽）；`model` / `permissionMode` / `hooks` /
+  `mcpServers` / `skills` / `isolation` / `background` / `memory` / `effort` / `color` /
+  `initialPrompt` 只解析不生效；正文超过 20000 字截断（Claude 原样使用）；fork / remote 两种
+  子代理形态与按 plugin 命名空间引用未移植。
 
 - **交互问答与两类提案：AskUserQuestion / ProposeGoal / ProposeSkills 对齐 Claude（R 批第 6 项）**：
   按 Claude Code 2.1.271 的 AskUserQuestion、ProposeGoal、ProposeSkills 契约落成本地
