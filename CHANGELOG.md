@@ -1,6 +1,37 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）
+
+- **MCP 配置变量展开（`mcp.json`）对齐 Claude `.mcp.json`（S 批第 6 项）**：
+  按 Claude Code 2.1.271 的 `.mcp.json` 展开口径落成本地实现。改
+  `services/mcp/bridge.py`（重写 `_expand`、`parse_servers` 注入 env 与逐服务端告警、
+  `MCPStatus.warnings`）、`services/mcp/client.py`（`ServerConfig.warnings`）、
+  `web/src/components/settings/api.ts` 与 `mcp-panel.tsx`（状态页逐条 ⚠ 展示）。
+  1. **语法**：`${VAR}` 与 `${VAR:-default}`；变量名必须是
+     `[A-Za-z_][A-Za-z0-9_]*`；同一字符串里的多个占位符逐个替换、重复变量只告警一次；
+     未闭合的 `${...` 原样保留（不猜）。
+  2. **取值口径**：变量已设（含设成空串）→ 取环境值；`${VAR:-default}` 在变量未设
+     **或为空**时用默认值（bash `:-` 语义）；未设且没有默认值 → **保留原文**并告警。
+     这里刻意偏离 shell 的空串替换：替成空串会把「忘了配」变成「配了个空 token」，
+     症状要到服务端 401 才显形。默认值按字面使用、不再递归展开。
+  3. **作用域**：`command` / `args`（逐元素）/ `env`（值）/ `url` / `headers`（值）五处
+     ——与 Claude 一致；本机另把 `cwd` 与 `auth` 段一并展开。`settings.json` 本身不展开
+     （与 Claude 一致，见上一条的偏离修正）。
+  4. **告警不泄值**：告警只说变量名；非法变量名连占位符原文都不回显
+     （`${sk-live-...}` 这类疑似密钥不进日志），只有「变量名不合法，已原样保留」一句。
+  5. **可观察**：告警按服务端去重，随 `MCPStatus.warnings` 出现在 `GET /settings/mcp`；
+     连上的、连接失败的、被跳过的服务端都带；设置页的 MCP 面板逐条以 ⚠ 显示，
+     不用等到工具调用失败才发现变量没配。
+  测试：`tests/test_mcp_tools.py` 新增 11 例（五字段展开、默认值两态、未设保留原文 +
+  告警、空串两态、多占位符与告警去重、非法变量名不回显、默认值不递归、未闭合占位符、
+  被跳过服务端带告警、状态端点告警），变异电池 10/10 红（逐条注入：替空串、不记告警、
+  默认值抢先生效、空串不回退默认、空串当未设、回显 spec、告警丢失在两处接线、
+  二次展开、告警不去重；跑完按原字节还原）。
+  全量后端回归：**3332 passed, 28 skipped**（0 failed，rc=0，718.84s）。
+  偏离：配置文件是设置目录旁的一份 `mcp.json`，没有 Claude 的项目 `.mcp.json` 与
+  user/project/local 三作用域（整条服务端取最高来源、字段不跨层合并）那套；展开面多了
+  `cwd` 与 `auth` 段；`${VAR:-default}` 的「空串算未设」按 bash 语义实现——上游二进制里
+  找不到这段实现，按官方文档口径（未设告警并保留原文；作用于五处）解释。
 
 - **设置层级（用户 < 项目 < 本机 < 管理策略）对齐 Claude settings 级联（S 批第 5 项）**：
   按 Claude Code 2.1.271 的 settings 级联口径落成本地四层叠加。新增
@@ -36,7 +67,8 @@
   全量后端回归：**3321 passed, 28 skipped**（0 failed，rc=0，717.79s）。
   偏离：目录用 `.blank/settings.json` / `.blank/settings.local.json` 而不是
   `.claude/...`；安全段只认用户层与管理层（Claude 允许项目/本机层改
-  `permissions.defaultMode`）；没有 `${VAR}` 环境变量展开；管理层只认
+  `permissions.defaultMode`）；`settings.json` 不展开 `${VAR}`（与 Claude 一致；
+  `mcp.json` 的五字段展开已在 S 批第 6 项补齐）；管理层只认
   `BLANK_MANAGED_SETTINGS_FILE`，没有平台默认管理路径与 `policySettings` 那套；设置页
   仍只读写用户层，叠加结果走 `GET /projects/{id}/settings` 只读展示。
 

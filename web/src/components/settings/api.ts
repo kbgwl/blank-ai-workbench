@@ -426,6 +426,8 @@ export type McpServerStatus = {
   boundary?: string;
   /** 边界的诚实说明；没挂进 Job 时以 ⚠ 开头 */
   boundary_note?: string;
+  /** 配置展开告警（未设置的 ${VAR} 原样保留等），只说变量名 */
+  warnings?: string[];
   /** 挂进 Job 时后端给的结构化读数；老服务没有这一块 */
   enforcement?: {
     memory_enforced?: boolean;

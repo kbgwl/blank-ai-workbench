@@ -109,6 +109,8 @@ class ServerConfig:
     client_factory: Any = None
     # 远程 http 服务端的出站身份；None＝沿用 headers 里的静态 Authorization（如果有）
     oauth: OAuthConfig | None = None
+    # 配置展开时的告警（未设置的变量原样保留等）。只说变量名，不带值。
+    warnings: tuple[str, ...] = ()
 
 
 def _job_limits(config: ServerConfig) -> tuple[int, int]:

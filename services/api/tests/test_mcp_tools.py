@@ -419,6 +419,156 @@ def test_env_placeholders_are_expanded(monkeypatch):
         {"mcpServers": {"remote": {"url": "https://x/mcp", "headers": {"Authorization": "Bearer ${MCP_TOKEN}"}}}}
     )
     assert servers[0].headers["Authorization"] == "Bearer secret-1"
+    assert servers[0].warnings == ()
+
+
+def test_placeholders_expand_in_every_documented_field():
+    """官方口径是 command / args / env / url / headers 五处；cwd 一并处理。"""
+    servers, statuses = parse_servers(
+        {
+            "mcpServers": {
+                "local": {
+                    "command": "${BIN}",
+                    "args": ["--root", "${ROOT}"],
+                    "env": {"TOKEN": "${TOKEN}"},
+                    "cwd": "${ROOT}",
+                },
+                "remote": {
+                    "type": "http",
+                    "url": "https://${HOST}/mcp",
+                    "headers": {"Authorization": "Bearer ${TOKEN}"},
+                },
+            }
+        },
+        env={"BIN": "npx", "ROOT": "/work", "TOKEN": "t-1", "HOST": "example.com"},
+    )
+
+    assert statuses == []
+    local, remote = servers
+    assert local.command == "npx"
+    assert local.args == ("--root", "/work")
+    assert local.env == {"TOKEN": "t-1"}
+    assert local.cwd == "/work"
+    assert remote.url == "https://example.com/mcp"
+    assert remote.headers == {"Authorization": "Bearer t-1"}
+
+
+def test_default_value_is_used_only_when_the_variable_is_missing():
+    servers, _ = parse_servers(
+        {"mcpServers": {"remote": {"type": "http", "url": "${BASE:-https://localhost:3000}/mcp"}}},
+        env={},
+    )
+    assert servers[0].url == "https://localhost:3000/mcp"
+    assert servers[0].warnings == (), "有默认值就不算配置缺失，不该告警"
+
+    servers, _ = parse_servers(
+        {"mcpServers": {"remote": {"type": "http", "url": "${BASE:-https://localhost:3000}/mcp"}}},
+        env={"BASE": "https://prod"},
+    )
+    assert servers[0].url == "https://prod/mcp"
+
+
+def test_missing_variable_keeps_the_placeholder_verbatim_and_warns():
+    """和 shell 不同：替成空串会把「忘了配」变成「配了个空 token」，要到 401 才显形。"""
+    servers, _ = parse_servers(
+        {
+            "mcpServers": {
+                "remote": {
+                    "type": "http",
+                    "url": "https://x/mcp",
+                    "headers": {"Authorization": "Bearer ${MCP_TOKEN_MISSING}"},
+                }
+            }
+        },
+        env={},
+    )
+
+    assert servers[0].headers["Authorization"] == "Bearer ${MCP_TOKEN_MISSING}"
+    assert servers[0].warnings == ("环境变量 MCP_TOKEN_MISSING 未设置，占位符已原样保留",)
+
+
+def test_empty_but_set_variable_expands_to_empty():
+    """``${VAR}`` 只看「设没设」：设成空串就展开成空串，不告警。"""
+    servers, _ = parse_servers(
+        {"mcpServers": {"local": {"command": "npx", "env": {"EMPTY": "${SET_BUT_EMPTY}"}}}},
+        env={"SET_BUT_EMPTY": ""},
+    )
+
+    assert servers[0].env == {"EMPTY": ""}
+    assert servers[0].warnings == ()
+
+
+def test_empty_but_set_variable_still_takes_the_default():
+    """``:-`` 是 bash 语义：未设**或为空**才回退默认值。"""
+    servers, _ = parse_servers(
+        {"mcpServers": {"remote": {"type": "http", "url": "${BASE:-https://localhost}/mcp"}}},
+        env={"BASE": ""},
+    )
+
+    assert servers[0].url == "https://localhost/mcp"
+
+
+def test_multiple_placeholders_and_repeated_warnings_collapse():
+    servers, _ = parse_servers(
+        {
+            "mcpServers": {
+                "local": {
+                    "command": "npx",
+                    "args": ["${A}", "${B:-fallback}", "${A}"],
+                    "env": {"ONE": "${MISSING_ONE}", "TWO": "x${MISSING_ONE}"},
+                }
+            }
+        },
+        env={"A": "1"},
+    )
+
+    assert servers[0].args == ("1", "fallback", "1")
+    assert servers[0].env == {"ONE": "${MISSING_ONE}", "TWO": "x${MISSING_ONE}"}
+    assert servers[0].warnings == ("环境变量 MISSING_ONE 未设置，占位符已原样保留",)
+
+
+def test_invalid_variable_name_is_kept_and_never_echoed():
+    """名字非法时把 spec 拼进告警，``${sk-live-...}`` 就会把疑似密钥打进日志。"""
+    servers, _ = parse_servers(
+        {"mcpServers": {"local": {"command": "npx", "env": {"TOKEN": "${sk-live-XYZ}"}}}},
+        env={},
+    )
+
+    assert servers[0].env == {"TOKEN": "${sk-live-XYZ}"}
+    assert servers[0].warnings == ("占位符的变量名不合法，已原样保留",)
+    assert "sk-live-XYZ" not in "".join(servers[0].warnings)
+
+
+def test_default_is_taken_literally_not_expanded_recursively():
+    """默认值里再写占位符不会被二次展开；内层的值一次都不碰。"""
+    servers, _ = parse_servers(
+        {"mcpServers": {"remote": {"type": "http", "url": "${A:-${B}}"}}},
+        env={"B": "https://inner"},
+    )
+
+    assert servers[0].url == "${B}"
+    assert "inner" not in servers[0].url
+
+
+def test_unclosed_placeholder_is_left_alone():
+    servers, _ = parse_servers(
+        {"mcpServers": {"local": {"command": "npx", "args": ["${A"]}}},
+        env={"A": "1"},
+    )
+
+    assert servers[0].args == ("${A",)
+
+
+def test_skipped_server_still_reports_its_warnings():
+    servers, statuses = parse_servers(
+        {"mcpServers": {"legacy": {"type": "sse", "url": "https://${HOST_MISSING}/sse"}}},
+        env={},
+    )
+
+    assert servers == []
+    assert statuses[0].warnings == ["环境变量 HOST_MISSING 未设置，占位符已原样保留"]
+    assert "HOST_MISSING" in statuses[0].as_dict()["warnings"][0]
+
 
 
 # --------------------------------------------------------------------------- #
@@ -625,6 +775,26 @@ async def test_status_endpoint_explains_each_server(client, tmp_path: Path, monk
     states = {item["name"]: item["state"] for item in body["servers"]}
     assert states == {"good": "ready", "bad": "failed"}
     assert body["config"].endswith("mcp.json")
+
+
+async def test_status_endpoint_surfaces_expansion_warnings(client, tmp_path: Path, monkeypatch):
+    """配置里引用了没设的变量，连上之后状态里也要看得见，而不是只留在启动日志。"""
+    config = tmp_path / "mcp.json"
+    entry = _server_entry("normal")
+    entry["env"] = {"UNSET_FOR_TEST": "${BLANK_UNDEFINED_TOKEN_X}"}
+    _write_config(config, {"good": entry})
+    monkeypatch.setenv("BLANK_MCP_FILE", str(config))
+    monkeypatch.delenv("BLANK_UNDEFINED_TOKEN_X", raising=False)
+    reset_manager()
+    try:
+        body = (await client.get("/api/v1/settings/mcp")).json()
+    finally:
+        await manager().close()
+        reset_manager()
+
+    server = body["servers"][0]
+    assert server["state"] == "ready"
+    assert server["warnings"] == ["环境变量 BLANK_UNDEFINED_TOKEN_X 未设置，占位符已原样保留"]
 
 
 async def test_approved_external_tool_runs_through_the_gateway(env, workspace: Path):  # noqa: F811

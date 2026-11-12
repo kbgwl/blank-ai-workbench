@@ -71,6 +71,12 @@ function ServerRow({ server }: { server: McpServerStatus }) {
           {server.error}
         </p>
       )}
+      {server.warnings?.map((warning) => (
+        // 变量没配时占位符会原样留着：这里不说，用户只会在 401 时才发现
+        <p key={warning} className="mt-1 font-mono text-[11px] leading-relaxed break-words text-warn">
+          ⚠ {warning}
+        </p>
+      ))}
       {server.state === "ready" && server.boundary === "job_object" && (
         <p className="mt-1 font-mono text-[10px] leading-relaxed break-words text-faint">
           {jobLimits(server.enforcement)}

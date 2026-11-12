@@ -27,6 +27,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -105,6 +107,8 @@ class MCPStatus:
     boundary: str = ""
     boundary_note: str = ""
     enforcement: dict[str, Any] = field(default_factory=dict)
+    # 配置展开告警：变量没配就把占位符原样留着，得让用户在状态里看见
+    warnings: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         boundary = self.boundary or mcp_boundary(self.state, self.transport)
@@ -115,6 +119,8 @@ class MCPStatus:
             "tools": self.tools,
             "boundary": boundary,
         }
+        if self.warnings:
+            body["warnings"] = list(self.warnings)
         if self.error:
             body["error"] = self.error
         if self.server_info:
@@ -194,14 +200,57 @@ def config_path() -> Path:
     return SettingsStore().path.parent / "mcp.json"
 
 
-def _expand(value: str) -> str:
-    """``${VAR}`` 展开。token 写进配置文件能少一个明文，但别指望它能加密。"""
+_PLACEHOLDER = re.compile(r"\$\{([^}]*)\}")
+_VAR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _expand(
+    value: str,
+    env: Mapping[str, str] | None = None,
+    warnings: list[str] | None = None,
+) -> str:
+    """``${VAR}`` / ``${VAR:-default}`` 展开，口径对齐 Claude 的 ``.mcp.json``。
+
+    只作用于服务端条目里的字面配置（command/args/env/url/headers 等）；``settings.json``
+    本身不展开变量。三条规则：
+
+    * 变量已设（哪怕是空串）→ 取环境值；
+    * ``${VAR:-default}`` 在变量未设**或为空**时用 default（bash 的 ``:-`` 语义），
+      默认值不递归展开；
+    * ``${VAR}`` 变量未设 → **保留原文**并记一条告警。这和 shell 不同：替成空串会把
+      「忘了配」变成「配了个空密码」，症状要到服务端 401 才显形。告警只说变量名，
+      不带任何值——默认值里也可能藏着密钥。
+    """
     text = str(value or "")
     if "${" not in text:
         return text
-    for key in {part.split("}")[0] for part in text.split("${")[1:]}:
-        text = text.replace("${" + key + "}", os.environ.get(key, ""))
-    return text
+    source = os.environ if env is None else env
+    seen: set[str] = set()
+
+    def one(match: re.Match[str]) -> str:
+        spec = match.group(1)
+        name, sep, default = spec.partition(":-")
+        if not _VAR_NAME.match(name):
+            if name not in seen:
+                seen.add(name)
+                if warnings is not None:
+                    # 不回显 spec：默认值可能是密钥
+                    warnings.append("占位符的变量名不合法，已原样保留")
+            return match.group(0)
+        if name in source:
+            resolved = source[name]
+            if resolved or not sep:
+                return resolved
+            return default
+        if sep:
+            return default
+        if name not in seen:
+            seen.add(name)
+            if warnings is not None:
+                warnings.append(f"环境变量 {name} 未设置，占位符已原样保留")
+        return match.group(0)
+
+    return _PLACEHOLDER.sub(one, text)
 
 
 def _as_timeout(raw: Any) -> float:
@@ -226,7 +275,12 @@ def _as_memory(raw: Any) -> str:
     return text if text and windows_job.parse_size(text) > 0 else ""
 
 
-def _as_oauth(entry: dict, transport: str) -> tuple[OAuthConfig | None, str]:
+def _as_oauth(
+    entry: dict,
+    transport: str,
+    env: Mapping[str, str] | None = None,
+    warnings: list[str] | None = None,
+) -> tuple[OAuthConfig | None, str]:
     """``auth``/``oauth`` 段 → OAuthConfig；配置错误返回可读原因（服务端会被跳过）。
 
     client_credentials 需要机密客户端，所以 client_secret 必填；交互式授权
@@ -244,10 +298,10 @@ def _as_oauth(entry: dict, transport: str) -> tuple[OAuthConfig | None, str]:
         return None, ""
     if kind not in ("oauth", "client_credentials"):
         return None, f"auth.type 只支持 oauth/client_credentials（实际 {kind}；交互式授权没有人工点击的场所）"
-    client_id = _expand(str(raw.get("client_id") or "")).strip()
+    client_id = _expand(str(raw.get("client_id") or ""), env, warnings).strip()
     if not client_id:
         return None, "auth 缺少 client_id"
-    client_secret = _expand(str(raw.get("client_secret") or "")).strip()
+    client_secret = _expand(str(raw.get("client_secret") or ""), env, warnings).strip()
     if not client_secret:
         return None, "auth 的 client_credentials 缺少 client_secret"
     method = str(raw.get("auth_method") or raw.get("token_endpoint_auth_method") or "").strip().lower()
@@ -261,21 +315,25 @@ def _as_oauth(entry: dict, transport: str) -> tuple[OAuthConfig | None, str]:
         OAuthConfig(
             client_id=client_id,
             client_secret=client_secret,
-            token_url=_expand(str(raw.get("token_url") or raw.get("tokenEndpoint") or "")).strip(),
-            scope=_expand(str(raw.get("scope") or "")).strip(),
-            audience=_expand(str(raw.get("audience") or raw.get("resource") or "")).strip(),
-            resource_metadata_url=_expand(str(raw.get("resource_metadata_url") or "")).strip(),
+            token_url=_expand(str(raw.get("token_url") or raw.get("tokenEndpoint") or ""), env, warnings).strip(),
+            scope=_expand(str(raw.get("scope") or ""), env, warnings).strip(),
+            audience=_expand(str(raw.get("audience") or raw.get("resource") or ""), env, warnings).strip(),
+            resource_metadata_url=_expand(str(raw.get("resource_metadata_url") or ""), env, warnings).strip(),
             auth_method=method,
         ),
         "",
     )
 
 
-def parse_servers(payload: dict) -> tuple[list[ServerConfig], list[MCPStatus]]:
+def parse_servers(
+    payload: dict,
+    env: Mapping[str, str] | None = None,
+) -> tuple[list[ServerConfig], list[MCPStatus]]:
     """配置文件 → 服务端列表 + 一眼能看懂的跳过原因。
 
     接受两种写法：标准的 ``{"mcpServers": {...}}``，以及直接一份 ``{name: {...}}``。
-    配置写错时必须说清楚是哪一条错在哪，否则用户只能靠猜。
+    配置写错时必须说清楚是哪一条错在哪，否则用户只能靠猜。``env`` 只给测试注入
+    用；生产走 ``os.environ``。
     """
     if not isinstance(payload, dict):
         return [], [MCPStatus("config", "", STATE_FAILED, error="mcp.json 顶层必须是对象")]
@@ -297,59 +355,67 @@ def parse_servers(payload: dict) -> tuple[list[ServerConfig], list[MCPStatus]]:
         server_name = str(name or "").strip()
         if not server_name:
             continue
-        if not isinstance(entry, dict):
-            statuses.append(MCPStatus(server_name, "", STATE_SKIPPED, error="配置项必须是对象"))
-            continue
-        if entry.get("disabled") is True or entry.get("enabled") is False:
-            # 关掉不等于删掉：下次想用时把这一行改回来就行
-            statuses.append(MCPStatus(server_name, "", STATE_SKIPPED, error="已禁用"))
-            continue
-        declared = str(entry.get("type") or entry.get("transport") or "").strip().lower()
-        url = _expand(str(entry.get("url") or entry.get("endpoint") or ""))
-        command = _expand(str(entry.get("command") or ""))
-        transport = declared or ("http" if url else "stdio" if command else "")
-        if transport not in ("stdio", "http"):
+        # 这一条展开时攒下的告警：跳过与连上两种结局都要带出去
+        warn: list[str] = []
+
+        def skipped(error: str, transport: str = "") -> None:
             statuses.append(
                 MCPStatus(
                     server_name,
-                    transport or "?",
+                    transport,
                     STATE_SKIPPED,
-                    error=f"不支持的传输方式：{transport or '未声明'}（只支持 stdio 与 http）",
+                    error=error,
+                    warnings=list(dict.fromkeys(warn)),
                 )
             )
+
+        if not isinstance(entry, dict):
+            skipped("配置项必须是对象")
+            continue
+        if entry.get("disabled") is True or entry.get("enabled") is False:
+            # 关掉不等于删掉：下次想用时把这一行改回来就行
+            skipped("已禁用")
+            continue
+        declared = str(entry.get("type") or entry.get("transport") or "").strip().lower()
+        url = _expand(str(entry.get("url") or entry.get("endpoint") or ""), env, warn)
+        command = _expand(str(entry.get("command") or ""), env, warn)
+        transport = declared or ("http" if url else "stdio" if command else "")
+        if transport not in ("stdio", "http"):
+            skipped(f"不支持的传输方式：{transport or '未声明'}（只支持 stdio 与 http）", transport or "?")
             continue
         if transport == "stdio" and not command:
-            statuses.append(MCPStatus(server_name, transport, STATE_SKIPPED, error="缺少 command"))
+            skipped("缺少 command", transport)
             continue
         if transport == "http" and not url:
-            statuses.append(MCPStatus(server_name, transport, STATE_SKIPPED, error="缺少 url"))
+            skipped("缺少 url", transport)
             continue
 
         args = entry.get("args")
-        env = entry.get("env")
+        env_raw = entry.get("env")
         headers = entry.get("headers")
         risk = str(entry.get("risk") or entry.get("riskLevel") or "high").strip().lower()
         if risk not in ("low", "medium", "high", "critical"):
             risk = "high"
-        oauth, auth_error = _as_oauth(entry, transport)
+        oauth, auth_error = _as_oauth(entry, transport, env, warn)
         if auth_error:
-            statuses.append(MCPStatus(server_name, transport, STATE_SKIPPED, error=auth_error))
+            skipped(auth_error, transport)
             continue
         servers.append(
             ServerConfig(
                 name=server_name,
                 transport=transport,
                 command=command,
-                args=tuple(_expand(str(item)) for item in args) if isinstance(args, list) else (),
-                env={str(k): _expand(str(v)) for k, v in env.items()} if isinstance(env, dict) else {},
-                cwd=_expand(str(entry.get("cwd") or "")),
+                args=tuple(_expand(str(item), env, warn) for item in args) if isinstance(args, list) else (),
+                env={str(k): _expand(str(v), env, warn) for k, v in env_raw.items()} if isinstance(env_raw, dict) else {},
+                cwd=_expand(str(entry.get("cwd") or ""), env, warn),
                 url=url,
-                headers={str(k): _expand(str(v)) for k, v in headers.items()} if isinstance(headers, dict) else {},
+                headers={str(k): _expand(str(v), env, warn) for k, v in headers.items()} if isinstance(headers, dict) else {},
                 timeout=_as_timeout(entry.get("timeout")),
                 risk=risk,
                 memory=_as_memory(entry.get("memory") or entry.get("memory_limit")),
                 pids=_as_pids(entry.get("pids") or entry.get("pids_limit")),
                 oauth=oauth,
+                warnings=tuple(dict.fromkeys(warn)),
             )
         )
     return servers, statuses
@@ -462,7 +528,9 @@ class MCPManager:
             return MCPBundle(statuses=statuses)
 
         async def one(server: ServerConfig) -> tuple[ServerConfig, Any, list[dict], MCPStatus]:
-            status = MCPStatus(server.name, server.transport, STATE_FAILED)
+            status = MCPStatus(
+                server.name, server.transport, STATE_FAILED, warnings=list(server.warnings)
+            )
             client = None
             try:
                 client = build_client(server)
