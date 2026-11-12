@@ -19,6 +19,11 @@ class CompactionSettings(BaseModel):
 
 class PermissionSettings(BaseModel):
     default_mode: str = "default"
+    # Claude Code settings.json 的三组规则。原样回显（含写不出来的条目），
+    # 让设置页看到的与文件里的是同一份；能否生效由运行时事件说明。
+    allow: list[str] = Field(default_factory=list)
+    deny: list[str] = Field(default_factory=list)
+    ask: list[str] = Field(default_factory=list)
 
 
 class ToolSettings(BaseModel):
@@ -82,6 +87,10 @@ class PermissionPatch(BaseModel):
     # 用户在界面选了「全放行」，服务端悄悄写回 default，面板还提示「已更新」，
     # 于是每一条命令继续弹审批（v165 P0 真机实测）。
     default_mode: Literal["default", "accept_edits", "plan", "bypass"] | None = None
+    # 三组规则整段替换（与设置文件的数组语义一致）：传 [] 就是清空。
+    allow: list[str] | None = None
+    deny: list[str] | None = None
+    ask: list[str] | None = None
 
 
 class ToolPatch(BaseModel):

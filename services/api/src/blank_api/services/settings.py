@@ -30,12 +30,35 @@ from blank_api.services.agent.automation import (
     AUTOMATION_MODES as BACKGROUND_AUTOMATION_MODES,
     MODE_LABELS as BACKGROUND_AUTOMATION_MODE_LABELS,
 )
-from blank_api.services.permissions import MODE_DEFAULT, MODES as PERMISSION_MODES
+from blank_api.services.permission_rules import (
+    MAX_RULE_LEN as PERMISSION_RULE_MAX_LEN,
+    MAX_RULES as PERMISSION_RULE_MAX_COUNT,
+)
+from blank_api.services.permissions import (
+    MODE_ACCEPT_EDITS,
+    MODE_BYPASS,
+    MODE_DEFAULT,
+    MODE_PLAN,
+    MODES as PERMISSION_MODES,
+)
 
 if TYPE_CHECKING:
     from blank_api.services.settings_layers import LayeredSettings
 
 GUARDIAN_MODES = ("off", "veto", "auto")
+
+# Claude settings.json 的 ``defaultMode`` 写的是 default / acceptEdits / plan /
+# bypassPermissions；本地档位是 default / accept_edits / plan / bypass。直接
+# ``lower()`` 会把后者折成 ``acceptedits`` / ``bypasspermissions``，两个都认不出，
+# 静默回落 default——用户在设置文件里写了「全放行」，运行时却仍在逐条问。
+_PERMISSION_MODE_ALIASES: dict[str, str] = {
+    "default": MODE_DEFAULT,
+    "accept_edits": MODE_ACCEPT_EDITS,
+    "acceptedits": MODE_ACCEPT_EDITS,
+    "plan": MODE_PLAN,
+    "bypass": MODE_BYPASS,
+    "bypasspermissions": MODE_BYPASS,
+}
 
 # 老位置：cwd 下的 data/settings.json（桌面版即包内），只作为搬迁来源
 _LEGACY_SETTINGS = Path("data/settings.json")
@@ -56,6 +79,12 @@ DEFAULTS: dict[str, Any] = {
     "permissions": {
         # 新任务的默认权限模式
         "default_mode": MODE_DEFAULT,
+        # Claude Code settings.json 的同名三组规则（``allow`` / ``deny`` / ``ask``）。
+        # 这里是结构化存储面；运行时由 permission_rules.parse_settings_rules 翻成
+        # 规则集，和 ``permissions.rules`` 文本文件叠加（文件里的先命中）。
+        "allow": [],
+        "deny": [],
+        "ask": [],
     },
     "sandbox": {
         # 新任务的默认档位。产品默认 workspace；部署级开关（BLANK_SANDBOX_ENABLED）
@@ -234,6 +263,29 @@ def _enabled_map(raw: Any) -> dict[str, bool]:
     return cleaned
 
 
+def _permission_rule_list(raw: Any) -> list[str]:
+    """``permissions.allow/deny/ask``：只保留下能读的字符串。
+
+    这里**不做语法校验**：规则写坏不是"设置页保存失败"，而是运行时要带出
+    ``permission_rules.settings`` 事件的事实。归一化阶段悄悄丢掉一条写坏的
+    deny，比保留它更危险——用户会以为存档成功了。条数/长度上限仍在这里夹，
+    防的是一份 settings.json 把规则表撑爆。
+    """
+    if not isinstance(raw, list):
+        return []
+    cleaned: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if not text or len(text) > PERMISSION_RULE_MAX_LEN:
+            continue
+        if len(cleaned) >= PERMISSION_RULE_MAX_COUNT:
+            break
+        cleaned.append(text)
+    return cleaned
+
+
 def normalize(raw: Any) -> dict[str, Any]:
     """Merge a partial payload over the defaults and clamp every number."""
     data = raw if isinstance(raw, dict) else {}
@@ -253,9 +305,17 @@ def normalize(raw: Any) -> dict[str, Any]:
     mode = str(guardian.get("mode") or "").strip().lower()
     if mode not in GUARDIAN_MODES:
         mode = DEFAULTS["guardian"]["mode"]
-    default_mode = str(permissions.get("default_mode") or "").strip().lower()
+    # Claude 用驼峰 defaultMode；两种写法都收，下划线写法优先。
+    mode_text = str(
+        permissions.get("default_mode") or permissions.get("defaultMode") or ""
+    ).strip().lower()
+    default_mode = _PERMISSION_MODE_ALIASES.get(mode_text)
     if default_mode not in PERMISSION_MODES:
         default_mode = MODE_DEFAULT
+    permission_rules_opt = {
+        action: _permission_rule_list(permissions.get(action))
+        for action in ("allow", "deny", "ask")
+    }
     notify_policy = str(background.get("notify_policy") or "").strip().lower()
     if notify_policy not in BACKGROUND_NOTIFY_POLICIES:
         notify_policy = DEFAULTS["background"]["notify_policy"]
@@ -303,7 +363,7 @@ def normalize(raw: Any) -> dict[str, Any]:
                 )
             ),
         },
-        "permissions": {"default_mode": default_mode},
+        "permissions": {"default_mode": default_mode, **permission_rules_opt},
         "sandbox": {
             # 认不出的档位退回默认，不退回 off：手改文件写坏了一个词，
             # 不该等于把每个新任务的隔离都关掉。

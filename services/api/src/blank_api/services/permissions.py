@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import fnmatch
 import os
 import posixpath
 import re
@@ -505,6 +506,57 @@ def covered_by_rules(command: str, rules, *, refuse_inadmissible: bool = True) -
 
 
 # --------------------------------------------------------------------------- #
+# settings.json 的 Bash 规则：整条子命令做 glob（``zMe``/``aV`` 的口径）
+# --------------------------------------------------------------------------- #
+def _joined_tokens(tokens: list[str]) -> str:
+    return re.sub(r"[ \t]+", " ", " ".join(tokens)).strip().lower()
+
+
+def _glob_hits(tokens: list[str], pattern: str) -> bool:
+    text = re.sub(r"[ \t]+", " ", str(pattern or "").strip()).lower()
+    return bool(text) and bool(tokens) and fnmatch.fnmatchcase(_joined_tokens(tokens), text)
+
+
+def glob_covered_by_rules(command: str, patterns) -> str | None:
+    """``Bash(cmd)`` 形状的放行：每一段子命令都要被某条 glob 规则整串命中。"""
+    usable = [str(item) for item in patterns if str(item or "").strip()]
+    if not usable:
+        return None
+    for candidates in (
+        [tokenize(item) for item in split_segments(command)],
+        [tokenize(item) for item in _leaf_segments(command)],
+    ):
+        if not candidates or any(not segment for segment in candidates):
+            continue
+        hits: list[str] = []
+        for segment in candidates:
+            matched = next((rule for rule in usable if _glob_hits(segment, rule)), None)
+            if matched is None:
+                hits = []
+                break
+            hits.append(matched)
+        if hits:
+            return ", ".join(dict.fromkeys(hits))
+    return None
+
+
+def glob_covered_by_any(command: str, patterns) -> str | None:
+    """``Bash(cmd)`` 形状的拒绝/询问：任一段（含壳载荷内层）整串命中就成立。"""
+    usable = [str(item) for item in patterns if str(item or "").strip()]
+    if not usable:
+        return None
+    for view in _deny_views(command):
+        for segment in expand_command(view):
+            tokens = tokenize(segment)
+            if not tokens:
+                continue
+            matched = next((rule for rule in usable if _glob_hits(tokens, rule)), None)
+            if matched is not None:
+                return matched
+    return None
+
+
+# --------------------------------------------------------------------------- #
 # 判定结果
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
@@ -515,6 +567,9 @@ class Decision:
     rule: str = ""
     prefix: str = ""
     memo: str = ""
+    # 卡上「本会话总是允许 X」能不能出现、按下去能不能兑现。ask 规则与单次越界
+    # 这类"下一次照样问"的判定要关掉它：按钮按了不留账，比没有按钮更糟。
+    tool_scope_allowed: bool = True
 
     @property
     def allowed(self) -> bool:
@@ -536,6 +591,8 @@ class Decision:
             body["memo"] = self.memo
         if self.reason:
             body["reason"] = self.reason
+        if not self.tool_scope_allowed:
+            body["tool_scope_allowed"] = False
         return body
 
 
@@ -543,8 +600,10 @@ def approve(risk: str, rule: str, prefix: str = "", memo: str = "") -> Decision:
     return Decision(ALLOW, risk=risk, rule=rule, prefix=prefix, memo=memo)
 
 
-def ask(risk: str, rule: str, prefix: str = "", memo: str = "") -> Decision:
-    return Decision(ASK, risk=risk, rule=rule, prefix=prefix, memo=memo)
+def ask(
+    risk: str, rule: str, prefix: str = "", memo: str = "", *, tool_scope_allowed: bool = True
+) -> Decision:
+    return Decision(ASK, risk=risk, rule=rule, prefix=prefix, memo=memo, tool_scope_allowed=tool_scope_allowed)
 
 
 def deny(risk: str, rule: str, reason: str, prefix: str = "", memo: str = "") -> Decision:
@@ -990,6 +1049,20 @@ class PermissionPolicy:
                 "mode:plan",
                 f"计划模式只允许只读取证，已拒绝执行 {name}。切换到默认模式后可以执行。",
                 command_prefix(command),
+            )
+
+        # ask 规则：与 Claude 同口径，压过全放行、approve_high_risk、会话批准与
+        # allow 规则——用户写 `ask Bash(git push:*)` 的意思就是"每一次都让我看一眼"。
+        # 排在 deny 与计划模式闸门之后：永远别碰的东西仍然直接拒绝，计划模式下
+        # 写操作仍然直接拒绝（不是变成一张审批卡）。
+        # 卡片上不给「本会话总是允许」：ask 规则下一次照样命中，按了也不兑现。
+        asked_rule = self.ruleset.match("ask", name, arguments or {})
+        if asked_rule is not None:
+            return ask(
+                risk,
+                f"rule:ask:{asked_rule.selector()}",
+                command_prefix(command),
+                tool_scope_allowed=False,
             )
 
         # 单次越界宿主执行：部署开关已开时也必须逐条人工批准。

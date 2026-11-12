@@ -58,7 +58,12 @@ class _Gateway:
 
     def decide(self, tool, arguments, context):
         return SimpleNamespace(
-            outcome=ASK, risk="high", rule="policy:ask", memo="", prefix=""
+            outcome=ASK,
+            risk="high",
+            rule="policy:ask",
+            memo="",
+            prefix="",
+            tool_scope_allowed=True,
         )
 
     async def execute(self, tool: str, args: dict, context, node: str) -> dict:

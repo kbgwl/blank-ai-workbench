@@ -59,7 +59,11 @@ from blank_api.services.agent.scenarios import (
 from blank_api.services.agent.store import SerializedSessionFactory
 from blank_api.services.approval_rules import load_prefix_rules
 from blank_api.services.approvals import approval_key
-from blank_api.services.permission_rules import load_ruleset
+from blank_api.services.permission_rules import (
+    load_ruleset,
+    merge_rulesets,
+    parse_settings_rules,
+)
 from blank_api.services.chat_index import index_task_summary
 from blank_api.services.features import is_enabled
 from blank_api.services.fork import allocate_thread
@@ -633,6 +637,20 @@ class AgentRuntime:
         # 人手写的 allow/deny 规则。文件写坏时整份停用并把错误记进事件：
         # 静默失效会让用户以为"我明明写了 deny"。
         ruleset = load_ruleset()
+        # settings.json 的 permissions.allow/deny/ask（Claude 形状）。它是第二来源：
+        # 文件里的规则排在前面（先命中先算），两边的错误与 note 一起带进事件。
+        # 写不出来的 deny/ask 会让整份 settings 规则停用；allow 只记 note 跳过。
+        settings_rules = parse_settings_rules(settings.get("permissions") or {}, source="settings.json")
+        if settings_rules.rules or settings_rules.error or settings_rules.notes:
+            await recorder.add(
+                "permission_rules.settings",
+                "receive_task",
+                {
+                    "source": layered.sources.get("permissions", "user"),
+                    **settings_rules.summary(),
+                },
+            )
+            ruleset = merge_rulesets(ruleset, settings_rules)
         permissions.ruleset = ruleset
         if ruleset.rules or ruleset.error:
             await recorder.add("permission_rules.loaded", "receive_task", ruleset.summary())

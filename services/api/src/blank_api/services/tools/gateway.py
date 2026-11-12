@@ -622,7 +622,10 @@ class ToolGateway:
                 "command_prefix": raw_prefix,
                 "suggested_prefix": memo,
                 "approval_options": approval_options(
-                    tool.name, memo, tool_scope=not tool_grant_too_wide(tool.name, arguments)
+                    tool.name,
+                    memo,
+                    tool_scope=(decision is None or decision.tool_scope_allowed)
+                    and not tool_grant_too_wide(tool.name, arguments),
                 ),
             },
         )

@@ -1,6 +1,51 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）
+
+- **settings.json 的 `permissions.allow/deny/ask` 接进审批链（Z 批）**：Claude Code 的
+  三组规则不再只是"看得到、不生效"。上游锚点：前缀规则 `zMe = /^(.+):\*$/`、glob
+  转换 `aV`（大小写不敏感、空白折叠、`*` 跨空格）、matcher 分流 `NNt`
+  （exact / prefix / wildcard）、`Bash` 命令拆段后前缀判定 `S===f || S.startsWith(f+" ")`、
+  ask 规则压过 bypass。改 `services/permission_rules.py`（`parse_settings_rules` /
+  `merge_rulesets` / `PermissionRule.mode`）、`services/permissions.py`（ask 分支、
+  glob 匹配、`Decision.tool_scope_allowed`）、`services/settings.py`（`defaultMode`
+  别名与三组列表归一）、`schemas/settings.py`、`services/agent/runtime.py`（加载与
+  事件）、`services/agent/graph.py` 与 `services/tools/gateway.py`（发卡接线）。
+  1. **两种口径**：`Bash(cmd:*)` 是前缀（token 边界，与上游 `startsWith(f+" ")` 等价），
+     `Bash(cmd)` 是整条子命令的 glob，`Bash(*)` 是整工具；规则带 `mode` 并进指纹，
+     换一种读法就是另一版规则。
+  2. **命令规则逐段判定**：allow 要求每一段子命令（含 `cmd /c "…"` 的内层载荷）都被
+     覆盖；deny/ask 任一段命中就成立，`echo hi && rm -rf src` 不会搭便车。
+  3. **失败方向**：写不出来的条目 allow 记 note 跳过（少放行＝安全）；deny/ask 写不出来
+     （MCP 工具、`domain:` 规则、工作区外路径、带 `*` 的 `:*` 前缀、结构错误）则整份
+     settings 规则停用并进 `error`——一份看起来防住了却没生效的 deny 比没有更糟。
+     文本规则文件仍是坏一行即整份停用。
+  4. **优先级**：deny > 计划模式闸门 > ask > host_bypass / irreversible > bypass /
+     `approve_high_risk` > 会话驳回 / 会话批准 > 前缀账 > allow > 工具档 > 接受编辑。
+     ask 命中时卡片不给「本会话总是允许」（下一次照样命中，按了不兑现）；三个发卡点
+     按 `tool_scope_allowed` 收掉该档。
+  5. **`defaultMode` 认 Claude 名字**：`default` / `acceptEdits` / `plan` /
+     `bypassPermissions`（下划线写法优先）。原实现直接 `lower()` 得到
+     `acceptedits` / `bypasspermissions`，静默回落 `default`——设置里写了「全放行」，
+     运行时仍在逐条问；本批一并修掉。
+  6. **来源可见**：settings 规则落 `permission_rules.settings`（含 `source` 层、
+     `notes`、错误）；与文本文件合并后的生效集再落 `permission_rules.loaded`，
+     文件里的规则先命中。
+  7. 未移植/偏离：项目层与本机层的 `permissions` 仍受安全段保护被忽略（克隆仓库不能
+     替用户放宽审批）；`mcp__server__tool` 与 `WebFetch(domain:)` 规则不接入（allow 记
+     note、deny/ask 整份停用）；子代理策略与 #112 一致不带 ruleset。
+  测试：新增 `tests/test_settings_permissions_v50.py` 34 例（工具名表与真实注册表逐名
+  对齐、前缀 vs 整串、逐段 allow/任一段 deny、路径闸门、写不出条目的两个方向、归并与
+  sha、`defaultMode` 别名、SettingsStore 往返、判定优先级；真实运行时三条端到端：
+  deny 命令没跑、allow 免卡、ask 仍挂卡且卡片只有「仅本次」）。变异 10/10 红（ask
+  分支置死、计划闸门改 ask、deny 写不出降级成 note、裸 Bash 当前缀、路径闸门关、
+  glob allow 改任一段、`defaultMode` 别名丢、ask 保留工具档、运行时不合并 settings
+  规则、graph 发卡恒给工具档）。另测 gateway 发卡点：本文件的三条端到端不经过该分支，
+  变异存活（不是 no-op——`tool_grant_too_wide` 之外的路径仍需要它），与 graph 同形，
+  列为未验证项。相邻 11 个套件 **214 passed**。全量后端回归：**3474 passed /
+  28 skipped，729.12s，rc=0**（本轮同时修掉 `test_validation_approval_identity_v101.py`
+  的审批桩：`Decision` 新增 `tool_scope_allowed` 后桩未同步，7 条走 `graph.py` 发卡点的
+  用例报 `AttributeError`）。
 
 - **子代理定义的 `permissionMode` / `isolation` / `background` 对齐上游（Y 批）**：
   文件型与插件 agent 的这三个字段不再当未支持字段。上游锚点：合法档位 `fw` 与

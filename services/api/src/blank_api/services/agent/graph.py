@@ -3006,7 +3006,10 @@ async def _approval_gate(
                 "command_prefix": decision.prefix,
                 "suggested_prefix": decision.memo,
                 "approval_options": approval_options(
-                    name, decision.memo, tool_scope=not tool_grant_too_wide(name, arguments)
+                    name,
+                    decision.memo,
+                    tool_scope=decision.tool_scope_allowed
+                    and not tool_grant_too_wide(name, arguments),
                 ),
                 # 钩子要求人工确认时把原因一并带上：卡片上只说「需要确认」，
                 # 用户没法判断是该批准还是该去改钩子。
@@ -4282,7 +4285,10 @@ async def _ask_run_tests_approval(
             "permission_mode": session.permission_mode,
             "permission_rule": decision.rule,
             "approval_options": approval_options(
-                name, decision.memo, tool_scope=not tool_grant_too_wide(name, arguments)
+                name,
+                decision.memo,
+                tool_scope=decision.tool_scope_allowed
+                and not tool_grant_too_wide(name, arguments),
             ),
             "expires_at": expires_at,
             "source": "validation",
