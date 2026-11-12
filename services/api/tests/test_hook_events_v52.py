@@ -117,6 +117,10 @@ class _Recorder:
 class _Hooks:
     """最小钩子替身：按事件返回预设结果，并记下每次调用的载荷。"""
 
+    # HookRunner.enabled：子代理派发点用它判断"有没有配钩子"。替身必须同形，
+    # 否则 run_subagent 会在这里 AttributeError（AD 批接线后暴露）。
+    enabled = True
+
     def __init__(self, script: dict[str, list[list[HookResult]]] | None = None) -> None:
         self.script = {key: list(value) for key, value in (script or {}).items()}
         self.calls: list[tuple[str, str, dict]] = []

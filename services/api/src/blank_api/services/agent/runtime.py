@@ -68,7 +68,12 @@ from blank_api.services.chat_index import index_task_summary
 from blank_api.services.features import is_enabled
 from blank_api.services.fork import allocate_thread
 from blank_api.services.guardian import Guardian
-from blank_api.services.hooks import HookRunner
+from blank_api.services.hooks import (
+    HookResult,
+    HookRunner,
+    non_blocking_errors,
+    usable_context,
+)
 from blank_api.services.instructions import load_layers, provenance
 from blank_api.services.context_curator import curate
 from blank_api.services.lsp import LSPServerManager
@@ -796,11 +801,13 @@ class AgentRuntime:
 
     async def _fire_hooks(
         self, scope: _RunScope, event: str, payload: dict, target: str = ""
-    ) -> None:
+    ) -> list[HookResult]:
         """钩子是可选扩展（BLANK_HOOKS 配置）：失败绝不影响任务，但每次都要留审计记录。
 
         ``target`` 是钩子配置里 ``match`` 的比对对象：SessionStart 按来源
         （startup / resume）、SessionEnd 按结束原因匹配——上游就是这么分流的。
+        返回结果列表：SessionStart 的 additionalContext 要真的进模型上下文，
+        "记了审计但正文被丢掉"正是 #123 修过的那种静默丢失。
         """
         results = await scope.session.hooks.run(event, target, payload)
         if results:
@@ -809,6 +816,7 @@ class AgentRuntime:
                 "receive_task",
                 {"event": event, "target": target, "results": [item.as_dict() for item in results]},
             )
+        return list(results or [])
 
     @staticmethod
     def _session_end_reason(result: dict, interrupts: list) -> str:
@@ -1043,7 +1051,7 @@ class AgentRuntime:
         # 会话生命周期钩子：对标 Codex 的 session_start。
         # user_prompt_submit 不在这里——它在 task.started 之前就跑完了（#123），
         # 因为它的决定是"这条正文进不进模型"，晚一步就已经进了。
-        await self._fire_hooks(
+        start_hook_results = await self._fire_hooks(
             scope,
             "session_start",
             {
@@ -1057,6 +1065,34 @@ class AgentRuntime:
             },
             target="startup",
         )
+        # 上游把 SessionStart 的 additionalContext 作为 attachment 放进会话，
+        # exit 2 则单独渲染成"钩子报错"提示。两种用途共用一个字段时必须分开：
+        # 把报错正文当上下文注入，等于让一条失败变成模型的作业指令。
+        session_hook_notes = usable_context(start_hook_results)
+        start_hook_errors = non_blocking_errors(start_hook_results)
+        if session_hook_notes:
+            await recorder.add(
+                "hook.context_injected",
+                "receive_task",
+                {
+                    "event": "session_start",
+                    "count": len(session_hook_notes),
+                    "chars": sum(len(note) for note in session_hook_notes),
+                },
+            )
+        if start_hook_errors:
+            await recorder.add(
+                "hook.non_blocking_error",
+                "receive_task",
+                {
+                    "event": "session_start",
+                    "count": len(start_hook_errors),
+                    "reasons": [
+                        (item.additional_context or item.reason or "钩子以退出码 2 结束")[:300]
+                        for item in start_hook_errors
+                    ],
+                },
+            )
         # shell 快照与指令来源：出问题时能回答"当时是什么环境、读了哪些约定文件"
         if session.shell is not None:
             await recorder.add("shell.snapshot", "receive_task", session.shell.as_dict())
@@ -1128,6 +1164,7 @@ class AgentRuntime:
                 ),
                 output_style=scope.output_style,
                 run_id=recorder.run_id,
+                hook_context=session_hook_notes,
             ),
             "plan": [],
             "steps": 0,

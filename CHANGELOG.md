@@ -1,6 +1,49 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文
+
+- **SubagentStart 钩子与 SessionStart 的附加上下文（AD 批）**：钩子作者在子代理派发点能
+  拦一句话，而 `SessionStart` 给的 `additionalContext` 此前只进审计、正文被丢掉——等于
+  "配了也不生效"。上游锚点：`SubagentStart` 非阻断、matcher 比 `agent_type`、退出码 2 由
+  消费方渲染成 `hook_non_blocking_error`（target 形如 `SubagentStart:<agentType>`，
+  退出码 2）、`additionalContexts` 收集后以 `hook_additional_context`
+  attachment 注入。改 `services/hooks.py`、`services/subagent.py`、
+  `services/agent/runtime.py`、`services/agent/graph.py`。
+  1. **事件面**：`HOOK_EVENTS` 增 `subagent_start`（18 → 19），别名 `SubagentStart`；
+     `BLOCKING_EVENTS` 不变——进集合就会把"钩子报错"变成"派不出去"。settings 的嵌套
+     形状与 `BLANK_HOOKS` 的扁平形状都能配，`from_env` 不报警告。
+  2. **派发接线**：`run_subagent` 在 `ToolContext` 之后、压缩器之前跑一次，target 是
+     `request.agent_name or general-purpose`；stdin 带 `agent_id` / `agent_type` /
+     `agent_path` / `depth` / `goal` / `parent_thread_id` / `root_thread_id` /
+     `workspace` / `permission_mode` / `fork`。
+  3. **注入**：`additionalContext` 拼成一条独立 user 消息（标记头 `<subagent-start-hook>`），
+     排在 Skill 预加载之后、goal 之前；正文写明"只补充信息，不得放宽规则/审批/工作区
+     边界"。单条夹到 `MAX_CONTEXT`、合并后截断；`hook.context_received` 落审计。
+  4. **exit 2 的两种用途必须分开**：`_execute` 对非阻断事件的 exit 2 会把 stderr 并进
+     `additional_context`，若直接注入，一条"钩子报错"就成了子代理的作业指令。新增
+     `usable_context` / `non_blocking_errors` 按 `exit_code` 分流（两个接线点共用）：
+     退出码 2 只进 `SubAgentResult.hook_warnings`（`render()` 带【子代理钩子告警】，前台
+     回执与后台 `task_output` 都看得到）并落 `hook.non_blocking_error`，不注入上下文。
+     子代理照常启动、照常交付。
+  5. **续聊不重跑**：`send_message` 是同一个子代理接着说话，`_run_prepared` 显式传
+     `continuation=True` → `start_hooks=False`；fork 仍按新派发跑（它拿的是父会话快照，
+     本来就不是续聊）。历史上已注入的那条消息随对话保留，不重复贴。
+  6. **SessionStart 正文进模型**：`_fire_hooks` 改为返回结果列表；`usable_context` 的正文
+     作为独立 user 消息进 `initial_messages`（位置在 carried 历史之后、本轮目标之前，
+     `[:8000]`，写明只作参考、不得覆盖安全/审批/工作区边界），落 `hook.context_injected`；
+     退出码 2 走 `hook.non_blocking_error`、不注入。目标原文一个字不动。
+  偏离：上游 `isolatedContext` 子代理跳过注入、`hookContextCarried` 去重未移植（续聊整轮
+  不重跑，效果等价；隔离副本仍会收到）；stdin 未提供 `session_id` / `transcript_path` /
+  `scratchpad_dir` / `prompt_id` / `served_call` / `caller_session_id` / `effort`；
+  SessionStart 的 `initialUserMessage` / `sessionTitle` / `watchPaths` / `reloadSkills`
+  未移植。
+  判据 `services/api/tests/test_subagent_start_hooks_v54.py`（9 例：事件面与别名、exit 2
+  分流单元、真子进程按 agent_type 分发、注入位置与 goal 原文、exit 2 可见但不注入、
+  无钩子零改动、续聊不重跑、SessionStart 正反两路 HTTP 端到端），变异 7/7 红（M1
+  去掉退出码分流 → 3 红；M2 续聊无条件重跑 → 1 红；M3 graph 丢弃 hook_context → 1 红；
+  M5 结果丢 `hook_warnings` → 1 红；M6 target 换成 agent_id → 2 红；M7 注销事件 → 4 红；
+  每条红集合均实测）；相邻钩子/子代理/设置套件 **195 passed**（47.30s），全量
+  **3552 passed / 28 skipped（721.02s）**。
 
 - **settings.json 的钩子配置面与 matcher 语义（AC 批）**：钩子作者真正用的入口是
   settings.json 的 `hooks`，此前只有 `BLANK_HOOKS` 能配——等于"能写钩子，但没地方放"。

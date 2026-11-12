@@ -61,6 +61,10 @@ HOOK_EVENTS = (
     # 子代理的同一时刻叫 SubagentStop（上游会把 agent 定义里写的 Stop 转成它）。
     "stop",
     "subagent_stop",
+    # 子代理刚要开始跑：上游按 agent_type 匹配，附加上下文注入子代理的启动上下文。
+    # 它不是阻断事件——上游把它的退出码 2 渲染成父会话里一条"钩子报错"提示，
+    # 子代理照常启动；这里同口径（见 subagent.py 的派发点）。
+    "subagent_start",
     # 隔离副本的创建/删除。非 git 工作区以前只有"整树复制"一条路；
     # 有了这两个事件，用户可以自己决定副本建在哪（远端、快照、专用卷）。
     "worktree_create",
@@ -101,6 +105,7 @@ EVENT_ALIASES: dict[str, str] = {
     "PermissionDenied": "permission_denied",
     "PostToolBatch": "post_tool_batch",
     "Stop": "stop",
+    "SubagentStart": "subagent_start",
     "SubagentStop": "subagent_stop",
     "WorktreeCreate": "worktree_create",
     "WorktreeRemove": "worktree_remove",
@@ -782,3 +787,23 @@ class HookRunner:
 
 def blocking_denial(results: list[HookResult]) -> HookResult | None:
     return next((item for item in results if item.denied), None)
+
+
+def usable_context(results: list[HookResult]) -> list[str]:
+    """钩子给的附加上下文，去掉退出码 2 的那些。
+
+    上游把 exit 2 一律渲染成 ``hook_non_blocking_error``（给人看的"钩子报错"），
+    而不是模型必须遵守的输入。``_execute`` 对非阻断事件的 exit 2 会把 stderr 并进
+    ``additional_context``，两个用途共用一个字段——注入前必须按退出码分开，
+    否则一条报错会变成子代理的作业指令。
+    """
+    return [
+        item.additional_context.strip()
+        for item in results
+        if item.additional_context.strip() and item.exit_code != 2
+    ]
+
+
+def non_blocking_errors(results: list[HookResult]) -> list[HookResult]:
+    """退出码 2 的那些（上游 ``hook_non_blocking_error``）：可见、但不阻断、不注入。"""
+    return [item for item in results if item.exit_code == 2]
