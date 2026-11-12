@@ -42,6 +42,23 @@ HOOK_EVENTS = (
     "task_created",
     "task_completed",
     "post_compact",
+    # 压缩前：钩子可以给摘要器补指令（上游把输出拼进压缩提示词）。
+    # 压缩是不可逆的上下文改写，机会只有一次，所以它必须排在折叠之前。
+    "pre_compact",
+    # 通知：上游按 notification_type 匹配（permission_prompt / agent_completed …）。
+    # 它是"告诉外部世界发生了什么"，不改变执行，永远是通知性质。
+    "notification",
+    # 权限三件套：请求前的决定（可 allow/deny 自动答复）、被拒之后的回执。
+    # PermissionRequest 能替用户作答，是阻断型；PermissionDenied 是事后通知。
+    "permission_request",
+    "permission_denied",
+    # 一批工具全跑完之后一次（上游 PostToolBatch，载荷是这一批的 tool_calls）。
+    # 与逐条的 post_tool_use 不互斥：那个看单次，这个看"这一批做了什么"。
+    "post_tool_batch",
+    # 回合结束：模型准备交付时触发。阻断 = 不让这一轮结束，把理由交回模型继续干活。
+    # 子代理的同一时刻叫 SubagentStop（上游会把 agent 定义里写的 Stop 转成它）。
+    "stop",
+    "subagent_stop",
     # 隔离副本的创建/删除。非 git 工作区以前只有"整树复制"一条路；
     # 有了这两个事件，用户可以自己决定副本建在哪（远端、快照、专用卷）。
     "worktree_create",
@@ -50,11 +67,34 @@ HOOK_EVENTS = (
 # 只有这些事件可以阻止后续动作；其余是通知性质。
 # 提交事件在 Claude 的阻断集合里（UserPromptSubmit/UserPromptExpansion 同一族）：
 # 它的价值就是"在送进模型之前拦下来或改写掉"，异步化等于放弃这个决定。
-BLOCKING_EVENTS = frozenset({"pre_tool_use", "user_prompt_submit", "task_created", "task_completed"})
+# 权限请求与回合结束同理：它们的返回值就是"这一次放不放行 / 这一轮能不能收"，
+# 后台跑完再回话时那个决定已经没有落点了。
+BLOCKING_EVENTS = frozenset(
+    {
+        "pre_tool_use",
+        "user_prompt_submit",
+        "task_created",
+        "task_completed",
+        "permission_request",
+        "stop",
+        "subagent_stop",
+    }
+)
 DEFAULT_TIMEOUT = 10.0
 MAX_SNIPPET = 500
 # additionalContext 会进模型上下文：不设上限等于让一个坏钩子把窗口占满。
 MAX_CONTEXT = 4000
+# 回合结束钩子的连续阻断上限（上游 CLAUDE_CODE_STOP_HOOK_BLOCK_CAP，默认同为 8）。
+# 一个永远说"不"的钩子不许把一轮对话拖成死循环；超限告警并放行。
+STOP_HOOK_BLOCK_CAP = 8
+
+
+def stop_hook_block_cap() -> int:
+    try:
+        value = int(os.environ.get("BLANK_STOP_HOOK_BLOCK_CAP", "") or STOP_HOOK_BLOCK_CAP)
+    except ValueError:
+        value = STOP_HOOK_BLOCK_CAP
+    return max(0, value)
 # 后台钩子在任务收尾时最多等这么久：等到的东西进审计，等不到的在事件里记
 # abandoned。一个慢钩子不许把任务结束拖成无上限等待。
 ASYNC_SETTLE_SECONDS = 1.0
@@ -414,7 +454,14 @@ class HookRunner:
         if not specs:
             return []
 
-        body = {"event": event, "target": target, **(payload or {})}
+        body = {
+            "event": event,
+            # 上游的 base hook input 里一定有 hook_event_name；有的钩子只认它
+            # （而不认我们自己的 event 字段），两个都写，谁都能读。
+            "hook_event_name": event,
+            "target": target,
+            **(payload or {}),
+        }
         results: list[HookResult] = []
         for spec in specs:
             if spec.async_run and event not in BLOCKING_EVENTS:

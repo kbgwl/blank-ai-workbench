@@ -787,15 +787,35 @@ class AgentRuntime:
             output_style=active_style.as_prompt() if active_style is not None else None,
         )
 
-    async def _fire_hooks(self, scope: _RunScope, event: str, payload: dict) -> None:
-        """钩子是可选扩展（BLANK_HOOKS 配置）：失败绝不影响任务，但每次都要留审计记录。"""
-        results = await scope.session.hooks.run(event, "", payload)
+    async def _fire_hooks(
+        self, scope: _RunScope, event: str, payload: dict, target: str = ""
+    ) -> None:
+        """钩子是可选扩展（BLANK_HOOKS 配置）：失败绝不影响任务，但每次都要留审计记录。
+
+        ``target`` 是钩子配置里 ``match`` 的比对对象：SessionStart 按来源
+        （startup / resume）、SessionEnd 按结束原因匹配——上游就是这么分流的。
+        """
+        results = await scope.session.hooks.run(event, target, payload)
         if results:
             await scope.recorder.add(
                 "hook.completed",
                 "receive_task",
-                {"event": event, "results": [item.as_dict() for item in results]},
+                {"event": event, "target": target, "results": [item.as_dict() for item in results]},
             )
+
+    @staticmethod
+    def _session_end_reason(result: dict, interrupts: list) -> str:
+        """收尾原因：上游 SessionEnd 的 reason 是钩子的分派键（match=reason）。
+
+        只写我们真的分得清的三种：等人审批、被取消/暂停、正常结束。其余状态
+        一律归到 completed——猜一个上游词汇（clear/logout）等于给钩子看假话。
+        """
+        if interrupts:
+            return "waiting_approval"
+        status = str((result or {}).get("status") or "")
+        if status in ("cancelled", "paused"):
+            return "interrupted"
+        return "completed"
 
     async def _submit_prompt(self, scope: _RunScope) -> _PromptDecision:
         """提交那一刻的三道决定：补上下文、抑制原文、否决提交（#123）。
@@ -1019,7 +1039,16 @@ class AgentRuntime:
         await self._fire_hooks(
             scope,
             "session_start",
-            {"task_id": request.task_id, "thread_id": thread_id, "workspace": mask_path(session.context.root)},
+            {
+                "task_id": request.task_id,
+                "thread_id": thread_id,
+                "workspace": mask_path(session.context.root),
+                # 上游按 source 匹配（startup / resume / clear / compact）：钩子作者
+                # 想"只在续跑时装东西"靠的就是这一位，不能永远发同一个值。
+                "source": "startup",
+                "model": request.adapter.config.model,
+            },
+            target="startup",
         )
         # shell 快照与指令来源：出问题时能回答"当时是什么环境、读了哪些约定文件"
         if session.shell is not None:
@@ -1121,10 +1150,17 @@ class AgentRuntime:
         else:
             interrupts = list(result.get("__interrupt__") or [])
         # 会话收尾钩子：run 与 resume 两条路径都要发
+        end_reason = self._session_end_reason(result, interrupts)
         await self._fire_hooks(
             scope,
             "session_end",
-            {"task_id": request.task_id, "thread_id": scope.thread_id, "interrupts": len(interrupts)},
+            {
+                "task_id": request.task_id,
+                "thread_id": scope.thread_id,
+                "interrupts": len(interrupts),
+                "reason": end_reason,
+            },
+            target=end_reason,
         )
         await self._close_hooks(scope)
         return await self._finalize(request, scope, result, interrupts)
@@ -1203,10 +1239,17 @@ class AgentRuntime:
         else:
             interrupts = list(result.get("__interrupt__") or [])
         # 会话收尾钩子：run 与 resume 两条路径都要发
+        end_reason = self._session_end_reason(result, interrupts)
         await self._fire_hooks(
             scope,
             "session_end",
-            {"task_id": request.task_id, "thread_id": scope.thread_id, "interrupts": len(interrupts)},
+            {
+                "task_id": request.task_id,
+                "thread_id": scope.thread_id,
+                "interrupts": len(interrupts),
+                "reason": end_reason,
+            },
+            target=end_reason,
         )
         await self._close_hooks(scope)
         return await self._finalize(request, scope, result, interrupts)

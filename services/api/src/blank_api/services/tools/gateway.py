@@ -22,6 +22,8 @@ from blank_api.services.mcp.protocol import qualify_prefix
 from blank_api.services.permissions import (
     ASK,
     DENY,
+    MODE_DEFAULT,
+    MODE_PLAN,
     Decision,
     approval_options,
     ask,
@@ -462,6 +464,9 @@ class ToolGateway:
                 outcome = ToolOutcome(ok=False, status="error", message=invalid)
             elif decision.outcome == DENY:
                 outcome = self._denied(tool, arguments, decision)
+                await self._permission_denied(
+                    context, tool.name, arguments, decision.reason, decision.rule, node
+                )
             elif decision.outcome == ASK:
                 if inner:
                     # REPL 里没有审批卡可弹：放行等于绕过权限，等待审批又没人能批。
@@ -483,7 +488,38 @@ class ToolGateway:
                         },
                     )
                 else:
-                    outcome = self._awaiting_approval(tool, arguments, risk, decision)
+                    # 先问钩子：上游 PermissionRequest 的 allow 等于"替用户点了同意"，
+                    # 但受限会话（计划模式）不认这个 allow——那里的 ASK 本身就是
+                    # "这个动作不允许发生"，钩子无权把它变成放行。
+                    hook_allow, hook_deny, hook_reason = await self._permission_request(
+                        context, tool, arguments, decision, node
+                    )
+                    if hook_deny:
+                        outcome = ToolOutcome(
+                            ok=False,
+                            status="denied",
+                            message=f"权限钩子拒绝执行 {name}：{hook_reason}",
+                            data={
+                                "requires_approval": False,
+                                "tool": name,
+                                "arguments": arguments,
+                                "risk_level": risk,
+                                "permission_rule": "hook:permission_request",
+                                "hook_reason": hook_reason,
+                            },
+                        )
+                        await self._permission_denied(
+                            context, name, arguments, hook_reason, "hook:permission_request", node
+                        )
+                    elif hook_allow and self._hook_may_allow(context):
+                        # 记账站在"下一次调用按什么判定"这一边：这是钩子给的一次性放行，
+                        # 不写进会话批准记忆，下一次照样重新判。
+                        decision = approve(decision.risk or risk, "hook:permission_request")
+                        outcome = await self._run(tool, arguments, context)
+                    else:
+                        outcome = await self._awaiting_approval(
+                            tool, arguments, risk, decision, context, node
+                        )
             else:
                 outcome = await self._run(tool, arguments, context)
         # decision.risk 可能被安全策略抬高（"每条命令都要确认"），台账要按最终口径记
@@ -597,20 +633,127 @@ class ToolGateway:
             },
         )
 
-    def _awaiting_approval(
-        self, tool: ToolDefinition, arguments: dict, risk: str, decision: Decision | None = None
+    def _hook_may_allow(self, context: ToolContext) -> bool:
+        """计划模式里不存在"钩子替我同意"：那里的 ASK 是"这个动作不该发生"。"""
+        permissions = getattr(context, "permissions", None)
+        return getattr(permissions, "mode", MODE_DEFAULT) != MODE_PLAN
+
+    async def _run_hook(
+        self, context: ToolContext, event: str, target: str, payload: dict, node: str
+    ) -> list:
+        """网关这一层的钩子出口：没有钩子基建就静默跳过（可选扩展）。"""
+        hooks = getattr(context, "hooks", None)
+        if hooks is None:
+            return []
+        results = list(await hooks.run(event, target, payload) or [])
+        recorder = getattr(context, "recorder", None)
+        if results and recorder is not None:
+            await recorder.add(
+                "hook.completed",
+                node,
+                {
+                    "event": event,
+                    "target": target,
+                    "results": [item.as_dict() for item in results],
+                },
+            )
+        return results
+
+    async def _permission_request(
+        self,
+        context: ToolContext,
+        tool: ToolDefinition,
+        arguments: dict,
+        decision: Decision,
+        node: str,
+    ) -> tuple[bool, bool, str]:
+        """问一次 PermissionRequest 钩子，返回 (allow, deny, reason)。
+
+        deny 优先：一组钩子意见不一致时按"更严的那一侧"执行，和上游一致。
+        """
+        suggestions = approval_options(
+            tool.name,
+            decision.memo,
+            tool_scope=decision.tool_scope_allowed
+            and not tool_grant_too_wide(tool.name, arguments),
+        )
+        results = await self._run_hook(
+            context,
+            "permission_request",
+            tool.name,
+            {
+                "tool_name": tool.name,
+                "tool_input": dict(arguments),
+                "permission_suggestions": suggestions,
+            },
+            node,
+        )
+        denied = [item for item in results if item.denied]
+        if denied:
+            return False, True, denied[0].reason or "钩子要求拒绝这次调用"
+        allowed = [item for item in results if item.allowed]
+        if allowed:
+            return True, False, allowed[0].reason
+        return False, False, ""
+
+    async def _permission_denied(
+        self,
+        context: ToolContext,
+        tool_name: str,
+        arguments: dict,
+        reason: str,
+        rule: str,
+        node: str,
+    ) -> None:
+        await self._run_hook(
+            context,
+            "permission_denied",
+            tool_name,
+            {
+                "tool_name": tool_name,
+                "tool_input": dict(arguments),
+                # 网关这一层拿不到模型的 tool_use id；空串比编一个假 id 诚实。
+                "tool_use_id": "",
+                "reason": reason,
+            },
+            node,
+        )
+
+    async def _awaiting_approval(
+        self,
+        tool: ToolDefinition,
+        arguments: dict,
+        risk: str,
+        decision: Decision | None = None,
+        context: ToolContext | None = None,
+        node: str = "",
     ) -> ToolOutcome:
         raw_prefix = decision.prefix if decision is not None else ""
         # 建议的「总是允许 X」取自决策里那条可记忆规则（解释器类带正文），
         # 不是命令首段：只拿 raw_prefix 会把 `python -c …` 缩成 `python`。
         memo = decision.memo if decision is not None else ""
+        message = (
+            f"工具 {tool.name} 的风险等级为 {risk}，未获得审批，已拒绝执行并生成待审批请求。"
+            "请在审批通过后重新运行该步骤。"
+        )
+        # 卡片就是"通知"事件在这次调用里的唯一落点：外部世界（桌面通知、IM 机器人）
+        # 想提醒人去看一眼，只能靠这一刻——等用户点完再喊已经晚了。
+        if context is not None:
+            await self._run_hook(
+                context,
+                "notification",
+                "permission_prompt",
+                {
+                    "message": message,
+                    "title": f"需要审批：{tool.name}",
+                    "notification_type": "permission_prompt",
+                },
+                node,
+            )
         return ToolOutcome(
             ok=False,
             status=APPROVAL_STATUS,
-            message=(
-                f"工具 {tool.name} 的风险等级为 {risk}，未获得审批，已拒绝执行并生成待审批请求。"
-                "请在审批通过后重新运行该步骤。"
-            ),
+            message=message,
             data={
                 "requires_approval": True,
                 "tool": tool.name,

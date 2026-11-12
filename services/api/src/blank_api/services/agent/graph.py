@@ -85,7 +85,7 @@ from blank_api.services import metrics
 from blank_api.services import shell_tasks
 from blank_api.services.features import is_enabled as feature_enabled
 from blank_api.services.guardian import Guardian
-from blank_api.services.hooks import HookRunner
+from blank_api.services.hooks import STOP_HOOK_BLOCK_CAP, HookRunner, stop_hook_block_cap
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.plan import normalize_goal, normalize_steps, plan_progress
 from blank_api.services.agent.planner import (
@@ -96,6 +96,7 @@ from blank_api.services.agent.planner import (
 from blank_api.services.permissions import (
     ASK,
     MODE_DEFAULT,
+    MODE_PLAN,
     READ_ONLY_TOOLS,
     SCOPE_ONCE,
     SCOPE_PREFIX,
@@ -418,6 +419,11 @@ class AgentState(TypedDict, total=False):
     # 读后写闸门的读状态（路径 → size/mtime_ns/sha256）。放在图状态里跟着检查点走：
     # 审批/提问会结束这次运行，恢复时是新会话，读过的文件不能因此"没读过"。
     file_reads: dict
+    # Stop 钩子这一轮是否被拦下、已经拦了几次。必须是声明的通道：langgraph 只合并
+    # 状态里有的键，写在返回值里而没声明，第二次读到的就是"从没拦过"（stop_hook_active
+    # 永远是 false，钩子会把自己的阻断当成第一次）。
+    stop_blocked: bool
+    stop_blocks: int
 
 
 async def _never_cancelled() -> bool:
@@ -544,6 +550,10 @@ class AgentSession:
     # 钩子给的 additionalContext：只注入下一模型调用一次，不写回检查点。
     # 它可能包含外部系统的实时信息，不该像历史消息那样被压缩器反复折叠。
     hook_context: list[dict] = field(default_factory=list)
+    # pre_compact 钩子给的压缩指令：只活到下一次摘要调用为止（用完即清）。
+    # 它作用于"这一次压缩"，不是会话级偏好，留下来只会让下一轮摘要照着上一次的
+    # 特殊要求写。
+    compact_instructions: str = ""
     # 分层指令的来源（只用于审计，不重复进 prompt）
     instruction_layers: list = field(default_factory=list)
     notes_injected: bool = False
@@ -807,6 +817,33 @@ class AgentSession:
         except Exception:  # 笔记是可选的，读写失败绝不能中断任务
             return ""
 
+    async def _precompact_gate(self, node: str) -> None:
+        """压缩前的钩子：把它们的输出带进这一次摘要提示词（上游 PreCompact 语义）。
+
+        刻意不阻断：压缩是"必须发生"的，钩子说"别压"没有可执行的含义——
+        不许它压只会让下一次调用超窗失败。它能做的是补充"哪段必须保住"。
+        """
+        results = await self.hooks.run(
+            "pre_compact", "auto", {"trigger": "auto", "custom_instructions": ""}
+        )
+        if not results:
+            return
+        await self.recorder.add(
+            "hook.completed",
+            node,
+            {"event": "pre_compact", "results": [item.as_dict() for item in results]},
+        )
+        text = "\n".join(
+            (item.additional_context or item.output or "").strip() for item in results
+        ).strip()
+        if text:
+            self.compact_instructions = text[:4000]
+            await self.recorder.add(
+                "hook.compact_instructions",
+                node,
+                {"chars": len(self.compact_instructions)},
+            )
+
     async def summarize_history(self, folded: list[dict], previous: str) -> str:
         """把滑出上下文窗口的历史折叠进五要素摘要。
 
@@ -814,7 +851,12 @@ class AgentSession:
         429 仍走与正文同一套退避：压缩失败同样会把整轮判死，不能因为它是"幕后那一笔"
         就少给两次机会。
         """
-        prompt = build_summary_prompt(folded, previous)
+        prompt = build_summary_prompt(
+            folded, previous, instructions=self.compact_instructions
+        )
+        # 指令只属于这一次压缩：摘要器回话后立刻清掉，下一轮换文不让上一轮的
+        # 特殊要求继续生效。
+        self.compact_instructions = ""
         chat = [ChatMessage(role=item["role"], content=item["content"]) for item in prompt]
         started = time.perf_counter()
         # 先清空再调：这一笔失败或没返回 id 时，绝不能把上一次压缩的 id 当成这次的。
@@ -932,6 +974,10 @@ class AgentSession:
         # 而这个数会进证据包被人当成当时的实情。
         await self.emit_world_state(node)
         covered_before = self.compactor.covered
+        # PreCompact 只在"这一次真的要压"时跑：压缩不可逆，钩子想保住哪段历史
+        # 只有这一次机会。跑在 build 之前，指令由 summarize_history 带进摘要提示词。
+        if self.compactor.over_trigger(messages):
+            await self._precompact_gate(node)
         compacted = await self.compactor.build(
             messages, self.summarize_history, author_run_id=self.run_id
         )
@@ -2925,9 +2971,18 @@ async def _approval_gate(
     ``forced_asks`` 是 pre_tool_use 钩子的 ask：它能把一次原本自动放行的调用升级成
     人工确认；反过来，钩子的 allow 不参与放行判定——权限策略问不问，仍由
     ``permissions.decide`` 说了算。
+
+    PermissionRequest 与 Notification(permission_prompt) 也挂在这里，而不是网关：
+    真实图形路径的 ASK 走图中断，网关的 ASK 分支根本不会执行。上游把
+    PermissionRequest 定位成"卡片即将出现时问一次外部"，allow 可以替用户同意
+    （受限的计划模式里忽略 allow），deny 直接拒绝不弹卡。
+
+    返回值第三项是被权限钩子拒绝的调用 → 理由；调用方把它并进 pre_tool_use 的
+    拒绝表，模型收到的文案与"钩子拒绝"完全一致。
     """
     denied: set[str] = set()
     blocked: dict[str, str] = {}
+    hook_denied: dict[str, str] = {}
     rewritten = rewritten or {}
     forced_asks = forced_asks or {}
     hook_allowed = hook_allowed or set()
@@ -3014,6 +3069,103 @@ async def _approval_gate(
                     {"tool": name, "approval_key": fingerprint, "arguments": arguments, "reasons": verdict.reasons},
                 )
                 continue
+        # 卡片上的建议档与钩子看到的必须是同一份：钩子按"人会看到什么"决定放不放，
+        # 两边各算一遍迟早分叉。算一次，往下两处共用。
+        options = approval_options(
+            name,
+            decision.memo,
+            tool_scope=decision.tool_scope_allowed and not tool_grant_too_wide(name, arguments),
+        )
+        if decision.asks:
+            # PermissionRequest 是"卡片即将出现时问一次外部"——放在 guardian 之后、
+            # interrupt 之前：审查员已经代批或拒掉的调用不会走到这里，也就不会
+            # 让钩子去处理一张根本不存在卡。
+            results = await session.hooks.run(
+                "permission_request",
+                name,
+                {
+                    "tool_name": name,
+                    "tool_input": dict(arguments),
+                    "permission_suggestions": options,
+                },
+            )
+            if results:
+                await session.recorder.add(
+                    "hook.completed",
+                    node,
+                    {
+                        "event": "permission_request",
+                        "target": name,
+                        "results": [item.as_dict() for item in results],
+                    },
+                )
+            denying = next((item for item in results if item.denied), None)
+            if denying is not None:
+                # 按调用记录，不进 `denied`（那是"用户驳回整个工具"的会话级账）。
+                # 键必须是 call key：调用方按 key 把它们并进 pre_tool_use 的拒绝表。
+                reason = denying.reason or "钩子要求拒绝这次调用"
+                hook_denied[key] = f"权限钩子拒绝：{reason}"
+                await session.recorder.add(
+                    "permission.denied",
+                    node,
+                    {
+                        "tool": name,
+                        "call_id": key,
+                        "arguments": arguments,
+                        "reason": reason,
+                        "rule": "hook:permission_request",
+                    },
+                )
+                await session.hooks.run(
+                    "permission_denied",
+                    name,
+                    {
+                        "tool_name": name,
+                        "tool_input": dict(arguments),
+                        "tool_use_id": key,
+                        "reason": reason,
+                    },
+                )
+                continue
+            allowing = next((item for item in results if item.allowed), None)
+            if allowing is not None and session.permission_mode != MODE_PLAN:
+                # 计划模式里不存在"钩子替我同意"：那里的 ASK 是"这个动作不该发生"。
+                session.permissions.remember(name, arguments, SCOPE_ONCE)
+                await session.recorder.add(
+                    "approval.granted",
+                    node,
+                    {
+                        "tool": name,
+                        "arguments": arguments,
+                        "approval_key": approval_key(name, arguments),
+                        "scope": SCOPE_ONCE,
+                        "rule": "hook:permission_request",
+                        "reason": allowing.reason,
+                    },
+                )
+                continue
+        # 卡片出现前喊一声：桌面通知/IM 机器人只能在这一刻提醒人来看，
+        # 等用户点完再喊已经晚了。通知钩子不阻断，失败也不影响发卡。
+        prompt_message = f"工具 {name} 的风险等级为 {decision.risk}，需要人工审批。"
+        notifications = await session.hooks.run(
+            "notification",
+            "permission_prompt",
+            {
+                "message": prompt_message,
+                "title": f"需要审批：{name}",
+                "notification_type": "permission_prompt",
+            },
+        )
+        if notifications:
+            await session.recorder.add(
+                "hook.completed",
+                node,
+                {
+                    "event": "notification",
+                    "target": "permission_prompt",
+                    "results": [item.as_dict() for item in notifications],
+                },
+            )
         expires_at = (datetime.now(timezone.utc) + timedelta(seconds=approval_ttl_seconds())).isoformat()
         # v0.10.1 §3.2：这张卡的完整身份。事件、证据包、审批 API 三处共用同一组
         # 字段——前端提交时带回 approval_id/tool_call_id/arguments_hash，后端
@@ -3032,12 +3184,7 @@ async def _approval_gate(
                 "permission_rule": decision.rule,
                 "command_prefix": decision.prefix,
                 "suggested_prefix": decision.memo,
-                "approval_options": approval_options(
-                    name,
-                    decision.memo,
-                    tool_scope=decision.tool_scope_allowed
-                    and not tool_grant_too_wide(name, arguments),
-                ),
+                "approval_options": options,
                 # 钩子要求人工确认时把原因一并带上：卡片上只说「需要确认」，
                 # 用户没法判断是该批准还是该去改钩子。
                 "hook_ask": hook_ask,
@@ -3101,7 +3248,7 @@ async def _approval_gate(
                     "prefix": learned,
                 },
             )
-    return denied, blocked
+    return denied, blocked, hook_denied
 
 
 @dataclass
@@ -3565,7 +3712,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     # 钩子必须在审批门之前跑完：updatedInput 改写后的参数要同时进审批卡与执行，
     # ask 也要变成一次真正的中断。顺序反过来，卡片上放行的参数与实际执行的参数就会分叉。
     hook_plan = await _scan_pre_tool_hooks(session, node, approvable, answers, readonly)
-    denied, guardian_blocked = await _approval_gate(
+    denied, guardian_blocked, hook_denied = await _approval_gate(
         session,
         node,
         approvable,
@@ -3573,6 +3720,9 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         forced_asks=hook_plan.asked,
         hook_allowed=hook_plan.allowed,
     )
+    # 权限钩子的拒绝与 pre_tool_use 的拒绝共用一条回执：模型看到的都是
+    # 「钩子拒绝执行 X：理由」，不需要知道是哪个事件说的话。
+    hook_plan.denied.update(hook_denied)
 
     # 第一段：串行决策。事件按模型给出的顺序落，与执行顺序解耦。
     planned: list[_PlannedCall] = []
@@ -3958,6 +4108,34 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
             }
         )
         messages = _append_tool_response(messages, item.call, payload, session=session, step=steps)
+
+    # 一批工具跑完之后再通知一次（上游 PostToolBatch）：逐条的 post_tool_use 看的是
+    # 单次调用，钩子想按"这一批做了什么"判断（整批都失败、一次改了几个文件）只有这里。
+    if planned:
+        batch_results = await session.hooks.run(
+            "post_tool_batch",
+            "",
+            {
+                "tool_calls": [
+                    {
+                        "tool_name": item.name,
+                        "tool_input": item.arguments,
+                        "tool_use_id": _call_key(item.call),
+                        "ok": bool(payload.get("ok")),
+                        "status": payload.get("status"),
+                        "mode": item.mode,
+                    }
+                    for item, payload in zip(planned, payloads)
+                ]
+            },
+        )
+        if batch_results:
+            await session.recorder.add(
+                "hook.completed",
+                node,
+                {"event": "post_tool_batch", "results": [x.as_dict() for x in batch_results]},
+            )
+            await _collect_hook_context(session, node, "post_tool_batch", "", batch_results)
 
     # 升级信号：真跑失败才提档。被驳回 / 被钩子拦下的不算——那是策略判断，
     # 不是模型不够强，为它去换更强的模型等于拿钱重试用户刚刚说「不」的事。
@@ -4891,7 +5069,95 @@ def _with_placeholder_note(report: str, session: AgentSession, state: AgentState
     return f"{report}\n\n{note}" if report.strip() else note
 
 
+STOP_HOOK_DEFAULT_CAP = STOP_HOOK_BLOCK_CAP
+
+
+def _stop_hook_cap() -> int:
+    """连续阻断上限：与上游默认值同源，见 hooks.stop_hook_block_cap。"""
+    return stop_hook_block_cap()
+
+
+def _running_background_tasks(session: AgentSession) -> list[dict]:
+    """Stop 钩子能看见"还有谁在跑"，否则它没法判断该不该拦这一轮。"""
+    runner = getattr(session.context, "subagent_runner", None)
+    agents = runner.list_agents() if runner is not None else []
+    return [
+        {
+            "id": str(item.get("agent_id") or ""),
+            "description": str(item.get("goal") or "")[:200],
+            "status": str(item.get("status") or ""),
+        }
+        for item in agents
+        if str(item.get("status") or "") == "running"
+    ]
+
+
+async def _stop_hook_gate(
+    state: AgentState, session: AgentSession, node: str
+) -> AgentState | None:
+    """交付前问一次 Stop 钩子：它说"先别收"，就带着理由回执行节点继续。
+
+    只认明确阻断：跑坏、超时、不表态都放行（钩子是可选扩展）。连续阻断超过 cap
+    （默认 8）时告警并放行——一个永远说"不"的钩子不许把任务拖成死循环。
+    返回非空状态表示"这一轮被拦下"，调用方直接把它交给路由。
+    """
+    last = _last_assistant_text(state.get("messages") or ())
+    results = await session.hooks.run(
+        "stop",
+        "",
+        {
+            # 钩子作者按上游约定用它防"自己拦自己"：第二次起要为 true。
+            "stop_hook_active": int(state.get("stop_blocks") or 0) > 0,
+            "last_assistant_message": last[:4000],
+            "background_tasks": _running_background_tasks(session),
+            "session_crons": [],
+        },
+    )
+    if not results:
+        return None
+    await session.recorder.add(
+        "hook.completed", node, {"event": "stop", "results": [item.as_dict() for item in results]}
+    )
+    blocked = [item for item in results if item.denied]
+    if not blocked:
+        await _collect_hook_context(session, node, "stop", "", results)
+        return None
+    reasons = [item.reason or "钩子要求先别结束这一轮" for item in blocked]
+    count = int(state.get("stop_blocks") or 0) + 1
+    cap = _stop_hook_cap()
+    if count > cap:
+        await session.recorder.add(
+            "hook.stop_capped",
+            node,
+            {"blocks": count - 1, "cap": cap, "reason": "；".join(reasons)[:500]},
+        )
+        return None
+    # 理由进下一模型调用的上下文；不写回消息历史，避免同一条在检查点里越积越多。
+    session.hook_context.extend(
+        {"event": "stop", "tool": "", "text": f"本轮暂不能结束：{reason}"} for reason in reasons
+    )
+    await session.recorder.add(
+        "hook.turn_blocked",
+        node,
+        {"blocks": count, "cap": cap, "reason": "；".join(reasons)[:500]},
+    )
+    return {"stop_blocked": True, "stop_blocks": count}
+
+
 async def summarize_result_node(state: AgentState, session: AgentSession) -> AgentState:
+    node = "summarize_result"
+    blocked = await _stop_hook_gate(state, session, node)
+    if blocked is not None:
+        return blocked
+    result = await _summarize_result_body(state, session)
+    # 显式落 False：state 是合并语义，上一轮被拦下的 True 不清掉会让路由永远回执行。
+    # 计数也归零：这一轮钩子已经放行，下一次再被拦属于新的一串（stop_hook_active 随之复位）。
+    result["stop_blocked"] = False
+    result["stop_blocks"] = 0
+    return result
+
+
+async def _summarize_result_body(state: AgentState, session: AgentSession) -> AgentState:
     node = "summarize_result"
     await session.recorder.add("node.started", node, {})
     # 子代理默认后台跑：在写交付之前先等一段时间，别让它们的结论被收尾的 aclose 取消掉。
@@ -5150,6 +5416,13 @@ def route_after_review(state: AgentState, session: AgentSession) -> str:
     return "summarize_result"
 
 
+def route_after_summarize(state: AgentState, session: AgentSession) -> str:
+    # 交付前钩子拦了一次：回执行节点，让模型带着理由继续干（上游 Stop 阻断语义）。
+    if state.get("stop_blocked"):
+        return "execute_action"
+    return "finish"
+
+
 def build_agent_graph(session: AgentSession, checkpointer: BaseCheckpointSaver | None = None):
     builder = StateGraph(AgentState)
     builder.add_node("create_plan", partial(create_plan_node, session=session))
@@ -5186,5 +5459,9 @@ def build_agent_graph(session: AgentSession, checkpointer: BaseCheckpointSaver |
         lambda state: route_after_review(state, session),
         {"execute_action": "execute_action", "summarize_result": "summarize_result"},
     )
-    builder.add_edge("summarize_result", END)
+    builder.add_conditional_edges(
+        "summarize_result",
+        lambda state: route_after_summarize(state, session),
+        {"execute_action": "execute_action", "finish": END},
+    )
     return builder.compile(checkpointer=checkpointer)

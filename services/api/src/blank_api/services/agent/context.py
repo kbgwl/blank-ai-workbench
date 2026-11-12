@@ -504,13 +504,19 @@ def load_summary_json(text: str) -> dict:
     return parsed
 
 
-def build_summary_prompt(folded: Sequence[dict], previous: str) -> list[dict]:
+def build_summary_prompt(
+    folded: Sequence[dict], previous: str, *, instructions: str = ""
+) -> list[dict]:
     transcript = "\n".join(
         f"[{item.get('role')}] {str(item.get('content') or '')[:SUMMARY_TRANSCRIPT_CHARS]}" for item in folded
     )
     if len(transcript) > SUMMARY_TOTAL_CHARS:
         transcript = transcript[:SUMMARY_TOTAL_CHARS] + "\n…（更早内容已省略）"
     instruction = SUMMARY_INSTRUCTION
+    if instructions.strip():
+        # 上游 PreCompact 钩子的输出会拼进压缩提示词：钩子知道哪段历史必须保住，
+        # 只给它一个"压缩前"的回调却不把话带进摘要器，等于没接。
+        instruction += "\n压缩前钩子补充的指令（必须遵守）：\n" + instructions.strip()
     if previous.strip():
         instruction += "\n已有摘要如下，请在其基础上增量合并，已有的条目不要丢失：\n" + previous
     return [
@@ -601,6 +607,19 @@ class ContextCompactor:
 
     def measure(self, messages: Sequence[dict]) -> int:
         return max(0, int(round(message_tokens(messages) * self.calibration)))
+
+    def over_trigger(self, messages: Sequence[dict]) -> bool:
+        """这一次装配是否真的会压（与 build 的第一次水位判定同一行）。
+
+        PreCompact 只在"要压"时触发。两处判定一旦分叉，钩子会在不该跑的时候跑
+        （压缩前钩子被白调一次），或者在该跑的时候不跑（最该保住的那段没人保）。
+        """
+        normalized = _normalize(messages)
+        if not normalized:
+            return False
+        if self.context_window > 0:
+            return self.measure(normalized) > self.trigger_tokens()
+        return _total_chars(normalized) > self.max_chars
 
     def observe(self, prompt_tokens: int, estimated_tokens: int) -> None:
         """用供应商回报的真实 prompt_tokens 校准估算器。

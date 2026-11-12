@@ -26,7 +26,7 @@ from typing import Any
 from blank_api.services.agent.context import ContextCompactor
 from blank_api.services.agent.usage import account_call, merge_usage
 from blank_api.services.agents_defs import BUILTIN_AGENT, MAX_INSTRUCTIONS_CHARS
-from blank_api.services.hooks import HookRunner
+from blank_api.services.hooks import HookRunner, stop_hook_block_cap
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.permissions import (
     MODE_ACCEPT_EDITS,
@@ -700,6 +700,12 @@ async def run_subagent(
         # 子树在本轮结束即删除/合并：后台命令活不到有人取结果的时候，入口直接关掉。
         # fork 在同一个工作区里跑，父会话能开的它也能开。
         allow_background_shell=bool(allow_background_shell),
+        # 子代理的工具调用走同一条网关，所以 PermissionRequest / PermissionDenied /
+        # 审批通知这些钩子也必须在子代理里成立——否则"派下去干活"就是钩子看不见的盲区。
+        hooks=hooks,
+        # 只在配了钩子时才把事件记录器交给网关（钩子结果要落 hook.completed）；
+        # 没配钩子时保持原样，免得别的工具突然开始在子代理里写事件。
+        recorder=log if hooks is not None else None,
     )
     compactor = ContextCompactor(**(watermark or {}))
     base_text = FORK_SYSTEM if request.fork else SUBAGENT_SYSTEM
@@ -827,6 +833,60 @@ async def run_subagent(
         )
         return response
 
+    stop_blocks = 0
+
+    async def stop_gate(text: str) -> bool:
+        """交付前问一次 SubagentStop：返回 True 表示这一轮不许收尾。
+
+        与主代理的 Stop 同一套语义（含连续阻断上限）：阻断理由作为一条 user 消息
+        交回子代理继续干，`stop_hook_active` 从第二次起为 true。
+        """
+        nonlocal stop_blocks
+        if hooks is None:
+            return False
+        results = list(
+            await hooks.run(
+                "subagent_stop",
+                "",
+                {
+                    "stop_hook_active": stop_blocks > 0,
+                    "last_assistant_message": str(text or "")[:4000],
+                    "background_tasks": [],
+                    "session_crons": [],
+                    "agent_id": agent_id,
+                    "agent_type": request.agent_name or BUILTIN_AGENT,
+                },
+            )
+            or []
+        )
+        if not results:
+            return False
+        await log.add(
+            "hook.completed",
+            "subagent",
+            {"event": "subagent_stop", "results": [item.as_dict() for item in results]},
+        )
+        denied = [item for item in results if item.denied]
+        if not denied:
+            return False
+        stop_blocks += 1
+        cap = stop_hook_block_cap()
+        reasons = [item.reason or "钩子要求先别结束这一轮" for item in denied]
+        if stop_blocks > cap:
+            await log.add(
+                "hook.stop_capped",
+                "subagent",
+                {"blocks": stop_blocks - 1, "cap": cap, "reason": "；".join(reasons)[:500]},
+            )
+            return False
+        messages.append({"role": "user", "content": "本轮暂不能结束：" + "；".join(reasons)})
+        await log.add(
+            "hook.turn_blocked",
+            "subagent",
+            {"blocks": stop_blocks, "cap": cap, "reason": "；".join(reasons)[:500]},
+        )
+        return True
+
     async def loop() -> None:
         nonlocal summary, steps
         while steps < request.max_steps:
@@ -847,6 +907,8 @@ async def run_subagent(
                 assistant["tool_calls"] = response.tool_calls
             messages.append(assistant)
             if not response.tool_calls:
+                if await stop_gate(response.text):
+                    continue
                 summary = response.text
                 return
             for call in response.tool_calls:
@@ -954,6 +1016,30 @@ async def run_subagent(
             "context_window": compactor.context_window,
         },
     )
+    # 上游的 agent 完成通知：外部看到"这个后台代理回来了"，靠的不是轮询 task_output。
+    # 通知钩子失败不改变结果——这时候活已经干完了。
+    if hooks is not None:
+        try:
+            notified = list(
+                await hooks.run(
+                    "notification",
+                    "agent_completed",
+                    {
+                        "message": result.summary[:500] or ("子代理失败：" + result.error if error else ""),
+                        "title": f"子代理完成：{request.agent_name or BUILTIN_AGENT}",
+                        "notification_type": "agent_completed",
+                    },
+                )
+                or []
+            )
+        except Exception:  # noqa: BLE001 - 通知失败不许把已完成的子代理改成失败
+            notified = []
+        if notified:
+            await log.add(
+                "hook.completed",
+                "subagent",
+                {"event": "notification", "results": [item.as_dict() for item in notified]},
+            )
     return result
 
 

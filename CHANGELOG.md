@@ -1,6 +1,49 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）
+
+- **钩子事件面第二批：图内权限钩子、通知、批处理、回合结束与压缩前后（AB 批）**：上一批
+  只有事件名和网关侧接线，图形路径下真正发卡的地方是 `graph.py:_approval_gate` 里的
+  `interrupt(...)`，网关的 ASK 分支在端到端里根本不会执行——所以 `PermissionRequest` /
+  `Notification` 必须挂在图上，否则钩子作者写的东西在界面上永不触发。上游锚点：
+  PreToolUse/PermissionRequest/PermissionDenied 三件套的 allow/deny 语义、Notification 按
+  `notification_type` 匹配、PostToolBatch 载荷 `tool_calls`、Stop/SubagentStop 阻断把理由
+  交回模型（第二次起 `stop_hook_active=true`，上限 `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP ?? 8`）、
+  PreCompact 输出拼进压缩提示词。改 `services/hooks.py`（事件全集、阻断集合、
+  `STOP_HOOK_BLOCK_CAP`、stdin 带 `hook_event_name`）、`services/agent/graph.py`（图内
+  权限钩子与通知、`AgentState` 声明）、`services/agent/runtime.py`、
+  `services/agent/context.py`、`services/subagent.py`、`services/tools/gateway.py`。
+  1. **PermissionRequest 接在发卡点**：放在 guardian 之后、`interrupt` 之前——审查员已经
+     代批或拒掉的调用不会走到这里，也就不会让钩子去处理一张根本不存在的卡。allow 视同
+     用户批准并记 `SCOPE_ONCE`（`approval.granted.rule=hook:permission_request`）；计划
+     模式忽略 allow（那里的 ASK 是"这个动作不该发生"，不存在"钩子替我同意"）；deny 不弹卡，
+     按 **call key** 把理由并进 `pre_tool_use` 的拒绝表（按工具名作键会查不中，模型看到的
+     会是网关兜底的另一种文案），并记 `permission.denied` + 触发 `PermissionDenied`。
+  2. **卡片出现前喊一声**：`Notification(notification_type=permission_prompt,
+     title=需要审批：<tool>)` 在 `interrupt` 之前跑，桌面通知/IM 机器人只能在这一刻提醒人
+     来看；通知钩子不阻断，失败也不影响发卡。子代理收尾发 `Notification(agent_completed)`。
+  3. **PostToolBatch 一批一次**：逐条 `post_tool_use` 之外再发一次批事件，载荷
+     `tool_calls[{tool_name, tool_input, ok, mode}]`，与单次事件不互斥。
+  4. **Stop / SubagentStop 不许无限拦**：阻断后把理由交回模型继续，第二次起
+     `stop_hook_active=true`，上限 `BLANK_STOP_HOOK_BLOCK_CAP`（默认 8）；`stop_blocked` /
+     `stop_blocks` 必须是 `AgentState` 里**声明过**的键——langgraph 只合并状态里有的键，
+     写在返回值里没声明会被静默丢弃，第二次读到的永远是"从没拦过"（首版实现真踩了，
+     端到端实测 `stop_hook_active` 恒 false 后修正）。
+  5. **PreCompact 是一次性的**：输出拼进压缩提示词且用完即清；`SessionStart` 按
+     `source=startup`、`SessionEnd` 按 `reason=completed|waiting_approval|interrupted` 分派。
+  6. 偏离/未移植：`UserPromptExpansion` / `TeammateIdle` 两个事件仍未移植，`session_crons`
+     恒空、`background_tasks` 形状是 `{id, description, status}`、SubagentStop 无
+     `agent_transcript_path`、Notification 只接 `permission_prompt`/`agent_completed` 两类、
+     SessionEnd 只有三种 reason。
+  测试：新增 `tests/test_hook_events_v52.py` 24 例（事件注册与阻断集合、stdin
+  `hook_event_name`、网关侧 allow/deny/计划模式/permission_denied/notification、**图内真实
+  发卡路径**四个用例含 deny 跳过卡片与 allow 不弹卡、Stop 二次阻断与上限、路由、压缩、
+  SessionEnd、子代理 stop，以及真子进程钩子的 post_tool_batch / stop / permission_request
+  allow / permission_request deny / notification / SessionStart-End 端到端）。变异 9/9 红
+  （阻断集合去掉 permission_request、stdin 去掉 `hook_event_name`、图内事件名改坏、计划
+  模式认 allow、notification target 改坏、不合并 `hook_denied`、不清 `stop_blocked`、子代理
+  不跑 stop 门、`agent_completed` 类型改坏）。相邻审批/钩子/子代理 12+11 个套件全绿；全量
+  后端回归：**3523 passed / 28 skipped（781.43s）**。
 
 - **Skill 的 `paths` 条件激活对齐上游 `conditionalSkills`（AA 批）**：frontmatter 里写
   `paths:` 的 Skill 不再只是"解析进 ignored"，而是按 Claude 的条件技能处理：清单里先

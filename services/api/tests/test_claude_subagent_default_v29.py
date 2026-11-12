@@ -56,6 +56,10 @@ def _context(workspace: Path, runner: SubAgentRunner, task_id: str = "task-v29")
     return SimpleNamespace(root=Path(workspace), task_id=task_id, subagent_runner=runner)
 
 
+async def _no_hooks(*_args, **_kwargs):
+    return []
+
+
 class CaptureSession:
     """只做 summarize 需要的那几件事：记事件、接住提示词、给一段交付正文。"""
 
@@ -71,6 +75,8 @@ class CaptureSession:
         self._text = text
         self.context = SimpleNamespace(subagent_runner=runner)
         self.recorder = self
+        # 这个假会话只服务收尾节点；Stop 门会先问一次钩子，没配钩子就是空结果。
+        self.hooks = SimpleNamespace(run=_no_hooks)
 
     async def add(self, event: str, node: str, payload: dict) -> None:
         self.events.append((event, payload))

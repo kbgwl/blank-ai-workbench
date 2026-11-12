@@ -371,10 +371,11 @@ async def test_the_gate_records_the_review_with_the_same_seq_as_the_event(seeded
     session = _gate_session(
         tmp_path, '{"verdict": "deny", "reasons": ["未经确认的递归删除"]}'
     )
-    denied, blocked = await _approval_gate(
+    denied, blocked, hook_denied = await _approval_gate(
         session, "call_model", [{"id": "call-1", "name": "run_shell", "args": arguments}]
     )
     assert denied == set() and blocked == {"run_shell": "未经确认的递归删除"}
+    assert hook_denied == {}
     events = await _events("guardian.reviewed")
     assert len(events) == 1, "审查判定必须进事件流（真源只有一个）"
     seq, payload = events[0]
