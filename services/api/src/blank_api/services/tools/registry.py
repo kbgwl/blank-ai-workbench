@@ -94,6 +94,8 @@ DEFERRED_TOOLS = frozenset(
         "read_mcp_resource",
         "read_mcp_resource_dir",
         "refresh_mcp_tools",
+        # LSP 与 Claude 一样 shouldDefer：代码智能不是每轮都要用，且要本机先配好语言服务器。
+        "lsp",
     }
 )
 
@@ -255,6 +257,24 @@ ALIASES: dict[str, tuple[str, ...]] = {
         "refresh",
         "refresh tools",
     ),
+    "lsp": (
+        "lsp",
+        "代码智能",
+        "定义",
+        "跳转定义",
+        "引用",
+        "谁用了",
+        "谁调用",
+        "符号",
+        "悬停",
+        "调用层级",
+        "implementation",
+        "definition",
+        "references",
+        "hover",
+        "symbols",
+        "call hierarchy",
+    ),
 }
 
 MAX_SEARCH_RESULTS = 6
@@ -291,6 +311,9 @@ PARALLEL_SAFE_TOOLS = frozenset(
         "list_mcp_resources",
         "read_mcp_resource",
         "read_mcp_resource_dir",
+        # LSP 九操作全部只读（Claude 的 isReadOnly/isConcurrencySafe 都为真）：
+        # 并发跑几条查询不会互相踩状态，服务端自己按文档排队。
+        "lsp",
     }
 )
 

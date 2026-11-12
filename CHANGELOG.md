@@ -1,6 +1,48 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）
+
+- **LSP 工具：单工具九操作、文本与计数对齐 Claude（R 批第 5 项）**：
+  按 Claude Code 2.1.271 的 `sdk-tools.d.ts` 契约与 `claude.exe` 嵌入实现落成本地
+  `lsp` 工具。新增 `services/lsp/client.py`（stdio 帧、按扩展名懒启动、反向请求应答、
+  失败缓存、关进程）与 `services/tools/lsp.py`（参数校验、九操作映射、`git check-ignore`
+  过滤、文本格式化与计数）；`tools/base.py`（`ToolContext.lsp`）、`services/agent/runtime.py`
+  （每任务一个管理器、收尾关闭）、`tools/__init__.py`、`tools/registry.py`（按需、并行安全、
+  别名）、`subagent.py`（子代理工具表不含 `lsp`）接线。
+  1. **一个工具、九个操作**：`goToDefinition` / `findReferences` / `hover` /
+     `documentSymbol` / `workspaceSymbol` / `goToImplementation` / `prepareCallHierarchy` /
+     `incomingCalls` / `outgoingCalls`。`filePath` 收绝对路径或工作区相对路径；
+     `line`/`character` 都是 1-based，只在发请求处减一。`incomingCalls`/`outgoingCalls`
+     先 `textDocument/prepareCallHierarchy`、再用返回的第一条 `{item}` 问
+     `callHierarchy/incomingCalls`（`outgoingCalls` 同理）。
+  2. **文本格式逐字对齐**：单条定义 `Defined in path:l:c`、多条 `Found N definitions:`
+     每行两空格；单条引用 `Found 1 reference:` 换行两空格，多引用
+     `Found N references across M files:` 后按文件空行分组 `path:` + `  Line l:c`；
+     工作区符号同分组并带 ` (Kind) - Line N in container`；hover `Hover info at l:c:`；
+     documentSymbol `Document symbols:` 两空格递进 + ` - Line N`；调用层级
+     `Found N incoming/outgoing call(s):` + `[calls at: l:c]` / `[called from: l:c]`；
+     八条空结果文案照抄，模型据此判断要不要再查一次。
+  3. **计数与过滤**：`resultCount`/`fileCount` 按 Claude 口径；定义/引用/实现/工作区符号
+     四类结果先问 `git check-ignore`（每批 50、5s 超时，非仓库不过滤），被 `.gitignore`
+     排除的生成文件不进结果。
+  4. **失败说清楚**：文件不存在 / 不是文件 / 超过 10,000,000 字节（提示用 ceil MB）直接
+     拒绝；没配服务端回 `No LSP server available for file type: .ext`；初始化失败回
+     `LSP initialization failed: ...` 并记住失败，不在每次调用重拉；运行期失败（超时、
+     畸形数据）回 `Error performing <op>: ...` 而不是抛异常——与 Claude 的 catch 同口径。
+  5. **协议与生命周期**：`Content-Length: N\r\n\r\n<body>` 帧；`initialize` 后
+     `initialized`；服务端反向 `workspace/configuration` 按项回 `null`、其余已知方法回
+     `null`、未知方法回 `-32601`；每次请求前全文 `didOpen`/`didChange`（不装 watcher）；
+     每任务一个管理器（绑定 `run_root`），任务收尾（含等审批）关进程，恢复后按需重拉；
+     子代理工具表不含 `lsp`，语言服务器进程不会跟着隔离副本泄漏。
+  测试：新增 `tests/test_lsp_tool_v42.py` 40 例（真实 stdio 假服务端跑通九操作、位置换算、
+     文本格式、计数、gitignore 过滤、10MB 上限、启动崩溃、失败缓存、配置跳过、关闭幂等、
+     运行时注入与收尾关闭），变异电池 34/34 红（逐条改坏实现，红在指定判据上，跑完按原字节
+     还原并核对 sha256）。
+  偏离：工具名 `lsp`（Claude 为 `LSP`）；服务器清单读本机 `lsp.json`（跟设置文件同目录，
+  `BLANK_LSP_FILE` 可改）；没有文件 watcher，每次请求重发全文 `didChange`；初始化失败
+  按扩展名缓存、不每次重拉；子代理不含该工具；`lsp.json` 写坏一条只跳过该条；非 runtime
+  入口走模块级兜底管理器。全量后端回归：**3104 passed, 28 skipped**（0 failed，rc=0，
+  713.15s）。
 
 - **MCP 资源四工具：能力先于调用、失败按服务端隔离、刷新只动本地工具表（R 批第 4 项）**：
   按 Claude Code 2.1.271 的 `sdk-tools.d.ts` 与 `claude.exe` 嵌入实现落成本地

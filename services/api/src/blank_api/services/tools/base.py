@@ -65,6 +65,9 @@ class ToolContext:
     # 本任务的 MCP 连接包（bridge.MCPBundle）：资源四工具从它取客户端名单，
     # 刷新工具表要拿它区分"连上了"与"连过但失败了"。
     mcp: Any = None
+    # 本任务的语言服务器管理器（lsp.LSPServerManager）：一个任务一个，initialize 绑定的
+    # 工作区根不会串到别的任务；进程在第一次 lsp 调用时才拉起，任务收尾时关闭。
+    lsp: Any = None
     # 团队群聊身份：group_id / bot_id / is_admin / project_id。空表示非团队任务，
     # 团队管理工具只在主理人的任务里可见。
     team_scope: dict = field(default_factory=dict)

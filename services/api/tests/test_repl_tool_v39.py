@@ -460,7 +460,13 @@ async def test_runtime_finish_closes_repl_session(monkeypatch):
         async def get(self, model, key):
             return None
 
-    scope = SimpleNamespace(task_id="task-repl-finish", store=lambda: Store(), subagents=None)
+    scope = SimpleNamespace(
+        task_id="task-repl-finish",
+        store=lambda: Store(),
+        subagents=None,
+        # 真实 scope 总有 session；这里不带 lsp，走「没有语言服务器管理器」那一支。
+        session=SimpleNamespace(context=SimpleNamespace()),
+    )
     runtime = AgentRuntime(None)
     # 等待审批不是终点：恢复后还要接着用同一个会话
     await runtime._finish(scope, "waiting_approval", summary="", reason="")

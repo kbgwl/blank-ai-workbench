@@ -63,6 +63,7 @@ from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import HookRunner
 from blank_api.services.instructions import load_layers, provenance
 from blank_api.services.context_curator import curate
+from blank_api.services.lsp import LSPServerManager
 from blank_api.services.mcp import manager as mcp_manager
 from blank_api.services.memory import MemoryStore
 from blank_api.services.plan import plan_fingerprint
@@ -546,6 +547,9 @@ class AgentRuntime:
                 "receive_task",
                 {"root": str(write_root), "readonly_source": str(request.root)},
             )
+        # LSP 语言服务器按任务持有：它的 initialize 绑定了工作区根（含隔离根/worktree），
+        # 跨任务复用会把 A 任务的符号表答给 B 任务。这里只建壳；进程等第一次 lsp 调用才拉起。
+        lsp_manager = LSPServerManager(root=run_root)
         gateway = ToolGateway(
             tools,
             defer=tool_search_enabled,
@@ -617,6 +621,7 @@ class AgentRuntime:
         context = ToolContext(
             hooks=hooks,
             mcp=mcp_bundle,
+            lsp=lsp_manager,
             root=run_root,
             task_id=request.task_id,
             recorder=recorder,
@@ -1321,6 +1326,11 @@ class AgentRuntime:
         # 它们还在调用模型、写事件，账目与界面从此对不上。等待审批不是一个终点——
         # 恢复后还要用同一个句柄取结论，所以那一档不收。
         # 后台命令同理：进程还活着、日志还占着盘，也得在这里收走。
+        # LSP 不在这一档例外里：语言服务器不保存用户可续跑的会话状态，等审批时让它
+        # 占着内存没有收益；恢复后的下一回合会按需重拉一个。
+        lsp_manager = getattr(getattr(scope.session, "context", None), "lsp", None)
+        if lsp_manager is not None:
+            await lsp_manager.close()
         if status != "waiting_approval":
             await shell_tasks.aclose(scope.task_id, reason=f"task_{status}")
             # 工作流的脚本进程与它派出的子代理都挂在任务上：任务一收尾就没人取结论了，

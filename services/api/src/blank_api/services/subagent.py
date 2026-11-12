@@ -343,8 +343,13 @@ def batch_usage(results: list[SubAgentResult]) -> dict:
 
 
 def _child_tools(tools: list, *, skill_catalog: bool) -> list:
-    """子代理能看到的工具：REPL 依赖父会话网关；没有 Skill 目录就没有加载入口。"""
-    kept = [tool for tool in tools if tool.name != "repl"]
+    """子代理能看到的工具：REPL 依赖父会话网关；没有 Skill 目录就没有加载入口。
+
+    LSP 管理器是任务级事实（绑定主工作区根、任务收尾统一关进程）。子代理跑在
+    隔离副本里，没有拿到父会话的 manager，走兜底会按副本根另起一套语言服务器，
+    副本删掉后这些进程没人收——所以和 REPL 一样，代码智能只留在主代理。
+    """
+    kept = [tool for tool in tools if tool.name not in ("repl", "lsp")]
     if not skill_catalog:
         kept = [tool for tool in kept if tool.name != "skill"]
     return kept

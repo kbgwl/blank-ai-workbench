@@ -13,6 +13,7 @@ from blank_api.services.tools.git import git_tools
 from blank_api.services.tools.delegate import delegate_tools
 from blank_api.services.tools.editing import editing_tools
 from blank_api.services.tools.memory_tools import memory_tools
+from blank_api.services.tools.lsp import lsp_tools
 from blank_api.services.tools.mcp_resources import mcp_resource_tools
 from blank_api.services.tools.monitor import monitor_tools
 from blank_api.services.tools.notebook import notebook_tools
@@ -55,6 +56,7 @@ def build_default_tools() -> list[ToolDefinition]:
         *workflow_tools(),
         *worktree_tools(),
         *mcp_resource_tools(),
+        *lsp_tools(),
         *team_admin_tools(),
     ]
 

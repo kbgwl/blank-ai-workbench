@@ -268,6 +268,7 @@ uv run alembic revision --autogenerate -m "描述"
 | REPL 工具（持久 JavaScript 组合） | ✅ | `repl(code, description?, timeout?)` 对齐 Claude REPL 契约：脚本跑在每任务一个的持久 Node 子进程里，密封 `vm` 上下文（没有 `require`/`process`/`import`），变量跨调用保留、支持顶层 await、最后一条表达式即返回值、`console.log/error` 分别回 stdout/stderr；工具按本地名字当异步函数用，每次内层调用回宿主走同一条 `ToolGateway.execute(..., inner=True)`（场景禁用/安全策略/权限/审计/沙箱一个不少）；会话/编排类工具不注入、场景排除的工具也不注入；需要审批的内层调用直接拒绝（REPL 里弹不出审批卡）；`timeout` 默认 30000ms、上限 600000ms，同步死循环由 `vm` 超时打断且会话保留，异步挂起由宿主截止时间杀掉进程并清空状态；缺 Node 报 `skipped` + `data.missing_command=node`；没有网关（子代理、非 runtime 入口）直接拒绝；任务收尾摘会话，等审批那一档保留。判据 `services/api/tests/test_repl_tool_v39.py`（36 例，含真实 Node 持久/密封/超时/内层工具），变异 16/16 红 |
 | 任务清单 Task*（依赖图 + 钩子） | ✅ | `task_create / task_get / task_update / task_list` 对齐 Claude Task* 契约：任务落盘（默认 `~/.blank/tasks/<task_id>/`，`BLANK_TASKS_DIR` 可改根；团队任务按 group_id 共享一份），id 是十进制数字、单调递增，删除后不复用（高水位单独记，崩溃丢了水位文件也会在删除最高号时抬回去），列表按数字 id 升序而不是文件名字典序；`addBlocks` / `addBlockedBy` 写双向引用、已存在的去重、删任务时把别处对它的引用一并清掉；`metadata` 按键合并、值为 null 删键；`task_list` 隐藏 `metadata._internal` 为真的任务、把已完成阻塞者从 `blockedBy` 里过滤；`task_created` / `task_completed` 是可阻断钩子（创建被拒把刚建的任务删回去，完成被拒任何字段都不落盘）；团队任务标 `in_progress` 未带 owner 时自动署名。写盘走 scratch + `os.replace`，同目录 asyncio 锁 + 独占创建，id 只认 `[A-Za-z0-9_-]{1,64}`（路径穿越直接拒绝）。判据 `services/api/tests/test_task_tools_v40.py`（33 例，含并发创建/坏文件/崩溃窗口/真实子进程钩子），变异 16/16 红 |
 | MCP 资源四工具（列举/读取/目录/热刷新） | ✅ | `list_mcp_resources / read_mcp_resource / read_mcp_resource_dir / refresh_mcp_tools` 对齐 Claude Code 2.1.271：没声明 `capabilities.resources` 的服务端连 `resources/list` 都不发，没声明目录扩展的连非标准 `resources/directory/read` 都不发（「没能力」与「能力坏了」分开说）；列举跟 `nextCursor` 翻页，目录首页 `InvalidParams`＝不是目录、后续页坏掉保留前几页、页数上限 20 并回报 `truncated`；一家服务端失败只进 `data.errors`，全部有能力服务端都失败时明确报错而不是说 `No resources found`；读取文本原样返回，二进制落系统临时目录（不进用户工作区）并给路径，非法 base64 如实标「未保存」，`-32601` / `-32002` 文案与 Claude 一致（后者只在声明目录能力时补 `ReadMcpResourceDir` 提示）；刷新只重查已连接客户端、绝不重拨，连过但失败报 `not_connected`，同名工具就地换定义并保留 `tool_search` 激活状态、只摘本服务端前缀、场景禁用回放。四个工具默认按需（`shouldDefer` 同口径），三读可并行、refresh 不在。判据 `services/api/tests/test_mcp_resources_v41.py`（34 例，含真实 stdio 子进程/分页/目录损坏/二进制落盘/运行时注入），变异 37/37 红 |
+| LSP 工具（九操作代码智能） | ✅ | `lsp(operation, filePath, line, character, query?)` 对齐 Claude 的单工具九操作：位置 1-based（只在发请求处减一次），`workspaceSymbol` 用 `query`；结果文本逐字对齐（单条定义 `Defined in`、多条 `Found N definitions:` 各占一行、单条引用 `Found 1 reference:`、多引用/工作区符号按文件空行分组、hover `Hover info at l:c:`、documentSymbol 两空格递进缩进 + `- Line N`、调用层级 `Found N incoming/outgoing call(s):` 与 `[calls at: l:c]`/`[called from: l:c]`），8 条空结果文案照抄；`resultCount`/`fileCount` 按 Claude 口径（definition/implementation/references/workspace 按有效条目与唯一 URI，hover 1/1，documentSymbol 递归符号数且 fileCount 只有 0/1，call hierarchy 按条目与各端点唯一）；定义/引用/实现/工作区符号四类结果先过 `git check-ignore`（每批 50、5s 超时，不是仓库就不过滤）；文件上限 10,000,000 字节、提示用 ceil MB；文件不存在/不是文件（含目录）直接拒绝，运行时失败（初始化、超时、畸形数据）回 `Error performing <op>: ...` 而不是抛异常，没配服务端回 `No LSP server available for file type: .ext`。语言服务器按扩展名懒启动（`lsp.json`，`BLANK_LSP_FILE` 可改；认 `extensionToLanguage` 与 `extensions` 两种写法，写坏一条只跳过该条），stdio 走 `Content-Length` 帧，服务端反向 `workspace/configuration` 按项回 `null`；每次请求前全文 `didChange`（不装文件 watcher，永不读到旧内容）；一台起不来会记住失败、不在每次调用重拉；每任务一个管理器、任务收尾（含等审批）关进程。默认按需（`tool_search` 拉出）、可并行、子代理工具表不含。判据 `services/api/tests/test_lsp_tool_v42.py`（40 例，含真实 stdio 假服务端/九操作/失败缓存/注入/收尾关闭），变异 34/34 红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -336,6 +337,15 @@ uv run alembic revision --autogenerate -m "描述"
   的文本模板；全部失败时回明确错误而不是 `No resources found`；目录截断只以 `data.truncated`
   表达、不在文本里追加说明；工具名沿用本地 snake_case（`list_mcp_resources` 等）而不是 Claude
   的 `ListMcpResourcesTool`；刷新是否保留激活状态在拆解产物里读不出来，这里显式钉成「保留」）。
+  LSP 已于 R5 补齐（见上表；七处偏离：工具名沿用本地 snake_case `lsp` 而不是 Claude 的
+  `LSP`；语言服务器清单读本机 `lsp.json`（跟设置文件同目录，`BLANK_LSP_FILE` 可改），
+  不是从 Claude 的客户端配置源读；没有文件 watcher，每次请求前把当前全文重发一次
+  `didChange`，换来「永不拿旧内容答新问题」但大文件要多传几次；初始化失败按扩展名记住、
+  后续调用直接回报而不是每次重拉（Claude 是否重拉在产物里读不出来，这里选了不留一堆
+  半死进程）；子代理工具表不含 `lsp`（语言服务器管理器是任务级事实、绑定主工作区根，
+  子代理跑在隔离副本里，另起一套没人收）；`lsp.json` 写坏一条只跳过该条并列出原因，
+  不拖垮整份配置；非 runtime 入口没有注入管理器时走模块级兜底（按根共用一份，宿主进程
+  结束才回收），生产路径上由运行时每任务注入并在收尾关闭）。
   后台 shell 已于 Q1 补齐
   （`run_in_background` + `task_output`/`task_stop`，见上表），但它有两处与本机实现绑定
   的偏离：沙箱路径不流式（只在结束时整段落日志）、完整输出走 `task_output` 而不是
