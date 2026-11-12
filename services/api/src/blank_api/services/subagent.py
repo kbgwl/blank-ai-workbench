@@ -426,9 +426,9 @@ async def run_subagent(
     catalog = SkillCatalog(skill_catalog.entries()) if skill_catalog is not None else None
     if catalog is not None and not len(catalog):
         catalog = None
-    # REPL 是主代理的会话级能力，子代理没有独立网关；没有 Skill 目录时加载入口
-    # 也没意义。两条口径都在 _child_tools 里。
-    tools = _child_tools(tools, skill_catalog=catalog is not None)
+    # REPL 是主代理的会话级能力，子代理没有独立网关；没有模型可调用的 Skill 时
+    # 加载入口也没意义。两条口径都在 _child_tools 里。
+    tools = _child_tools(tools, skill_catalog=catalog is not None and catalog.model_available())
     try:
         sandbox_tier = assert_not_looser(parent_tier, sandbox_tier)
     except TierDowngrade as exc:

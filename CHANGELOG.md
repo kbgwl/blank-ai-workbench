@@ -1,6 +1,45 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）
+
+- **文件型 Skill 定义（`.blank/skills`）与 skill 工具双闸对齐 Claude（S 批第 2 项）**：
+  按 Claude Code 2.1.271 的 `.claude/skills` 契约落成本地磁盘 Skill 发现与合并。新增
+  `services/skills_defs.py`（frontmatter 降级解析、字段校验、两层发现、审计投影、合并规则），
+  改 `services/tools/skills.py`（目录带可用性/工具审计字段、模型清单与工具拒绝）、
+  `services/agent/runtime.py`（每任务发现一次、`skills.loaded` 事件、与库目录合并、
+  没有模型可调用项时摘掉 `skill` 工具）、`services/subagent.py`（子代理拷贝目录，
+  没有一个模型可调用时同样摘掉入口）。
+  1. **目录与发现**：一目录一 Skill（`<name>/SKILL.md`，文件名大小写不敏感）；项目层
+     `<运行根>/.blank/skills` + 用户层 `~/.blank/skills`（`BLANK_USER_SKILLS_DIR`、
+     `BLANK_USER_INSTRUCTIONS_DIR/skills` 可改），同名项目层胜用户层；调用名就是目录名，
+     frontmatter `name` 只作显示名；没有 SKILL.md 的目录静默跳过，`synced` 保留目录、
+     超 1 MiB、读失败逐个点名，单个坏文件不拖垮其余 Skill；刻意只读 `.blank`，
+     不把仓库里的 `.claude/skills` 顺带加载。
+  2. **坏 frontmatter 降级而不是跳过**：YAML 坏掉 / 未闭合 / 非映射时丢掉全部字段但
+     仍加载文件——名字回落到目录名、说明回落到正文首行，问题进告警（与 Claude 同口径）。
+  3. **说明与正文**：`description` 缺省时回落到正文首行，清单里截到 120 字；正文超过
+     20000 字截断并标注，正文只在 `skill` 工具里按需加载，不提前进系统提示。
+  4. **双闸与只解析字段**：`disable-model-invocation` 同时挡住模型清单与 `skill` 工具
+     （工具拒绝时明确提示不要绕道复刻）；`user-invocable`、`allowed-tools` /
+     `disallowed-tools`（含 `disallowedTools` 别名）只解析留审计，不改变工具池；
+     `model` / `effort` / `hooks` / `mcpServers` / `lspServers` / `paths` / `context` /
+     `agent` 等未支持字段逐条进 `ignored`。
+  5. **合并与接通**：库 → 用户级 → 项目级，后者胜；但「模型不可调用」的同名项不能遮住
+     可调用的那一份（对应 Claude 同名去重时保留可调用版本）。运行时每任务在最终运行根上
+     发现一次并落 `skills.loaded`，系统提示只列模型可调用项；子代理拿目录拷贝，
+     没有一个模型可调用时连 `skill` 工具一起拿掉。
+  测试：新增 `tests/test_skills_disk_v45.py` 33 例（两层覆盖、跳过矩阵、坏 frontmatter
+     三形态降级、字段解析与审计、合并遮蔽、真实运行时发现→提示→工具加载→事件、
+     只有 user-only 时主代理与子代理都拿不到入口），变异电池 19/19 红（逐条改坏实现，
+     红在指定判据上；跑完按原字节还原并核对 sha256）。全量后端回归：
+     **3220 passed, 28 skipped**（0 failed，rc=0，748.88s）。
+  偏离：目录用 `.blank/skills` 而不是 `.claude/skills`、用户层是 `~/.blank/skills`，
+  且刻意只读 `.blank`；本机还没有斜杠命令/会话入口，`disable-model-invocation` 的
+  Skill 用户侧暂时也没有触发路径（工具会明确拒绝，不假装可用）；`allowed-tools` /
+  `disallowed-tools` 只解析留审计、不改变工具池；正文超过 20000 字截断（Claude 原样
+  使用）；未支持字段只进 `ignored`；plugin 命名空间、`synced` 同步根（只跳过、未实现
+  同步）、嵌套 Skill 目录以及 `allowed-tools` 里的 `${CLAUDE_SKILL_DIR}` /
+  `${CLAUDE_PROJECT_DIR}` 替换未移植。
 
 - **文件型子代理定义（`.blank/agents`）与 spawn_agent(subagent_type) 对齐 Claude（S 批）**：
   按 Claude Code 2.1.271 的 `.claude/agents` 契约落成本地定义发现与派发。新增

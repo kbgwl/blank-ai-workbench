@@ -48,6 +48,7 @@ from blank_api.services.agent import workflow as workflow_module
 from blank_api.services import shell_tasks, worktree_session
 from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agents_defs import discover_agents
+from blank_api.services.skills_defs import discover_skills, merge_skill_entries
 from blank_api.services.agent.scenarios import (
     excluded_tools,
     resolve as resolve_scenario,
@@ -487,12 +488,6 @@ class AgentRuntime:
         # 模型连"有这个工具"都不该知道。工具自身还会再校验一次身份。
         if not (request.team_scope or {}).get("is_admin"):
             tools = [tool for tool in tools if tool.name not in TEAM_ADMIN_TOOL_NAMES]
-        # Skill 目录在这轮装配时定下来：清单进系统提示，正文等模型调用 skill 再加载。
-        # 一个可加载的都没有时，工具也一并拿掉——列不出名字却摆着加载入口，
-        # 只会让模型反复试错。
-        skills = SkillCatalog(request.skill_catalog)
-        if not skills:
-            tools = [tool for tool in tools if tool.name != "skill"]
         # 外部工具（MCP）：走同一个网关、同一套审批、同一份审计。连接失败只影响
         # 那个服务端自己——半份工具表也远好过起不来任务。
         mcp_bundle = await mcp_manager().bundle()
@@ -542,6 +537,23 @@ class AgentRuntime:
         agents = discover_agents(run_root)
         if agents.custom() or agents.errors:
             await recorder.add("agents.loaded", "receive_task", agents.as_dict())
+        # 磁盘 Skill（.blank/skills/<name>/SKILL.md）与库里的启用项合成同一份目录：
+        # 清单进系统提示，正文等模型调用 skill 再按需加载。层级从低到高是
+        # 库（应用里启用的）→ 用户级 → 项目级，项目能盖住同名项（与 Claude 一致）；
+        # 但"模型不可调用"的同名定义不能盖掉可调用的那一份。
+        disk_skills = discover_skills(run_root)
+        if disk_skills.entries or disk_skills.errors or disk_skills.warnings:
+            await recorder.add("skills.loaded", "receive_task", disk_skills.as_dict())
+        skills = SkillCatalog(
+            merge_skill_entries(
+                request.skill_catalog,
+                [item.as_entry() for item in disk_skills.entries.values()],
+            )
+        )
+        # 一个模型可加载的都没有时，工具也一并拿掉——列不出名字却摆着加载入口，
+        # 只会让模型反复试错。
+        if not skills.model_available():
+            tools = [tool for tool in tools if tool.name != "skill"]
         # 逆向场景：读根仍是用户的工作区（样本在那儿），写根切到独立分析区。
         # 这一层不写在提示词里——提示词只是"别改原文"的建议，换写入根才是约束（v164 §5）。
         write_root = None

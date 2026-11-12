@@ -84,6 +84,16 @@ class SkillCatalog:
                 "description": str(entry.get("description") or "").strip()
                 or skill_summary(instructions),
                 "instructions": instructions,
+                # 磁盘定义（.blank/skills）带过来的审计/可用性字段。库里那条没有，
+                # 默认就是"模型可调用、用户可调用"。
+                "display_name": str(entry.get("display_name") or "").strip(),
+                "allowed_tools": tuple(entry.get("allowed_tools") or ()),
+                "disallowed_tools": tuple(entry.get("disallowed_tools") or ()),
+                "model_invocable": bool(entry.get("model_invocable", True)),
+                "user_invocable": bool(entry.get("user_invocable", True)),
+                "source": str(entry.get("source") or ""),
+                "path": str(entry.get("path") or ""),
+                "ignored": tuple(entry.get("ignored") or ()),
             }
         self.loaded: set[str] = set()
 
@@ -93,11 +103,19 @@ class SkillCatalog:
     def names(self) -> list[str]:
         return list(self._entries)
 
+    def model_names(self) -> list[str]:
+        """模型可调用的名字：``disable-model-invocation`` 的那些不能出现。"""
+        return [name for name, item in self._entries.items() if item["model_invocable"]]
+
+    def model_available(self) -> bool:
+        return any(item["model_invocable"] for item in self._entries.values())
+
     def listing(self) -> list[dict]:
         """系统提示里那一栏的形状：只有名字与一句话说明，不放正文。"""
         return [
             {"name": item["name"], "description": item["description"]}
             for item in self._entries.values()
+            if item["model_invocable"]
         ]
 
     def get(self, name: str) -> dict | None:
@@ -129,11 +147,17 @@ async def _skill(context: ToolContext, arguments: dict) -> ToolOutcome:
         return fail("error", "当前任务没有可用的 Skill。")
     entry = catalog.get(name)
     if entry is None:
-        available = "、".join(catalog.names())
+        available = "、".join(catalog.model_names())
         return fail(
             "error",
             f"没有名为「{name}」的 Skill。当前可用：{available}。"
             "只能用清单里的准确名字，不要猜；CLI 内置命令（/help、/clear 等）不是 Skill。",
+        )
+    if not entry["model_invocable"]:
+        return fail(
+            "error",
+            f"Skill「{name}」标记了 disable-model-invocation，只能由用户在界面里显式触发，"
+            "不能由你调用；也不要用别的方式复刻它的流程。",
         )
     if name in catalog.loaded:
         return ok(
