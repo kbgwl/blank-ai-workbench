@@ -687,7 +687,14 @@ class AgentRuntime:
         file_state = FileStateCache()
         # 钩子实例先建出来：任务清单的 TaskCreated / TaskCompleted 在工具层就要判定，
         # 而 ToolContext 比 AgentSession 先构造。同一个实例交给两边，审计结果不分家。
-        hooks = HookRunner.from_env()
+        # 两个来源合并：settings.json 的 hooks（用户/管理层，项目层已被 ignored）与
+        # BLANK_HOOKS（运维/测试）；disableAllHooks 为真时一个都不加载。
+        hooks = HookRunner.from_env(
+            settings=settings.get("hooks"),
+            disabled=bool(settings.get("disable_all_hooks")),
+        )
+        if hooks.enabled or hooks.warnings or hooks.disabled:
+            await recorder.add("hooks.loaded", "receive_task", hooks.describe())
         context = ToolContext(
             hooks=hooks,
             mcp=mcp_bundle,

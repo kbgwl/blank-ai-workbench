@@ -1,6 +1,36 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）
+
+- **settings.json 的钩子配置面与 matcher 语义（AC 批）**：钩子作者真正用的入口是
+  settings.json 的 `hooks`，此前只有 `BLANK_HOOKS` 能配——等于"能写钩子，但没地方放"。
+  上游锚点：`_zr(e,n,...)`（空 / `*` 全中、纯名单精确、其余正则）、`coi`（名单字符表
+  `^[a-zA-Z0-9_|, -]+$`）、事件名到匹配目标的映射（PreToolUse→tool_name 等）、
+  `disableAllHooks`（策略级总开关）。改 `services/hooks.py`、`services/settings.py`、
+  `services/settings_layers.py`、`services/agent/runtime.py`。
+  1. **两种形状都收**：Claude 嵌套 `{事件: [{matcher, hooks:[{type, command, timeout, async}]}]}`
+     与既有扁平 `{event: [{match, command, ...}]}`；PascalCase 事件名经 `EVENT_ALIASES`
+     折成内部蛇形名，未支持的事件告警后跳过（静默忽略会让用户以为配的钩子在跑）。
+  2. **matcher 对齐 `_zr`**：空 / `*` / `.*` 全中；纯名单（`[A-Za-z0-9_|, -]`）按 `|` 与
+     逗号拆分后精确比对；其余当未锚定的 Python 正则搜；非法正则配置期告警并丢弃。
+     旧实现是 `self.match in target` 子串匹配——`Write|Edit` 会命中 `WriteFile`，
+     `run_shell` 会命中 `run_shell_extra`，判据里三条反证就是它。
+  3. **合并与总开关**：settings 钩子与 `BLANK_HOOKS` 合并，按「事件 + 命令 + matcher +
+     超时」去重（同一条跑两次是 bug）；`disableAllHooks` 认驼峰与下划线两种写法
+     （下划线优先），为真时一个都不加载。timeout 夹到 0.5–60 秒；非 `command` 类型、
+     空命令、坏条目逐条告警跳过，告警只带事件与序号、不带命令正文（避免路径/参数进事件）。
+  4. **安全段**：`hooks` 与 `disable_all_hooks` 进 `PROTECTED_SECTIONS`，项目/本机层
+     写了进 `ignored`。理由：项目设置里的钩子 = 克隆一个仓库就执行它的任意命令；Claude
+     靠工作区信任对话框挡这一步，我们还没有那道门。`disableAllHooks` 同理——项目层能关掉
+     用户的守卫钩子也是提权。
+  5. **接线与可观察**：`runtime._prepare` 从生效设置构建 `HookRunner`（不再只读 env），
+     有钩子 / 有告警 / 总开关为真时落 `hooks.loaded`（每事件条数、来源 env|settings、
+      disabled），不落命令正文。偏离：managed hooks 也受 `disableAllHooks` 约束（上游规定
+     非管理层关闭不影响 managed），现结构按来源分不开；钩子类型只支持 `command`。
+  判据 `services/api/tests/test_settings_hooks_v53.py`（20 例：两种形状、事件名映射、坏
+  事件/类型/正则/空命令、timeout 夹取、合并去重、总开关、matcher 四种形态、层级 honored/
+  ignored、别名优先级、settings 来源真子进程钩子的任务端到端 + 总开关反证），变异 9/9 红；
+  相邻钩子/设置套件 209 + 135 例全绿，全量 **3543 passed / 28 skipped（786.84s）**。
 
 - **钩子事件面第二批：图内权限钩子、通知、批处理、回合结束与压缩前后（AB 批）**：上一批
   只有事件名和网关侧接线，图形路径下真正发卡的地方是 `graph.py:_approval_gate` 里的

@@ -13,8 +13,8 @@ Claude Code 的 settings 从低到高叠加：用户级、项目级（``.claude/
 
 **安全段只认用户层与管理层。** 项目/本机文件躺在一个可能被克隆、被随手提交的
 仓库里，让它改 ``safety`` / ``permissions`` / ``sandbox`` / ``guardian`` /
-``features`` 等于把「打开这个仓库」变成一次提权。被忽略的段进 ``ignored``
-并带在审计事件里，不静默吞掉。
+``features`` / ``hooks`` / ``disable_all_hooks`` 等于把「打开这个仓库」变成一次
+提权（钩子就是任意命令）。被忽略的段进 ``ignored`` 并带在审计事件里，不静默吞掉。
 
 **插件开关（``enabledPlugins``）不在此列。** 插件只提供提示词组件
 （commands/skills/agents/输出样式），hooks 与 MCP 一律不加载，所以项目层打开一个
@@ -52,8 +52,11 @@ MANAGED_ENV = "BLANK_MANAGED_SETTINGS_FILE"
 MAX_FILE_BYTES = 1024 * 1024
 
 # 这些段只能由用户层或管理策略层决定。项目层/本机层写了也只进 ignored。
+# ``hooks`` 在列：项目设置里的钩子 = 克隆一个仓库就执行它的任意命令；Claude
+# 靠工作区信任对话框挡这一步，我们还没有那道门，所以直接只认用户/管理层。
+# ``disable_all_hooks`` 同样在列：项目层能关掉用户的守卫钩子也是提权。
 PROTECTED_SECTIONS: frozenset[str] = frozenset(
-    {"guardian", "permissions", "sandbox", "safety", "features"}
+    {"guardian", "permissions", "sandbox", "safety", "features", "hooks", "disable_all_hooks"}
 )
 _PROTECTED_REASON = "安全设置只能由用户层或管理策略决定"
 
@@ -189,7 +192,13 @@ def _merge_layer(merged: dict[str, Any], sources: dict[str, str], layer: Layer) 
         return
     # 同一层里两张写法都出现时，plugins.enabled 优先（和 normalize 的口径一致），
     # 所以先把顶层 enabledPlugins 铺进去，后面处理 plugins 时再覆盖。
-    for key, value in sorted(layer.data.items(), key=lambda item: item[0] != "enabledPlugins"):
+    for key, value in sorted(
+        layer.data.items(), key=lambda item: item[0] not in ("enabledPlugins", "disableAllHooks")
+    ):
+        # Claude 写的是驼峰 disableAllHooks：先折成内部名，再走保护与合并。
+        # 同一层两种写法都在时，下划线写法后到、覆盖驼峰（与 normalize 一致）。
+        if key == "disableAllHooks":
+            key = "disable_all_hooks"
         if key in PROTECTED_SECTIONS and layer.name in (LAYER_PROJECT, LAYER_LOCAL):
             layer.ignored.append({"section": key, "reason": _PROTECTED_REASON})
             continue

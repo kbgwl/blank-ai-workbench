@@ -12,8 +12,9 @@ REA 拆解证据（docs/REA-CODEX-CLAUDE.md）：Codex 与 Claude Code 都有几
 这是"可扩展"的地基：没有它，任何可插拔能力都只能改内核代码。
 
 落地方式与两家一致：把事件以 JSON 写到子进程 stdin，读 stdout 的 JSON 决定是否干预。
-**默认关闭** —— 只有显式配置了 `BLANK_HOOKS` 才会执行任何外部命令。
-钩子失败一律 **fail-open**（坏钩子不能把任务搞挂），但每次执行都会留审计记录。
+**默认关闭** —— 只有显式配置了 `BLANK_HOOKS` 或 settings.json 的 ``hooks`` 才会执行
+任何外部命令。钩子失败一律 **fail-open**（坏钩子不能把任务搞挂），但每次执行都会
+留审计记录。
 例外是否决本身：阻断型事件（pre_tool_use / user_prompt_submit）上明确说"不"
 （deny 或退出码 2）就不许放行，跑坏、超时与非阻断型事件的"不表态"一样不拦。
 """
@@ -24,6 +25,7 @@ import asyncio
 import json
 import locale
 import os
+import re
 import signal
 import time
 from dataclasses import dataclass
@@ -80,6 +82,70 @@ BLOCKING_EVENTS = frozenset(
         "subagent_stop",
     }
 )
+# Claude settings.json 用的是 PascalCase 事件名，BLANK_HOOKS 用蛇形。两种都收，
+# 统一折成 HOOK_EVENTS 里的名字。表里没有的事件 = 我们还没移植，告警后跳过：
+# 静默忽略会让用户以为自己配的钩子在跑。
+EVENT_ALIASES: dict[str, str] = {
+    "SessionStart": "session_start",
+    "SessionEnd": "session_end",
+    "UserPromptSubmit": "user_prompt_submit",
+    "PreToolUse": "pre_tool_use",
+    "PostToolUse": "post_tool_use",
+    "PostToolUseFailure": "post_tool_use_failure",
+    "TaskCreated": "task_created",
+    "TaskCompleted": "task_completed",
+    "PreCompact": "pre_compact",
+    "PostCompact": "post_compact",
+    "Notification": "notification",
+    "PermissionRequest": "permission_request",
+    "PermissionDenied": "permission_denied",
+    "PostToolBatch": "post_tool_batch",
+    "Stop": "stop",
+    "SubagentStop": "subagent_stop",
+    "WorktreeCreate": "worktree_create",
+    "WorktreeRemove": "worktree_remove",
+}
+
+# 上游的 matcher 三种形态：空串/"*"/".*" 全中；纯名单按 `|` 或 `,` 拆分后**精确**
+# 比对；其余当正则（未锚定）搜。纯名单判定沿用上游那张字符表 —— 名单里不可能
+# 出现正则元字符，所以两种解释不会歧义。
+_MATCHER_LIST_RE = re.compile(r"^[A-Za-z0-9_|, -]+$")
+_MATCH_ALL = ("", "*", ".*")
+
+
+def matcher_matches(matcher: str, target: str) -> bool:
+    """钩子的 matcher 是否命中。语义对齐上游 ``_zr``：
+
+    * 空 / ``*`` / ``.*`` → 全中；
+    * 纯名单（字母数字下划线、``|``、逗号、空格、连字符）→ 拆分后精确比对；
+    * 其余 → 当正则搜（未锚定）；
+    * 正则非法 → 不匹配（上游同样告警后当作不命中）。
+    """
+    text = str(matcher or "")
+    if text in _MATCH_ALL:
+        return True
+    if _MATCHER_LIST_RE.match(text):
+        names = {item.strip() for item in text.replace(",", "|").split("|")}
+        names.discard("")
+        return target in names
+    try:
+        return re.search(text, target) is not None
+    except re.error:
+        return False
+
+
+def _matcher_ok(matcher: str) -> bool:
+    """配置期校验：非法正则在这里就丢掉，别等到每次调用才静默不匹配。"""
+    text = str(matcher or "")
+    if text in _MATCH_ALL or _MATCHER_LIST_RE.match(text):
+        return True
+    try:
+        re.compile(text)
+    except re.error:
+        return False
+    return True
+
+
 DEFAULT_TIMEOUT = 10.0
 MAX_SNIPPET = 500
 # additionalContext 会进模型上下文：不设上限等于让一个坏钩子把窗口占满。
@@ -110,9 +176,65 @@ class HookSpec:
     # （pre_tool_use / user_prompt_submit）例外：它的价值就在于"等结果再决定"，
     # 异步化等于放弃 veto。
     async_run: bool = False
+    # 这条钩子从哪来：env（BLANK_HOOKS）还是 settings（settings.json 的 hooks）。
+    # 只用于审计，不影响执行。
+    source: str = "env"
 
     def applies(self, target: str) -> bool:
-        return not self.match or self.match in target
+        return matcher_matches(self.match, target)
+
+
+def _clamp_timeout(raw: object) -> float:
+    try:
+        value = float(raw) if raw is not None else DEFAULT_TIMEOUT
+    except (TypeError, ValueError):
+        value = DEFAULT_TIMEOUT
+    return max(0.5, min(value, 60.0))
+
+
+def _build_specs(event: str, items: list, *, source: str, warnings: list[str]) -> list[HookSpec]:
+    """拍平一个事件下的配置。两种形状都收：
+
+    * 扁平：``[{"command": "...", "match": "Write", "timeout": 5}]``（BLANK_HOOKS）
+    * Claude 嵌套：``[{"matcher": "Write|Edit", "hooks": [{"type": "command", ...}]}]``
+    """
+    specs: list[HookSpec] = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            warnings.append(f"{event} 第 {index} 条配置不是对象，已跳过")
+            continue
+        group = item.get("hooks")
+        matcher = str(item.get("matcher") or item.get("match") or "").strip()
+        candidates = group if isinstance(group, list) else [item]
+        if not _matcher_ok(matcher):
+            warnings.append(f"{event} 第 {index} 条的 matcher 不是合法正则，已跳过")
+            continue
+        for hook in candidates:
+            if not isinstance(hook, dict):
+                warnings.append(f"{event} 第 {index} 组里的钩子不是对象，已跳过")
+                continue
+            # 上游的钩子还有其他 type（prompt/agent/http/…）：还没有对应实现，
+            # 跳过并告警，而不是当成 shell 命令去跑一坨提示词。
+            kind = str(hook.get("type") or "command").strip().lower()
+            if kind != "command":
+                warnings.append(f"{event} 第 {index} 组的钩子类型 {kind} 尚未支持，已跳过")
+                continue
+            command = str(hook.get("command") or "").strip()
+            if not command:
+                warnings.append(f"{event} 第 {index} 组的钩子缺少 command，已跳过")
+                continue
+            specs.append(
+                HookSpec(
+                    command=command,
+                    match=matcher,
+                    timeout=_clamp_timeout(hook.get("timeout")),
+                    async_run=bool(
+                        hook.get("async") or hook.get("asyncRun") or hook.get("background")
+                    ),
+                    source=source,
+                )
+            )
+    return specs
 
 
 @dataclass
@@ -377,10 +499,17 @@ class HookRunner:
         hooks: dict[str, list[HookSpec]] | None = None,
         *,
         settle_timeout: float = ASYNC_SETTLE_SECONDS,
+        warnings: list[str] | None = None,
+        disabled: bool = False,
     ) -> None:
         self.hooks: dict[str, list[HookSpec]] = hooks or {}
         self.results: list[HookResult] = []
         self.settle_timeout = max(0.0, min(float(settle_timeout), MAX_SETTLE_SECONDS))
+        # 配置期发现的问题（未支持的事件/类型、坏正则、空命令）。进审计事件，
+        # 让"我配了但没跑"有出处；不含命令正文，避免把路径/参数带进事件。
+        self.warnings: list[str] = list(warnings or [])
+        # disableAllHooks：策略级总开关。为真时一个钩子都不加载。
+        self.disabled = bool(disabled)
         # 后台任务：键是任务本身（防止被 GC），值保留 spec 与事件名供取消后审计。
         self._tasks: dict[asyncio.Task, tuple[HookSpec, str]] = {}
         # 完成但还没被下一次模型调用 / 收尾流程取走的结果与唤醒。
@@ -396,52 +525,73 @@ class HookRunner:
         return sum(1 for task in self._tasks if not task.done())
 
     @classmethod
-    def from_env(cls, raw: str | None = None) -> "HookRunner":
-        """`BLANK_HOOKS` 形如：
-        {"pre_tool_use":[{"match":"run_shell","command":"node hooks/guard.mjs","timeout":5}]}
-        解析失败一律降级为"没有钩子"，不影响任务启动。
+    def from_env(
+        cls,
+        raw: str | None = None,
+        *,
+        settings: dict | None = None,
+        disabled: bool = False,
+    ) -> "HookRunner":
+        """从 settings.json 的 ``hooks`` 与 ``BLANK_HOOKS`` 构建（后者形如：
+        {"pre_tool_use":[{"match":"run_shell","command":"node hooks/guard.mjs","timeout":5}]}）。
+
+        两处配置合并，同一条（事件 + 命令 + matcher + 超时）只跑一次。解析失败
+        一律降级为"没有钩子"，不影响任务启动；坏条目进 ``warnings`` 进审计。
+        ``disabled``（上游 disableAllHooks）为真时一个钩子都不加载。
         """
-        text = (os.environ.get("BLANK_HOOKS", "") if raw is None else raw).strip()
-        if not text:
-            return cls()
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return cls()
-        if not isinstance(parsed, dict):
-            return cls()
         try:
             settle = float(os.environ.get("BLANK_HOOK_SETTLE", "") or ASYNC_SETTLE_SECONDS)
         except ValueError:
             settle = ASYNC_SETTLE_SECONDS
+        if disabled:
+            return cls(
+                settle_timeout=settle,
+                warnings=["disableAllHooks 为真：所有钩子都不加载"],
+                disabled=True,
+            )
 
         hooks: dict[str, list[HookSpec]] = {}
-        for event, specs in parsed.items():
-            if event not in HOOK_EVENTS or not isinstance(specs, list):
-                continue
-            built: list[HookSpec] = []
-            for spec in specs:
-                if not isinstance(spec, dict) or not spec.get("command"):
+        warnings: list[str] = []
+        seen: set[tuple[str, str, str, float]] = set()
+
+        def add(mapping: dict, source: str) -> None:
+            for key, items in mapping.items():
+                event = EVENT_ALIASES.get(str(key), str(key))
+                if event not in HOOK_EVENTS:
+                    warnings.append(f"未支持的事件 {key}，已跳过")
                     continue
-                try:
-                    timeout = float(spec.get("timeout") or DEFAULT_TIMEOUT)
-                except (TypeError, ValueError):
-                    timeout = DEFAULT_TIMEOUT
-                built.append(
-                    HookSpec(
-                        command=str(spec["command"]),
-                        match=str(spec.get("match") or ""),
-                        timeout=max(0.5, min(timeout, 60.0)),
-                        async_run=bool(
-                            spec.get("async")
-                            or spec.get("asyncRun")
-                            or spec.get("background")
-                        ),
-                    )
-                )
-            if built:
-                hooks[event] = built
-        return cls(hooks, settle_timeout=settle)
+                if not isinstance(items, list):
+                    warnings.append(f"{key} 的配置不是数组，已跳过")
+                    continue
+                for spec in _build_specs(event, items, source=source, warnings=warnings):
+                    fingerprint = (event, spec.command, spec.match, spec.timeout)
+                    if fingerprint in seen:
+                        continue
+                    seen.add(fingerprint)
+                    hooks.setdefault(event, []).append(spec)
+
+        if isinstance(settings, dict):
+            add(settings, "settings")
+        text = (os.environ.get("BLANK_HOOKS", "") if raw is None else raw).strip()
+        if text:
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                parsed = None
+                warnings.append("BLANK_HOOKS 不是合法 JSON，已跳过")
+            if isinstance(parsed, dict):
+                add(parsed, "env")
+        return cls(hooks, settle_timeout=settle, warnings=warnings)
+
+    def describe(self) -> dict:
+        """审计面：每个事件几条钩子、来自哪里、配置期告警。不含命令正文。"""
+        return {
+            "disabled": self.disabled,
+            "events": {event: len(specs) for event, specs in sorted(self.hooks.items())},
+            "count": sum(len(specs) for specs in self.hooks.values()),
+            "sources": sorted({spec.source for specs in self.hooks.values() for spec in specs}),
+            "warnings": list(self.warnings),
+        }
 
     async def run(self, event: str, target: str = "", payload: dict | None = None) -> list[HookResult]:
         """执行某事件下所有匹配的钩子。阻塞型事件遇到 deny 立即停止后续钩子。

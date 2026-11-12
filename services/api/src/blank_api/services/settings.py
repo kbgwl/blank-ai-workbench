@@ -105,6 +105,12 @@ DEFAULTS: dict[str, Any] = {
     # ``name@marketplace``），值是布尔；设置文件顶层的 enabledPlugins 也会
     # 合到这里，见 settings_layers._merge_layer。
     "plugins": {"enabled": {}},
+    # Claude settings.json 的 ``hooks``：钩子作者真正用的配置入口。结构原样
+    # 透传，由运行时（HookRunner.from_env(settings=...)）解释；写坏的条目只在
+    # 运行时告警，不让任务起不来。
+    "hooks": {},
+    # 策略级总开关（上游 disableAllHooks）。为真时一个钩子都不加载。
+    "disable_all_hooks": False,
     "safety": {
         # 能力边界，与 permissions.default_mode（审批节奏）是两回事：
         # 这里决定"能不能做"，那里决定"要不要问"。默认全部取最保守的一档。
@@ -301,6 +307,14 @@ def normalize(raw: Any) -> dict[str, Any]:
     enabled_plugins = plugins.get("enabled") if isinstance(plugins.get("enabled"), dict) else {}
     # Claude 把开关放在顶层 enabledPlugins；两种写法都收，plugins.enabled 优先。
     legacy_enabled = data.get("enabledPlugins") if isinstance(data.get("enabledPlugins"), dict) else {}
+    # 钩子配置原样透传（结构由 HookRunner 解释）；非对象等于没配。
+    hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
+    # Claude 用驼峰 disableAllHooks；两种写法都收，下划线写法优先。
+    disable_all_hooks = flag_value(data.get("disable_all_hooks"))
+    if disable_all_hooks is None:
+        disable_all_hooks = flag_value(data.get("disableAllHooks"))
+    if disable_all_hooks is None:
+        disable_all_hooks = False
 
     mode = str(guardian.get("mode") or "").strip().lower()
     if mode not in GUARDIAN_MODES:
@@ -387,6 +401,8 @@ def normalize(raw: Any) -> dict[str, Any]:
             # 设置结构，同名键优先。
             "enabled": _enabled_map({**legacy_enabled, **enabled_plugins}),
         },
+        "hooks": deepcopy(hooks),
+        "disable_all_hooks": bool(disable_all_hooks),
         "safety": {
             # 能力开关一律按"没写就是关"处理：手改设置文件漏了字段，不能变成放行。
             "shell_enabled": _as_bool(safety.get("shell_enabled"), DEFAULTS["safety"]["shell_enabled"]),
