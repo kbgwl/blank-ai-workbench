@@ -34,6 +34,7 @@ from pathlib import Path
 import yaml
 
 from blank_api.services.plugins_defs import discover_plugins
+from blank_api.services.skills_defs import _tool_list as _parse_tool_specs
 from blank_api.services.workspace import mask_path
 
 BUILTIN_AGENT = "general-purpose"
@@ -69,7 +70,7 @@ class AgentDefinition:
     name: str
     description: str
     instructions: str = ""
-    # None = no restriction (Claude's ``tools: "*"``), otherwise a whitelist.
+    # None = no restriction (key absent or Claude's ``tools: "*"``), else a whitelist.
     tools: tuple[str, ...] | None = None
     disallowed_tools: tuple[str, ...] = ()
     max_turns: int | None = None
@@ -210,27 +211,23 @@ def _split_frontmatter(text: str) -> tuple[dict | None, str]:
     return meta, "\n".join(lines[end + 1 :]).strip()
 
 
-def _tool_list(value) -> tuple[tuple[str, ...] | None, str]:
-    """Parse ``tools`` / ``disallowedTools`` into names (``None`` = absent).
+_MISSING = object()
 
-    An invalid shape yields ``()`` — the same fail-closed "this definition
-    grants nothing" reading Claude gets from its list parser.
+
+def _tool_list(value):
+    """Parse ``tools`` / ``disallowedTools`` like upstream ``VW``.
+
+    A missing key (``_MISSING``) means "no restriction"; an explicit ``null``
+    or other falsy value means "no tools". The shared parser collapses any
+    ``*`` to ``("*",)``; ``VW`` turns that into ``undefined`` — unrestricted
+    for ``tools`` and an omitted deny list for ``disallowedTools``.
     """
-    if value is None:
+    if value is _MISSING:
         return None, ""
-    warning = ""
-    if isinstance(value, str):
-        items = value.split(",")
-    elif isinstance(value, list):
-        items = []
-        for item in value:
-            if isinstance(item, str):
-                items.append(item)
-            else:
-                warning = "列表里只能写工具名字符串；非字符串项已忽略"
-    else:
-        return (), "必须是逗号分隔的字符串或字符串列表；按没有可用工具处理"
-    return tuple(item.strip() for item in items if item.strip()), warning
+    items, warning = _parse_tool_specs(value)
+    if items == ("*",):
+        return None, warning
+    return items, warning
 
 
 def _positive_int(value) -> int | None:
@@ -283,12 +280,12 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
     description = raw_description.strip()
     warnings: list[str] = []
 
-    tools, problem = _tool_list(meta.get("tools"))
+    tools, problem = _tool_list(meta["tools"] if "tools" in meta else _MISSING)
     if problem:
         warnings.append(f"Agent 文件 {mask_path(str(path))} 的 tools {problem}")
-    if tools is not None and "*" in tools:
-        tools = None
-    disallowed, problem = _tool_list(meta.get("disallowedTools"))
+    disallowed, problem = _tool_list(
+        meta["disallowedTools"] if "disallowedTools" in meta else _MISSING
+    )
     if problem:
         warnings.append(
             f"Agent 文件 {mask_path(str(path))} 的 disallowedTools {problem}"

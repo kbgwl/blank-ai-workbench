@@ -8,7 +8,9 @@
    但校验失败（缺 description、名字非法、坏 YAML、超 1 MiB）必须进错误清单，
    单个坏文件不能拖垮整个目录；
 3. **工具只收窄**：``tools`` 是白名单且与只读/隔离基线取交集，写工具不会因为
-   定义里写了就出现；``disallowedTools: "*"`` 按全部禁用处理；
+   定义里写了就出现；``tools`` 的字段缺省与 ``"*"`` 都是不限，显式 ``null`` /
+   假值是「没有工具」；``disallowedTools: "*"`` 按上游 ``VW`` 归一成
+   ``undefined``，即等同于不写这条限制；
 4. **maxTurns**：正整数进请求步数（受全局上限约束），非法值忽略并告警；
 5. **未支持字段可见**：model / permissionMode / hooks 等不生效的字段进
    ``agent_ignored``，不能悄悄吞掉让用户以为配置起了作用；
@@ -339,13 +341,73 @@ def test_non_string_tool_item_is_ignored_with_warning(tmp_path: Path) -> None:
     assert any("非字符串项" in item for item in catalog.errors), catalog.errors
 
 
-def test_disallowed_tools_keeps_star(tmp_path: Path) -> None:
+def test_tool_specs_split_on_spaces_and_keep_parentheses(tmp_path: Path) -> None:
+    """上游 ``VW`` 复用 ``Wd``：空格与逗号都切，括号内保持一条。"""
+
     root = tmp_path / "ws"
-    _write(root / ".blank/agents/deny.md", _agent(extra='disallowedTools: "*"\n'))
+    _write(
+        root / ".blank/agents/spec.md",
+        _agent(extra="tools: 'read_file Bash(git add, git commit)'\n"),
+    )
 
     catalog = _discover(root)
 
-    assert catalog.get("reviewer").disallowed_tools == ("*",)
+    assert catalog.get("reviewer").tools == (
+        "read_file",
+        "Bash(git add, git commit)",
+    )
+
+
+def test_empty_tools_line_means_no_tools(tmp_path: Path) -> None:
+    """显式 ``tools:``（YAML null）在上游是空表，不是「不限」。"""
+
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/empty.md", _agent(name="empty", extra="tools:\n"))
+    _write(root / ".blank/agents/absent.md", _agent(name="absent"))
+
+    catalog = _discover(root)
+
+    assert catalog.get("empty").tools == ()
+    assert catalog.get("absent").tools is None
+
+
+def test_wildcard_inside_a_tool_list_collapses(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    _write(
+        root / ".blank/agents/mixed.md",
+        _agent(extra="tools:\n  - read_file\n  - '*'\n"),
+    )
+
+    catalog = _discover(root)
+
+    assert catalog.get("reviewer").tools is None
+
+
+def test_falsy_tools_value_means_no_tools(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/off.md", _agent(extra="tools: false\n"))
+
+    catalog = _discover(root)
+
+    assert catalog.get("reviewer").tools == ()
+    assert not any("tools" in item for item in catalog.errors), catalog.errors
+
+
+def test_disallowed_tools_star_means_no_restriction(tmp_path: Path) -> None:
+    """上游 ``VW`` 把 ``*`` 变成 ``undefined``：禁止列表整条被省略。"""
+
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/deny.md", _agent(extra='disallowedTools: "*"\n'))
+    _write(
+        root / ".blank/agents/mixed.md",
+        _agent(name="mixed", extra="disallowedTools:\n  - run_shell\n  - '*'\n"),
+    )
+
+    catalog = _discover(root)
+
+    assert catalog.get("reviewer").disallowed_tools == ()
+    assert catalog.get("mixed").disallowed_tools == ()
+    assert "disallowedTools" not in catalog.get("reviewer").as_dict()
 
 
 def test_max_turns_must_be_positive_integer(tmp_path: Path) -> None:

@@ -2,6 +2,25 @@
 
 ## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）
 
+- **子代理定义的 `tools` / `disallowedTools` 对齐上游 `VW`（W 批）**：文件型与插件
+  agent 的这两个字段都走 `fyn` + `Wd` 再包一层 `VW`（`fyn` @19523546、`Wd`
+  @43262594、`VW` @19523799；调用点 @5785886 插件 agent、@20358524 文件型 agent）。
+  改 `services/agents_defs.py`：删掉本地「只切逗号」的实现，复用
+  `skills_defs._tool_list`，并用 `_MISSING` 区分「字段缺省」与「显式 null」。
+  1. **缺省 ≠ null**：缺省走 `undefined`（不限），显式 `null` / 假值走 `[]`
+     （没有工具）。此前把两者都当 `None`，等于把用户的 `tools:` 空行读成最大授权。
+  2. **通配符按 `VW` 归一**：列表里任何 `*` 先由 `fyn` 归一成 `["*"]`，`VW` 再转成
+     `undefined`——`tools: "*"` 与缺省同义，`disallowedTools` 里的 `*` 则整条省略。
+     此前我们把禁止列表的 `*` 按「全部禁用」处理，方向与上游相反。
+  3. **分词口径与 Skill/命令共用**：空格与逗号都切、括号内保持一条、数组里的
+     非字符串项丢弃并进审计告警（上游静默 filter；告警不改变结果）。
+  测试：`tests/test_agent_defs_v44.py` 新增 5 例（空格切分保括号、空行 null 与缺省
+  分开、列表内 `*` 归一、假值=没有工具、禁止列表 `*` 整条省略），替换 1 例钉旧口径的
+  用例；36 passed。变异 5/5 红（只按逗号切、通配符不归一、null 当缺省、假值走错误
+  分支、禁止列表不归一成空元组）。相邻套件（fork / 子代理默认后台 / 插件 /
+  Skill / 命令 / skill 工具）195 passed。全量后端回归：**3410 passed, 28 skipped**
+  （rc=0，728.61s）。
+
 - **工具规格解析对齐上游 `fyn` + `Wd`（V 批）**：`allowed-tools` /
   `disallowed-tools` 从「只按逗号切」改成 Claude 的口径。核对
   `E:/env/rea/out/claude.uniq.txt` 的 `fyn`（@19523546）与分词器 `Wd`
