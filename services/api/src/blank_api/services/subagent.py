@@ -342,6 +342,14 @@ def batch_usage(results: list[SubAgentResult]) -> dict:
     return total
 
 
+def _child_tools(tools: list, *, skill_catalog: bool) -> list:
+    """子代理能看到的工具：REPL 依赖父会话网关；没有 Skill 目录就没有加载入口。"""
+    kept = [tool for tool in tools if tool.name != "repl"]
+    if not skill_catalog:
+        kept = [tool for tool in kept if tool.name != "skill"]
+    return kept
+
+
 async def run_subagent(
     *,
     adapter: ModelAdapter,
@@ -379,9 +387,9 @@ async def run_subagent(
     catalog = SkillCatalog(skill_catalog.entries()) if skill_catalog is not None else None
     if catalog is not None and not len(catalog):
         catalog = None
-    if catalog is None:
-        # 没有可加载的 Skill 就别摆着入口：父会话那边也是这条口径。
-        tools = [tool for tool in tools if tool.name != "skill"]
+    # REPL 是主代理的会话级能力，子代理没有独立网关；没有 Skill 目录时加载入口
+    # 也没意义。两条口径都在 _child_tools 里。
+    tools = _child_tools(tools, skill_catalog=catalog is not None)
     try:
         sandbox_tier = assert_not_looser(parent_tier, sandbox_tier)
     except TierDowngrade as exc:

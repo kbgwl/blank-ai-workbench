@@ -125,7 +125,10 @@ DEFAULT_SCENARIO = DEV.key
 # 场景能拿来过滤的全部真实工具名（与 services/tools/ 的注册名一一对应）。
 # monitor 也在里面：它执行命令，只是把输出逐行投递；不跟着 run_shell 一起禁，
 # 「文档/逆向场景不跑命令」就只剩一句提示词。
-WRITE_TOOLS = frozenset({"apply_patch", "run_shell", "run_tests", "git", "monitor"})
+# repl 同理：它本身不写文件，但内层可以调写工具与命令；只读场景里连入口都不该有。
+# 文档/逆向没有把它加进 tool_denylist：内层 run_shell 已被场景排除，
+# 留下的读/算能力正是这两个场景需要的。
+WRITE_TOOLS = frozenset({"apply_patch", "run_shell", "run_tests", "git", "monitor", "repl"})
 # 逆向与日常不联网检索：分析以本地工作区为准（web 工具按需可再放开）。
 MEMORY_WRITE_TOOL = "memory_write"
 

@@ -35,6 +35,9 @@ WRITE_TOOLS = frozenset(
         # monitor 跑的也是同一条命令：`> index.html` 之类的写法能落盘，
         # 不扫它等于给占位内容留了第二条落盘通道。
         "monitor",
+        # repl 的脚本里可以内联 write_file 的 content：占位值一样会落盘，
+        # 扫 code 的同时也覆盖了那段内联内容。
+        "repl",
         "spawn_agent",
         "spawn_agents",
     }

@@ -56,6 +56,9 @@ class ToolContext:
     shell: Any = None
     # 工具注册表：tool_search 靠它判断"哪些工具还没加载"，激活状态按会话隔离
     tool_registry: Any = None
+    # 本任务的工具网关：repl 的内层调用必须回到同一条管线（场景/权限/安全/审计/沙箱），
+    # 而不是自己另开一套。子代理与非 runtime 入口拿不到网关，repl 会明确拒绝。
+    tool_gateway: Any = None
     # 团队群聊身份：group_id / bot_id / is_admin / project_id。空表示非团队任务，
     # 团队管理工具只在主理人的任务里可见。
     team_scope: dict = field(default_factory=dict)

@@ -17,6 +17,7 @@ from blank_api.services.tools.monitor import monitor_tools
 from blank_api.services.tools.notebook import notebook_tools
 from blank_api.services.tools.patch import patch_tools
 from blank_api.services.tools.plan import plan_tools
+from blank_api.services.tools.repl import repl_tools
 from blank_api.services.tools.review import review_tools
 from blank_api.services.tools.search import search_tools
 from blank_api.services.tools.shell import shell_tools
@@ -41,6 +42,7 @@ def build_default_tools() -> list[ToolDefinition]:
         *notebook_tools(),
         *shell_tools(),
         *monitor_tools(),
+        *repl_tools(),
         *git_tools(),
         *test_tools(),
         *web_tools(),

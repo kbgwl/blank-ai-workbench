@@ -354,7 +354,14 @@ class ToolGateway:
         target = _write_target(name, arguments)
         return write_allowed(self.scenario, target) if target else True
 
-    async def execute(self, name: str, arguments: dict, context: ToolContext, node: str = "") -> dict:
+    async def execute(
+        self,
+        name: str,
+        arguments: dict,
+        context: ToolContext,
+        node: str = "",
+        inner: bool = False,
+    ) -> dict:
         started = time.perf_counter()
         if name in self.excluded:
             # 场景禁用先于一切判定：approve_high_risk / 审批放行都救不回来。
@@ -420,7 +427,27 @@ class ToolGateway:
             elif decision.outcome == DENY:
                 outcome = self._denied(tool, arguments, decision)
             elif decision.outcome == ASK:
-                outcome = self._awaiting_approval(tool, arguments, risk, decision)
+                if inner:
+                    # REPL 里没有审批卡可弹：放行等于绕过权限，等待审批又没人能批。
+                    # 唯一的诚实答案是拒绝，并告诉模型把这一步改回顶层调用。
+                    outcome = ToolOutcome(
+                        ok=False,
+                        status="denied",
+                        message=(
+                            f"工具 {name} 需要审批，但 REPL 里弹不出审批卡，已拒绝执行。"
+                            "请把这一步改成顶层工具调用（审批通过后再执行），"
+                            "其余步骤可以继续留在脚本里。"
+                        ),
+                        data={
+                            "requires_approval": True,
+                            "approval_in_repl": False,
+                            "tool": name,
+                            "risk_level": risk,
+                            "permission_rule": decision.rule,
+                        },
+                    )
+                else:
+                    outcome = self._awaiting_approval(tool, arguments, risk, decision)
             else:
                 outcome = await self._run(tool, arguments, context)
         # decision.risk 可能被安全策略抬高（"每条命令都要确认"），台账要按最终口径记

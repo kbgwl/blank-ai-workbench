@@ -43,6 +43,7 @@ from blank_api.services.agent.verifier import (
 )
 from blank_api.services.agent.automation import resolve_mode as resolve_automation_mode
 from blank_api.services.agent.loadstats import recent_load
+from blank_api.services.agent import repl as repl_module
 from blank_api.services.agent import workflow as workflow_module
 from blank_api.services import shell_tasks, worktree_session
 from blank_api.services.agent.router import Candidate, Router
@@ -627,6 +628,7 @@ class AgentRuntime:
             memory=memory,
             shell=shell,
             tool_registry=gateway.registry,
+            tool_gateway=gateway,
             team_scope=dict(request.team_scope or {}),
             skills=skills if skills else None,
             sandbox_tier=sandbox.tier,
@@ -1319,6 +1321,8 @@ class AgentRuntime:
             # 工作流的脚本进程与它派出的子代理都挂在任务上：任务一收尾就没人取结论了，
             # 必须在这里取消，否则进程和模型调用会陪着一条已完成的任务继续烧。
             await workflow_module.aclose(scope.task_id, reason=f"task_{status}")
+            # REPL 会话同理：Node 进程和它清空前的状态都挂在任务上，任务收尾后没人再调用。
+            await repl_module.aclose(scope.task_id, reason=f"task_{status}")
             # worktree 会话只摘记录，工作树留在盘上：删不删由 exit_worktree 决定，
             # 任务收尾不该替用户丢掉还没合并的工作。
             worktree_session.release(scope.task_id)

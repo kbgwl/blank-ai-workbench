@@ -1,6 +1,42 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）
+
+- **REPL 工具：一段持久的 JavaScript 把多次工具调用串起来（R 批第 2 项）**：
+  按 Claude 原文（`code` 必填、支持顶层 await、变量跨调用保留；`description` 可选；
+  `timeout` 默认 30000、上限 600000）落成本地 `repl`。新增 `services/agent/repl.py`
+  （每任务一个持久 Node 子进程 + 密封 `vm` 上下文 + JSON 行协议）与
+  `services/tools/repl.py`（工具面/回执/审计）；`tools/__init__.py`、`tools/base.py`、
+  `tools/gateway.py`、`tools/registry.py`、`agent/runtime.py`、`agent/scenarios.py`、
+  `agent/placeholders.py`、`subagent.py` 接线。
+  1. **会话语义**：同一任务的多次调用共用进程与上下文，顶层 `let/const/class/function`
+     跨调用保留；顶层 await 自动用 async 包装；最后一条顶层表达式即返回值（先按顶层 `;`
+     切分，无分号时按行自底向上累积并用真编译验证续行）；`console.log/error` 分回
+     stdout/stderr。
+  2. **密封与边界**：`vm` 上下文没有 `require` / `process` / `import`；动态 `import()` 会
+     报错但不杀会话；内层工具按本地名字注入，每次调用回宿主走同一条
+     `ToolGateway.execute(..., inner=True)`（场景禁用/安全策略/权限/审计/沙箱一个不少）；
+     会话/编排类工具与场景排除的工具不注入；需要审批的内层调用直接 `denied`（REPL 里弹不出
+     审批卡，放行等于绕过权限）。
+  3. **超时与崩溃**：`timeout` 默认 30000ms、上限 600000ms；同步死循环由 `vm` 自身超时打断、
+     会话保留；异步挂起由宿主截止时间杀掉进程并清空状态；未处理的异步异常只记到当前调用，
+     不会把空闲会话打死。
+  4. **环境与收尾**：缺 Node 报 `skipped` + `data.missing_command=node` 并接入停滞检测；
+     没有网关的入口（子代理、非 runtime）直接拒绝；子代理工具表移除 `repl`；任务收尾摘会话
+     （等审批那一档保留）。
+  测试：新增 `tests/test_repl_tool_v39.py` 36 例（契约/参数边界/注入过滤/内层拒绝与透传/
+     回执渲染/审计事件/宿主超时与崩溃回执/真实 Node 持久+TLA+密封+同步超时保留+异步超时重建/
+     场景·占位·注册表·子代理·收尾接线）；连同相邻 7 个测试文件合计 **220 passed**；子代理与
+     边界 5 个文件 **37 passed**；变异电池 16/16 全红（逐条改坏实现、实测红集合，跑完即按原
+     字节还原）。2026-11-12 后端全量回归 **2992 passed / 28 skipped / 0 failed**
+     （720.25s，rc=0；R1 基线 2956 + 本批 36 例，跳过数与基线同为 28，全是本机环境门：
+     docker、受限令牌自检、aiomysql、桌面包产物）。
+  偏离：内层工具用本地名字（`read_file`/`run_shell`/`search_code` 等）而不是 Read/Bash 别名；
+  Claude 的顶层声明持久是语言级作用域，本机用「扫描顶层声明 + `Object.assign(globalThis, ...)`」
+  近似回填，同名遮蔽与解构声明不在近似范围内；REPL 里没有 web/Agent/Workflow 等会开进程或
+  等审批的入口；需要审批的动作只能改成顶层工具调用；超时或进程崩溃会清空整个会话状态；
+  `vm` 不是内核级沙箱，脚本的能力边界靠「不注入 `require`/`process`/`import` + 内层调用走网关」，
+  真正的高风险动作仍由网关权限与沙箱档位把关。
 
 - **Monitor 工具：把「命令又输出了一行」变成可投递的系统事件（R 批第 1 项）**：
   按 Claude 原文（`description` / `command` / `timeout_ms` 必填，默认 300000、上限 1800000，
