@@ -21,9 +21,12 @@ honour without silently changing behaviour:
   entry point in this app yet, which is reported as a deviation);
 * ``allowed-tools`` / ``disallowed-tools`` are parsed and audited but not
   enforced — our tool pool is decided by the gateway, not by a prompt file;
-  ``${CLAUDE_SKILL_DIR}`` / ``${CLAUDE_PROJECT_DIR}`` inside ``allowed-tools``
-  are expanded exactly like Claude's parser (allowed-tools only, forward-slash
-  paths) so the audit record matches what the Skill author wrote;
+  the list is tokenized like Claude (commas and spaces split specs, parentheses
+  keep them whole, non-string array entries are dropped, ``*`` collapses the
+  list), and ``${CLAUDE_SKILL_DIR}`` / ``${CLAUDE_PROJECT_DIR}`` inside
+  ``allowed-tools`` are expanded exactly like Claude's parser (allowed-tools
+  only, forward-slash paths) so the audit record matches what the Skill author
+  wrote;
 * one bad Skill never takes the whole catalogue down.
 """
 
@@ -197,22 +200,62 @@ def _parse_frontmatter(text: str) -> tuple[dict, str, str]:
     return meta, body, ""
 
 
+def _split_tool_specs(text: str) -> list[str]:
+    """Tokenize one tool-spec string the way upstream ``Wd`` does.
+
+    Commas and spaces are separators, except inside parentheses — a spec like
+    ``Bash(git add, git commit)`` stays one entry. Empty pieces are dropped.
+    """
+    items: list[str] = []
+    current = ""
+    inside = False
+    for char in text:
+        if char == "(":
+            inside = True
+            current += char
+        elif char == ")":
+            inside = False
+            current += char
+        elif char in (",", " ") and not inside:
+            if current.strip():
+                items.append(current.strip())
+            current = ""
+        else:
+            current += char
+    if current.strip():
+        items.append(current.strip())
+    return items
+
+
 def _tool_list(value) -> tuple[tuple[str, ...], str]:
-    """Parse a comma string or YAML list; invalid shapes yield ``()``."""
+    """Parse tool specs like upstream ``fyn`` + ``Wd``.
+
+    * ``None`` / falsy → no tools, no warning;
+    * a string is tokenized on commas *and* spaces, parentheses kept whole;
+    * a YAML list keeps its string entries and drops the rest (upstream filters
+      non-strings instead of rejecting the field);
+    * any ``*`` collapses the whole list to ``("*",)`` (upstream's "all tools").
+    """
     if value is None:
         return (), ""
+    if not value:
+        return (), ""
     if isinstance(value, str):
-        items = value.split(",")
+        raw = [value]
+        dropped = 0
     elif isinstance(value, list):
-        items = []
-        for item in value:
-            if isinstance(item, str):
-                items.append(item)
-            else:
-                return (), "列表里只能写工具名字符串；非字符串项已忽略"
+        raw = [item for item in value if isinstance(item, str)]
+        dropped = len(value) - len(raw)
     else:
-        return (), "必须是逗号分隔的字符串或字符串列表；按没有工具处理"
-    return tuple(item.strip() for item in items if item.strip()), ""
+        return (), "必须是字符串或字符串列表；按没有工具处理"
+    items: list[str] = []
+    for entry in raw:
+        items.extend(_split_tool_specs(entry))
+    if "*" in items:
+        return ("*",), ""
+    if dropped:
+        return tuple(items), "列表里只能写工具名字符串；非字符串项已忽略"
+    return tuple(items), ""
 
 
 def _flag(value, default: bool) -> tuple[bool, str]:

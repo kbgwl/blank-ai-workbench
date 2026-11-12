@@ -2,6 +2,30 @@
 
 ## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）
 
+- **工具规格解析对齐上游 `fyn` + `Wd`（V 批）**：`allowed-tools` /
+  `disallowed-tools` 从「只按逗号切」改成 Claude 的口径。核对
+  `E:/env/rea/out/claude.uniq.txt` 的 `fyn`（@19523546）与分词器 `Wd`
+  （@43262594），以及 8 处调用点（@4662204、@5331371、@5331545、@16103864、
+  @19531446、@20805013、@14427699、@34939794）：`fyn` 对 null 返回空表；字符串整体
+  交给 `Wd` 分词；数组只保留字符串项、非字符串项丢弃而不是把整字段判无效；分词时空格
+  与逗号都是分隔符，但括号内不切（`Bash(git add, git commit)` 保持一条），每段 trim
+  后丢空段；列表里出现 `*` 时整体归一成 `["*"]`（上游的「全部工具」）。改
+  `services/skills_defs.py`（新增 `_split_tool_specs`、重写 `_tool_list`）；
+  `services/commands_defs.py` 复用同一函数，Skill 与斜杠命令两侧同时生效。
+  1. **只改解析、不改工具池**：解析结果仍只进审计面，工具池由网关与场景决定
+     （与 U 批同一边界）。
+  2. **数组非字符串项丢弃并告警**：上游是 `filter`，这里同样保留字符串项，只对
+     「丢了东西」发提示，不再把整字段判成无效。
+  3. **`*` 在占位符替换之前归一**：先出 `("*",)` 再做 `${CLAUDE_SKILL_DIR}` /
+     `${CLAUDE_PROJECT_DIR}` 替换，与上游 `fyn` 先于 `Iot` 的顺序一致。
+  测试：`tests/test_skills_disk_v45.py` 新增 4 例（空格切分保括号、数组丢非字符串
+  项、`*` 归一、假值不告警），`tests/test_commands_v46.py` 新增 1 例（命令侧走同一
+  分词器），两套件 82 passed；变异 5/5 红（只按逗号切、去掉括号内不切、数组遇非字符串
+  整字段作废、去掉 `*` 归一、假值仍告警），前两条同时命中命令侧的共享分词用例；
+  相邻套件（`test_skill_tool_v33`、`test_plugins_v49`、`test_ask_goal_skills_v43`
+  连同上述两个）189 passed。全量后端回归：**3406 passed, 28 skipped**
+  （rc=0，709.01s）。
+
 - **Skill `allowed-tools` 占位符替换（U 批）**：按上游原文补齐
   `${CLAUDE_SKILL_DIR}` / `${CLAUDE_PROJECT_DIR}` 的替换语义。核对
   `E:/tmp/rea-claude/skill_parse_fragment.txt` 里的 `Iot(...)`：只对 `allowedTools`

@@ -292,6 +292,23 @@ def test_long_body_is_clipped(tmp_path: Path) -> None:
     assert entry.instructions.endswith("…（命令正文过长，已截断）")
 
 
+def test_tool_specs_use_the_shared_skill_tokenizer(tmp_path: Path) -> None:
+    """命令与 Skill 共用上游 Wd 口径：空格切分、括号内保持完整。"""
+
+    _write_command(
+        tmp_path,
+        "deploy.md",
+        "---\n"
+        "description: 上线\n"
+        "allowed-tools: 'read_file Bash(git add, git commit)'\n"
+        "---\n上线\n",
+    )
+
+    entry = _discover(tmp_path).entries["deploy"]
+
+    assert entry.allowed_tools == ("read_file", "Bash(git add, git commit)")
+
+
 def test_frontmatter_knobs_are_parsed_and_audited(tmp_path: Path) -> None:
     _write_command(
         tmp_path,

@@ -424,6 +424,66 @@ def test_user_layer_skills_resolve_project_dir_to_the_workspace(tmp_path: Path) 
     )
 
 
+def test_tool_specs_split_on_spaces_outside_parentheses(tmp_path: Path) -> None:
+    """上游 Wd：逗号和空格都切，括号里的空格/逗号保持完整。"""
+
+    _write_skill(
+        tmp_path,
+        "deploy",
+        _skill(extra="allowed-tools: 'read_file Bash(git add, git commit) search_code'\n"),
+    )
+
+    found = _discover(tmp_path)
+
+    assert found.entries["deploy"].allowed_tools == (
+        "read_file",
+        "Bash(git add, git commit)",
+        "search_code",
+    )
+
+
+def test_tool_list_drops_non_string_entries_instead_of_the_whole_field(
+    tmp_path: Path,
+) -> None:
+    """上游 fyn 只过滤掉非字符串项，剩下的照常解析而不是整段作废。"""
+
+    _write_skill(
+        tmp_path,
+        "deploy",
+        _skill(extra="allowed-tools: ['read_file', 42, 'search_code']\n"),
+    )
+
+    found = _discover(tmp_path)
+
+    assert found.entries["deploy"].allowed_tools == ("read_file", "search_code")
+    assert any("非字符串" in item for item in found.warnings), found.warnings
+
+
+def test_wildcard_tool_spec_collapses_the_list(tmp_path: Path) -> None:
+    """上游 fyn：列表里出现 ``*`` 时整段归一成 ``["*"]``。"""
+
+    _write_skill(
+        tmp_path,
+        "deploy",
+        _skill(extra="disallowedTools: ['run_shell', '*']\n"),
+    )
+
+    found = _discover(tmp_path)
+
+    assert found.entries["deploy"].disallowed_tools == ("*",)
+
+
+def test_falsy_tool_list_is_empty_without_a_warning(tmp_path: Path) -> None:
+    """``allowed-tools: false`` 在上游是「没有工具」，不是坏形状。"""
+
+    _write_skill(tmp_path, "deploy", _skill(extra="allowed-tools: false\n"))
+
+    found = _discover(tmp_path)
+
+    assert found.entries["deploy"].allowed_tools == ()
+    assert not any("allowed-tools" in item for item in found.warnings), found.warnings
+
+
 def test_invalid_tool_shape_is_a_warning_not_a_crash(tmp_path: Path) -> None:
     _write_skill(tmp_path, "deploy", _skill(extra="allowed-tools: {a: 1}\n"))
 
