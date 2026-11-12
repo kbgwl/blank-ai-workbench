@@ -107,12 +107,32 @@ async def list_project_output_styles(project_id: str, db: DbSession) -> dict:
     project = await load_project(db, project_id)
     workspace = project.active_workspace
     discovery = discover_output_styles(workspace.path if workspace is not None else None)
-    selected = str(SettingsStore().read().get("output_style") or "default")
+    layered = SettingsStore().read_layered(workspace.path if workspace is not None else None)
+    selected = str(layered.settings.get("output_style") or "default")
     active = discovery.resolve(selected)
     return {
         **discovery.as_dict(),
         "selected": selected,
         "active": active.name if active is not None else "default",
+    }
+
+
+@router.get("/{project_id}/settings")
+async def read_project_settings(project_id: str, db: DbSession) -> dict:
+    """该工作区叠出来的生效设置与来源。
+
+    设置页写的是用户层；项目层/本机层随仓库走，可以覆盖偏好段。安全段
+    （``safety`` / ``permissions`` / ``sandbox`` / ``guardian`` / ``features``）只认
+    用户层与管理策略层——项目文件里写了也会出现在 ``layers[].ignored``。
+    返回的是生效值 + 审计面，不返回任何一层文件的原始文本。
+    """
+    project = await load_project(db, project_id)
+    workspace = project.active_workspace
+    layered = SettingsStore().read_layered(workspace.path if workspace is not None else None)
+    return {
+        "settings": layered.settings,
+        **layered.as_dict(),
+        "user_path": mask_path(str(SettingsStore().path)),
     }
 
 

@@ -457,7 +457,13 @@ class AgentRuntime:
             run_id=request.run_id or thread_id,
             origin_run_id=request.origin_run_id,
         )
-        settings = SettingsStore().read()
+        # 设置按 用户 < 项目 < 本机 < 管理 叠一次（见 services/settings_layers.py）。
+        # 沙箱档位、审批模式、guardian 与安全段只认用户/管理层，项目文件写这些也进
+        # ignored；其余偏好（压缩水位、输出样式、工具检索、后台预算）项目层可以覆盖。
+        layered = SettingsStore().read_layered(request.root)
+        settings = layered.settings
+        if layered.changed():
+            await recorder.add("settings.layers", "receive_task", layered.as_dict())
         # 档位在装配层解析一次：网关、工具上下文、子代理与治理快照读的是同一份结果。
         # 不可用就整任务拒绝——不让它有"先跑起来再说"的机会。
         #

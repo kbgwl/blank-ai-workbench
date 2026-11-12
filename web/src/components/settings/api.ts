@@ -335,6 +335,32 @@ export function fetchAgentSettings(): Promise<AgentSettings> {
   return request<AgentSettings>(`${api}/settings/agent`, { cache: "no-store" });
 }
 
+/** 设置级联里的一层：路径已打码；ignored 是被安全规则挡下的段。 */
+export type SettingsLayerInfo = {
+  layer: "user" | "project" | "local" | "managed";
+  path: string;
+  exists: boolean;
+  ok: boolean;
+  errors?: string[];
+  warnings?: string[];
+  ignored?: { section: string; reason: string }[];
+};
+
+/** 一个工作区叠出来的生效设置与来源；设置页写入的仍只是用户层。 */
+export type LayeredAgentSettings = {
+  settings: Omit<AgentSettings, "path" | "limits">;
+  layers: SettingsLayerInfo[];
+  sources: Record<string, string>;
+  active: string[];
+  warnings: string[];
+  errors: string[];
+  user_path: string;
+};
+
+export function fetchProjectSettings(projectId: string): Promise<LayeredAgentSettings> {
+  return request<LayeredAgentSettings>(`${api}/projects/${projectId}/settings`, { cache: "no-store" });
+}
+
 /** 特性注册表里的一条。source 说明当前值是哪一层定的：env / settings / legacy / default。 */
 export type FeatureFlag = {
   name: string;

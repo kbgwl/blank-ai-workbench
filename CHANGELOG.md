@@ -1,6 +1,44 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）
+
+- **设置层级（用户 < 项目 < 本机 < 管理策略）对齐 Claude settings 级联（S 批第 5 项）**：
+  按 Claude Code 2.1.271 的 settings 级联口径落成本地四层叠加。新增
+  `services/settings_layers.py`（层路径规划、单层读取、键级合并、安全段保护、审计投影），
+  改 `services/settings.py`（`SettingsStore.read_layered`）、
+  `services/agent/runtime.py`（每任务在运行根上叠一次、`settings.layers` 事件）、
+  `api/routes/projects.py`（`GET /projects/{id}/settings`；`output-styles` 的 selected 改读
+  级联）、`web/src/components/settings/api.ts`（类型）。
+  1. **层与路径**：用户层 `BLANK_SETTINGS_FILE`（桌面壳指到用户数据目录，缺省沿用
+     `settings_path()`）+ 项目层 `<workspace>/.blank/settings.json` + 本机层
+     `<workspace>/.blank/settings.local.json` + 管理层 `BLANK_MANAGED_SETTINGS_FILE`
+     （不配就没有这一层）。没有工作区时只剩用户层与管理层，结果与旧的 `read()` 一致
+     （`read_layered(None)` 与 `read()` 逐键相等的判据钉住）。
+  2. **叠加**：从低到高 user → project → local → managed；高一层只覆盖它写了的键，嵌套
+     对象逐键合并，数组与标量整段替换；合并后仍走 `normalize()`，夹取与回落语义跟用户层
+     完全一致；未知设置段进该层 `ignored`（带原因），不参与合并。
+  3. **安全段保护（本机偏离）**：`guardian` / `permissions` / `sandbox` / `safety` /
+     `features` 只认用户层与管理层；项目/本机文件写了也进 `ignored`（「安全设置只能由
+     用户层或管理策略决定」），有效值不变——克隆来的仓库不能靠提交 `settings.json` 替
+     用户放宽审批或安全边界。被挡下的段在审计事件里逐段留痕，不静默吞掉。
+  4. **坏层隔离**：坏 JSON（点名第几行）/ 顶层不是对象 / 超 1 MiB 只跳过这一层并进
+     `errors`，其余层照常叠加；缺层不算错误。读设置失败整任务起不来，比少一层偏好更糟。
+  5. **可观察**：层、来源与 ignored 落 `settings.layers` 事件（只在用户层之外有东西或有
+     坏层时写），路径经 `mask_path` 打码、不含任何设置值；`GET /projects/{id}/settings`
+     返回生效值 + `layers` / `sources` / `active` / `warnings` / `errors` + 打码后的用户层
+     路径；`GET /projects/{id}/output-styles` 的 `selected/active` 也改用工作区级联。
+  测试：新增 `tests/test_settings_layers_v48.py` 28 例（四层顺序与来源、local>project>user
+  三阶段重写、嵌套合并与数组替换、无工作区/无层回落、安全段五段矩阵、管理层可钉安全段、
+  未知段、坏 JSON/顶层数组/超 1 MiB 隔离、缺层、normalize 夹取、环境变量开关、审计打码
+  且不泄值、`read_layered(None)` 等价、运行时系统提示与事件、项目设置端点、output-styles
+  级联），变异电池 27/27 红（逐条改坏实现，红在指定判据上；跑完按原字节还原并核对
+  sha256）。
+  全量后端回归：**3321 passed, 28 skipped**（0 failed，rc=0，717.79s）。
+  偏离：目录用 `.blank/settings.json` / `.blank/settings.local.json` 而不是
+  `.claude/...`；安全段只认用户层与管理层（Claude 允许项目/本机层改
+  `permissions.defaultMode`）；没有 `${VAR}` 环境变量展开；管理层只认
+  `BLANK_MANAGED_SETTINGS_FILE`，没有平台默认管理路径与 `policySettings` 那套；设置页
+  仍只读写用户层，叠加结果走 `GET /projects/{id}/settings` 只读展示。
 
 - **输出样式（`.blank/output-styles`）与系统提示接入对齐 Claude（S 批第 4 项）**：
   按 Claude Code 2.1.271 的 `.claude/output-styles` 契约落成本地输出样式发现与选择。新增

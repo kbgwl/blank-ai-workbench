@@ -24,13 +24,16 @@ from copy import deepcopy
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from blank_api.services.agent.automation import (
     AUTOMATION_MODES as BACKGROUND_AUTOMATION_MODES,
     MODE_LABELS as BACKGROUND_AUTOMATION_MODE_LABELS,
 )
 from blank_api.services.permissions import MODE_DEFAULT, MODES as PERMISSION_MODES
+
+if TYPE_CHECKING:
+    from blank_api.services.settings_layers import LayeredSettings
 
 GUARDIAN_MODES = ("off", "veto", "auto")
 
@@ -428,6 +431,22 @@ class SettingsStore:
         except (FileNotFoundError, NotADirectoryError, OSError, UnicodeDecodeError, json.JSONDecodeError):
             return deepcopy(DEFAULTS)
         return normalize(raw)
+
+    def read_layered(
+        self,
+        workspace: str | Path | None = None,
+        *,
+        env: dict[str, str] | None = None,
+    ) -> "LayeredSettings":
+        """按工作区叠加 用户 < 项目 < 本机 < 管理 四层。
+
+        不传工作区时等价于只读这一份用户设置（项目/本机层不存在）。返回值是
+        ``settings_layers.LayeredSettings``：``.settings`` 是按同一套 ``normalize``
+        夹过的生效值，``.as_dict()`` 是给事件/接口的审计面（路径打码、不含设置值）。
+        """
+        from blank_api.services.settings_layers import load_layered_settings
+
+        return load_layered_settings(workspace, user_path=self._path, env=env)
 
     def raw(self) -> dict[str, Any]:
         """文件里的原样内容。用来区分「没配过」与「配成了默认值」。"""
