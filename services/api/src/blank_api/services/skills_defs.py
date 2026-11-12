@@ -27,6 +27,13 @@ honour without silently changing behaviour:
   ``allowed-tools`` are expanded exactly like Claude's parser (allowed-tools
   only, forward-slash paths) so the audit record matches what the Skill author
   wrote;
+* ``paths`` makes a Skill **conditional**: upstream ``y1r`` normalizes the
+  frontmatter list (comma split outside braces, trailing ``/**`` stripped, an
+  empty list or nothing-but-``**`` means "always visible") and the loader keeps
+  such Skills out of the catalogue until a matching file is touched
+  (``p1r`` → ``ignore().add(paths).ignores(path)``). We keep the same shape and
+  hide conditional Skills from the listing/tool until a file tool touches a
+  matching workspace-relative path;
 * one bad Skill never takes the whole catalogue down.
 """
 
@@ -55,11 +62,11 @@ PROJECT_SKILLS_DIR = Path(".blank") / "skills"
 # would duplicate whatever the sync layer already installed.
 RESERVED_DIRS = frozenset({"synced"})
 # Parsed for audit only; we do not apply them (see module docstring).
+# ``paths`` is *not* here: it is honoured as a conditional-activation gate.
 UNSUPPORTED_FIELDS = (
     "model",
     "when_to_use",
     "version",
-    "paths",
     "hooks",
     "context",
     "agent",
@@ -86,12 +93,18 @@ class SkillDefinition:
     argument_names: tuple[str, ...] = ()
     allowed_tools: tuple[str, ...] = ()
     disallowed_tools: tuple[str, ...] = ()
+    paths: tuple[str, ...] = ()
     model_invocable: bool = True
     user_invocable: bool = True
     source: str = "project"
     path: str = ""
     ignored: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+
+    @property
+    def conditional(self) -> bool:
+        """有 ``paths`` 的 Skill 先不出现在清单里，等文件被触碰再激活。"""
+        return bool(self.paths)
 
     def as_entry(self) -> dict:
         """Shape consumed by ``tools.skills.SkillCatalog``."""
@@ -106,6 +119,8 @@ class SkillDefinition:
             "base_dir": str(Path(self.path).parent) if self.path else "",
             "allowed_tools": list(self.allowed_tools),
             "disallowed_tools": list(self.disallowed_tools),
+            "paths": list(self.paths),
+            "conditional": self.conditional,
             "model_invocable": self.model_invocable,
             "user_invocable": self.user_invocable,
             "source": self.source,
@@ -135,6 +150,9 @@ class SkillDefinition:
             payload["allowedTools"] = list(self.allowed_tools)
         if self.disallowed_tools:
             payload["disallowedTools"] = list(self.disallowed_tools)
+        if self.paths:
+            payload["paths"] = list(self.paths)
+            payload["conditional"] = True
         if self.ignored:
             payload["ignored"] = list(self.ignored)
         return payload
@@ -256,6 +274,135 @@ def _tool_list(value) -> tuple[tuple[str, ...], str]:
     if dropped:
         return tuple(items), "列表里只能写工具名字符串；非字符串项已忽略"
     return tuple(items), ""
+
+
+def _split_path_specs(text: str) -> list[str]:
+    """Comma split outside braces — upstream ``eKe`` → ``C`` walks ``{…}`` as opaque.
+
+    That keeps a brace expansion like ``src/*.{ts,tsx}`` in one piece instead of
+    cutting it on the comma inside the braces.
+    """
+    items: list[str] = []
+    current = ""
+    depth = 0
+    for char in text:
+        if char == "{":
+            depth += 1
+            current += char
+        elif char == "}":
+            depth = max(0, depth - 1)
+            current += char
+        elif char == "," and depth == 0:
+            if current.strip():
+                items.append(current.strip())
+            current = ""
+        else:
+            current += char
+    if current.strip():
+        items.append(current.strip())
+    return items
+
+
+def _path_list(value) -> tuple[tuple[str, ...], str]:
+    """Parse ``paths`` like upstream ``y1r``.
+
+    * ``None`` / empty → not conditional, no warning;
+    * a string is comma-split (braces kept whole), a YAML list is flattened and
+      non-string entries are dropped with a warning;
+    * a trailing ``/**`` is stripped (upstream ``endsWith("/**")``), because the
+      match is "this file is the pattern or lives under it" either way;
+    * an empty list — or nothing but ``**`` — means unconditional: upstream
+      returns ``undefined`` and the Skill stays in the ordinary listing.
+    """
+    if value is None or value == "" or value == []:
+        return (), ""
+    if isinstance(value, str):
+        raw = [value]
+        dropped = 0
+    elif isinstance(value, list):
+        raw = [item for item in value if isinstance(item, str)]
+        dropped = len(value) - len(raw)
+    else:
+        return (), "必须是字符串或字符串列表；按没有 paths 处理"
+    patterns: list[str] = []
+    for entry in raw:
+        patterns.extend(_split_path_specs(entry))
+    cleaned: list[str] = []
+    for item in patterns:
+        item = item.strip().replace("\\", "/")
+        if item.endswith("/**"):
+            item = item[:-3]
+        item = item.rstrip("/")
+        if item:
+            cleaned.append(item)
+    if not cleaned or all(item == "**" for item in cleaned):
+        return (), ""
+    warning = "列表里只能写路径通配字符串；非字符串项已忽略" if dropped else ""
+    return tuple(cleaned), warning
+
+
+def _pattern_regex(pattern: str) -> re.Pattern[str]:
+    """gitignore-ish pattern → regex: ``**`` crosses ``/``, ``*``/``?`` do not.
+
+    A pattern without a ``/`` matches at any depth (``*.py`` hits ``a/b.py``);
+    one with a ``/`` is anchored at the workspace root. A match also covers
+    everything below the matched directory, which is how the stripped ``/**``
+    keeps its meaning.
+    """
+    anchored = "/" in pattern.strip("/")
+    body_source = pattern.strip("/")
+    out: list[str] = []
+    index = 0
+    while index < len(body_source):
+        char = body_source[index]
+        if char == "*":
+            if body_source.startswith("**", index):
+                index += 2
+                if index < len(body_source) and body_source[index] == "/":
+                    out.append("(?:[^/]+/)*")
+                    index += 1
+                else:
+                    out.append(".*")
+                continue
+            out.append("[^/]*")
+        elif char == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(char))
+        index += 1
+    prefix = "^" if anchored else "^(?:.*/)?"
+    return re.compile(prefix + "".join(out) + r"(?:/.*)?$")
+
+
+def match_skill_paths(patterns, path) -> bool:
+    """Does ``path`` (workspace-relative) match this Skill's ``paths``?
+
+    Ordered like gitignore: a later ``!pattern`` can re-exclude an earlier hit.
+    Absolute paths and anything with a ``..`` segment never match — upstream
+    skips them before asking the matcher, because a pattern is about files
+    *inside* the workspace.
+    """
+    candidate = str(path or "").strip().replace("\\", "/")
+    if not candidate:
+        return False
+    if candidate.startswith("/") or re.match(r"^[A-Za-z]:", candidate):
+        return False
+    while candidate.startswith("./"):
+        candidate = candidate[2:]
+    if candidate == ".." or candidate.startswith("../") or "/../" in candidate:
+        return False
+    matched = False
+    for raw in patterns or ():
+        pattern = str(raw or "").strip()
+        if not pattern:
+            continue
+        negated = pattern.startswith("!")
+        body = pattern[1:].strip() if negated else pattern
+        if not body:
+            continue
+        if _pattern_regex(body).match(candidate):
+            matched = not negated
+    return matched
 
 
 def _flag(value, default: bool) -> tuple[bool, str]:
@@ -389,6 +536,10 @@ def _definition_from_dir(
     argument_hint = "" if raw_hint is None else str(raw_hint)
     names = argument_names(meta.get("arguments"))
 
+    paths, problem = _path_list(meta.get("paths"))
+    if problem:
+        warnings.append(f"Skill 文件 {mask_path(str(path))} 的 paths {problem}")
+
     if len(body) > MAX_BODY_CHARS:
         body = body[:MAX_BODY_CHARS].rstrip() + "\n…（Skill 正文过长，已截断）"
     ignored = tuple(key for key in UNSUPPORTED_FIELDS if meta.get(key) is not None)
@@ -402,6 +553,7 @@ def _definition_from_dir(
             argument_names=names,
             allowed_tools=allowed_tools,
             disallowed_tools=disallowed_tools,
+            paths=paths,
             model_invocable=model_invocable,
             user_invocable=user_invocable,
             source=source,

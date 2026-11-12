@@ -131,6 +131,10 @@ from blank_api.services.tools.base import (
 )
 from blank_api.services.tools.gateway import ToolGateway, sandbox_backend_event_field
 from blank_api.services.tools.registry import PARALLEL_SAFE_TOOLS, PROFILE_FULL, PROFILE_LEAN
+from blank_api.services.tools.skills import (
+    activate_from_tool_results,
+    render_skill_activation,
+)
 
 MAX_REPAIR_ROUNDS = 3
 # 审查最多跑几轮。审查不通过会回到执行，而执行不一定有新东西可改；没有这个上限，
@@ -707,6 +711,29 @@ class AgentSession:
             messages = messages + [authored({"role": "user", "content": prompt}, self.run_id)]
         # 中途插话：在每次模型调用前取一次，插话在"下一步"生效，撤回不了已经跑完的动作
         messages = messages + await drain_steer(self, node, int(state.get("steps") or 0))
+        # 条件 Skill（frontmatter 里的 paths）：文件工具碰到匹配路径后，下一次调用前
+        # 才把'现在可以用了'告诉模型。触发取自工具台账而不是内存标记——审批恢复会
+        # 重建会话目录，重放检查点里的结果就能把已激活的集合原样找回来。
+        activated = activate_from_tool_results(
+            getattr(self.context, "skills", None), state.get("tool_results") or ()
+        )
+        if activated:
+            messages = messages + [
+                authored(
+                    {"role": "system", "content": render_skill_activation(activated)},
+                    self.run_id,
+                )
+            ]
+            await self.recorder.add(
+                "skills.activated",
+                node,
+                {
+                    "step": int(state.get("steps") or 0),
+                    "skills": [
+                        {"skill": item["name"], "path": item["path"]} for item in activated
+                    ],
+                },
+            )
         response, usage = await self.call_model(messages, node, step=int(state.get("steps") or 0))
         assistant: dict[str, Any] = authored({"role": "assistant", "content": response.text}, self.run_id)
         if response.tool_calls:
@@ -4081,8 +4108,11 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         # 仍要续跑提示，否则下一轮没有任何新的 user 输入，模型只会复述上一段。
         last_role = str((messages[-1] or {}).get("role") or "") if messages else ""
         prompt = "" if last_role == "tool" else "请继续：如未完成请调用工具执行下一步；如已完成请输出中文总结。"
+    # 这一节点刚跑完的工具结果要等节点返回才写回 state，但条件 Skill 的激活必须
+    # 赶在"下一次模型调用"之前：模型刚读完文件、紧接着在同一轮里调用 skill 时，
+    # 目录若还按旧台账算就会把它判成不存在。把已执行的台账并进这次 ask 的视图。
     result = await session.ask(
-        state,
+        {**state, "tool_results": results},
         prompt,
         node,
         messages=messages,

@@ -14,10 +14,17 @@ from __future__ import annotations
 import re
 
 from blank_api.services.prompt_args import render_prompt
+from blank_api.services.skills_defs import match_skill_paths
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, fail, ok
 
 # 清单是每轮都在付的固定成本：一条 Skill 只占一行。
 SUMMARY_CHARS = 120
+
+# 哪些工具算"碰到了工作区里的这个文件"。只认真正落到文件上的那几个；glob /
+# search_code 的 pattern 是通配符不是路径，越权拿它去匹配等于凭猜想激活。
+TOUCHED_PATH_TOOLS = frozenset(
+    {"read_file", "edit_file", "write_file", "apply_patch", "notebook_edit"}
+)
 
 _LEADING_MARKS = re.compile(r"^[#>*\-\s]+")
 
@@ -103,7 +110,13 @@ def preload_skills(
         name = str(raw or "").strip()
         if not name or name in carried:
             continue
-        entry = catalog.get(name) if isinstance(catalog, SkillCatalog) else None
+        # 子代理定义里点名的 Skill 是作者显式声明的，不受条件激活闸门影响：
+        # 否则 agent 写了 skills: [x] 却因为 x 有 paths 而加载不到。
+        entry = (
+            catalog.get(name, include_conditional=True)
+            if isinstance(catalog, SkillCatalog)
+            else None
+        )
         if entry is None:
             problems.append((name, f"Skill '{name}' specified in frontmatter was not found"))
             continue
@@ -138,6 +151,7 @@ class SkillCatalog:
             instructions = str(entry.get("instructions") or "").strip()
             # 提案采用后的 Skill 自带一句专门写的 description（skills.metadata），
             # 它比从正文首行压出来的更准确；没有时才回落到正文。
+            paths = tuple(str(item) for item in (entry.get("paths") or ()) if str(item).strip())
             self._entries[name] = {
                 "name": name,
                 "description": str(entry.get("description") or "").strip()
@@ -148,6 +162,9 @@ class SkillCatalog:
                 "display_name": str(entry.get("display_name") or "").strip(),
                 "allowed_tools": tuple(entry.get("allowed_tools") or ()),
                 "disallowed_tools": tuple(entry.get("disallowed_tools") or ()),
+                # paths 非空 = 条件技能：清单里先不出现，等文件工具碰到匹配路径再激活
+                # （对齐上游 conditionalSkills / activatedConditionalSkillNames）。
+                "paths": paths,
                 "model_invocable": bool(entry.get("model_invocable", True)),
                 "user_invocable": bool(entry.get("user_invocable", True)),
                 "source": str(entry.get("source") or ""),
@@ -162,6 +179,7 @@ class SkillCatalog:
                 "base_dir": str(entry.get("base_dir") or ""),
             }
         self.loaded: set[str] = set()
+        self.activated: set[str] = set()
 
     def entries(self) -> list[dict]:
         return [dict(item) for item in self._entries.values()]
@@ -169,29 +187,118 @@ class SkillCatalog:
     def names(self) -> list[str]:
         return list(self._entries)
 
+    def _visible(self, name: str, item: dict) -> bool:
+        """条件技能在激活前不进清单，也不能被模型按名字猜中。"""
+        return not item["paths"] or name in self.activated
+
+    def _visible_entries(self) -> list[dict]:
+        return [
+            item
+            for name, item in self._entries.items()
+            if self._visible(name, item)
+        ]
+
     def model_names(self) -> list[str]:
-        """模型可调用的名字：``disable-model-invocation`` 的那些不能出现。"""
-        return [name for name, item in self._entries.items() if item["model_invocable"]]
+        """模型可调用的名字：``disable-model-invocation`` 与未激活的条件技能不出现。"""
+        return [
+            name
+            for name, item in self._entries.items()
+            if item["model_invocable"] and self._visible(name, item)
+        ]
 
     def model_available(self) -> bool:
+        """条件技能也算可用：它们只是不在清单里，工具不该因此被整个拿掉。"""
         return any(item["model_invocable"] for item in self._entries.values())
 
     def listing(self) -> list[dict]:
         """系统提示里那一栏的形状：只有名字与一句话说明，不放正文。"""
         return [
             {"name": item["name"], "description": item["description"]}
-            for item in self._entries.values()
+            for item in self._visible_entries()
             if item["model_invocable"]
         ]
 
-    def get(self, name: str) -> dict | None:
-        return self._entries.get(name)
+    def get(self, name: str, *, include_conditional: bool = False) -> dict | None:
+        item = self._entries.get(name)
+        if item is None:
+            return None
+        if not include_conditional and not self._visible(name, item):
+            return None
+        return item
+
+    def touch(self, paths) -> list[dict]:
+        """文件被碰到时尝试激活条件技能；返回这次**新**激活的那些。
+
+        幂等：同一技能只激活一次，调用方因此可以把完整 tool_results 每步重放
+        一遍——审批恢复重建目录后也能靠检查点里的结果把状态找回来。
+        """
+        activated: list[dict] = []
+        for name, item in self._entries.items():
+            if not item["paths"] or name in self.activated:
+                continue
+            for path in paths or ():
+                if match_skill_paths(item["paths"], path):
+                    self.activated.add(name)
+                    activated.append(
+                        {
+                            "name": name,
+                            "description": item["description"],
+                            "path": str(path),
+                        }
+                    )
+                    break
+        return activated
 
     def __len__(self) -> int:
         return len(self._entries)
 
     def __bool__(self) -> bool:
         return bool(self._entries)
+
+
+def touched_paths(tool_results) -> list[str]:
+    """从工具台账里取"真被碰到的文件"（只认成功的文件工具）。"""
+    paths: list[str] = []
+    for item in tool_results or ():
+        if not isinstance(item, dict) or not item.get("ok"):
+            continue
+        if str(item.get("tool") or "") not in TOUCHED_PATH_TOOLS:
+            continue
+        data = item.get("data")
+        if not isinstance(data, dict):
+            continue
+        value = data.get("path")
+        if isinstance(value, str) and value.strip():
+            paths.append(value.strip())
+    return paths
+
+
+def activate_from_tool_results(catalog, tool_results) -> list[dict]:
+    """按台账激活条件技能；返回这次新激活的项（调用方负责落事件与提示）。"""
+    if not isinstance(catalog, SkillCatalog):
+        return []
+    return catalog.touch(touched_paths(tool_results))
+
+
+def render_skill_activation(activated) -> str:
+    """激活后的系统提醒：模型要知道"清单里多了一条、名字怎么拼"。"""
+    lines = [
+        "<system-reminder>",
+        "刚才触碰的文件命中了以下条件 Skill 的 paths，它们现在可以调用：",
+    ]
+    for item in activated or ():
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        description = str(item.get("description") or "").strip()
+        matched = str(item.get("path") or "").strip()
+        suffix = f"（匹配 {matched}）" if matched else ""
+        lines.append(
+            f"- {name}：{description}{suffix}" if description else f"- {name}{suffix}"
+        )
+    lines.append("需要时先用 skill 工具加载正文，名字要照抄，不要猜。")
+    lines.append("</system-reminder>")
+    return "\n".join(lines)
 
 
 async def _record(context: ToolContext, event: str, payload: dict) -> None:

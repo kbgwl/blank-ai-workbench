@@ -494,19 +494,20 @@ def test_invalid_tool_shape_is_a_warning_not_a_crash(tmp_path: Path) -> None:
 
 
 def test_unsupported_fields_are_reported_not_applied(tmp_path: Path) -> None:
+    # paths 已不再是"只看不用"的字段（AA 批起按条件激活生效），这里只钉余下的。
     _write_skill(
         tmp_path,
         "deploy",
-        _skill(extra="model: sonnet\npaths: src/**\ncontext: fork\neffort: high\n"),
+        _skill(extra="model: sonnet\ncontext: fork\neffort: high\n"),
     )
 
     found = _discover(tmp_path)
     item = found.entries["deploy"]
 
-    assert set(item.ignored) == {"model", "paths", "context", "effort"}
+    assert set(item.ignored) == {"model", "context", "effort"}
     audit = item.as_dict()
     assert "sonnet" not in str(audit)
-    assert audit["ignored"] == ["model", "paths", "context", "effort"]
+    assert audit["ignored"] == ["model", "context", "effort"]
 
 
 # --------------------------------------------------------------------------- #

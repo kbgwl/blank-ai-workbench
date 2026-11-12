@@ -1,6 +1,42 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）
+
+- **Skill 的 `paths` 条件激活对齐上游 `conditionalSkills`（AA 批）**：frontmatter 里写
+  `paths:` 的 Skill 不再只是"解析进 ignored"，而是按 Claude 的条件技能处理：清单里先
+  不出现，等文件工具真碰到匹配路径后，在下一次模型调用前把"现在可以用了"作为系统提醒
+  交给模型。上游锚点：归一化 `y1r`（字符串按逗号拆、`{}` 内不拆、列表拍平、非字符串
+  丢弃、尾部 `/**` 去掉、空或全 `**` → 无条件）、文件操作后激活 `p1r`（
+  `ignore().add(paths)` + `ignores(path)`，命中移入 `dynamicSkills`、记
+  `activatedConditionalSkillNames`、log `Activated conditional skill '<name>' (matched
+  path: <path>)`、emit `tengu_dynamic_skills_changed`）。改 `services/skills_defs.py`
+  （`_path_list` / `_pattern_regex` / `match_skill_paths` / `SkillDefinition.paths|conditional`）、
+  `services/tools/skills.py`（`SkillCatalog._visible|touch`、`touched_paths`、
+  `activate_from_tool_results`、`render_skill_activation`、`preload_skills` 绕过条件闸门）、
+  `services/agent/graph.py`（`ask` 注入提醒与 `skills.activated` 事件）。
+  1. **只有真碰文件才算**：`read_file` / `edit_file` / `write_file` / `apply_patch` /
+     `notebook_edit` 的成功回执才进台账；`glob` / `search_code` 的 pattern 是通配符不是
+     路径，不能拿来猜激活；绝对路径与含 `..` 的段一律不匹配（与上游跳过一致）。
+  2. **清单与工具两个面**：未激活的条件技能不进系统提示清单、`skill` 工具按名调用会被
+     拒（报错里的「当前可用」也不泄漏名字）；只要目录里还有一个模型可调用的 Skill
+     （哪怕它是条件的），`skill` 工具就不从工具表里拿掉——工具在、只是那一条还没解锁。
+  3. **激活幂等且可复原**：`touch` 对已激活的项不再宣布；激活由工具台账反推，审批恢复
+     重建会话目录后重放检查点里的结果即可复原，不依赖内存标记。
+  4. **作者显式点名不受闸门拦**：子代理 frontmatter 的 `skills:` 预加载用
+     `include_conditional=True`——这是作者写的派发指令，不是模型猜的名字。
+  5. **同一轮就能解锁**：执行节点先跑工具再问模型，而工具结果要等节点返回才写回 state；
+     本批把刚执行完的台账并进这次 `ask` 的视图，模型"读完文件紧接着调 skill"不再慢一步
+     （首版实现里提醒会晚一轮注入，端到端实测暴露后修正）。
+  6. 偏离/未移植：匹配器是 gitignore 近似（`*` / `?` 不跨 `/`、`**` 跨、尾缀 `/**` 去尾、
+     `!pattern` 取反、无 `/` 的 pattern 任意层级），不是上游同款 `ignore` 库，罕见边界
+     可能有出入；`synced` 同步根与嵌套 Skill 目录仍未移植。
+  测试：新增 `tests/test_skill_paths_v51.py` 25 例（解析与 `ignored` 口径、`y1r` 形状、
+  13 条匹配参数含取反与锚定、绝对与 `..` 拒绝、目录可见性与幂等、台账只认成功文件工具、
+  工具闸门与报错不泄漏、子代理预加载绕过、提醒文案、五步真实运行时端到端含
+  `skills.activated` 载荷）。变异 12/12 红（条件技能可见、touch 非幂等、条件技能算不进
+  工具可用、`get` 绕过闸门、preload 被闸门拦、glob 计入触碰、失败回执计入触碰、尾缀
+  `/**` 不去、pattern 一律锚定、取反失效、`ask` 用旧台账、提醒不注入）。相邻 12 个套件
+  **347 passed**。全量后端回归：**3499 passed / 28 skipped（766.03s）**。
 
 - **settings.json 的 `permissions.allow/deny/ask` 接进审批链（Z 批）**：Claude Code 的
   三组规则不再只是"看得到、不生效"。上游锚点：前缀规则 `zMe = /^(.+):\*$/`、glob
