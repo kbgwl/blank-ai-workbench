@@ -1,6 +1,48 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）
+
+- **输出样式（`.blank/output-styles`）与系统提示接入对齐 Claude（S 批第 4 项）**：
+  按 Claude Code 2.1.271 的 `.claude/output-styles` 契约落成本地输出样式发现与选择。新增
+  `services/output_styles_defs.py`（两层发现、字段解析、审计投影、精确选择），改
+  `services/agent/graph.py`（`SYSTEM_PROMPT` 拆成头 / 编程纪律 / 尾，新增
+  `compose_system_prompt`，`initial_messages` 接受选中样式）、`services/agent/runtime.py`
+  （每任务发现一次、`output_styles.loaded` 事件、选中样式经 `_RunScope` 带进系统提示）、
+  `services/settings.py` + `schemas/settings.py` + `api/routes/settings.py`
+  （`output_style` 设置键与顶层标量合并）、`api/routes/projects.py`
+  （`GET /projects/{id}/output-styles`）、`web/src/components/settings/api.ts`（类型）。
+  1. **发现与命名**：一个 md 一个样式，项目层 `<workspace>/.blank/output-styles/**/*.md`
+     + 用户层 `~/.blank/output-styles`（`BLANK_USER_OUTPUT_STYLES_DIR`、
+     `BLANK_USER_INSTRUCTIONS_DIR/output-styles` 可改）递归扫描（深度 32、目录数 4096
+     上限），同名项目层胜用户层；扩展名匹配大小写不敏感、名字只删小写 `.md`
+     （`Foo.MD` 保留后缀，与上游 `replace(/\.md$/,"")` 一致）。
+  2. **字段**：`name` 默认文件名；`description` 默认正文首行（字符串 trim、布尔/数字转
+     字符串、对象/数组告警后回退首行）；`keep-coding-instructions` 按上游 `m1` 口径
+     （true/false 集合，`1` / `0` 也认）；`force-for-plugin` 只对 plugin 样式有意义，
+     在用户/项目样式上解析后告警并忽略；未知键进 `ignored` 并告警、样式仍加载；坏
+     frontmatter 降级（字段丢掉、正文保留）而不是跳过；超 1 MiB 跳过并点名；正文原样
+     使用、不截断。
+  3. **选择**：`settings.output_style`（默认 `"default"`）精确查表，名字区分大小写；
+     空名/未知名字静默回落 `default`（上游 `?? null` 的同一语义），只在
+     `output_styles.loaded` 的 `selected` / `active` 里留痕；归一化 trim，空串/超过 256
+     字回落 `default`。
+  4. **系统提示**：默认编程纪律段（Codex coding guidelines / Claude code editor 规则的
+     本机压缩版）单独成段；选中样式且 `keep-coding-instructions !== true` 时该段被样式
+     正文替换，`true` 时两段都在；样式段固定排在安全/审批/工作区边界之后并写明不得覆盖
+     它们；没有选中样式时系统提示与旧版逐字节一致（sha256 基线
+     `0c05c3558e3fc6da04ebe015cda0544c826c26c084bb7ca8536c6be854276111` 钉在判据里）。
+  5. **可观察**：`output_styles.loaded`（发现结果 + selected/active，不含正文）与
+     `GET /projects/{id}/output-styles` 列表（审计信息与字符数，不回正文）。
+  测试：新增 `tests/test_output_styles_v47.py` 31 例（命名、字段、跳过与降级矩阵、两层
+  覆盖、选择语义、合成逐字节基线、keep 两态、运行时系统提示与事件、设置键与 HTTP 列表），
+  变异电池 21/21 红（逐条改坏实现，红在指定判据上；跑完按原字节还原并核对 sha256）。
+  全量后端回归：**3293 passed, 28 skipped**（0 failed，rc=0，710.58s）。
+  偏离：目录用 `.blank/output-styles` 而不是 `.claude/output-styles`，用户层是
+  `~/.blank/output-styles`，刻意只读 `.blank`；没有 plugin 清单 / marketplace 两层，
+  `force-for-plugin` 只解析并告警；Claude 内置 Explanatory / Learning / Concise 三个
+  英文 persona 不移植；没有每轮注入的 `"<name>" output style is active.` 元提醒（本机
+  每次任务/回合重建系统提示，样式在合成处已经生效）；设置键名是 `output_style` 而不是
+  `outputStyle`。
 
 - **自定义斜杠命令（`.blank/commands`）与参数展开对齐 Claude（S 批第 3 项）**：
   按 Claude Code 2.1.271 的 `.claude/commands` 命名规则与 `qW` 占位符引擎落成本地斜杠命令。

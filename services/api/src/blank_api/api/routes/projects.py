@@ -21,6 +21,8 @@ from blank_api.schemas.project import (
     WorkspaceOut,
 )
 from blank_api.services.commands_defs import discover_commands
+from blank_api.services.output_styles_defs import discover_output_styles
+from blank_api.services.settings import SettingsStore
 from blank_api.services.uploads import UploadStore
 from blank_api.services.workspace import mask_path, validate_workspace_path
 
@@ -92,6 +94,26 @@ async def list_project_commands(project_id: str, db: DbSession) -> dict:
     project = await load_project(db, project_id)
     workspace = project.active_workspace
     return discover_commands(workspace.path if workspace is not None else None).as_dict()
+
+
+@router.get("/{project_id}/output-styles")
+async def list_project_output_styles(project_id: str, db: DbSession) -> dict:
+    """该工作区可用的输出样式（用户层 + 项目层），以及当前选中/实际生效的是哪个。
+
+    和 commands 一样只返回审计信息，不返回正文：正文会整段进系统提示，
+    列表接口没有理由把它端到前端。``active`` 与运行时一致——认不出的名字
+    静默回落 default。
+    """
+    project = await load_project(db, project_id)
+    workspace = project.active_workspace
+    discovery = discover_output_styles(workspace.path if workspace is not None else None)
+    selected = str(SettingsStore().read().get("output_style") or "default")
+    active = discovery.resolve(selected)
+    return {
+        **discovery.as_dict(),
+        "selected": selected,
+        "active": active.name if active is not None else "default",
+    }
 
 
 @router.patch("/{project_id}", response_model=ProjectOut)

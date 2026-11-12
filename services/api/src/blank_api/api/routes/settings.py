@@ -97,7 +97,7 @@ def _render(payload: dict, store: SettingsStore) -> AgentSettings:
     body = {
         k: v
         for k, v in payload.items()
-        if k in ("guardian", "compaction", "permissions", "tools", "safety", "background")
+        if k in ("guardian", "compaction", "permissions", "tools", "safety", "background", "output_style")
     }
     return AgentSettings.model_validate({**body, "path": str(store.path), "limits": _limits()})
 

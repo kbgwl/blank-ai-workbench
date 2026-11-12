@@ -134,6 +134,8 @@ export type AgentSettings = {
     default_model_policy: string;
     automation_mode: string;
   };
+  /** 当前选中的输出样式名（.blank/output-styles）；"default" 表示不带样式提示。 */
+  output_style: string;
   path: string;
   limits: {
     guardian_modes?: string[];
@@ -166,6 +168,7 @@ export type AgentSettingsPatch = {
     token_budget?: number;
     auto_recoveries?: number;
   };
+  output_style?: string;
 };
 
 /** 这台机器此刻到底怎么隔离的：容器 / 本机实测边界 / 无隔离。 */

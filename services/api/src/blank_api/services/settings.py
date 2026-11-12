@@ -63,6 +63,9 @@ DEFAULTS: dict[str, Any] = {
         # 工具超过一定数量后按需检索加载（tool_search）
         "search": True,
     },
+    # 选中的输出样式名（.blank/output-styles 里的文件名或 frontmatter name）。
+    # 和 Claude 的 settings.outputStyle 同一语义：精确查表，认不出的名字静默回落 default。
+    "output_style": "default",
     # 能力开关的覆盖层：键由 services/features.py 的注册表定义，这里不预先列名，
     # 否则每加一个开关都要改两处。没写的开关一律按注册表默认值走。
     "features": {},
@@ -232,6 +235,11 @@ def normalize(raw: Any) -> dict[str, Any]:
     automation_mode = str(background.get("automation_mode") or "").strip().lower()
     if automation_mode not in BACKGROUND_AUTOMATION_MODES:
         automation_mode = DEFAULTS["background"]["automation_mode"]
+    # 样式名区分大小写（Claude 直接拿它当字典键），只做 trim；空串/超长一律回落
+    # default —— 一个坏名字不该让新任务搭上一个来路不明的样式。
+    output_style = str(data.get("output_style") or "").strip()
+    if not output_style or len(output_style) > 256:
+        output_style = DEFAULTS["output_style"]
 
     return {
         "guardian": {
@@ -276,6 +284,7 @@ def normalize(raw: Any) -> dict[str, Any]:
             )
         },
         "tools": {"search": _as_bool(tools.get("search"), DEFAULTS["tools"]["search"])},
+        "output_style": output_style,
         # 只收认得出布尔语义的值：手改文件时写成字符串 "on" 也认，写成一坨
         # 无法解释的东西就丢掉，让注册表默认值接手，而不是让开关变成随机行为。
         "features": {
@@ -449,7 +458,13 @@ class SettingsStore:
         current = self.read()
         merged = deepcopy(current)
         for section, value in (patch or {}).items():
-            if not isinstance(value, dict) or section not in merged:
+            if section not in merged:
+                continue
+            if not isinstance(merged[section], dict):
+                # 顶层标量（output_style）：没有可合并的子键，直接替换后交给 normalize。
+                merged[section] = value
+                continue
+            if not isinstance(value, dict):
                 continue
             if section == "features":
                 # 开关名由注册表定义，不在 DEFAULTS 里预置。按"已有键"过滤会让

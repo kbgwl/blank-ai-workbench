@@ -60,6 +60,8 @@ class AgentSettings(BaseModel):
     tools: ToolSettings = Field(default_factory=ToolSettings)
     safety: SafetySettings = Field(default_factory=SafetySettings)
     background: BackgroundSettings = Field(default_factory=BackgroundSettings)
+    # 当前选中的输出样式名；「default」＝不带样式提示。认不出的名字运行时静默回落。
+    output_style: str = "default"
     # 设置文件位置与合法取值：前端用来画滑杆边界，顺便让"改到哪去了"可查
     path: str = ""
     limits: dict = Field(default_factory=dict)
@@ -117,3 +119,6 @@ class AgentSettingsPatch(BaseModel):
     tools: ToolPatch | None = None
     safety: SafetyPatch | None = None
     background: BackgroundPatch | None = None
+    # 样式名不在这里做枚举校验：样式来自工作区文件，设置页也允许先存一个名字。
+    # 空串/超长由 settings.normalize 回落成 default。
+    output_style: str | None = None

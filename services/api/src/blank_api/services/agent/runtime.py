@@ -49,6 +49,7 @@ from blank_api.services import shell_tasks, worktree_session
 from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agents_defs import discover_agents
 from blank_api.services.commands_defs import discover_commands
+from blank_api.services.output_styles_defs import discover_output_styles
 from blank_api.services.skills_defs import discover_skills, merge_skill_entries
 from blank_api.services.agent.scenarios import (
     excluded_tools,
@@ -272,6 +273,8 @@ class _RunScope:
     isolation_settled: bool = False
     # 场景 key（scenarios.py）。task.started 记"当时在哪个场景"用，事件与证据都以它为准。
     scenario_key: str = "dev"
+    # 本轮选中的输出样式（as_prompt 形状）；None ＝ 没选/不可用，系统提示走默认。
+    output_style: dict | None = None
 
 
 @dataclass
@@ -550,6 +553,21 @@ class AgentRuntime:
         commands = discover_commands(run_root)
         if commands.entries or commands.errors or commands.warnings:
             await recorder.add("commands.loaded", "receive_task", commands.as_dict())
+        # 输出样式（.blank/output-styles/**/*.md）：设置页选一个，正文进系统提示。
+        # 选中的名字查不到时按默认样式跑（Claude 的 `?? null`），只在事件里留痕。
+        output_styles = discover_output_styles(run_root)
+        selected_style = str(settings.get("output_style") or "").strip() or "default"
+        active_style = output_styles.resolve(selected_style)
+        if output_styles.entries or output_styles.errors or output_styles.warnings:
+            await recorder.add(
+                "output_styles.loaded",
+                "receive_task",
+                {
+                    **output_styles.as_dict(),
+                    "selected": selected_style,
+                    "active": active_style.name if active_style is not None else "default",
+                },
+            )
         skills = SkillCatalog(
             merge_skill_entries(
                 request.skill_catalog,
@@ -740,6 +758,7 @@ class AgentRuntime:
             subagents=subagents,
             scenario_key=scenario.key,
             isolation=isolation,
+            output_style=active_style.as_prompt() if active_style is not None else None,
         )
 
     async def _fire_hooks(self, scope: _RunScope, event: str, payload: dict) -> None:
@@ -1045,6 +1064,7 @@ class AgentRuntime:
                     resolve_scenario(request.scenario),
                     memory_opt_in=request.memory_opt_in,
                 ),
+                output_style=scope.output_style,
                 run_id=recorder.run_id,
             ),
             "plan": [],
