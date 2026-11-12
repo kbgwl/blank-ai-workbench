@@ -22,6 +22,7 @@ from blank_api.services.tools.review import review_tools
 from blank_api.services.tools.search import search_tools
 from blank_api.services.tools.shell import shell_tools
 from blank_api.services.tools.skills import SkillCatalog, skill_tools
+from blank_api.services.tools.tasks import task_tools
 from blank_api.services.tools.team_admin import TEAM_ADMIN_TOOL_NAMES, team_admin_tools
 from blank_api.services.tools.testing import test_tools
 from blank_api.services.tools.web import web_tools
@@ -33,6 +34,7 @@ def build_default_tools() -> list[ToolDefinition]:
     return [
         *search_tools(),
         *plan_tools(),
+        *task_tools(),
         *ask_tools(),
         *delegate_tools(),
         *filesystem_tools(),

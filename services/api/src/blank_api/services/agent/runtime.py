@@ -611,7 +611,11 @@ class AgentRuntime:
         layers = load_layers(run_root)
         # 读后写状态跟着任务走：read_file 记录、edit_file/write_file/apply_patch 前对照。
         file_state = FileStateCache()
+        # 钩子实例先建出来：任务清单的 TaskCreated / TaskCompleted 在工具层就要判定，
+        # 而 ToolContext 比 AgentSession 先构造。同一个实例交给两边，审计结果不分家。
+        hooks = HookRunner.from_env()
         context = ToolContext(
+            hooks=hooks,
             root=run_root,
             task_id=request.task_id,
             recorder=recorder,
@@ -669,7 +673,7 @@ class AgentRuntime:
             stream_output=is_enabled("stream_output", settings),
             is_cancelled=_CancelledLookup(store, request.task_id),
             current_status=_StatusLookup(store, request.task_id),
-            hooks=HookRunner.from_env(),
+            hooks=hooks,
             guardian=guardian,
             compactor=compactor,
             notes=notes,

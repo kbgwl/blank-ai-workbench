@@ -37,6 +37,10 @@ HOOK_EVENTS = (
     # 失败与成功分开：Claude Code 的同名事件让钩子作者不必靠 ok 字段分流。
     # 旧的 post_tool_use 在失败时仍会跑一次（兼容），这里是额外的一次。
     "post_tool_use_failure",
+    # 任务清单的创建/完成。两家客户端都有同名钩子，价值在"创建前拦一次、完成前拦一次"：
+    # 被拒的创建要把刚建的任务删回去，被拒的完成不许落盘（见 tools/tasks.py）。
+    "task_created",
+    "task_completed",
     "post_compact",
     # 隔离副本的创建/删除。非 git 工作区以前只有"整树复制"一条路；
     # 有了这两个事件，用户可以自己决定副本建在哪（远端、快照、专用卷）。
@@ -46,7 +50,7 @@ HOOK_EVENTS = (
 # 只有这些事件可以阻止后续动作；其余是通知性质。
 # 提交事件在 Claude 的阻断集合里（UserPromptSubmit/UserPromptExpansion 同一族）：
 # 它的价值就是"在送进模型之前拦下来或改写掉"，异步化等于放弃这个决定。
-BLOCKING_EVENTS = frozenset({"pre_tool_use", "user_prompt_submit"})
+BLOCKING_EVENTS = frozenset({"pre_tool_use", "user_prompt_submit", "task_created", "task_completed"})
 DEFAULT_TIMEOUT = 10.0
 MAX_SNIPPET = 500
 # additionalContext 会进模型上下文：不设上限等于让一个坏钩子把窗口占满。

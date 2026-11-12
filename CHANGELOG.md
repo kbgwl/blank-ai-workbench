@@ -1,6 +1,37 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）
+
+- **任务清单 Task*：依赖图 + 可阻断钩子（R 批第 3 项）**：
+  按 Claude Code 2.1.271 的 `sdk-tools.d.ts` 契约与 `claude.exe` 里的嵌入实现落成本地
+  `task_create` / `task_get` / `task_update` / `task_list`。新增 `services/tools/tasks.py`；
+  `tools/__init__.py`、`tools/base.py`（`ToolContext.hooks`）、`tools/registry.py`（别名）、
+  `services/hooks.py`（两个阻断事件）、`agent/runtime.py`（钩子提到 ToolContext）、
+  `agent/graph.py`（编排纪律）接线。
+  1. **落盘语义**：一个任务一个 `<id>.json`，id 是十进制数字、单调递增，删除后不复用
+     （高水位单独记；建文件与写水位之间崩溃丢了水位文件，删除最高号任务时会把水位抬回去）。
+     列表按数字 id 升序，不是文件名字典序；坏文件跳过而不是整表失败；写盘走 scratch +
+     `os.replace`，同目录一把 asyncio 锁 + `open(..., "x")` 独占创建，并发创建各自拿到不同 id。
+     任务 id 只认 `[A-Za-z0-9_-]{1,64}`，穿越目标真实存在也读不到。
+  2. **依赖图**：`addBlocks` / `addBlockedBy` 写双向引用（A.blocks → B、B.blockedBy → A），
+     已存在的过滤掉，过滤后非空才记入 `updatedFields`；目标不存在时忽略但字段仍如实上报；
+     删除任务把其它任务里对它的引用一并清掉。
+  3. **展示口径**：`updatedFields` 只列真正变了的字段（同状态不算变更、不产生
+     `statusChange`）；`metadata` 按键合并、置 `null` 删键；`task_list` 隐藏
+     `metadata._internal` 为真的任务、把已完成阻塞者从 `blockedBy` 里过滤，渲染
+     `#id [status] subject (owner) [blocked by #a, #b]`，空表 `No tasks found`；
+     团队任务标 `in_progress` 未带 owner 时自动署名，按 group_id 共享同一份清单。
+  4. **可阻断钩子**：`task_created` 在创建落盘后跑，被拒就把刚建的任务删回去；
+     `task_completed` 在状态落盘前跑，被拒时任何字段都不落盘。两个事件进
+     `BLOCKING_EVENTS`，退出码 2 生效，async 标志在阻断事件上被忽略。
+  测试：新增 `tests/test_task_tools_v40.py` 33 例（落盘语义/依赖图/展示口径/参数与钩子/工具面，
+  含并发创建、坏文件、崩溃窗口、真实子进程退出码 2）；相邻 14 个测试文件 **271 passed**；
+  变异电池 16/16 全红（逐条改坏实现、实测红在预期用例上，跑完按原字节还原并核对 sha256）。
+  全量后端回归：**3025 passed, 28 skipped**（0 failed，rc=0，737.97s）。
+  偏离：四个工具常驻而不是 Claude 的 `shouldDefer`（纯展示差异）；更新不存在的任务回
+  `Task #<id> not found` 而不是 error；空 `subject` / `description` 明确拒绝，Claude 的 zod
+  允许空串；团队清单按 group_id 共享，但没有移植 `task_assignment` 消息；钩子事件名用
+  snake_case `task_created` / `task_completed`；不存时间戳、不发 UI 通知。
 
 - **REPL 工具：一段持久的 JavaScript 把多次工具调用串起来（R 批第 2 项）**：
   按 Claude 原文（`code` 必填、支持顶层 await、变量跨调用保留；`description` 可选；

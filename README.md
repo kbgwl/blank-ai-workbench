@@ -266,6 +266,7 @@ uv run alembic revision --autogenerate -m "描述"
 | NotebookEdit 工具（按单元格编辑） | ✅ | `notebook_edit(notebook_path, cell_id?, new_source, cell_type?, edit_mode?)` 对齐 Claude NotebookEdit：`.ipynb` 用单元格视图读（`<cell id="...">` 标签，read_file 默认渲染、`offset/limit` 仍回原始 JSON 行）；`replace` 按 id 换源（可顺带改类型，代码→markdown 清空执行字段、反向补默认值）、`insert` 放在目标格之后（省略 `cell_id` 插最前，自动生成 id）、`delete` 删格；老 notebook 没有真实 id 时合成 `cell-<序号>` 只用于定位、不写回；同样过「没读过不许改、被改过要重读」硬闸门（与 `edit_file`/`write_file`/`apply_patch` 同一套 size+mtime+sha256），写前备份、写回保留原缩进与 CRLF、8MB 上限，非法 JSON/缺少单元格/无实际变更都点名拒绝；工作区改写（逆向场景落分析区）、计划模式拦截、父任务变更记录全部按既有写入路径接上。判据 `services/api/tests/test_notebook_edit_v37.py`（30 例，含读渲染/闸门/CRLF/接线），变异 38/38 红 |
 | Monitor 工具（逐行事件流） | ✅ | `monitor(description, command, timeout_ms)` 对齐 Claude Monitor 的 command 变体：命令仍过 safety（`policy_gate("run_shell")`）、shell allowlist 与沙箱档位，不是绕开执行边界的旁路；每条 stdout/stderr 行是一个事件（按字节切行再解码，多字节字符被 chunk 切开不会变乱码；空行不投递），命令没结束就能取到事件，结束/超时/取消/`task_stop` 都只以最后一条事件收尾；事件在下一次模型调用前作为系统通知注入（明确「不是用户发言、不要轮询、不要 sleep」），每次最多 25 行，积压留在队列下一轮继续，队列上限 200 行、只丢最旧并如实上报丢弃数；`task_output` / `task_stop` 认 `mon-` 句柄（与 `shell-`/`wf_` 同一张表、同一套日志与收尾）；子代理直接拒绝，文档/逆向/日常/头脑风暴场景按命令工具一并禁用；手写 allow/deny 规则、高风险动作分类、缺命令停滞检测、占位内容审计也都覆盖 monitor。判据 `services/api/tests/test_monitor_tool_v38.py`（20 例，含真实进程逐行/跨块/边跑边投/积压），变异 17/17 红（附带一致性改动 4/4 红） |
 | REPL 工具（持久 JavaScript 组合） | ✅ | `repl(code, description?, timeout?)` 对齐 Claude REPL 契约：脚本跑在每任务一个的持久 Node 子进程里，密封 `vm` 上下文（没有 `require`/`process`/`import`），变量跨调用保留、支持顶层 await、最后一条表达式即返回值、`console.log/error` 分别回 stdout/stderr；工具按本地名字当异步函数用，每次内层调用回宿主走同一条 `ToolGateway.execute(..., inner=True)`（场景禁用/安全策略/权限/审计/沙箱一个不少）；会话/编排类工具不注入、场景排除的工具也不注入；需要审批的内层调用直接拒绝（REPL 里弹不出审批卡）；`timeout` 默认 30000ms、上限 600000ms，同步死循环由 `vm` 超时打断且会话保留，异步挂起由宿主截止时间杀掉进程并清空状态；缺 Node 报 `skipped` + `data.missing_command=node`；没有网关（子代理、非 runtime 入口）直接拒绝；任务收尾摘会话，等审批那一档保留。判据 `services/api/tests/test_repl_tool_v39.py`（36 例，含真实 Node 持久/密封/超时/内层工具），变异 16/16 红 |
+| 任务清单 Task*（依赖图 + 钩子） | ✅ | `task_create / task_get / task_update / task_list` 对齐 Claude Task* 契约：任务落盘（默认 `~/.blank/tasks/<task_id>/`，`BLANK_TASKS_DIR` 可改根；团队任务按 group_id 共享一份），id 是十进制数字、单调递增，删除后不复用（高水位单独记，崩溃丢了水位文件也会在删除最高号时抬回去），列表按数字 id 升序而不是文件名字典序；`addBlocks` / `addBlockedBy` 写双向引用、已存在的去重、删任务时把别处对它的引用一并清掉；`metadata` 按键合并、值为 null 删键；`task_list` 隐藏 `metadata._internal` 为真的任务、把已完成阻塞者从 `blockedBy` 里过滤；`task_created` / `task_completed` 是可阻断钩子（创建被拒把刚建的任务删回去，完成被拒任何字段都不落盘）；团队任务标 `in_progress` 未带 owner 时自动署名。写盘走 scratch + `os.replace`，同目录 asyncio 锁 + 独占创建，id 只认 `[A-Za-z0-9_-]{1,64}`（路径穿越直接拒绝）。判据 `services/api/tests/test_task_tools_v40.py`（33 例，含并发创建/坏文件/崩溃窗口/真实子进程钩子），变异 16/16 红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -322,7 +323,12 @@ uv run alembic revision --autogenerate -m "描述"
   或等审批的入口；需要审批的动作只能在顶层调用里批，REPL 内层会直接拒绝；超时或进程崩溃会
   清空整个会话状态，下一次调用从新会话开始；`vm` 不是内核级沙箱，脚本的能力边界靠「不注入
   `require`/`process`/`import` + 内层调用走网关」，真正的高风险动作仍由网关权限与沙箱档位
-  把关）。后台 shell 已于 Q1 补齐
+  把关）。任务清单 Task* 已于 R3 补齐（见上表；五处偏离：四个工具常驻而不是 Claude 的
+  `shouldDefer`，纯展示差异；更新不存在的任务回 `Task #<id> not found` 而不是 error，
+  读侧保持与 TaskGet 同口径；空 `subject` / `description` 明确拒绝，Claude 的 zod 允许空串；
+  团队任务按 group_id 共享同一份清单，但没有移植 `task_assignment` 消息那一路；
+  钩子事件名用 snake_case `task_created` / `task_completed`，与本地其余事件同一命名，
+  不存时间戳、不发 UI 通知）。后台 shell 已于 Q1 补齐
   （`run_in_background` + `task_output`/`task_stop`，见上表），但它有两处与本机实现绑定
   的偏离：沙箱路径不流式（只在结束时整段落日志）、完整输出走 `task_output` 而不是
   Claude 的「Read 输出文件」（临时日志在系统临时目录，Read 只读工作区相对路径）。

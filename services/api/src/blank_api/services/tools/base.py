@@ -59,6 +59,9 @@ class ToolContext:
     # 本任务的工具网关：repl 的内层调用必须回到同一条管线（场景/权限/安全/审计/沙箱），
     # 而不是自己另开一套。子代理与非 runtime 入口拿不到网关，repl 会明确拒绝。
     tool_gateway: Any = None
+    # 任务清单的可阻断钩子（task_created / task_completed）。没有运行时会话的入口
+    # 拿不到它，任务工具照常工作——钩子是可选扩展，不是执行前提。
+    hooks: Any = None
     # 团队群聊身份：group_id / bot_id / is_admin / project_id。空表示非团队任务，
     # 团队管理工具只在主理人的任务里可见。
     team_scope: dict = field(default_factory=dict)
