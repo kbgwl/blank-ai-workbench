@@ -361,6 +361,41 @@ export function fetchProjectSettings(projectId: string): Promise<LayeredAgentSet
   return request<LayeredAgentSettings>(`${api}/projects/${projectId}/settings`, { cache: "no-store" });
 }
 
+/** 工作区里的一个插件包。组件只给数量，正文由各加载器在任务启动时读取。 */
+export type ProjectPlugin = {
+  name: string;
+  /** user / project —— 项目层同名会覆盖用户层。 */
+  source: string;
+  /** 清单路径，已打码。 */
+  path: string;
+  enabled: boolean;
+  defaultEnabled: boolean;
+  description?: string;
+  version?: string;
+  author?: string;
+  /** commands / agents / skills / output-styles → 条目数。 */
+  components?: Record<string, number>;
+  /** 解析了但没有加载的段（hooks / mcpServers）。 */
+  ignored?: { section: string; reason: string }[];
+  warnings?: string[];
+};
+
+export type ProjectPlugins = {
+  count: number;
+  plugins: ProjectPlugin[];
+  enabled: string[];
+  errors: string[];
+  warnings: string[];
+  /** 用户层插件目录（下一步要放插件的位置）。 */
+  userDir: string;
+  /** 项目层插件目录；项目没绑工作区时为空串。 */
+  projectDir: string;
+};
+
+export function fetchProjectPlugins(projectId: string): Promise<ProjectPlugins> {
+  return request<ProjectPlugins>(`${api}/projects/${projectId}/plugins`, { cache: "no-store" });
+}
+
 /** 特性注册表里的一条。source 说明当前值是哪一层定的：env / settings / legacy / default。 */
 export type FeatureFlag = {
   name: string;

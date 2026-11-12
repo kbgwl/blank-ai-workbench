@@ -28,11 +28,12 @@ from __future__ import annotations
 
 import os
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import yaml
 
+from blank_api.services.plugins_defs import discover_plugins
 from blank_api.services.workspace import mask_path
 
 BUILTIN_AGENT = "general-purpose"
@@ -110,6 +111,7 @@ class AgentCatalog:
 
     entries: dict[str, AgentDefinition] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def __len__(self) -> int:
         return len(self.entries)
@@ -141,11 +143,14 @@ class AgentCatalog:
         ]
 
     def as_dict(self) -> dict:
-        return {
+        payload = {
             "count": len(self.entries),
             "agents": [self.entries[name].as_dict() for name in self.names()],
             "errors": list(self.errors),
         }
+        if self.warnings:
+            payload["warnings"] = list(self.warnings)
+        return payload
 
 
 def user_agents_dir(env: dict[str, str] | None = None) -> Path:
@@ -314,7 +319,10 @@ def _files_under(root: Path) -> list[Path]:
 
 
 def discover_agents(root: str | Path, *, env: dict[str, str] | None = None) -> AgentCatalog:
-    """Load the user layer, then the project layer; project wins by name."""
+    """Load the user layer, the project layer, then enabled plugins.
+
+    Plugin agents are addressed as ``<plugin>:<agent>`` (Claude's namespace).
+    """
     catalog = AgentCatalog(entries={BUILTIN_AGENT: BUILTIN_GENERAL_PURPOSE})
     layers = (
         ("user", user_agents_dir(env)),
@@ -328,6 +336,22 @@ def discover_agents(root: str | Path, *, env: dict[str, str] | None = None) -> A
             catalog.errors.extend(problems)
             if definition is not None:
                 catalog.entries[definition.name] = definition
+
+    plugins = discover_plugins(root, env=env)
+    catalog.errors.extend(plugins.errors)
+    catalog.warnings.extend(plugins.warnings)
+    for plugin in plugins.enabled():
+        for directory in plugin.component_dirs("agents"):
+            for path in _files_under(directory):
+                definition, problems = _definition_from_file(
+                    path, f"plugin:{plugin.name}"
+                )
+                catalog.errors.extend(problems)
+                if definition is not None:
+                    definition = replace(
+                        definition, name=f"{plugin.name}:{definition.name}"
+                    )
+                    catalog.entries[definition.name] = definition
     return catalog
 
 

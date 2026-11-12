@@ -16,6 +16,11 @@ Claude Code 的 settings 从低到高叠加：用户级、项目级（``.claude/
 ``features`` 等于把「打开这个仓库」变成一次提权。被忽略的段进 ``ignored``
 并带在审计事件里，不静默吞掉。
 
+**插件开关（``enabledPlugins``）不在此列。** 插件只提供提示词组件
+（commands/skills/agents/输出样式），hooks 与 MCP 一律不加载，所以项目层打开一个
+本机已有的插件，边界等价于项目自带的 ``.blank/commands``；这与 Claude 允许
+项目设置携带插件开关一致。顶层 ``enabledPlugins`` 合到 ``plugins.enabled``。
+
 单层文件写坏（坏 JSON、顶层不是对象、超过 1 MiB）只跳过**这一层**：其余层
 照常叠加，错误进 ``errors``。设置读不出来时整任务起不来，比少一层偏好更糟。
 """
@@ -182,9 +187,30 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
 def _merge_layer(merged: dict[str, Any], sources: dict[str, str], layer: Layer) -> None:
     if not layer.ok:
         return
-    for key, value in layer.data.items():
+    # 同一层里两张写法都出现时，plugins.enabled 优先（和 normalize 的口径一致），
+    # 所以先把顶层 enabledPlugins 铺进去，后面处理 plugins 时再覆盖。
+    for key, value in sorted(layer.data.items(), key=lambda item: item[0] != "enabledPlugins"):
         if key in PROTECTED_SECTIONS and layer.name in (LAYER_PROJECT, LAYER_LOCAL):
             layer.ignored.append({"section": key, "reason": _PROTECTED_REASON})
+            continue
+        # Claude 把插件开关写成顶层 enabledPlugins；合到 plugins.enabled 里，
+        # 让 normalize 只有一条读取路径。它不是安全段：插件只提供提示词组件，
+        # 项目层开一个本机已有的插件，权限等价于项目自带的 .blank/commands。
+        if key == "enabledPlugins":
+            if not isinstance(value, dict):
+                layer.ignored.append(
+                    {"section": key, "reason": "enabledPlugins 必须是对象"}
+                )
+                continue
+            plugins = merged.setdefault("plugins", {})
+            if not isinstance(plugins, dict):
+                continue
+            enabled = plugins.get("enabled")
+            if not isinstance(enabled, dict):
+                enabled = {}
+                plugins["enabled"] = enabled
+            enabled.update(deepcopy(value))
+            sources["plugins"] = layer.name
             continue
         if key not in DEFAULTS:
             layer.ignored.append({"section": key, "reason": "未知设置段"})

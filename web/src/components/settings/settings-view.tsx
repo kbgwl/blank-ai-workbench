@@ -6,6 +6,7 @@ import { AgentRuntimePanel } from "./agent-runtime-panel";
 import { ChannelsPanel } from "./channels-panel";
 import { FeatureFlagsPanel } from "./feature-flags-panel";
 import { McpPanel } from "./mcp-panel";
+import { PluginsPanel } from "./plugins-panel";
 import { ProvidersView } from "./providers-view";
 import { RoleModelSettings } from "./role-model-settings";
 import { RoutingEvidencePanel } from "./routing-evidence-panel";
@@ -92,10 +93,10 @@ const SECTIONS: Section[] = [
   },
   {
     key: "tools",
-    label: "外部工具",
-    hint: "MCP 服务端连接",
+    label: "外部工具与插件",
+    hint: "MCP 服务端 · 插件包",
     description:
-      "接入外部 MCP 服务端，工具会和内置工具一样走审批与审计。连接失败时，这里能看到原因，而不只是「工具变少了」。",
+      "接入外部 MCP 服务端，工具会和内置工具一样走审批与审计；插件包（plugin.json）则把命令、子代理、技能与输出样式按工作区打包分发。加载失败时，这里能看到原因，而不只是「工具变少了」。",
     status: "实时读取",
     icon: (
       <svg {...iconProps}>
@@ -149,7 +150,12 @@ function SectionBody({ active }: { active: SectionKey }) {
     case "channels":
       return <ChannelsPanel />;
     case "tools":
-      return <McpPanel />;
+      return (
+        <div className="flex flex-col gap-4">
+          <PluginsPanel />
+          <McpPanel />
+        </div>
+      );
     case "advanced":
       return (
         <div className="flex flex-col gap-4">

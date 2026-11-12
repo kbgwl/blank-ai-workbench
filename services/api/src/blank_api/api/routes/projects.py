@@ -22,6 +22,11 @@ from blank_api.schemas.project import (
 )
 from blank_api.services.commands_defs import discover_commands
 from blank_api.services.output_styles_defs import discover_output_styles
+from blank_api.services.plugins_defs import (
+    PROJECT_PLUGINS_DIR,
+    discover_plugins,
+    user_plugins_dir,
+)
 from blank_api.services.settings import SettingsStore
 from blank_api.services.uploads import UploadStore
 from blank_api.services.workspace import mask_path, validate_workspace_path
@@ -114,6 +119,26 @@ async def list_project_output_styles(project_id: str, db: DbSession) -> dict:
         **discovery.as_dict(),
         "selected": selected,
         "active": active.name if active is not None else "default",
+    }
+
+
+@router.get("/{project_id}/plugins")
+async def list_project_plugins(project_id: str, db: DbSession) -> dict:
+    """该工作区可用的插件包（用户层 + 项目层，项目同名覆盖）。
+
+    只返回清单与审计面：启用状态来自设置级联（``enabledPlugins`` /
+    ``plugins.enabled``），组件只给数量，正文仍由各加载器在任务启动时读取。
+    ``userDir`` 是用户层插件的绝对路径；``projectDir`` 给工作区下的相对路径，
+    不回显宿主绝对路径（与清单里的 ``path`` 同一打码口径）。
+    """
+    project = await load_project(db, project_id)
+    workspace = project.active_workspace
+    root = workspace.path if workspace is not None else None
+    catalog = discover_plugins(root)
+    return {
+        **catalog.as_dict(),
+        "userDir": str(user_plugins_dir()),
+        "projectDir": str(PROJECT_PLUGINS_DIR) if root is not None else "",
     }
 
 

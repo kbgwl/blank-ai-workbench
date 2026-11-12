@@ -1,6 +1,49 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）
+
+- **插件包（`.claude-plugin/plugin.json`）对齐 Claude 插件契约（S 批第 7 项）**：
+  按 Claude Code 2.1.271 的插件包口径落成本地实现。新增
+  `services/plugins_defs.py`（发现、清单校验、组件路径解析、启用解析），改
+  `services/commands_defs.py` / `skills_defs.py` / `agents_defs.py` /
+  `output_styles_defs.py`（四类组件按 `<plugin>:<name>` 命名空间接入）、
+  `services/settings.py` / `settings_layers.py`（`plugins.enabled` 段与顶层
+  `enabledPlugins` 合并）、`api/routes/projects.py`（`GET /projects/{id}/plugins`）、
+  `web/src/components/settings/{api.ts,plugins-panel.tsx,settings-view.tsx}`（插件面板）。
+  1. **发现**：用户层 `~/.blank/plugins/<name>/.claude-plugin/plugin.json`
+     （`BLANK_USER_PLUGINS_DIR` / `BLANK_USER_INSTRUCTIONS_DIR/plugins` 可改）+
+     项目层 `<workspace>/.blank/plugins/...`；同名项目层胜并告警；缺清单的目录进
+     告警；坏清单（坏 JSON / 顶层非对象 / 缺 name / 名字以 `-` 开头或含 `:` /
+     超 1 MiB）只跳过该插件并点名，其余插件照常加载。
+  2. **组件与命名空间**：`commands` / `agents` / `skills` / `outputStyles` 四类
+     提示词组件接进既有加载器，名字按 `<plugin>:<name>`（`/deploy-tools:review`
+     可直接展开；裸名字不能命中插件组件）；清单路径覆盖替换默认目录，必须以 `./`
+     开头且不得逃出插件目录，违规告警后回退默认目录或跳过该项。
+  3. **启用口径**：`enabledPlugins`（顶层）或 `plugins.enabled`（同层后者优先，
+     跨层仍按 用户 < 项目 < 本机 < 管理 叠加）；键可为 `name` 或
+     `name@marketplace`（按 `@` 前基名匹配）；没写时取清单 `defaultEnabled`
+     （默认 true）；停用插件不注入任何组件；设置里指到本机不存在的插件给告警。
+  4. **只报告、不加载**：`hooks` / `mcpServers` / `lspServers` 与自带 `.mcp.json`
+     只进 `ignored`（带原因），不执行、不连接——克隆仓库里的插件包不能换来进程
+     执行或外连。
+  5. **可观察**：`GET /projects/{id}/plugins` 返回清单、组件计数、启用状态、
+     ignored 与告警（插件条目路径打码、项目层只给工作区相对路径）；设置页「外部
+     工具与插件」新增插件面板：清单模板、命名空间说明、停用原因、忽略段与告警、
+     「重新扫描」；项目下拉默认选第一个绑了工作区的项目。
+  测试：新增 `tests/test_plugins_v49.py` 26 例（发现与清单字段、路径覆盖与两级校验、
+  四类组件命名空间、启用三口径、设置合并与归一化、真实 HTTP 列表），变异电池
+  15/15 红（四处前缀丢失、停用仍注入、忽略 defaultEnabled、顶层开关不合并、
+  `./` 校验删除、逃逸校验删除、hooks 不报告、层级反了、坏清单带崩目录、`@`
+  后缀不剥、接口泄漏绝对路径、normalize 优先级反转；跑完按原字节还原并核对
+  sha256）。
+  全量后端回归：**3358 passed, 28 skipped**（0 failed，rc=0，777.53s）；前端
+  `tsc --noEmit` 与 `eslint src` 均 rc=0。
+  偏离：目录用 `.blank/plugins` 而不是 `.claude/plugins`，用户层是
+  `~/.blank/plugins`，且刻意只读 `.blank`；没有 marketplace（网络安装 / 更新源），
+  只认本地目录，`name@marketplace` 键只按基名匹配；没有 `/plugin` 交互命令与启用
+  写回；`hooks` / `mcpServers` / `lspServers` 与自带 `.mcp.json` 只报告不加载
+  （刻意的安全边界）；清单里的 `force-for-plugin` 沿用 S4 口径只解析、不生效。
+
 
 - **MCP 配置变量展开（`mcp.json`）对齐 Claude `.mcp.json`（S 批第 6 项）**：
   按 Claude Code 2.1.271 的 `.mcp.json` 展开口径落成本地实现。改

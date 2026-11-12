@@ -34,9 +34,10 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from blank_api.services.plugins_defs import discover_plugins
 from blank_api.services.prompt_args import argument_names, render_prompt
 from blank_api.services.skills_defs import (
     MAX_BODY_CHARS,
@@ -258,7 +259,7 @@ def _definition(path: Path, base: Path, source: str) -> tuple[CommandDefinition 
     )
 
 
-def _layer(directory: Path, source: str, discovery: CommandDiscovery) -> None:
+def _layer(directory: Path, source: str, discovery: CommandDiscovery, *, prefix: str = "") -> None:
     grouped: dict[Path, list[Path]] = {}
     for path in _markdown_files(directory):
         grouped.setdefault(path.parent, []).append(path)
@@ -278,13 +279,28 @@ def _layer(directory: Path, source: str, discovery: CommandDiscovery) -> None:
             discovery.errors.extend(errors)
             discovery.warnings.extend(warnings)
             if definition is not None:
+                if prefix:
+                    definition = replace(definition, name=prefix + definition.name)
                 discovery.entries[definition.name] = definition
+
+
+def _plugin_layers(
+    root: str | Path | None, discovery: CommandDiscovery, env: dict[str, str] | None
+) -> None:
+    catalog = discover_plugins(root, env=env)
+    discovery.errors.extend(catalog.errors)
+    discovery.warnings.extend(catalog.warnings)
+    for plugin in catalog.enabled():
+        # 插件命令按 ``<plugin>:<command>`` 命名（Claude 的命名空间），
+        # 所以留到本地层之后加载也不会与普通命令撞名。
+        for directory in plugin.component_dirs("commands"):
+            _layer(directory, f"plugin:{plugin.name}", discovery, prefix=f"{plugin.name}:")
 
 
 def discover_commands(
     root: str | Path | None, *, env: dict[str, str] | None = None
 ) -> CommandDiscovery:
-    """Load the user layer, then the project layer; project wins by name.
+    """Load the user layer, then the project layer, then enabled plugins.
 
     ``root=None`` means there is no workspace (yet): only the user layer is
     scanned, the same way Claude has no project commands outside a project.
@@ -293,6 +309,7 @@ def discover_commands(
     _layer(user_commands_dir(env), "user", discovery)
     if root is not None:
         _layer(Path(root) / PROJECT_COMMANDS_DIR, "project", discovery)
+    _plugin_layers(root, discovery, env)
     return discovery
 
 

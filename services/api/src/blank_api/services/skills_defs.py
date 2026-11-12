@@ -28,11 +28,12 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import yaml
 
+from blank_api.services.plugins_defs import discover_plugins
 from blank_api.services.prompt_args import argument_names
 from blank_api.services.workspace import mask_path
 
@@ -354,7 +355,11 @@ def _skill_dirs(root: Path) -> list[Path]:
 
 
 def discover_skills(root: str | Path, *, env: dict[str, str] | None = None) -> SkillDiscovery:
-    """Load the user layer, then the project layer; project wins by name."""
+    """Load the user layer, the project layer, then enabled plugins.
+
+    Plugin Skills are addressed as ``<plugin>:<skill>`` (Claude's namespace);
+    the directory name stays the invocation name inside the plugin.
+    """
     discovery = SkillDiscovery()
     layers = (
         ("user", user_skills_dir(env)),
@@ -367,6 +372,23 @@ def discover_skills(root: str | Path, *, env: dict[str, str] | None = None) -> S
             discovery.warnings.extend(warnings)
             if definition is not None:
                 discovery.entries[definition.name] = definition
+
+    catalog = discover_plugins(root, env=env)
+    discovery.errors.extend(catalog.errors)
+    discovery.warnings.extend(catalog.warnings)
+    for plugin in catalog.enabled():
+        for plugin_dir in plugin.component_dirs("skills"):
+            for skill_dir in _skill_dirs(plugin_dir):
+                definition, errors, warnings = _definition_from_dir(
+                    skill_dir, f"plugin:{plugin.name}"
+                )
+                discovery.errors.extend(errors)
+                discovery.warnings.extend(warnings)
+                if definition is not None:
+                    definition = replace(
+                        definition, name=f"{plugin.name}:{definition.name}"
+                    )
+                    discovery.entries[definition.name] = definition
     return discovery
 
 

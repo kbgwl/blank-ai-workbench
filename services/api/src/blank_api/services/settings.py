@@ -72,6 +72,10 @@ DEFAULTS: dict[str, Any] = {
     # 能力开关的覆盖层：键由 services/features.py 的注册表定义，这里不预先列名，
     # 否则每加一个开关都要改两处。没写的开关一律按注册表默认值走。
     "features": {},
+    # 插件包的启用开关。键对齐 Claude 的 enabledPlugins（``name`` 或
+    # ``name@marketplace``），值是布尔；设置文件顶层的 enabledPlugins 也会
+    # 合到这里，见 settings_layers._merge_layer。
+    "plugins": {"enabled": {}},
     "safety": {
         # 能力边界，与 permissions.default_mode（审批节奏）是两回事：
         # 这里决定"能不能做"，那里决定"要不要问"。默认全部取最保守的一档。
@@ -211,6 +215,25 @@ def flag_value(value: Any) -> bool | None:
     return None
 
 
+def _enabled_map(raw: Any) -> dict[str, bool]:
+    """``enabledPlugins``：键保留 ``name@marketplace`` 原样，解释不了的值丢掉。
+
+    丢掉而不是猜，是为了让"没写"继续走插件清单的 defaultEnabled；写成
+    ``"maybe"`` 这类东西不该把插件从启用翻成停用。
+    """
+    if not isinstance(raw, dict):
+        return {}
+    cleaned: dict[str, bool] = {}
+    for key, value in raw.items():
+        name = str(key).strip()
+        if not name:
+            continue
+        flag = flag_value(value)
+        if flag is not None:
+            cleaned[name] = flag
+    return cleaned
+
+
 def normalize(raw: Any) -> dict[str, Any]:
     """Merge a partial payload over the defaults and clamp every number."""
     data = raw if isinstance(raw, dict) else {}
@@ -222,6 +245,10 @@ def normalize(raw: Any) -> dict[str, Any]:
     safety = data.get("safety") if isinstance(data.get("safety"), dict) else {}
     background = data.get("background") if isinstance(data.get("background"), dict) else {}
     features = data.get("features") if isinstance(data.get("features"), dict) else {}
+    plugins = data.get("plugins") if isinstance(data.get("plugins"), dict) else {}
+    enabled_plugins = plugins.get("enabled") if isinstance(plugins.get("enabled"), dict) else {}
+    # Claude 把开关放在顶层 enabledPlugins；两种写法都收，plugins.enabled 优先。
+    legacy_enabled = data.get("enabledPlugins") if isinstance(data.get("enabledPlugins"), dict) else {}
 
     mode = str(guardian.get("mode") or "").strip().lower()
     if mode not in GUARDIAN_MODES:
@@ -294,6 +321,11 @@ def normalize(raw: Any) -> dict[str, Any]:
             str(key).strip(): parsed
             for key, raw_value in features.items()
             if str(key).strip() and (parsed := flag_value(raw_value)) is not None
+        },
+        "plugins": {
+            # 顶层 enabledPlugins 与 plugins.enabled 都收；后者更贴近本应用的
+            # 设置结构，同名键优先。
+            "enabled": _enabled_map({**legacy_enabled, **enabled_plugins}),
         },
         "safety": {
             # 能力开关一律按"没写就是关"处理：手改设置文件漏了字段，不能变成放行。

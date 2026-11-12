@@ -17,18 +17,22 @@ and pick one at a time. Semantics copied from the CLI:
 * ``force-for-plugin`` is only meaningful for plugin-bundled styles — on a
   user/project style it is ignored with a warning (Claude logs one too).
 
-Boundaries: no plugin manifests, no built-in English personas, and no separate
-per-turn "style is active" meta reminder. Our system prompt is rebuilt for
-every task/turn, so the style is re-resolved (and re-applied) at that point.
+Boundaries: plugin-bundled styles are discovered through ``.claude-plugin``
+manifests but only when the plugin is enabled (``plugins.enabled``), and
+``forceForPlugin`` is parsed but not applied. There is no marketplace install
+and no separate per-turn "style is active" meta reminder. Our system prompt is
+rebuilt for every task/turn, so the style is re-resolved (and re-applied) at
+that point.
 """
 
 from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from blank_api.services.plugins_defs import discover_plugins
 from blank_api.services.skills_defs import (
     MAX_FILE_BYTES,
     _parse_frontmatter,
@@ -207,7 +211,7 @@ def _description(value, path: Path, body: str) -> tuple[str, list[str]]:
     return _summary(body), warnings
 
 
-def _definition(path: Path, source: str) -> tuple[OutputStyle | None, list[str], list[str]]:
+def _definition(path: Path, source: str, *, plugin: bool = False) -> tuple[OutputStyle | None, list[str], list[str]]:
     warnings: list[str] = []
     try:
         if path.stat().st_size > MAX_FILE_BYTES:
@@ -255,6 +259,8 @@ def _definition(path: Path, source: str) -> tuple[OutputStyle | None, list[str],
     if "force-for-plugin" in normalized:
         warnings.append(
             f"输出样式 {name} 的 force-for-plugin 只对 plugin 样式生效，已忽略"
+            if not plugin
+            else f"输出样式 {name} 的 force-for-plugin 已解析，但本应用不做强制样式"
         )
 
     return (
@@ -274,23 +280,36 @@ def _definition(path: Path, source: str) -> tuple[OutputStyle | None, list[str],
     )
 
 
-def _layer(directory: Path, source: str, discovery: OutputStyleDiscovery) -> None:
+def _layer(directory: Path, source: str, discovery: OutputStyleDiscovery, *, prefix: str = "") -> None:
     files, warnings = _walk_markdown(directory)
     discovery.warnings.extend(warnings)
     for path in files:
-        style, errors, issues = _definition(path, source)
+        style, errors, issues = _definition(path, source, plugin=bool(prefix))
         discovery.errors.extend(errors)
         discovery.warnings.extend(issues)
         if style is not None:
+            if prefix:
+                style = replace(style, name=prefix + style.name)
             discovery.entries[style.name] = style
 
 
 def discover_output_styles(
     root: str | Path | None, *, env: dict[str, str] | None = None
 ) -> OutputStyleDiscovery:
-    """Load the user layer, then the project layer; project wins by name."""
+    """Load the user layer, the project layer, then enabled plugins.
+
+    Plugin styles are addressed as ``<plugin>:<style>`` (Claude's namespace), so
+    a user/project style keeps its bare name and cannot shadow them by accident.
+    """
     discovery = OutputStyleDiscovery()
     _layer(user_output_styles_dir(env), "user", discovery)
     if root is not None:
         _layer(Path(root) / PROJECT_OUTPUT_STYLES_DIR, "project", discovery)
+
+    catalog = discover_plugins(root, env=env)
+    discovery.errors.extend(catalog.errors)
+    discovery.warnings.extend(catalog.warnings)
+    for plugin in catalog.enabled():
+        for directory in plugin.component_dirs("output-styles"):
+            _layer(directory, f"plugin:{plugin.name}", discovery, prefix=f"{plugin.name}:")
     return discovery

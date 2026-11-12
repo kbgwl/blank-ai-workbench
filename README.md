@@ -278,6 +278,7 @@ uv run alembic revision --autogenerate -m "描述"
 | 输出样式（`.blank/output-styles`） | ✅ | 对齐 Claude 的 `.claude/output-styles`：一个 md 一个样式，项目层 `<workspace>/.blank/output-styles/**/*.md` + 用户层 `~/.blank/output-styles`（`BLANK_USER_OUTPUT_STYLES_DIR` / `BLANK_USER_INSTRUCTIONS_DIR/output-styles` 可改）递归扫描（深度 32、目录数 4096 上限），同名项目胜；扩展名匹配大小写不敏感、名字只删小写 `.md`（`Foo.MD` 保留后缀）；`name` 默认文件名、`description` 默认正文首行（字符串 trim、布尔/数字转字符串、对象/数组告警后回退首行）；`keep-coding-instructions` 按 Claude `m1` 口径解析（true/false 集合，`1` / `0` 也认），`force-for-plugin` 只对 plugin 样式生效、在用户/项目样式上告警并忽略；未知键进 `ignored` 并告警、样式仍加载；坏 frontmatter 降级不跳过；非普通文件/超 1 MiB 跳过；`settings.output_style` 精确查表，空名/未知名字静默回落 `default`；选中样式且 `keep-coding-instructions !== true` 时，系统提示里的默认编程纪律段被样式正文替换，`true` 时两段都在，样式段固定排在安全/审批/工作区边界之后并写明不得覆盖；没有样式时系统提示与旧版逐字节一致（sha256 基线钉在判据里）。`output_styles.loaded` 事件与 `GET /projects/{id}/output-styles` 列表（只给审计信息与字符数，不回正文）。判据 `services/api/tests/test_output_styles_v47.py`（31 例，含真实运行时系统提示与 HTTP 列表），变异 21/21 红 |
 | 设置层级（用户 < 项目 < 本机 < 管理策略） | ✅ | 对齐 Claude 的 settings 级联：用户层 `BLANK_SETTINGS_FILE`（桌面壳指到用户数据目录）+ 项目层 `<workspace>/.blank/settings.json` + 本机层 `<workspace>/.blank/settings.local.json` + 管理层 `BLANK_MANAGED_SETTINGS_FILE`（不配就没有这一层），从低到高叠加；高一层只覆盖写了的键，嵌套对象逐键合并、数组与标量整段替换，合并后仍走同一套 `normalize` 夹取；**安全段（`safety` / `permissions` / `sandbox` / `guardian` / `features`）只认用户层与管理层**——项目/本机文件写了也进 `ignored`（带原因），有效值不变，否则克隆一个仓库就等于一次提权；单层坏 JSON、顶层不是对象、超 1 MiB 只跳过该层并进 `errors`，其余层照常叠加；运行时在任务根上叠一次（沙箱档位、审批模式、guardian、压缩水位、输出样式、工具检索、后台预算都读这份生效值），层/来源/ignored 落 `settings.layers` 事件（路径打码、不含设置值）；`GET /projects/{id}/settings` 返回生效值与来源，`GET /projects/{id}/output-styles` 的 `selected/active` 也改用工作区级联。判据 `services/api/tests/test_settings_layers_v48.py`（28 例，含真实运行时与 HTTP 端点），变异 27/27 红 |
 | MCP 配置变量展开（`mcp.json`） | ✅ | 与 Claude 的 `.mcp.json` 同口径：`${VAR}` 取环境值（设成空串也算「设了」），`${VAR:-default}` 在变量未设**或为空**时用默认值（bash `:-` 语义，默认值不递归展开）；变量未设且无默认值时**保留原文**并告警，而不是像 shell 那样替成空串——「忘了配」不该伪装成「配了个空 token」；占位符变量名必须是 `[A-Za-z_][A-Za-z0-9_]*`，非法名原样保留且告警只说「名字不合法」、绝不回显占位符原文（`${sk-live-...}` 这类疑似密钥不进日志）；展开作用于 `command` / `args` / `env` / `url` / `headers` 五处（另含本机的 `cwd` 与 `auth` 段）；告警按服务端去重，随 `MCPStatus.warnings` 出现在 `GET /settings/mcp`，连不上/被跳过的服务端也带。判据 `services/api/tests/test_mcp_tools.py`（52 例，含真实 stdio 子进程与 HTTP 状态端点），本批 11 例展开判据，变异 10/10 红 |
+| 插件包（`.claude-plugin/plugin.json`） | ✅ | 对齐 Claude 的插件包契约：用户层 `~/.blank/plugins/<name>/.claude-plugin/plugin.json`（`BLANK_USER_PLUGINS_DIR` / `BLANK_USER_INSTRUCTIONS_DIR/plugins` 可改）+ 项目层 `<workspace>/.blank/plugins/...`，同名项目覆盖并告警；坏清单（坏 JSON / 顶层非对象 / 缺 name / 名字以 `-` 开头或含 `:` / 超 1 MiB）只跳过该插件并点名，不拖垮整张目录；`commands` / `agents` / `skills` / `outputStyles` 四类提示词组件接进既有加载器，名字按 `<plugin>:<name>` 命名空间（裸名字不能命中），清单路径覆盖替换默认目录、必须 `./` 开头且不得逃出插件目录（违规告警后回退默认目录或跳过该项）；`hooks` / `mcpServers` / `lspServers` 与自带 `.mcp.json` 只进 `ignored` 报告、不加载——仓库里丢进来的插件包不会获得进程执行或外连；启用跟随 `enabledPlugins`（顶层）或 `plugins.enabled`（同层后者优先），键可为 `name` 或 `name@marketplace`（按基名匹配），没写时取清单 `defaultEnabled`（默认 true），停用插件不注入任何组件，设置里指到不存在的插件给告警；`GET /projects/{id}/plugins` 返回清单、组件计数与启用状态（插件条目路径打码、项目层只给工作区相对路径；用户层根给本机绝对路径，便于用户直接放置插件），设置页「外部工具与插件」新增插件面板（清单模板、命名空间说明、停用原因、忽略段与告警）。判据 `services/api/tests/test_plugins_v49.py`（26 例，含真实 HTTP 列表），变异 15/15 红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -373,19 +374,19 @@ uv run alembic revision --autogenerate -m "描述"
   `draft`、要用户在技能页再启用才生效；会话目标按 thread 记，不跨团队成员共享，
   Claude 的队友目标那一路没有移植）。文件型子代理定义已于 S1 补齐（见上表；六处偏离：
   目录用 `.blank/agents` 而不是 `.claude/agents`，用户层是 `~/.blank/agents` 而不是
-  `~/.claude/agents`；Claude 的 plugin / flagSettings / policySettings 三层没有移植，
-  只保留用户层与项目层；工具名沿用本地 snake_case，定义里写 `Read` / `Bash` 这类 Claude
+  `~/.claude/agents`；Claude 的 flagSettings / policySettings 两层没有移植，只保留
+  用户层与项目层（plugin 层已于 S7 接上：插件里的 agents 按 `<plugin>:<name>` 加载）；工具名沿用本地 snake_case，定义里写 `Read` / `Bash` 这类 Claude
   别名不会命中本地工具（结果是拿不到工具，不是悄悄放宽）；`model` / `permissionMode` /
   `hooks` / `mcpServers` / `skills` / `isolation` / `background` / `memory` / `effort` /
   `color` / `initialPrompt` 只解析不生效、逐条进 `agent_ignored`；正文超过 20000 字截断
-  （Claude 原样使用），fork / remote 两种子代理形态与按 plugin 命名空间引用未移植）。
+  （Claude 原样使用），fork / remote 两种子代理形态未移植）。
   文件型 Skill 定义已于 S2 补齐（见上表；六处偏离：目录用 `.blank/skills` 而不是
   `.claude/skills`、用户层是 `~/.blank/skills`，且刻意只读 `.blank`、不把仓库里的
   `.claude/skills` 顺带加载；`allowed-tools` / `disallowed-tools` 只解析留审计，不改变
   工具池（工具池由网关与场景决定，不因一份提示文件放宽或收紧）；正文超过 20000 字截断
   并标注（Claude 原样使用）；未支持字段（`model` / `effort` / `hooks` / `mcpServers` /
-  `lspServers` / `paths` / `context` / `agent` 等）只进 `ignored`；plugin 命名空间、
-  `synced` 同步根（只跳过、未实现同步）、嵌套 Skill 目录以及 `allowed-tools` 里的
+  `lspServers` / `paths` / `context` / `agent` 等）只进 `ignored`；`synced` 同步根
+  （只跳过、未实现同步）、嵌套 Skill 目录以及 `allowed-tools` 里的
   `${CLAUDE_SKILL_DIR}` / `${CLAUDE_PROJECT_DIR}` 替换未移植。S2 当时「本机还没有斜杠
   命令入口、`disable-model-invocation` 的 Skill 用户侧也没有触发路径」这句话已由 S3 改写：
   Skill 与命令共用 `/名字` 入口，`disable-model-invocation` 只挡模型、不再挡用户）。
@@ -402,7 +403,8 @@ uv run alembic revision --autogenerate -m "描述"
   不算「用过」，因此没有别的占位符时仍会追加 `ARGUMENTS:` 行）。
   输出样式已于 S4 补齐（见上表；五处偏离：目录用 `.blank/output-styles` 而不是
   `.claude/output-styles`，用户层是 `~/.blank/output-styles`，且刻意只读 `.blank`；
-  没有 plugin 清单 / marketplace 那两层，`force-for-plugin` 只解析并告警、不生效；
+  plugin 清单已于 S7 接上（插件 outputStyles 按 `<plugin>:<name>` 加载），marketplace
+  那层没有；`force-for-plugin` 只解析并告警、不生效；
   Claude 内置的 Explanatory / Learning / Concise 三个英文 persona 不移植，`default`
   就是本机的默认系统提示；没有每轮注入的 `"<name>" output style is active.` 元提醒——
   本机每次任务/回合重建系统提示，样式在合成处已经生效，重复提醒只会多一份可漂移的副本；
@@ -414,6 +416,13 @@ uv run alembic revision --autogenerate -m "描述"
   （与 Claude 一致；MCP 配置 `mcp.json` 的五字段展开已按 `.mcp.json` 口径补齐，见上表）；
   管理层只认 `BLANK_MANAGED_SETTINGS_FILE`，没有平台默认管理路径与 `policySettings`
   那套；设置页仍只读写用户层，叠加结果走 `GET /projects/{id}/settings` 只读展示）。
+  插件包已于 S7 补齐（见上表；五处偏离：目录用 `.blank/plugins` 而不是
+  `.claude/plugins`，用户层是 `~/.blank/plugins`，且刻意只读 `.blank`；没有
+  marketplace（网络安装 / 更新源）这一层，只认本地目录，`name@marketplace` 键只按
+  `@` 前的基名匹配；没有 `/plugin` 交互命令与启用写回，开关只从设置文件读；
+  `hooks` / `mcpServers` / `lspServers` 与自带 `.mcp.json` 只报告不加载——这是刻意
+  的安全边界，克隆仓库里的插件包不能换来进程执行或外连；清单里的
+  `force-for-plugin` 沿用 S4 口径只解析、不生效）。
 
 - 验收条件的「是否覆盖」由模型自报，平台无法判断语义：极端情况下会出现「文件没改但条件判 ✓」。
   时间线里的工具卡片和 Diff 才是可核对的证据，验收结论只作为模型的自我声明展示。
