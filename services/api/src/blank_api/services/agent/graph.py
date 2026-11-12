@@ -550,6 +550,10 @@ class AgentSession:
     # 代理树位置：子代理事件靠这两个字段还原"谁在哪个分支上干活"。
     depth: int = 0
     agent_path: str = "root"
+    # 父会话到当前这一步为止的完整对话（含系统提示），供 fork 子代理继承。
+    # 每次执行工具前由 execute_action_node 刷新，只活在进程内存里：恢复时那一趟
+    # 会按同一条路径重新算出来，不需要跟着检查点存一份可能过期的副本。
+    conversation_snapshot: list[dict] = field(default_factory=list, repr=False)
     # 工具输出瘦身的账：指纹 → 第几步出现过（相同输出只发一次），
     # 以及累计省下的字符数。省了多少必须能回答，否则"减 token"只是口号。
     output_seen: dict[str, int] = field(default_factory=dict)
@@ -2026,6 +2030,22 @@ def tool_call_args(call: dict) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _fork_history(messages: list[dict]) -> list[dict]:
+    """fork 能继承的对话：去掉还没拿到回执的那一次工具交换。
+
+    节点开始时 state 里的最后一条是模型刚发出的 assistant(tool_calls)，它的
+    回执要等这一批工具跑完才写回去。把这种半截交换交给分身，消息序列会变成
+    「assistant(tool_calls) 后面直接跟 user」——多数供应商直接 400。剪掉它，
+    分身就从最后一条完整消息（通常是用户的提问）之后接着做。
+    """
+    trimmed = list(messages)
+    if trimmed:
+        last = trimmed[-1]
+        if str(last.get("role") or "") == "assistant" and last.get("tool_calls"):
+            trimmed.pop()
+    return trimmed
+
+
 def _append_tool_response(
     messages: list[dict], call: dict, payload: dict, *, session: "AgentSession | None" = None, step: int = 0
 ) -> list[dict]:
@@ -3457,6 +3477,9 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     await session.recorder.add("node.started", node, {"step": steps, "max_steps": session.max_steps})
 
     messages = list(state.get("messages") or [])
+    # fork 分身继承的是"派发这一刻"的父对话。快照必须在执行这批工具之前刷：
+    # 工具跑完后再取，分身的起点就成了「已经知道这次派发结果」的版本。
+    session.conversation_snapshot = _fork_history(messages)
     usage = dict(state.get("usage") or {})
     delegated = dict(state.get("delegated_usage") or {})
     results = list(state.get("tool_results") or [])

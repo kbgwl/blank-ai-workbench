@@ -257,6 +257,7 @@ uv run alembic revision --autogenerate -m "描述"
 | 场景模式对齐 Claude Harness | ✅ | 驳回不再暂停整轮（该步记未执行、模型换个做法继续）；工具回执直接续跑、不再每步塞合成「请继续」；后台子代理结束时注入一次性系统通知（结论由主代理转述）；`update_plan` 同时只允许一个 `in_progress`；系统提示补齐 act / 推荐 / 系统提醒边界 / 专职工具优先。判据 `services/api/tests/test_claude_loop_parity_v27.py`（6 例），变异 7/7 红 |
 | Claude 工具面 Glob / Grep / ListAgents | ✅ | 新增 `glob`（`**/` 命中根部、花括号、mtime 倒序、扫描预算）；`search_code` 补齐 `output_mode` / `glob` / `type` / `-i` / `multiline` / `-A/-B/-C` / `-o` / `-n` / `head_limit` / `offset`；fs-broker 与任务级隔离转发同一套参数；新增 `list_agents` 列出后台子代理状态。判据 `services/api/tests/test_claude_tool_surface_v28.py`（21 例），变异 8/8 红 |
 | 子代理默认后台与续聊 | ✅ | `spawn_agent` 不传参即在后台跑（`run_in_background=false` 才同步等）；任务收尾先给后台子代理 90 秒窗口，结束的结论写进交付提示词、仍在跑的显式取消并点名；新增 `send_message` 续聊（保留上一轮读/写/结论，新 `spawn_agent` 是全新上下文；隔离子代理与仍在跑的句柄如实拒绝）。判据 `test_claude_subagent_default_v29.py`（6 例）+ `test_claude_send_message_v30.py`（9 例），变异 8/8 与 10/10 全红 |
+| fork 子代理（Agent(fork)） | ✅ | `spawn_agent(subagent_type="fork")` 以当前会话的分身运行：继承派发这一刻的完整对话与系统提示（剪掉尚未拿到回执的那次工具交换）、复用父会话的 `PermissionPolicy` 与工具表（减去派发类与 REPL/LSP/workflow、场景禁用），子网关沿用父网关的场景文件类型闸门与 `write_root`；只能前台，显式 `run_in_background=true` 直接拒绝，`spawn_agents` 并行批也拒绝；拿不到父对话 fail-closed；`subagent.started/completed` 带 `fork` 标记，续聊保留 fork 工具面。remote 形态冻结（理由与重开条件见「已知限制」）。判据 `services/api/tests/test_claude_fork_v30.py`（15 例），变异 11/11 红 |
 | 后台 shell | ✅ | `run_shell(run_in_background=true)` 立即返回 `shell-…` 句柄，命令在后台真的跑；宿主路径边跑边流式写日志（系统临时目录、2MB 上限、读回尾部 64KB），结束时在模型调用前注入一次性系统通知（不轮询、不 sleep）；`task_output` / `task_stop` 统一句柄名 `task_id`（旧名 `agent_id` / `shell_id` 继续接受）；`task_stop` 与任务收尾都按进程树杀（cmd 外壳下的孙进程不会残留）、日志删除，等审批那一档不杀；子代理上下文禁用后台命令。判据 `services/api/tests/test_background_shell_v31.py`（20 例），变异 21/21 红 |
 | 任务级工作树会话 | ✅ | `enter_worktree` 用 `name` 在 `<repo>/.blank-worktrees/<name>` 新建 `blank/worktree-<name>` 分支，或用 `path` 进入 `git worktree list` 里已注册的树，之后本任务所有工具（shell cwd、文件工具、git、安全策略路径基准）都换到那棵树；`exit_worktree(action=keep|remove)` 回到原工作区：`remove` 只对本任务创建的树生效、`path` 进入的只能 keep，遇未提交改动/未合并提交默认拒绝并逐文件点名，显式 `discard_changes=true` 才丢弃；审批恢复后仍在同一棵树，任务收尾只摘记录不删树。判据 `services/api/tests/test_worktree_tools_v32.py`（34 例），变异 28/28 红 |
 | Skill 工具 | ✅ | 系统提示只列「名字 + 一句话说明」（取正文首行、剥前导 markdown、截到 120 字符），模型判断任务属于某个 Skill 时调用 `skill(skill, args)` 按需加载正文；参数替换 `$ARGUMENTS`、无占位符则附在正文末尾；名字必须精确命中，前导斜杠直接拒绝并给出修正名，未知名字 fail-closed 并列出真实清单；同一任务里重复调用只回一行「已加载」、不再贴正文；没有可加载的 Skill 时 `skill` 从工具表里整条移除（子代理同口径）；子代理拿目录副本，加载状态不写回父会话。判据 `services/api/tests/test_skill_tool_v33.py`（30 例，含真实 HTTP 任务运行），变异 24/24 红 |
@@ -297,10 +298,19 @@ uv run alembic revision --autogenerate -m "描述"
 
 - **Claude 式编程工具面已落地，但有两项刻意偏离**（N 批，判据
   `services/api/tests/test_claude_parity_v24.py`）：Read 不读 PDF/图片、
-  路径仍要求工作区相对路径而不是绝对路径；另外未实现「`old_string` 是上一次 `new_string`
-  子串」的链式编辑拒绝——当前读后写状态只按文件记，不记「上一次改了什么」。前两项是产品
-  边界（附件读取是另一套能力），最后一项不影响「没读过/被改过」这两道硬闸门。
+  路径仍要求工作区相对路径而不是绝对路径。两项都是产品边界（附件读取是另一套能力）。
+  链式编辑已核对上游原文：`old_string` 只要求「本会话内读过、精确匹配且唯一」
+  （`E:/tmp/rea7/claude_tools_dump.txt` 第 230–231 行），**没有**「`old_string` 是上一次
+  `new_string` 子串就拒绝」这条规则；我们每次写成功后重记文件状态，读一次即可连续编辑，
+  与本条一致（判据 `test_three_chained_edits_after_one_read`）。
   NotebookEdit（Q6）与后台 shell（Q1）已不在偏离项里：都已落地，见上表。
+
+- **remote 子代理冻结（外部条件，不是待办）**：Qoder 的配置里 `kind` 字段只区分
+  `local` / `remote`，公开文档没有给出 remote 的传输协议、端点与鉴权约定；没有可复现的
+  对端，写不出能失败的判据，硬做只会得到「看起来支持、实际连不上」的假功能。因此
+  `spawn_agent` 不接受 remote，类型名按未知类型拒绝并列出可用类型（`general-purpose`、
+  `fork`）。**重开条件**：拿到一个可复现的 remote 端点（含鉴权方式与版本协商），并能在
+  本机跑通一次派发、当场记录请求/响应；满足后再按 fork 同样的方式补判据与变异电池。
 
 - **P 批把 Glob / Grep 的参数面补齐了，子代理也改成默认后台并支持续聊，Claude 工具表
   至此已无未移植项**（判据 `services/api/tests/test_claude_tool_surface_v28.py`、
@@ -380,7 +390,7 @@ uv run alembic revision --autogenerate -m "描述"
   别名不会命中本地工具（结果是拿不到工具，不是悄悄放宽）；`model` / `permissionMode` /
   `hooks` / `mcpServers` / `skills` / `isolation` / `background` / `memory` / `effort` /
   `color` / `initialPrompt` 只解析不生效、逐条进 `agent_ignored`；正文超过 20000 字截断
-  （Claude 原样使用），fork / remote 两种子代理形态未移植）。
+  （Claude 原样使用），fork 已于 T 批补齐（见上表），remote 形态冻结（见下方已知限制）。
   文件型 Skill 定义已于 S2 补齐（见上表；六处偏离：目录用 `.blank/skills` 而不是
   `.claude/skills`、用户层是 `~/.blank/skills`，且刻意只读 `.blank`、不把仓库里的
   `.claude/skills` 顺带加载；`allowed-tools` / `disallowed-tools` 只解析留审计，不改变

@@ -29,6 +29,7 @@ from blank_api.services.agent.graph import initial_messages
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.agents_defs import (
     BUILTIN_AGENT,
+    BUILTIN_FORK,
     BUILTIN_GENERAL_PURPOSE,
     MAX_FILE_BYTES,
     MAX_INSTRUCTIONS_CHARS,
@@ -174,7 +175,7 @@ def test_user_layer_loads_when_project_has_no_definition(tmp_path: Path) -> None
     catalog = _discover(root, user)
 
     assert catalog.get("helper").source == "user"
-    assert catalog.names() == [BUILTIN_AGENT, "helper"]
+    assert catalog.names() == [BUILTIN_AGENT, BUILTIN_FORK, "helper"]
     assert [item.name for item in catalog.custom()] == ["helper"]
 
 
@@ -426,7 +427,7 @@ async def test_spawn_agent_rejects_unknown_type_and_lists_available(tmp_path: Pa
     assert runner.requests == []
 
 
-async def test_without_catalog_only_general_purpose_is_known(tmp_path: Path) -> None:
+async def test_without_catalog_only_builtins_are_known(tmp_path: Path) -> None:
     root = tmp_path / "ws"
     runner = RecordingRunner()
     tool = _tool_map()["spawn_agent"]
@@ -438,7 +439,7 @@ async def test_without_catalog_only_general_purpose_is_known(tmp_path: Path) -> 
 
     assert outcome.ok is False
     assert outcome.message == (
-        "未知子代理类型 'reviewer'。可用类型：" + BUILTIN_AGENT
+        "未知子代理类型 'reviewer'。可用类型：" + f"{BUILTIN_AGENT}, {BUILTIN_FORK}"
     )
 
     default = await tool.handler(
@@ -665,9 +666,9 @@ async def test_runtime_discovers_agents_lists_them_and_spawns_by_type(
 
     loaded = [item for item in evidence["timeline"] if item["type"] == "agents.loaded"]
     assert loaded, [item["type"] for item in evidence["timeline"]]
-    assert loaded[0]["payload"]["count"] == 2
+    assert loaded[0]["payload"]["count"] == 3
     names = {item["name"] for item in loaded[0]["payload"]["agents"]}
-    assert {"reviewer", BUILTIN_AGENT} <= names
+    assert {"reviewer", BUILTIN_AGENT, BUILTIN_FORK} <= names
 
     # 主代理第一问的系统提示里必须有清单；没有它，模型不知道能按名字派。
     parent_prompt = _messages_text(env.mock.requests[0]["messages"])

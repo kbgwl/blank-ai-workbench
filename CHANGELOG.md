@@ -1,6 +1,48 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）
+
+- **fork 子代理（Agent(fork)）与链式编辑口径修正（T 批）**：`spawn_agent` 新增内置类型
+  `fork`，语义对齐 Claude 的会话分身：继承派发这一刻的完整对话与系统提示、复用父会话的
+  `PermissionPolicy` 与工具表，只换一个新的上下文窗口。改 `services/agents_defs.py`
+  （内置 `fork` 定义）、`services/subagent.py`（`SubAgentRequest.fork`、`_fork_tools`、
+  fork 系统提示、权限与后台 shell 继承、无快照 fail-closed、续聊保留 fork）、
+  `services/tools/delegate.py`（类型解析、`spawn_agents` 与显式后台的拒绝）、
+  `services/agent/graph.py`（`AgentSession.conversation_snapshot` 与
+  `_fork_history`，在 `execute_action_node` 执行这批工具之前刷新）。
+  1. **快照是派发那一刻**：图节点一开始就取 `state["messages"]` 的快照，并剪掉最后一条
+     尚未拿到回执的 `assistant(tool_calls)`——否则分身会看到「assistant(tool_calls) 直接
+     跟 user」的非法消息序列。
+  2. **工具面与权限是继承不是新授**：工具取父网关当前的工具表，减去派发类
+     （`spawn_agent(s)` / `send_message` / `task_*` / `list_agents`）与 REPL/LSP/workflow，
+     并剪掉父网关的场景级禁用；子网关沿用父网关的场景（文件类型白名单）与 `write_root`，
+     不能靠重建一个默认 dev 网关把「文档场景只能写 .md」或逆向写根在分身里打开。
+     权限复用父会话的同一个 `PermissionPolicy` 对象，审批卡在子代理里弹不出来，需要
+     审批的动作照旧被拒绝。
+  3. **只能前台**：fork 显式传 `run_in_background=true` 是参数错，直接拒绝；
+     `spawn_agents` 并行批同样整批拒绝（并行批里的分身各自拿到同一份快照，结论会落在
+     父会话走远之后）。
+  4. **拿不到父对话就失败**：没有快照时返回「fork 子代理拿不到父会话对话」，不伪装成
+     普通只读子代理；`subagent.started/completed` 事件带 `fork` 标记。
+  5. **链式编辑口径**：核对上游原文（`E:/tmp/rea7/claude_tools_dump.txt` 第 230–231 行）
+     后确认 Edit 只要求「本会话内读过、`old_string` 精确且唯一」，没有「链式编辑必须
+     拒绝」这条规则；README/CHANGELOG 的旧表述按实修正，并补三跳链式编辑判据
+     `test_three_chained_edits_after_one_read`。
+  6. **remote 形态冻结**：Qoder 文档只有 `kind` 字段，没有可验证的 remote 协议/端点；
+     没有对端就写不出能失败的判据。重开条件：拿到可复现的 remote 端点（含鉴权与版本
+     协商）并本机跑通一次派发。在此之前按未知类型拒绝。
+  测试：新增 `tests/test_claude_fork_v30.py` 15 例（内置类型、对话与系统提示继承、
+  未回执交换剪裁、图节点派发前刷新、工具面收窄、权限对象共享、无快照 fail-closed、
+  前台默认与显式后台拒绝、并行批拒绝、续聊保留 fork、场景禁用剪裁、文件类型闸门与
+  写根继承），变异 11/11 红（前 8 格之外补：不剪场景禁用、重建网关丢场景闸门与写根、
+  不把父网关接进 fork；跑完逐条还原并核对 sha256）。相邻套件
+  （`test_claude_subagent_default_v29`、`test_background_subagent_v116`、
+  `test_agent_continuation_v25`、`test_agent_defs_v44`、`test_claude_parity_v24`、
+  `test_claude_fork_v30`、`test_tool_search_v13`）合计 153 passed。
+  另修 `spawn_agent` 描述中 fork 段落的措辞（「并行批次」→「多任务批次」）：单代理
+  工具描述里不该出现检索别名词「并行」，否则 `tool_search("并行")` 会把
+  `spawn_agent` 与 `spawn_agents` 打成同分并按注册顺序反超。
+  全量后端回归：**3399 passed, 28 skipped**（0 failed，rc=0，728.32s）。
 
 - **MCP 配置三作用域与项目层批准（`.mcp.json`）对齐 Claude 的 user < project < local 级联（S 批第 8 项）**：
   按 Claude Code 2.1.271 的作用域口径落成本地实现。新增
@@ -329,7 +371,7 @@
   命中本地工具（结果是拿不到工具，不是悄悄放宽）；`model` / `permissionMode` / `hooks` /
   `mcpServers` / `skills` / `isolation` / `background` / `memory` / `effort` / `color` /
   `initialPrompt` 只解析不生效；正文超过 20000 字截断（Claude 原样使用）；fork / remote 两种
-  子代理形态与按 plugin 命名空间引用未移植。
+  子代理形态与按 plugin 命名空间引用未移植（fork 已于 T 批补齐、remote 冻结，见最新条目）。
 
 - **交互问答与两类提案：AskUserQuestion / ProposeGoal / ProposeSkills 对齐 Claude（R 批第 6 项）**：
   按 Claude Code 2.1.271 的 AskUserQuestion、ProposeGoal、ProposeSkills 契约落成本地
@@ -929,8 +971,11 @@
   新增的两条 safety 判据做了变异：引号重定向退回抹引号扫描红 2 例、引号路径退回抹引号扫描
   红 1 例（均已还原源码后复跑 60 例全绿）。
   偏离项（本轮不移植）：后台 shell（`run_in_background`）、NotebookEdit、PDF/图片 Read；
-  路径仍要求**工作区相对路径**（Claude 用绝对路径）；未实现「`old_string` 是上一次
-  `new_string` 子串」的链式编辑拒绝。抓包原文不入库，只留在 `E:/tmp/rea6`、`E:/tmp/rea7`。
+  路径仍要求**工作区相对路径**（Claude 用绝对路径）。链式编辑已核对上游原文：Edit 只要求
+  「本会话内读过、`old_string` 精确匹配且唯一」（`E:/tmp/rea7/claude_tools_dump.txt` 第
+  230–231 行），没有「`old_string` 是上一次 `new_string` 子串就拒绝」这条规则；我们写成功后
+  重记文件状态，读一次即可连续编辑，判据 `test_three_chained_edits_after_one_read`。
+  抓包原文不入库，只留在 `E:/tmp/rea6`、`E:/tmp/rea7`。
 
 - **任务级隔离：每个任务一个独立可写根 + 一个只属于它的 AppContainer 包（J3）**：此前隔离靠
   路径闸门与审批——同一个 OS 用户下的另一个任务拿到绝对路径就能 `open()`。现在打开

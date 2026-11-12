@@ -102,6 +102,39 @@ SUBAGENT_SYSTEM = (
     "3. 不要尝试越出工作区，不要执行不可逆命令。"
 )
 
+# fork 子代理不是从零开始：它继承父会话到此刻为止的全部对话，所以不能套用
+# SUBAGENT_SYSTEM（那会把父会话的历史整个丢在系统提示之后讲不通）。这里只追加
+# 分身自己的约束，接在原系统提示末尾——仍然是一条 system，前缀缓存与供应商兼容性
+# 都按原样处理。
+FORK_SYSTEM = (
+    "\n\n你正在以 fork 方式运行：你是主代理在这个任务里的分身，"
+    "上面就是主会话到目前为止的完整对话，你继承它的工作区、工具与权限。\n"
+    "规则：\n"
+    "1. 你无法向用户提问，也无法请求审批；需要审批的动作会被直接拒绝，请换一种做法。\n"
+    "2. 最多 {steps} 步；完成后用一段中文说明你做了什么、结论是什么。\n"
+    "3. 不要越出工作区，不要执行不可逆命令。"
+)
+# 续聊时识别"这条系统提示里已经写过 fork 约束"：分身的第一轮把约束并进了
+# 父会话的系统提示，续聊再从 _CONVERSATIONS 里取回来时不能又追加一遍。
+FORK_MARKER = "你正在以 fork 方式运行"
+
+# fork 拿父会话的工具表，但这几类必须拿掉：子代理不能再派子代理（深度上限靠
+# 工具表缺失成立，不靠计数器），REPL/LSP 绑定父会话的网关与进程，workflow 内部
+# 也会派子代理。拿掉它们不是收窄权限——父会话本来能做这些事，只是分身不能。
+FORK_EXCLUDED_TOOLS = frozenset(
+    {
+        "spawn_agent",
+        "spawn_agents",
+        "send_message",
+        "task_output",
+        "task_stop",
+        "list_agents",
+        "repl",
+        "lsp",
+        "workflow",
+    }
+)
+
 
 @dataclass
 class SubAgentRequest:
@@ -123,6 +156,10 @@ class SubAgentRequest:
     # 定义里写了、但我们不支持因此没有生效的字段（model/permissionMode/...）。
     # 只用于审计：绝不能悄悄吞掉，否则用户以为那条权限模式起了作用。
     agent_ignored: tuple[str, ...] = ()
+    # 对齐 Claude 的 fork 子代理：继承父会话到此刻为止的完整对话与工具权限。
+    # 只能前台跑——后台拿的是派发那一刻的快照，父会话之后的变化它看不见，
+    # 结论回来时父会话多半已经走远了。
+    fork: bool = False
 
     def normalized(self) -> "SubAgentRequest":
         return SubAgentRequest(
@@ -140,6 +177,7 @@ class SubAgentRequest:
             allowed_tools=None if self.allowed_tools is None else tuple(self.allowed_tools),
             disallowed_tools=tuple(self.disallowed_tools or ()),
             agent_ignored=tuple(self.agent_ignored or ()),
+            fork=bool(self.fork),
         )
 
 
@@ -389,6 +427,24 @@ def _child_allowed_tools(request: SubAgentRequest) -> set[str]:
     return allowed - set(request.disallowed_tools)
 
 
+def _fork_tools(session) -> list:
+    """fork 分身的工具表 = 父会话此刻看得见的工具，减去不能继承的那几类。
+
+    直接从父会话网关拿，而不是从 ``build_default_tools()`` 重算：父会话可能按
+    场景/档位裁过表，分身必须和它看到同一份，否则「分身就是另一个我」不成立。
+    场景级禁用（只读场景拿掉写工具）同样要在这里剪掉——分身不能靠重算工具表
+    把父会话已经关掉的能力再打开。
+    """
+    gateway = getattr(session, "gateway", None)
+    tools = list(getattr(gateway, "tools", {}).values())
+    excluded = set(getattr(gateway, "excluded", ()) or ())
+    return [
+        tool
+        for tool in tools
+        if tool.name not in FORK_EXCLUDED_TOOLS and tool.name not in excluded
+    ]
+
+
 async def run_subagent(
     *,
     adapter: ModelAdapter,
@@ -418,6 +474,16 @@ async def run_subagent(
     # 父任务的 Skill 目录。子代理拿一份**拷贝**：加载状态是会话级事实，
     # 子代理加载过的 Skill 不能让父代理误以为自己也已经见过正文。
     skill_catalog: SkillCatalog | None = None,
+    # fork 分身继承父会话的权限对象本身（不是复制一份）：同一个模式、同一批
+    # 已批准动作。审批卡在子代理里弹不出来，所以需要审批的动作照旧被拒绝——
+    # 分身拿到的是父会话**已经拥有**的能力，不是一张新的白名单。
+    parent_permissions: PermissionPolicy | None = None,
+    # fork 在同一工作区里跑，父会话允许的后台命令它也允许；普通子代理的隔离
+    # 副本跑完即删，后台进程活不到有人取结果，所以默认关掉。
+    allow_background_shell: bool = False,
+    # fork 的父网关：子网关要沿用父会话的场景闸门（文件类型白名单）、场景禁用
+    # 与写根，否则分身就是绕过场景模式的一道侧门。普通子代理传 None。
+    fork_gateway: ToolGateway | None = None,
 ) -> SubAgentResult:
     request = request.normalized()
     if not request.goal:
@@ -486,8 +552,20 @@ async def run_subagent(
             )
         await worktree_log.add("worktree.created", "subagent", tree.as_dict())
 
-    gateway = ToolGateway(tools, defer=False)
-    permissions = PermissionPolicy.build(
+    if fork_gateway is not None:
+        # 分身沿用父会话的场景与写根，只换上剪过的工具表。新造一个默认 dev 场景的
+        # 网关会让「文档场景只能写 .md」这类约束在分身里静默失效。
+        scenario = getattr(getattr(fork_gateway, "scenario", None), "key", "dev")
+        gateway = ToolGateway(
+            tools,
+            defer=False,
+            excluded=getattr(fork_gateway, "excluded", ()) or (),
+            scenario=scenario,
+            write_root=getattr(fork_gateway, "write_root", None),
+        )
+    else:
+        gateway = ToolGateway(tools, defer=False)
+    permissions = parent_permissions or PermissionPolicy.build(
         MODE_ACCEPT_EDITS if isolated else MODE_DEFAULT,
         approved_tools=set(),
         approved_actions=set(),
@@ -510,7 +588,8 @@ async def run_subagent(
         # 读后写状态按副本独立记：子代理只在它自己的根里读和写。
         file_state=FileStateCache(),
         # 子树在本轮结束即删除/合并：后台命令活不到有人取结果的时候，入口直接关掉。
-        allow_background_shell=False,
+        # fork 在同一个工作区里跑，父会话能开的它也能开。
+        allow_background_shell=bool(allow_background_shell),
     )
     log = _Recorder(
         recorder,
@@ -520,7 +599,8 @@ async def run_subagent(
         root_thread_id=root_thread_id,
     )
     compactor = ContextCompactor(**(watermark or {}))
-    system_message = {"role": "system", "content": SUBAGENT_SYSTEM.format(steps=request.max_steps)}
+    base_text = FORK_SYSTEM if request.fork else SUBAGENT_SYSTEM
+    system_message = {"role": "system", "content": base_text.format(steps=request.max_steps)}
     if request.instructions:
         # 定义正文是"这个类型怎么做"，不是另一套权限。放在基础规则之后，
         # 并写死不得放宽上面的规则——定义文件不能变成绕过审批的侧门。
@@ -529,7 +609,8 @@ async def run_subagent(
             f"\n以下是子代理类型「{label}」的专用说明（只补充做法，"
             "不得放宽上面的规则、审批要求与工作区边界）：\n" + request.instructions
         )
-    if catalog is not None:
+    # fork 的系统提示是父会话原文，里面已经有 Skill 清单；再挂一份是重复占上下文。
+    if catalog is not None and not request.fork:
         lines = [
             f"- {item['name']}：{item['description']}" if item["description"] else f"- {item['name']}"
             for item in catalog.listing()
@@ -539,10 +620,19 @@ async def run_subagent(
             "只用清单里的准确名字，不要猜）：\n" + "\n".join(lines)
         )
     if history:
-        # 续聊：历史里已经有系统提示与上一轮的读/写/结论，这一轮只追加新问题。
+        # 续聊 / fork：历史里已经有系统提示与上一轮的读/写/结论，这一轮只追加新问题。
         messages: list[dict] = list(history)
         if not messages or messages[0].get("role") != "system":
             messages.insert(0, system_message)
+        elif request.fork:
+            # 分身沿用父会话的系统提示，只把 fork 约束接在它末尾。另起一条 system
+            # 会让"同一条系统提示"这个前提在部分供应商上直接不成立。续聊取回的
+            # 系统提示已经带着这段约束，按标记跳过，免得越续越长。
+            first = dict(messages[0])
+            current = str(first.get("content") or "")
+            if FORK_MARKER not in current:
+                first["content"] = current + str(system_message["content"])
+                messages[0] = first
         messages.append({"role": "user", "content": request.goal})
     else:
         messages = [
@@ -731,6 +821,7 @@ async def run_subagent(
             "summary": result.summary[:500],
             "error": result.error,
             "agent_id": agent_id,
+            "fork": request.fork,
             "worktree_mode": tree.mode if tree else "",
             # 这一位花了多少、属于哪一批、是哪条线程——三个数原先只在 `model.usage` 里，
             # 批次要汇总就得先把整串事件按 trace_id 归堆；在这里直说一次，汇总才有可指认的来源。
@@ -791,14 +882,32 @@ class SubAgentRunner:
         # 根线程从父会话一路往下传：孙代理的根仍然是最初那条线程，不是它的父亲。
         root_thread_id = str(getattr(session, "root_thread_id", "") or session.trace_id)
         tier = str(getattr(session, "sandbox_tier", "") or "")
-        allowed = _child_allowed_tools(request)
-        tools = [tool for tool in _all_tools() if tool.name in allowed]
+        if request.fork:
+            # 分身拿父会话此刻的工具表（少派发类），而不是只读基线。
+            tools = _fork_tools(session)
+            allowed = {tool.name for tool in tools}
+            if history is None:
+                history = list(getattr(session, "conversation_snapshot", None) or [])
+            if not history:
+                # 没有父对话就不是分身，是从零开始的普通子代理——那会给出
+                # "我记得我们刚才说过"的错误答案，不如直接说拿不到。
+                return SubAgentResult(
+                    ok=False,
+                    error="fork 子代理拿不到父会话对话（当前会话没有可继承的消息）",
+                    depth=prepared.depth,
+                    agent_path=prepared.agent_path,
+                    agent_id=prepared.agent_id,
+                )
+        else:
+            allowed = _child_allowed_tools(request)
+            tools = [tool for tool in _all_tools() if tool.name in allowed]
         await session.recorder.add(
             "subagent.started",
             "subagent",
             {
                 "goal": request.goal[:500],
                 "isolate": request.isolate,
+                "fork": request.fork,
                 "max_steps": request.max_steps,
                 "agent_type": request.agent_name or BUILTIN_AGENT,
                 "agent_ignored": list(request.agent_ignored),
@@ -834,6 +943,11 @@ class SubAgentRunner:
             hooks=getattr(session, "hooks", None),
             history=history,
             skill_catalog=getattr(session.context, "skills", None),
+            parent_permissions=getattr(session, "permissions", None) if request.fork else None,
+            allow_background_shell=bool(
+                request.fork and getattr(session.context, "allow_background_shell", False)
+            ),
+            fork_gateway=getattr(session, "gateway", None) if request.fork else None,
         )
         # 留给 send_message：无论这一轮成功还是失败，已经说过的话都要能接上。
         self._remember(prepared, result)
@@ -875,6 +989,7 @@ class SubAgentRunner:
             "disallowed_tools": list(prepared.request.disallowed_tools),
             "agent_ignored": list(prepared.request.agent_ignored),
             "max_steps": prepared.request.max_steps,
+            "fork": bool(prepared.request.fork),
         }
         while len(bucket) > MAX_CONVERSATIONS:
             bucket.pop(next(iter(bucket)))
@@ -922,6 +1037,9 @@ class SubAgentRunner:
             allowed_tools=None if allowed_tools is None else tuple(allowed_tools),
             disallowed_tools=tuple(entry.get("disallowed_tools") or ()),
             agent_ignored=tuple(entry.get("agent_ignored") or ()),
+            # 续聊是同一个子代理接着说话：fork 的工具面与权限也必须跟着回来，
+            # 否则第二轮会悄悄退回到只读基线。
+            fork=bool(entry.get("fork")),
         ).normalized()
         if not request.goal:
             return SubAgentResult(ok=False, error="续聊消息为空")

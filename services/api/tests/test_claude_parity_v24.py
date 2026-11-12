@@ -428,6 +428,31 @@ async def test_read_then_edit_then_edit_again_without_rereading(tmp_path, monkey
     assert (tmp_path / "a.py").read_text(encoding="utf-8") == "a = 3\n"
 
 
+async def test_three_chained_edits_after_one_read(tmp_path, monkeypatch):
+    """读一次之后连续三次编辑都成功：上游没有「链式编辑必须拒绝」这条硬规则。"""
+
+    monkeypatch.setenv("BLANK_FEATURE_FS_BROKER", "0")
+
+    async def fake_record_change(context, relative, change_type, diff, backup_rel):
+        return "change-1"
+
+    monkeypatch.setattr(editing, "_record_change", fake_record_change)
+    cache = FileStateCache()
+    context = ToolContext(root=tmp_path, task_id="task-1", session_factory=None, file_state=cache)
+    _write(tmp_path, "a.py", "a = 1\n")
+    assert (await _read_file(context, {"path": "a.py"})).ok
+
+    outcomes = [
+        await _edit_file(context, {"path": "a.py", "old_string": "a = 1", "new_string": "a = 2"}),
+        await _edit_file(context, {"path": "a.py", "old_string": "a = 2", "new_string": "a = 3"}),
+        await _edit_file(context, {"path": "a.py", "old_string": "a = 3", "new_string": "a = 4"}),
+    ]
+
+    assert all(item.ok for item in outcomes), [item.message for item in outcomes]
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "a = 4\n"
+    assert cache.guard("a.py")["was_read"] is True
+
+
 async def test_write_handler_rerecords_so_the_next_write_needs_no_reread(tmp_path, monkeypatch):
     monkeypatch.setenv("BLANK_FEATURE_FS_BROKER", "0")
 

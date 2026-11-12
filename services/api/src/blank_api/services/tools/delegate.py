@@ -17,7 +17,12 @@ the point; the parent decides what lands.
 
 from __future__ import annotations
 
-from blank_api.services.agents_defs import BUILTIN_AGENT, BUILTIN_GENERAL_PURPOSE
+from blank_api.services.agents_defs import (
+    BUILTIN_AGENT,
+    BUILTIN_FORK,
+    BUILTIN_FORK_AGENT,
+    BUILTIN_GENERAL_PURPOSE,
+)
 from blank_api.services.subagent import (
     DEFAULT_CONCURRENCY,
     DEFAULT_STEPS,
@@ -35,7 +40,7 @@ MAX_GOAL_CHARS = 2_000
 def _resolve_agent(context: ToolContext, raw) -> tuple:
     """把 subagent_type 解析成定义；未知类型 fail-closed 并列出可用名字。
 
-    没有运行时会话时（单测 / 非 runtime 入口）只认内置 general-purpose：
+    没有运行时会话时（单测 / 非 runtime 入口）只认内置 general-purpose 与 fork：
     宁可明确说"没有这个类型"，也不要凭一个不存在的目录去猜。
     """
     name = str(raw or "").strip() or BUILTIN_AGENT
@@ -47,7 +52,9 @@ def _resolve_agent(context: ToolContext, raw) -> tuple:
         return None, f"未知子代理类型 '{name}'。可用类型：{', '.join(catalog.names())}"
     if name == BUILTIN_AGENT:
         return BUILTIN_GENERAL_PURPOSE, ""
-    return None, f"未知子代理类型 '{name}'。可用类型：{BUILTIN_AGENT}"
+    if name == BUILTIN_FORK:
+        return BUILTIN_FORK_AGENT, ""
+    return None, f"未知子代理类型 '{name}'。可用类型：{BUILTIN_AGENT}, {BUILTIN_FORK}"
 
 
 def _apply_definition(request: SubAgentRequest, definition) -> SubAgentRequest:
@@ -57,6 +64,7 @@ def _apply_definition(request: SubAgentRequest, definition) -> SubAgentRequest:
     request.allowed_tools = definition.tools
     request.disallowed_tools = definition.disallowed_tools
     request.agent_ignored = definition.ignored
+    request.fork = definition.name == BUILTIN_FORK
     return request
 
 
@@ -93,6 +101,11 @@ def _parse_tasks(raw, context: ToolContext) -> tuple[list[SubAgentRequest], str]
         definition, error = _resolve_agent(context, agent_type)
         if error:
             return [], error
+        if definition.name == BUILTIN_FORK:
+            # fork 继承的是父会话到此刻为止的对话；并行批里的分身各自拿到同一份
+            # 快照却分头改动，回来时的结论没法拼成一个"我"。Claude 也只按单个
+            # Agent 调用来 fork。
+            return [], "fork 子代理只能通过 spawn_agent 前台派发，不能放进 spawn_agents 并行批次"
         try:
             resolved_steps = _request_steps(steps, definition)
         except (TypeError, ValueError):
@@ -129,10 +142,21 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
 
     # Claude Code 的 Agent 工具默认后台跑：不传就是后台，只有「下一步马上就要结论、
     # 期间没有别的事可做」时才显式传 false。旧参数名 background 继续接受。
+    # fork 是唯一例外：Claude 的 fork 形态没有 run_in_background，直接传 true 是
+    # 参数错，不是"换个方式跑"——它继承的是派发这一刻的对话快照。
     raw_background = arguments.get("run_in_background")
     if raw_background is None:
         raw_background = arguments.get("background")
-    background = True if raw_background is None else bool(raw_background)
+    if request.fork:
+        if raw_background is not None and bool(raw_background):
+            return fail(
+                "error",
+                "fork 子代理只能前台运行：它继承的是派发这一刻的父会话对话，"
+                "后台跑会让结论落在父会话已经走远之后。去掉 run_in_background 或传 false。",
+            )
+        background = False
+    else:
+        background = True if raw_background is None else bool(raw_background)
     if background:
         if not hasattr(runner, "spawn_background"):
             return fail("error", "当前运行时没有启用后台子代理")
@@ -600,6 +624,9 @@ def delegate_tools() -> list[ToolDefinition]:
                 "需要同时分头做几件事时改用 spawn_agents。"
                 "子代理类型由工作区 .blank/agents/*.md（以及用户级 agents 目录）定义；"
                 "不传 subagent_type 就是内置 general-purpose，未知类型会被拒绝并列出可用名字。"
+                "subagent_type=\"fork\" 是内置分身类型：它继承你到此为止的完整对话、系统提示与工具权限，"
+                "适合「接着我刚才查到的线索继续，但别占我的上下文」这类工作；fork 只能前台运行，"
+                "不能放进 spawn_agents 的多任务批次。"
             ),
             input_schema={
                 "type": "object",
@@ -610,7 +637,8 @@ def delegate_tools() -> list[ToolDefinition]:
                         "type": "string",
                         "description": (
                             "子代理类型，默认 general-purpose；"
-                            "工作区 .blank/agents 里定义的名称也可以直接用"
+                            "工作区 .blank/agents 里定义的名称也可以直接用；"
+                            "fork 是内置分身（继承当前对话，只能前台）"
                         ),
                     },
                     "isolate": {
@@ -656,7 +684,8 @@ def delegate_tools() -> list[ToolDefinition]:
                             f"子任务列表，最多 {MAX_PARALLEL_AGENTS} 个；元素可以是字符串或 "
                             "{goal, isolate, max_steps, subagent_type}。"
                             "subagent_type 不传就是内置 general-purpose，"
-                            "也可以用工作区 .blank/agents 里定义的类型；未知类型整批拒绝"
+                            "也可以用工作区 .blank/agents 里定义的类型；未知类型整批拒绝；"
+                            "fork 只能走 spawn_agent，放进这里会整批拒绝"
                         ),
                         "items": {"type": "string"},
                     },

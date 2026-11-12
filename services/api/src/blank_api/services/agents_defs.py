@@ -37,6 +37,10 @@ from blank_api.services.plugins_defs import discover_plugins
 from blank_api.services.workspace import mask_path
 
 BUILTIN_AGENT = "general-purpose"
+# Claude 的 Agent 工具内建 `fork` 类型：子代理继承主会话到目前为止的全部对话，
+# 用同一套系统提示、同一个模型，只是换一个新的上下文窗口接着干。它不是文件型
+# 定义——名字留在这里，项目里同名文件会像 general-purpose 一样覆盖内置项。
+BUILTIN_FORK = "fork"
 # Claude skips files that are not regular files or exceed this byte limit.
 MAX_FILE_BYTES = 1_048_576
 # The body becomes part of every child system prompt. Claude uses it verbatim;
@@ -104,6 +108,12 @@ BUILTIN_GENERAL_PURPOSE = AgentDefinition(
     source="built-in",
 )
 
+BUILTIN_FORK_AGENT = AgentDefinition(
+    name=BUILTIN_FORK,
+    description="当前会话的分身：继承到此为止的完整对话与工具权限，只能前台运行。",
+    source="built-in",
+)
+
 
 @dataclass
 class AgentCatalog:
@@ -123,10 +133,16 @@ class AgentCatalog:
         return self.entries.get(str(name or "").strip())
 
     def names(self) -> list[str]:
-        # Built-in first: it is the default the model should reach for when no
-        # type is stated, and the error list reads better with it up front.
-        ordered = [BUILTIN_AGENT] if BUILTIN_AGENT in self.entries else []
-        ordered.extend(sorted(name for name in self.entries if name != BUILTIN_AGENT))
+        # Built-ins first, default name leading: it is the type the model should
+        # reach for when none is stated, and the error list reads better with it
+        # up front. fork comes second because it is a tool-shaped choice, not a
+        # general exploration default.
+        ordered = [
+            name for name in (BUILTIN_AGENT, BUILTIN_FORK) if name in self.entries
+        ]
+        ordered.extend(
+            sorted(name for name in self.entries if name not in (BUILTIN_AGENT, BUILTIN_FORK))
+        )
         return ordered
 
     def custom(self) -> list[AgentDefinition]:
@@ -323,7 +339,9 @@ def discover_agents(root: str | Path, *, env: dict[str, str] | None = None) -> A
 
     Plugin agents are addressed as ``<plugin>:<agent>`` (Claude's namespace).
     """
-    catalog = AgentCatalog(entries={BUILTIN_AGENT: BUILTIN_GENERAL_PURPOSE})
+    catalog = AgentCatalog(
+        entries={BUILTIN_AGENT: BUILTIN_GENERAL_PURPOSE, BUILTIN_FORK: BUILTIN_FORK_AGENT}
+    )
     layers = (
         ("user", user_agents_dir(env)),
         ("project", Path(root) / PROJECT_AGENTS_DIR),
