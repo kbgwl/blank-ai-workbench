@@ -87,6 +87,8 @@ DEFERRED_TOOLS = frozenset(
         "exit_worktree",
         # 工作流脚本只在用户明确要求多代理编排时才该出现；默认收着，靠 tool_search 拉。
         "workflow",
+        # 监控是"盯住一个还在输出的东西"的专门能力，不是每轮都要用的常驻工具。
+        "monitor",
     }
 )
 
@@ -132,6 +134,17 @@ ALIASES: dict[str, tuple[str, ...]] = {
         "notebook edit",
     ),
     "run_shell": ("命令", "shell", "执行", "终端", "bash"),
+    "monitor": (
+        "监控",
+        "监听",
+        "盯",
+        "实时",
+        "日志",
+        "watch",
+        "monitor",
+        "tail",
+        "stream",
+    ),
     "search_code": ("搜索代码", "查找", "grep", "search"),
     "glob": ("找文件", "文件列表", "按名找", "glob", "通配符", "*.py"),
     "request_user_input": ("提问", "询问", "确认", "ask"),

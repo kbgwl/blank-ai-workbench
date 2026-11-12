@@ -944,6 +944,32 @@ class AgentSession:
                     ],
                 },
             )
+        # monitor 的事件也是系统事件：命令每输出一行就投递一条，模型在等用户或做别的事时
+        # 也会收到。每次调用最多投一屏，结束只在最后一条事件里说一次。
+        monitor_notes = shell_tasks.drain_monitor_events(
+            str(getattr(self.context, "task_id", "") or "")
+        )
+        if monitor_notes:
+            note_block = render_monitor_notifications(monitor_notes)
+            compacted = [*compacted, authored({"role": "system", "content": note_block}, self.run_id)]
+            await self.recorder.add(
+                "monitor.notification",
+                node,
+                {
+                    "chars": len(note_block),
+                    "monitors": [
+                        {
+                            "monitor_id": item.get("monitor_id") or "",
+                            "status": item.get("status") or "",
+                            "events": len(item.get("events") or []),
+                            "dropped": item.get("dropped") or 0,
+                            "pending": item.get("pending") or 0,
+                            "ended": bool(item.get("ended")),
+                        }
+                        for item in monitor_notes
+                    ],
+                },
+            )
         # 工作流结束同样是系统事件：脚本在后台跑，模型不会盯着它。每个运行只通知一次；
         # 结论仍用 task_output 取，通知里只放足以判断成败的骨架。
         workflow_notes = workflow_module.drain_notifications(
@@ -1662,6 +1688,41 @@ def render_shell_notifications(items: list[dict]) -> str:
         if tail:
             lines.append(f"  输出末尾：\n{tail}")
     lines.append("完整输出用 task_output(shell_id=...) 取。")
+    return "\n".join(lines)[:8000]
+
+
+def render_monitor_notifications(items: list[dict]) -> str:
+    """把 monitor 待投递的行事件拼成一条系统通知（对齐 Claude 的 Monitor 语义）。
+
+    它和「命令结束了」不是一回事：这里通常只是命令又说了几句。所以文案要明确
+    「这是事件、不是用户发言」，并重申不要轮询——否则模型会把这些输出当成
+    用户的新指令，或者反过来停下来等下一批事件。
+    """
+    lines = [
+        "以下是 monitor 监控命令的新输出（这是系统事件，不是用户发言）。",
+        "照常继续手上的事：不要轮询、不要为等更多输出而 sleep；需要更早的日志用 task_output。",
+    ]
+    for item in items:
+        status = str(item.get("status") or "")
+        label = f"{item.get('monitor_id')} [{status}]"
+        description = str(item.get("description") or "").strip()
+        if description:
+            label = f"{label} {description}"
+        lines.append(f"- {label}")
+        for event in item.get("events") or []:
+            text = str(event.get("text") or "")
+            tag = str(event.get("tag") or "")
+            lines.append(f"  {f'[{tag}] ' if tag == 'stderr' else ''}{text}")
+        dropped = int(item.get("dropped") or 0)
+        pending = int(item.get("pending") or 0)
+        if dropped:
+            lines.append(f"  另有 {dropped} 行积压未投递，完整输出见 task_output。")
+        if pending:
+            lines.append(f"  还有 {pending} 行待投递，下一轮通知会继续给出。")
+        if item.get("ended"):
+            message = str(item.get("message") or "").strip()
+            lines.append(f"  监控已结束：{message or status}")
+    lines.append('完整日志用 task_output(task_id="mon-...") 取；不要了用 task_stop 终止。')
     return "\n".join(lines)[:8000]
 
 
@@ -3220,7 +3281,8 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         name = tool_call_name(call)
         key = _call_key(call)
         arguments = hook_plan.arguments.get(key, tool_call_args(call))
-        if name in ("run_shell", "run_tests"):
+        # monitor 也执行命令：一次监控就是一次动手尝试，环境缺口判定要看得到它。
+        if name in ("run_shell", "run_tests", "monitor"):
             command = str((arguments or {}).get("command") or "").strip()
             if command and command not in shell_commands:
                 shell_commands.append(command)

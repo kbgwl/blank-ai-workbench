@@ -167,7 +167,9 @@ def classify_action(tool: str, arguments: dict[str, Any] | None = None) -> str:
     """
     if tool == "delete_file":
         return "delete_file"
-    if tool != "run_shell":
+    # monitor 执行的是同一条命令，只是输出逐行投递：只认 run_shell 会让
+    # 「自动驾驶模式」把一条 git push 监控当成低风险动作悄悄放过去。
+    if tool not in ("run_shell", "monitor"):
         return ""
     text = str((arguments or {}).get("command") or "").lower()
     if not text:

@@ -18,6 +18,7 @@
 * 括号里是限制；不写括号表示"这个工具的所有调用"。
 * `run_shell` 的限制按**逐段**匹配（`git status && rm -rf src` 不会被
   `allow run_shell(git status)` 放行），语义与 `approvals.json` 的前缀规则一致。
+  `run_shell` 与 `monitor` 的规则互相通用：两者执行同一条命令，只是输出投递不同。
 * 文件工具（`read_file` / `apply_patch` / `list_files` / `search_code` / `git` 等）
   的限制按工作区相对路径通配，`*` 可以跨目录。指向工作区外的规则不生效。
 * 任何一行解析失败 ⇒ **整份文件停用**并带出错误。宁可多问一次，也不能让一条
@@ -72,11 +73,14 @@ class PermissionRule:
         return f"{self.tool}({self.spec})" if self.spec else self.tool
 
     def matches(self, tool: str, arguments: dict) -> bool:
-        if tool != self.tool:
+        # 为 run_shell / monitor 写下的规则互相通用：两者执行的是同一条命令，只是
+        # 输出投递方式不同。不并过来，`deny run_shell(git push)` 换个工具名就能绕过。
+        command_tool = tool in ("run_shell", "monitor") and self.tool in ("run_shell", "monitor")
+        if tool != self.tool and not command_tool:
             return False
         if not self.spec:
             return True
-        if tool == "run_shell":
+        if command_tool:
             from blank_api.services.permissions import covered_by_any, covered_by_rules
 
             command = str((arguments or {}).get("command") or "")

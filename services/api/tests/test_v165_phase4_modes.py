@@ -70,6 +70,9 @@ def test_low_risk_is_automatic_and_manual_medium_risk_asks():
 def test_is_high_risk_looks_at_the_command_not_just_the_tool_name():
     assert is_high_risk("run_shell", {"command": "git push origin main"}) is True
     assert is_high_risk("run_shell", {"command": "git status"}) is False
+    # monitor 执行的是同一条命令：换个工具名不该让它掉出高风险识别。
+    assert is_high_risk("monitor", {"command": "git push origin main"}) is True
+    assert is_high_risk("monitor", {"command": "tail -f build.log"}) is False
     assert is_high_risk("delete_file", {"path": "src/a.py"}) is True
     assert is_high_risk("read_file", {"command": "git push"}) is False
 

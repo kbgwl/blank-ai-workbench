@@ -245,8 +245,10 @@ def test_scenario_acceptance_matrix_followup153():
 
     # 文档：能落文档文件（allow_write 保持开），但提示词约束「先提纲、不重构代码」。
     # v164：权限细化到文件类型——写文档要保留 apply_patch，跑命令/跑测试/git 拿掉，
-    # 因为它们能绕开扩展名限制改任何东西。
-    assert excluded_tools(DOCS) == frozenset({"memory_write", "run_shell", "run_tests", "git"})
+    # 因为它们能绕开扩展名限制改任何东西。R1：monitor 也执行命令，同样拿掉。
+    assert excluded_tools(DOCS) == frozenset(
+        {"memory_write", "run_shell", "run_tests", "git", "monitor"}
+    )
     assert "apply_patch" not in excluded_tools(DOCS)
     assert write_allowed(DOCS, "README.md")
     assert write_allowed(DOCS, "docs/guide.txt")
@@ -269,7 +271,10 @@ def test_scenario_acceptance_matrix_followup153():
     # 逆向实验室：读为主但结论要落分析笔记（保留写入），提示词强制证据与「未确认」标注。
     # v164：不跑项目测试、不提交、不跑 shell——这三件事都在改被分析的那个仓库；
     # 写笔记走独立分析区（见 runtime 的 write_root 与网关的路径重定向）。
-    assert excluded_tools(REVERSE) == frozenset({"memory_write", "run_shell", "run_tests", "git"})
+    # R1：monitor 也是「在被分析仓库里执行东西」，一并拿掉。
+    assert excluded_tools(REVERSE) == frozenset(
+        {"memory_write", "run_shell", "run_tests", "git", "monitor"}
+    )
     assert write_allowed(REVERSE, "analysis/report.md")
     assert not write_allowed(REVERSE, "sample.exe")
     assert "证据" in REVERSE.system_prompt

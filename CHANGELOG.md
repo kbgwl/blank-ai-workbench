@@ -1,6 +1,38 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）
+
+- **Monitor 工具：把「命令又输出了一行」变成可投递的系统事件（R 批第 1 项）**：
+  按 Claude 原文（`description` / `command` / `timeout_ms` 必填，默认 300000、上限 1800000，
+  0 表示不设监控期限；每条 stdout 行一个事件、结束 watch 结束、期间不轮询不 sleep）落成本地
+  `monitor`。新增 `services/tools/monitor.py`；`shell_tasks.py`、`tools/__init__.py`、
+  `tools/registry.py`、`tools/delegate.py`、`permissions.py`、`permission_rules.py`、
+  `agent/graph.py`、`agent/scenarios.py`、`agent/automation.py`、`agent/stall.py`、
+  `agent/placeholders.py` 接线。
+  1. **逐行事件**：后台句柄表新增 `kind="monitor"`，同一个进程/日志/取消/收尾；输出按字节切行再
+     解码（多字节字符被 chunk 切开不会变乱码），stdout/stderr 分得清，空行不投递；命令没结束
+     就能取到已产生的事件；结束、超时、取消、`task_stop` 都只以最后一条事件收尾。
+  2. **投递有上限**：每次模型调用前注入一次系统通知，文案明确「不是用户发言、不要轮询、不要
+     sleep」；一次最多 25 行，积压留在队列下一轮继续；内存队列上限 200 行，超限只丢最旧的行
+     并把丢弃条数如实上报。
+  3. **句柄与终止**：`mon-` 句柄走同一张表，`task_output` / `task_stop` 与 `shell-` / `wf_` 同一套
+     语义；任务收尾取消仍在跑的监控并删日志；被拒绝的调用不留下句柄。
+  4. **执行边界不被绕过**：命令仍过 `policy_gate("run_shell")`、安全超时与沙箱档位；shell
+     allowlist 同时拦 monitor；子代理直接拒绝；文档/逆向/日常/头脑风暴场景把它当命令工具禁用；
+     带 `command` 的工具不获得「总是允许该工具」的档，也不给「总是允许该前缀」（monitor 每次按
+     当前档位判定）；手写 allow/deny 规则在 `run_shell` 与 `monitor` 之间互通；高风险动作分类、
+     缺命令停滞检测、占位内容审计同样覆盖 monitor。
+  测试：新增 `tests/test_monitor_tool_v38.py` 20 例（契约/参数边界/真实进程逐行与 stderr/边跑边投/
+     跨 chunk 与多字节/空行/投递上限与积压/队列溢出/通知只注入一次/终止与收尾/四条执行边界）；
+     相连 10 个测试文件（monitor/工具授权/后台 shell/命令级策略/场景/NotebookEdit/审批模式/
+     停滞/权限规则/占位审计）合计 **199 passed**；变异电池 17/17 全红（逐条改坏实现、实测红集合，
+     跑完即按原字节还原），附带一致性改动另做 4/4 红。2026-11-12 后端全量回归
+     **2956 passed / 28 skipped / 0 failed**（747.58s，rc=0；28 条 skipped 全是本机环境门：
+     docker、受限令牌自检、aiomysql、桌面包产物，与 monitor 无关）。
+  偏离：只支持 `command`，Claude 的 WebSocket 变体未移植；`timeout_ms=0` 的「不设期限」仍受
+  安全设置的「单条命令超时」约束（默认 120s），回执里如实说明；每轮最多 25 行、队列 200 行；
+  `run_shell` 的会话内「总是允许某前缀」不自动扩展到 monitor，同一命令从 monitor 走仍按当前
+  档位重新判定。
 
 - **NotebookEdit 工具：按单元格编辑 `.ipynb`（Q 批第 6 项）**：
   按 Claude 原文（`notebook_path` / `cell_id` / `new_source` / `cell_type` / `edit_mode`，

@@ -104,6 +104,32 @@ def test_parse_accepts_comments_bare_tools_and_specs() -> None:
     assert ruleset.rules[3].matches("read_file", {"path": "a"}) is False
 
 
+def test_shell_rules_also_cover_monitor_because_it_runs_the_same_command() -> None:
+    """换个工具名不能绕过手写规则：monitor 执行的就是那条命令。"""
+    ruleset = parse_rules("deny run_shell(git push *)\nallow run_shell(git status)\n", source="mem")
+    assert ruleset.error == ""
+    monitor_args = {"command": "git push origin main", "description": "盯推送", "timeout_ms": 1000}
+    assert ruleset.match("deny", "monitor", monitor_args) is not None
+    assert ruleset.match(
+        "allow", "monitor", {"command": "git status", "description": "盯", "timeout_ms": 1000}
+    ) is not None
+    # 覆盖是有方向的：只批了 git status，不代表 monitor 里的 git push 也免问。
+    assert ruleset.match("allow", "monitor", monitor_args) is None
+
+    mirror = parse_rules("deny monitor(rm -rf *)\n", source="mem")
+    assert mirror.match("deny", "run_shell", {"command": "rm -rf build"}) is not None
+    # 文件工具的规则不会因为工具名里有 command 参数就套到 monitor 上。
+    paths = parse_rules("deny read_file(secrets/**)\n", source="mem")
+    assert paths.match("deny", "monitor", monitor_args) is None
+
+    # decide() 走的也是同一条匹配：被 deny 的命令不管从哪个工具进都被拒。
+    policy = _policy("deny run_shell(git push *)\n")
+    monitor_tool = _tool("monitor", keys=("command", "description", "timeout_ms"))
+    decision = policy.decide(monitor_tool, monitor_args, "high")
+    assert decision.outcome == DENY, decision
+    assert decision.rule == "rule:deny"
+
+
 @pytest.mark.parametrize(
     "text",
     [

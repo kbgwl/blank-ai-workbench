@@ -72,6 +72,7 @@ SCOPES = (SCOPE_ONCE, SCOPE_PREFIX, SCOPE_TOOL)
 ARGUMENT_SCOPED_TOOLS = frozenset(
     {
         "run_shell",
+        "monitor",
         "git",
         "apply_patch",
         "edit_file",
@@ -1089,9 +1090,11 @@ class PermissionPolicy:
         if self.mode == MODE_ACCEPT_EDITS and name in EDIT_TOOLS and risk not in ("high", "critical"):
             return approve(risk, "mode:accept_edits")
 
-        # 命令级默认拒绝：只对 run_shell 生效，且排在所有显式批准之后——
-        # 规则、会话批准、工具档都还能放行；没被任何东西放行的命令回到人手里。
-        if name == "run_shell" and command and shell_policy() == SHELL_POLICY_ALLOWLIST:
+        # 命令级默认拒绝：对执行命令的工具（run_shell / monitor）生效，且排在所有
+        # 显式批准之后——规则、会话批准、工具档都还能放行；没被任何东西放行的命令
+        # 回到人手里。monitor 必须在这一列：否则一条被 allowlist 拒绝的命令换到
+        # monitor 里跑就能绕过去，等于给 shell 策略开了个后门。
+        if name in ("run_shell", "monitor") and command and shell_policy() == SHELL_POLICY_ALLOWLIST:
             return ask(risk, "policy:shell_allowlist", command_prefix(command), memo=memo)
 
         if risk not in ("high", "critical"):

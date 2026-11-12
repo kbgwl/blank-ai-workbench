@@ -106,6 +106,25 @@ def test_only_write_calls_are_audited() -> None:
     assert [hit["tool"] for hit in hits] == ["write_file"]
 
 
+def test_monitor_commands_are_audited_too() -> None:
+    """monitor 跑的是同一条命令，`> index.html` 一样能把占位内容落盘。"""
+    messages = [
+        {"role": "user", "content": "帮我写个官网"},
+        _assistant(
+            (
+                "monitor",
+                {
+                    "command": 'echo "lorem ipsum" > index.html',
+                    "description": "盯构建",
+                    "timeout_ms": 1000,
+                },
+            )
+        ),
+    ]
+    hits = scan_messages(messages)
+    assert [hit["tool"] for hit in hits] == ["monitor"]
+
+
 def test_scan_does_not_repeat_the_same_token_on_every_line() -> None:
     """同一个占位值在十个文件位置出现，是同一个问题，不是十个。"""
     text = "\n".join("email: hi@example.com" for _ in range(20))

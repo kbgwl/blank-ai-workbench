@@ -124,7 +124,7 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
 
 def _handle_id(arguments: dict) -> str:
     """task_output / task_stop 的句柄：task_id 是通用名，旧名 agent_id / shell_id 继续接受。"""
-    for key in ("task_id", "shell_id", "agent_id"):
+    for key in ("task_id", "shell_id", "agent_id", "monitor_id"):
         value = str(arguments.get(key) or "").strip()
         if value:
             return value
@@ -136,6 +136,13 @@ def _is_shell_handle(arguments: dict, handle_id: str) -> bool:
     if handle_id.startswith("shell-"):
         return True
     return str(arguments.get("shell_id") or "").strip() == handle_id
+
+
+def _is_monitor_handle(arguments: dict, handle_id: str) -> bool:
+    # monitor 的句柄固定 mon- 开头；显式传 monitor_id 也按监控处理。
+    if handle_id.startswith("mon-"):
+        return True
+    return str(arguments.get("monitor_id") or "").strip() == handle_id
 
 
 def _is_workflow_handle(handle_id: str) -> bool:
@@ -277,10 +284,74 @@ async def _shell_stop(context: ToolContext, shell_id: str) -> ToolOutcome:
     return ok(f"后台命令 {shell_id} 已经结束（{status}），没有需要终止的运行。", **data)
 
 
+async def _monitor_output(context: ToolContext, monitor_id: str, arguments: dict) -> ToolOutcome:
+    from blank_api.services import shell_tasks
+    from blank_api.services.tools.shell import MAX_OUTPUT_CHARS, mask_output
+
+    try:
+        timeout = float(arguments.get("timeout") or 60)
+    except (TypeError, ValueError):
+        timeout = 60.0
+    snapshot = await shell_tasks.output(
+        str(getattr(context, "task_id", "") or ""),
+        monitor_id,
+        block=bool(arguments.get("block", True)),
+        timeout=timeout,
+    )
+    status = str(snapshot.get("status") or "")
+    if status == "not_found":
+        return fail("error", str(snapshot.get("message") or "没有找到该监控"))
+    body = mask_output(str(snapshot.get("text") or ""), context.root)
+    if len(body) > MAX_OUTPUT_CHARS:
+        body = body[:MAX_OUTPUT_CHARS] + "\n…（输出已截断）"
+    data = {
+        key: snapshot[key]
+        for key in (
+            "monitor_id",
+            "kind",
+            "command",
+            "description",
+            "status",
+            "exit_code",
+            "timed_out",
+            "elapsed_seconds",
+            "truncated",
+        )
+        if key in snapshot
+    }
+    message = str(snapshot.get("message") or "")
+    if status == "running":
+        return ToolOutcome(ok=True, status="ok", output=f"{message}\n{body}".strip(), data=data)
+    if status == "cancelled":
+        return ToolOutcome(ok=False, status="error", output=body, data=data, message=message)
+    if status != "completed":
+        return ToolOutcome(ok=False, status="error", output=body, data=data, message=message)
+    return ToolOutcome(ok=True, status="ok", output=body or "监控的命令已结束，没有输出", data=data)
+
+
+async def _monitor_stop(context: ToolContext, monitor_id: str) -> ToolOutcome:
+    from blank_api.services import shell_tasks
+
+    snapshot = await shell_tasks.stop(str(getattr(context, "task_id", "") or ""), monitor_id)
+    status = str(snapshot.get("status") or "")
+    if status == "not_found":
+        return fail("error", str(snapshot.get("message") or "没有找到该监控"))
+    data = {
+        key: snapshot[key]
+        for key in ("monitor_id", "kind", "command", "description", "status", "exit_code", "elapsed_seconds")
+        if key in snapshot
+    }
+    if status == "cancelled":
+        return ok(f"已终止监控 {monitor_id}，监控的进程已结束。", **data)
+    return ok(f"监控 {monitor_id} 已经结束（{status}），没有需要终止的运行。", **data)
+
+
 async def _task_output(context: ToolContext, arguments: dict) -> ToolOutcome:
     handle_id = _handle_id(arguments)
     if not handle_id:
-        return fail("error", "task_output 需要 task_id（后台子代理或后台命令的句柄）")
+        return fail("error", "task_output 需要 task_id（后台子代理、后台命令或 monitor 的句柄）")
+    if _is_monitor_handle(arguments, handle_id):
+        return await _monitor_output(context, handle_id, arguments)
     if _is_shell_handle(arguments, handle_id):
         return await _shell_output(context, handle_id, arguments)
     if _is_workflow_handle(handle_id):
@@ -350,7 +421,9 @@ async def _list_agents(context: ToolContext, arguments: dict) -> ToolOutcome:
 async def _task_stop(context: ToolContext, arguments: dict) -> ToolOutcome:
     handle_id = _handle_id(arguments)
     if not handle_id:
-        return fail("error", "task_stop 需要 task_id（后台子代理或后台命令的句柄）")
+        return fail("error", "task_stop 需要 task_id（后台子代理、后台命令或 monitor 的句柄）")
+    if _is_monitor_handle(arguments, handle_id):
+        return await _monitor_stop(context, handle_id)
     if _is_shell_handle(arguments, handle_id):
         return await _shell_stop(context, handle_id)
     if _is_workflow_handle(handle_id):
@@ -544,7 +617,8 @@ def delegate_tools() -> list[ToolDefinition]:
             name="task_output",
             description=(
                 "取后台任务的现状与输出：后台子代理（spawn_agent）的结论、后台命令"
-                "（run_shell(run_in_background=true)）的输出，或工作流（workflow）的结果。"
+                "（run_shell(run_in_background=true)）的输出、monitor 监控的日志，"
+                "或工作流（workflow）的结果。"
                 "block=true 时最多等 timeout 秒；等不到只表示它还在跑，不会因此取消它。"
                 "返回状态 running / completed / failed / timeout / cancelled，未知句柄会如实报找不到。"
                 "后台任务自己结束时你会收到系统通知，这里只在需要更细的进度或拿完整文本时用。"
@@ -605,7 +679,8 @@ def delegate_tools() -> list[ToolDefinition]:
             name="task_stop",
             description=(
                 "终止一个仍在运行的后台任务：后台子代理（隔离副本一并删除并留下 subagent.cancelled）、"
-                "后台命令（进程终止并留下 shell.cancelled），或工作流（脚本进程终止、仍在跑的子代理收走）。"
+                "后台命令（进程终止并留下 shell.cancelled）、monitor 监控（进程终止并留下 monitor.cancelled），"
+                "或工作流（脚本进程终止、仍在跑的子代理收走）。"
                 "已经结束的句柄照实返回它当初的状态，不会谎报取消。"
             ),
             input_schema={

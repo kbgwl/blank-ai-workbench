@@ -192,8 +192,11 @@ class TestEnvironmentFailures:
         breaker.record("run_shell", {"command": "node --check x.js"}, NODE_MISSING)
         # 用到 node 的另一条命令：同一个失败，拦。
         assert breaker.verdict("run_shell", {"command": "pnpm exec node -v"}).block is True
+        # monitor 只是换了个输出投递方式，命令本身还是同一个失败。
+        assert breaker.verdict("monitor", {"command": "node app.js"}).block is True
         # 不用 node 的命令照跑：缺的是那条命令，不是整个工具。
         assert breaker.verdict("run_shell", {"command": "dir /b"}).block is False
+        assert breaker.verdict("monitor", {"command": "type build.log"}).block is False
 
     def test_command_name_with_extension(self) -> None:
         breaker = StallBreaker()

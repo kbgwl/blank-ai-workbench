@@ -156,7 +156,9 @@ def structured_missing_tool(payload: dict) -> str:
     return str(data.get("missing_test_runner") or data.get("missing_command") or "").strip()
 
 
-_COMMAND_TOOLS = frozenset({"run_shell", "run_tests"})
+# monitor 执行的是同一条命令：缺 node 时改用它再跑一遍是同一个失败，
+# 把它漏在这张表外，「别重复同一个环境缺口」的闸门就多了一个旁路。
+_COMMAND_TOOLS = frozenset({"run_shell", "run_tests", "monitor"})
 _SEPARATORS = re.compile(r"[\s|&;()<>]+")
 # 这些词后面跟着的才是"真正被执行的程序"。`cmd /c node`、`powershell -Command ...`
 # 和 `pnpm exec node` 里 node 都是被调用的那一个，只跳过这些位置会漏拦。

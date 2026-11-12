@@ -65,7 +65,8 @@ DOCS = Scenario(
     # 文档场景的边界是文件类型，不是"能不能写"。写 README 是本职，改 main.py 不是。
     write_extensions=frozenset({".md", ".markdown", ".txt", ".rst", ".adoc", ".docx", ".doc"}),
     # 跑命令和提交不在"写文档"里，而且它们能绕开扩展名限制。
-    tool_denylist=frozenset({"run_shell", "run_tests", "git"}),
+    # monitor 也执行命令，只是把输出逐行投递——不跟着禁就是换条通道跑 shell。
+    tool_denylist=frozenset({"run_shell", "run_tests", "git", "monitor"}),
     input_hint="要写给谁看？主题和大致篇幅…",
 )
 
@@ -110,7 +111,8 @@ REVERSE = Scenario(
     write_extensions=frozenset({".md", ".markdown", ".txt"}),
     # 逆向不提交、不跑项目测试、不跑 shell：这三件事都作用在被分析的那个仓库上。
     # 分析要用命令时应该走"读样本 + 自己算"，而不是在人家目录里执行东西。
-    tool_denylist=frozenset({"run_shell", "run_tests", "git"}),
+    # monitor 同样是"在人家目录里执行东西"，只是换了投递方式。
+    tool_denylist=frozenset({"run_shell", "run_tests", "git", "monitor"}),
     input_hint="给出要分析的目标文件或目录…",
 )
 
@@ -121,7 +123,9 @@ SCENARIOS: dict[str, Scenario] = {
 DEFAULT_SCENARIO = DEV.key
 
 # 场景能拿来过滤的全部真实工具名（与 services/tools/ 的注册名一一对应）。
-WRITE_TOOLS = frozenset({"apply_patch", "run_shell", "run_tests", "git"})
+# monitor 也在里面：它执行命令，只是把输出逐行投递；不跟着 run_shell 一起禁，
+# 「文档/逆向场景不跑命令」就只剩一句提示词。
+WRITE_TOOLS = frozenset({"apply_patch", "run_shell", "run_tests", "git", "monitor"})
 # 逆向与日常不联网检索：分析以本地工作区为准（web 工具按需可再放开）。
 MEMORY_WRITE_TOOL = "memory_write"
 

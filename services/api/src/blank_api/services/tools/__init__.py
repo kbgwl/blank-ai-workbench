@@ -13,6 +13,7 @@ from blank_api.services.tools.git import git_tools
 from blank_api.services.tools.delegate import delegate_tools
 from blank_api.services.tools.editing import editing_tools
 from blank_api.services.tools.memory_tools import memory_tools
+from blank_api.services.tools.monitor import monitor_tools
 from blank_api.services.tools.notebook import notebook_tools
 from blank_api.services.tools.patch import patch_tools
 from blank_api.services.tools.plan import plan_tools
@@ -39,6 +40,7 @@ def build_default_tools() -> list[ToolDefinition]:
         *editing_tools(),
         *notebook_tools(),
         *shell_tools(),
+        *monitor_tools(),
         *git_tools(),
         *test_tools(),
         *web_tools(),

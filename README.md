@@ -264,6 +264,7 @@ uv run alembic revision --autogenerate -m "描述"
 | 定时工具（Cron + Wakeup） | ✅ | `cron_create / cron_delete / cron_list / schedule_wakeup` 对齐 Claude CronCreate/Delete/List 与 ScheduleWakeup：5 段本地 cron，日/星期同时受限按 Vixie 语义取 OR；`recurring=false` 只触发一次、到点自动结束；重复任务 7 天后结束（期限从排定那一刻算，不随重排往后滚）；抖动确定性（重复最多晚周期的 10%、封顶 900 秒，一次性落在 :00/:30 最多早 90 秒）；`durable=false` 只活到本次进程结束（启动时作废，避免重启后凭空补跑），`durable=true` 跨重启保留并在到点后 24 小时内补跑一次；第一次到点才建任务（prompt 即 goal），后续每一跳沿同一条任务续跑；绑定任务正忙时顺延 60 秒再看，不把这次触发吞掉；执行路径仍只有 `launch_task` 一条。`schedule_wakeup` 的 delaySeconds 夹到 [60,3600]，stop 结束循环，noop 连击折叠。四个工具常驻；`cron_list` 只读、可并行、计划模式放行，子代理工具表不含。判据 `services/api/tests/test_cron_tools_v35.py`（28 例，含到点放行/重排/忙时顺延/启动清理），变异 26/26 红 |
 | Workflow 工具（脚本即编排） | ✅ | `workflow` 对齐 Claude Workflow 契约：脚本必须以 `export const meta = { name, description, phases? }` 纯字面量开头（变量/调用/插值拒绝），正文用 `agent() / parallel() / pipeline() / phase()`；脚本跑在 Node 子进程（`--permission --allow-fs-read=<temp> --disable-proto=throw`），只走 stdout/stdin JSON 行；`agent()` 复用既有后台子代理，`parallel` 保序、`pipeline` 维度内串行维度间并发、`phase` 必须命中 `meta.phases`，`args` 传真正的 JSON 值，`schema` 要求 JSON 并做 type/required/properties 骨架校验；最多 50 个子代理、同时在飞 4 个；脚本不能写文件、不能起进程，网络入口在预置层替换为报错；high 风险走审批且只在用户明确要求多代理编排（workflow / 工作流 / fan out / ultracode 等）时允许调用；启动即返回 `wf_` 句柄，`task_output` / `task_stop` 认该前缀，结束时注入一次系统通知，任务收尾（等审批除外）取消仍在跑的运行；`scriptPath` 优先于 `script`/`name`，脚本幂等落到 `.blank/workflows/.runs/` 并写入 `.git/info/exclude`；`resumeFromRunId` 仅本进程、按 `(prompt, options)` 哈希续跑；缺 Node 报 `skipped` + `data.missing_command=node` 并接入停滞检测。判据 `services/api/tests/test_workflow_tool_v36.py`（50 例，含真实 Node 编排/边界/缓存/收尾），变异 39/39 红 |
 | NotebookEdit 工具（按单元格编辑） | ✅ | `notebook_edit(notebook_path, cell_id?, new_source, cell_type?, edit_mode?)` 对齐 Claude NotebookEdit：`.ipynb` 用单元格视图读（`<cell id="...">` 标签，read_file 默认渲染、`offset/limit` 仍回原始 JSON 行）；`replace` 按 id 换源（可顺带改类型，代码→markdown 清空执行字段、反向补默认值）、`insert` 放在目标格之后（省略 `cell_id` 插最前，自动生成 id）、`delete` 删格；老 notebook 没有真实 id 时合成 `cell-<序号>` 只用于定位、不写回；同样过「没读过不许改、被改过要重读」硬闸门（与 `edit_file`/`write_file`/`apply_patch` 同一套 size+mtime+sha256），写前备份、写回保留原缩进与 CRLF、8MB 上限，非法 JSON/缺少单元格/无实际变更都点名拒绝；工作区改写（逆向场景落分析区）、计划模式拦截、父任务变更记录全部按既有写入路径接上。判据 `services/api/tests/test_notebook_edit_v37.py`（30 例，含读渲染/闸门/CRLF/接线），变异 38/38 红 |
+| Monitor 工具（逐行事件流） | ✅ | `monitor(description, command, timeout_ms)` 对齐 Claude Monitor 的 command 变体：命令仍过 safety（`policy_gate("run_shell")`）、shell allowlist 与沙箱档位，不是绕开执行边界的旁路；每条 stdout/stderr 行是一个事件（按字节切行再解码，多字节字符被 chunk 切开不会变乱码；空行不投递），命令没结束就能取到事件，结束/超时/取消/`task_stop` 都只以最后一条事件收尾；事件在下一次模型调用前作为系统通知注入（明确「不是用户发言、不要轮询、不要 sleep」），每次最多 25 行，积压留在队列下一轮继续，队列上限 200 行、只丢最旧并如实上报丢弃数；`task_output` / `task_stop` 认 `mon-` 句柄（与 `shell-`/`wf_` 同一张表、同一套日志与收尾）；子代理直接拒绝，文档/逆向/日常/头脑风暴场景按命令工具一并禁用；手写 allow/deny 规则、高风险动作分类、缺命令停滞检测、占位内容审计也都覆盖 monitor。判据 `services/api/tests/test_monitor_tool_v38.py`（20 例，含真实进程逐行/跨块/边跑边投/积压），变异 17/17 红（附带一致性改动 4/4 红） |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -309,7 +310,11 @@ uv run alembic revision --autogenerate -m "描述"
   库里没有单独的 description 字段；加载状态只在本任务进程内保留，重开任务会重新加载）。
   EnterWorktree/ExitWorktree 已于 Q2 补齐（见上表；两处偏离：建在
   `.blank-worktrees/` 而不是 `.claude/worktrees/`、没有暴露 `baseRef`，一律从 HEAD 创建；
-  `path` 只认已注册的 git 工作树）。后台 shell 已于 Q1 补齐
+  `path` 只认已注册的 git 工作树）。Monitor 已于 R1 补齐（见上表；四处偏离：只支持
+  `command`，Claude 的 WebSocket 变体未移植；`timeout_ms=0` 的「不设期限」仍受安全设置的
+  单条命令超时约束（默认 120 秒），回执会如实说明；每轮最多投 25 行、内存队列上限 200 行；
+  `run_shell` 的会话内「总是允许某前缀」不会自动扩展到 monitor，同一命令从 monitor 走仍会
+  按当前档位重新判定）。后台 shell 已于 Q1 补齐
   （`run_in_background` + `task_output`/`task_stop`，见上表），但它有两处与本机实现绑定
   的偏离：沙箱路径不流式（只在结束时整段落日志）、完整输出走 `task_output` 而不是
   Claude 的「Read 输出文件」（临时日志在系统临时目录，Read 只读工作区相对路径）。
