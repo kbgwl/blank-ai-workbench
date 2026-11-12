@@ -18,6 +18,7 @@ from blank_api.services.models.base import ToolSpecLite
 from blank_api.services.agent.artifacts import ArtifactStore
 from blank_api.services.agent.scenarios import resolve as resolve_scenario
 from blank_api.services.agent.scenarios import write_allowed
+from blank_api.services.mcp.protocol import qualify_prefix
 from blank_api.services.permissions import (
     ASK,
     DENY,
@@ -315,6 +316,41 @@ class ToolGateway:
 
     def get(self, name: str) -> ToolDefinition | None:
         return self.tools.get(name)
+
+    # -- MCP 工具热更新 -----------------------------------------------------
+    def mcp_tool_names(self, server: str) -> list[str]:
+        """某个 MCP 服务端当前挂在网关里的工具名（按命名空间前缀认）。"""
+        prefix = qualify_prefix(server)
+        return [name for name in self.tools if name.startswith(prefix)]
+
+    def add_tools(self, tools: Sequence[ToolDefinition]) -> list[str]:
+        """装入 / 覆盖工具定义，返回真正新出现的名字。
+
+        覆盖是必要的：同一个工具名在刷新后 schema 可能变了，留着旧 handler
+        会让模型按新 schema 调用、再由旧服务端拒绝。激活状态由注册表保留。
+        """
+        fresh = self.registry.add(tools)
+        for tool in tools:
+            self.tools[tool.name] = tool
+        if self.excluded:
+            self.registry.exclude(self.excluded)
+        return fresh
+
+    def remove_tools(self, names: Iterable[str]) -> list[str]:
+        removed = self.registry.remove(names)
+        for name in removed:
+            self.tools.pop(name, None)
+        return removed
+
+    def sync_mcp_tools(self, server: str, tools: Sequence[ToolDefinition]) -> tuple[list[str], list[str]]:
+        """按服务端最新 tools/list 对齐本地工具表，返回 (新增, 移除)。
+
+        同名的定义就地替换（保留激活状态），只有真正消失/新出现的名字才进两份名单。
+        """
+        new_names = {tool.name for tool in tools}
+        removed = self.remove_tools(name for name in self.mcp_tool_names(server) if name not in new_names)
+        added = self.add_tools(tools)
+        return added, removed
 
     async def refuse(
         self, name: str, arguments: dict, context: ToolContext, node: str = "", reason: str = ""

@@ -89,6 +89,11 @@ DEFERRED_TOOLS = frozenset(
         "workflow",
         # 监控是"盯住一个还在输出的东西"的专门能力，不是每轮都要用的常驻工具。
         "monitor",
+        # MCP 资源四工具与 Claude 一样 shouldDefer：只有接了服务端、又真想读资源时才出现。
+        "list_mcp_resources",
+        "read_mcp_resource",
+        "read_mcp_resource_dir",
+        "refresh_mcp_tools",
     }
 )
 
@@ -216,6 +221,40 @@ ALIASES: dict[str, tuple[str, ...]] = {
         "wake me",
         "loop",
     ),
+    "list_mcp_resources": (
+        "mcp",
+        "资源",
+        "资源列表",
+        "服务端资源",
+        "resource",
+        "resources",
+        "list resources",
+    ),
+    "read_mcp_resource": (
+        "mcp",
+        "资源",
+        "读取资源",
+        "读文件",
+        "resource",
+        "read resource",
+    ),
+    "read_mcp_resource_dir": (
+        "mcp",
+        "资源",
+        "目录",
+        "列举目录",
+        "directory",
+        "resource dir",
+        "read resource dir",
+    ),
+    "refresh_mcp_tools": (
+        "mcp",
+        "刷新",
+        "刷新工具",
+        "工具列表",
+        "refresh",
+        "refresh tools",
+    ),
 }
 
 MAX_SEARCH_RESULTS = 6
@@ -248,6 +287,10 @@ PARALLEL_SAFE_TOOLS = frozenset(
         "report_findings",
         # 只读数据库里的定时任务清单，不登记/不取消；和别的只读工具并发安全。
         "cron_list",
+        # 资源三读只拿服务端数据回来；refresh 会改本地工具表，故意不在这里。
+        "list_mcp_resources",
+        "read_mcp_resource",
+        "read_mcp_resource_dir",
     }
 )
 
@@ -423,6 +466,43 @@ class ToolRegistry:
                 self._active.add(name)
                 added.append(name)
         return added
+
+    # -- 热更新（MCP 工具刷新） --------------------------------------------
+    def add(self, tools: Iterable[ToolDefinition]) -> list[str]:
+        """装入新工具；同名工具就地换定义，保留顺序与激活状态。
+
+        刷新一个 MCP 服务端时，大部分工具名字不变、schema 可能变了。按名字删了再加
+        会把模型用 tool_search 拉出来的状态一并清掉，表现就像"工具自己跑了"。
+        返回真正新出现的名字（同名替换不算新增）。
+        """
+        fresh: list[str] = []
+        for tool in tools:
+            is_new = tool.name not in self._tools
+            self._tools[tool.name] = tool
+            if not is_new:
+                continue
+            self._order.append(tool.name)
+            if self._fixed or (tool.name not in DEFERRED_TOOLS and not tool.name.startswith(DEFERRED_PREFIXES)):
+                self._core.add(tool.name)
+                self._base_core.add(tool.name)
+            fresh.append(tool.name)
+        return fresh
+
+    def remove(self, names: Iterable[str]) -> list[str]:
+        """摘掉工具（服务端刷新后真的消失了）。返回真正被摘掉的名单。"""
+        removed: list[str] = []
+        for name in names:
+            if name not in self._tools:
+                continue
+            del self._tools[name]
+            if name in self._order:
+                self._order.remove(name)
+            self._core.discard(name)
+            self._base_core.discard(name)
+            self._active.discard(name)
+            self._excluded.discard(name)
+            removed.append(name)
+        return removed
 
     # -- 检索 ---------------------------------------------------------------
     def _score(self, tool: ToolDefinition, terms: list[str], raw: str) -> int:

@@ -267,6 +267,7 @@ uv run alembic revision --autogenerate -m "描述"
 | Monitor 工具（逐行事件流） | ✅ | `monitor(description, command, timeout_ms)` 对齐 Claude Monitor 的 command 变体：命令仍过 safety（`policy_gate("run_shell")`）、shell allowlist 与沙箱档位，不是绕开执行边界的旁路；每条 stdout/stderr 行是一个事件（按字节切行再解码，多字节字符被 chunk 切开不会变乱码；空行不投递），命令没结束就能取到事件，结束/超时/取消/`task_stop` 都只以最后一条事件收尾；事件在下一次模型调用前作为系统通知注入（明确「不是用户发言、不要轮询、不要 sleep」），每次最多 25 行，积压留在队列下一轮继续，队列上限 200 行、只丢最旧并如实上报丢弃数；`task_output` / `task_stop` 认 `mon-` 句柄（与 `shell-`/`wf_` 同一张表、同一套日志与收尾）；子代理直接拒绝，文档/逆向/日常/头脑风暴场景按命令工具一并禁用；手写 allow/deny 规则、高风险动作分类、缺命令停滞检测、占位内容审计也都覆盖 monitor。判据 `services/api/tests/test_monitor_tool_v38.py`（20 例，含真实进程逐行/跨块/边跑边投/积压），变异 17/17 红（附带一致性改动 4/4 红） |
 | REPL 工具（持久 JavaScript 组合） | ✅ | `repl(code, description?, timeout?)` 对齐 Claude REPL 契约：脚本跑在每任务一个的持久 Node 子进程里，密封 `vm` 上下文（没有 `require`/`process`/`import`），变量跨调用保留、支持顶层 await、最后一条表达式即返回值、`console.log/error` 分别回 stdout/stderr；工具按本地名字当异步函数用，每次内层调用回宿主走同一条 `ToolGateway.execute(..., inner=True)`（场景禁用/安全策略/权限/审计/沙箱一个不少）；会话/编排类工具不注入、场景排除的工具也不注入；需要审批的内层调用直接拒绝（REPL 里弹不出审批卡）；`timeout` 默认 30000ms、上限 600000ms，同步死循环由 `vm` 超时打断且会话保留，异步挂起由宿主截止时间杀掉进程并清空状态；缺 Node 报 `skipped` + `data.missing_command=node`；没有网关（子代理、非 runtime 入口）直接拒绝；任务收尾摘会话，等审批那一档保留。判据 `services/api/tests/test_repl_tool_v39.py`（36 例，含真实 Node 持久/密封/超时/内层工具），变异 16/16 红 |
 | 任务清单 Task*（依赖图 + 钩子） | ✅ | `task_create / task_get / task_update / task_list` 对齐 Claude Task* 契约：任务落盘（默认 `~/.blank/tasks/<task_id>/`，`BLANK_TASKS_DIR` 可改根；团队任务按 group_id 共享一份），id 是十进制数字、单调递增，删除后不复用（高水位单独记，崩溃丢了水位文件也会在删除最高号时抬回去），列表按数字 id 升序而不是文件名字典序；`addBlocks` / `addBlockedBy` 写双向引用、已存在的去重、删任务时把别处对它的引用一并清掉；`metadata` 按键合并、值为 null 删键；`task_list` 隐藏 `metadata._internal` 为真的任务、把已完成阻塞者从 `blockedBy` 里过滤；`task_created` / `task_completed` 是可阻断钩子（创建被拒把刚建的任务删回去，完成被拒任何字段都不落盘）；团队任务标 `in_progress` 未带 owner 时自动署名。写盘走 scratch + `os.replace`，同目录 asyncio 锁 + 独占创建，id 只认 `[A-Za-z0-9_-]{1,64}`（路径穿越直接拒绝）。判据 `services/api/tests/test_task_tools_v40.py`（33 例，含并发创建/坏文件/崩溃窗口/真实子进程钩子），变异 16/16 红 |
+| MCP 资源四工具（列举/读取/目录/热刷新） | ✅ | `list_mcp_resources / read_mcp_resource / read_mcp_resource_dir / refresh_mcp_tools` 对齐 Claude Code 2.1.271：没声明 `capabilities.resources` 的服务端连 `resources/list` 都不发，没声明目录扩展的连非标准 `resources/directory/read` 都不发（「没能力」与「能力坏了」分开说）；列举跟 `nextCursor` 翻页，目录首页 `InvalidParams`＝不是目录、后续页坏掉保留前几页、页数上限 20 并回报 `truncated`；一家服务端失败只进 `data.errors`，全部有能力服务端都失败时明确报错而不是说 `No resources found`；读取文本原样返回，二进制落系统临时目录（不进用户工作区）并给路径，非法 base64 如实标「未保存」，`-32601` / `-32002` 文案与 Claude 一致（后者只在声明目录能力时补 `ReadMcpResourceDir` 提示）；刷新只重查已连接客户端、绝不重拨，连过但失败报 `not_connected`，同名工具就地换定义并保留 `tool_search` 激活状态、只摘本服务端前缀、场景禁用回放。四个工具默认按需（`shouldDefer` 同口径），三读可并行、refresh 不在。判据 `services/api/tests/test_mcp_resources_v41.py`（34 例，含真实 stdio 子进程/分页/目录损坏/二进制落盘/运行时注入），变异 37/37 红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -328,7 +329,14 @@ uv run alembic revision --autogenerate -m "描述"
   读侧保持与 TaskGet 同口径；空 `subject` / `description` 明确拒绝，Claude 的 zod 允许空串；
   团队任务按 group_id 共享同一份清单，但没有移植 `task_assignment` 消息那一路；
   钩子事件名用 snake_case `task_created` / `task_completed`，与本地其余事件同一命名，
-  不存时间戳、不发 UI 通知）。后台 shell 已于 Q1 补齐
+  不存时间戳、不发 UI 通知）。MCP 资源四工具已于 R4 补齐（见上表；七处偏离：目录能力门控
+  键名是 Claude 的编译期常量、无法从产物恢复，按语义放宽为 `capabilities.extensions` 里任一
+  `directoryRead === true`；二进制落系统临时目录而不是 Claude 的内部存储，但「给路径、不展开
+  正文」的契约一致；列表/读取结果以 JSON（`{"resources"}` / `{"contents"}`）输出而不是 Claude
+  的文本模板；全部失败时回明确错误而不是 `No resources found`；目录截断只以 `data.truncated`
+  表达、不在文本里追加说明；工具名沿用本地 snake_case（`list_mcp_resources` 等）而不是 Claude
+  的 `ListMcpResourcesTool`；刷新是否保留激活状态在拆解产物里读不出来，这里显式钉成「保留」）。
+  后台 shell 已于 Q1 补齐
   （`run_in_background` + `task_output`/`task_stop`，见上表），但它有两处与本机实现绑定
   的偏离：沙箱路径不流式（只在结束时整段落日志）、完整输出走 `task_output` 而不是
   Claude 的「Read 输出文件」（临时日志在系统临时目录，Read 只读工作区相对路径）。

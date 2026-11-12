@@ -57,6 +57,11 @@ def is_mcp_name(name: str) -> bool:
     return str(name or "").startswith(MCP_PREFIX)
 
 
+def qualify_prefix(server: str) -> str:
+    """某个服务端所有桥接工具共有的名字前缀。刷新工具表时按它摘旧名字。"""
+    return f"{MCP_PREFIX}{_clean(server)}{SEGMENT_SEPARATOR}"
+
+
 def request(request_id: int, method: str, params: dict | None = None) -> dict:
     return {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}}
 

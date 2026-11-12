@@ -616,6 +616,7 @@ class AgentRuntime:
         hooks = HookRunner.from_env()
         context = ToolContext(
             hooks=hooks,
+            mcp=mcp_bundle,
             root=run_root,
             task_id=request.task_id,
             recorder=recorder,

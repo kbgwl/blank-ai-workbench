@@ -61,6 +61,13 @@ BOUNDARY_JOB = "job_object"
 BOUNDARY_UNBOUNDED = "host_process_unbounded"
 BOUNDARY_REMOTE = "remote"
 
+# JSON-RPC / MCP 的错误码：资源四工具要靠它把"没实现""不是目录""找不到"分开说。
+MCP_METHOD_NOT_FOUND = -32601
+MCP_INVALID_PARAMS = -32602
+MCP_RESOURCE_NOT_FOUND = -32002
+# 目录列举走的是非标准方法（resources/directory/read），翻页上限与工具列表同一口径。
+MAX_DIRECTORY_PAGES = 20
+
 
 class MCPError(Exception):
     """带机器可读 code 的失败：上层要把它写进审计，不能只剩一句中文。"""
@@ -69,6 +76,17 @@ class MCPError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+    @property
+    def rpc_code(self) -> int | None:
+        """服务端原始 JSON-RPC 错误码；本地失败（超时、断开）返回 None。"""
+        prefix = "mcp_error_"
+        if not self.code.startswith(prefix):
+            return None
+        try:
+            return int(self.code[len(prefix):])
+        except ValueError:
+            return None
 
 
 @dataclass(frozen=True)
@@ -310,6 +328,76 @@ class _JSONRPCClient:
 
     async def call_tool(self, name: str, arguments: dict) -> dict:
         return await self.request("tools/call", {"name": name, "arguments": arguments or {}})
+
+    # -- 资源 ---------------------------------------------------------------
+    @property
+    def supports_resources(self) -> bool:
+        """服务端在 initialize 里声明了 ``capabilities.resources``。
+
+        没声明的服务端连 ``resources/list`` 都不该发：很多实现会直接回 -32601，
+        而"这个服务端没有资源"和"资源读取坏了"是两件事。
+        """
+        return isinstance(self.capabilities.get("resources"), dict)
+
+    def declares_directory_read(self) -> bool:
+        """服务端声明支持目录列举（非标准扩展 ``extensions.*.directoryRead``）。
+
+        Claude 的门控键名是一个编译期常量，无法从产物里恢复；这里按语义放宽为
+        "任一扩展声明 directoryRead=true"。宁可少调一次非标准方法，也不对没声明的
+        服务端发它——那只会换回一条 -32601。
+        """
+        extensions = self.capabilities.get("extensions")
+        if not isinstance(extensions, dict):
+            return False
+        return any(
+            isinstance(item, dict) and item.get("directoryRead") is True
+            for item in extensions.values()
+        )
+
+    async def list_resources(self) -> list[dict]:
+        """拉全量资源，跟着 nextCursor 翻页（与 tools/list 同一套理由）。"""
+        resources: list[dict] = []
+        cursor = ""
+        for _ in range(MAX_LIST_PAGES):
+            params = {"cursor": cursor} if cursor else {}
+            result = await self.request("resources/list", params)
+            for item in result.get("resources") or []:
+                if isinstance(item, dict) and item.get("uri"):
+                    resources.append(item)
+            cursor = str(result.get("nextCursor") or "")
+            if not cursor:
+                break
+        return resources
+
+    async def read_resource(self, uri: str) -> dict:
+        return await self.request("resources/read", {"uri": uri})
+
+    async def read_resource_directory(self, uri: str) -> tuple[list[dict], bool]:
+        """列举目录资源，返回 (条目, 是否因翻页上限被截断)。
+
+        首页回 InvalidParams ＝ 这个 URI 不是目录（调用方据 rpc_code 判）；
+        后续页回 InvalidParams ＝ 服务端翻到一半坏了，保留已拿到的条目再停下，
+        不把整次列举判成失败——前几页是真的。
+        """
+        entries: list[dict] = []
+        cursor = ""
+        for page in range(MAX_DIRECTORY_PAGES):
+            params = {"uri": uri}
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                result = await self.request("resources/directory/read", params)
+            except MCPError:
+                if page == 0:
+                    raise
+                return entries, False
+            for item in result.get("resources") or []:
+                if isinstance(item, dict) and item.get("uri"):
+                    entries.append(item)
+            cursor = str(result.get("nextCursor") or "")
+            if not cursor:
+                return entries, False
+        return entries, bool(cursor)
 
 
 class StdioClient(_JSONRPCClient):

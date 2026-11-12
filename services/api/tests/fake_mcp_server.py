@@ -9,6 +9,7 @@ speaking the protocol.
 
 from __future__ import annotations
 
+import base64
 import json
 import sys
 
@@ -40,6 +41,51 @@ TOOLS = [
     },
 ]
 
+LATE_TOOL = {
+    "name": "late_tool",
+    "description": "刷新之后才出现的工具",
+    "inputSchema": {"type": "object", "properties": {}},
+}
+
+RESOURCES = [
+    {
+        "uri": "file:///notes/readme.txt",
+        "name": "readme",
+        "mimeType": "text/plain",
+        "description": "示例文本资源",
+    },
+    {
+        "uri": "file:///notes/data.bin",
+        "name": "data",
+        "mimeType": "application/octet-stream",
+    },
+    {
+        "uri": "dir:///docs",
+        "name": "docs",
+        "mimeType": "inode/directory",
+    },
+]
+
+BLOB = base64.b64encode(b"\x00\x01\x02").decode("ascii")
+
+# 目录列举：普通目录两页；broken 目录第二页回 -32602（验证"保留前一页"）。
+DIRECTORY_PAGES = {
+    "dir:///docs": {
+        "": {
+            "resources": [
+                {"uri": "file:///docs/a.md", "name": "a", "mimeType": "text/markdown"},
+                {"uri": "file:///docs/b.md", "name": "b", "mimeType": "text/markdown"},
+            ],
+            "nextCursor": "p2",
+        },
+        "p2": {"resources": [{"uri": "file:///docs/c.md", "name": "c", "mimeType": "text/markdown"}]},
+    },
+    # 第二页回 InvalidParams：客户端应保留第一页，而不是把整次列举判成失败。
+    "dir:///broken": {
+        "": {"resources": [{"uri": "file:///docs/x.md", "name": "x"}], "nextCursor": "p2"},
+    },
+}
+
 # 只在对应模式下出现的工具：默认工具表不变，老断言（4 个工具）仍然成立。
 MODE_TOOLS = {
     "hog": {
@@ -54,16 +100,51 @@ MODE_TOOLS = {
     },
 }
 
+# dynamic 模式下 tools/call 可以改的工具表状态。
+STATE = {"late": False, "drop_echo": False}
+
 
 def _tools(mode: str) -> list[dict]:
+    if mode == "dynamic":
+        rows = [item for item in TOOLS if not (STATE["drop_echo"] and item["name"] == "echo")]
+        if STATE["late"]:
+            rows.append(LATE_TOOL)
+        return rows
     extra = MODE_TOOLS.get(mode)
     return [*TOOLS, extra] if extra else list(TOOLS)
+
+
+def _capabilities(mode: str) -> dict:
+    if mode in ("resources", "dynamic"):
+        # directoryRead 是我们能识别的目录能力形状（扩展名不重要，值是 true 就够）。
+        return {"tools": {}, "resources": {}, "extensions": {"fake.directory": {"directoryRead": True}}}
+    if mode == "resources_nodir":
+        return {"tools": {}, "resources": {}}
+    return {"tools": {}}
 
 
 def _reply(message: dict, result: dict) -> None:
     body = {"jsonrpc": "2.0", "id": message.get("id"), "result": result}
     sys.stdout.write(json.dumps(body, ensure_ascii=False) + "\n")
     sys.stdout.flush()
+
+
+def _error(message: dict, code: int, text: str) -> None:
+    body = {"jsonrpc": "2.0", "id": message.get("id"), "error": {"code": code, "message": text}}
+    sys.stdout.write(json.dumps(body, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def _utf8_streams() -> None:
+    """管道下 Windows 默认用 GBK：协议两端都按 UTF-8 走，先钉死编码。
+
+    不这么做时，服务端源码里的中文（资源正文）会以 GBK 写出去，客户端按 UTF-8
+    读成乱码；而"echo 回显"恰好因为 GBK 往返能还原字节，把这个问题藏起来。
+    """
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
 
 
 def _call(name: str, arguments: dict, child_pid: int = 0) -> dict:
@@ -73,6 +154,12 @@ def _call(name: str, arguments: dict, child_pid: int = 0) -> dict:
         return {"content": [{"type": "text", "text": "服务端内部炸了"}], "isError": True}
     if name == "run shell":
         return {"content": [{"type": "text", "text": "这是外部服务的同名工具"}]}
+    if name == "add_late":
+        STATE["late"] = True
+        return {"content": [{"type": "text", "text": "late tool added"}]}
+    if name == "drop_echo":
+        STATE["drop_echo"] = True
+        return {"content": [{"type": "text", "text": "echo dropped"}]}
     if name == "hog":
         size = 256 * 1024 * 1024
         buffer = bytearray(size)
@@ -86,6 +173,7 @@ def _call(name: str, arguments: dict, child_pid: int = 0) -> dict:
 
 
 def main() -> int:
+    _utf8_streams()
     mode = sys.argv[1] if len(sys.argv) > 1 else "normal"
 
     if mode == "crash":
@@ -138,7 +226,7 @@ def main() -> int:
                 message,
                 {
                     "protocolVersion": "2025-06-18",
-                    "capabilities": {"tools": {}},
+                    "capabilities": _capabilities(mode),
                     "serverInfo": {"name": "fake", "version": "1.2.3"},
                 },
             )
@@ -152,6 +240,66 @@ def main() -> int:
                 message,
                 _call(name, params.get("arguments") or {}, child_pid=spawned),
             )
+        elif method == "resources/list":
+            if mode in ("resources", "dynamic"):
+                # 分两页返回：客户端不跟 nextCursor 就会少一半资源。
+                cursor = str((message.get("params") or {}).get("cursor") or "")
+                if not cursor:
+                    _reply(message, {"resources": RESOURCES[:2], "nextCursor": "r2"})
+                elif cursor == "r2":
+                    _reply(message, {"resources": RESOURCES[2:]})
+                else:
+                    _error(message, -32602, "Invalid params: bad cursor")
+            else:
+                _error(message, -32601, "Method not found")
+        elif method == "resources/read":
+            params = message.get("params") or {}
+            uri = str(params.get("uri") or "")
+            if mode not in ("resources", "dynamic", "resources_nodir"):
+                _error(message, -32601, "Method not found")
+            elif uri == "file:///notes/readme.txt":
+                _reply(
+                    message,
+                    {"contents": [{"uri": uri, "mimeType": "text/plain", "text": "# 说明\n第一行"}]},
+                )
+            elif uri == "file:///notes/data.bin":
+                _reply(
+                    message,
+                    {"contents": [{"uri": uri, "mimeType": "application/octet-stream", "blob": BLOB}]},
+                )
+            else:
+                _error(message, -32002, "Resource not found")
+        elif method == "resources/directory/read":
+            params = message.get("params") or {}
+            uri = str(params.get("uri") or "")
+            cursor = str(params.get("cursor") or "")
+            pages = DIRECTORY_PAGES.get(uri)
+            if mode not in ("resources", "dynamic", "resources_nodir"):
+                _error(message, -32601, "Method not found")
+            elif uri == "dir:///endless":
+                # 永不结束的目录：验证客户端在 MAX_DIRECTORY_PAGES 处停下并如实说"被截断"，
+                # 而不是一直翻到进程被杀。
+                index = int(cursor or 0)
+                _reply(
+                    message,
+                    {
+                        "resources": [{"uri": f"file:///endless/{index}.md", "name": str(index)}],
+                        "nextCursor": str(index + 1),
+                    },
+                )
+            elif pages is None:
+                # 首页 InvalidParams ＝ 不是目录（客户端据此给出 "Not a directory resource"）。
+                _error(message, -32602, "Invalid params: not a directory")
+            elif mode == "resources_nodir":
+                # 声明里没有 directoryRead。客户端如果无视门控照发，这里会"成功"——
+                # 判据正是靠这一点才能红：工具必须自己拒绝，而不是靠服务端拒绝。
+                _reply(message, pages.get("") or {"resources": []})
+            elif cursor in pages:
+                _reply(message, pages[cursor])
+            else:
+                _error(message, -32602, "Invalid params: bad cursor")
+        elif str(method or "").startswith("resources/"):
+            _error(message, -32601, "Method not found")
         else:
             _reply(message, {})
     return 0

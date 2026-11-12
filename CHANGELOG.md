@@ -1,6 +1,45 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）
+
+- **MCP 资源四工具：能力先于调用、失败按服务端隔离、刷新只动本地工具表（R 批第 4 项）**：
+  按 Claude Code 2.1.271 的 `sdk-tools.d.ts` 与 `claude.exe` 嵌入实现落成本地
+  `list_mcp_resources` / `read_mcp_resource` / `read_mcp_resource_dir` / `refresh_mcp_tools`。
+  新增 `services/tools/mcp_resources.py`；`services/mcp/client.py`（资源能力判定、翻页、
+  非标准目录方法、`MCPError.rpc_code`），`services/mcp/protocol.py`（`qualify_prefix`），
+  `tools/gateway.py`（`mcp_tool_names` / `add_tools` / `remove_tools` / `sync_mcp_tools`），
+  `tools/registry.py`（`add` / `remove` 与四工具别名、按需登记、并行安全集合），
+  `tools/base.py`（`ToolContext.mcp`）、`agent/runtime.py`（注入 `MCPBundle`）接线。
+  1. **能力先于调用**：没在 `initialize` 里声明 `capabilities.resources` 的服务端连
+     `resources/list` 都不发；没声明目录扩展的服务端连非标准方法都不发——「没这个能力」与
+     「能力坏了」必须能分开说。`resources/list` 跟 `nextCursor` 翻页；`resources/directory/read`
+     首页 `InvalidParams` ＝ 不是目录，后续页坏掉保留已拿到的前几页，页数上限 20 并回报
+     `truncated`。
+  2. **失败按服务端隔离**：一家失败只进 `data.errors`，另一家照常返回；全部声明了能力的
+     服务端都失败时明确报错，不说 `No resources found`——那句会把「没人给我资源」和
+     「每家都炸了」说成同一件事。「全部失败」按「报错数 == 有能力服务端数」判定，一家失败、
+     另一家只是没资源不算。
+  3. **读取口径**：文本原样返回；二进制落系统临时目录（`blank-mcp-resources/<task_id>/`，
+     不进用户工作区）并给路径，正文只留一行说明；非法 base64 不抛异常、如实标「未保存」；
+     `-32601` / `-32002` 按 Claude 原文分支处理，后者只在服务端声明了目录能力时才补
+     `ReadMcpResourceDir` 提示。
+  4. **刷新只动本地工具表**：只重查已连接客户端、绝不重拨；连过但失败的服务端报
+     `not_connected` 而不是「不存在」；每服务端回 `{server, status, toolCount, added, removed}`。
+     同名工具就地换定义并保留 `tool_search` 拉出来的激活状态，只摘本服务端前缀下的工具，
+     场景禁用的名字在刷新后仍不可用。
+  测试：新增 `tests/test_mcp_resources_v41.py` 34 例（客户端协议/工具语义/刷新/注册与装配，
+  含真实 stdio 子进程、分页、目录后续页损坏、翻页上限、二进制落盘、场景禁用回放、运行时
+  注入）；连同相邻 17 个测试文件 **528 passed, 1 skipped**；变异电池 37/37 全红（逐条改坏
+  实现、实测红在预期用例上，跑完按原字节还原并核对 sha256；首轮两条存活变异已回填判据：
+  假服务端资源改成分页、注册表定义也要换）。
+  全量后端回归：**3063 passed, 28 skipped**（0 failed，rc=0，878.10s）。
+  偏离：目录能力门控键名（Claude 的编译期常量）无法从产物恢复，按语义放宽为
+  `capabilities.extensions` 里任一 `directoryRead === true`；二进制落系统临时目录而不是
+  Claude 的内部存储，但「给路径、不展开正文」的契约一致；列表/读取结果以 JSON
+  （`{"resources"}` / `{"contents"}`）输出而不是 Claude 的文本模板；全部失败时回明确错误
+  而不是 `No resources found`；目录截断只以 `data.truncated` 表达、不在文本里追加说明；
+  工具名沿用本地 snake_case（`list_mcp_resources` 等）而不是 Claude 的
+  `ListMcpResourcesTool`；刷新是否保留激活状态在拆解产物里读不出来，这里显式钉成「保留」。
 
 - **任务清单 Task*：依赖图 + 可阻断钩子（R 批第 3 项）**：
   按 Claude Code 2.1.271 的 `sdk-tools.d.ts` 契约与 `claude.exe` 里的嵌入实现落成本地
