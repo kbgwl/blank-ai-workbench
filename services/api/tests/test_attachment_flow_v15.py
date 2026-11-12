@@ -245,6 +245,9 @@ async def test_second_turn_knows_the_first_turn_had_images(env, workspace):  # n
         await env.client.post(f"{API}/projects/{project_id}/threads", json={"title": "改样式"})
     ).json()
 
+    # v0.10.1 起轮次创建时后端会按监督者判定就地启动（assist 默认 auto_start）。
+    # 这个用例验证的是附件历史，随后要自己调 /run，必须显式关掉自动启动，
+    # 否则自动下发先一步把任务标成 running，/run 就会撞 409（实测在全量回归里偶发）。
     first = await env.client.post(
         f"{API}/threads/{thread['id']}/turns",
         json={
@@ -252,9 +255,11 @@ async def test_second_turn_knows_the_first_turn_had_images(env, workspace):  # n
             "goal": "照这张图改按钮",
             "provider_id": provider_id,
             "attachments": [{"id": shot["id"], "name": "改前.png"}],
+            "auto_start": False,
         },
     )
     assert first.status_code == 201, first.text
+    assert first.json()["goal_spec"]["dispatch"]["auto_start"] is False
     env.mock.reset([{"content": "按钮已改成蓝色"}])
     await _run(env, first.json()["id"], provider_id)
 
@@ -264,9 +269,15 @@ async def test_second_turn_knows_the_first_turn_had_images(env, workspace):  # n
 
     second = await env.client.post(
         f"{API}/threads/{thread['id']}/turns",
-        json={"title": "再深一点", "goal": "刚才那张图里的按钮再深一点", "provider_id": provider_id},
+        json={
+            "title": "再深一点",
+            "goal": "刚才那张图里的按钮再深一点",
+            "provider_id": provider_id,
+            "auto_start": False,
+        },
     )
     assert second.status_code == 201, second.text
+    assert second.json()["goal_spec"]["dispatch"]["auto_start"] is False
 
     before = len(env.mock.requests)
     env.mock.reset([{"content": "已调深"}])
