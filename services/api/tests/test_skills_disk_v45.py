@@ -378,6 +378,52 @@ def test_tool_lists_are_parsed_and_kept_for_audit(tmp_path: Path) -> None:
     assert audit["disallowedTools"] == ["run_shell"]
 
 
+def test_allowed_tools_expand_skill_and_project_placeholders(tmp_path: Path) -> None:
+    """上游只替换 allowed-tools 里的两个占位符，并把路径统一成正斜杠。"""
+
+    _write_skill(
+        tmp_path,
+        "deploy",
+        _skill(
+            extra=(
+                "allowed-tools: 'read_file, ${CLAUDE_SKILL_DIR}/scripts/run.py, "
+                "${CLAUDE_PROJECT_DIR}/bin/tool'\n"
+                "disallowedTools: ['${CLAUDE_SKILL_DIR}/x']\n"
+            )
+        ),
+    )
+
+    found = _discover(tmp_path)
+    item = found.entries["deploy"]
+    skill_dir = str(tmp_path / ".blank" / "skills" / "deploy").replace("\\", "/")
+    project = str(tmp_path).replace("\\", "/")
+
+    assert item.allowed_tools == (
+        "read_file",
+        f"{skill_dir}/scripts/run.py",
+        f"{project}/bin/tool",
+    )
+    # disallowed-tools 不参与替换：上游只对 allowedTools 做这一步。
+    assert item.disallowed_tools == ("${CLAUDE_SKILL_DIR}/x",)
+    assert item.as_dict()["allowedTools"] == list(item.allowed_tools)
+
+
+def test_user_layer_skills_resolve_project_dir_to_the_workspace(tmp_path: Path) -> None:
+    """用户层的 Skill 也用当前工作区当 ``${CLAUDE_PROJECT_DIR}``，不是用户目录。"""
+
+    user_dir = tmp_path / "user-skills"
+    _write(
+        user_dir / "lint" / "SKILL.md",
+        _skill(name="lint", extra="allowed-tools: ['${CLAUDE_PROJECT_DIR}/lint.py']\n"),
+    )
+
+    found = _discover(tmp_path, user_dir)
+
+    assert found.entries["lint"].allowed_tools == (
+        f"{str(tmp_path).replace(chr(92), '/')}/lint.py",
+    )
+
+
 def test_invalid_tool_shape_is_a_warning_not_a_crash(tmp_path: Path) -> None:
     _write_skill(tmp_path, "deploy", _skill(extra="allowed-tools: {a: 1}\n"))
 

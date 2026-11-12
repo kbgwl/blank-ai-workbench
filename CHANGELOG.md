@@ -2,6 +2,33 @@
 
 ## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）
 
+- **Skill `allowed-tools` 占位符替换（U 批）**：按上游原文补齐
+  `${CLAUDE_SKILL_DIR}` / `${CLAUDE_PROJECT_DIR}` 的替换语义。核对
+  `E:/tmp/rea-claude/skill_parse_fragment.txt` 里的 `Iot(...)`：只对 `allowedTools`
+  做替换，Skill 目录先换、工作区根后换，路径统一 `\` → `/`；`disallowed-tools`
+  原样保留。改 `services/skills_defs.py`（新增 `_tool_placeholders`、
+  `_definition_from_dir(project_root=...)`、`discover_skills` 与 `load_skill` 透传
+  工作区根）。
+  1. **只动 allowed-tools**：替换发生在 `_tool_list` 解析成功之后；工具池仍由网关与
+     场景决定，替换出来的只是审计面里的完整路径。
+  2. **用户层也用当前工作区**：`${CLAUDE_PROJECT_DIR}` 取的是运行时根，不是
+     `~/.blank`；用户层与项目层、插件层同一口径。
+  3. **正斜杠**：Windows 反斜杠在工具名/规格里会被当转义，替换后统一 `/`（与上游
+     `qYe` 的 `replaceAll("\\", "/")` 同一口径）。
+  4. 仍未移植：嵌套 Skill 目录（上游扫描只走一层，未找到反例，不凭猜实现）；
+     `${CLAUDE_EFFORT}` 在当前上游转储里没有出现，按未验证处理；自定义斜杠命令的
+     `allowed-tools` 不替换——转储里能看到插件命令把工具表交给 `lme`，但看不到 `lme`
+     是否与 Skill 共用 `Iot`，没有证据就不动。
+  测试：`tests/test_skills_disk_v45.py` 新增 2 例（两占位符同时替换且 disallowed
+  不动、用户层把项目根解析到工作区），全套 35 passed；变异 4/4 红（撤掉替换调用、
+  去掉 Skill 目录的斜杠归一化、去掉项目根的斜杠归一化、把替换也套到 disallowed）；
+  相邻套件（`test_skill_tool_v33`、`test_plugins_v49`、`test_ask_goal_skills_v43`、
+  `test_skills_disk_v45`）142 passed。全量后端回归：**3401 passed, 28 skipped**
+  （rc=0，710.27s）。首次全量出现 1 例
+  `test_real_file_e2e_v153::test_real_file_loop_read_break_test_fix_pass` 落 failed；
+  该用例只走 read_file / apply_patch / run_tests，与本批改动无调用交集，单文件 5 连跑
+  10/10 绿、整轮复跑全绿，按全量负载下的偶发记录——没有调大超时、也没有改判据。
+
 - **fork 子代理（Agent(fork)）与链式编辑口径修正（T 批）**：`spawn_agent` 新增内置类型
   `fork`，语义对齐 Claude 的会话分身：继承派发这一刻的完整对话与系统提示、复用父会话的
   `PermissionPolicy` 与工具表，只换一个新的上下文窗口。改 `services/agents_defs.py`

@@ -21,6 +21,9 @@ honour without silently changing behaviour:
   entry point in this app yet, which is reported as a deviation);
 * ``allowed-tools`` / ``disallowed-tools`` are parsed and audited but not
   enforced — our tool pool is decided by the gateway, not by a prompt file;
+  ``${CLAUDE_SKILL_DIR}`` / ``${CLAUDE_PROJECT_DIR}`` inside ``allowed-tools``
+  are expanded exactly like Claude's parser (allowed-tools only, forward-slash
+  paths) so the audit record matches what the Skill author wrote;
 * one bad Skill never takes the whole catalogue down.
 """
 
@@ -249,8 +252,33 @@ def _skill_file(directory: Path) -> Path | None:
     return None
 
 
+def _tool_placeholders(
+    tools: tuple[str, ...], base_dir: Path | None, project_root: Path | None
+) -> tuple[str, ...]:
+    """Expand ``${CLAUDE_SKILL_DIR}`` / ``${CLAUDE_PROJECT_DIR}`` in allowed-tools.
+
+    Claude only rewrites ``allowedTools`` (not ``disallowed-tools``), and only
+    when there is something to rewrite: the Skill directory goes in first, then
+    the project root. Paths are normalized to forward slashes so a Windows
+    backslash does not get treated as an escape in the resulting tool spec.
+    """
+    if not tools:
+        return tools
+    expanded = list(tools)
+    if base_dir is not None:
+        skill_dir = str(base_dir).replace("\\", "/")
+        expanded = [item.replace("${CLAUDE_SKILL_DIR}", skill_dir) for item in expanded]
+    if project_root is not None:
+        project = str(project_root).replace("\\", "/")
+        expanded = [item.replace("${CLAUDE_PROJECT_DIR}", project) for item in expanded]
+    return tuple(expanded)
+
+
 def _definition_from_dir(
-    directory: Path, source: str
+    directory: Path,
+    source: str,
+    *,
+    project_root: Path | None = None,
 ) -> tuple[SkillDefinition | None, list[str], list[str]]:
     """Parse one ``<name>/SKILL.md``. Returns (definition, errors, warnings)."""
     name = directory.name.strip()
@@ -295,6 +323,7 @@ def _definition_from_dir(
     allowed_tools, problem = _tool_list(meta.get("allowed-tools"))
     if problem:
         warnings.append(f"Skill 文件 {mask_path(str(path))} 的 allowed-tools {problem}")
+    allowed_tools = _tool_placeholders(allowed_tools, directory, project_root)
     raw_disallowed = meta.get("disallowed-tools", meta.get("disallowedTools"))
     disallowed_tools, problem = _tool_list(raw_disallowed)
     if problem:
@@ -365,9 +394,12 @@ def discover_skills(root: str | Path, *, env: dict[str, str] | None = None) -> S
         ("user", user_skills_dir(env)),
         ("project", Path(root) / PROJECT_SKILLS_DIR),
     )
+    project_root = Path(root)
     for source, directory in layers:
         for skill_dir in _skill_dirs(directory):
-            definition, errors, warnings = _definition_from_dir(skill_dir, source)
+            definition, errors, warnings = _definition_from_dir(
+                skill_dir, source, project_root=project_root
+            )
             discovery.errors.extend(errors)
             discovery.warnings.extend(warnings)
             if definition is not None:
@@ -380,7 +412,7 @@ def discover_skills(root: str | Path, *, env: dict[str, str] | None = None) -> S
         for plugin_dir in plugin.component_dirs("skills"):
             for skill_dir in _skill_dirs(plugin_dir):
                 definition, errors, warnings = _definition_from_dir(
-                    skill_dir, f"plugin:{plugin.name}"
+                    skill_dir, f"plugin:{plugin.name}", project_root=project_root
                 )
                 discovery.errors.extend(errors)
                 discovery.warnings.extend(warnings)
@@ -393,10 +425,17 @@ def discover_skills(root: str | Path, *, env: dict[str, str] | None = None) -> S
 
 
 def load_skill(
-    path: str | Path, *, source: str = "project"
+    path: str | Path,
+    *,
+    source: str = "project",
+    project_root: str | Path | None = None,
 ) -> tuple[SkillDefinition | None, list[str], list[str]]:
     """Single-file entry point used by tests and by future editing tools."""
-    return _definition_from_dir(Path(path).parent, source)
+    return _definition_from_dir(
+        Path(path).parent,
+        source,
+        project_root=Path(project_root) if project_root is not None else None,
+    )
 
 
 def merge_skill_entries(*groups) -> list[dict]:
