@@ -29,6 +29,8 @@ os.environ.setdefault("BLANK_SETTINGS_FILE", f"{tempfile.mkdtemp(prefix='blank-s
 # 落盘的审批前缀规则同理：一次测试留下的 approvals.json 会改变后续用例的判定。
 # 具体用例可再用 monkeypatch 指向自己的 tmp_path，做跨任务的隔离验证。
 os.environ.setdefault("BLANK_APPROVALS_FILE", f"{tempfile.mkdtemp(prefix='blank-approvals-')}/approvals.json")
+# MCP 项目层/本机层的批准记录同理：本机留下的批准会让后续用例里的 pending 变绿。
+os.environ.setdefault("BLANK_MCP_APPROVALS_FILE", f"{tempfile.mkdtemp(prefix='blank-mcp-approvals-')}/approvals.json")
 # 子代理的隔离副本也放测试自己的目录：不往系统临时目录里堆，跑完自动随 basetemp 清理
 os.environ.setdefault("BLANK_WORKTREE_ROOT", tempfile.mkdtemp(prefix="blank-worktrees-"))
 # 工作区快照同样落临时目录：默认路径是仓库里的 data/snapshots。

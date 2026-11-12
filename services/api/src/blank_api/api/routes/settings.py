@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, Query
 
 from blank_api.api.auth import require_token
 from blank_api.api.errors import ApiError
+from blank_api.api.routes.projects import load_project
+from blank_api.deps import DbSession
 from blank_api.schemas.settings import AgentSettings, AgentSettingsPatch
 from blank_api.services import features as feature_registry
 from blank_api.services.agent.automation import (
@@ -20,7 +22,9 @@ from blank_api.services.agent.automation import (
     MODE_LABELS as AUTOMATION_MODE_LABELS,
 )
 from blank_api.services.guardian import MODES as GUARDIAN_MODES
+from blank_api.services.mcp import approvals as mcp_approvals
 from blank_api.services.mcp import manager as mcp_manager
+from blank_api.services.mcp.bridge import SCOPE_LABELS, scoped_entries
 from blank_api.services.permissions import MODE_LABELS, MODES as PERMISSION_MODES
 from blank_api.services.sandbox import docker_probe
 from blank_api.services.sandbox.policy import SandboxPolicy
@@ -140,15 +144,84 @@ async def patch_features(payload: dict[str, Any] = Body(...)) -> dict:
         raise ApiError("invalid_feature_value", str(exc)) from exc
 
 
+async def _workspace_root(db: DbSession, project_id: str) -> str | None:
+    workspace = (await load_project(db, project_id)).active_workspace
+    return workspace.path if workspace is not None else None
+
+
 @router.get("/mcp")
-async def read_mcp() -> dict:
+async def read_mcp(db: DbSession, project_id: str = Query(default="")) -> dict:
     """外部工具服务端接上没有、每个为什么没接上。
 
-    配置写在 mcp.json 里，用户改错一个字段时界面上唯一的症状是「工具变少了」。
-    这个端点把每一行的判定结果原样吐出来，省得靠猜。
+    配置分三层（用户 ``mcp.json`` < 项目 ``.mcp.json`` < 本机 ``.blank/mcp.local.json``），
+    带上 ``project_id`` 才能读到工作区下那两层。用户改错一个字段时界面上唯一的
+    症状是「工具变少了」，所以这个端点把每一行的判定结果原样吐出来，省得靠猜。
+    项目层/本机层没批准的服务端只出现在状态里（``approval=pending``），不会启动。
     """
-    bundle = await mcp_manager().bundle()
-    return {"config": str(mcp_manager().path), **bundle.as_dict()}
+    root = await _workspace_root(db, project_id) if project_id else None
+    manager = mcp_manager()
+    bundle = await manager.bundle(root)
+    return {
+        "config": str(manager.path),
+        "projectId": project_id,
+        "workspace": root is not None,
+        **bundle.as_dict(),
+    }
+
+
+@router.post("/mcp/approvals")
+async def approve_mcp_server(db: DbSession, payload: dict[str, Any] = Body(...)) -> dict:
+    """批准项目层/本机层的一条服务端定义（按整条定义的哈希记录）。
+
+    只允许批准当前真正生效的那一层：如果本机层同名条目把项目层盖住了，批准项目层
+    那条不会有任何效果，所以直接说清是被谁盖住的，而不是假装成功。
+    """
+    scope = str(payload.get("scope") or "").strip().lower()
+    name = str(payload.get("name") or "").strip()
+    project_id = str(payload.get("project_id") or "").strip()
+    if scope not in mcp_approvals.APPROVAL_SCOPES:
+        raise ApiError("invalid_scope", "只有项目层与本机层需要批准")
+    if not name:
+        raise ApiError("invalid_server", "缺少服务端名称")
+    if not project_id:
+        raise ApiError("project_required", "批准项目层/本机层服务端必须指定项目")
+    root = await _workspace_root(db, project_id)
+    if root is None:
+        raise ApiError("workspace_required", "该项目没有绑定工作区，没有项目层/本机层配置可批准")
+    entry = scoped_entries(root).get(name)
+    if entry is None:
+        raise ApiError("server_not_found", f"工作区配置里没有服务端：{name}", status_code=404)
+    entry_scope, definition = entry
+    if entry_scope != scope:
+        raise ApiError(
+            "scope_overridden",
+            f"服务端 {name} 当前由{SCOPE_LABELS.get(entry_scope, entry_scope)}覆盖，"
+            f"批准{scope}那条不会生效",
+            status_code=409,
+        )
+    digest = mcp_approvals.approve(scope, root, name, definition)
+    # 批准后立刻重连：下一次任务启动就该看到这些工具，不能等进程重启
+    await mcp_manager().reload(root)
+    return {"approved": True, "scope": scope, "name": name, "digest": digest}
+
+
+@router.delete("/mcp/approvals/{name}")
+async def revoke_mcp_server(
+    name: str,
+    db: DbSession,
+    scope: str = Query(...),
+    project_id: str = Query(...),
+) -> dict:
+    """撤销批准：下一次解析时这条服务端会退回 ``pending``，进程不再启动。"""
+    scope = scope.strip().lower()
+    if scope not in mcp_approvals.APPROVAL_SCOPES:
+        raise ApiError("invalid_scope", "只有项目层与本机层有批准记录")
+    root = await _workspace_root(db, project_id)
+    if root is None:
+        raise ApiError("workspace_required", "该项目没有绑定工作区")
+    existed = mcp_approvals.revoke(scope, root, name)
+    await mcp_manager().reload(root)
+    return {"revoked": existed, "scope": scope, "name": name}
 
 
 @router.get("/safety/runtime")

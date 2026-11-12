@@ -500,7 +500,9 @@ class AgentRuntime:
             tools = [tool for tool in tools if tool.name not in TEAM_ADMIN_TOOL_NAMES]
         # 外部工具（MCP）：走同一个网关、同一套审批、同一份审计。连接失败只影响
         # 那个服务端自己——半份工具表也远好过起不来任务。
-        mcp_bundle = await mcp_manager().bundle()
+        # 用原始工作区根而不是任务隔离副本：`.mcp.json` 跟着仓库走，
+        # 副本是本次任务的写根，里面不该凭空多出一份 MCP 配置。
+        mcp_bundle = await mcp_manager().bundle(request.root)
         tools = [*tools, *mcp_bundle.tools]
         # 场景装配（scenarios.py）：只影响系统提示附加段与工具可用性，
         # 不向用户 prompt 拼前缀。被禁工具在注册表里消失、在网关执行处硬拦。

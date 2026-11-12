@@ -457,6 +457,10 @@ export type McpServerStatus = {
   /** 失败或跳过时后端给的中文原因，成功时为空 */
   error?: string;
   server?: string;
+  /** 这条定义最终来自哪一层：user / project / local */
+  scope: string;
+  /** 项目层/本机层是否已批准：pending / approved；用户层是 user（无需批准） */
+  approval?: string;
   /** 连上时的边界事实：job_object / host_process_unbounded / remote */
   boundary?: string;
   /** 边界的诚实说明；没挂进 Job 时以 ⚠ 开头 */
@@ -473,16 +477,50 @@ export type McpServerStatus = {
   };
 };
 
+/** 一层配置的位置。user 是绝对路径；project/local 是工作区下的相对路径。 */
+export type McpScopeInfo = { path: string; exists: boolean };
+
 export type McpResponse = {
-  /** 配置文件的绝对路径：用户要改的就是这个文件 */
+  /** 用户层配置文件的绝对路径：用户要改的就是这个文件 */
   config: string;
+  /** 查询时带上的项目；空串表示只看了用户层 */
+  projectId: string;
+  /** 项目是否绑了工作区（没绑就没有项目层/本机层） */
+  workspace: boolean;
   /** 所有服务端提供的工具总数 */
   tools: number;
   servers: McpServerStatus[];
+  /** 三层配置的位置与是否存在 */
+  scopes: Record<string, McpScopeInfo>;
 };
 
-export function fetchMcp(): Promise<McpResponse> {
-  return request<McpResponse>(`${api}/settings/mcp`, { cache: "no-store" });
+export function fetchMcp(projectId?: string): Promise<McpResponse> {
+  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
+  return request<McpResponse>(`${api}/settings/mcp${query}`, { cache: "no-store" });
+}
+
+/** 批准一条项目层/本机层服务端定义；后端按整条定义的哈希记录。 */
+export function approveMcpServer(input: {
+  projectId: string;
+  scope: string;
+  name: string;
+}): Promise<{ approved: boolean; scope: string; name: string; digest: string }> {
+  return request(`${api}/settings/mcp/approvals`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ project_id: input.projectId, scope: input.scope, name: input.name }),
+  });
+}
+
+export function revokeMcpServer(input: {
+  projectId: string;
+  scope: string;
+  name: string;
+}): Promise<{ revoked: boolean; scope: string; name: string }> {
+  const query = `scope=${encodeURIComponent(input.scope)}&project_id=${encodeURIComponent(input.projectId)}`;
+  return request(`${api}/settings/mcp/approvals/${encodeURIComponent(input.name)}?${query}`, {
+    method: "DELETE",
+  });
 }
 
 export function chatProvider(providerId: string, message: string): Promise<{ text: string; model?: string }> {

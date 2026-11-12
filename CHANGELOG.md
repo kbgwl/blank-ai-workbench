@@ -1,6 +1,53 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）
+
+- **MCP 配置三作用域与项目层批准（`.mcp.json`）对齐 Claude 的 user < project < local 级联（S 批第 8 项）**：
+  按 Claude Code 2.1.271 的作用域口径落成本地实现。新增
+  `services/mcp/approvals.py`（批准记录的读写、整条定义摘要、工作区绑定、原子写），改
+  `services/mcp/bridge.py`（三层路径、整条覆盖合并、批准闸门、按工作区分桶的
+  `MCPManager`）、`services/mcp/client.py`（`ServerConfig.scope`）、
+  `api/routes/settings.py`（状态端点按项目读、批准/撤销端点）、
+  `services/agent/runtime.py`（用原始工作区根取配置）、
+  `web/src/components/settings/{api.ts,mcp-panel.tsx}`（项目下拉、作用域/批准徽标、批准与撤销）。
+  1. **层与路径**：用户层 `mcp.json`（`BLANK_MCP_FILE` 或设置目录旁）、项目层
+     `<workspace>/.mcp.json`、本机层 `<workspace>/.blank/mcp.local.json`，从低到高读取；
+     同名服务端**整条覆盖**、字段不跨层合并——高优先级层写 `disabled` 就是把同名服务端
+     整条关掉，而不是只改一个字段。坏 JSON / 顶层非对象只给这一层一条 `failed` 状态，
+     不拖垮其余层。
+  2. **批准闸门**：项目层与本机层的条目在批准前**不启动进程**（状态 `skipped` +
+     `approval=pending`，原因写明「批准这条定义之前不会启动进程」）；用户层沿用原有
+     免批准行为。批准记录按「作用域 + 工作区路径哈希 + 服务端名 → 整条定义的 sha256」
+     存 `mcp-approvals.json`（`BLANK_MCP_APPROVALS_FILE` 可改），只存哈希、不复制
+     `env` / `headers`（密钥不会多一份副本）；改一个字节或换一个工作区都会退回
+     `pending`；坏批准文件按「什么都没批准」fail-closed。
+  3. **缓存与重连**：`MCPManager` 按工作区分桶缓存（key 是工作区路径哈希），
+     stamp 覆盖用户/项目/本机三份配置与批准文件，任一改动即重连；批准/撤销后即时生效，
+     不用重启。运行时取配置用原始工作区根，而不是任务的隔离副本。
+  4. **可观察**：`GET /settings/mcp?project_id=` 返回每条的 `scope` / `approval`、
+     三层路径与是否存在；`POST /settings/mcp/approvals` 与
+     `DELETE /settings/mcp/approvals/{name}?scope=&project_id=` 批准/撤销并立即重连，
+     批准用户层、批准不存在的名字、批准被更高层覆盖的定义分别给 400 / 404 / 409。
+     设置页 MCP 面板加项目下拉、作用域徽标、待批准/已批准与批准/撤销按钮，空状态摊开
+     三层路径。
+  测试：新增 `tests/test_mcp_scopes_v50.py` 25 例（三层覆盖与整条取代、禁用遮蔽、
+  未批准不启动、批准后连接、改定义/换工作区退回 pending、批准文件不含密钥、摘要键序
+  无关值敏感、坏批准文件 fail-closed、撤销即时、拒绝批准用户层、坏层隔离、分桶缓存、
+  HTTP 端点 400/404/409、运行时装配），变异电池 17/17 红（逐条注入：层序反转、不读
+  批准、批准不绑定工作区、整条覆盖变字段合并、stamp 不含批准文件、端点不校验作用域等；
+  跑完按原字节还原并核对 sha256）。
+  全量后端回归：**3383 passed, 28 skipped**（0 failed，rc=0，720.83s）。
+  浏览器点验（隔离库 :8171 + Next dev :3171 + headless Chrome，受控实例关掉限流）：
+  待批准 → 点批准 → 已连接/4 工具 → 切「仅用户层」→ 切回仍已批准 → 撤销 → 退回待批准，
+  基线 14/14 绿、还原后复跑 14/14 绿、无控制台错误，装置自身 rc=0；两条源码变异分别
+  只红在依赖它的判据上（作用域徽标缩写 → 恰红 B1；撤销分支改成再次批准 → 恰红
+  E1/E2/E3）。前端 `tsc --noEmit` 与 `eslint src` 均 rc=0。
+  偏离：项目层用 `.mcp.json`（与 Claude 一致），本机层放 `<workspace>/.blank/mcp.local.json`
+  而不是 `~/.claude.json` 的项目键——项目私有配置随工作区目录走，拷走工作区不会带走批准；
+  批准记录单独存 `mcp-approvals.json` 且只存哈希，不像 Claude 把批准状态连同原始配置
+  写进项目私有段；没有 `/mcp` 交互命令与 OAuth 浏览器授权流程，批准只走设置页与 HTTP
+  端点；没有服务端级工具 allow/deny 过滤（Claude 能逐工具审批与禁用），本机只按整条
+  定义批准或撤销。
 
 - **插件包（`.claude-plugin/plugin.json`）对齐 Claude 插件契约（S 批第 7 项）**：
   按 Claude Code 2.1.271 的插件包口径落成本地实现。新增
@@ -72,7 +119,8 @@
   二次展开、告警不去重；跑完按原字节还原）。
   全量后端回归：**3332 passed, 28 skipped**（0 failed，rc=0，718.84s）。
   偏离：配置文件是设置目录旁的一份 `mcp.json`，没有 Claude 的项目 `.mcp.json` 与
-  user/project/local 三作用域（整条服务端取最高来源、字段不跨层合并）那套；展开面多了
+  user/project/local 三作用域（整条服务端取最高来源、字段不跨层合并）那套——三作用域
+  与项目层批准已在 S8 补齐（见本批第 8 项）；展开面多了
   `cwd` 与 `auth` 段；`${VAR:-default}` 的「空串算未设」按 bash 语义实现——上游二进制里
   找不到这段实现，按官方文档口径（未设告警并保留原文；作用于五处）解释。
 

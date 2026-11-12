@@ -111,6 +111,9 @@ class ServerConfig:
     oauth: OAuthConfig | None = None
     # 配置展开时的告警（未设置的变量原样保留等）。只说变量名，不带值。
     warnings: tuple[str, ...] = ()
+    # 这条定义来自哪一层：user / project / local。放末尾且带默认值，
+    # 既有按位置构造的调用方不用改。
+    scope: str = "user"
 
 
 def _job_limits(config: ServerConfig) -> tuple[int, int]:

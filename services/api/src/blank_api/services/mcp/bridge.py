@@ -15,11 +15,21 @@ approval path, same audit record. Three rules make that safe:
   protocol costs that server's tools and nothing else. Task startup must still
   succeed — a broken MCP server is not a reason to refuse to work.
 
-The config lives next to ``settings.json`` as ``mcp.json``, in the same
-``mcpServers`` shape every other MCP client uses. **The file is the switch**:
-no file means no processes are spawned and no code path changes, which is the
-same gate ``BLANK_HOOKS`` uses. ``BLANK_MCP_DISABLE=1`` turns it off without
-deleting the file.
+Config is read from three places, later layers overriding earlier ones whole:
+
+* **user** — ``mcp.json`` next to ``settings.json`` (same ``mcpServers`` shape
+  every other MCP client uses); hand-written, no approval needed;
+* **project** — ``.mcp.json`` at the workspace root, so a repository can ship
+  its own servers;
+* **local** — ``.blank/mcp.local.json`` under the workspace, for machine-only
+  additions that must not be committed.
+
+Project and local entries are only started after the user approves that exact
+definition (see :mod:`blank_api.services.mcp.approvals`); a cloned repository
+must not be able to launch a process merely because it was opened. **The file
+is the switch**: no config means no processes are spawned and no code path
+changes, which is the same gate ``BLANK_HOOKS`` uses. ``BLANK_MCP_DISABLE=1``
+turns it off without deleting anything.
 """
 
 from __future__ import annotations
@@ -29,10 +39,11 @@ import json
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from blank_api.services.mcp.approvals import approvals_path, is_approved, workspace_key
 from blank_api.services.mcp.client import (
     BOUNDARY_JOB,
     BOUNDARY_REMOTE,
@@ -59,6 +70,20 @@ TOTAL_CONNECT_TIMEOUT = 45.0
 STATE_READY = "ready"
 STATE_FAILED = "failed"
 STATE_SKIPPED = "skipped"
+
+# 三层配置，后面的整条覆盖前面的同名服务端（与 Claude Code 一致）。
+# 项目层放在工作区根上的 ``.mcp.json``，这样仓库自带的配置跟着 git 走；
+# 本机层放 ``.blank/mcp.local.json``，是"这台机器、这个工作区"的私有补充。
+SCOPE_USER = "user"
+SCOPE_PROJECT = "project"
+SCOPE_LOCAL = "local"
+# 窗口层字段：user 是本人写的，不需要批准；另外两层要点一次才启动进程。
+APPROVAL_USER = "user"
+APPROVAL_APPROVED = "approved"
+APPROVAL_PENDING = "pending"
+
+PROJECT_MCP_FILE = ".mcp.json"
+LOCAL_MCP_FILE = Path(".blank") / "mcp.local.json"
 
 # MCP 服务端的执行边界：stdio 是我们拉起来的**宿主**进程，但能挂进 Job 就必须挂；
 # 挂不进去是一等事实，要在状态与证据里红字说清。#94 之前这里只有 host_process，
@@ -109,6 +134,10 @@ class MCPStatus:
     enforcement: dict[str, Any] = field(default_factory=dict)
     # 配置展开告警：变量没配就把占位符原样留着，得让用户在状态里看见
     warnings: list[str] = field(default_factory=list)
+    # 这条定义最终从哪一层来；approval 只对 project/local 有内容：
+    # pending＝还没批准（不会启动进程），approved＝已批准，user＝用户层无需批准。
+    scope: str = SCOPE_USER
+    approval: str = ""
 
     def as_dict(self) -> dict:
         boundary = self.boundary or mcp_boundary(self.state, self.transport)
@@ -118,7 +147,10 @@ class MCPStatus:
             "state": self.state,
             "tools": self.tools,
             "boundary": boundary,
+            "scope": self.scope,
         }
+        if self.approval:
+            body["approval"] = self.approval
         if self.warnings:
             body["warnings"] = list(self.warnings)
         if self.error:
@@ -138,6 +170,8 @@ class MCPBundle:
     statuses: list[MCPStatus] = field(default_factory=list)
     # 名字 → 客户端，供关闭与排障；工具本身已经把调用点闭包进去了
     clients: dict[str, Any] = field(default_factory=dict)
+    # 这一包读了哪几份配置：层级名 → {"path": 展示用路径, "exists": 文件在不在}
+    scopes: dict[str, dict] = field(default_factory=dict)
 
     @property
     def ready(self) -> list[MCPStatus]:
@@ -187,6 +221,7 @@ class MCPBundle:
             # 结构化账：界面与证据不用再按文案反推每种边界各有几个。
             "by_boundary": counts,
             "unbounded_servers": unbounded,
+            "scopes": {name: dict(body) for name, body in self.scopes.items()},
         }
 
 
@@ -198,6 +233,147 @@ def config_path() -> Path:
     from blank_api.services.settings import SettingsStore
 
     return SettingsStore().path.parent / "mcp.json"
+
+
+SCOPE_LABELS = {SCOPE_USER: "用户层", SCOPE_PROJECT: "项目层", SCOPE_LOCAL: "本机层"}
+
+
+def scoped_paths(root: str | Path | None = None, user: Path | None = None) -> list[tuple[str, Path]]:
+    """按优先级从低到高列出要读的配置：用户 < 项目 < 本机。
+
+    ``root`` 为空时只读用户层——没有绑工作区就没有仓库根，项目层/本机层无处可放。
+    """
+    paths: list[tuple[str, Path]] = [(SCOPE_USER, user or config_path())]
+    if root is not None:
+        base = Path(root)
+        paths.append((SCOPE_PROJECT, base / PROJECT_MCP_FILE))
+        paths.append((SCOPE_LOCAL, base / LOCAL_MCP_FILE))
+    return paths
+
+
+def _server_table(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    table = payload.get("mcpServers")
+    if not isinstance(table, dict):
+        table = {
+            key: value
+            for key, value in payload.items()
+            if isinstance(value, dict) and not key.startswith("$")
+        }
+    return table if isinstance(table, dict) else {}
+
+
+def _read_raw(path: Path, scope: str) -> tuple[dict[str, Any], list[MCPStatus]]:
+    """读一层配置；坏文件只让这一层变空，不拦住别的层。"""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}, []
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return {}, [
+            MCPStatus(
+                "config",
+                "",
+                STATE_FAILED,
+                error=f"{path.name} 解析失败：{error}",
+                scope=scope,
+                approval=APPROVAL_USER if scope == SCOPE_USER else APPROVAL_PENDING,
+            )
+        ]
+    if not isinstance(payload, dict):
+        return {}, [
+            MCPStatus(
+                "config",
+                "",
+                STATE_FAILED,
+                error=f"{path.name} 顶层必须是对象",
+                scope=scope,
+                approval=APPROVAL_USER if scope == SCOPE_USER else APPROVAL_PENDING,
+            )
+        ]
+    return _server_table(payload), []
+
+
+def _merge_scoped(
+    layers: list[tuple[str, Path]],
+) -> tuple[dict[str, tuple[str, Any]], list[MCPStatus]]:
+    """优先级高的层整条覆盖同名条目；坏文件只贡献一条状态，不打断合并。"""
+    merged: dict[str, tuple[str, Any]] = {}
+    statuses: list[MCPStatus] = []
+    for scope, path in layers:
+        table, problems = _read_raw(path, scope)
+        statuses.extend(problems)
+        for name, entry in table.items():
+            server_name = str(name or "").strip()
+            if server_name:
+                merged[server_name] = (scope, entry)
+    return merged, statuses
+
+
+def scoped_entries(
+    root: str | Path | None = None,
+    user: Path | None = None,
+) -> dict[str, tuple[str, Any]]:
+    """合并后每个服务端最终来自哪一层、原始定义是什么（批准端点要用原始定义）。"""
+    return _merge_scoped(scoped_paths(root, user))[0]
+
+
+def resolve_scoped_servers(
+    root: str | Path | None = None,
+    user: Path | None = None,
+) -> tuple[list[ServerConfig], list[MCPStatus], dict[str, dict]]:
+    """三层配置合并后的服务端列表、状态与层级账。
+
+    合并口径与 Claude Code 一致：同名服务端**整条覆盖**，不逐字段合并——半个
+    新命令配半个旧参数的组合没人能解释清楚。高优先级层可以放一条 ``disabled``
+    把低层同名的服务端整条遮掉。
+
+    项目层/本机层的条目还要过批准闸门：定义（整条 JSON）的哈希与批准记录一致
+    才进列表，否则只给一条 ``skipped + pending`` 状态。未批准的条目在这里就
+    被拦下，``_connect`` 根本看不到它，所以不存在"先起进程再问"。
+    """
+    layers = scoped_paths(root, user)
+    merged, statuses = _merge_scoped(layers)
+
+    servers: list[ServerConfig] = []
+    for name, (scope, entry) in merged.items():
+        parsed, parse_statuses = parse_servers({"mcpServers": {name: entry}})
+        approved = scope == SCOPE_USER or is_approved(scope, root, name, entry)
+        approval = (
+            APPROVAL_USER if scope == SCOPE_USER else (APPROVAL_APPROVED if approved else APPROVAL_PENDING)
+        )
+        for status in parse_statuses:
+            status.scope = scope
+            status.approval = approval
+        statuses.extend(parse_statuses)
+        for server in parsed:
+            if not approved:
+                statuses.append(
+                    MCPStatus(
+                        name,
+                        server.transport,
+                        STATE_SKIPPED,
+                        scope=scope,
+                        approval=APPROVAL_PENDING,
+                        warnings=list(server.warnings),
+                        error=(
+                            f"{SCOPE_LABELS.get(scope, scope)}服务端还没批准："
+                            "批准这条定义之前不会启动进程"
+                        ),
+                    )
+                )
+                continue
+            servers.append(replace(server, scope=scope))
+
+    scopes = {
+        scope: {
+            "path": str(path) if scope == SCOPE_USER else str(path.relative_to(Path(root))),
+            "exists": path.exists(),
+        }
+        for scope, path in layers
+    }
+    return servers, statuses, scopes
 
 
 _PLACEHOLDER = re.compile(r"\$\{([^}]*)\}")
@@ -475,11 +651,14 @@ class MCPManager:
     所以坏掉的服务端只让第一个任务慢一点，后面的任务直接拿到失败原因。
     """
 
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, root: str | Path | None = None) -> None:
         self._path = path
-        self._bundle: MCPBundle | None = None
+        self._root = root
+        # 按工作区分桶：不同仓库的 ``.mcp.json`` 不能互相顶掉。键是工作区路径哈希，
+        # 未绑工作区时为空串（只有用户层，所有调用共用同一桶）。
+        self._bundles: dict[str, MCPBundle] = {}
+        self._stamps: dict[str, tuple] = {}
         self._lock = asyncio.Lock()
-        self._stamp: tuple[int, int] | None = None
 
     @property
     def path(self) -> Path:
@@ -492,44 +671,53 @@ class MCPManager:
             return None
         return stat.st_mtime_ns, stat.st_size
 
-    def _read(self, path: Path) -> tuple[list[ServerConfig], list[MCPStatus]]:
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return [], []
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            # 配置文件坏了不能拦住任务：说清楚哪里坏了，然后当作没配
-            return [], [MCPStatus("config", "", STATE_FAILED, error=f"mcp.json 解析失败：{error}")]
-        return parse_servers(payload)
+    def _stamp(self, root: str | Path | None) -> tuple:
+        # 三层配置与批准文件任一改动都要重连：批准后必须立刻生效，不能等重启
+        paths = [path for _, path in scoped_paths(root, self._path)]
+        return tuple(self._stamp_of(path) for path in [*paths, approvals_path()])
 
-    async def bundle(self) -> MCPBundle:
+    async def bundle(self, root: str | Path | None = None) -> MCPBundle:
         if str(os.environ.get("BLANK_MCP_DISABLE") or "").strip() in ("1", "true", "yes"):
             return MCPBundle()
-        path = self.path
-        stamp = self._stamp_of(path)
+        workspace = self._root if root is None else root
+        key = workspace_key(workspace)
+        stamp = self._stamp(workspace)
         async with self._lock:
             # 文件被改过就重连：用户改完配置不该还需要重启进程
-            if self._bundle is not None and stamp == self._stamp:
-                return self._bundle
-            if self._bundle is not None:
-                await self._close_bundle(self._bundle)
-            self._bundle = await self._connect(path)
-            self._stamp = stamp
-            return self._bundle
+            current = self._bundles.get(key)
+            if current is not None and stamp == self._stamps.get(key):
+                return current
+            if current is not None:
+                await self._close_bundle(current)
+                self._bundles.pop(key, None)
+            bundle = await self._connect(workspace)
+            self._bundles[key] = bundle
+            self._stamps[key] = stamp
+            return bundle
 
-    async def reload(self) -> MCPBundle:
-        self._stamp = None
-        self._bundle = None
-        return await self.bundle()
+    async def reload(self, root: str | Path | None = None) -> MCPBundle:
+        workspace = self._root if root is None else root
+        key = workspace_key(workspace)
+        async with self._lock:
+            current = self._bundles.pop(key, None)
+            self._stamps.pop(key, None)
+        if current is not None:
+            await self._close_bundle(current)
+        return await self.bundle(workspace)
 
-    async def _connect(self, path: Path) -> MCPBundle:
-        servers, statuses = self._read(path)
+    async def _connect(self, root: str | Path | None) -> MCPBundle:
+        servers, statuses, scopes = resolve_scoped_servers(root, self._path)
         if not servers:
-            return MCPBundle(statuses=statuses)
+            return MCPBundle(statuses=statuses, scopes=scopes)
 
         async def one(server: ServerConfig) -> tuple[ServerConfig, Any, list[dict], MCPStatus]:
             status = MCPStatus(
-                server.name, server.transport, STATE_FAILED, warnings=list(server.warnings)
+                server.name,
+                server.transport,
+                STATE_FAILED,
+                warnings=list(server.warnings),
+                scope=server.scope,
+                approval=APPROVAL_USER if server.scope == SCOPE_USER else APPROVAL_APPROVED,
             )
             client = None
             try:
@@ -563,7 +751,7 @@ class MCPManager:
             asyncio.gather(*(one(server) for server in servers)), timeout=TOTAL_CONNECT_TIMEOUT
         )
 
-        bundle = MCPBundle(statuses=[*statuses])
+        bundle = MCPBundle(statuses=[*statuses], scopes=scopes)
         for server, client, catalog, status in results:
             bundle.statuses.append(status)
             if client is None:
@@ -582,10 +770,11 @@ class MCPManager:
 
     async def close(self) -> None:
         async with self._lock:
-            if self._bundle is not None:
-                await self._close_bundle(self._bundle)
-                self._bundle = None
-                self._stamp = None
+            bundles = list(self._bundles.values())
+            self._bundles.clear()
+            self._stamps.clear()
+        for bundle in bundles:
+            await self._close_bundle(bundle)
 
 
 _MANAGER: MCPManager | None = None
@@ -605,13 +794,21 @@ def reset_manager() -> None:
 
 
 __all__ = [
+    "LOCAL_MCP_FILE",
     "MCPBundle",
     "MCPManager",
     "MCPStatus",
+    "PROJECT_MCP_FILE",
+    "SCOPE_LOCAL",
+    "SCOPE_PROJECT",
+    "SCOPE_USER",
     "bridge_tools",
     "config_path",
     "is_mcp_name",
     "manager",
     "parse_servers",
     "reset_manager",
+    "resolve_scoped_servers",
+    "scoped_entries",
+    "scoped_paths",
 ]
