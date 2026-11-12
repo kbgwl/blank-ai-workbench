@@ -65,6 +65,14 @@ def _apply_definition(request: SubAgentRequest, definition) -> SubAgentRequest:
     request.disallowed_tools = definition.disallowed_tools
     request.skills = definition.skills
     request.agent_ignored = definition.ignored
+    # permissionMode 只是"声明"，真正生效与否在 run_subagent 里按基线收紧判定。
+    request.permission_mode = definition.permission_mode
+    # 上游 Szn：isolation 的生效值 = 派发参数 ?? 定义值；定义写 worktree 时
+    # 调用方显式传 isolate:false 也压不住它——用户要的是"每次都在副本里跑"。
+    if definition.isolation == "worktree":
+        request.isolate = True
+    # 上游 Pts：定义里的 background:true 会压过调用方的 run_in_background=false。
+    request.definition_background = definition.background
     request.fork = definition.name == BUILTIN_FORK
     return request
 
@@ -158,6 +166,9 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
         background = False
     else:
         background = True if raw_background is None else bool(raw_background)
+        # 上游 Pts：定义里写了 background:true 就按后台派出，即使调用方传了 false。
+        if request.definition_background:
+            background = True
     if background:
         if not hasattr(runner, "spawn_background"):
             return fail("error", "当前运行时没有启用后台子代理")

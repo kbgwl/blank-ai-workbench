@@ -15,15 +15,25 @@ but the *rules around it*:
   ``*`` in ``tools`` means "no restriction";
 * ``skills`` names Skills to preload into the child's startup messages. A
   missing name is reported but never stops the spawn (upstream only warns);
+* ``permissionMode`` / ``isolation`` / ``background`` are parsed like upstream
+  (``Vf`` / ``fw``, ``worktree|remote``, ``true|false``). A declared mode may
+  only *tighten* the child (see ``subagent._child_permission_mode``);
+  ``isolation: worktree`` always wins over a caller's ``isolate: false``;
+  ``background: true`` wins over ``run_in_background: false``;
 * ``maxTurns`` is a positive integer; anything else is ignored with a warning;
+* plugin agents fall back to the file name for ``name`` and to
+  ``description`` → ``when_to_use`` → ``when-to-use`` → ``Agent from <plugin>
+  plugin`` for the description, and ignore ``permissionMode`` / ``hooks`` /
+  ``mcpServers`` with a warning (upstream ``Skn``);
 * one bad file never takes the whole catalog down.
 
-What a definition may *not* do here is widen the boundary. We parse
-``model`` / ``permissionMode`` / ``hooks`` / ``mcpServers`` (and a few other
-Claude-only knobs) but never apply them; they are reported per definition so
-the omission is visible instead of silently changing what the user thinks they
-configured. Tool lists only ever narrow the child pool — a custom agent that
-lists ``run_shell`` stays read-only unless it was spawned with ``isolate``.
+What a definition still may *not* do here is widen the boundary. We parse
+``model`` / ``hooks`` / ``mcpServers`` (and a few other Claude-only knobs) but
+never apply them; they are reported per definition so the omission is visible
+instead of silently changing what the user thinks they configured. Tool lists
+only ever narrow the child pool — a custom agent that lists ``run_shell`` stays
+read-only unless it was spawned with ``isolate``. Permission modes only move
+toward stricter; a declaration looser than the spawn baseline is ignored.
 """
 
 from __future__ import annotations
@@ -50,15 +60,32 @@ MAX_FILE_BYTES = 1_048_576
 # we clip it so one huge definition cannot eat the child's whole window.
 MAX_INSTRUCTIONS_CHARS = 20_000
 PROJECT_AGENTS_DIR = Path(".blank") / "agents"
+# Claude 的合法 permissionMode（``fw``）；``Vf`` 把 ``manual`` 当成 ``default``
+# 的别名。``auto`` / ``dontAsk`` 我们这边没有对应审批档，解析时按合法值识别
+# 但不落进定义，记一条告警并进 ignored 审计。
+PERMISSION_MODES = (
+    "default",
+    "plan",
+    "acceptEdits",
+    "bypassPermissions",
+    "dontAsk",
+    "auto",
+)
+PERMISSION_MODE_ALIASES = {"manual": "default"}
+# 本机真有的四种审批档（permissions.MODES 的 Claude 名字）。其余合法值只解析、
+# 不生效。
+MAPPABLE_PERMISSION_MODES = (
+    "default",
+    "plan",
+    "acceptEdits",
+    "bypassPermissions",
+)
 # Claude applies these; we cannot without widening/altering the parent boundary,
 # so a definition that sets them gets them named in the audit instead.
 UNSUPPORTED_FIELDS = (
     "model",
-    "permissionMode",
     "hooks",
     "mcpServers",
-    "isolation",
-    "background",
     "memory",
     "effort",
     "color",
@@ -77,6 +104,13 @@ class AgentDefinition:
     # Skill 名字，按 Claude 的 ``OI`` 解析：缺省与 null 都是空表，``*`` 保留成
     # 字面名字（它不会解析成功，运行时会按"没找到"告警，与上游一致）。
     skills: tuple[str, ...] = ()
+    # Claude 的 ``permissionMode``（原样保存，含大小写）。派发时只能相对基线收紧。
+    permission_mode: str = ""
+    # ``isolation: worktree`` 时强制隔离；``remote`` 未移植，解析时告警并丢弃。
+    isolation: str = ""
+    # 上游只认 ``background: true``（``false`` 等同于没写）；true 会压过调用方
+    # 的 ``run_in_background=false``。
+    background: bool = False
     max_turns: int | None = None
     source: str = "project"
     path: str = ""
@@ -102,6 +136,12 @@ class AgentDefinition:
             payload["disallowedTools"] = list(self.disallowed_tools)
         if self.skills:
             payload["skills"] = list(self.skills)
+        if self.permission_mode:
+            payload["permissionMode"] = self.permission_mode
+        if self.isolation:
+            payload["isolation"] = self.isolation
+        if self.background:
+            payload["background"] = True
         if self.max_turns is not None:
             payload["maxTurns"] = self.max_turns
         if self.ignored:
@@ -257,77 +297,216 @@ def _positive_int(value) -> int | None:
     return value
 
 
+def _permission_mode(value) -> tuple[str, str, bool]:
+    """Parse ``permissionMode`` like upstream ``Vf`` + ``fw``.
+
+    Returns ``(value, warning, ignored)``. ``ignored`` means the key was written
+    but nothing was applied, so it belongs in the audit list. ``manual`` is a
+    Claude alias for ``default``; ``auto`` / ``dontAsk`` are upstream-valid but
+    have no local approval tier, so they are reported rather than guessed at.
+    """
+    if value is _MISSING or value is None:
+        return "", "", False
+    if not isinstance(value, str):
+        return "", "permissionMode 必须是字符串，已忽略", True
+    raw = value.strip()
+    canonical = PERMISSION_MODE_ALIASES.get(raw, raw)
+    if canonical not in PERMISSION_MODES:
+        return (
+            "",
+            f"permissionMode {raw!r} 无效（可选：{', '.join(PERMISSION_MODES)}），已忽略",
+            True,
+        )
+    if canonical not in MAPPABLE_PERMISSION_MODES:
+        return (
+            "",
+            f"permissionMode {raw!r} 在我们这里没有对应审批档（已移植："
+            f"{', '.join(MAPPABLE_PERMISSION_MODES)}），已忽略",
+            True,
+        )
+    return canonical, "", False
+
+
+def _isolation(value, *, plugin: bool) -> tuple[str, str, bool]:
+    """Parse ``isolation`` like upstream (``worktree`` in effect, ``remote`` frozen).
+
+    Upstream plugin agents accept only ``worktree`` and silently drop anything
+    else; file agents warn on invalid values. ``remote`` is valid upstream but
+    this build has no remote executor, so it is reported and treated as local.
+    """
+    if value is _MISSING or value is None:
+        return "", "", False
+    if not isinstance(value, str):
+        if plugin:
+            return "", "", True
+        return "", "isolation 必须是字符串，已忽略", True
+    raw = value.strip()
+    if raw == "worktree":
+        return "worktree", "", False
+    if plugin:
+        return "", "", True
+    if raw == "remote":
+        return "", "isolation 'remote'（远程子代理）尚未移植，已按本地运行", True
+    return "", f"isolation {raw!r} 无效（可选：worktree, remote），已忽略", True
+
+
+def _background(value, *, plugin: bool) -> tuple[bool, str, bool]:
+    """Parse ``background`` like upstream: only an explicit true is meaningful."""
+    if value is _MISSING or value is None:
+        return False, "", False
+    if value is True or value == "true":
+        return True, "", False
+    if value is False or value == "false":
+        return False, "", False
+    if plugin:
+        # 上游插件 agent 对非法值静默忽略，不写 warning。
+        return False, "", True
+    return (
+        False,
+        f"background {value!r} 无效（只能是 'true' / 'false' / 布尔），已忽略",
+        True,
+    )
+
+
 def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | None, list[str]]:
-    """Parse one file. Returns (definition, errors); a file with no name is silent."""
+    """Parse one file. Returns (definition, errors); a file with no name is silent.
+
+    Plugin sources (``plugin:<name>``) follow upstream ``Skn`` instead of the
+    file-agent contract: the name falls back to the file stem, the description
+    falls back to ``when_to_use`` / ``when-to-use`` / a generated line, and
+    ``permissionMode`` / ``hooks`` / ``mcpServers`` are named as ignored.
+    """
+    plugin_source = source.startswith("plugin:")
+    plugin_name = source.split(":", 1)[1] if plugin_source else ""
+    label = "插件 Agent 文件" if plugin_source else "Agent 文件"
+    where = mask_path(str(path))
     try:
         if not path.is_file():
-            return None, [f"Agent 文件 {mask_path(str(path))} 不是常规文件，已跳过"]
+            return None, [f"{label} {where} 不是常规文件，已跳过"]
         if path.stat().st_size > MAX_FILE_BYTES:
             return None, [
-                f"Agent 文件 {mask_path(str(path))} 超过 {MAX_FILE_BYTES} 字节上限，已跳过"
+                f"{label} {where} 超过 {MAX_FILE_BYTES} 字节上限，已跳过"
             ]
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        return None, [f"Agent 文件 {mask_path(str(path))} 读取失败：{exc.__class__.__name__}"]
+        return None, [f"{label} {where} 读取失败：{exc.__class__.__name__}"]
     try:
         meta, body = _split_frontmatter(text)
     except ValueError as exc:
-        return None, [f"Agent 文件 {mask_path(str(path))}：{exc}"]
+        return None, [f"{label} {where}：{exc}"]
     if meta is None:
         # No frontmatter = no declaration. Claude skips these silently too.
         return None, []
     raw_name = meta.get("name")
-    if raw_name is None:
-        return None, []
-    if not isinstance(raw_name, str):
-        return None, [f"Agent 文件 {mask_path(str(path))} 的 name 必须是字符串"]
-    name = raw_name.strip()
-    if not name:
-        return None, [f"Agent 文件 {mask_path(str(path))} 的 name 为空"]
+    if plugin_source:
+        # 上游 Skn：``String(name)`` 为空时退回文件名（去掉 .md）。
+        if raw_name is None:
+            name = path.stem
+        elif isinstance(raw_name, str):
+            name = raw_name.strip() or path.stem
+        else:
+            name = str(raw_name).strip() or path.stem
+    else:
+        if raw_name is None:
+            return None, []
+        if not isinstance(raw_name, str):
+            return None, [f"{label} {where} 的 name 必须是字符串"]
+        name = raw_name.strip()
+        if not name:
+            return None, [f"{label} {where} 的 name 为空"]
     if name.startswith("-"):
-        return None, [
-            f"Agent 文件 {mask_path(str(path))} 的名称 {name!r} 不能以 \"-\" 开头"
-        ]
+        return None, [f"{label} {where} 的名称 {name!r} 不能以 \"-\" 开头"]
     if ":" in unicodedata.normalize("NFKC", name):
         return None, [
-            f"Agent 文件 {mask_path(str(path))} 的名称 {name!r} 不能包含 \":\""
+            f"{label} {where} 的名称 {name!r} 不能包含 \":\""
             "（冒号保留给插件命名空间）"
         ]
-    raw_description = meta.get("description")
-    if not isinstance(raw_description, str) or not raw_description.strip():
-        return None, [
-            f"Agent 文件 {mask_path(str(path))} 缺少必需的 description"
-        ]
-    description = raw_description.strip()
+    if plugin_source:
+        description = ""
+        for candidate in (
+            meta.get("description"),
+            meta.get("when_to_use"),
+            meta.get("when-to-use"),
+        ):
+            if isinstance(candidate, str) and candidate.strip():
+                description = candidate.strip()
+                break
+        if not description:
+            description = f"Agent from {plugin_name} plugin"
+    else:
+        raw_description = meta.get("description")
+        if not isinstance(raw_description, str) or not raw_description.strip():
+            return None, [f"{label} {where} 缺少必需的 description"]
+        description = raw_description.strip()
     warnings: list[str] = []
+    ignored_extra: set[str] = set()
 
     tools, problem = _tool_list(meta["tools"] if "tools" in meta else _MISSING)
     if problem:
-        warnings.append(f"Agent 文件 {mask_path(str(path))} 的 tools {problem}")
+        warnings.append(f"{label} {where} 的 tools {problem}")
     disallowed, problem = _tool_list(
         meta["disallowedTools"] if "disallowedTools" in meta else _MISSING
     )
     if problem:
-        warnings.append(
-            f"Agent 文件 {mask_path(str(path))} 的 disallowedTools {problem}"
-        )
+        warnings.append(f"{label} {where} 的 disallowedTools {problem}")
     disallowed = disallowed or ()
 
     skills, problem = _skills_list(meta["skills"] if "skills" in meta else _MISSING)
     if problem:
-        warnings.append(f"Agent 文件 {mask_path(str(path))} 的 skills {problem}")
+        warnings.append(f"{label} {where} 的 skills {problem}")
+
+    permission_mode = ""
+    if plugin_source:
+        # 上游对插件 agent 的 permissionMode/hooks/mcpServers 一律告警忽略：
+        # 这三类控制只认 .blank/agents/ 里的定义。
+        for key in ("permissionMode", "hooks", "mcpServers"):
+            if meta.get(key) is not None:
+                ignored_extra.add(key)
+                warnings.append(
+                    f"{label} {where} 设置了 {key}，插件 agent 会忽略它；"
+                    "需要这类控制请放到 .blank/agents/"
+                )
+    else:
+        permission_mode, problem, unsupported = _permission_mode(
+            meta["permissionMode"] if "permissionMode" in meta else _MISSING
+        )
+        if problem:
+            warnings.append(f"{label} {where} 的 {problem}")
+        if unsupported:
+            ignored_extra.add("permissionMode")
+
+    isolation, problem, unsupported = _isolation(
+        meta["isolation"] if "isolation" in meta else _MISSING,
+        plugin=plugin_source,
+    )
+    if problem:
+        warnings.append(f"{label} {where} 的 {problem}")
+    if unsupported:
+        ignored_extra.add("isolation")
+
+    background, problem, unsupported = _background(
+        meta["background"] if "background" in meta else _MISSING,
+        plugin=plugin_source,
+    )
+    if problem:
+        warnings.append(f"{label} {where} 的 {problem}")
+    if unsupported:
+        ignored_extra.add("background")
 
     max_turns = None
     if meta.get("maxTurns") is not None:
         max_turns = _positive_int(meta.get("maxTurns"))
         if max_turns is None:
             warnings.append(
-                f"Agent 文件 {mask_path(str(path))} 的 maxTurns 必须是正整数，已忽略"
+                f"{label} {where} 的 maxTurns 必须是正整数，已忽略"
             )
 
     if len(body) > MAX_INSTRUCTIONS_CHARS:
         body = body[:MAX_INSTRUCTIONS_CHARS].rstrip() + "\n…（定义正文过长，已截断）"
-    ignored = tuple(key for key in UNSUPPORTED_FIELDS if meta.get(key) is not None)
+    governed = tuple(
+        dict.fromkeys([*UNSUPPORTED_FIELDS, *sorted(ignored_extra)])
+    )
+    ignored = tuple(key for key in governed if meta.get(key) is not None)
     return (
         AgentDefinition(
             name=name,
@@ -336,6 +515,9 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
             tools=tools,
             disallowed_tools=tuple(disallowed),
             skills=skills,
+            permission_mode=permission_mode,
+            isolation=isolation,
+            background=background,
             max_turns=max_turns,
             source=source,
             path=str(path),

@@ -468,3 +468,89 @@ async def test_project_plugins_api_lists_components_and_switches(
     assert str(workspace) not in response.text
     # 列表只给清单，不返回命令正文。
     assert "命令正文" not in response.text
+
+
+# --------------------------------------------------------------------------- #
+# 6. Y 批：插件 agent 的字段回退与忽略口径（上游 ``Skn``）
+# --------------------------------------------------------------------------- #
+def test_plugin_agent_name_falls_back_to_the_file_stem(tmp_path: Path) -> None:
+    plugin = _plugin(tmp_path, "deploy-tools")
+    _write(
+        plugin / "agents" / "auditor.md",
+        "---\ndescription: 审计\n---\n逐条核对。",
+    )
+
+    catalog = discover_agents(tmp_path, env=_env(tmp_path))
+
+    assert "deploy-tools:auditor" in catalog.entries
+    definition = catalog.entries["deploy-tools:auditor"]
+    assert definition.description == "审计"
+    assert catalog.errors == []
+
+
+def test_plugin_agent_description_falls_back_to_when_to_use(tmp_path: Path) -> None:
+    plugin = _plugin(tmp_path, "deploy-tools")
+    _write(
+        plugin / "agents" / "a.md",
+        "---\nname: a\nwhen_to_use: 需要审计时\n---\n正文",
+    )
+    _write(
+        plugin / "agents" / "b.md",
+        "---\nname: b\nwhen-to-use: 需要复核时\n---\n正文",
+    )
+    _write(plugin / "agents" / "c.md", "---\nname: c\n---\n正文")
+
+    catalog = discover_agents(tmp_path, env=_env(tmp_path))
+
+    assert catalog.entries["deploy-tools:a"].description == "需要审计时"
+    assert catalog.entries["deploy-tools:b"].description == "需要复核时"
+    # 上游最后的兜底文案：Agent from <plugin> plugin。
+    assert catalog.entries["deploy-tools:c"].description == "Agent from deploy-tools plugin"
+    assert catalog.errors == []
+
+
+def test_plugin_agent_permission_controls_are_reported_not_applied(
+    tmp_path: Path,
+) -> None:
+    plugin = _plugin(tmp_path, "deploy-tools")
+    _write(
+        plugin / "agents" / "locked.md",
+        "---\nname: locked\ndescription: 受限\n"
+        "permissionMode: plan\nhooks: {}\nmcpServers: {}\n---\n正文",
+    )
+
+    catalog = discover_agents(tmp_path, env=_env(tmp_path))
+
+    definition = catalog.entries["deploy-tools:locked"]
+    # 插件 agent 不接受这三类控制：解析出来也不生效，且要明确告警。
+    # （加载器把单文件"问题"统一收在 errors 清单里，严重程度看文案。）
+    assert definition.permission_mode == ""
+    assert {"permissionMode", "hooks", "mcpServers"} <= set(definition.ignored)
+    for key in ("permissionMode", "hooks", "mcpServers"):
+        assert any(
+            key in item and "忽略" in item for item in catalog.errors
+        ), catalog.errors
+
+
+def test_plugin_agent_isolation_worktree_is_honoured_and_invalid_is_silent(
+    tmp_path: Path,
+) -> None:
+    plugin = _plugin(tmp_path, "deploy-tools")
+    _write(
+        plugin / "agents" / "w.md",
+        "---\nname: w\ndescription: 隔离\nisolation: worktree\n---\n正文",
+    )
+    _write(
+        plugin / "agents" / "r.md",
+        "---\nname: r\ndescription: 远程\nisolation: remote\n---\n正文",
+    )
+
+    catalog = discover_agents(tmp_path, env=_env(tmp_path))
+
+    assert catalog.entries["deploy-tools:w"].isolation == "worktree"
+    # 插件 agent 只接受 worktree：其余值上游静默丢弃，不写告警。
+    remote = catalog.entries["deploy-tools:r"]
+    assert remote.isolation == ""
+    assert "isolation" in remote.ignored
+    assert not any("isolation" in item for item in catalog.errors), catalog.errors
+    assert catalog.errors == []

@@ -15,10 +15,17 @@
 5. **skills**：frontmatter 声明的 Skill 在派发时预加载进子代理启动消息
    （``command-message`` 标记头 + 正文），缺名只告警不阻断派发；续聊按上游
    ``kDs`` 的 carriedPreloads 口径跳过上一轮已经带上的正文；
-6. **未支持字段可见**：model / permissionMode / hooks 等不生效的字段进
-   ``agent_ignored``，不能悄悄吞掉让用户以为配置起了作用；
+6. **未支持字段可见**：model / hooks 等不生效的字段进 ``agent_ignored``，不能
+   悄悄吞掉让用户以为配置起了作用；``permissionMode`` / ``isolation`` /
+   ``background`` 属于可生效字段，但只在派发时按"只收紧"规则落地；
 7. **真的接通**：运行时发现目录、系统提示列出类型、spawn_agent 解析类型并把
    定义正文挂进子代理系统提示、``agents.loaded`` 与 ``subagent.started`` 进事件。
+8. **Y 批语义**：``permissionMode`` 只相对派发基线收紧（``plan`` 可以压过隔离
+   副本的 ``accept_edits``，``acceptEdits`` 压不过默认档），生效/忽略都写
+   ``permission.mode.*`` 事件；``isolation: worktree`` 压过调用方的
+   ``isolate: false``；``background: true`` 压过 ``run_in_background: false``；
+   插件 agent 的名字/描述有上游回退，``permissionMode`` / ``hooks`` /
+   ``mcpServers`` 只告警不生效。
 """
 
 from __future__ import annotations
@@ -42,8 +49,14 @@ from blank_api.services.agents_defs import (
     discover_agents,
     load_definition,
 )
-from blank_api.services.models.base import ChatMessage
+from blank_api.services.models.base import ChatMessage, ModelResponse, Usage
 from blank_api.services.models.registry import build_adapter
+from blank_api.services.permissions import (
+    MODE_ACCEPT_EDITS,
+    MODE_BYPASS,
+    MODE_DEFAULT,
+    MODE_PLAN,
+)
 from blank_api.services.subagent import (
     ISOLATED_TOOLS,
     READ_ONLY_TOOLS,
@@ -51,6 +64,7 @@ from blank_api.services.subagent import (
     SubAgentResult,
     SubAgentRunner,
     _child_allowed_tools,
+    _child_permission_mode,
 )
 from blank_api.services.tools.delegate import delegate_tools
 from blank_api.services.tools.skills import (
@@ -68,6 +82,11 @@ from tests.test_agent_v04 import (  # noqa: F401  (env 是夹具，故意导入)
     env,
 )
 from tests.test_background_subagent_v116 import FakeRecorder, SlowAdapter, _session
+from tests.test_claude_fork_v30 import (
+    FakeRunner,
+    RecordingAdapter,
+    _session as _fork_session,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -962,3 +981,339 @@ async def _provider_row(provider_id: str):
 
     async with get_session_factory()() as session:
         return await session.get(ModelProvider, provider_id)
+
+
+# --------------------------------------------------------------------------- #
+# 9. Y 批：permissionMode / isolation / background 的解析与派发语义
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("default", "default"),
+        ("plan", "plan"),
+        ("acceptEdits", "acceptEdits"),
+        ("bypassPermissions", "bypassPermissions"),
+        # 上游 ``Vf``：manual 是 default 的别名。
+        ("manual", "default"),
+    ],
+)
+def test_permission_mode_accepts_claude_names(
+    tmp_path: Path, value: str, expected: str
+) -> None:
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/m.md", _agent(name="m", extra=f"permissionMode: {value}\n"))
+
+    catalog = _discover(root)
+
+    definition = catalog.get("m")
+    assert definition.permission_mode == expected
+    assert definition.ignored == ()
+    assert not any("permissionMode" in item for item in catalog.errors), catalog.errors
+    assert definition.as_dict()["permissionMode"] == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "needle"),
+    [
+        ("yolo", "无效"),
+        # 上游合法，但我们没有对应审批档：识别出来，明确告警，不落进定义。
+        ("auto", "没有对应审批档"),
+        ("dontAsk", "没有对应审批档"),
+        ("42", "必须是字符串"),
+    ],
+)
+def test_permission_mode_invalid_values_are_reported_not_applied(
+    tmp_path: Path, value: str, needle: str
+) -> None:
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/m.md", _agent(name="m", extra=f"permissionMode: {value}\n"))
+
+    catalog = _discover(root)
+
+    definition = catalog.get("m")
+    assert definition is not None
+    assert definition.permission_mode == ""
+    assert "permissionMode" in definition.ignored
+    assert any(needle in item for item in catalog.errors), catalog.errors
+
+
+def test_isolation_worktree_is_kept_and_remote_is_reported(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/w.md", _agent(name="w", extra="isolation: worktree\n"))
+    _write(root / ".blank/agents/r.md", _agent(name="r", extra="isolation: remote\n"))
+    _write(root / ".blank/agents/b.md", _agent(name="b", extra="isolation: bogus\n"))
+    _write(root / ".blank/agents/n.md", _agent(name="n", extra="isolation: 42\n"))
+
+    catalog = _discover(root)
+
+    worktree = catalog.get("w")
+    assert worktree.isolation == "worktree"
+    assert worktree.ignored == ()
+    # 合法值本身不产生问题；b/r/n 各自的告警不归到 w.md。
+    assert not any("w.md" in item for item in catalog.errors), catalog.errors
+
+    remote = catalog.get("r")
+    assert remote.isolation == ""
+    assert "isolation" in remote.ignored
+    assert any("尚未移植" in item for item in catalog.errors), catalog.errors
+
+    assert catalog.get("b").isolation == ""
+    assert "isolation" in catalog.get("b").ignored
+    assert catalog.get("n").isolation == ""
+    assert "isolation" in catalog.get("n").ignored
+
+
+def test_background_only_an_explicit_true_counts(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/t.md", _agent(name="t", extra="background: true\n"))
+    _write(root / ".blank/agents/s.md", _agent(name="s", extra='background: "true"\n'))
+    _write(root / ".blank/agents/f.md", _agent(name="f", extra="background: false\n"))
+    _write(root / ".blank/agents/sf.md", _agent(name="sf", extra='background: "false"\n'))
+    _write(root / ".blank/agents/bad.md", _agent(name="bad", extra="background: 1\n"))
+    _write(root / ".blank/agents/none.md", _agent(name="none"))
+
+    catalog = _discover(root)
+
+    assert catalog.get("t").background is True
+    assert catalog.get("s").background is True
+    assert catalog.get("f").background is False
+    assert catalog.get("sf").background is False
+    assert catalog.get("bad").background is False
+    assert "background" in catalog.get("bad").ignored
+    assert any("background" in item for item in catalog.errors), catalog.errors
+    # 没写这个键不是"配置错误"，不该进忽略审计。
+    assert catalog.get("none").background is False
+    assert "background" not in catalog.get("none").ignored
+
+
+def test_effective_fields_appear_in_the_audit_view(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    _write(
+        root / ".blank/agents/audit.md",
+        _agent(
+            name="audit",
+            extra="permissionMode: plan\nisolation: worktree\nbackground: true\n",
+        ),
+    )
+
+    audit = _discover(root).get("audit").as_dict()
+
+    assert audit["permissionMode"] == "plan"
+    assert audit["isolation"] == "worktree"
+    assert audit["background"] is True
+    assert "ignored" not in audit
+
+
+def test_child_permission_mode_only_tightens() -> None:
+    # 隔离副本的基线是 accept_edits（要能写副本）；plan 更严，可以生效。
+    assert _child_permission_mode(MODE_ACCEPT_EDITS, "plan") == (MODE_PLAN, "applied")
+    assert _child_permission_mode(MODE_ACCEPT_EDITS, "default") == (MODE_DEFAULT, "applied")
+    # 默认档基线不能被定义放宽到 acceptEdits / bypass。
+    assert _child_permission_mode(MODE_DEFAULT, "acceptEdits") == (MODE_DEFAULT, "looser")
+    assert _child_permission_mode(MODE_DEFAULT, "bypassPermissions") == (MODE_DEFAULT, "looser")
+    # plan 基线只能原地或更严（plan 自己）。
+    assert _child_permission_mode(MODE_PLAN, "default") == (MODE_PLAN, "looser")
+    assert _child_permission_mode(MODE_PLAN, "plan") == (MODE_PLAN, "applied")
+    # 没声明就是原样；未知值无法映射。
+    assert _child_permission_mode(MODE_DEFAULT, "") == (MODE_DEFAULT, "")
+    assert _child_permission_mode(MODE_DEFAULT, "auto") == (MODE_DEFAULT, "unsupported")
+    # fork 的权限对象是父会话那一份，声明改不动它。
+    assert _child_permission_mode(
+        MODE_ACCEPT_EDITS, "plan", fork_inherits=True
+    ) == (MODE_ACCEPT_EDITS, "fork_inherits_parent")
+    assert _child_permission_mode(MODE_BYPASS, "default", fork_inherits=True) == (
+        MODE_BYPASS,
+        "fork_inherits_parent",
+    )
+
+
+def _scripted_write(path: str = "note.txt", content: str = "hi") -> ModelResponse:
+    return ModelResponse(
+        text="",
+        usage=Usage(1, 1),
+        model="fork-v30",
+        tool_calls=[
+            {
+                "id": "call-write",
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "arguments": json.dumps({"path": path, "content": content}),
+                },
+            }
+        ],
+    )
+
+
+async def _run_isolated_write(
+    tmp_path: Path, *, permission_mode: str
+) -> tuple[object, SimpleNamespace, RecordingAdapter]:
+    root = tmp_path / "ws"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    adapter = RecordingAdapter(scripted=[_scripted_write()])
+    session = _fork_session(root, adapter)
+    runner = SubAgentRunner().bind(session)
+    request = SubAgentRequest(
+        goal="写一份说明",
+        isolate=True,
+        allowed_tools=("write_file",),
+        permission_mode=permission_mode,
+    )
+    try:
+        result = await runner(request)
+    finally:
+        await runner.aclose("task-fork")
+    return result, session, adapter
+
+
+async def test_declared_plan_mode_denies_writes_that_the_baseline_allows(
+    tmp_path: Path,
+) -> None:
+    """同一份定义与调用，只差 permissionMode：plan 拒写，基线（accept_edits）放行。"""
+
+    planned, planned_session, _ = await _run_isolated_write(
+        tmp_path, permission_mode="plan"
+    )
+    baseline, baseline_session, _ = await _run_isolated_write(
+        tmp_path, permission_mode=""
+    )
+
+    assert planned.ok, planned.error
+    assert baseline.ok, baseline.error
+
+    def write_events(session) -> list[dict]:
+        return [
+            payload
+            for event, payload in session.recorder.events
+            if event == "tool.completed" and payload.get("tool") == "write_file"
+        ]
+
+    planned_write = write_events(planned_session)
+    baseline_write = write_events(baseline_session)
+    assert planned_write and planned_write[0]["status"] == "denied", planned_write
+    assert "计划模式" in planned_write[0]["summary"]
+    assert baseline_write and baseline_write[0]["status"] == "ok", baseline_write
+
+    # 生效值要留在事件里：用户看得到"我写的 plan 真的生效了"。
+    applied = [
+        payload
+        for event, payload in planned_session.recorder.events
+        if event == "permission.mode.applied"
+    ]
+    assert applied and applied[0]["declared"] == "plan"
+    assert applied[0]["baseline"] == MODE_ACCEPT_EDITS
+    assert applied[0]["effective"] == MODE_PLAN
+    assert applied[0]["fork"] is False
+    assert not [
+        event
+        for event, _ in baseline_session.recorder.events
+        if event.startswith("permission.mode.")
+    ]
+
+    started = [
+        payload
+        for event, payload in planned_session.recorder.events
+        if event == "subagent.started"
+    ]
+    assert started[0]["agent_permission_mode"] == MODE_PLAN
+    baseline_started = [
+        payload
+        for event, payload in baseline_session.recorder.events
+        if event == "subagent.started"
+    ]
+    assert baseline_started[0]["agent_permission_mode"] == MODE_ACCEPT_EDITS
+
+
+async def test_continuation_keeps_the_declared_permission_mode(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    root.mkdir(parents=True, exist_ok=True)
+    adapter = RecordingAdapter()
+    session = _fork_session(root, adapter)
+    runner = SubAgentRunner().bind(session)
+    try:
+        first = await runner(SubAgentRequest(goal="第一轮", permission_mode="plan"))
+        second = await runner.send_message(first.agent_id, "第二轮接着看")
+    finally:
+        await runner.aclose("task-fork")
+
+    assert first.ok and second.ok, first.error or second.error
+    applied = [
+        payload
+        for event, payload in session.recorder.events
+        if event == "permission.mode.applied"
+    ]
+    # 两轮都按声明的 plan 生效：续聊不能悄悄退回默认档。
+    assert [item["effective"] for item in applied] == [MODE_PLAN, MODE_PLAN]
+    assert [item["baseline"] for item in applied] == [MODE_DEFAULT, MODE_DEFAULT]
+
+
+async def test_spawn_agent_applies_definition_isolation_and_background(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "ws"
+    _write(
+        root / ".blank/agents/worker.md",
+        _agent(
+            name="worker",
+            extra="isolation: worktree\nbackground: true\npermissionMode: plan\n",
+        ),
+    )
+    _write(root / ".blank/agents/plain.md", _agent(name="plain"))
+    catalog = _discover(root)
+    runner = FakeRunner()
+    tool = _tool_map()["spawn_agent"]
+
+    # 调用方显式 isolate:false / run_in_background:false 都压不住定义。
+    outcome = await tool.handler(
+        _context(root, runner, catalog),
+        {
+            "goal": "按定义跑",
+            "subagent_type": "worker",
+            "isolate": False,
+            "run_in_background": False,
+        },
+    )
+    assert outcome.ok is True, outcome.message
+    assert runner.background_requests, "定义 background:true 必须按后台派出"
+    forced = runner.background_requests[-1]
+    assert forced.isolate is True
+    assert forced.permission_mode == "plan"
+    assert forced.definition_background is True
+    assert runner.requests == []
+
+    # 没有这些声明的定义仍按调用方参数走前台、不隔离。
+    outcome = await tool.handler(
+        _context(root, runner, catalog),
+        {
+            "goal": "普通跑",
+            "subagent_type": "plain",
+            "isolate": False,
+            "run_in_background": False,
+        },
+    )
+    assert outcome.ok is True, outcome.message
+    plain = runner.requests[-1]
+    assert plain.isolate is False
+    assert plain.permission_mode == ""
+    assert plain.definition_background is False
+
+
+async def test_spawn_agents_honours_definition_isolation_and_mode(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    _write(
+        root / ".blank/agents/worker.md",
+        _agent(name="worker", extra="isolation: worktree\npermissionMode: plan\n"),
+    )
+    catalog = _discover(root)
+    runner = RecordingRunner()
+    tool = _tool_map()["spawn_agents"]
+
+    outcome = await tool.handler(
+        _context(root, runner, catalog),
+        {"tasks": [{"goal": "并行跑", "isolate": False, "subagent_type": "worker"}]},
+    )
+
+    assert outcome.ok is True, outcome.message
+    assert runner.requests and runner.requests[-1].isolate is True
+    assert runner.requests[-1].permission_mode == "plan"

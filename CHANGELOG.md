@@ -1,6 +1,41 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）
+
+- **子代理定义的 `permissionMode` / `isolation` / `background` 对齐上游（Y 批）**：
+  文件型与插件 agent 的这三个字段不再当未支持字段。上游锚点：合法档位 `fw` 与
+  `manual`→`default` 别名 `Vf`、严格度 `Ho` 与「只能收紧」判定 `lK`
+  （`vs=lK($t,kr); bs=vs??e.permissionMode`）、隔离生效值 `Szn`（派发参数 ?? 定义
+  值）、后台判定 `Pts`（`background:true` 压过调用方 false）、插件 agent 解析
+  `Skn`（名字/描述回退 + 三类控制告警忽略）。改 `services/agents_defs.py`、
+  `services/subagent.py`、`services/tools/delegate.py`。
+  1. **只收紧不放宽**：本机审批档序列 plan < default < accept_edits < bypass；派发
+     基线隔离副本 accept_edits、非隔离 default。声明档序号不大于基线才生效，更宽的
+     声明忽略并落 `permission.mode.ignored`（reason=`looser`）。上游允许从 default
+     父档升到 acceptEdits；本机隔离副本的基线本身就是 accept_edits（副本要能写），
+     所以定义只能在它之上继续收紧——这是有意偏离，见 README。
+  2. **`auto` / `dontAsk` 只识别不落地**：上游合法，本机没有对应审批档；解析时告警
+     并收进 `agent_ignored`，不猜一个近似档。
+  3. **可观察**：生效/忽略写 `permission.mode.applied|ignored`（declared / baseline /
+     effective / reason / fork），`subagent.started` 带 `agent_permission_mode`；
+     fork 的权限对象就是父会话那一份，声明一律 `fork_inherits_parent`。
+  4. **worktree 强制隔离**：`isolation: worktree` 压过调用方 `isolate:false`；
+     `remote` 未移植，按本地运行并告警；插件 agent 只认 worktree，其余静默丢弃。
+  5. **background 强制后台**：只认显式 true（布尔或字符串），会压过
+     `run_in_background:false`；`false` 等同没写；续聊保留 `permission_mode`。
+  6. **插件回退**：名字缺省用文件名（去掉 `.md`），描述 `description` → `when_to_use`
+     → `when-to-use` → `Agent from <plugin> plugin`；`permissionMode` / `hooks` /
+     `mcpServers` 逐条告警忽略（与上游 `Skn` 一致，真正的控制请放 `.blank/agents/`）。
+  测试：`tests/test_agent_defs_v44.py` 45→62 例（档位解析/`manual` 别名/非法值与
+  `auto`·`dontAsk`、隔离与后台解析、审计视图、收紧表、真跑对照：同一次隔离派发
+  `plan` 拒写而基线放行、续聊两轮仍 plan、工具层 worktree/background 强制、并行批次
+  同样生效）；`tests/test_plugins_v49.py` 26→30 例（名字/描述回退、三类控制告警、
+  worktree 生效与非法静默）。Y 批变异 13/13 红（丢严格度比较、`run_subagent` 忽略
+  声明、started 事件不报生效档、续聊丢声明、worktree 不强制隔离、background 不强制
+  后台、丢 `manual` 别名、`remote` 当生效值、插件名字回退、描述回退、忽略循环、非法
+  隔离告警、worktree 解析）。相邻套件（fork / 子代理默认后台 / 子代理 / 子代理用量 /
+  续聊 / 插件 / Skill / 命令 / skill 工具 / 提案）184 passed；扩到边界/工作树/证据
+  20 个套件 **384 passed**。全量后端回归：**3440 passed, 28 skipped, rc=0**（730.11s）。
 
 - **子代理 frontmatter 的 `skills` 预加载对齐上游 `OI` + `formatSkillLoadingMetadata`（X 批）**：
   文件型与插件 agent 的 `skills` 不再当未支持字段，派发前把声明 Skill 的正文预加载成一条

@@ -28,7 +28,13 @@ from blank_api.services.agent.usage import account_call, merge_usage
 from blank_api.services.agents_defs import BUILTIN_AGENT, MAX_INSTRUCTIONS_CHARS
 from blank_api.services.hooks import HookRunner
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
-from blank_api.services.permissions import MODE_ACCEPT_EDITS, MODE_DEFAULT, PermissionPolicy
+from blank_api.services.permissions import (
+    MODE_ACCEPT_EDITS,
+    MODE_BYPASS,
+    MODE_DEFAULT,
+    MODE_PLAN,
+    PermissionPolicy,
+)
 from blank_api.services.safety import SafetyPolicy
 from blank_api.services.sandbox.tiers import TierDowngrade, assert_not_looser
 from blank_api.services.tools.base import ToolContext
@@ -167,6 +173,11 @@ class SubAgentRequest:
     # 只能前台跑——后台拿的是派发那一刻的快照，父会话之后的变化它看不见，
     # 结论回来时父会话多半已经走远了。
     fork: bool = False
+    # 定义里声明的 Claude permissionMode（已规范成 default/plan/acceptEdits/
+    # bypassPermissions 之一）。只用于相对派发基线收紧；fork 直接继承父权限。
+    permission_mode: str = ""
+    # 定义里写了 ``background: true``：上游会压过调用方的 ``run_in_background=false``。
+    definition_background: bool = False
 
     def normalized(self) -> "SubAgentRequest":
         return SubAgentRequest(
@@ -186,6 +197,8 @@ class SubAgentRequest:
             skills=tuple(self.skills or ()),
             agent_ignored=tuple(self.agent_ignored or ()),
             fork=bool(self.fork),
+            permission_mode=str(self.permission_mode or "").strip(),
+            definition_background=bool(self.definition_background),
         )
 
 
@@ -362,6 +375,47 @@ def _session_provider(session) -> tuple[str, str]:
         role_ids.get("subagent") or getattr(session, "provider_id", "") or "",
         getattr(session, "provider_name", "") or "",
     )
+
+
+# Claude 的 permissionMode 名字 → 本机审批档。数字越小越严，与上游 ``Ho``
+# （plan < default < acceptEdits < bypassPermissions）同一顺序。
+PERMISSION_MODE_MAP: dict[str, str] = {
+    "plan": MODE_PLAN,
+    "default": MODE_DEFAULT,
+    "acceptEdits": MODE_ACCEPT_EDITS,
+    "bypassPermissions": MODE_BYPASS,
+}
+_MODE_RANK: dict[str, int] = {
+    MODE_PLAN: 0,
+    MODE_DEFAULT: 1,
+    MODE_ACCEPT_EDITS: 2,
+    MODE_BYPASS: 3,
+}
+
+
+def _child_permission_mode(
+    baseline: str, declared: str, *, fork_inherits: bool = False
+) -> tuple[str, str]:
+    """把定义里声明的 permissionMode 压到派发基线上：只收紧，不放宽。
+
+    对齐上游 ``lK(spawn, current)``：档位序号不大于当前基线才生效。fork 分身
+    的权限对象就是父会话那一份，声明无权改动它。返回 ``(生效档, 判定)``，判定
+    为空串表示没有声明，其余为 ``applied`` / ``looser`` / ``unsupported`` /
+    ``fork_inherits_parent``，供调用方写进事件。
+    """
+    if not declared:
+        return baseline, ""
+    if fork_inherits:
+        return baseline, "fork_inherits_parent"
+    mapped = PERMISSION_MODE_MAP.get(declared)
+    if mapped is None:
+        return baseline, "unsupported"
+    base_rank = _MODE_RANK.get(baseline)
+    if base_rank is None:
+        return baseline, "unsupported"
+    if _MODE_RANK[mapped] > base_rank:
+        return baseline, "looser"
+    return mapped, "applied"
 
 
 def _inherited_watermark(session) -> dict:
@@ -588,13 +642,46 @@ async def run_subagent(
         )
     else:
         gateway = ToolGateway(tools, defer=False)
-    permissions = parent_permissions or PermissionPolicy.build(
-        MODE_ACCEPT_EDITS if isolated else MODE_DEFAULT,
-        approved_tools=set(),
-        approved_actions=set(),
-        # 子代理继承父任务的档位，不许自己挑一个更宽的执行边界。
-        sandbox_tier=sandbox_tier,
+    baseline_mode = MODE_ACCEPT_EDITS if isolated else MODE_DEFAULT
+    log = _Recorder(
+        recorder,
+        agent_path=agent_path,
+        depth=depth,
+        parent_thread_id=parent_thread_id,
+        root_thread_id=root_thread_id,
     )
+    if parent_permissions is not None:
+        # fork 的权限对象就是父会话那一份：定义里再写 permissionMode 也改不动它。
+        permissions = parent_permissions
+        parent_mode = str(getattr(parent_permissions, "mode", baseline_mode) or baseline_mode)
+        effective_mode, verdict = _child_permission_mode(
+            parent_mode, request.permission_mode, fork_inherits=True
+        )
+    else:
+        effective_mode, verdict = _child_permission_mode(
+            baseline_mode, request.permission_mode
+        )
+        permissions = PermissionPolicy.build(
+            effective_mode,
+            approved_tools=set(),
+            approved_actions=set(),
+            # 子代理继承父任务的档位，不许自己挑一个更宽的执行边界。
+            sandbox_tier=sandbox_tier,
+        )
+    if verdict:
+        # 声明了却没生效必须留痕：用户以为写了 plan，实际仍在 acceptEdits，
+        # 这条事件是唯一能看出差别的地方。
+        await log.add(
+            "permission.mode.applied" if verdict == "applied" else "permission.mode.ignored",
+            "subagent",
+            {
+                "declared": request.permission_mode,
+                "baseline": parent_mode if parent_permissions is not None else baseline_mode,
+                "effective": effective_mode,
+                "reason": verdict,
+                "fork": bool(request.fork),
+            },
+        )
     context = ToolContext(
         root=run_root,
         task_id=task_id,
@@ -613,13 +700,6 @@ async def run_subagent(
         # 子树在本轮结束即删除/合并：后台命令活不到有人取结果的时候，入口直接关掉。
         # fork 在同一个工作区里跑，父会话能开的它也能开。
         allow_background_shell=bool(allow_background_shell),
-    )
-    log = _Recorder(
-        recorder,
-        agent_path=agent_path,
-        depth=depth,
-        parent_thread_id=parent_thread_id,
-        root_thread_id=root_thread_id,
     )
     compactor = ContextCompactor(**(watermark or {}))
     base_text = FORK_SYSTEM if request.fork else SUBAGENT_SYSTEM
@@ -944,6 +1024,18 @@ class SubAgentRunner:
         else:
             allowed = _child_allowed_tools(request)
             tools = [tool for tool in _all_tools() if tool.name in allowed]
+        # 事件里报的是真正会生效的那一档（定义只收紧；fork 报父会话的档）。
+        started_mode = MODE_ACCEPT_EDITS if request.isolate else MODE_DEFAULT
+        fork_permissions = getattr(session, "permissions", None)
+        if request.fork and fork_permissions is not None:
+            started_mode = str(
+                getattr(fork_permissions, "mode", started_mode) or started_mode
+            )
+        started_mode, _ = _child_permission_mode(
+            started_mode,
+            request.permission_mode,
+            fork_inherits=bool(request.fork and fork_permissions is not None),
+        )
         await session.recorder.add(
             "subagent.started",
             "subagent",
@@ -956,6 +1048,7 @@ class SubAgentRunner:
                 "agent_ignored": list(request.agent_ignored),
                 "agent_tools": sorted(allowed),
                 "agent_skills": list(request.skills),
+                "agent_permission_mode": started_mode,
                 "agent_path": prepared.agent_path,
                 "agent_id": prepared.agent_id,
                 "depth": prepared.depth,
@@ -1033,6 +1126,7 @@ class SubAgentRunner:
             "disallowed_tools": list(prepared.request.disallowed_tools),
             "agent_ignored": list(prepared.request.agent_ignored),
             "skills": list(prepared.request.skills),
+            "permission_mode": prepared.request.permission_mode,
             "max_steps": prepared.request.max_steps,
             "fork": bool(prepared.request.fork),
         }
@@ -1084,7 +1178,9 @@ class SubAgentRunner:
             agent_ignored=tuple(entry.get("agent_ignored") or ()),
             skills=tuple(entry.get("skills") or ()),
             # 续聊是同一个子代理接着说话：fork 的工具面与权限也必须跟着回来，
-            # 否则第二轮会悄悄退回到只读基线。
+            # 否则第二轮会悄悄退回到只读基线。定义里声明的审批档同样要记住，
+            # 免得第一轮是 plan、第二轮却按 default 问一遍。
+            permission_mode=str(entry.get("permission_mode") or ""),
             fork=bool(entry.get("fork")),
         ).normalized()
         if not request.goal:
@@ -1493,6 +1589,10 @@ class SubAgentRunner:
                 request.keep_worktree = keep
                 request.parallel_group = group
                 allowed = _child_allowed_tools(request)
+                started_mode, _ = _child_permission_mode(
+                    MODE_ACCEPT_EDITS if request.isolate else MODE_DEFAULT,
+                    request.permission_mode,
+                )
                 await session.recorder.add(
                     "subagent.started",
                     "subagent",
@@ -1503,6 +1603,7 @@ class SubAgentRunner:
                         "agent_type": request.agent_name or BUILTIN_AGENT,
                         "agent_ignored": list(request.agent_ignored),
                         "agent_tools": sorted(allowed),
+                        "agent_permission_mode": started_mode,
                         "agent_path": agent_path,
                         "depth": depth,
                         "parent_thread_id": session.trace_id,
