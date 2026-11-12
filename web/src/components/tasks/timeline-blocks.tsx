@@ -21,7 +21,7 @@ import type { HistoryRef } from "./status";
 import { ReplyView } from "./reply";
 import { describeTool, type ToolFact } from "./tool-display";
 import type { Block, TermLine } from "./timeline";
-import { approvalGrantOptions, type ApprovalScope } from "./api";
+import { approvalGrantOptions, type AnswerValues, type ApprovalScope } from "./api";
 import { groupByMilestone, statusLabel, statusMark } from "./plan";
 import { BlockIcon } from "./bits";
 
@@ -466,13 +466,28 @@ function QuestionCard({
   block: Extract<Block, { kind: "question" }>;
   busy: boolean;
   onAnswer: (
-    answers: Record<string, string>,
+    answers: AnswerValues,
     block: Extract<Block, { kind: "question" }>,
   ) => void;
 }) {
-  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [draft, setDraft] = useState<AnswerValues>({});
   const answered = block.state === "answered";
-  const complete = block.questions.every((item) => (draft[item.id] ?? "").trim().length > 0);
+  // 多选题的答案是数组；单选是字符串。判"答完没有"必须按形状分开看，
+  // 否则 [] 会被当成非空、空串会被数组分支放过。
+  const filled = (id: string): boolean => {
+    const value = draft[id];
+    return Array.isArray(value) ? value.length > 0 : Boolean((value ?? "").trim());
+  };
+  const complete = block.questions.every((item) => filled(item.id));
+  const selected = (id: string, label: string): boolean => {
+    const value = draft[id];
+    return Array.isArray(value) ? value.includes(label) : value === label;
+  };
+  const activePreview = block.questions
+    .flatMap((item) =>
+      item.options.filter((option) => selected(item.id, option.label) && option.preview),
+    )
+    .map((option) => option.preview)[0];
 
   return (
     <CardShell
@@ -497,14 +512,23 @@ function QuestionCard({
           {!answered && item.options.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {item.options.map((option) => {
-                const active = draft[item.id] === option.label;
+                const active = selected(item.id, option.label);
                 return (
                   <button
                     key={option.label}
                     type="button"
                     title={option.description || undefined}
                     disabled={busy}
-                    onClick={() => setDraft((prev) => ({ ...prev, [item.id]: option.label }))}
+                    onClick={() =>
+                      setDraft((prev) => {
+                        if (!item.multiSelect) return { ...prev, [item.id]: option.label };
+                        const current = Array.isArray(prev[item.id]) ? (prev[item.id] as string[]) : [];
+                        const next = current.includes(option.label)
+                          ? current.filter((value) => value !== option.label)
+                          : [...current, option.label];
+                        return { ...prev, [item.id]: next };
+                      })
+                    }
                     className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${
                       active
                         ? "border-brand/50 bg-brand/15 text-text"
@@ -519,7 +543,7 @@ function QuestionCard({
           )}
           {!answered && item.allowFreeText && (
             <input
-              value={draft[item.id] ?? ""}
+              value={typeof draft[item.id] === "string" ? (draft[item.id] as string) : ""}
               onChange={(event) => setDraft((prev) => ({ ...prev, [item.id]: event.target.value }))}
               placeholder={item.options.length ? "或者直接写你的答案" : "写下你的答案"}
               className="w-full rounded border border-line bg-transparent px-2 py-1.5 text-[12px] text-text outline-none focus:border-brand/60 placeholder:text-faint"
@@ -527,6 +551,12 @@ function QuestionCard({
           )}
         </div>
       ))}
+      {!answered && activePreview && (
+        // preview 是模型给的 HTML 片段：这里只按纯文本展示，绝不塞进 innerHTML。
+        <pre className="max-h-40 overflow-auto rounded-md border border-line bg-surface/70 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-text/85">
+          {activePreview}
+        </pre>
+      )}
       {answered ? (
         <p className="text-[12px] text-text/80">已按你的回答继续执行{block.answers ? `：${clip(block.answers, 120)}` : ""}</p>
       ) : (
@@ -720,7 +750,7 @@ export function TimelineBlock({
     scope?: ApprovalScope,
   ) => void;
   onAnswer: (
-    answers: Record<string, string>,
+    answers: AnswerValues,
     block: Extract<Block, { kind: "question" }>,
   ) => void;
 }) {

@@ -95,6 +95,10 @@ READ_ONLY_TOOLS = frozenset(
         "set_goal",
         "git",
         "request_user_input",
+        # 两个提案工具都不写工作区：目标落在会话行上，技能提案落在 skills 表里，
+        # 都要用户去界面点采用才会生效。计划模式反而最该先把目标与流程问清。
+        "propose_goal",
+        "propose_skills",
         "web_search",
         "web_fetch",
         "read_notes",

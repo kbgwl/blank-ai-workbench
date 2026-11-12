@@ -3,10 +3,12 @@ import { test } from "node:test";
 
 import { countSkills, preview, skillState, skillSummary } from "./format.ts";
 
-test("只认后端那三个状态；其余一律念「状态未知」", () => {
+test("只认后端那几个状态；其余一律念「状态未知」", () => {
   assert.equal(skillState("active"), "active");
   assert.equal(skillState(" DRAFT "), "draft");
   assert.equal(skillState("disabled"), "disabled");
+  // proposed 是模型提案，不是用户确认过的做法：单独一档，不能挤进 draft。
+  assert.equal(skillState("proposed"), "proposed");
   assert.equal(skillState("archived"), "unknown");
   assert.equal(skillState(""), "unknown");
   assert.equal(skillState(null), "unknown");
@@ -32,8 +34,9 @@ test("超长说明截断并加省略号，短说明原样返回", () => {
   assert.equal(preview("字".repeat(10), 10), "字".repeat(10));
 });
 
-test("计数只数 active，未知状态不算已启用", () => {
+test("计数只数 active：未知状态与提案都不算已启用", () => {
   assert.deepEqual(countSkills(["active", "draft", "active", "odd"]), { active: 2, total: 4 });
+  assert.deepEqual(countSkills(["proposed", "active"]), { active: 1, total: 2 });
   assert.deepEqual(countSkills([]), { active: 0, total: 0 });
 });
 

@@ -6,6 +6,7 @@ import { errorMessage } from "@/lib/http";
 import { formatDateTime } from "@/components/tasks/format";
 import {
   acceptMemoryCandidate,
+  acceptSkillProposal,
   deleteSkill,
   disableSkill,
   enableSkill,
@@ -21,8 +22,14 @@ const STATE_TONE: Record<ReturnType<typeof skillState>, string> = {
   active: "border-accent/30 bg-accent/10 text-accent",
   draft: "border-warn/30 bg-warn/10 text-warn",
   disabled: "border-line bg-surface-2 text-muted",
+  proposed: "border-brand/30 bg-brand/10 text-brand",
   unknown: "border-danger/25 bg-danger/[0.06] text-danger",
 };
+
+function metaText(skill: Skill, key: string): string {
+  const value = skill.metadata?.[key];
+  return typeof value === "string" ? value : "";
+}
 
 /**
  * 技能：用户确认过的做法，启用后会作为「工作偏好」进入每一轮的系统提示。
@@ -108,6 +115,38 @@ export function SkillsView() {
     }
   }
 
+  async function adopt(proposal: Skill) {
+    setBusy(proposal.id);
+    setError("");
+    try {
+      // improvement 会并入目标 Skill（提案行随之消失），new 会转成 draft；
+      // 两种都得整表重读，不能只替换一行。
+      await acceptSkillProposal(proposal.id);
+      const rows = await fetchSkills();
+      setSkills(rows);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function discardProposal(proposal: Skill) {
+    if (!window.confirm(`丢弃提案「${proposal.name}」？丢弃后不可恢复。`)) return;
+    setBusy(proposal.id);
+    setError("");
+    try {
+      await deleteSkill(proposal.id);
+      setSkills((rows) => (rows ?? []).filter((row) => row.id !== proposal.id));
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const proposals = (skills ?? []).filter((row) => skillState(row.status) === "proposed");
+  const confirmed = (skills ?? []).filter((row) => skillState(row.status) !== "proposed");
   const pending = (candidates ?? []).filter((row) => row.status === "pending");
 
   return (
@@ -127,10 +166,64 @@ export function SkillsView() {
       )}
 
       <div className="flex flex-col gap-4">
-        <Panel title="已确认的做法" hint={skills === null ? "读取中…" : skillSummary((skills ?? []).map((s) => s.status))}>
+        {proposals.length > 0 && (
+          <Panel title="待采用的提案" hint={`${proposals.length} 条模型提的建议`}>
+            <p className="mb-2 text-[11.5px] leading-relaxed text-muted">
+              这些是模型在任务里主动提的技能建议。采用才会落成草案或并入目标技能；
+              丢弃后就从列表里消失。
+            </p>
+            <div className="space-y-1.5">
+              {proposals.map((proposal) => {
+                const target = metaText(proposal, "target");
+                const kind = metaText(proposal, "kind");
+                return (
+                  <div
+                    key={proposal.id}
+                    className="flex items-start gap-3 rounded-lg border border-brand/25 bg-brand/[0.03] px-3 py-2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-[12.5px] font-medium">{proposal.name}</span>
+                        <span className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${STATE_TONE.proposed}`}>
+                          {kind === "improvement" ? "改进" : "新技能"}
+                        </span>
+                      </div>
+                      {target && (
+                        <p className="mt-0.5 font-mono text-[10px] text-faint">目标：{target}</p>
+                      )}
+                      <p className="mt-1 text-[11.5px] leading-relaxed text-muted">
+                        {metaText(proposal, "description") || preview(proposal.instructions) || "（没有说明）"}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        disabled={busy === proposal.id}
+                        onClick={() => void adopt(proposal)}
+                        className="rounded-md border border-brand/40 bg-brand/10 px-2 py-1 text-[11.5px] text-brand transition-colors hover:bg-brand/15 disabled:opacity-50"
+                      >
+                        采用
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy === proposal.id}
+                        onClick={() => void discardProposal(proposal)}
+                        className="rounded-md border border-line-strong bg-surface px-2 py-1 text-[11.5px] text-muted transition-colors hover:text-danger disabled:opacity-50"
+                      >
+                        丢弃
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Panel>
+        )}
+
+        <Panel title="已确认的做法" hint={skills === null ? "读取中…" : skillSummary(confirmed.map((s) => s.status))}>
           {skills === null && <div className="space-y-2">{[0, 1].map((row) => <div key={row} className="h-10 animate-pulse rounded-md bg-surface-2" />)}</div>}
 
-          {skills !== null && skills.length === 0 && (
+          {skills !== null && confirmed.length === 0 && (
             <p className="py-4 text-center text-[12px] leading-relaxed text-faint">
               还没有技能。
               <br />
@@ -139,7 +232,7 @@ export function SkillsView() {
           )}
 
           <div className="space-y-1.5">
-            {(skills ?? []).map((skill) => {
+            {confirmed.map((skill) => {
               const state = skillState(skill.status);
               const active = state === "active";
               return (

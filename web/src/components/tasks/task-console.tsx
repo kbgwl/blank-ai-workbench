@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Panel } from "@/components/panel";
 import { Notice, Spinner } from "@/components/projects/ui";
-import { isTerminalStatus, type AgentEvent, type ApprovalScope, type Task } from "./api";
+import { isTerminalStatus, type AgentEvent, type AnswerValues, type ApprovalScope, type Task } from "./api";
 import { LiveBadge, StatusBadge } from "./bits";
 import { formatDateTime, relativeTime } from "./format";
 import { buildBlocks, type Block } from "./timeline";
@@ -31,7 +31,7 @@ type Props = {
   ) => void;
   /** 回答 Agent 的提问：与审批同一条中断通道，只是恢复值换成答案。 */
   onAnswer: (
-    answers: Record<string, string>,
+    answers: AnswerValues,
     block: Extract<Block, { kind: "question" }>,
   ) => void;
   onReload: () => void;

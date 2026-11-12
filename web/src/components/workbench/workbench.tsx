@@ -18,6 +18,7 @@ import {
   runTask,
   steerTask,
   type AgentEvent,
+  type AnswerValues,
   type ApprovalScope,
   type Evidence,
   type Project,
@@ -402,7 +403,7 @@ export function Workbench() {
   );
 
   const onAnswer = useCallback(
-    async (answers: Record<string, string>, block: Extract<Block, { kind: "question" }>) => {
+    async (answers: AnswerValues, block: Extract<Block, { kind: "question" }>) => {
       if (!selectedId) return;
       setBusy("answer");
       setApprovalKey(block.key);

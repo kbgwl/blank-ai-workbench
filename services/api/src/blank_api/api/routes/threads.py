@@ -114,6 +114,7 @@ async def _detail(db: AsyncSession, thread: Thread) -> ThreadDetailOut:
         forked_from=thread.forked_from,
         turn_count=int(thread.turn_count or 0),
         last_turn_status=latest.get(thread.id, ""),
+        session_goal=str(thread.session_goal or ""),
         created_at=thread.created_at,
         updated_at=thread.updated_at,
         turns=[_turn_out(task) for task in turns],
@@ -232,6 +233,30 @@ async def read_goal(thread_id: str, db: DbSession):
     tracker = GoalTracker(db)
     goal = await tracker.active(thread.id) or await tracker.latest(thread.id)
     return GoalOut.model_validate(goal) if goal is not None else None
+
+
+@router.get("/threads/{thread_id}/session-goal")
+async def read_session_goal(thread_id: str, db: DbSession) -> dict[str, str]:
+    """会话级目标（ProposeGoal）的当前值。空串＝没设置。
+
+    与上面的 ``/goal`` 是两回事：那条返回产品级 Goal（状态、步骤、预算），
+    这条只返回用户确认过的一句话。前端要在顶部显示"这次会话要达成什么"读这条。
+    """
+    thread = await thread_or_404(db, thread_id)
+    return {"thread_id": thread.id, "session_goal": str(thread.session_goal or "")}
+
+
+@router.delete("/threads/{thread_id}/session-goal")
+async def clear_session_goal_route(thread_id: str, db: DbSession) -> dict[str, str]:
+    """用户显式清除会话目标。清掉之后下一轮不再注入它。
+
+    返回被清掉的那句：用户点"清除"时界面要能确认清的是哪一条，而不是只看到一个 204。
+    """
+    thread = await thread_or_404(db, thread_id)
+    previous = str(thread.session_goal or "")
+    thread.session_goal = ""
+    await db.commit()
+    return {"thread_id": thread.id, "session_goal": "", "cleared": previous}
 
 
 @router.post("/threads/{thread_id}/turns", response_model=TaskOut, status_code=201)

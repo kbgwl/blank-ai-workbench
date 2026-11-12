@@ -1263,6 +1263,8 @@ function QuestionBlock({
   const options = question.options ?? [];
   const multi = question.multiSelect === true;
   const selected = multi ? value.split("\n").filter(Boolean) : [value].filter(Boolean);
+  // 多选与 preview 在后端就互斥（选多个时预览区显示哪一个没有定义）。
+  const activePreview = multi ? "" : options.find((option) => option.label === value)?.preview ?? "";
 
   function toggle(label: string) {
     if (!multi) {
@@ -1307,6 +1309,12 @@ function QuestionBlock({
           placeholder={options.length > 0 ? "或者直接输入…" : "输入你的回答…"}
           className="mt-2 w-full rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[12px] placeholder:text-faint focus:border-brand/60 focus:outline-none"
         />
+      )}
+      {activePreview && (
+        // 与任务页同一口径：模型给的 HTML 片段只按纯文本展示。
+        <pre className="mt-2 max-h-40 overflow-auto rounded-lg border border-line bg-surface-2 px-2.5 py-2 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap text-text/85">
+          {activePreview}
+        </pre>
       )}
     </div>
   );

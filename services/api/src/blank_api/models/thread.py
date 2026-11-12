@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from blank_api.db import Base
@@ -42,6 +42,12 @@ class Thread(Base):
     # 在一个有几百轮的会话上会变成列表接口的主要开销。
     turn_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
+    )
+    # 会话级目标（对齐 Claude 的 ProposeGoal）：由用户确认后跨轮保留，注入后续
+    # 每一轮的系统提示。与 goals 表的产品级长期目标不是一回事——那条按会话/项目
+    # 追踪状态与步骤，这里只是「这一串对话要达成什么」的一句话条件。空串＝没设置。
+    session_goal: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=text("('')")
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

@@ -20,6 +20,7 @@ import {
   forkThread,
   isMissingEndpoint,
   runTask,
+  type AnswerValues,
   type ApprovalScope,
   type Evidence,
   type Project,
@@ -252,7 +253,7 @@ export function TasksView({ initialTaskId = null }: Props) {
   /** 回答 Agent 的提问：POST /tasks/{id}/answer，答案回填后从断点继续。 */
   const answer = useCallback(
     async (
-      answers: Record<string, string>,
+      answers: AnswerValues,
       block?: Extract<Block, { kind: "question" }>,
     ) => {
       if (!selectedId) return;

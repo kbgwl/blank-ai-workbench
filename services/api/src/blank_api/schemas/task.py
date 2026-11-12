@@ -137,11 +137,29 @@ class TaskApprovalIn(BaseModel):
     scope: Literal["once", "prefix", "tool"] = "once"
 
 
-class TaskAnswerIn(BaseModel):
-    """回答 Agent 的提问：按问题 id 回填，或直接给一个自由文本答案。"""
+class AnswerAnnotation(BaseModel):
+    """逐题备注（对齐 Claude AskUserQuestion 的 annotations[问题]。{preview, notes}）。
 
-    answers: dict[str, str] = Field(default_factory=dict, max_length=8)
+    preview 是用户看到并选中那一段的展示内容，不进模型上下文；notes 是用户自己
+    写的补充，会渲染给模型。两者都由前端原样回传，长度在服务端再截一次。
+    """
+
+    preview: str = Field(default="", max_length=4000)
+    notes: str = Field(default="", max_length=4000)
+
+
+class TaskAnswerIn(BaseModel):
+    """回答 Agent 的提问：按问题 id / 问题文本回填，或直接给一个自由文本答案。
+
+    ``answers`` 的值可以是字符串（单选）或字符串数组（多选）。Claude 的回执是
+    逗号串，HTTP 客户端更自然的是数组；两种都收，落账前统一成同一形状。
+    """
+
+    answers: dict[str, str | list[str]] = Field(default_factory=dict, max_length=8)
     answer: str = Field(default="", max_length=4000)
+    # 跨题的「补充」一句话（Claude 的 response）与逐题注解。
+    response: str = Field(default="", max_length=4000)
+    annotations: dict[str, AnswerAnnotation] = Field(default_factory=dict, max_length=8)
     provider_id: str | None = None
 
 

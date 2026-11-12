@@ -5,7 +5,7 @@ import { Button } from "@/components/projects/ui";
 import { formatDuration } from "../tasks/format";
 import { guardianReviewLabel } from "../tasks/status";
 import { approvalGrantOptions } from "../tasks/api";
-import type { AttachmentRef, PendingApproval, PendingQuestion } from "../tasks/api";
+import type { AnswerValues, AttachmentRef, PendingApproval, PendingQuestion } from "../tasks/api";
 import { MarkdownView } from "./markdown-view";
 import { StepView } from "./steps";
 import type { BotStep, StepFilter } from "./turns";
@@ -136,14 +136,27 @@ function QuestionCard({
   busy,
 }: {
   questions: PendingQuestion[];
-  onAnswer: (answers: Record<string, string>) => void;
+  onAnswer: (answers: AnswerValues) => void;
   busy: boolean;
 }) {
-  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [draft, setDraft] = useState<AnswerValues>({});
   // 每题都有推荐项才允许「按默认继续」：事实题没有默认值，放空等于让服务器替用户编。
   const canDefault =
     questions.length > 0 &&
     questions.every((question) => question.options.some((option) => option.recommended));
+  const hasAnswer = (question: PendingQuestion): boolean => {
+    const value = draft[question.id];
+    return Array.isArray(value) ? value.length > 0 : Boolean((value ?? "").trim());
+  };
+  const isSelected = (id: string, label: string): boolean => {
+    const value = draft[id];
+    return Array.isArray(value) ? value.includes(label) : value === label;
+  };
+  const preview = questions
+    .flatMap((question) =>
+      question.options.filter((option) => isSelected(question.id, option.label) && option.preview),
+    )
+    .map((option) => option.preview)[0];
   return (
     <div className="my-2 rounded-xl border border-brand/30 bg-brand/[0.03] p-3">
       <p className="text-[12.5px] font-medium text-brand">它想先问你一句</p>
@@ -158,9 +171,22 @@ function QuestionCard({
                     key={option.label}
                     type="button"
                     title={option.description}
-                    onClick={() => setDraft((current) => ({ ...current, [question.id]: option.label }))}
+                    onClick={() =>
+                      setDraft((current) => {
+                        if (!question.multiSelect) {
+                          return { ...current, [question.id]: option.label };
+                        }
+                        const picked = Array.isArray(current[question.id])
+                          ? (current[question.id] as string[])
+                          : [];
+                        const next = picked.includes(option.label)
+                          ? picked.filter((value) => value !== option.label)
+                          : [...picked, option.label];
+                        return { ...current, [question.id]: next };
+                      })
+                    }
                     className={`rounded-md border px-2 py-1 text-[11.5px] transition-colors ${
-                      draft[question.id] === option.label
+                      isSelected(question.id, option.label)
                         ? "border-brand/60 bg-brand/[0.08] text-brand"
                         : "border-line bg-surface text-muted hover:border-line-strong hover:text-text"
                     }`}
@@ -175,7 +201,7 @@ function QuestionCard({
             )}
             {question.allowFreeText && (
               <input
-                value={draft[question.id] ?? ""}
+                value={typeof draft[question.id] === "string" ? (draft[question.id] as string) : ""}
                 onChange={(event) => setDraft((current) => ({ ...current, [question.id]: event.target.value }))}
                 placeholder="或者直接写你的答案"
                 className="mt-1.5 w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-[12px] text-text placeholder:text-faint focus:border-brand/60 focus:outline-none"
@@ -184,10 +210,16 @@ function QuestionCard({
           </div>
         ))}
       </div>
+      {preview && (
+        // 模型给的 HTML 片段一律按纯文本展示：不在 innerHTML 里跑它的标签。
+        <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-line bg-surface px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-text/85">
+          {preview}
+        </pre>
+      )}
       <div className="mt-2.5 flex items-center gap-2">
         <Button
           variant="primary"
-          disabled={busy || Object.values(draft).every((value) => !value?.trim())}
+          disabled={busy || questions.every((question) => !hasAnswer(question))}
           onClick={() => onAnswer(draft)}
         >
           回答并继续
@@ -223,7 +255,7 @@ export type TurnViewProps = {
   questions: PendingQuestion[];
   actionBusy: boolean;
   onDecide: (approval: PendingApproval, decision: "approve" | "deny", scope: "once" | "prefix" | "tool") => void;
-  onAnswer: (questions: PendingQuestion[], answers: Record<string, string>) => void;
+  onAnswer: (questions: PendingQuestion[], answers: AnswerValues) => void;
   onRetry: () => void;
 };
 

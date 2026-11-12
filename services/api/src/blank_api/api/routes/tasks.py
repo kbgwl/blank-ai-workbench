@@ -67,6 +67,7 @@ from blank_api.services.agent.live import LiveFeed
 from blank_api.services import metrics
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.agent.vision import supports_vision
+from blank_api.services.tools.ask import parse_answers
 from blank_api.services.fork import FORK_EVENT, fork_thread
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
 from blank_api.services.agent.queue import abandon_run, claim_run, enqueue_run, finish_run, renew_run
@@ -800,7 +801,7 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
     # 按需加载。只取正文的老形状会把每个启用 Skill 的全文注进每一轮。
     active_skills = (
         await db.execute(
-            select(Skill.name, Skill.instructions)
+            select(Skill.name, Skill.instructions, Skill.metadata_json)
             .where(Skill.status == "active")
             .order_by(Skill.updated_at)
         )
@@ -847,7 +848,12 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         # 开关不会自己变，图会被静默降级。见 services/agent/vision.py。
         "supports_vision": supports_vision(bool(provider.supports_vision), provider.default_model),
         "skill_catalog": [
-            {"name": str(row.name), "instructions": str(row.instructions or "")}
+            {
+                "name": str(row.name),
+                "instructions": str(row.instructions or ""),
+                # 提案采用时写进 metadata 的一句话说明：比从正文首行压出来的准。
+                "description": str((row.metadata_json or {}).get("description") or ""),
+            }
             for row in active_skills
         ],
         # 会话上下文由运行时自己读：这里只告诉它"这一轮属于哪条会话"。
@@ -1843,7 +1849,18 @@ async def answer_question(
             status_code=409,
         )
     known = {str(item.get("id") or "") for item in questions}
-    answers = {key: str(value)[:4000] for key, value in payload.answers.items() if key in known}
+    # 三种键都认：问题 id、问题原文、header（Claude 的回执按问题文本做键）。
+    # 多选答案按 ", " 拼成一段——与 ask._value_text 的落账形状一致。
+    answers = {
+        key: str(value)[:4000]
+        for key, value in parse_answers({"answers": payload.answers}, questions).items()
+        if str(value).strip()
+    }
+    annotation_payload = {
+        name: {field: text for field, text in item.model_dump().items() if text}
+        for name, item in payload.annotations.items()
+    }
+    annotation_payload = {name: item for name, item in annotation_payload.items() if item}
     if payload.answer.strip():
         first = str(questions[0].get("id") or "")
         answers.setdefault(first, payload.answer.strip()[:4000])
@@ -1866,17 +1883,24 @@ async def answer_question(
                 status_code=409,
             )
 
+    decided: dict = {"answers": answers, "questions": sorted(known)}
+    response = payload.response.strip()[:4000]
+    if response:
+        decided["response"] = response
+    if annotation_payload:
+        decided["annotations"] = annotation_payload
     await EventRecorder(get_session_factory(), task_id).add(
-        "question.decided",
-        "execute_action",
-        {"answers": answers, "questions": sorted(known)},
+        "question.decided", "execute_action", decided
     )
     run_request = await _run_request(
         db, task, TaskRunIn(provider_id=payload.provider_id), request
     )
-    evidence = await AgentRuntime(get_session_factory()).resume(
-        run_request, decision={"answers": answers}
-    )
+    decision: dict = {"answers": answers}
+    if response:
+        decision["response"] = response
+    if annotation_payload:
+        decision["annotations"] = annotation_payload
+    evidence = await AgentRuntime(get_session_factory()).resume(run_request, decision=decision)
     async with get_session_factory()() as session:
         finished = await load_task(session, task_id)
         return {"task": TaskOut.model_validate(finished).model_dump(), "evidence": evidence}

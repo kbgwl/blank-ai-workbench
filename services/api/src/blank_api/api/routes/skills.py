@@ -77,6 +77,71 @@ async def list_skills(db: DbSession) -> list[SkillOut]:
     return [SkillOut.model_validate(row) for row in rows]
 
 
+@router.post("/{skill_id}/accept", response_model=SkillOut)
+async def accept_skill_proposal(skill_id: str, db: DbSession) -> SkillOut:
+    """采用一条技能提案（status == "proposed"）。
+
+    - improvement：按 metadata.target 找到既有 Skill，把正文换代并记进 history
+      （与 PATCH 同一种回滚账），然后删掉提案行；目标 Skill 的启用状态不变。
+    - new（或已存在同名 Skill）：同名合并；否则提案行转成 draft，等待用户再决定
+      启用（catalog 只吃 active）——采用不等于启用，这一步不能替用户做主。
+    """
+    proposal = await db.get(Skill, skill_id)
+    if proposal is None:
+        raise ApiError(code="skill_not_found", message="Skill 不存在", status_code=404)
+    if proposal.status != "proposed":
+        raise ApiError(code="skill_not_proposed", message="这条记忆不是待采用的提案", status_code=409)
+    meta = dict(proposal.metadata_json or {})
+    kind = str(meta.get("kind") or "new")
+    target_name = str(meta.get("target") or "").strip()
+    if kind == "improvement" and not target_name:
+        raise ApiError(
+            code="skill_proposal_invalid", message="改进提案缺少目标 Skill", status_code=409
+        )
+    lookup = target_name or str(proposal.name or "")
+    existing = (
+        await db.execute(
+            select(Skill)
+            .where(Skill.name == lookup, Skill.id != proposal.id, Skill.status != "proposed")
+            .order_by(Skill.updated_at.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if existing is None and kind == "improvement":
+        raise ApiError(
+            code="skill_target_not_found",
+            message=f"目标 Skill「{lookup}」已不存在，无法合并；可以丢弃这条提案",
+            status_code=409,
+        )
+    now = datetime.now(timezone.utc).isoformat()
+    description = str(meta.get("description") or "")
+    if existing is not None:
+        before = str(existing.instructions or "")
+        if before and before != proposal.instructions:
+            history = list(existing.history or [])
+            history.append({"version": existing.version, "instructions": before})
+            existing.history = history[-20:]
+            existing.instructions = proposal.instructions
+            existing.version += 1
+        merged = dict(existing.metadata_json or {})
+        if description:
+            merged["description"] = description
+        if meta.get("evidence"):
+            merged["evidence"] = meta["evidence"]
+        merged["adopted_from"] = proposal.id
+        merged["adopted_at"] = now
+        existing.metadata_json = merged
+        await db.delete(proposal)
+        await db.commit()
+        await db.refresh(existing)
+        return SkillOut.model_validate(existing)
+    proposal.status = "draft"
+    proposal.metadata_json = {**meta, "accepted_at": now}
+    await db.commit()
+    await db.refresh(proposal)
+    return SkillOut.model_validate(proposal)
+
+
 @router.patch("/{skill_id}", response_model=SkillOut)
 async def update_skill(skill_id: str, payload: SkillUpdate, db: DbSession) -> SkillOut:
     skill = await db.get(Skill, skill_id)

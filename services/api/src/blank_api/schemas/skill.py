@@ -29,6 +29,9 @@ class SkillOut(BaseModel):
     version: int
     source_candidate_id: str | None
     history: list
+    # ORM 属性叫 metadata_json（`metadata` 是 SQLAlchemy 声明式的保留名），
+    # 对外的字段名仍然是 metadata，所以读的时候走 validation_alias。
+    metadata: dict = Field(default_factory=dict, validation_alias="metadata_json")
     created_at: datetime
     updated_at: datetime
 

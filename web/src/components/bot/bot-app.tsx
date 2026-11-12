@@ -15,6 +15,7 @@ import {
   fetchTask,
   fetchThreadGoal,
   steerTask,
+  type AnswerValues,
   type ApprovalScope,
   type Evidence,
   type PendingApproval,
@@ -817,15 +818,19 @@ export function BotApp() {
   );
 
   const answer = useCallback(
-    (questions: PendingQuestion[], answers: Record<string, string>) => {
+    (questions: PendingQuestion[], answers: AnswerValues) => {
       if (!activeTaskId) return;
       setActionBusy(true);
       setActionError(null);
       // 只有真的填了答案的问题才提交：把空串一起发回去，等于替用户回答了"空"。
-      const payload: Record<string, string> = {};
+      // 多选题的数组里也可能带空串，同样先滤再判空。
+      const payload: AnswerValues = {};
       for (const question of questions) {
-        const value = (answers[question.id] ?? "").trim();
-        if (value) payload[question.id] = value;
+        const raw = answers[question.id];
+        const value = Array.isArray(raw)
+          ? raw.filter((item) => item.trim().length > 0)
+          : (raw ?? "").trim();
+        if (Array.isArray(value) ? value.length > 0 : value) payload[question.id] = value;
       }
       answerTask(activeTaskId, payload)
         .then(() => {

@@ -13,10 +13,13 @@ export type Skill = {
   id: string;
   name: string;
   instructions: string;
-  status: "draft" | "active" | "disabled" | string;
+  status: "draft" | "active" | "disabled" | "proposed" | string;
   version: number;
   source_candidate_id: string | null;
   history: unknown[];
+  // 提案元数据（kind/target/description/evidence/proposed_at）。模型发起的提案
+  // 落成 status=proposed 的行，采用后才变成 draft 或并入目标 Skill。
+  metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 };
@@ -47,6 +50,11 @@ export function rejectMemoryCandidate(id: string): Promise<MemoryCandidate> {
 
 export function fetchSkills(): Promise<Skill[]> {
   return request<Skill[]>(`${api}/skills`, { cache: "no-store" });
+}
+
+/** 采用一条模型提案：improvement 并入目标 Skill，new 落成 draft。 */
+export function acceptSkillProposal(id: string): Promise<Skill> {
+  return request<Skill>(`${api}/skills/${id}/accept`, { method: "POST" });
 }
 
 export function enableSkill(id: string): Promise<Skill> {

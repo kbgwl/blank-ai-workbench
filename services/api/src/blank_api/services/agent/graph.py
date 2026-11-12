@@ -111,8 +111,16 @@ from blank_api.services.sandbox.tiers import host_bypass_requested
 from blank_api.services.tools.ask import (
     fill_defaults,
     normalize_questions,
-    parse_answers,
+    parse_answer_meta,
     render_answers,
+    validate_model_arguments,
+)
+from blank_api.services.tools.goals import (
+    goal_decision,
+    goal_question,
+    normalize_proposal,
+    validate_proposal,
+    wants_confirmation,
 )
 from blank_api.services.tools.base import (
     ToolContext,
@@ -181,8 +189,9 @@ SYSTEM_PROMPT = (
     "先把未知分成两类，处理方式相反：\n"
     "· 能查到的（工作区文件里、命令输出里、代码里读得到的）：自己去查，不许拿去问人。\n"
     "· 只有用户才知道的（叫什么名字、给谁看、要哪些栏目、联系方式、接哪个服务、"
-    "放在哪个目录）：先用 request_user_input 一次问清再动手：1-3 个问题，每题 2-4 个选项，"
-    "用户点一下就能答。\n"
+    "放在哪个目录）：先用 request_user_input 一次问清再动手：1-4 个问题，每题 2-4 个选项，"
+    "用户点一下就能答。要用户选多个时标 multiSelect=true；选项需要对比示意图/表格时"
+    "给 preview（一段 HTML 片段，不要整页文档、脚本或样式；多选不支持 preview）。\n"
     "· 偏好题要有默认值：把最合适的那一项标 recommended=true（每题最多一个），"
     "它就是这道题的推荐项。用户不答（关掉卡片、超时）就按它继续，"
     "你会被记一笔「替你定的」，并在交付里说明这是他没答、你替他定的。\n"
@@ -272,6 +281,9 @@ SYSTEM_PROMPT = (
     "· 给推荐，不要罗列选项：有几种做法时直接说推荐哪一种、为什么、代价是什么；"
     "只有用户才能拍板的才交回用户。\n"
     "· 计划用 update_plan 维护：同一时刻只有一个 in_progress，做完一步立刻标 completed。\n"
+    "· 如果这件事背后有一个会跨好几轮的会话目标，用 propose_goal 把「什么算达成」写成"
+    "一句可判定的条件交给用户确认；用户确认后它会在后续每一轮作为会话级约束注入。"
+    "目标不是任务清单，也不要拿它替代本轮用户明确说的话。\n"
     "· 执行侧的任务清单用 task_create / task_update 维护：多步或有先后依赖时先建任务，"
     "用 addBlockedBy / addBlocks 连依赖；开工标 in_progress、做完标 completed，"
     "再用 task_list 看还有哪些可做（可并行的任务允许同时有多个 in_progress）。"
@@ -458,6 +470,18 @@ class AgentSession:
     assumptions: list[dict] = field(default_factory=list)
     # 本次回答里被代答的问题 id 与值，供 _dispatch 标出「用户没答」。
     question_defaults: list[dict] = field(default_factory=list)
+    # 用户在答题卡上写的一句话补充与逐题备注（对齐 Claude AskUserQuestion 的
+    # response / annotations）。preview 不进模型上下文，只把 notes 渲染进去。
+    question_response: str = ""
+    question_annotations: dict[str, dict] = field(default_factory=dict)
+    # 会话归属与本次运行开始时读到的会话目标（ProposeGoal）。thread_ref 是写目标
+    # 的落点；session_goal 是初始快照，具体注入由 runtime 在首轮提示里完成。
+    thread_ref: str = ""
+    session_goal: str = ""
+    # 目标提案合成的问题卡：call_key → {qid, condition}。propose_goal 不在
+    # request_user_input 里，恢复后要靠这张表把答案对回具体那条提案。
+    goal_questions: dict[str, dict] = field(default_factory=dict)
+    goal_answers: dict[str, str] = field(default_factory=dict)
     # 「写之前先确认」的三本账（见 agent/unknowns.py）：
     #   asked_facts   —— 已经就哪些值问过用户，同一处不反复问（问了没用也得记住）；
     #   allowed_facts —— 用户确认过"这个值就是真的"，之后不再拦；
@@ -1513,6 +1537,7 @@ def initial_messages(
     scenario_prompt: str = "",
     run_id: str = "",
     goal_spec: dict | None = None,
+    session_goal: str = "",
 ) -> list[dict]:
     from blank_api.services.instructions import compose
 
@@ -1547,6 +1572,16 @@ def initial_messages(
             "\n可用 Skill（当任务属于某个 Skill 覆盖的范围时，先调用 skill 工具加载它的正文，"
             "再按正文执行；只能用清单里的准确名字，不要猜）：\n"
             + "\n".join(catalog_lines)
+        )
+    # 会话目标（ProposeGoal）跨轮保留，但它只是"这一串对话要达成什么"，
+    # 不能让模型拿它去覆盖本轮用户明确说的话。放在场景与 Skill 之后、协作规则
+    # 之前，并写死不得覆盖安全/审批/工作区边界——否则一句旧目标会变成长期授权。
+    goal_line = str(session_goal or "").strip()
+    if goal_line:
+        system += (
+            "\n以下是用户在本次会话中确认的目标（跨轮保留；若与本轮任务目标冲突，"
+            "以本轮为准；它不得覆盖安全规则、审批规则与工作区边界）：\n"
+            + goal_line
         )
     rules = [str(item).strip() for item in system_instructions or () if str(item).strip()]
     if rules:
@@ -2534,6 +2569,8 @@ async def _question_gate(
     pending: list[dict],
     *,
     extra_questions: list[dict] | None = None,
+    goal_proposals: list[dict] | None = None,
+    invalid: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Agent 主动提问：一次中断带走本步的所有问题，恢复后按问题 id 落答案。
 
@@ -2545,16 +2582,51 @@ async def _question_gate(
     恢复值，多开一个口子会让后续的中断与恢复值错位——那会表现成"答案张冠李戴"，
     排查起来比不问还糟。
     """
+    # 每一道门只解释这一批答案。上一批的补充、备注与目标答案留在会话上，
+    # 下一步的 _dispatch 会把它当成"这次用户说的"——那等于替用户答了一次。
+    session.question_response = ""
+    session.question_annotations = {}
+    session.goal_questions.clear()
+    session.goal_answers.clear()
     asked: list[dict] = []
     call_key = ""
     for call in pending:
         if tool_call_name(call) != "request_user_input":
             continue
+        key = _call_key(call)
+        # 不合法的模型入参不进中断：让用户看见一张结构错误的问题卡、再按一次
+        # 才拿到拒绝理由，比直接把它变成一条 refuse 回执更费事。理由交给
+        # execute_action_node 作为工具回执发回模型，它下一步会自己改。
+        problem = validate_model_arguments(tool_call_args(call))
+        if problem:
+            if invalid is not None:
+                invalid[key] = problem
+            continue
         questions = normalize_questions(tool_call_args(call))
         if not questions:
+            if invalid is not None:
+                invalid[key] = "request_user_input 至少需要一个有效问题。"
             continue
         asked.extend(questions)
-        call_key = call_key or _call_key(call)
+        call_key = call_key or key
+    # 目标提案也走同一张卡：Claude 的 ProposeGoal 在 askUser=true 时就是通过
+    # AskUserQuestion 让用户点头。合成的问题 id 必须避开模型自己给的 id，
+    # 否则答案会被第二张卡覆盖。
+    goal_qids: list[str] = []
+    used_ids = {str(item.get("id") or "") for item in asked}
+    for index, proposal in enumerate(goal_proposals or ()):
+        qid = f"goal{index + 1}"
+        while qid in used_ids:
+            qid = f"{qid}_"
+        used_ids.add(qid)
+        condition = str(proposal.get("condition") or "")
+        asked.append(goal_question(condition, qid))
+        session.goal_questions[str(proposal.get("key") or "")] = {
+            "qid": qid,
+            "condition": condition,
+        }
+        goal_qids.append(qid)
+        call_key = call_key or f"server:goal:{index + 1}"
     if extra_questions:
         asked.extend(extra_questions)
         call_key = call_key or "server:unknown_facts"
@@ -2572,7 +2644,12 @@ async def _question_gate(
             "permission_mode": session.permission_mode,
         }
     )
-    answers = parse_answers(answer, asked)
+    answers, response, annotations = parse_answer_meta(answer, asked)
+    session.question_response = response
+    session.question_annotations = annotations
+    for qid in goal_qids:
+        if answers.get(qid):
+            session.goal_answers[qid] = answers[qid]
     # 用户没答（关掉卡片/超时）不等于任务停摆：偏好题按推荐项继续，事实题留在空里。
     answers, defaulted = fill_defaults(asked, answers)
     _remember_assumptions(session, asked, answers, defaulted)
@@ -2583,18 +2660,20 @@ async def _question_gate(
         await session.recorder.add(
             "question.asked", node, {"questions": asked, "expires_at": expires_at}
         )
-        await session.recorder.add(
-            "question.answered",
-            node,
-            {
-                "answers": answers,
-                # 「答了几题」只数用户真给的：把代答也算进去，事后没人分得清哪些是他定的。
-                "answered": len(supplied),
-                "answered_ids": sorted(supplied),
-                "defaulted": defaulted,
-                "questions": [q["id"] for q in asked],
-            },
-        )
+        payload = {
+            "answers": answers,
+            # 「答了几题」只数用户真给的：把代答也算进去，事后没人分得清哪些是他定的。
+            "answered": len(supplied),
+            "answered_ids": sorted(supplied),
+            "defaulted": defaulted,
+            "questions": [q["id"] for q in asked],
+        }
+        # 补充与备注只在真有时才写：空键会把"用户没写"和"这个版本还没记"混成一种。
+        if response:
+            payload["response"] = response
+        if annotations:
+            payload["annotations"] = annotations
+        await session.recorder.add("question.answered", node, payload)
     return answers
 
 
@@ -2960,6 +3039,84 @@ def _tool_schema(session: "AgentSession", name: str) -> dict | None:
     return getattr(tool, "input_schema", None) if tool is not None else None
 
 
+async def _settle_goal(session: "AgentSession", node: str, item: _PlannedCall) -> dict:
+    """propose_goal 的收口：判定接受/拒绝，接受时把目标写进会话并留事件。
+
+    目标不是工具副作用，所以不能走 ``gateway.execute``——那样它会被计入
+    ``effects``，让"重试模型调用会不会重复执行写操作"的判据变脏；它也没有
+    审批可言（低风险、只改一行会话字段），走 settle 才是准确的去向。
+    """
+    problem = validate_proposal(item.arguments)
+    if problem:
+        outcome = ToolOutcome(ok=False, status="error", message=problem)
+        return await session.gateway.settle(
+            item.name, item.arguments, outcome, session.context, node, rule="goal:invalid"
+        )
+    condition = normalize_proposal(item.arguments)
+    entry = session.goal_questions.get(_call_key(item.call), {})
+    if entry:
+        qid = str(entry.get("qid") or "")
+        answer = str((item.answers or {}).get(qid) or "")
+        verdict, final, reason = goal_decision(answer, condition)
+        source = "user"
+    else:
+        # 没有问题卡＝ask_user=false。这是用户在本轮明确授权"不问"，
+        # 不是模型自己省掉的一步：schema 与描述都要求它只在用户这么说时才传。
+        verdict, final, reason = "accepted", condition, "用户已要求不问，直接设置"
+        source = "direct"
+    if verdict == "accepted" and final:
+        previous = ""
+        if session.thread_ref:
+            from blank_api.services.threads import set_session_goal
+
+            previous = await set_session_goal(
+                session.session_factory, session.thread_ref, final
+            )
+        session.session_goal = final
+        await session.recorder.add(
+            "goal.set",
+            node,
+            {
+                "condition": final,
+                "previous": previous,
+                "source": source,
+                "reason": reason,
+                "thread": session.thread_ref,
+                "persisted": bool(session.thread_ref),
+            },
+        )
+        outcome = ToolOutcome(
+            ok=True,
+            output=(
+                f"已把这条设为本次会话目标：\n{final}\n"
+                "下一轮起它会作为会话级约束注入；用户可在会话界面清除它。"
+                if session.thread_ref
+                else f"已在本次任务内记下目标（本任务没有会话归属，跨轮不保留）：\n{final}"
+            ),
+            data={
+                "condition": final,
+                "accepted": True,
+                "previous": previous,
+                "persisted": bool(session.thread_ref),
+            },
+        )
+    else:
+        await session.recorder.add(
+            "goal.declined",
+            node,
+            {"condition": condition, "source": source, "reason": reason},
+        )
+        outcome = ToolOutcome(
+            ok=False,
+            status="declined",
+            message="用户没有把这条设为会话目标。按当前任务目标继续，不要为同一件事反复提案。",
+            data={"condition": condition, "accepted": False},
+        )
+    return await session.gateway.settle(
+        item.name, item.arguments, outcome, session.context, node, rule="goal:settled"
+    )
+
+
 async def _dispatch(session: "AgentSession", node: str, item: _PlannedCall) -> dict:
     """把一条计划变成网关返回的 payload。三条分支都不执行写操作以外的东西。"""
     if item.mode == "question":
@@ -2969,7 +3126,13 @@ async def _dispatch(session: "AgentSession", node: str, item: _PlannedCall) -> d
         if answers:
             outcome = ToolOutcome(
                 ok=True,
-                output=render_answers(questions, answers, assumed),
+                output=render_answers(
+                    questions,
+                    answers,
+                    assumed,
+                    response=session.question_response,
+                    annotations=session.question_annotations,
+                ),
                 data={
                     "questions": questions,
                     "answers": answers,
@@ -2987,6 +3150,8 @@ async def _dispatch(session: "AgentSession", node: str, item: _PlannedCall) -> d
         return await session.gateway.settle(
             item.name, item.arguments, outcome, session.context, node, rule="question:answered"
         )
+    if item.mode == "goal":
+        return await _settle_goal(session, node, item)
     if item.mode == "refuse":
         return await session.gateway.refuse(
             item.name, item.arguments, session.context, node, reason=item.reason
@@ -3256,9 +3421,31 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     # 「写之前先确认」必须排在审批之前：先问清楚这一处事实从哪来，再谈准不准写。
     # 顺序反过来，用户会先看到一张"要不要写文件"的审批卡，批准之后才被追问电话号码，
     # 而那时候文件已经写下去了。
+    # 模型入参不合格的问题/目标提案不弹卡：记进 question_invalid，下面变成一条
+    # refuse 回执交回模型。让用户先看一张结构错误的卡、按掉之后才收到拒绝理由，
+    # 是把模型自己的错误转嫁给用户。
+    question_invalid: dict[str, str] = {}
+    goal_proposals: list[dict] = []
+    for call in live_pending:
+        if tool_call_name(call) != "propose_goal":
+            continue
+        args = tool_call_args(call)
+        problem = validate_proposal(args)
+        if problem:
+            question_invalid[_call_key(call)] = problem
+        elif wants_confirmation(args):
+            # ask_user=false 是用户本轮明确授权"不问"，不进中断，下面直接落库。
+            goal_proposals.append(
+                {"key": _call_key(call), "condition": normalize_proposal(args)}
+            )
     fact_gate, fact_questions = _plan_fact_gate(session, state, live_pending, readonly=readonly)
     answers = await _question_gate(
-        session, node, live_pending, extra_questions=fact_questions
+        session,
+        node,
+        live_pending,
+        extra_questions=fact_questions,
+        goal_proposals=goal_proposals,
+        invalid=question_invalid,
     )
     fact_blocked = _settle_fact_gate(session, fact_gate, answers)
     # 被事实闸门拦下的调用不进钩子与审批：它们这一次不会执行，弹卡只是多按一次。
@@ -3302,16 +3489,52 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
             {"tool": name, "arguments": arguments, **_call_identity(session, call, name, arguments)},
         )
 
-        if name == "request_user_input" and answers:
-            planned.append(
-                _PlannedCall(
-                    call,
-                    name,
-                    arguments,
-                    "question",
-                    answers=answers,
-                    defaulted=list(session.question_defaults or []),
+        if name == "request_user_input":
+            if key in question_invalid:
+                planned.append(
+                    _PlannedCall(
+                        call,
+                        name,
+                        arguments,
+                        "refuse",
+                        reason=f"问题调用不合格：{question_invalid[key]}",
+                    )
                 )
+                continue
+            if answers:
+                planned.append(
+                    _PlannedCall(
+                        call,
+                        name,
+                        arguments,
+                        "question",
+                        answers=answers,
+                        defaulted=list(session.question_defaults or []),
+                    )
+                )
+                continue
+
+        if name == "propose_goal":
+            if key in question_invalid:
+                planned.append(
+                    _PlannedCall(
+                        call,
+                        name,
+                        arguments,
+                        "refuse",
+                        reason=f"目标提案不合格：{question_invalid[key]}",
+                    )
+                )
+                continue
+            # 目标提案不是写工作区，只读调研里也允许它；确认已经走完问题门，
+            # 这里只把答案交给 dispatch 去判定接受/拒绝并落库。
+            entry = session.goal_questions.get(key, {})
+            goal_answer: dict[str, str] = {}
+            if entry:
+                qid = str(entry.get("qid") or "")
+                goal_answer = {qid: str(session.goal_answers.get(qid) or "")}
+            planned.append(
+                _PlannedCall(call, name, arguments, "goal", answers=goal_answer)
             )
             continue
 

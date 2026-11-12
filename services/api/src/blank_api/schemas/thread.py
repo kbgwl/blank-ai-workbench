@@ -50,6 +50,8 @@ class ThreadOut(BaseModel):
     # 最后一轮的状态（draft/running/succeeded/failed/cancelled），会话列表靠它画状态点。
     # 空串表示"这条会话还没有任何一轮"，与"跑完了"必须能区分：前者不该画点。
     last_turn_status: str = ""
+    # 会话级目标（ProposeGoal）。空串＝没设置；它跨轮保留，但不进列表文案。
+    session_goal: str = ""
     created_at: datetime
     updated_at: datetime
 

@@ -163,6 +163,57 @@ async def _own_turns(
     return turns
 
 
+async def session_goal_for(
+    session_factory: async_sessionmaker[AsyncSession], thread_id: str | None
+) -> str:
+    """读会话目标；没有会话或没设置时返回空串。
+
+    空串是"没设置"的**唯一**表示：目标不存在、会话被删、thread_id 为空都走这条路。
+    调用方必须把空串当"没有约束"，而不是补一句默认目标——替用户发明目标比没有目标更糟。
+    """
+    if not thread_id:
+        return ""
+    async with session_factory() as session:
+        thread = await session.get(Thread, thread_id)
+        return str(thread.session_goal or "") if thread is not None else ""
+
+
+async def set_session_goal(
+    session_factory: async_sessionmaker[AsyncSession], thread_id: str, goal: str
+) -> str:
+    """写入会话目标，返回旧值。会话不存在时什么都不写，返回空串。
+
+    旧值返回给调用方记事件用：用户把目标从 A 改成 B 时，事件里要能看见这次替换，
+    否则事后只有 B，没人知道 A 是什么时候、被谁顶掉的。
+    """
+    if not thread_id:
+        return ""
+    async with session_factory() as session:
+        thread = await session.get(Thread, thread_id)
+        if thread is None:
+            return ""
+        previous = str(thread.session_goal or "")
+        thread.session_goal = str(goal or "")[:2000]
+        await session.commit()
+        return previous
+
+
+async def clear_session_goal(
+    session_factory: async_sessionmaker[AsyncSession], thread_id: str
+) -> str:
+    """清除会话目标，返回被清掉的那句。没有目标时返回空串（不算失败）。"""
+    if not thread_id:
+        return ""
+    async with session_factory() as session:
+        thread = await session.get(Thread, thread_id)
+        if thread is None:
+            return ""
+        previous = str(thread.session_goal or "")
+        thread.session_goal = ""
+        await session.commit()
+        return previous
+
+
 async def history_for(
     session_factory: async_sessionmaker[AsyncSession],
     thread_id: str | None,

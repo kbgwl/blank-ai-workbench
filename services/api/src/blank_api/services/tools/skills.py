@@ -24,12 +24,25 @@ _LEADING_MARKS = re.compile(r"^[#>*\-\s]+")
 
 
 def skill_summary(instructions: str) -> str:
-    """把正文第一段压成一行说明。
+    """把 Skill 压成一行说明：frontmatter 里的 description 优先，其次正文第一段。
 
-    不另开一个 description 字段：库里已有的 Skill 只有正文，凭空生成一句概括
-    等于替用户编内容；正文的第一行本来就是作者写的"这是干什么的"。
+    不凭空生成概括——库里已有的 Skill 只有正文，正文第一行本来就是作者写的
+    "这是干什么的"。提案写进来的 Skill 带 frontmatter，其中的 description 才是
+    作者专门写的一句话说明，比正文首行更准确。
     """
-    for raw in str(instructions or "").splitlines():
+    text = str(instructions or "")
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        for index, line in enumerate(lines[1:], start=1):
+            if line.strip() in ("---", "..."):
+                for meta_line in lines[1:index]:
+                    key, _, value = meta_line.partition(":")
+                    if key.strip() == "description" and value.strip():
+                        summary = value.strip().strip('"').strip("'")
+                        return summary if len(summary) <= SUMMARY_CHARS else summary[: SUMMARY_CHARS - 1] + "…"
+                text = "\n".join(lines[index + 1 :])
+                break
+    for raw in text.splitlines():
         line = _LEADING_MARKS.sub("", raw).strip()
         if not line:
             continue
@@ -64,9 +77,12 @@ class SkillCatalog:
             if not name:
                 continue
             instructions = str(entry.get("instructions") or "").strip()
+            # 提案采用后的 Skill 自带一句专门写的 description（skills.metadata），
+            # 它比从正文首行压出来的更准确；没有时才回落到正文。
             self._entries[name] = {
                 "name": name,
-                "description": skill_summary(instructions),
+                "description": str(entry.get("description") or "").strip()
+                or skill_summary(instructions),
                 "instructions": instructions,
             }
         self.loaded: set[str] = set()

@@ -143,7 +143,7 @@ export type TeamQuestion = {
   id: string;
   question: string;
   header?: string;
-  options?: { label: string; description?: string }[];
+  options?: { label: string; description?: string; preview?: string }[];
   multiSelect?: boolean;
   allowFreeText?: boolean;
   allow_free_text?: boolean;

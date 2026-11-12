@@ -5,12 +5,13 @@
  * 把它们埋在组件里，就只能靠肉眼确认，改一次问一次。
  */
 
-export type SkillState = "active" | "draft" | "disabled" | "unknown";
+export type SkillState = "active" | "draft" | "disabled" | "proposed" | "unknown";
 
 export const SKILL_STATE_LABEL: Record<SkillState, string> = {
   active: "已启用",
   draft: "草案",
   disabled: "已停用",
+  proposed: "提案",
   unknown: "状态未知",
 };
 
@@ -25,6 +26,7 @@ export function skillState(status: string | null | undefined): SkillState {
   if (value === "active") return "active";
   if (value === "draft") return "draft";
   if (value === "disabled") return "disabled";
+  if (value === "proposed") return "proposed";
   return "unknown";
 }
 

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from blank_api.db import Base
@@ -35,6 +35,12 @@ class Skill(Base):
         ForeignKey("memory_candidates.id", ondelete="SET NULL"), nullable=True
     )
     history: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # 提案元数据（对齐 Claude 的 ProposeSkills）：kind(new/improvement)、target、
+    # description、evidence、proposed_at。不能塞进 history——rollback 把它当
+    # [{version, instructions}] 读，缺 instructions 键会直接 KeyError。
+    metadata_json: Mapped[dict] = mapped_column(
+        "metadata", JSON, nullable=False, default=dict, server_default=text("('{}')")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()

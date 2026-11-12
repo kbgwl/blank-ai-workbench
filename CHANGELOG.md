@@ -1,6 +1,53 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills
+
+- **交互问答与两类提案：AskUserQuestion / ProposeGoal / ProposeSkills 对齐 Claude（R 批第 6 项）**：
+  按 Claude Code 2.1.271 的 AskUserQuestion、ProposeGoal、ProposeSkills 契约落成本地
+  `request_user_input`（重写）、`propose_goal`、`propose_skills` 三个工具。改
+  `services/tools/ask.py`（归一化、参数校验、preview 片段判定、答案解析与渲染），新增
+  `services/tools/goals.py`、`services/tools/skill_proposals.py`；`tools/skills.py`
+  （目录带上单独写的 description）、`tools/__init__.py`、`permissions.py`（两个提案工具
+  进只读集合：目标落在会话行、提案落在 skills 表，都不写工作区）、`agent/graph.py`
+  （问题门、目标结算、工具规划与系统提示）、`agent/runtime.py`（每轮从库重读会话目标）、
+  `services/threads.py`（session_goal 读/写/清）、`models/skill.py` + `models/thread.py`、
+  `schemas/skill.py` + `schemas/task.py` + `schemas/thread.py`、`routes/skills.py`
+  （提案采用）、`routes/tasks.py`（答题回执恢复）、`routes/threads.py`（session-goal
+  端点）、迁移 `0035_session_goal_skill_meta.py`；前端 `bot/turn.tsx`、`bot/bot-app.tsx`、
+  `tasks/*`、`skills/*`（提案分区与状态口径）、`workbench.tsx` 接线。
+  1. **问答契约**：1-4 题、每题至多 4 个选项（下界不卡，事实题可以没有选项），header 截到
+     12 字、question 截到 500 字、选项 label/description 截到 120 字；`multiSelect` 与
+     `preview` 互斥，preview 只收片段（拒绝整页/脚本标签、注释、代码围栏，≤4000 字）；
+     单选「默认/推荐」每题只留一个，多选保留全部；显式 `default` 必须命中已列出的 label。
+  2. **答案回执**：`{answers: {问题文本→答案}, response?, annotations?}`，多选答案列表按
+     ", " 合并，注解按问题文本或 header 归位；`notes` 以「备注：」、`response` 以「补充：」
+     进模型，preview 不回贴——模型看到的是结论，不是自己的渲染物。
+  3. **目标提案**：`propose_goal` 缺省要用户确认，确认走普通问题卡（id 合成 `goal1`、
+     header「会话目标」、选项「设为本次会话目标 / 不用」、刻意没有默认值），接受后写回
+     `threads.session_goal`，下一轮起每轮从库重读并以「以下是用户在本次会话中确认的目标」
+     注入（不得覆盖安全与审批）；自由文本答案当作用户改写后的目标接受，拒绝或空答不落任何
+     东西；`GET/DELETE /threads/{id}/session-goal` 可读可清，`goal.set` 事件留痕。
+  4. **技能提案**：一次最多 3 条，`kind` 为 `new` 或 `improvement`；`new` 落成
+     `status="proposed"` 的新行，`improvement` 必须 `target` 命中本任务已加载过正文的
+     Skill（没加载过不让提改进），否则整批拒绝并点名第几条。`POST /skills/{id}/accept`
+     采用：`new` → `draft`；`improvement` 把旧正文 append 进 `history`、`version+1`、
+     换成提案正文并删掉提案行；三种 409 各有错误码（`skill_not_proposed` /
+     `skill_proposal_invalid` / `skill_target_not_found`）。
+  5. **界面**：问题卡多选可切换、自由文本可覆盖、选中项带 preview 时按纯文本 `<pre>`
+     渲染（不进 innerHTML），每题都有推荐项才给「按默认继续」；技能页新增「待采用的提案」
+     分区，可采用/丢弃（丢弃二次确认），状态未知值不兜底成 draft/active。
+  测试：新增 `tests/test_ask_goal_skills_v43.py` 51 例（纯函数契约、工具落库与采用、
+     真实 HTTP 多选/注解/自由文本往返、目标提案确认与拒绝、目标安装到会话并在下一轮注入），
+     变异电池 14/14 红（逐条改坏实现，红在指定判据上；跑完按原字节还原并核对 sha256）。
+     前端 `tsc --noEmit` rc=0，`node --test` 299 passed / 0 failed。全量后端回归：
+     **3155 passed, 28 skipped**（0 failed，rc=0，838.92s）。
+  偏离：工具名沿用本地 snake_case（`request_user_input` / `propose_goal` /
+  `propose_skills`）；`afkTimeoutMs`（用户离开自动超时）未落地，问题卡没有倒计时；
+  preview 前端只按纯文本渲染，不执行模型给的 HTML/Markdown；问题卡没有单独的注解/补充
+  输入框，`annotations.notes` 与 `response` 目前只走 API 侧；目标确认卡 id 固定合成
+  `goal1`，工具调用 id 不透传；`session_goal` 写入按 2000 字截断（提案正文上限 500 字）；
+  提案落库到 `skills` 表而不是写 skill 文件，采用 `new` 后是 `draft`、要用户再启用；
+  会话目标按 thread 记，不跨团队成员共享。
 
 - **LSP 工具：单工具九操作、文本与计数对齐 Claude（R 批第 5 项）**：
   按 Claude Code 2.1.271 的 `sdk-tools.d.ts` 契约与 `claude.exe` 嵌入实现落成本地

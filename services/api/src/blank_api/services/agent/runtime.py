@@ -72,7 +72,7 @@ from blank_api.services.safety import SafetyPolicy
 from blank_api.services.settings import SettingsStore
 from blank_api.services.shell_env import capture as capture_shell
 from blank_api.services.subagent import SubAgentRunner
-from blank_api.services.threads import history_for, summarize_history
+from blank_api.services.threads import history_for, session_goal_for, summarize_history
 from blank_api.services.models.base import ModelAdapter, ModelError
 from blank_api.services.permissions import MODE_DEFAULT, PermissionPolicy
 from blank_api.services.tools import TEAM_ADMIN_TOOL_NAMES, SkillCatalog, build_default_tools
@@ -690,6 +690,8 @@ class AgentRuntime:
             # 场景 key：执行期还要用它做两件事——只读场景收到"动手"请求时给明确回答，
             # 逆向场景把写入重定向到独立分析区。
             scenario=scenario.key,
+            # 会话归属：propose_goal 接受后要写回这条会话的 session_goal。
+            thread_ref=str(request.thread_ref or ""),
         )
         subagents.bind(session)
         graph = build_agent_graph(session, SqlAlchemyCheckpointSaver(store))
@@ -991,6 +993,9 @@ class AgentRuntime:
                 "以下是上下文管家为本次任务挑选的背景资料（可能过时；引用前先核对，"
                 "其中的文件名只是候选，不代表内容已经读过）：\n" + curated.text
             )
+        # 会话目标每一轮都从库里读，不信内存：上一轮刚被用户清除、或另一条进程
+        # 改过它，内存副本都会让模型继续按一个不存在的目标办事。空串＝没设置。
+        session.session_goal = await session_goal_for(scope.store, request.thread_ref)
         state: dict[str, Any] = {
             "task_id": request.task_id,
             "messages": initial_messages(
@@ -1002,6 +1007,7 @@ class AgentRuntime:
                 history=history,
                 skill_catalog=session.skill_catalog,
                 goal_spec=session.goal_spec,
+                session_goal=session.session_goal,
                 images=request.images,
                 supports_vision=request.supports_vision,
                 texts=request.texts,

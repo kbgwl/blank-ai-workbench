@@ -806,10 +806,15 @@ export type PendingQuestion = {
   header: string;
   // recommended 决定界面上标不标"默认值"。丢了它用户看不见哪个是默认，
   // 却又会被告知"不选就按默认继续"——等于让他盲签。
-  options: { label: string; description: string; recommended: boolean }[];
+  // preview 是选项被选中时展示的一段片段（Claude AskUserQuestion 的 preview）。
+  // 只按纯文本渲染：模型给的 HTML 片段不能直接塞进 innerHTML。
+  options: { label: string; description: string; recommended: boolean; preview: string }[];
   multiSelect: boolean;
   allowFreeText: boolean;
 };
+
+/** 答题草稿 / 提交值：单选是字符串，多选是字符串数组。 */
+export type AnswerValues = Record<string, string | string[]>;
 
 /** 一步当时被什么策略管着。后端只在全局 digest 变化时落一条，所以这里通常是 1 条 + 若干变更。 */
 export type GovernanceChange = {
@@ -1328,7 +1333,7 @@ export function normalizeQuestions(container: unknown): PendingQuestion[] {
       options: arrayOf(item, "options", "choices")
         .map((option) => {
           if (typeof option === "string") {
-            return { label: option, description: "", recommended: false };
+            return { label: option, description: "", recommended: false, preview: "" };
           }
           return {
             label: textOf(option, "label", "value", "title"),
@@ -1336,6 +1341,7 @@ export function normalizeQuestions(container: unknown): PendingQuestion[] {
             // 显式给 false 而不是省略键：界面要统一按布尔判断"标不标默认"，
             // undefined 会让每个读者各自决定缺省值，最后总有一处猜成"是默认"。
             recommended: boolOf(option, "recommended", "is_default", "isDefault") === true,
+            preview: textOf(option, "preview"),
           };
         })
         .filter((option) => option.label !== ""),
@@ -1973,7 +1979,7 @@ export function decideApproval(
 /** POST /tasks/{id}/answer：回答 Agent 的提问，答案回填后从断点继续。 */
 export function answerTask(
   taskId: string,
-  answers: Record<string, string>,
+  answers: AnswerValues,
 ): Promise<{ used: string }> {
   return request<unknown>(`${api}/tasks/${taskId}/answer`, {
     method: "POST",

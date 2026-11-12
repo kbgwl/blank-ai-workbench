@@ -269,6 +269,9 @@ uv run alembic revision --autogenerate -m "描述"
 | 任务清单 Task*（依赖图 + 钩子） | ✅ | `task_create / task_get / task_update / task_list` 对齐 Claude Task* 契约：任务落盘（默认 `~/.blank/tasks/<task_id>/`，`BLANK_TASKS_DIR` 可改根；团队任务按 group_id 共享一份），id 是十进制数字、单调递增，删除后不复用（高水位单独记，崩溃丢了水位文件也会在删除最高号时抬回去），列表按数字 id 升序而不是文件名字典序；`addBlocks` / `addBlockedBy` 写双向引用、已存在的去重、删任务时把别处对它的引用一并清掉；`metadata` 按键合并、值为 null 删键；`task_list` 隐藏 `metadata._internal` 为真的任务、把已完成阻塞者从 `blockedBy` 里过滤；`task_created` / `task_completed` 是可阻断钩子（创建被拒把刚建的任务删回去，完成被拒任何字段都不落盘）；团队任务标 `in_progress` 未带 owner 时自动署名。写盘走 scratch + `os.replace`，同目录 asyncio 锁 + 独占创建，id 只认 `[A-Za-z0-9_-]{1,64}`（路径穿越直接拒绝）。判据 `services/api/tests/test_task_tools_v40.py`（33 例，含并发创建/坏文件/崩溃窗口/真实子进程钩子），变异 16/16 红 |
 | MCP 资源四工具（列举/读取/目录/热刷新） | ✅ | `list_mcp_resources / read_mcp_resource / read_mcp_resource_dir / refresh_mcp_tools` 对齐 Claude Code 2.1.271：没声明 `capabilities.resources` 的服务端连 `resources/list` 都不发，没声明目录扩展的连非标准 `resources/directory/read` 都不发（「没能力」与「能力坏了」分开说）；列举跟 `nextCursor` 翻页，目录首页 `InvalidParams`＝不是目录、后续页坏掉保留前几页、页数上限 20 并回报 `truncated`；一家服务端失败只进 `data.errors`，全部有能力服务端都失败时明确报错而不是说 `No resources found`；读取文本原样返回，二进制落系统临时目录（不进用户工作区）并给路径，非法 base64 如实标「未保存」，`-32601` / `-32002` 文案与 Claude 一致（后者只在声明目录能力时补 `ReadMcpResourceDir` 提示）；刷新只重查已连接客户端、绝不重拨，连过但失败报 `not_connected`，同名工具就地换定义并保留 `tool_search` 激活状态、只摘本服务端前缀、场景禁用回放。四个工具默认按需（`shouldDefer` 同口径），三读可并行、refresh 不在。判据 `services/api/tests/test_mcp_resources_v41.py`（34 例，含真实 stdio 子进程/分页/目录损坏/二进制落盘/运行时注入），变异 37/37 红 |
 | LSP 工具（九操作代码智能） | ✅ | `lsp(operation, filePath, line, character, query?)` 对齐 Claude 的单工具九操作：位置 1-based（只在发请求处减一次），`workspaceSymbol` 用 `query`；结果文本逐字对齐（单条定义 `Defined in`、多条 `Found N definitions:` 各占一行、单条引用 `Found 1 reference:`、多引用/工作区符号按文件空行分组、hover `Hover info at l:c:`、documentSymbol 两空格递进缩进 + `- Line N`、调用层级 `Found N incoming/outgoing call(s):` 与 `[calls at: l:c]`/`[called from: l:c]`），8 条空结果文案照抄；`resultCount`/`fileCount` 按 Claude 口径（definition/implementation/references/workspace 按有效条目与唯一 URI，hover 1/1，documentSymbol 递归符号数且 fileCount 只有 0/1，call hierarchy 按条目与各端点唯一）；定义/引用/实现/工作区符号四类结果先过 `git check-ignore`（每批 50、5s 超时，不是仓库就不过滤）；文件上限 10,000,000 字节、提示用 ceil MB；文件不存在/不是文件（含目录）直接拒绝，运行时失败（初始化、超时、畸形数据）回 `Error performing <op>: ...` 而不是抛异常，没配服务端回 `No LSP server available for file type: .ext`。语言服务器按扩展名懒启动（`lsp.json`，`BLANK_LSP_FILE` 可改；认 `extensionToLanguage` 与 `extensions` 两种写法，写坏一条只跳过该条），stdio 走 `Content-Length` 帧，服务端反向 `workspace/configuration` 按项回 `null`；每次请求前全文 `didChange`（不装文件 watcher，永不读到旧内容）；一台起不来会记住失败、不在每次调用重拉；每任务一个管理器、任务收尾（含等审批）关进程。默认按需（`tool_search` 拉出）、可并行、子代理工具表不含。判据 `services/api/tests/test_lsp_tool_v42.py`（40 例，含真实 stdio 假服务端/九操作/失败缓存/注入/收尾关闭），变异 34/34 红 |
+| 交互问答 AskUserQuestion | ✅ | `request_user_input(questions[])` 对齐 Claude AskUserQuestion：1-4 题、每题至多 4 个选项（下界不卡，事实题可以没有选项）、header 截到 12 字、question 截到 500 字、选项 label/description 截到 120 字；`multiSelect` 与 `preview` 互斥（多选时 preview 一律丢掉），preview 只收片段（拒绝 `html/body/script/iframe` 等整页与脚本标签、注释、代码围栏，≤4000 字），单选「默认/推荐」每题只留一个（多选保留全部），显式 `default` 必须是已列出的 label（多选可逗号分隔）；回执 `{answers: {问题文本→答案}, response?, annotations?}`，多选答案列表按 ", " 合并，注解按问题文本或 header 归位，`notes` 以「备注：」进模型、`response` 以「补充：」进模型、preview 不回贴；问题卡前端多选可切换、自由文本可覆盖、选中项带 preview 时按纯文本 `<pre>` 渲染（不进 innerHTML），每题都有推荐项才给「按默认继续」。判据 `services/api/tests/test_ask_goal_skills_v43.py`（51 例，含真实 HTTP 多选/注解/自由文本往返），变异 14/14 红 |
+| 会话目标提案 ProposeGoal | ✅ | `propose_goal(condition, requiresConfirmation?)` 对齐 Claude ProposeGoal：condition ≤500 字（超出直接拒绝而不是截断），`requiresConfirmation` 缺省为真、只有显式 `false` 才直接设置（本机没有确认通道时如实回 `unanswered`，不假装用户点过头）；确认走普通问题卡（id 合成 `goal1`、header「会话目标」、选项「设为本次会话目标 / 不用」、刻意不设默认值——不答就是不设置）；接受后把目标写回会话（`threads.session_goal`，2000 字截断），下一轮起每轮从库重读并注入「以下是用户在本次会话中确认的目标」（明确不得覆盖安全/审批/工作区边界）；自由文本答案当作用户改写后的目标接受，拒绝或空答不落任何东西；`GET/DELETE /threads/{id}/session-goal` 可读可清，`goal.set` 事件留痕。判据同文件，变异 14/14 红 |
+| 技能提案 ProposeSkills | ✅ | `propose_skills(proposals[])` 对齐 Claude ProposeSkills：一次最多 3 条，每条 `kind` 为 `new` 或 `improvement`、`name`/`description`/`skillMd`（≤20000 字）必填、`evidence` ≤20 条；`new` 落成 `skills.status="proposed"` 的新行，`improvement` 必须 `target` 命中本任务已加载过正文的 Skill（没加载过就不让提改进），否则整批拒绝并点名第几条；frontmatter 的 `description` 等进 `metadata` 留审计；`POST /skills/{id}/accept` 采用：`new` → `draft`（不自动启用），`improvement` 把旧正文 append 进 `history`、`version+1`、换成提案正文并删掉提案行；非提案 409 `skill_not_proposed`、缺 target 409 `skill_proposal_invalid`、target 不存在 409 `skill_target_not_found`；技能页新增「待采用的提案」分区（采用 / 丢弃，丢弃二次确认）。判据同文件，变异 14/14 红 |
 
 | 版本 | 验收要点 | 证据 |
 | --- | --- | --- |
@@ -353,6 +356,16 @@ uv run alembic revision --autogenerate -m "描述"
   续聊本身的边界：对话只在本进程内保留（每任务最多 20 个会话、每会话 60 条消息、
   单条 8k 字符），隔离子代理副本结束即清理因此明确拒绝续聊，仍在后台跑的句柄要先
   `task_output`；任务收尾的等待窗口是 90 秒，过时未完成的会被取消并在交付正文点名。
+  AskUserQuestion 已于 R6 补齐（见上表；四处偏离：工具名沿用本地 snake_case
+  `request_user_input` 而不是 Claude 的 `AskUserQuestion`；`afkTimeoutMs`（用户离开
+  自动超时）未落地，问题卡没有倒计时；preview 前端只按纯文本 `<pre>` 渲染，不原样执行
+  模型给的 HTML/Markdown；问题卡没有单独的注解/补充输入框，`annotations.notes` 与
+  `response` 目前只走 API 侧，判据里有真实 HTTP 往返）。ProposeGoal 与 ProposeSkills
+  也于 R6 补齐（见上表；四处偏离：目标确认卡的 id 固定合成 `goal1`，模型自己写的问题 id
+  不会与它抢位、但工具调用 id 不透传；`session_goal` 写入按 2000 字截断，提案正文本身
+  的上限是 500 字；提案落库到 `skills` 表而不是写 skill 文件，采用 `new` 提案后状态是
+  `draft`、要用户在技能页再启用才生效；会话目标按 thread 记，不跨团队成员共享，
+  Claude 的队友目标那一路没有移植）。
 
 - 验收条件的「是否覆盖」由模型自报，平台无法判断语义：极端情况下会出现「文件没改但条件判 ✓」。
   时间线里的工具卡片和 Diff 才是可核对的证据，验收结论只作为模型的自我声明展示。
