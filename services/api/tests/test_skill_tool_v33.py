@@ -179,7 +179,8 @@ async def test_second_call_only_says_it_is_already_loaded() -> None:
 async def test_args_are_appended_when_the_body_has_no_placeholder() -> None:
     catalog = SkillCatalog([{"name": "deploy", "instructions": "按步骤上线"}])
     outcome = await _tool().handler(_context(catalog), {"skill": "deploy", "args": "生产环境"})
-    assert outcome.output.strip().endswith("调用参数：生产环境")
+    # 与 Claude 的 qW 一致：没有占位符时追加 `\nARGUMENTS: <args>`。
+    assert outcome.output.strip().endswith("按步骤上线\nARGUMENTS: 生产环境")
 
 
 async def test_args_replace_the_placeholder() -> None:

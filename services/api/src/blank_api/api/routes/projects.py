@@ -20,6 +20,7 @@ from blank_api.schemas.project import (
     WorkspaceCreate,
     WorkspaceOut,
 )
+from blank_api.services.commands_defs import discover_commands
 from blank_api.services.uploads import UploadStore
 from blank_api.services.workspace import mask_path, validate_workspace_path
 
@@ -79,6 +80,18 @@ async def create_project(payload: ProjectCreate, db: DbSession) -> ProjectOut:
 @router.get("/{project_id}", response_model=ProjectOut)
 async def get_project(project_id: str, db: DbSession) -> ProjectOut:
     return project_out(await load_project(db, project_id))
+
+
+@router.get("/{project_id}/commands")
+async def list_project_commands(project_id: str, db: DbSession) -> dict:
+    """该工作区可用的自定义斜杠命令（用户层 + 项目层，项目同名覆盖）。
+
+    只返回审计信息与一句话说明，不返回正文：前端要做的是把名字和
+    ``argument-hint`` 列出来，正文等用户真的敲下这条命令再展开。
+    """
+    project = await load_project(db, project_id)
+    workspace = project.active_workspace
+    return discover_commands(workspace.path if workspace is not None else None).as_dict()
 
 
 @router.patch("/{project_id}", response_model=ProjectOut)

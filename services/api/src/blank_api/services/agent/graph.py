@@ -2459,7 +2459,8 @@ async def drain_steer(session: AgentSession, node: str, step: int = 0) -> list[d
     texts: list[str] = []
     for row in rows or []:
         payload = row.payload or {}
-        message = str(payload.get("message") or "").strip()
+        # 斜杠命令的插话：界面显示原话，模型读展开后的正文。
+        message = str(payload.get("expanded") or payload.get("message") or "").strip()
         if not message:
             continue
         texts.append(message)

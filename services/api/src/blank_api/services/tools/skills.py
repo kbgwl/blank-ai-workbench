@@ -13,12 +13,11 @@ from __future__ import annotations
 
 import re
 
+from blank_api.services.prompt_args import render_prompt
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, fail, ok
 
 # 清单是每轮都在付的固定成本：一条 Skill 只占一行。
 SUMMARY_CHARS = 120
-# 正文里允许模型用 `$ARGUMENTS` 引用本次调用参数（与 Claude 的 Skill 一致）。
-ARGUMENT_PLACEHOLDER = "$ARGUMENTS"
 
 _LEADING_MARKS = re.compile(r"^[#>*\-\s]+")
 
@@ -50,15 +49,24 @@ def skill_summary(instructions: str) -> str:
     return ""
 
 
-def render_skill(instructions: str, args: str) -> str:
-    """把调用参数交给 Skill：优先填 `$ARGUMENTS`，否则附在正文末尾。"""
-    text = str(instructions or "")
-    args = str(args or "").strip()
-    if not args:
-        return text
-    if ARGUMENT_PLACEHOLDER in text:
-        return text.replace(ARGUMENT_PLACEHOLDER, args)
-    return f"{text}\n\n调用参数：{args}"
+def render_skill(
+    instructions: str,
+    args: str,
+    *,
+    names=(),
+    project_dir: str = "",
+    session_id: str = "",
+    skill_dir: str = "",
+) -> str:
+    """把调用参数交给 Skill：与 Claude 的 ``qW`` 同一套占位符规则。"""
+    return render_prompt(
+        instructions,
+        args,
+        names=names,
+        project_dir=project_dir,
+        session_id=session_id,
+        skill_dir=skill_dir,
+    )
 
 
 class SkillCatalog:
@@ -94,6 +102,13 @@ class SkillCatalog:
                 "source": str(entry.get("source") or ""),
                 "path": str(entry.get("path") or ""),
                 "ignored": tuple(entry.get("ignored") or ()),
+                # 磁盘命令的调用参数声明与基础目录：args 里的 `$name` 按
+                # `argument_names` 的次序取位置参数，`${CLAUDE_SKILL_DIR}` 用
+                # `base_dir`。库里的 Skill 两者皆空。
+                "argument_hint": str(entry.get("argument_hint") or ""),
+                "argument_names": tuple(entry.get("argument_names") or ()),
+                "kind": str(entry.get("kind") or "skill"),
+                "base_dir": str(entry.get("base_dir") or ""),
             }
         self.loaded: set[str] = set()
 
@@ -166,7 +181,14 @@ async def _skill(context: ToolContext, arguments: dict) -> ToolOutcome:
             already_loaded=True,
         )
     catalog.loaded.add(name)
-    body = render_skill(entry["instructions"], args)
+    body = render_skill(
+        entry["instructions"],
+        args,
+        names=entry["argument_names"],
+        project_dir=str(getattr(context, "root", "") or ""),
+        session_id=str(getattr(context, "task_id", "") or ""),
+        skill_dir=entry["base_dir"],
+    )
     await _record(context, "skill.invoked", {"skill": name, "has_args": bool(args), "chars": len(body)})
     return ok(
         f"已加载 Skill「{name}」，按以下说明执行：\n\n{body}",
@@ -185,7 +207,9 @@ def skill_tools() -> list[ToolDefinition]:
                 "当任务正好属于某个 Skill 覆盖的范围时，先调用这个工具把它的说明加载进来，"
                 "再按说明执行，替换你的默认做法。skill 必须是清单里的准确名字，不要猜；"
                 "用户点名要某个 Skill（例如「用 deploy」或 /deploy）也是调用它的请求。"
-                "本次任务里已经加载过的 Skill 不要再调用。args 原样传给 Skill 的说明。"
+                "本次任务里已经加载过的 Skill 不要再调用。args 按说明里的占位符展开："
+                "$ARGUMENTS 是整串参数，$1、$2 是第几个参数（从 0 起），"
+                "$名字 按 Skill 声明的参数名取对应位置。"
             ),
             input_schema={
                 "type": "object",

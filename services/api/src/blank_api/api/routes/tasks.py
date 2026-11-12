@@ -67,6 +67,7 @@ from blank_api.services.agent.live import LiveFeed
 from blank_api.services import metrics
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.agent.vision import supports_vision
+from blank_api.services.commands_defs import expand_user_input
 from blank_api.services.tools.ask import parse_answers
 from blank_api.services.fork import FORK_EVENT, fork_thread
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
@@ -193,6 +194,7 @@ async def persist_task(
     *,
     thread_id: str | None = None,
     turn_index: int = 0,
+    command_info: dict | None = None,
 ) -> Task:
     """把一条任务写进库并发一条 task.created。
 
@@ -279,6 +281,14 @@ async def persist_task(
             "attachments": len(attachments),
         },
     )
+    # 斜杠命令展开留痕：用户输入被换成了文件正文，事后要能回答"这句话是怎么
+    # 变成这段提示词的"，所以把命中项与长度差单独记一条。
+    if command_info:
+        await EventRecorder(get_session_factory(), task.id).add(
+            "command.expanded",
+            "receive_task",
+            {"task_id": task.id, **command_info},
+        )
     await _record_dispatch(db, task)
     return task
 
@@ -382,7 +392,24 @@ async def create_task(
         turn_count=1,
     )
     db.add(thread)
-    task = await persist_task(db, project.id, payload, thread_id=thread.id, turn_index=1)
+    # 用户输入以 `/名字 参数` 开头且命中命令/Skill 时换成正文字：这一步要在建行
+    # 之前完成，落库的 goal 就是模型真正会读到的那段。标题保留用户原话。
+    workspace = project.active_workspace
+    expanded_goal, command_info = expand_user_input(
+        payload.goal,
+        root=workspace.path if workspace is not None else None,
+        session_id=thread.id,
+    )
+    if command_info is not None:
+        payload = payload.model_copy(update={"goal": expanded_goal})
+    task = await persist_task(
+        db,
+        project.id,
+        payload,
+        thread_id=thread.id,
+        turn_index=1,
+        command_info=command_info,
+    )
     # v0.10.1 §2：与 threads.create_turn 同一条规矩——auto_start 由后端就地接管，
     # 前端不再二次调 /run。启动失败记 task.dispatch_failed，任务留在 draft/queued
     # 可重试的状态；失败不能把 201 带走，也不能静默。
@@ -1954,10 +1981,30 @@ async def steer_task(task_id: str, payload: TaskSteerIn, db: DbSession) -> dict:
             status_code=409,
         )
     queued_at = int(time.time() * 1000)
-    await EventRecorder(get_session_factory(), task_id).add(
+    # 插话同样接受 `/名字 参数`：`message` 留给界面显示用户原话，模型读 `expanded`。
+    project = await load_project(db, task.project_id)
+    workspace = project.active_workspace
+    expanded, command_info = expand_user_input(
+        payload.message,
+        root=workspace.path if workspace is not None else None,
+        session_id=str(task.thread_id or task.id),
+    )
+    recorder = EventRecorder(get_session_factory(), task_id)
+    if command_info is not None:
+        await recorder.add(
+            "command.expanded",
+            "receive_task",
+            {"task_id": task_id, "channel": "steer", **command_info},
+        )
+    await recorder.add(
         "steer.queued",
         "user",
-        {"message": payload.message.strip(), "queued_at": queued_at, "step": int(task.steps_used or 0)},
+        {
+            "message": payload.message.strip(),
+            **({"expanded": expanded} if command_info is not None else {}),
+            "queued_at": queued_at,
+            "step": int(task.steps_used or 0),
+        },
     )
     return {
         "task_id": task_id,

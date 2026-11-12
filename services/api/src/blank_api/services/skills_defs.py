@@ -33,6 +33,7 @@ from pathlib import Path
 
 import yaml
 
+from blank_api.services.prompt_args import argument_names
 from blank_api.services.workspace import mask_path
 
 # Claude skips Skill files that are not regular files or exceed this limit.
@@ -49,8 +50,6 @@ RESERVED_DIRS = frozenset({"synced"})
 # Parsed for audit only; we do not apply them (see module docstring).
 UNSUPPORTED_FIELDS = (
     "model",
-    "argument-hint",
-    "arguments",
     "when_to_use",
     "version",
     "paths",
@@ -76,6 +75,8 @@ class SkillDefinition:
     description: str
     instructions: str
     display_name: str = ""
+    argument_hint: str = ""
+    argument_names: tuple[str, ...] = ()
     allowed_tools: tuple[str, ...] = ()
     disallowed_tools: tuple[str, ...] = ()
     model_invocable: bool = True
@@ -92,6 +93,10 @@ class SkillDefinition:
             "description": self.description,
             "instructions": self.instructions,
             "display_name": self.display_name,
+            "argument_hint": self.argument_hint,
+            "argument_names": list(self.argument_names),
+            "kind": "skill",
+            "base_dir": str(Path(self.path).parent) if self.path else "",
             "allowed_tools": list(self.allowed_tools),
             "disallowed_tools": list(self.disallowed_tools),
             "model_invocable": self.model_invocable,
@@ -113,6 +118,10 @@ class SkillDefinition:
         }
         if self.display_name and self.display_name != self.name:
             payload["displayName"] = self.display_name
+        if self.argument_hint:
+            payload["argumentHint"] = self.argument_hint
+        if self.argument_names:
+            payload["argumentNames"] = list(self.argument_names)
         if self.path:
             payload["path"] = mask_path(self.path)
         if self.allowed_tools:
@@ -303,6 +312,10 @@ def _definition_from_dir(
     if problem:
         warnings.append(f"Skill 文件 {mask_path(str(path))} 的 user-invocable {problem}")
 
+    raw_hint = meta.get("argument-hint")
+    argument_hint = "" if raw_hint is None else str(raw_hint)
+    names = argument_names(meta.get("arguments"))
+
     if len(body) > MAX_BODY_CHARS:
         body = body[:MAX_BODY_CHARS].rstrip() + "\n…（Skill 正文过长，已截断）"
     ignored = tuple(key for key in UNSUPPORTED_FIELDS if meta.get(key) is not None)
@@ -312,6 +325,8 @@ def _definition_from_dir(
             description=description,
             instructions=body,
             display_name=display_name,
+            argument_hint=argument_hint,
+            argument_names=names,
             allowed_tools=allowed_tools,
             disallowed_tools=disallowed_tools,
             model_invocable=model_invocable,

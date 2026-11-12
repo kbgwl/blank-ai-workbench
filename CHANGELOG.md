@@ -1,6 +1,51 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）
+
+- **自定义斜杠命令（`.blank/commands`）与参数展开对齐 Claude（S 批第 3 项）**：
+  按 Claude Code 2.1.271 的 `.claude/commands` 命名规则与 `qW` 占位符引擎落成本地斜杠命令。
+  新增 `services/prompt_args.py`（`qW` 等价替换引擎 + 路径占位符）与
+  `services/commands_defs.py`（两层发现、命名规则、frontmatter 审计、用户输入展开）；
+  改 `services/skills_defs.py`（`argument-hint` / `arguments` 解析与审计投影）、
+  `services/tools/skills.py`（渲染委托 `render_prompt`、条目带参数名与 base_dir）、
+  `services/agent/runtime.py`（`commands.loaded`、与 Skill 合并同一份目录）、
+  `api/routes/tasks.py`、`api/routes/threads.py`（创建任务 / 会话回合 / 插话三个入口展开
+  并落 `command.expanded`）、`api/routes/projects.py`（`GET /projects/{id}/commands`）、
+  `services/agent/graph.py`（插话注入模型的是展开正文）。
+  1. **命名与发现**：一个 md 一条命令，嵌套目录用 `:` 连接（`db/migrate.md` →
+     `/db:migrate`）；子目录里的 `SKILL.md` 用目录名，根目录的 `SKILL.md` 没有名字、
+     跳过；同目录多 md 且含 `SKILL.md` 时只用它并告警。项目层
+     `<workspace>/.blank/commands` + 用户层 `~/.blank/commands`（`BLANK_USER_COMMANDS_DIR`、
+     `BLANK_USER_INSTRUCTIONS_DIR/commands` 可改），同名项目层胜；单个坏文件不拖垮其余命令。
+  2. **文件边界**：只认 `.md` 后缀，超 1 MiB 跳过并点名；坏 frontmatter 降级不跳过
+     （与 Skill 同口径），正文超 20000 字截断并标注；`allowed-tools` / `disallowed-tools`
+     只解析留审计、不改变工具池；`disable-model-invocation` 只挡模型清单与 `skill` 工具，
+     `user-invocable: false` 只挡用户 `/名字` 入口。
+  3. **参数替换（逐条对齐 `qW`）**：`$ARGUMENTS` 整串、`$ARGUMENTS[n]` / `$n` 取第 n 个
+     shell 词（0 起，`shlex` 口径，引号不配对退回空白切分）、`$name` 按 frontmatter
+     `arguments` 声明取位（最长名字优先、后接字母或 `[` 不算占位）、`\$` 转义、替换进去的
+     值不会被二次展开；越界占位符保留原文且不算「用过」，因此没有别的占位符时仍追加
+     `\nARGUMENTS: <args>`（与上游逐字节一致，`tests/test_skill_tool_v33.py` 里对应期望已同步）。
+  4. **路径占位符**：正文里的 `${CLAUDE_PROJECT_DIR}` / `${CLAUDE_SESSION_ID}` /
+     `${CLAUDE_SKILL_DIR}` 按上下文替换（后者只对 `SKILL.md` 命名的命令有值），Windows
+     路径统一成正斜杠。
+  5. **三个入口与模型侧**：用户输入 `/名字 参数` 在创建任务、会话回合、运行中插话三处展开——
+     标题与界面保留用户原话，落库的 `goal` 与插话注入给模型的是展开正文；未知名字与非
+     slash 文本原样返回。模型侧与 Skill 共用一份目录（同名命令胜），正文仍只经 `skill`
+     工具按需加载。
+  6. **可观察**：`commands.loaded`（发现结果）、`command.expanded`（含 name / source /
+     kind / 字符数 / 打码路径，插话时带 `channel=steer`）与 `GET /projects/{id}/commands`
+     列表（只给审计信息与一句话说明，不回正文）。
+  测试：新增 `tests/test_commands_v46.py` 42 例（`qW` 各形态与越界语义、命名三形态、
+  两层覆盖、跳过与降级矩阵、三个真实 HTTP 入口、运行时发现/清单/工具加载、插话读取侧），
+  变异电池 41/41 红（逐条改坏实现，红在指定判据上；跑完按原字节还原并核对 sha256）。
+  全量后端回归：
+  **3262 passed, 28 skipped**（0 failed，rc=0，709.25s）。
+  偏离：目录用 `.blank/commands` 而不是 `.claude/commands`，用户层是 `~/.blank/commands`，
+  刻意只读 `.blank`；`!` 前缀的 shell 执行块不执行、原样留在正文里；未知 `/名字` 按普通
+  文本入库（本机没有补全/选择器，把 `/path/to/file` 当错误会误伤正常消息）；团队群聊消息
+  与定时/工作流等非手输任务不走用户侧展开；`allowed-tools` / `disallowed-tools` 只审计；
+  `${CLAUDE_EFFORT}` 未移植；命令名按文件名原样、只差大小写的两条命令在 Windows 上不会同时存在。
 
 - **文件型 Skill 定义（`.blank/skills`）与 skill 工具双闸对齐 Claude（S 批第 2 项）**：
   按 Claude Code 2.1.271 的 `.claude/skills` 契约落成本地磁盘 Skill 发现与合并。新增
@@ -34,12 +79,12 @@
      红在指定判据上；跑完按原字节还原并核对 sha256）。全量后端回归：
      **3220 passed, 28 skipped**（0 failed，rc=0，748.88s）。
   偏离：目录用 `.blank/skills` 而不是 `.claude/skills`、用户层是 `~/.blank/skills`，
-  且刻意只读 `.blank`；本机还没有斜杠命令/会话入口，`disable-model-invocation` 的
-  Skill 用户侧暂时也没有触发路径（工具会明确拒绝，不假装可用）；`allowed-tools` /
-  `disallowed-tools` 只解析留审计、不改变工具池；正文超过 20000 字截断（Claude 原样
-  使用）；未支持字段只进 `ignored`；plugin 命名空间、`synced` 同步根（只跳过、未实现
-  同步）、嵌套 Skill 目录以及 `allowed-tools` 里的 `${CLAUDE_SKILL_DIR}` /
-  `${CLAUDE_PROJECT_DIR}` 替换未移植。
+  且刻意只读 `.blank`；`allowed-tools` / `disallowed-tools` 只解析留审计、不改变工具池；
+  正文超过 20000 字截断（Claude 原样使用）；未支持字段只进 `ignored`；plugin 命名空间、
+  `synced` 同步根（只跳过、未实现同步）、嵌套 Skill 目录以及 `allowed-tools` 里的
+  `${CLAUDE_SKILL_DIR}` / `${CLAUDE_PROJECT_DIR}` 替换未移植。S2 当时「本机还没有斜杠
+  命令入口，`disable-model-invocation` 的 Skill 用户侧也没有触发路径」已由 S3 改写：
+  Skill 与命令共用 `/名字` 入口，`disable-model-invocation` 只挡模型、不再挡用户。
 
 - **文件型子代理定义（`.blank/agents`）与 spawn_agent(subagent_type) 对齐 Claude（S 批）**：
   按 Claude Code 2.1.271 的 `.claude/agents` 契约落成本地定义发现与派发。新增

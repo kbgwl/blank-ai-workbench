@@ -48,6 +48,7 @@ from blank_api.services.agent import workflow as workflow_module
 from blank_api.services import shell_tasks, worktree_session
 from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agents_defs import discover_agents
+from blank_api.services.commands_defs import discover_commands
 from blank_api.services.skills_defs import discover_skills, merge_skill_entries
 from blank_api.services.agent.scenarios import (
     excluded_tools,
@@ -544,10 +545,16 @@ class AgentRuntime:
         disk_skills = discover_skills(run_root)
         if disk_skills.entries or disk_skills.errors or disk_skills.warnings:
             await recorder.add("skills.loaded", "receive_task", disk_skills.as_dict())
+        # 自定义斜杠命令（.blank/commands/**/*.md）：用户侧 `/name args` 由路由
+        # 展开，模型侧与 Skill 共用同一份目录（同名时命令胜）。
+        commands = discover_commands(run_root)
+        if commands.entries or commands.errors or commands.warnings:
+            await recorder.add("commands.loaded", "receive_task", commands.as_dict())
         skills = SkillCatalog(
             merge_skill_entries(
                 request.skill_catalog,
                 [item.as_entry() for item in disk_skills.entries.values()],
+                [item.as_entry() for item in commands.entries.values()],
             )
         )
         # 一个模型可加载的都没有时，工具也一并拿掉——列不出名字却摆着加载入口，

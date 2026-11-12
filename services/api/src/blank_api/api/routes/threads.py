@@ -57,6 +57,7 @@ from blank_api.services.agent.dispatcher import (
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.goals import GoalTracker
 from blank_api.services.agent.supervisor import observe, wants_new_goal
+from blank_api.services.commands_defs import expand_user_input
 from blank_api.services.sandbox import SnapshotNotRestorable, SnapshotStore
 from blank_api.services.settings import SettingsStore
 from blank_api.services.threads import rewind_to_turn, thread_or_404, thread_turns
@@ -353,6 +354,14 @@ async def create_turn(
     automation_mode = resolve_automation_mode(settings, str(goal.automation_mode or ""))
     policy = effective_policy(automation_mode, permission_mode)
     project = await load_project(db, thread.project_id)
+    # 监督者的判断读用户原话（`/deploy prod` 就是用户想做的事），真正入任务的
+    # goal 换成命令正文——模型看到的是展开后的提示词，标题/目标名仍是原话。
+    workspace = project.active_workspace
+    expanded_goal, command_info = expand_user_input(
+        payload.goal,
+        root=workspace.path if workspace is not None else None,
+        session_id=thread_id,
+    )
     budget_left = not (
         int(goal.budget_tokens or 0) > 0
         and int(goal.tokens_used or 0) >= int(goal.budget_tokens)
@@ -375,7 +384,7 @@ async def create_turn(
         thread.project_id,
         TaskCreate(
             title=payload.title,
-            goal=payload.goal,
+            goal=expanded_goal,
             acceptance_criteria=payload.acceptance_criteria,
             provider_id=payload.provider_id,
             scenario=payload.scenario,
@@ -384,6 +393,7 @@ async def create_turn(
         ),
         thread_id=thread_id,
         turn_index=next_turn,
+        command_info=command_info,
     )
     # persist_task 自己 commit 过：重新取一次目标再挂，别拿可能已过期的实例写字段。
     stored_goal = (
