@@ -69,6 +69,57 @@ def render_skill(
     )
 
 
+def skill_loading_header(name: str) -> str:
+    """Claude 的 ``formatSkillLoadingMetadata``：预加载消息的标记头。
+
+    续聊时靠这个头认出「这一份正文上一轮已经给过」，对应上游 ``kDs`` 用
+    ``isSkillLoadingMetadata`` 扫历史消息的做法。
+    """
+    return (
+        f"<command-message>{name}</command-message>\n"
+        f"<command-name>{name}</command-name>\n"
+        "<skill-format>true</skill-format>"
+    )
+
+
+def preload_skills(
+    catalog,
+    names,
+    *,
+    project_dir: str = "",
+    session_id: str = "",
+    carried=(),
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """把 agent frontmatter 里声明的 Skill 正文预加载成消息正文。
+
+    返回 ``([(name, text)], [(name, error)])``。缺名只告警、不阻断派发（上游
+    同样只是 log 一行 warning）；``carried`` 里的名字上一轮已经进过对话，跳过
+    以免续聊把同一份正文越叠越长。预加载成功后名字记进 ``catalog.loaded``，
+    子代理再调 ``skill`` 工具会得到「已加载」，不会把正文贴第二遍。
+    """
+    loaded: list[tuple[str, str]] = []
+    problems: list[tuple[str, str]] = []
+    for raw in names or ():
+        name = str(raw or "").strip()
+        if not name or name in carried:
+            continue
+        entry = catalog.get(name) if isinstance(catalog, SkillCatalog) else None
+        if entry is None:
+            problems.append((name, f"Skill '{name}' specified in frontmatter was not found"))
+            continue
+        catalog.loaded.add(name)
+        body = render_skill(
+            entry["instructions"],
+            "",
+            names=entry["argument_names"],
+            project_dir=project_dir,
+            session_id=session_id,
+            skill_dir=entry["base_dir"],
+        )
+        loaded.append((name, skill_loading_header(name) + "\n\n" + body))
+    return loaded, problems
+
+
 class SkillCatalog:
     """一次任务可用的 Skill 快照 + 本任务已经加载过哪些。
 

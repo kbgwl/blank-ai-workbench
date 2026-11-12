@@ -34,7 +34,11 @@ from blank_api.services.sandbox.tiers import TierDowngrade, assert_not_looser
 from blank_api.services.tools.base import ToolContext
 from blank_api.services.tools.file_state import FileStateCache
 from blank_api.services.tools.gateway import ToolGateway, sandbox_backend_event_field
-from blank_api.services.tools.skills import SkillCatalog
+from blank_api.services.tools.skills import (
+    SkillCatalog,
+    preload_skills,
+    skill_loading_header,
+)
 from blank_api.services.worktree import (
     Worktree,
     apply_changes,
@@ -153,6 +157,9 @@ class SubAgentRequest:
     # None = 不限（对应定义里的 tools: "*"）；否则是允许的工具名白名单。
     allowed_tools: tuple[str, ...] | None = None
     disallowed_tools: tuple[str, ...] = ()
+    # 定义里声明的 Skill 名字：派发时把正文预加载进子代理的启动消息（对齐
+    # Claude 的 agent frontmatter ``skills``）。解析失败的项只告警，不阻断派发。
+    skills: tuple[str, ...] = ()
     # 定义里写了、但我们不支持因此没有生效的字段（model/permissionMode/...）。
     # 只用于审计：绝不能悄悄吞掉，否则用户以为那条权限模式起了作用。
     agent_ignored: tuple[str, ...] = ()
@@ -176,6 +183,7 @@ class SubAgentRequest:
             instructions=str(self.instructions or "").strip()[:MAX_INSTRUCTIONS_CHARS],
             allowed_tools=None if self.allowed_tools is None else tuple(self.allowed_tools),
             disallowed_tools=tuple(self.disallowed_tools or ()),
+            skills=tuple(self.skills or ()),
             agent_ignored=tuple(self.agent_ignored or ()),
             fork=bool(self.fork),
         )
@@ -411,6 +419,21 @@ def _child_tools(tools: list, *, skill_catalog: bool) -> list:
     return kept
 
 
+def _carried_skill_preloads(history, names) -> set[str]:
+    """续聊里上一轮已经预加载过的 Skill（上游 ``kDs`` 的 carriedPreloads）。
+
+    只认消息开头就是该 Skill 的标记头：正文里恰好引用了别的 Skill 名字不算
+    「已经给过」，否则续聊会静默漏掉一份真正需要的正文。
+    """
+    carried: set[str] = set()
+    for item in history or ():
+        content = str((item or {}).get("content") or "")
+        for name in names or ():
+            if name not in carried and content.startswith(skill_loading_header(name)):
+                carried.add(name)
+    return carried
+
+
 def _child_allowed_tools(request: SubAgentRequest) -> set[str]:
     """定义只能收窄、不能扩大子代理的工具池。
 
@@ -619,6 +642,24 @@ async def run_subagent(
             "\n可用 Skill（任务属于它覆盖的范围时，先调用 skill 工具加载正文再照做；"
             "只用清单里的准确名字，不要猜）：\n" + "\n".join(lines)
         )
+    # 定义里声明的 Skill 在派发时就把正文放进启动消息（对齐上游 subagent 的
+    # skills 预加载）。fork 继承父会话原文，父会话里已经有的正文不再重复贴。
+    preloaded: list[tuple[str, str]] = []
+    if catalog is not None and request.skills and not request.fork:
+        carried = _carried_skill_preloads(history or (), request.skills)
+        preloaded, missing = preload_skills(
+            catalog,
+            request.skills,
+            project_dir=str(run_root),
+            session_id=task_id,
+            carried=carried,
+        )
+        for name, error in missing:
+            # 上游同样只 log 一行 warning：缺名不阻断派发，子代理照常跑。
+            await log.add("skill.preload.failed", "subagent", {"skill": name, "error": error})
+        for name, text in preloaded:
+            await log.add("skill.preloaded", "subagent", {"skill": name, "chars": len(text)})
+    preloaded_messages = [{"role": "user", "content": text} for _, text in preloaded]
     if history:
         # 续聊 / fork：历史里已经有系统提示与上一轮的读/写/结论，这一轮只追加新问题。
         messages: list[dict] = list(history)
@@ -633,10 +674,12 @@ async def run_subagent(
             if FORK_MARKER not in current:
                 first["content"] = current + str(system_message["content"])
                 messages[0] = first
+        messages.extend(preloaded_messages)
         messages.append({"role": "user", "content": request.goal})
     else:
         messages = [
             system_message,
+            *preloaded_messages,
             {
                 "role": "user",
                 "content": request.goal + ("\n（你在一个临时隔离副本里工作，改动不会影响真实工作区）" if isolated else ""),
@@ -912,6 +955,7 @@ class SubAgentRunner:
                 "agent_type": request.agent_name or BUILTIN_AGENT,
                 "agent_ignored": list(request.agent_ignored),
                 "agent_tools": sorted(allowed),
+                "agent_skills": list(request.skills),
                 "agent_path": prepared.agent_path,
                 "agent_id": prepared.agent_id,
                 "depth": prepared.depth,
@@ -988,6 +1032,7 @@ class SubAgentRunner:
             else list(prepared.request.allowed_tools),
             "disallowed_tools": list(prepared.request.disallowed_tools),
             "agent_ignored": list(prepared.request.agent_ignored),
+            "skills": list(prepared.request.skills),
             "max_steps": prepared.request.max_steps,
             "fork": bool(prepared.request.fork),
         }
@@ -1037,6 +1082,7 @@ class SubAgentRunner:
             allowed_tools=None if allowed_tools is None else tuple(allowed_tools),
             disallowed_tools=tuple(entry.get("disallowed_tools") or ()),
             agent_ignored=tuple(entry.get("agent_ignored") or ()),
+            skills=tuple(entry.get("skills") or ()),
             # 续聊是同一个子代理接着说话：fork 的工具面与权限也必须跟着回来，
             # 否则第二轮会悄悄退回到只读基线。
             fork=bool(entry.get("fork")),

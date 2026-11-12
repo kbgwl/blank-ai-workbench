@@ -12,9 +12,12 @@
    假值是「没有工具」；``disallowedTools: "*"`` 按上游 ``VW`` 归一成
    ``undefined``，即等同于不写这条限制；
 4. **maxTurns**：正整数进请求步数（受全局上限约束），非法值忽略并告警；
-5. **未支持字段可见**：model / permissionMode / hooks 等不生效的字段进
+5. **skills**：frontmatter 声明的 Skill 在派发时预加载进子代理启动消息
+   （``command-message`` 标记头 + 正文），缺名只告警不阻断派发；续聊按上游
+   ``kDs`` 的 carriedPreloads 口径跳过上一轮已经带上的正文；
+6. **未支持字段可见**：model / permissionMode / hooks 等不生效的字段进
    ``agent_ignored``，不能悄悄吞掉让用户以为配置起了作用；
-6. **真的接通**：运行时发现目录、系统提示列出类型、spawn_agent 解析类型并把
+7. **真的接通**：运行时发现目录、系统提示列出类型、spawn_agent 解析类型并把
    定义正文挂进子代理系统提示、``agents.loaded`` 与 ``subagent.started`` 进事件。
 """
 
@@ -50,6 +53,12 @@ from blank_api.services.subagent import (
     _child_allowed_tools,
 )
 from blank_api.services.tools.delegate import delegate_tools
+from blank_api.services.tools.skills import (
+    SkillCatalog,
+    _skill,
+    preload_skills,
+    skill_loading_header,
+)
 
 from tests.test_agent_v04 import (  # noqa: F401  (env 是夹具，故意导入)
     call,
@@ -107,6 +116,15 @@ def _messages_text(messages) -> str:
         else:
             parts.append(str(getattr(item, "content", "") or ""))
     return "\n".join(parts)
+
+
+def _contents(messages) -> list[str]:
+    return [
+        str(item.get("content") or "")
+        if isinstance(item, dict)
+        else str(getattr(item, "content", "") or "")
+        for item in messages
+    ]
 
 
 class CaptureAdapter(SlowAdapter):
@@ -393,6 +411,74 @@ def test_falsy_tools_value_means_no_tools(tmp_path: Path) -> None:
     assert not any("tools" in item for item in catalog.errors), catalog.errors
 
 
+def test_skills_accepts_comma_string_and_list(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/one.md", _agent(name="one", extra="skills: deploy, review\n"))
+    _write(
+        root / ".blank/agents/two.md",
+        _agent(name="two", extra="skills:\n  - deploy\n  - review\n"),
+    )
+
+    catalog = _discover(root)
+
+    assert catalog.get("one").skills == ("deploy", "review")
+    assert catalog.get("two").skills == ("deploy", "review")
+
+
+def test_skills_absent_and_null_are_both_empty(tmp_path: Path) -> None:
+    """上游 ``OI``：``e == null ? [] : fyn(e)``，缺省键与显式 null 同义。"""
+
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/absent.md", _agent(name="absent"))
+    _write(root / ".blank/agents/nil.md", _agent(name="nil", extra="skills:\n"))
+
+    catalog = _discover(root)
+
+    assert catalog.get("absent").skills == ()
+    assert catalog.get("nil").skills == ()
+    assert not any("skills" in item for item in catalog.errors), catalog.errors
+
+
+def test_invalid_skills_type_fails_closed_with_a_skill_worded_warning(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/bad.md", _agent(name="bad", extra="skills: 42\n"))
+    _write(
+        root / ".blank/agents/mixed.md",
+        _agent(name="mixed", extra="skills:\n  - deploy\n  - 3\n"),
+    )
+
+    catalog = _discover(root)
+
+    assert catalog.get("bad").skills == ()
+    assert catalog.get("mixed").skills == ("deploy",)
+    assert any("skills" in item and "没有 Skill" in item for item in catalog.errors), catalog.errors
+    assert any("非字符串项" in item for item in catalog.errors), catalog.errors
+
+
+def test_skills_star_is_a_literal_name_not_a_wildcard(tmp_path: Path) -> None:
+    """``tools`` 的 ``*`` 是不限；``skills`` 的 ``*`` 只是一个解析不到的名字。"""
+
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/all.md", _agent(extra='skills: "*"\n'))
+
+    catalog = _discover(root)
+
+    assert catalog.get("reviewer").skills == ("*",)
+
+
+def test_skills_field_is_audited_not_reported_as_unsupported(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/reviewer.md", _agent(extra="skills: deploy\n"))
+
+    definition = _discover(root).get("reviewer")
+
+    assert "skills" not in UNSUPPORTED_FIELDS
+    assert definition.ignored == ()
+    assert definition.as_dict()["skills"] == ["deploy"]
+
+
 def test_disallowed_tools_star_means_no_restriction(tmp_path: Path) -> None:
     """上游 ``VW`` 把 ``*`` 变成 ``undefined``：禁止列表整条被省略。"""
 
@@ -609,6 +695,120 @@ async def test_definition_body_and_tool_narrowing_reach_the_real_child(tmp_path:
     assert started[0]["agent_type"] == "reviewer"
     assert started[0]["agent_tools"] == ["read_file"]
     assert started[0]["agent_ignored"] == ["model"]
+
+
+def _skill_catalog(*entries: tuple[str, str]) -> SkillCatalog:
+    return SkillCatalog(
+        [
+            {"name": name, "description": f"{name} 说明", "instructions": body}
+            for name, body in entries
+        ]
+    )
+
+
+async def test_declared_skills_are_preloaded_before_the_goal(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/reviewer.md", _agent(extra="skills: deploy\n"))
+    catalog = _discover(root)
+    adapter = CaptureAdapter("子代理结论")
+    session = _session(root, adapter, task_id="task-x1")
+    session.context.skills = _skill_catalog(("deploy", "部署步骤：先备份数据库。"))
+    runner = SubAgentRunner().bind(session)
+    tool = _tool_map()["spawn_agent"]
+    try:
+        outcome = await tool.handler(
+            _context(root, runner, catalog),
+            {"goal": "部署预发", "subagent_type": "reviewer", "run_in_background": False},
+        )
+    finally:
+        await runner.aclose("task-x1")
+
+    assert outcome.ok is True, outcome.message
+    contents = _contents(adapter.calls[0])
+    header = skill_loading_header("deploy")
+    preload = next(index for index, text in enumerate(contents) if text.startswith(header))
+    goal = next(index for index, text in enumerate(contents) if "部署预发" in text)
+    # 上游顺序：system → 预加载 meta 消息 → 用户目标。
+    assert contents[0] != contents[preload]
+    assert preload == 1, contents[:3]
+    assert preload < goal
+    assert "部署步骤：先备份数据库。" in contents[preload]
+    # 目录是拷贝：子代理加载过的 Skill 不能让父会话以为自己也见过了。
+    assert session.context.skills.loaded == set()
+    assert [payload["skill"] for event, payload in session.recorder.events if event == "skill.preloaded"] == ["deploy"]
+    started = [payload for event, payload in session.recorder.events if event == "subagent.started"]
+    assert started[0]["agent_skills"] == ["deploy"]
+
+
+async def test_missing_declared_skill_warns_but_still_spawns(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/reviewer.md", _agent(extra="skills: nope\n"))
+    catalog = _discover(root)
+    adapter = CaptureAdapter("子代理结论")
+    session = _session(root, adapter, task_id="task-x2")
+    session.context.skills = _skill_catalog(("deploy", "部署步骤。"))
+    runner = SubAgentRunner().bind(session)
+    tool = _tool_map()["spawn_agent"]
+    try:
+        outcome = await tool.handler(
+            _context(root, runner, catalog),
+            {"goal": "看看", "subagent_type": "reviewer", "run_in_background": False},
+        )
+    finally:
+        await runner.aclose("task-x2")
+
+    # 缺名不阻断派发：上游同样只记一行 warning。
+    assert outcome.ok is True, outcome.message
+    failed = [payload for event, payload in session.recorder.events if event == "skill.preload.failed"]
+    assert failed and failed[0]["skill"] == "nope"
+    assert "was not found" in failed[0]["error"]
+    assert "was not found" not in _messages_text(adapter.calls[0])
+    assert [payload["skill"] for event, payload in session.recorder.events if event == "skill.preloaded"] == []
+
+
+async def test_continuation_does_not_repeat_a_carried_preload(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    _write(root / ".blank/agents/reviewer.md", _agent(extra="skills: deploy\n"))
+    catalog = _discover(root)
+    adapter = CaptureAdapter("子代理结论")
+    session = _session(root, adapter, task_id="task-x3")
+    session.context.skills = _skill_catalog(("deploy", "部署步骤：先备份数据库。"))
+    runner = SubAgentRunner().bind(session)
+    tool = _tool_map()["spawn_agent"]
+    try:
+        outcome = await tool.handler(
+            _context(root, runner, catalog),
+            {"goal": "第一轮", "subagent_type": "reviewer", "run_in_background": False},
+        )
+        assert outcome.ok is True, outcome.message
+        second = await runner.send_message(outcome.data["agent_id"], "第二轮")
+    finally:
+        await runner.aclose("task-x3")
+
+    assert second.ok is True, second.error
+    header = skill_loading_header("deploy")
+    assert _messages_text(adapter.calls[0]).count(header) == 1
+    # 上一轮已经把正文带进历史：续聊再贴一遍就是重复占上下文（上游 kDs）。
+    assert _messages_text(adapter.calls[1]).count(header) == 1
+    events = [payload for event, payload in session.recorder.events if event == "skill.preloaded"]
+    assert len(events) == 1
+
+
+async def test_preloaded_skill_counts_as_loaded_for_the_child(tmp_path: Path) -> None:
+    catalog = _skill_catalog(("deploy", "部署步骤。"))
+    loaded, problems = preload_skills(
+        catalog, ("deploy",), project_dir=str(tmp_path), session_id="task-x4"
+    )
+
+    assert problems == []
+    assert loaded and loaded[0][0] == "deploy"
+    assert catalog.loaded == {"deploy"}
+    outcome = await _skill(
+        SimpleNamespace(skills=catalog, root=str(tmp_path), task_id="task-x4"),
+        {"skill": "deploy"},
+    )
+    assert outcome.ok is True
+    assert outcome.data.get("already_loaded") is True
 
 
 async def test_continuation_keeps_definition_and_tool_boundary(tmp_path: Path) -> None:

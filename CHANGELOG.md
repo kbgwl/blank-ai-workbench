@@ -2,6 +2,38 @@
 
 ## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）
 
+- **子代理 frontmatter 的 `skills` 预加载对齐上游 `OI` + `formatSkillLoadingMetadata`（X 批）**：
+  文件型与插件 agent 的 `skills` 不再当未支持字段，派发前把声明 Skill 的正文预加载成一条
+  meta user 消息。上游锚点：过滤循环 @15191346（`(e.skills??[]).filter((Wi)=>!Ya.has(Wi))`
+  与五类 warning）、预加载消息拼装 @15191925（`formatSkillLoadingMetadata` + 正文、
+  `isMeta:!0`）、续聊 carriedPreloads @15188674 / `kDs` @15205370（用
+  `isSkillLoadingMetadata` 扫 meta user 消息）。改 `services/agents_defs.py`（`skills`
+  字段与 `OI` 解析）、`services/subagent.py`（预加载消息、carried 跳过、续聊保留）、
+  `services/tools/skills.py`（`skill_loading_header`、`preload_skills`）、
+  `services/tools/delegate.py`（定义透传）。
+  1. **解析口径同 `OI`**：缺省与显式 null 都是空表；`*` 保留成字面名字（可能找不到、
+     按缺名告警），不按工具通配符展开；分词复用 `fyn` + `Wd`（逗号与空格都切、括号内
+     保持一条、非字符串项丢弃并告警，告警文案按 Skill 措辞）。
+  2. **缺名只告警不阻断**：`Skill '<x>' specified in frontmatter was not found` 进
+     `skill.preload.failed` 事件，派发继续；成功进 `skill.preloaded`（名字 + 字数），
+     `subagent.started` 带 `agent_skills`。
+  3. **预加载消息排在 goal 之前**：`<command-message>` / `<command-name>` /
+     `<skill-format>` 三段头 + 正文作为 user 消息；续聊先扫历史里的同一个头，已经进过
+     上下文的不再重复贴（对应 `kDs` 的 carriedPreloads）。
+  4. **预加载即已加载**：名字记进 `catalog.loaded`，子代理再调 `skill` 工具返回
+     「已加载」，不会把正文贴第二遍（上游 `ykr`）。
+  5. 未移植：`syncedSkills`（账户同步）与「非 prompt 型」「策略禁用」两类上游 warning
+     分支——本机 Skill 目录只装载 prompt 型，也没有账户同步链路，没有对应状态可判；
+     远程同步仍整条冻结。
+  测试：`tests/test_agent_defs_v44.py` 新增 9 例（逗号串/列表、缺省与 null 都为空、
+  坏类型 fail-closed 且用 Skill 措辞、`*` 是字面名、审计视图收进 skills 不再报
+  unsupported、预加载排在 goal 前且父会话 loaded 不变、缺名仍派发、续聊不重复、
+  预加载后 skill 工具返回已加载），全套 45 passed。变异 6/6 红（`*` 按通配符归一、
+  整段跳过解析、不记 loaded、carried 恒空、预加载排到 goal 之后、缺名静默跳过）。
+  相邻套件（fork / 子代理默认后台 / 子代理 / 子代理用量 / 插件 / Skill / 命令 /
+  skill 工具 / 提案）232 passed。全量后端回归：**3419 passed, 28 skipped**
+  （704.58s）。
+
 - **子代理定义的 `tools` / `disallowedTools` 对齐上游 `VW`（W 批）**：文件型与插件
   agent 的这两个字段都走 `fyn` + `Wd` 再包一层 `VW`（`fyn` @19523546、`Wd`
   @43262594、`VW` @19523799；调用点 @5785886 插件 agent、@20358524 文件型 agent）。

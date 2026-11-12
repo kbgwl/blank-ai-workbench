@@ -63,6 +63,7 @@ def _apply_definition(request: SubAgentRequest, definition) -> SubAgentRequest:
     request.instructions = definition.instructions
     request.allowed_tools = definition.tools
     request.disallowed_tools = definition.disallowed_tools
+    request.skills = definition.skills
     request.agent_ignored = definition.ignored
     request.fork = definition.name == BUILTIN_FORK
     return request

@@ -13,6 +13,8 @@ but the *rules around it*:
   plugin namespacing);
 * ``tools`` / ``disallowedTools`` accept a comma string or a YAML list, and
   ``*`` in ``tools`` means "no restriction";
+* ``skills`` names Skills to preload into the child's startup messages. A
+  missing name is reported but never stops the spawn (upstream only warns);
 * ``maxTurns`` is a positive integer; anything else is ignored with a warning;
 * one bad file never takes the whole catalog down.
 
@@ -55,7 +57,6 @@ UNSUPPORTED_FIELDS = (
     "permissionMode",
     "hooks",
     "mcpServers",
-    "skills",
     "isolation",
     "background",
     "memory",
@@ -73,6 +74,9 @@ class AgentDefinition:
     # None = no restriction (key absent or Claude's ``tools: "*"``), else a whitelist.
     tools: tuple[str, ...] | None = None
     disallowed_tools: tuple[str, ...] = ()
+    # Skill 名字，按 Claude 的 ``OI`` 解析：缺省与 null 都是空表，``*`` 保留成
+    # 字面名字（它不会解析成功，运行时会按"没找到"告警，与上游一致）。
+    skills: tuple[str, ...] = ()
     max_turns: int | None = None
     source: str = "project"
     path: str = ""
@@ -96,6 +100,8 @@ class AgentDefinition:
             payload["tools"] = list(self.tools)
         if self.disallowed_tools:
             payload["disallowedTools"] = list(self.disallowed_tools)
+        if self.skills:
+            payload["skills"] = list(self.skills)
         if self.max_turns is not None:
             payload["maxTurns"] = self.max_turns
         if self.ignored:
@@ -230,6 +236,21 @@ def _tool_list(value):
     return items, warning
 
 
+def _skills_list(value):
+    """Parse ``skills`` like upstream ``OI``.
+
+    Missing key, ``null`` and other falsy values all mean "nothing to preload".
+    ``*`` stays a literal name here — unlike ``tools``, upstream does not read it
+    as "all skills"; it just fails to resolve and warns at spawn time.
+    """
+    if value is _MISSING or not value:
+        return (), ""
+    items, warning = _parse_tool_specs(value)
+    if warning:
+        warning = warning.replace("工具名", "Skill 名").replace("没有工具", "没有 Skill")
+    return items, warning
+
+
 def _positive_int(value) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         return None
@@ -292,6 +313,10 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
         )
     disallowed = disallowed or ()
 
+    skills, problem = _skills_list(meta["skills"] if "skills" in meta else _MISSING)
+    if problem:
+        warnings.append(f"Agent 文件 {mask_path(str(path))} 的 skills {problem}")
+
     max_turns = None
     if meta.get("maxTurns") is not None:
         max_turns = _positive_int(meta.get("maxTurns"))
@@ -310,6 +335,7 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
             instructions=body,
             tools=tools,
             disallowed_tools=tuple(disallowed),
+            skills=skills,
             max_turns=max_turns,
             source=source,
             path=str(path),
