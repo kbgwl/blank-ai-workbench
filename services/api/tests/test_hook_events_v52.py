@@ -66,11 +66,14 @@ NEW_EVENTS = (
 def test_new_events_registered_and_blocking_set_is_narrow():
     missing = [event for event in NEW_EVENTS if event not in HOOK_EVENTS]
     assert not missing, missing
-    # 只该多这三个：它们是"返回决定就立刻生效"的事件。通知/批处理/压缩前后
+    # 只该多这四个：它们是"返回决定就立刻生效"的事件。通知/批处理/压缩前后
     # 都不许拦流程——把任意一个塞进集合，异步配置就会被迫同步等待。
+    # user_prompt_expansion 与 user_prompt_submit 同族：上游 UserPromptExpansion
+    # 的退出码 2 就是"这次展开作废"，不进集合的话否决会退化成一条非阻断错误。
     assert BLOCKING_EVENTS == {
         "pre_tool_use",
         "user_prompt_submit",
+        "user_prompt_expansion",
         "task_created",
         "task_completed",
         "permission_request",
@@ -90,7 +93,7 @@ async def test_stdin_carries_hook_event_name(tmp_path):
         f"open({str(seen)!r}, 'w', encoding='utf-8').write(json.dumps(payload, ensure_ascii=False))\n",
         encoding="utf-8",
     )
-    runner = HookRunner({"permission_request": [HookSpec(f'"{sys.executable}" "{script}"')]})
+    runner = HookRunner({"permission_request": [HookSpec(command=f'"{sys.executable}" "{script}"')]})
     await runner.run(
         "permission_request",
         "run_shell",

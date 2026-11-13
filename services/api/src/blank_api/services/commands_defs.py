@@ -58,6 +58,28 @@ SKILL_FILE = "skill.md"
 
 _SLASH = re.compile(r"^/([^\s/]+)(?:\s+(.*))?$", re.DOTALL)
 
+# 上游 UserPromptExpansion 载荷的五个键（逐字）：钩子按这几个名字读，多一个少一个
+# 都会让"钩子没拿到参数"这类问题查不出来。`expand_user_input` 命中斜杠命令时把它们
+# 整份放进 info，触发点再用 `expansion_payload` 抽出，避免这五键在各触发点各写一份。
+EXPANSION_PAYLOAD_KEYS: tuple[str, ...] = (
+    "expansion_type",
+    "command_name",
+    "command_args",
+    "command_source",
+    "prompt",
+)
+
+
+def expansion_payload(info: dict | None) -> dict:
+    """从 `expand_user_input` 的 info 里取出上游 UserPromptExpansion 的载荷。
+
+    返回的 dict 只含上游那五个键，其余（`source` / `kind` / 字数统计）留给审计，
+    不进钩子载荷。``info`` 为空（不是斜杠命令展开来的）时返回空 dict。
+    """
+    if not info:
+        return {}
+    return {key: str(info.get(key) or "") for key in EXPANSION_PAYLOAD_KEYS}
+
 
 @dataclass(frozen=True)
 class CommandDefinition:
@@ -367,6 +389,15 @@ def expand_user_input(
         "args_chars": len(args),
         "original_chars": len(str(text)),
         "expanded_chars": len(expanded),
+        # 上游 UserPromptExpansion 的载荷键（逐字对齐）：钩子拿到的就是这一份，
+        # 多一个少一个都会让审计里的载荷对不上。`expansion_type` 的分叉规则与上游
+        # 同一句（`source === "mcp" ? "mcp_prompt" : "slash_command"`）；本仓库的
+        # 目录只有 command/skill 两种来源，所以恒为 slash_command。
+        "expansion_type": "mcp_prompt" if str(entry.get("source") or "") == "mcp" else "slash_command",
+        "command_name": name,
+        "command_args": args,
+        "command_source": str(entry.get("source") or ""),
+        "prompt": str(text),
     }
     if entry.get("path"):
         info["path"] = mask_path(str(entry["path"]))

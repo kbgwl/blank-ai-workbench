@@ -1,6 +1,85 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）
+
+- **`UserPromptExpansion` 与 `TeammateIdle` 两个事件、钩子类型补到六种（AF 批）**：事件面
+  在 AE 批之后还剩这两个没移植，钩子类型此前只支持 `command`——等于"能写钩子，但上游
+  能配的四类（prompt/agent/http/mcp_tool/script）配了也认不出来"。这批把两件事一次收掉。
+  上游锚点（逐字取证自 `claude.uniq.txt`）：`UserPromptExpansion` 的载荷五键
+  `expansion_type/command_name/command_args/command_source/prompt`、`matcher` 的
+  `fieldToMatch` 是 `source`、退出码 2 即"这次展开作废"；`TeammateIdle` 载荷两键
+  `teammate_name/team_name`（上游把 team_name 标 deprecated，仍按会话推导传）、
+  `preventContinuation` + `stopReason`、缺省文案 `TeammateIdle hook prevented
+  continuation`；六种类型的序列化形状 `{type:"http",command:url}` /
+  `{type:"mcp_tool",command:"${server}/${tool}"}` / `{type:"prompt",prompt}` /
+  `{type:"agent",prompt}` / `{type:"script",file|script}`，执行分发
+  `kn.type==="command"||"http"||"mcp_tool"||"script"` 与
+  `kn.type==="agent"||"prompt"`，http 走 `dfe`（POST JSON、非 2xx 文案
+  `HTTP ${statusCode} from ${url}`、**成功时把 statusCode 记成 exitCode 而 outcome 是
+  success——退出码不等于成败**），script 型 `Jst` 直接抛
+  `script hooks are not available in this build`，prompt/agent 型无会话上下文时抛
+  `prompt-type hooks are not supported for ${event} events (no conversation context is
+  available). Use a command-type hook instead.`。
+  改 `services/hooks.py`、`services/commands_defs.py`、`services/agent/runtime.py`、
+  `services/agent/graph.py`、`services/team.py`、`services/api/routes/tasks.py`、
+  `models/task.py`、`schemas/task.py`（新增 `expansion` 列 + 迁移 `0036_task_expansion.py`）。
+  1. **事件面**：`HOOK_EVENTS` 增 `user_prompt_expansion`、`teammate_idle`（20 → 22），
+     别名 `UserPromptExpansion` / `TeammateIdle`；`user_prompt_expansion` **进**
+     `BLOCKING_EVENTS`（与 `user_prompt_submit` 同族——不进集合的话退出码 2 会被当成
+     一条非阻断错误，否决直接失效），`teammate_idle` **不进**（上游把退出码 2 渲染成
+     一条"钩子报错"，进集合就会变成"成员不能转空闲"）。
+  2. **`user_prompt_expansion` 接线**：载荷五键由 `expansion_payload` 从 `expand_user_input`
+     的 info 里抽出（多一个少一个都会让"钩子没拿到参数"查不出来），`matcher` 比
+     `expansion_type`；触发点两处——提交路径（`runtime._run_expansion_hooks`）与插话/steer
+     路径（`graph` 读 `steer.queued`），载荷与处置不分叉。三种处置：否决（退出码 2 /
+     decision=deny）作废整次展开、理由带用户原文；`suppressOriginalPrompt` 时原文从阻断
+     消息里略去（只抑制上下文，不落账）；`ask` 档在提交这一步没有确认界面，按否决处理
+     （静默放行等于把钩子写下的条件丢掉）。补上下文与提交钩子的补段一起进模型。
+     展开事实随行落库：任务行新增 `expansion` 列（迁移 `0036_task_expansion.py`）存展开
+     那一刻的整份事实，`TaskOut` 原样带出——钩子在执行那一刻才跑（可能在另一个进程、也
+     可能在重启之后），读任务行比回头解析审计时间线稳；且审计事件落库前过 `mask_deep`，
+     密钥形态的参数（`--token=sk-…`）会被整段抹掉，钩子要读的正是用户真写的那份参数，
+     落列才保得住原值。插话（steer）没有可落的列，走审计事件，落库前同样过 `mask_deep`。
+  3. **`teammate_idle` 接线**：`team.py` 成员即将转入空闲那一刻触发，载荷两键逐字，
+     `matcher` 比 `teammate_name`；`preventContinuation` 阻止继续、理由取 `stopReason`、
+     缺省用上游那句；补上下文的去处是群记录（下一位发言者与用户读的都是它），审计另记
+     count/chars；退出码 2 只算一条非阻断错误（可见、不注入、不阻止）。
+  4. **钩子类型六种**：`HOOK_KINDS` 补 `prompt/agent/http/mcp_tool/script`；
+     `_build_specs` 各类型取各自的主键（http→`url`、mcp_tool→`server`/`tool`、
+     script→`file` 或内联正文），`_execute` 按 `spec.kind` 分发，四类的输出判定与退出码
+     语义共用 `_finish`。缺关键字段（http 缺 url、mcp_tool 缺 server/tool、prompt 缺
+     prompt、script 缺 file 且无内联正文）逐条告警跳过，告警不带命令正文。
+  5. **http 的成败语义**：非 2xx 逐字 `HTTP ${statusCode} from ${url}`；2xx 时上游把
+     statusCode 记成 exitCode、body 当 stdout，而成败看 outcome（2xx 即 success）——
+     退出码不等于成败，`_finish` 新增 `ok` 参数显式给定，**不能拿"非 0 即失败"反推**
+     （否则 200 会被误判成失败）。
+  6. **prompt/agent 型**：无会话上下文时逐字报上游那句（agent 型前缀换 `agent-type`），
+     作为一条非阻断错误（可见、不阻断、不注入），而不是静默跳过；注入 `prompt_runner`
+     时把提示词交给模型、正文按同一套解析。
+  7. **mcp_tool 型**：`${server}/${tool}`；上游从会话上下文取 MCP 客户端，未注入
+     `mcp_runner` 时报"缺 MCP 客户端"的非阻断错误，而不是把它当命令去跑。
+  8. **script 型**：上游这个构建里 `Jst` 直接抛 `script hooks are not available in this
+     build`；这里认出来、执行时按同一句逐字报一条非阻断失败（不执行脚本文件）。
+  偏离/未移植：prompt/agent/mcp_tool 型在本仓库还没有"把提示词/工具调用送进会话上下文"
+  的注入点（`runtime` 未接 `prompt_runner` / `mcp_runner` 时按上游同口径报缺上下文，而非
+  静默跳过——接上注入点后这两类即可真正执行）；上游的 `function`/`callback`/`unknown`
+  类型不在执行分发里，不移植；`TeammateIdle` 的 `team_name` 上游已 deprecated，仍按会话
+  推导传。
+  判据 `services/api/tests/test_hook_triggers_af3ab.py`（17 例：两事件注册/别名/阻断归属、
+  五键逐字、两份载荷键常量不漂移、matcher 按 `expansion_type`/`teammate_name` 分流、
+  否决带原文、抑制不泄漏原文、ask 按否决、补上下文与来源掩码、阻止继续与缺省文案、
+  退出码 2 非阻断分流、stdin 载荷）与 `test_hook_kinds_af3c.py`（18 例：六种类型识别与
+  字段对齐、缺参告警、未知类型跳过、http 真 POST 的 2xx 判成功且退出码记状态码、非 2xx
+  文案逐字、mcp_tool/prompt/agent 注入 runner、script 执行报上游那句）；另修正
+  `test_hook_events_v52.py`（阻断集合补 `user_prompt_expansion`、`HookSpec` 位置传参回归）
+  与 `test_settings_hooks_v53.py`（未知事件/未知类型告警、未知类型在已知事件内告警跳过）。
+  变异电池 `evals/hooks_mutation_battery_af.py`（8/8 红，红集合登记在
+  `evals/fixtures/battery-booked-af.json`、第二轮逐字核对通过，跑完按原字节还原并核对
+  sha256）：M1 http 2xx 去掉 `ok=True` → 2 红；M2 `HOOK_KINDS` 摘 `script` → 3 红；
+  M3 script 措辞改坏 → 1 红；M4 `_finish` 忽略 `ok` → 2 红；M5 `user_prompt_expansion`
+  摘出阻断集合 → 2 红；M6 展开钩子忽略 `suppress_original` → 1 红；M7 idle 把退出码 2
+  当阻止 → 1 红；M8 idle 缺省文案改坏 → 1 红；相邻钩子/子代理/设置套件 **248 passed**
+  （74.40s），全量 **3596 passed / 28 skipped（788.81s，RC=0）**。
 
 - **SubagentStart 钩子与 SessionStart 的附加上下文（AD 批）**：钩子作者在子代理派发点能
   拦一句话，而 `SessionStart` 给的 `additionalContext` 此前只进审计、正文被丢掉——等于

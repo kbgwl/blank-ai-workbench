@@ -85,7 +85,13 @@ from blank_api.services import metrics
 from blank_api.services import shell_tasks
 from blank_api.services.features import is_enabled as feature_enabled
 from blank_api.services.guardian import Guardian
-from blank_api.services.hooks import STOP_HOOK_BLOCK_CAP, HookRunner, stop_hook_block_cap
+from blank_api.services.hooks import (
+    EXPAND_PAYLOAD_KEYS,
+    STOP_HOOK_BLOCK_CAP,
+    HookRunner,
+    run_expansion_hooks,
+    stop_hook_block_cap,
+)
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.plan import normalize_goal, normalize_steps, plan_progress
 from blank_api.services.agent.planner import (
@@ -2559,6 +2565,10 @@ async def drain_steer(session: AgentSession, node: str, step: int = 0) -> list[d
 
     队列放在事件日志里而不是内存里：桌面壳重启、多次审批恢复之后，
     用户排的这句话都还在，不会因为进程换了就丢。
+
+    插话里的斜杠命令与提交路径走同一套展开钩子：入队时把上游那五个键随行带进来，
+    抽干时跑 ``user_prompt_expansion``，钩子否决就这条不注入。两处共用
+    :func:`run_expansion_hooks`，载荷与处置不分叉。
     """
     from sqlalchemy import select
 
@@ -2606,6 +2616,20 @@ async def drain_steer(session: AgentSession, node: str, step: int = 0) -> list[d
         message = str(payload.get("expanded") or payload.get("message") or "").strip()
         if not message:
             continue
+        # 展开载荷是入队时随行带进来的五个键；没有这五个键 = 这句不是斜杠命令展开来的，
+        # 一个钩子都不跑（与"没配钩子"同形）。
+        expansion = {key: payload[key] for key in EXPAND_PAYLOAD_KEYS if payload.get(key)}
+        outcome = await run_expansion_hooks(
+            session.hooks, session.recorder, expansion or None, node=node
+        )
+        if outcome.blocked:
+            # 钩子否决的是"这次展开"：展开后的正文不进上下文（用户原话与否决理由都留在
+            # 事件时间线里）。游标照样推进，否则这条会被一遍遍重新读出来。
+            session.steer_cursor = max(session.steer_cursor, int(row.seq))
+            continue
+        if outcome.notes:
+            # 钩子补的上下文跟着这句一起进模型，别只在审计里留个"注入了几段"。
+            message = f"{message}\n\n" + "\n".join(f"- {note}" for note in outcome.notes)
         texts.append(message)
         session.steer_cursor = max(session.steer_cursor, int(row.seq))
         queued_at = payload.get("queued_at")

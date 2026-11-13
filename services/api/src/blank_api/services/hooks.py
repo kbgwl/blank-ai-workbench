@@ -28,12 +28,17 @@ import os
 import re
 import signal
 import time
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 
 HOOK_EVENTS = (
     "session_start",
     "session_end",
     "user_prompt_submit",
+    # 斜杠命令展开成提示词的那一刻（上游 UserPromptExpansion）。与 user_prompt_submit
+    # 同族、但在它之前：载荷带 expansion_type / command_name / command_args /
+    # command_source / 原文，钩子可以补上下文、要求抑制原文，或直接否决这次展开。
+    "user_prompt_expansion",
     "pre_tool_use",
     "post_tool_use",
     # 失败与成功分开：Claude Code 的同名事件让钩子作者不必靠 ok 字段分流。
@@ -43,6 +48,12 @@ HOOK_EVENTS = (
     # 被拒的创建要把刚建的任务删回去，被拒的完成不许落盘（见 tools/tasks.py）。
     "task_created",
     "task_completed",
+    # 成员即将转入空闲的那一刻（上游 TeammateIdle）。载荷只有 teammate_name /
+    # team_name 两个键（上游的 team_name 已标 deprecated，仍是会话推导出来的那份）；
+    # 钩子给 preventContinuation 就阻止它继续，理由取 stopReason，缺省文案
+    # "TeammateIdle hook prevented continuation"。退出码 2 按上游同口径只算一条
+    # 非阻断错误（不进 BLOCKING_EVENTS）。
+    "teammate_idle",
     "post_compact",
     # 压缩前：钩子可以给摘要器补指令（上游把输出拼进压缩提示词）。
     # 压缩是不可逆的上下文改写，机会只有一次，所以它必须排在折叠之前。
@@ -83,6 +94,9 @@ BLOCKING_EVENTS = frozenset(
     {
         "pre_tool_use",
         "user_prompt_submit",
+        # 与 user_prompt_submit 同族：上游 UserPromptExpansion 的退出码 2 就是
+        # "这次展开作废"，不进集合的话退出码 2 会被当成一条非阻断错误，否决直接失效。
+        "user_prompt_expansion",
         "task_created",
         "task_completed",
         "permission_request",
@@ -90,6 +104,12 @@ BLOCKING_EVENTS = frozenset(
         "subagent_stop",
     }
 )
+# 上游的六种可执行钩子类型（AF3c 补齐）。command 是本仓库原来唯一支持的形态；
+# prompt/agent 需要会话上下文（上游在无上下文时直接抛错），http 直接 POST，
+# mcp_tool 调一个 MCP 工具，script 走脚本文件——但上游这个构建里 ``Jst`` 直接抛
+# "script hooks are not available in this build"，所以 script 认出来、执行时按上游
+# 同口径报不可用。四类可执行类型的输出判定与退出码语义与 command 共用。
+HOOK_KINDS = frozenset({"command", "prompt", "agent", "http", "mcp_tool", "script"})
 # Claude settings.json 用的是 PascalCase 事件名，BLANK_HOOKS 用蛇形。两种都收，
 # 统一折成 HOOK_EVENTS 里的名字。表里没有的事件 = 我们还没移植，告警后跳过：
 # 静默忽略会让用户以为自己配的钩子在跑。
@@ -97,11 +117,13 @@ EVENT_ALIASES: dict[str, str] = {
     "SessionStart": "session_start",
     "SessionEnd": "session_end",
     "UserPromptSubmit": "user_prompt_submit",
+    "UserPromptExpansion": "user_prompt_expansion",
     "PreToolUse": "pre_tool_use",
     "PostToolUse": "post_tool_use",
     "PostToolUseFailure": "post_tool_use_failure",
     "TaskCreated": "task_created",
     "TaskCompleted": "task_completed",
+    "TeammateIdle": "teammate_idle",
     "PreCompact": "pre_compact",
     "PostCompact": "post_compact",
     "Notification": "notification",
@@ -238,7 +260,13 @@ MAX_SETTLE_SECONDS = 10.0
 
 @dataclass(frozen=True)
 class HookSpec:
-    command: str
+    # 上游的钩子类型（command/prompt/agent/http/mcp_tool）。command 是本仓库原来
+    # 唯一支持的形态；其余四类在 AF3c 补齐——它们与 command 的差别只在"怎么拿到
+    # 输出"，拿到之后的判定（parse_hook_output）与退出码语义完全共用。
+    kind: str = "command"
+    # 审计与调用侧共用的标识串：command 型是 shell 命令，http 型是 url，
+    # mcp_tool 型是 `server/tool`，prompt/agent 型是提示词正文。
+    command: str = ""
     match: str = ""
     timeout: float = DEFAULT_TIMEOUT
     # 配置里写 "async": true 时，钩子跑在后台，调用方不再等它。阻断型事件
@@ -248,6 +276,13 @@ class HookSpec:
     # 这条钩子从哪来：env（BLANK_HOOKS）还是 settings（settings.json 的 hooks）。
     # 只用于审计，不影响执行。
     source: str = "env"
+    # http 型：请求地址（上游的字段名就是 url）。
+    url: str = ""
+    # prompt/agent 型：交给模型的提示词正文。
+    prompt: str = ""
+    # mcp_tool 型：服务端名与工具名（上游序列化成 `${server}/${tool}`）。
+    server: str = ""
+    tool: str = ""
 
     def applies(self, target: str) -> bool:
         return matcher_matches(self.match, target)
@@ -282,25 +317,60 @@ def _build_specs(event: str, items: list, *, source: str, warnings: list[str]) -
             if not isinstance(hook, dict):
                 warnings.append(f"{event} 第 {index} 组里的钩子不是对象，已跳过")
                 continue
-            # 上游的钩子还有其他 type（prompt/agent/http/…）：还没有对应实现，
-            # 跳过并告警，而不是当成 shell 命令去跑一坨提示词。
+            # 上游的六种可执行钩子类型（command/prompt/agent/http/mcp_tool/script）：
+            # 字段名与序列化形状都对齐上游——http 用 url（序列化时写进 command 键），
+            # mcp_tool 用 server+tool（序列化成 `${server}/${tool}`），
+            # prompt/agent 用 prompt，script 用 file（或内联 script）。认不出来的类型
+            # 照旧跳过并告警，而不是当成 shell 命令去跑一坨提示词。
             kind = str(hook.get("type") or "command").strip().lower()
-            if kind != "command":
+            if kind not in HOOK_KINDS:
                 warnings.append(f"{event} 第 {index} 组的钩子类型 {kind} 尚未支持，已跳过")
                 continue
-            command = str(hook.get("command") or "").strip()
-            if not command:
-                warnings.append(f"{event} 第 {index} 组的钩子缺少 command，已跳过")
-                continue
+            if kind == "command":
+                primary = str(hook.get("command") or "").strip()
+                if not primary:
+                    warnings.append(f"{event} 第 {index} 组的钩子缺少 command，已跳过")
+                    continue
+            elif kind == "http":
+                primary = str(hook.get("url") or hook.get("command") or "").strip()
+                if not primary:
+                    warnings.append(f"{event} 第 {index} 组的 http 钩子缺少 url，已跳过")
+                    continue
+            elif kind in ("prompt", "agent"):
+                primary = str(hook.get("prompt") or "").strip()
+                if not primary:
+                    warnings.append(f"{event} 第 {index} 组的 {kind} 钩子缺少 prompt，已跳过")
+                    continue
+            elif kind == "script":
+                # 上游 script 型要么给 file（脚本文件路径），要么给内联 script 正文。
+                # 内联正文不落进审计的 command 字段（mask_path 只打码路径、不打码正文），
+                # 用固定标记代替，免得把脚本原文带进事件。
+                file = str(hook.get("file") or "").strip()
+                if not file and not str(hook.get("script") or "").strip():
+                    warnings.append(f"{event} 第 {index} 组的 script 钩子缺少 file/script，已跳过")
+                    continue
+                primary = file or "<inline-script>"
+            else:  # mcp_tool
+                server = str(hook.get("server") or "").strip()
+                tool = str(hook.get("tool") or "").strip()
+                if not server or not tool:
+                    warnings.append(f"{event} 第 {index} 组的 mcp_tool 钩子缺少 server/tool，已跳过")
+                    continue
+                primary = f"{server}/{tool}"
             specs.append(
                 HookSpec(
-                    command=command,
+                    kind=kind,
+                    command=primary,
                     match=matcher,
                     timeout=_clamp_timeout(hook.get("timeout")),
                     async_run=bool(
                         hook.get("async") or hook.get("asyncRun") or hook.get("background")
                     ),
                     source=source,
+                    url=primary if kind == "http" else "",
+                    prompt=primary if kind in ("prompt", "agent") else "",
+                    server=str(hook.get("server") or "").strip() if kind == "mcp_tool" else "",
+                    tool=str(hook.get("tool") or "").strip() if kind == "mcp_tool" else "",
                 )
             )
     return specs
@@ -325,6 +395,11 @@ class HookResult:
     # suppressOriginalPrompt：钩子要求"原文不进模型上下文"（#123）。
     # 抑制的是上下文，不是账——tasks.goal 里那份原文一个字都不动。
     suppress_original: bool = False
+    # preventContinuation / stopReason：上游 TeammateIdle（与 TaskCompleted、Stop 同族）
+    # 的契约——钩子要求"别继续"，并给出理由；上游的默认文案是
+    # "TeammateIdle hook prevented continuation"。只认真布尔 true，理由只取字符串。
+    prevent_continuation: bool = False
+    stop_reason: str = ""
     # 这条结果是后台跑完的（配置里 async:true）。审计时读它，
     # 否则"钩子跑完了、但模型没等它"这件事在时间线上看不出来。
     background: bool = False
@@ -363,6 +438,12 @@ class HookResult:
             body["worktree_path"] = self.worktree_path
         if self.suppress_original:
             body["suppress_original_prompt"] = True
+        if self.prevent_continuation:
+            # 阻止继续的理由要落账：它是给用户看的那句话（上游渲染成
+            # hook_stopped_continuation 的消息），只记钩子自己的那份。
+            body["prevent_continuation"] = True
+            if self.stop_reason:
+                body["stop_reason"] = self.stop_reason
         if self.background:
             body["async"] = True
         if self.exit_code is not None:
@@ -454,6 +535,19 @@ def parse_hook_output(text: str) -> dict:
         suppress = parsed.get("suppressOriginalPrompt")
     if suppress is True:
         body_out["suppress_original_prompt"] = True
+    # preventContinuation / stopReason（TeammateIdle、TaskCompleted、Stop 同族）：
+    # 同样只认真布尔 true——字符串 "true" 与 1 是写错的钩子，把它读成"要阻止继续"
+    # 等于让一次错型变成一次静默的硬停，比放行更难查。
+    prevent = body.get("preventContinuation")
+    if prevent is not True:
+        prevent = parsed.get("preventContinuation")
+    if prevent is True:
+        body_out["prevent_continuation"] = True
+    stop = body.get("stopReason")
+    if not isinstance(stop, str):
+        stop = parsed.get("stopReason")
+    if isinstance(stop, str) and stop.strip():
+        body_out["stop_reason"] = stop.strip()[:300]
     return body_out
 
 
@@ -570,6 +664,8 @@ class HookRunner:
         settle_timeout: float = ASYNC_SETTLE_SECONDS,
         warnings: list[str] | None = None,
         disabled: bool = False,
+        prompt_runner: Callable[[str, dict], Awaitable[str]] | None = None,
+        mcp_runner: Callable[[str, str, dict], Awaitable[str]] | None = None,
     ) -> None:
         self.hooks: dict[str, list[HookSpec]] = hooks or {}
         self.results: list[HookResult] = []
@@ -579,6 +675,14 @@ class HookRunner:
         self.warnings: list[str] = list(warnings or [])
         # disableAllHooks：策略级总开关。为真时一个钩子都不加载。
         self.disabled = bool(disabled)
+        # prompt/agent 型钩子要把提示词交给模型（上游在无会话上下文时直接抛错）。
+        # 运行时注入一个 `(prompt, payload) -> 模型正文` 的调用；没有它，这两类
+        # 钩子按上游同口径报"没有会话上下文"，而不是静默跳过。
+        self.prompt_runner = prompt_runner
+        # mcp_tool 型钩子要调一个 MCP 工具（上游从会话上下文里取客户端）。注入
+        # `(server, tool, payload) -> 工具正文`；没有它，这类钩子按上游同口径报
+        # "缺 MCP 客户端"，而不是把它当命令去跑。
+        self.mcp_runner = mcp_runner
         # 后台任务：键是任务本身（防止被 GC），值保留 spec 与事件名供取消后审计。
         self._tasks: dict[asyncio.Task, tuple[HookSpec, str]] = {}
         # 完成但还没被下一次模型调用 / 收尾流程取走的结果与唤醒。
@@ -600,6 +704,8 @@ class HookRunner:
         *,
         settings: dict | None = None,
         disabled: bool = False,
+        prompt_runner: Callable[[str, dict], Awaitable[str]] | None = None,
+        mcp_runner: Callable[[str, str, dict], Awaitable[str]] | None = None,
     ) -> "HookRunner":
         """从 settings.json 的 ``hooks`` 与 ``BLANK_HOOKS`` 构建（后者形如：
         {"pre_tool_use":[{"match":"run_shell","command":"node hooks/guard.mjs","timeout":5}]}）。
@@ -607,6 +713,9 @@ class HookRunner:
         两处配置合并，同一条（事件 + 命令 + matcher + 超时）只跑一次。解析失败
         一律降级为"没有钩子"，不影响任务启动；坏条目进 ``warnings`` 进审计。
         ``disabled``（上游 disableAllHooks）为真时一个钩子都不加载。
+        ``prompt_runner`` 供 prompt/agent 型钩子把提示词交给模型（见
+        :attr:`HookRunner.prompt_runner`）；``mcp_runner`` 供 mcp_tool 型钩子调
+        MCP 工具（见 :attr:`HookRunner.mcp_runner`）。
         """
         try:
             settle = float(os.environ.get("BLANK_HOOK_SETTLE", "") or ASYNC_SETTLE_SECONDS)
@@ -617,6 +726,8 @@ class HookRunner:
                 settle_timeout=settle,
                 warnings=["disableAllHooks 为真：所有钩子都不加载"],
                 disabled=True,
+                prompt_runner=prompt_runner,
+                mcp_runner=mcp_runner,
             )
 
         hooks: dict[str, list[HookSpec]] = {}
@@ -650,7 +761,13 @@ class HookRunner:
                 warnings.append("BLANK_HOOKS 不是合法 JSON，已跳过")
             if isinstance(parsed, dict):
                 add(parsed, "env")
-        return cls(hooks, settle_timeout=settle, warnings=warnings)
+        return cls(
+            hooks,
+            settle_timeout=settle,
+            warnings=warnings,
+            prompt_runner=prompt_runner,
+            mcp_runner=mcp_runner,
+        )
 
     def describe(self) -> dict:
         """审计面：每个事件几条钩子、来自哪里、配置期告警。不含命令正文。"""
@@ -781,6 +898,27 @@ class HookRunner:
         return self.drain_completed(), commands
 
     async def _execute(self, spec: HookSpec, event: str, payload: dict) -> HookResult:
+        """按钩子类型分发。四类可执行的非 command 类型（http/prompt/agent/mcp_tool）
+        的判定与退出码语义与 command 共用同一套 ``parse_hook_output``，差别只在
+        "怎么拿到输出正文"；script 在这个构建里不可用，按上游同口径报错。"""
+        if spec.kind == "command":
+            return await self._execute_command(spec, event, payload)
+        if spec.kind == "http":
+            return await self._execute_http(spec, event, payload)
+        if spec.kind in ("prompt", "agent"):
+            return await self._execute_prompt(spec, event, payload)
+        if spec.kind == "mcp_tool":
+            return await self._execute_mcp_tool(spec, event, payload)
+        if spec.kind == "script":
+            return await self._execute_script(spec, event, payload)
+        return HookResult(
+            event=event,
+            command=spec.command,
+            status="failed",
+            reason=f"未知钩子类型 {spec.kind}",
+        )
+
+    async def _execute_command(self, spec: HookSpec, event: str, payload: dict) -> HookResult:
         started = time.perf_counter()
         encoded = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
 
@@ -817,12 +955,169 @@ class HookRunner:
 
         text = _decode(stdout or b"").strip()
         err = _decode(stderr or b"").strip()
+        return self._finish(spec, event, text, err, exit_code=process.returncode, elapsed=elapsed)
+
+    async def _execute_http(self, spec: HookSpec, event: str, payload: dict) -> HookResult:
+        """http 型：把钩子输入 JSON POST 到 ``url``，响应正文按同一套解析。
+
+        对齐上游 ``dfe``：非 2xx 的报错文案逐字是 ``HTTP ${statusCode} from ${url}``；
+        成功时上游把 ``statusCode`` 记成 exitCode、``body`` 当 stdout，而成败看的是
+        ``outcome``（2xx 即 success）——退出码不等于成败，所以这里显式传 ``ok=True``，
+        不能拿"非 0 即失败"反推（否则 200 会被误判成失败）。
+        """
+        import httpx
+
+        started = time.perf_counter()
+
+        def elapsed() -> int:
+            return int((time.perf_counter() - started) * 1000)
+
+        body = json.dumps(payload, ensure_ascii=False, default=str)
+        try:
+            async with httpx.AsyncClient(timeout=spec.timeout) as client:
+                response = await client.post(
+                    spec.url,
+                    content=body.encode("utf-8"),
+                    headers={"content-type": "application/json"},
+                    follow_redirects=False,
+                )
+        except Exception as exc:  # 连不上 / 超时 / TLS：一律非阻断失败
+            return HookResult(
+                event=event,
+                command=spec.command,
+                status="failed",
+                reason=f"HTTP 钩子请求失败：{exc.__class__.__name__}",
+                duration_ms=elapsed(),
+            )
+        status_code = response.status_code
+        text = _decode(response.content).strip()
+        if not 200 <= status_code < 300:
+            return HookResult(
+                event=event,
+                command=spec.command,
+                status="failed",
+                reason=f"HTTP {status_code} from {spec.url}"[:300],
+                duration_ms=elapsed(),
+                output=text[:MAX_SNIPPET],
+                exit_code=status_code,
+            )
+        return self._finish(
+            spec, event, text, "", exit_code=status_code, elapsed=elapsed, ok=True
+        )
+
+    async def _execute_prompt(self, spec: HookSpec, event: str, payload: dict) -> HookResult:
+        """prompt/agent 型：把提示词交给模型，模型正文按同一套解析。
+
+        上游在没有会话上下文时直接抛 ``prompt-type hooks are not supported for
+        ${event} events (no conversation context is available). Use a command-type
+        hook instead.``——这里没有注入 ``prompt_runner`` 时逐字报同一句，作为一条
+        非阻断错误（可见、不阻断、不注入），而不是静默跳过。
+        """
+        started = time.perf_counter()
+
+        def elapsed() -> int:
+            return int((time.perf_counter() - started) * 1000)
+
+        if self.prompt_runner is None:
+            label = "prompt-type" if spec.kind == "prompt" else "agent-type"
+            return HookResult(
+                event=event,
+                command=spec.command,
+                status="failed",
+                reason=(
+                    f"{label} hooks are not supported for {event} events "
+                    "(no conversation context is available). Use a command-type hook instead."
+                ),
+                duration_ms=elapsed(),
+            )
+        try:
+            text = await self.prompt_runner(spec.prompt, payload)
+        except Exception as exc:
+            return HookResult(
+                event=event,
+                command=spec.command,
+                status="failed",
+                reason=f"{spec.kind} 钩子执行失败：{exc.__class__.__name__}",
+                duration_ms=elapsed(),
+            )
+        return self._finish(spec, event, str(text or ""), "", exit_code=0, elapsed=elapsed)
+
+    async def _execute_mcp_tool(self, spec: HookSpec, event: str, payload: dict) -> HookResult:
+        """mcp_tool 型：调用 ``server/tool``，工具正文按同一套解析。
+
+        上游把 MCP 客户端从会话上下文里取出来再调；这里没有注入 ``mcp_runner``
+        时报一条非阻断错误，指明缺的是 MCP 客户端，而不是把它当命令去跑。
+        """
+        started = time.perf_counter()
+
+        def elapsed() -> int:
+            return int((time.perf_counter() - started) * 1000)
+
+        if self.mcp_runner is None:
+            return HookResult(
+                event=event,
+                command=spec.command,
+                status="failed",
+                reason=f"mcp_tool 钩子缺少 MCP 客户端（{spec.server}/{spec.tool}），无法执行",
+                duration_ms=elapsed(),
+            )
+        try:
+            text = await self.mcp_runner(spec.server, spec.tool, payload)
+        except Exception as exc:
+            return HookResult(
+                event=event,
+                command=spec.command,
+                status="failed",
+                reason=f"mcp_tool 钩子执行失败：{exc.__class__.__name__}",
+                duration_ms=elapsed(),
+            )
+        return self._finish(spec, event, str(text or ""), "", exit_code=0, elapsed=elapsed)
+
+    async def _execute_script(self, spec: HookSpec, event: str, payload: dict) -> HookResult:
+        """script 型：上游这个构建里不可用。
+
+        上游的 ``Jst`` 直接 ``throw Error("script hooks are not available in this
+        build")``——这里按同一句逐字报一条非阻断失败（可见、不阻断、不执行），
+        而不是把它当命令去跑一个脚本文件。
+        """
+        started = time.perf_counter()
+
+        def elapsed() -> int:
+            return int((time.perf_counter() - started) * 1000)
+
+        return HookResult(
+            event=event,
+            command=spec.command,
+            status="failed",
+            reason="script hooks are not available in this build",
+            duration_ms=elapsed(),
+        )
+
+    def _finish(
+        self,
+        spec: HookSpec,
+        event: str,
+        text: str,
+        err: str,
+        *,
+        exit_code: int | None,
+        elapsed,
+        ok: bool | None = None,
+    ) -> HookResult:
+        """四种类型共用的收尾：解析正文、套退出码语义、组装 HookResult。
+
+        ``ok`` 显式给定成败（上游 http 型把 2xx 的状态码记成 exitCode、却仍是
+        ``outcome:"success"``——退出码不等于成败，不能拿"非 0 即失败"反推）；
+        不传时按 command/prompt/mcp 的口径，退出码 0 才算成功。
+        """
         parsed = parse_hook_output(text)
         decision = str(parsed.get("decision") or "")
         reason = str(parsed.get("reason") or "")
-        exit_code = process.returncode
         additional_context = str(parsed.get("additional_context") or "")
-        status = "ok" if exit_code == 0 else "failed"
+        if ok is None:
+            status = "ok" if exit_code == 0 else "failed"
+        else:
+            status = "ok" if ok else "failed"
         if exit_code == 2:
             # Claude 的约定：退出码 2 = 阻断，stderr 作为原因交给模型/用户。
             # 只有阻断型事件才真的阻断；其余事件把 stderr 当作给模型的上下文（#119）。
@@ -845,6 +1140,8 @@ class HookRunner:
             additional_context=additional_context,
             worktree_path=str(parsed.get("worktree_path") or ""),
             suppress_original=bool(parsed.get("suppress_original_prompt")),
+            prevent_continuation=bool(parsed.get("prevent_continuation")),
+            stop_reason=str(parsed.get("stop_reason") or ""),
             exit_code=exit_code,
         )
 
@@ -871,3 +1168,243 @@ def usable_context(results: list[HookResult]) -> list[str]:
 def non_blocking_errors(results: list[HookResult]) -> list[HookResult]:
     """退出码 2 的那些（上游 ``hook_non_blocking_error``）：可见、但不阻断、不注入。"""
     return [item for item in results if item.exit_code == 2]
+
+
+def prompt_sha(text: str) -> str:
+    """原文指纹：审计里记"改了哪一段"时用，不把原文本身落进事件。"""
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12] if text else ""
+
+
+# 上游 UserPromptExpansion 的载荷键（逐字）。钩子按这几个名字读，多一个少一个都会让
+# "我配的钩子没拿到参数"这类问题查不出来。触发点用 `expansion_payload` 抽出这五键。
+EXPAND_PAYLOAD_KEYS: tuple[str, ...] = (
+    "expansion_type",
+    "command_name",
+    "command_args",
+    "command_source",
+    "prompt",
+)
+
+
+@dataclass
+class ExpansionOutcome:
+    """展开钩子（上游 UserPromptExpansion）对"这一次展开"的处置。
+
+    与提交钩子的处置分开记：展开钩子否决的是"这次展开"，提交钩子否决的是"这次提交"，
+    两者的阻断理由要能在同一个时间线上分得清。非阻断时它只贡献补上下文（notes）与
+    "是否要求抑制原文"这两条事实。
+    """
+
+    # 钩子补的上下文，与提交钩子的补段一起进模型上下文（展开的在前）。
+    notes: list[str] = field(default_factory=list)
+    # 补上下文的钩子命令（掩码后）：注入事件的 sources 要能指到是谁补的，
+    # 只说"注入了几段"而不说是谁，账就不全。
+    sources: list[str] = field(default_factory=list)
+    # 上游这条键只管阻断消息（decision 为 block 时从消息里略去原文）。非阻断时
+    # 展开后的正文本来就不是原文，所以它天然成立，只记进审计。
+    suppress_original: bool = False
+    blocked: bool = False
+    reason: str = ""
+
+
+async def run_expansion_hooks(
+    hooks: "HookRunner",
+    recorder,
+    expansion: dict | None,
+    *,
+    node: str = "receive_task",
+) -> ExpansionOutcome:
+    """斜杠命令展开那一刻的钩子（上游 UserPromptExpansion）。
+
+    载荷就是上游那五个键，逐字对齐——钩子是按这几个名字读的，多一个少一个都会让
+    "钩子没拿到参数"这类问题查不出来。``matcher`` 的比对对象取 ``expansion_type``
+    （上游这张表的 fieldToMatch 是 source，取值 slash_command / register_repo_root；
+    本仓库只有斜杠命令这一种展开）。
+
+    三种处置：
+    * 否决（退出码 2 / decision=deny）：整次提交作废。理由里带用户原文，钩子要求
+      抑制原文时不带——与上游 ``suppressOriginalPrompt`` 同口径（"decision 为 block
+      时从阻断消息里略去原文"）。
+    * 补上下文：与提交钩子的补段一起进模型上下文。
+    * 要求抑制原文：非阻断时展开后的正文本来就不是原文，这条天然成立，只记进审计
+      让人看得见，不改送进模型的那一份。
+
+    ``expansion`` 为空 = 这条 goal 不是斜杠命令展开来的：一个钩子都不跑，也不产生任何
+    事件，与"没配钩子"同形。
+
+    提交路径与插话（steer）路径共用这一份：两处都是"用户敲了斜杠命令、正文被展开"，
+    钩子该拿到的载荷与该有的处置不该因为入口不同而分叉。
+    """
+    from blank_api.services.workspace import mask_path
+
+    if not expansion:
+        return ExpansionOutcome()
+    payload = {key: str(expansion.get(key) or "") for key in EXPAND_PAYLOAD_KEYS}
+    results = await hooks.run("user_prompt_expansion", payload["expansion_type"], payload)
+    if not results:
+        return ExpansionOutcome()
+    await recorder.add(
+        "hook.completed",
+        node,
+        {"event": "user_prompt_expansion", "target": payload["expansion_type"],
+         "results": [item.as_dict() for item in results]},
+    )
+    denied = next((item for item in results if item.denied), None)
+    if denied is not None:
+        suppressed = any(item.suppress_original for item in results)
+        original = payload["prompt"]
+        reason = (denied.reason or "钩子否决了这次展开")[:300]
+        if not suppressed and original:
+            reason = f"{reason}\n用户原文：{original[:300]}"[:600]
+        await recorder.add(
+            "hook.prompt_blocked",
+            node,
+            {
+                "event": "user_prompt_expansion",
+                "reason": reason,
+                "expansion_type": payload["expansion_type"],
+                "command_name": payload["command_name"],
+                "original_chars": len(original),
+                "original_sha": prompt_sha(original),
+                "original_omitted": suppressed,
+                "exit_code": denied.exit_code,
+                "sources": [mask_path(item.command)[:120] for item in results if item.denied],
+            },
+        )
+        return ExpansionOutcome(blocked=True, reason=reason, suppress_original=suppressed)
+    asking = next((item for item in results if item.asks), None)
+    if asking is not None:
+        # 与提交钩子同一口径：提交这一步没有确认界面，要求"先问一声"按否决处理。
+        # 静默放行等于把钩子写下的条件丢掉，而它自己以为问过了。
+        note = f"：{asking.reason}" if asking.reason else ""
+        reason = f"展开钩子要求先确认（ask），提交这一步没有确认界面，按否决处理{note}"[:300]
+        await recorder.add(
+            "hook.prompt_blocked",
+            node,
+            {
+                "event": "user_prompt_expansion",
+                "reason": reason,
+                "decision": "ask",
+                "expansion_type": payload["expansion_type"],
+                "command_name": payload["command_name"],
+                "exit_code": asking.exit_code,
+                "sources": [mask_path(item.command)[:120] for item in results if item.asks],
+            },
+        )
+        return ExpansionOutcome(blocked=True, reason=reason)
+    notes = [item.additional_context.strip() for item in results if item.additional_context.strip()]
+    return ExpansionOutcome(
+        notes=notes,
+        sources=[mask_path(item.command)[:120] for item in results if item.additional_context.strip()],
+        suppress_original=any(item.suppress_original for item in results),
+    )
+
+
+# 上游 TeammateIdle 阻止继续时的缺省文案（逐字）：钩子没给 stopReason 就用这句。
+DEFAULT_IDLE_STOP_REASON = "TeammateIdle hook prevented continuation"
+
+
+@dataclass
+class IdleOutcome:
+    """TeammateIdle 钩子对"成员转空闲"的处置。
+
+    与展开/提交钩子不同，这条默认不否决：钩子不明确要求 ``preventContinuation``
+    就照常继续，只贡献补上下文（notes）。
+    """
+
+    notes: list[str] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
+    # 钩子要求阻止继续：调用方要停下"接下来还要继续的那一段"，成员转空闲。
+    prevented: bool = False
+    # 阻止的理由（上游渲染成 hook_stopped_continuation 的消息）。
+    reason: str = ""
+
+
+async def run_idle_hooks(
+    hooks: "HookRunner",
+    recorder,
+    payload: dict | None,
+    *,
+    node: str = "team",
+) -> IdleOutcome:
+    """成员即将转入空闲那一刻的钩子（上游 TeammateIdle）。
+
+    载荷逐字对齐上游的两个键：``teammate_name`` / ``team_name``（上游把 team_name
+    标成 deprecated，仍按会话推导出来那一份传）；其余键是本仓库补的标识，供审计
+    与 matcher 使用。``matcher`` 的比对对象取 ``teammate_name``。
+
+    两种处置：
+    * 阻止继续（``preventContinuation: true``）：理由取 ``stopReason``，缺省用上游
+      那句 "TeammateIdle hook prevented continuation"。调用方据此停下接下来的一段。
+    * 补上下文：成员转空闲之后没有"下一次模型调用"可注入，这份正文的去处是群记录
+      （下一位发言者与用户读的都是它），审计里另记 count/chars。
+
+    退出码 2 按上游同口径只算一条非阻断错误：可见、不注入、不阻止继续。
+    """
+    from blank_api.services.workspace import mask_path
+
+    if not payload:
+        return IdleOutcome()
+    teammate = str(payload.get("teammate_name") or "")
+    results = await hooks.run("teammate_idle", teammate, payload)
+    if not results:
+        return IdleOutcome()
+    await recorder.add(
+        "hook.completed",
+        node,
+        {
+            "event": "teammate_idle",
+            "target": teammate,
+            "results": [item.as_dict() for item in results],
+        },
+    )
+    notes = usable_context(results)
+    sources = [
+        mask_path(item.command)[:120] for item in results if item.additional_context.strip()
+    ]
+    errors = non_blocking_errors(results)
+    if errors:
+        await recorder.add(
+            "hook.non_blocking_error",
+            node,
+            {
+                "event": "teammate_idle",
+                "target": teammate,
+                "count": len(errors),
+                "reasons": [
+                    (item.additional_context or item.reason or "钩子以退出码 2 结束")[:300]
+                    for item in errors
+                ],
+            },
+        )
+    prevented = next((item for item in results if item.prevent_continuation), None)
+    if prevented is not None:
+        reason = (prevented.stop_reason or DEFAULT_IDLE_STOP_REASON)[:300]
+        await recorder.add(
+            "hook.continuation_stopped",
+            node,
+            {
+                "event": "teammate_idle",
+                "teammate_name": teammate,
+                "reason": reason,
+                "exit_code": prevented.exit_code,
+                "sources": [
+                    mask_path(item.command)[:120] for item in results if item.prevent_continuation
+                ],
+            },
+        )
+        return IdleOutcome(notes=notes, sources=sources, prevented=True, reason=reason)
+    if notes:
+        await recorder.add(
+            "hook.context_received",
+            node,
+            {
+                "event": "teammate_idle",
+                "count": len(notes),
+                "chars": sum(len(note) for note in notes),
+            },
+        )
+    return IdleOutcome(notes=notes, sources=sources)
+

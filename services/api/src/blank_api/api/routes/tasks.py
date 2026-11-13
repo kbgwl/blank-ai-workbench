@@ -67,7 +67,7 @@ from blank_api.services.agent.live import LiveFeed
 from blank_api.services import metrics
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.agent.vision import supports_vision
-from blank_api.services.commands_defs import expand_user_input
+from blank_api.services.commands_defs import expansion_payload, expand_user_input
 from blank_api.services.tools.ask import parse_answers
 from blank_api.services.fork import FORK_EVENT, fork_thread
 from blank_api.services.agent.manager import RunAlreadyActive, run_manager
@@ -268,6 +268,9 @@ async def persist_task(
         max_steps=payload.max_steps,
         thread_id=thread_id,
         turn_index=turn_index,
+        # 展开事实随行落库（见 models/task.py 的 expansion 注释）：提交钩子要读
+        # 未打码的 command_args，而审计事件里的那份是打过码的。
+        expansion=command_info or {},
     )
     db.add(task)
     await db.commit()
@@ -865,6 +868,9 @@ async def _run_request(db: DbSession, task: Task, payload: TaskRunIn, request: R
         # 结构化约束（constraints/out_of_scope）随任务带进运行时：它们要进首轮提示，
         # 光存库不进提示等于模型从没见过用户声明的边界。
         "goal_spec": dict(task.goal_spec or {}) or None,
+        # 斜杠命令展开的事实随行带进运行时：提交钩子的 user_prompt_expansion 要读
+        # 未打码的 command_args，所以走列而不走审计事件（事件里那份打过码）。
+        "expansion": dict(task.expansion or {}) or None,
         # 结构化的一份单独带过去：会话主体只吃字符串，但收尾判定要知道
         # 每条验收对应哪几步——这个映射不能靠再回表读一次。
         "acceptance_links": normalize_criteria(task.acceptance_criteria),
@@ -2002,6 +2008,10 @@ async def steer_task(task_id: str, payload: TaskSteerIn, db: DbSession) -> dict:
         {
             "message": payload.message.strip(),
             **({"expanded": expanded} if command_info is not None else {}),
+            # 展开载荷随插话一起入队：抽干的那边拿它跑**同一份** user_prompt_expansion
+            # 钩子，载荷与提交路径逐字一致。与任务行上的 `expansion` 列不同，这里走的是
+            # 审计事件，落库前过 mask_deep，密钥形态的参数会被抹掉（插话没有可落的列）。
+            **expansion_payload(command_info),
             "queued_at": queued_at,
             "step": int(task.steps_used or 0),
         },

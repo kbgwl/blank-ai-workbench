@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 from collections.abc import Sequence
@@ -70,9 +69,12 @@ from blank_api.services.features import is_enabled
 from blank_api.services.fork import allocate_thread
 from blank_api.services.guardian import Guardian
 from blank_api.services.hooks import (
+    ExpansionOutcome,
     HookResult,
     HookRunner,
     non_blocking_errors,
+    prompt_sha,
+    run_expansion_hooks,
     stop_failure_error_category,
     usable_context,
 )
@@ -205,6 +207,10 @@ class RunRequest:
     # 结构化目标 {objective, done_when, constraints, out_of_scope}。constraints /
     # out_of_scope 会进首轮提示（模型必须看见用户声明的边界）；done_when 只用于收尾对账。
     goal_spec: dict | None = None
+    # 这条 goal 的来历（斜杠命令展开，对标上游 UserPromptExpansion 的载荷）：
+    # {expansion_type, command_name, command_args, command_source, prompt, ...}。
+    # None = 不是展开来的，提交钩子里的 user_prompt_expansion 一个都不触发。
+    expansion: dict | None = None
     # 验收条件与计划步骤的对应关系 [{id, criterion, milestone_id, step_ids}]。
     # 有了它，验收失败能指到具体是哪一步没做完，而不是只知道"整体没过"。
     acceptance_links: Sequence[dict] = ()
@@ -286,6 +292,10 @@ class _RunScope:
     scenario_key: str = "dev"
     # 本轮选中的输出样式（as_prompt 形状）；None ＝ 没选/不可用，系统提示走默认。
     output_style: dict | None = None
+    # 这条 goal 的来历（斜杠命令展开）；None ＝ 不是展开来的，提交钩子不触发
+    # user_prompt_expansion。与 goal 分开带：goal 是展开后的正文，这里记的是
+    # 展开本身的事实（钩子载荷要读的那几个键）。
+    expansion: dict | None = None
 
 
 @dataclass
@@ -304,10 +314,7 @@ class _PromptDecision:
     suppressed: bool = False
 
 
-def _prompt_sha(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12] if text else ""
-
-
+@dataclass
 class AgentRuntime:
     def __init__(self, session_factory) -> None:
         self.session_factory = session_factory
@@ -799,6 +806,7 @@ class AgentRuntime:
             scenario_key=scenario.key,
             isolation=isolation,
             output_style=active_style.as_prompt() if active_style is not None else None,
+            expansion=request.expansion,
         )
 
     async def _fire_hooks(
@@ -855,16 +863,31 @@ class AgentRuntime:
             return "interrupted"
         return "completed"
 
-    async def _submit_prompt(self, scope: _RunScope) -> _PromptDecision:
-        """提交那一刻的三道决定：补上下文、抑制原文、否决提交（#123）。
+    async def _run_expansion_hooks(self, scope: _RunScope) -> ExpansionOutcome:
+        """提交路径的展开钩子。处置与载荷见 :func:`run_expansion_hooks`。
 
-        对标 Claude Code 的 `UserPromptSubmit` / `UserPromptExpansion`：钩子给的
+        插话（steer）路径在 `graph.drain_steer` 里跑同一份，两处不该分叉。
+        """
+        return await run_expansion_hooks(
+            scope.session.hooks, scope.recorder, scope.expansion, node="receive_task"
+        )
+
+    async def _submit_prompt(self, scope: _RunScope) -> _PromptDecision:
+        """提交那一刻的四道决定：展开钩子、提交钩子、抑制原文、否决提交（#123）。
+
+        对标 Claude Code 的 `UserPromptExpansion` / `UserPromptSubmit`：钩子给的
         `additionalContext` 过去只进审计、正文被静默丢掉，`suppressOriginalPrompt`
-        这个键我们连读都不读。现在三道都真的作用在"送进模型的那一份"上，
+        这个键我们连读都不读。现在四道都真的作用在"送进模型的那一份"上，
         而 `tasks.goal` 里的原文一个字都不动——抑制的是上下文，不是账。
+
+        展开钩子排在提交钩子之前，与上游同次序：它否决的是"这次展开"，提交钩子
+        否决的是"这次提交"，两条否决各说各的事，先展开后提交。
         """
         session, recorder = scope.session, scope.recorder
         goal = session.goal or ""
+        expansion = await self._run_expansion_hooks(scope)
+        if expansion.blocked:
+            return _PromptDecision(blocked=True, reason=expansion.reason, goal_for_model=goal)
         results = await session.hooks.run(
             "user_prompt_submit", "", {"goal": goal, "acceptance_criteria": session.acceptance_criteria}
         )
@@ -884,7 +907,7 @@ class AgentRuntime:
                 {
                     "reason": reason,
                     "original_chars": len(goal),
-                    "original_sha": _prompt_sha(goal),
+                    "original_sha": prompt_sha(goal),
                     "exit_code": denied.exit_code,
                     "sources": [mask_path(item.command)[:120] for item in results if item.denied],
                 },
@@ -903,16 +926,34 @@ class AgentRuntime:
                     "reason": reason,
                     "decision": "ask",
                     "original_chars": len(goal),
-                    "original_sha": _prompt_sha(goal),
+                    "original_sha": prompt_sha(goal),
                     "exit_code": asking.exit_code,
                     "sources": [mask_path(item.command)[:120] for item in results if item.asks],
                 },
             )
             return _PromptDecision(blocked=True, reason=reason, goal_for_model=goal)
         # 钩子只能收紧：任何一条要求"原文不进上下文"就抑制；替代正文按配置顺序拼接。
-        notes = [item.additional_context.strip() for item in results if item.additional_context.strip()]
+        # 展开钩子的补段在前（说的是这次展开），提交钩子的在后。
+        if expansion.notes:
+            # 展开钩子补的上下文单独记一条：`hook.prompt_injected` 是"模型上下文里
+            # 有几段钩子文本"的合计，sources 混在一起分不清哪段来自哪个事件。
+            await recorder.add(
+                "hook.context_injected",
+                "receive_task",
+                {
+                    "event": "user_prompt_expansion",
+                    "count": len(expansion.notes),
+                    "chars": sum(len(note) for note in expansion.notes),
+                    "sources": expansion.sources,
+                },
+            )
+        notes = [*expansion.notes]
+        notes.extend(item.additional_context.strip() for item in results)
+        notes = [note for note in notes if note]
         replacement = "\n\n".join(notes)
         sources = [mask_path(item.command)[:120] for item in results]
+        if expansion.notes:
+            sources = [*sources, *expansion.sources]
         if not any(item.suppress_original for item in results):
             if replacement:
                 await recorder.add(
@@ -931,7 +972,7 @@ class AgentRuntime:
                     "suppressed": False,
                     "scope": "goal",
                     "original_chars": len(goal),
-                    "original_sha": _prompt_sha(goal),
+                    "original_sha": prompt_sha(goal),
                     "replacement_chars": 0,
                     "sources": sources,
                     "skipped_reason": "钩子要求抑制原文但没有给出替代正文，原文照送",
@@ -945,7 +986,7 @@ class AgentRuntime:
                 "suppressed": True,
                 "scope": "goal",
                 "original_chars": len(goal),
-                "original_sha": _prompt_sha(goal),
+                "original_sha": prompt_sha(goal),
                 "replacement_chars": len(replacement),
                 "sources": sources,
             },

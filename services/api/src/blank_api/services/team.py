@@ -46,8 +46,10 @@ from blank_api.services.agent.evidence import build_evidence
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.chat_index import delete_doc, index_team_message
+from blank_api.services.hooks import HookRunner, IdleOutcome, run_idle_hooks
 from blank_api.services.models.registry import build_adapter
 from blank_api.services.permissions import MODE_DEFAULT, MODES
+from blank_api.services.settings import SettingsStore
 from blank_api.services.workspace import mask_path
 
 log = logging.getLogger(__name__)
@@ -624,7 +626,7 @@ class TeamOrchestrator:
                         pass
 
                 outcome = await self._run_turn(round_id, bot_id)
-                if outcome in ("waiting", "stopped"):
+                if outcome in ("waiting", "stopped", "continuation_stopped"):
                     return
         except asyncio.CancelledError:
             raise
@@ -877,7 +879,9 @@ class TeamOrchestrator:
                 evidence = await build_evidence(factory, task_id)
             except Exception:
                 evidence = {}
-        return await self._finalize_turn(round_id, message_id, bot_id, evidence, error)
+        return await self._finalize_turn(
+            round_id, message_id, bot_id, evidence, error, workspace_path=str(ctx.workspace.path)
+        )
 
     async def _mark_task_failed(self, task_id: str, error: str) -> None:
         factory = get_session_factory()
@@ -900,6 +904,61 @@ class TeamOrchestrator:
                 "task.failed", "error", {"reason": error[:2000], "error": error[:2000]}
             )
 
+    @staticmethod
+    def _idle_note_message(round_row: TeamRound, group: TeamGroup, notes: list[str]) -> TeamMessage:
+        """TeammateIdle 钩子补的上下文：进群记录，不冒充成员说的话。
+
+        成员转空闲之后没有"下一次模型调用"可注入，下一位发言者与用户读的都是群记录，
+        写进那里才不是只留在审计里；role 是 system，不会被当成成员的输出。
+        """
+        return TeamMessage(
+            group_id=group.id,
+            round_id=round_row.id,
+            role="system",
+            bot_name="系统",
+            content="TeammateIdle 钩子补充的上下文：\n" + "\n".join(f"- {note}" for note in notes),
+            status="sent",
+        )
+
+    async def _run_idle_hooks(
+        self,
+        round_row: TeamRound,
+        group: TeamGroup,
+        message: TeamMessage,
+        task: Task | None,
+        workspace_path: str,
+    ) -> IdleOutcome:
+        """成员转空闲那一刻跑 TeammateIdle 钩子（上游同名事件）。
+
+        钩子实例与运行时同源（settings.json 的 hooks 与 BLANK_HOOKS 合并，
+        disableAllHooks 为真时一个都不加载），载荷的两个键逐字对齐上游：
+        ``teammate_name`` / ``team_name``。
+        """
+        layered = SettingsStore().read_layered(workspace_path or None)
+        settings = layered.settings
+        hooks = HookRunner.from_env(
+            settings=settings.get("hooks"),
+            disabled=bool(settings.get("disable_all_hooks")),
+        )
+        task_id = task.id if task is not None else str(message.task_id or "")
+        recorder = EventRecorder(get_session_factory(), task_id)
+        return await run_idle_hooks(
+            hooks,
+            recorder,
+            {
+                "teammate_name": message.bot_name or "",
+                "team_name": group.name,
+                "group_id": group.id,
+                "round_id": round_row.id,
+                "bot_id": message.bot_id or "",
+                "task_id": task_id,
+                "message_id": message.id,
+                "workspace": workspace_path,
+                "status": message.status,
+            },
+            node="team",
+        )
+
     async def _finalize_turn(
         self,
         round_id: str,
@@ -907,6 +966,7 @@ class TeamOrchestrator:
         bot_id: str,
         evidence: dict,
         error: str = "",
+        workspace_path: str = "",
     ) -> str:
         factory = get_session_factory()
         async with factory() as session:
@@ -1049,7 +1109,31 @@ class TeamOrchestrator:
             message.meta = meta
             await index_team_message(session, message, group)
             await session.commit()
-            return "ok"
+
+            # TeammateIdle：成员这一句说完、正要转空闲。钩子可以补上下文，也可以要求
+            # 阻止继续——后者本轮就停在这里，不再排下一位（与上游
+            # hook_stopped_continuation 同口径）。等待审批与被用户停止的两条路在前面
+            # 就返回了，它们不是"转空闲"。
+            idle = await self._run_idle_hooks(round_row, group, message, task, workspace_path)
+            if idle.notes:
+                session.add(self._idle_note_message(round_row, group, idle.notes))
+            if not idle.prevented:
+                await session.commit()
+                return "ok"
+            round_row.queue = []
+            round_row.status = "completed"
+            session.add(
+                TeamMessage(
+                    group_id=group.id,
+                    round_id=round_row.id,
+                    role="system",
+                    bot_name="系统",
+                    content=f"TeammateIdle 钩子阻止了继续：{idle.reason}",
+                    status="sent",
+                )
+            )
+            await session.commit()
+            return "continuation_stopped"
 
     async def resume_message(self, message_id: int, kind: str, decision: dict) -> str:
         """批准/驳回/回答之后接着跑。kind 为 approval 或 answer。"""
@@ -1132,7 +1216,9 @@ class TeamOrchestrator:
                         await session.commit()
                 raise
 
-            outcome = await self._finalize_turn(round_id, message_id, bot_id, evidence)
+            outcome = await self._finalize_turn(
+                round_id, message_id, bot_id, evidence, workspace_path=str(ctx.workspace.path)
+            )
             if outcome == "ok":
                 await self.schedule(round_id)
             return outcome

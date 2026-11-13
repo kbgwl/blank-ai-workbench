@@ -1,0 +1,31 @@
+{
+ "M1 http 2xx 去掉 ok=True": [
+  "test_http型在阻断事件上body决策照常生效",
+  "test_http型真POST且2xx判成功退出码记状态码"
+ ],
+ "M4 _finish 忽略 ok": [
+  "test_http型在阻断事件上body决策照常生效",
+  "test_http型真POST且2xx判成功退出码记状态码"
+ ],
+ "M2 HOOK_KINDS 摘 script": [
+  "test_script型缺file与内联正文都认得",
+  "test_script型缺file与正文时告警跳过",
+  "test_六种类型都认出来且字段名对齐上游"
+ ],
+ "M3 script 措辞改坏": [
+  "test_script型执行时报上游那句不可用"
+ ],
+ "M5 user_prompt_expansion 摘出阻断集合": [
+  "test_两个事件注册别名与阻断归属",
+  "test_退出码二否决作废整次展开且理由带原文"
+ ],
+ "M6 展开钩子忽略 suppress_original": [
+  "test_抑制原文时否决理由不带原文"
+ ],
+ "M7 idle 把退出码 2 当阻止": [
+  "test_idle退出码二是非阻断错误不阻止"
+ ],
+ "M8 idle 缺省文案改坏": [
+  "test_preventContinuation缺stopReason用上游缺省文案"
+ ]
+}

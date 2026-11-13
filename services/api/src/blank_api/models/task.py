@@ -47,6 +47,20 @@ class Task(Base):
     dispatch_snapshot: Mapped[dict] = mapped_column(
         JSON, nullable=False, default=dict, server_default=text("('{}')")
     )
+    # 这条 goal 的来历（对标上游 UserPromptExpansion 的载荷）：用户敲 `/名字 参数`
+    # 命中命令/Skill 时，展开那一刻记下的整份事实，其中 expansion_type /
+    # command_name / command_args / command_source / prompt（用户原话）五个键就是
+    # 上游钩子载荷的那几个。空 dict = 这条 goal 不是斜杠命令展开来的，提交钩子里的
+    # user_prompt_expansion 一个都不触发。
+    #
+    # 为什么不在展开时读回 command.expanded 事件：这一列是执行侧的事实（与
+    # dispatch_snapshot 同口径）——钩子在执行那一刻才跑，可能是另一个进程、也可能
+    # 在重启之后，读任务行比回头解析审计时间线稳。而且事件落库前过 mask_deep，
+    # 密钥形态的参数（`--token=sk-…`）会被整段抹掉，钩子要读的正是用户真写的那份
+    # 参数，落列才保得住原值。
+    expansion: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("('{}')")
+    )
     # 所属会话（多轮对话）。为空表示这是一次独立任务，行为与没有会话时完全一致。
     # ON DELETE SET NULL：删会话不该连任务一起删——那些任务的执行记录是审计材料。
     # 名字与迁移 0014 的 `create_foreign_key("fk_tasks_thread_id", ...)` 对齐：不写名字时

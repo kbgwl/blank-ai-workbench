@@ -114,11 +114,11 @@ def test_event_alias_table_covers_only_known_events():
     assert all(key[0].isupper() for key in EVENT_ALIASES)
 
 
-def test_unknown_event_and_non_command_type_warn_and_skip():
+def test_unknown_event_and_unknown_type_warn_and_skip():
     runner = HookRunner.from_env(
         settings={
-            # 上游有、我们还没移植：必须告警，不能静默当没写
-            "UserPromptExpansion": [{"hooks": [{"type": "command", "command": "x"}]}],
+            # 上游有、我们还没移植的事件：必须告警，不能静默当没写
+            "SomeFutureEvent": [{"hooks": [{"type": "command", "command": "x"}]}],
             "PreToolUse": [
                 {
                     "matcher": "",
@@ -126,17 +126,40 @@ def test_unknown_event_and_non_command_type_warn_and_skip():
                         {"type": "prompt", "prompt": "你是一个守卫"},
                         {"type": "command", "command": "ok.sh"},
                         {"type": "command"},
+                        {"type": "telepathy", "command": "x"},
                     ],
                 }
             ],
         }
     )
-    assert [spec.command for spec in runner.hooks["pre_tool_use"]] == ["ok.sh"]
+    # prompt 是已支持的类型，要真的加载进来；缺正文的 command 与未知类型跳过。
+    assert [(spec.kind, spec.command) for spec in runner.hooks["pre_tool_use"]] == [
+        ("prompt", "你是一个守卫"),
+        ("command", "ok.sh"),
+    ]
     joined = "\n".join(runner.warnings)
-    assert "UserPromptExpansion" in joined
-    assert "prompt" in joined
+    assert "SomeFutureEvent" in joined
+    assert "telepathy" in joined
     assert "command" in joined
     assert "ok.sh" not in joined, "告警不许把命令正文带进审计"
+
+
+def test_unknown_hook_type_in_known_event_warns_and_skips():
+    runner = HookRunner.from_env(
+        settings={
+            "PreToolUse": [
+                {
+                    "matcher": "",
+                    "hooks": [
+                        {"type": "telepathy", "command": "never.sh"},
+                        {"type": "command", "command": "ok.sh"},
+                    ],
+                }
+            ]
+        }
+    )
+    assert [spec.command for spec in runner.hooks["pre_tool_use"]] == ["ok.sh"]
+    assert any("telepathy" in warning for warning in runner.warnings)
 
 
 def test_timeout_is_clamped_and_garbage_falls_back_to_default():

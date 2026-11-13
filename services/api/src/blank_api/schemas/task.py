@@ -52,6 +52,9 @@ class TaskOut(BaseModel):
     # 派发快照（v162，dispatch.py）。空 dict = 这条任务不是按快照派的。
     # 原样带出去而不是只给摘要：证据页要能回答「当时按什么权限跑的」。
     dispatch_snapshot: dict = Field(default_factory=dict)
+    # goal 的来历（斜杠命令展开）。原样带出去：证据页要能回答"这段提示词是怎么来的"，
+    # 提交钩子的载荷也从这里读，两处必须是同一份未打码的值。
+    expansion: dict = Field(default_factory=dict)
     # 所属会话（多轮对话）。独立任务为 None。
     thread_id: str | None = None
     title: str
