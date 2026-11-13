@@ -215,7 +215,7 @@ class Counter:
 
 
 class NoHooks:
-    async def run(self, event: str, tool: str = "", payload: dict | None = None):
+    async def run(self, event: str, tool: str = "", payload: dict | None = None, *, effort: str = ""):
         return []
 
 

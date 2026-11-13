@@ -61,6 +61,23 @@ SECRET_VALUE = re.compile(r"(?i)^(?:sk-|ghp_|gho_|xox[baprs]-|akia|eyJ)[A-Za-z0-
 
 MAX_PATH_ENTRIES = 40
 
+# 上游 Uje：``if(e.effortLevel!==void 0)n.CLAUDE_EFFORT=e.effortLevel``。
+# 钩子命令与 Bash 的子进程环境里都带这个键，模型写的脚本、用户配的钩子
+# 才能读到"这一轮实际生效的档位"。
+CLAUDE_EFFORT_ENV = "CLAUDE_EFFORT"
+
+
+def apply_effort(env: dict[str, str], effort: str) -> dict[str, str]:
+    """把本轮的思考强度写进子进程环境。
+
+    只在**确实裁决出了档位**时才写这个键：没档位就不给，钩子/命令里读不到
+    就是"这一轮没有档位"，而不是一个空串、也不是上一轮的残留。
+    """
+    level = str(effort or "").strip()
+    if not level:
+        return env
+    return {**env, CLAUDE_EFFORT_ENV: level}
+
 
 def _policy_from_env(env: dict[str, str] | None = None) -> str:
     raw = str((env or os.environ).get("BLANK_SHELL_ENV_POLICY") or "").strip().lower()

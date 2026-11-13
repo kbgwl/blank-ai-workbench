@@ -645,7 +645,17 @@ class ToolGateway:
         hooks = getattr(context, "hooks", None)
         if hooks is None:
             return []
-        results = list(await hooks.run(event, target, payload) or [])
+        # 工具上下文里的钩子（PreToolUse / PostToolUse 等）拿到的是本轮已裁决的档位：
+        # 上游的钩子输入里 effort 只出现在工具上下文事件上，会话生命周期事件没有。
+        results = list(
+            await hooks.run(
+                event,
+                target,
+                payload,
+                effort=str(getattr(context, "turn_state", {}).get("effort", "") or ""),
+            )
+            or []
+        )
         recorder = getattr(context, "recorder", None)
         if results and recorder is not None:
             await recorder.add(

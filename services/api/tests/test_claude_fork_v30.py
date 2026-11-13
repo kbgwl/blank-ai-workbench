@@ -267,7 +267,7 @@ def test_fork_snapshot_drops_the_unanswered_tool_exchange() -> None:
 
 
 class _NoHooks:
-    async def run(self, event: str, tool: str = "", payload: dict | None = None):
+    async def run(self, event: str, tool: str = "", payload: dict | None = None, *, effort: str = ""):
         return []
 
 

@@ -620,7 +620,7 @@ async def _kill_process(process: asyncio.subprocess.Process) -> None:
         pass
 
 
-async def _spawn_shell(command: str) -> asyncio.subprocess.Process:
+async def _spawn_shell(command: str, env: dict[str, str] | None = None) -> asyncio.subprocess.Process:
     """起钩子进程；创建途中被取消时，落地的那个进程也要杀。
 
     收尾窗口只有几十毫秒，取消可能正好落在「子进程正在创建」这一段：那时
@@ -634,6 +634,7 @@ async def _spawn_shell(command: str) -> asyncio.subprocess.Process:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
             # POSIX 上让钩子自成进程组，这样收尾取消能对整组发信号（见 _kill_process）。
             # Windows 上没有这个概念，靠 taskkill /T 收树，不传这个参数。
             **({"start_new_session": True} if os.name != "nt" else {}),
@@ -779,12 +780,23 @@ class HookRunner:
             "warnings": list(self.warnings),
         }
 
-    async def run(self, event: str, target: str = "", payload: dict | None = None) -> list[HookResult]:
+    async def run(
+        self,
+        event: str,
+        target: str = "",
+        payload: dict | None = None,
+        *,
+        effort: str = "",
+    ) -> list[HookResult]:
         """执行某事件下所有匹配的钩子。阻塞型事件遇到 deny 立即停止后续钩子。
 
         ``async_run`` 的钩子这里只登记后台任务并立即返回；它的结果留给下一次
         模型调用或收尾流程取走。阻断型事件上的 async 配置被忽略——拿不到结果的
         veto 不是 veto。
+
+        ``effort`` 是本轮裁决出的思考强度：上游把它作为 ``CLAUDE_EFFORT`` 暴露给
+        钩子命令的子进程，钩子脚本里 ``$CLAUDE_EFFORT`` 读到的就是这一档。
+        没传（会话生命周期类钩子、没有档位的场合）就一个键都不加。
         """
         specs = [spec for spec in self.hooks.get(event, []) if spec.applies(target)]
         if not specs:
@@ -801,17 +813,17 @@ class HookRunner:
         results: list[HookResult] = []
         for spec in specs:
             if spec.async_run and event not in BLOCKING_EVENTS:
-                self._spawn(spec, event, body)
+                self._spawn(spec, event, body, effort=effort)
                 continue
-            result = await self._execute(spec, event, body)
+            result = await self._execute(spec, event, body, effort=effort)
             results.append(result)
             self.results.append(result)
             if event in BLOCKING_EVENTS and result.denied:
                 break
         return results
 
-    def _spawn(self, spec: HookSpec, event: str, body: dict) -> None:
-        task = asyncio.create_task(self._run_detached(spec, event, body))
+    def _spawn(self, spec: HookSpec, event: str, body: dict, *, effort: str = "") -> None:
+        task = asyncio.create_task(self._run_detached(spec, event, body, effort=effort))
         self._tasks[task] = (spec, event)
         task.add_done_callback(self._finished)
 
@@ -834,9 +846,9 @@ class HookRunner:
         self.results.append(result)
         self._completed.append(result)
 
-    async def _run_detached(self, spec: HookSpec, event: str, body: dict) -> None:
+    async def _run_detached(self, spec: HookSpec, event: str, body: dict, *, effort: str = "") -> None:
         try:
-            result = await self._execute(spec, event, body)
+            result = await self._execute(spec, event, body, effort=effort)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 后台失败绝不能冒到任务主流程
@@ -897,12 +909,14 @@ class HookRunner:
             await asyncio.gather(*abandoned, return_exceptions=True)
         return self.drain_completed(), commands
 
-    async def _execute(self, spec: HookSpec, event: str, payload: dict) -> HookResult:
+    async def _execute(
+        self, spec: HookSpec, event: str, payload: dict, *, effort: str = ""
+    ) -> HookResult:
         """按钩子类型分发。四类可执行的非 command 类型（http/prompt/agent/mcp_tool）
         的判定与退出码语义与 command 共用同一套 ``parse_hook_output``，差别只在
         "怎么拿到输出正文"；script 在这个构建里不可用，按上游同口径报错。"""
         if spec.kind == "command":
-            return await self._execute_command(spec, event, payload)
+            return await self._execute_command(spec, event, payload, effort=effort)
         if spec.kind == "http":
             return await self._execute_http(spec, event, payload)
         if spec.kind in ("prompt", "agent"):
@@ -918,15 +932,23 @@ class HookRunner:
             reason=f"未知钩子类型 {spec.kind}",
         )
 
-    async def _execute_command(self, spec: HookSpec, event: str, payload: dict) -> HookResult:
+    async def _execute_command(
+        self, spec: HookSpec, event: str, payload: dict, *, effort: str = ""
+    ) -> HookResult:
         started = time.perf_counter()
         encoded = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
 
         def elapsed() -> int:
             return int((time.perf_counter() - started) * 1000)
 
+        # 钩子命令的子进程环境：上游把本轮档位作为 CLAUDE_EFFORT 暴露给钩子脚本
+        # （Uje 的 ``n.CLAUDE_EFFORT=e.effortLevel``）。这里只加这一个键，其余照旧
+        # 继承父进程环境——收窄钩子环境是另一件事，不该混在这一次改动里。
+        from blank_api.services.shell_env import apply_effort
+
+        env = apply_effort(dict(os.environ), effort) if effort else None
         try:
-            process = await _spawn_shell(spec.command)
+            process = await _spawn_shell(spec.command, env=env)
         except Exception as exc:  # 命令本身起不来
             return HookResult(
                 event=event,

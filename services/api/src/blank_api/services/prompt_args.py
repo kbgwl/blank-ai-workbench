@@ -140,8 +140,9 @@ def render_prompt(
     project_dir: str = "",
     session_id: str = "",
     skill_dir: str = "",
+    effort: str = "",
 ) -> str:
-    """Expand one prompt file: arguments first, then Claude's path placeholders."""
+    """Expand one prompt file: arguments first, then Claude's placeholders."""
     clean = str(args) if args is not None and str(args) != "" else None
     text = expand_arguments(instructions, clean, names=names)
     return substitute_paths(
@@ -149,6 +150,7 @@ def render_prompt(
         project_dir=project_dir,
         session_id=session_id,
         skill_dir=skill_dir,
+        effort=effort,
     )
 
 
@@ -158,11 +160,17 @@ def substitute_paths(
     project_dir: str = "",
     session_id: str = "",
     skill_dir: str = "",
+    effort: str = "",
 ) -> str:
-    """Replace Claude's directory/session placeholders.
+    """Replace Claude's directory/session/effort placeholders.
 
     ``$CLAUDE_SKILL_DIR`` only applies to a file whose name is ``SKILL.md``
     (Claude passes a base directory for those and nothing for plain commands).
+
+    ``${CLAUDE_EFFORT}`` carries this invocation's *resolved* effort, not the
+    raw request: upstream substitutes the value after the model cap and the
+    thinking-disabled clamp have been applied, so a body written for Claude
+    that says "think at ${CLAUDE_EFFORT}" gets the level actually granted.
     """
     result = str(text)
     if skill_dir:
@@ -171,6 +179,8 @@ def substitute_paths(
         result = result.replace("${CLAUDE_PROJECT_DIR}", _posix(project_dir))
     if session_id:
         result = result.replace("${CLAUDE_SESSION_ID}", str(session_id))
+    if effort:
+        result = result.replace("${CLAUDE_EFFORT}", str(effort))
     return result
 
 

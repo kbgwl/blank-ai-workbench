@@ -34,6 +34,12 @@ from blank_api.services.hooks import (
     usable_context,
 )
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
+from blank_api.services.effort import (
+    EffortPolicy,
+    ThinkingConfig,
+    resolve_turn_effort,
+    thinking_budget_ceiling,
+)
 from blank_api.services.permissions import (
     MODE_ACCEPT_EDITS,
     MODE_BYPASS,
@@ -189,6 +195,10 @@ class SubAgentRequest:
     permission_mode: str = ""
     # 定义里写了 ``background: true``：上游会压过调用方的 ``run_in_background=false``。
     definition_background: bool = False
+    # 定义里声明的本轮思考强度（Claude 的 ``effort``）。空串 = 定义没声明，
+    # 派发时按模型封顶取兜底档。认不出的值在定义解析阶段就已经告警丢弃，
+    # 到这里只会是档位词或关键词升档后的结果。
+    effort: str = ""
 
     def normalized(self) -> "SubAgentRequest":
         return SubAgentRequest(
@@ -210,6 +220,7 @@ class SubAgentRequest:
             fork=bool(self.fork),
             permission_mode=str(self.permission_mode or "").strip(),
             definition_background=bool(self.definition_background),
+            effort=str(self.effort or "").strip(),
         )
 
 
@@ -614,6 +625,33 @@ async def run_subagent(
         # 子代理只能继承父级的边界，不许自己挑一个更宽的。这不是参数错，是越权。
         return SubAgentResult(ok=False, error=str(exc), agent_path=agent_path, depth=depth)
 
+    # 子代理这一轮的思考强度：定义里声明的档位 + 目标正文里的关键词，走与主代理
+    # 同一套裁决（模型封顶、thinking 关断回落）。一轮只算一次，之后每一步调用
+    # 都复用它——子代理的每一步都是同一次作业，档位不该逐步重算、更不该逐步变。
+    # 定义没声明时回落到供应商配置的静态档位（与主代理同一份 ``reasoning_effort``），
+    # 否则同一家供应商在主线程与子代理里会跑出两个档位。
+    # 放在越权守卫之后：被守卫拦下时一个适配器字段都不该读，adapter=None 也能走到守卫。
+    child_effort = resolve_turn_effort(
+        request.effort or str(getattr(adapter.config, "reasoning_effort", "") or ""),
+        model=str(getattr(adapter.config, "model", "") or ""),
+        policy=EffortPolicy(),
+        thinking=ThinkingConfig(),
+        keyword_text=request.goal,
+    )
+    # 扩展思考的开关与预算：与主代理同一份口径（auto 不发、off 发 disabled、
+    # extended 发 enabled + 预算，预算天花板是输出上限减一）。
+    thinking_config = ThinkingConfig()
+    if thinking_config.mode == "off":
+        child_thinking: dict | None = {"type": "disabled"}
+    elif thinking_config.mode == "extended":
+        child_thinking = {
+            "type": "enabled",
+            "budget_tokens": thinking_config.budget_tokens
+            or thinking_budget_ceiling(int(getattr(adapter.config, "max_tokens", 0) or 0)),
+        }
+    else:
+        child_thinking = None
+
     tree: Worktree | None = None
     run_root = Path(root)
     isolated = request.isolate
@@ -686,6 +724,18 @@ async def run_subagent(
         parent_thread_id=parent_thread_id,
         root_thread_id=root_thread_id,
     )
+    if child_effort.warning:
+        # 档位被压下来必须留痕：定义里写了 max、模型只认 high 时，子代理照跑，
+        # 但读事件的人得能看出来"这一轮没有按声明的档位走"。
+        await log.add(
+            "effort.warning",
+            "subagent",
+            {
+                "warning": child_effort.warning,
+                "requested": child_effort.requested,
+                "effort": child_effort.level,
+            },
+        )
     if parent_permissions is not None:
         # fork 的权限对象就是父会话那一份：定义里再写 permissionMode 也改不动它。
         permissions = parent_permissions
@@ -736,6 +786,9 @@ async def run_subagent(
         # 子树在本轮结束即删除/合并：后台命令活不到有人取结果的时候，入口直接关掉。
         # fork 在同一个工作区里跑，父会话能开的它也能开。
         allow_background_shell=bool(allow_background_shell),
+        # 子代理这一轮的档位：它自己调 skill 工具时，正文里的 ${CLAUDE_EFFORT}
+        # 用的就是这一档（与发给模型的 output_config.effort 同一份裁决结果）。
+        turn_state={"effort": child_effort.level},
         # 子代理的工具调用走同一条网关，所以 PermissionRequest / PermissionDenied /
         # 审批通知这些钩子也必须在子代理里成立——否则"派下去干活"就是钩子看不见的盲区。
         hooks=hooks,
@@ -808,6 +861,10 @@ async def run_subagent(
     compactor = ContextCompactor(**(watermark or {}))
     base_text = FORK_SYSTEM if request.fork else SUBAGENT_SYSTEM
     system_message = {"role": "system", "content": base_text.format(steps=request.max_steps)}
+    if child_effort.reminder:
+        # 关键词（目标正文里的 ultrathink/ultracode）升档时，与主代理同一条提醒：
+        # 档位是模型参数，模型看不见"用户要求更深推理"这句话就可能按默认档想。
+        system_message["content"] += "\n" + str(child_effort.reminder)
     if request.instructions:
         # 定义正文是"这个类型怎么做"，不是另一套权限。放在基础规则之后，
         # 并写死不得放宽上面的规则——定义文件不能变成绕过审批的侧门。
@@ -837,6 +894,10 @@ async def run_subagent(
             project_dir=str(run_root),
             session_id=task_id,
             carried=carried,
+            # 子代理这一轮**裁决后**的档位写进 Skill 正文的 ${CLAUDE_EFFORT}：
+            # 目标里的 ultrathink 把本轮抬到 xhigh 时，正文里就该是 xhigh，
+            # 不能退回定义里那个未经裁决的声明值。
+            effort=child_effort.level,
         )
         for name, error in missing:
             # 上游同样只 log 一行 warning：缺名不阻断派发，子代理照常跑。
@@ -922,7 +983,9 @@ async def run_subagent(
         """一次调用，成功与失败都进账（失败的那笔根本没花 token，只有账本说得出）。"""
         started = time.perf_counter()
         try:
-            response = await adapter.bind_tools(specs, chat)
+            response = await adapter.bind_tools(
+                specs, chat, effort=child_effort.level, thinking=child_thinking
+            )
         except ModelError:
             await account("", Usage(), int((time.perf_counter() - started) * 1000), "error")
             raise
@@ -958,6 +1021,8 @@ async def run_subagent(
                     "agent_id": agent_id,
                     "agent_type": request.agent_name or BUILTIN_AGENT,
                 },
+                # 上游的 SubagentStop 属于工具上下文事件，钩子输入里带这一轮的档位。
+                effort=child_effort.level,
             )
             or []
         )
@@ -1240,6 +1305,10 @@ class SubAgentRunner:
                 "agent_tools": sorted(allowed),
                 "agent_skills": list(request.skills),
                 "agent_permission_mode": started_mode,
+                # 定义声明的档位（未钳制）。真正生效的那一档在子代理内部按模型
+                # 封顶裁决，被压下来时由 effort.warning 事件记录——这里只记声明，
+                # 不在这里重算一遍，免得两处裁决各写一份、迟早写歪。
+                "agent_effort_declared": request.effort,
                 "agent_path": prepared.agent_path,
                 "agent_id": prepared.agent_id,
                 "depth": prepared.depth,

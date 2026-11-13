@@ -94,6 +94,10 @@ class ToolContext:
     # 后台命令（run_shell(run_in_background=true)）：子代理的工作副本在本轮结束时会被
     # 清理，后台进程活不到有人取结果的时候，所以子代理上下文显式关掉这个入口。
     allow_background_shell: bool = True
+    # 本会话这一轮的可变状态。ToolContext 是 frozen 的，而本轮思考强度是运行期
+    # 才裁决出来的、又得让工具层（Skill/命令正文里的 ${CLAUDE_EFFORT}）读到，
+    # 所以给一个字典落点，而不是为一个值改数据类的形状或绕开 frozen 契约。
+    turn_state: dict = field(default_factory=dict)
 
 
 @dataclass

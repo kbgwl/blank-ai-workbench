@@ -59,7 +59,7 @@ class SlowHooks:
         self.deny = deny
         self.seen: list[str] = []
 
-    async def run(self, event: str, tool: str = "", payload: dict | None = None):
+    async def run(self, event: str, tool: str = "", payload: dict | None = None, *, effort: str = ""):
         if event == "pre_tool_use":
             self.seen.append(tool)
             if tool == self.deny:

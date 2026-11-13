@@ -73,7 +73,7 @@ class AnthropicAdapter(ModelAdapter):
             converted[-1]["content"][-1]["cache_control"] = {"type": "ephemeral"}
         return converted
 
-    def _payload(self, messages, tools, stream: bool) -> dict:
+    def _payload(self, messages, tools, stream: bool, *, effort: str = "", thinking: dict | None = None) -> dict:
         payload = {
             "model": self.config.model,
             "system": self._system_blocks(messages),
@@ -88,12 +88,23 @@ class AnthropicAdapter(ModelAdapter):
                 # 工具表是每轮都一样的稳定前缀，值得单独打一个断点。
                 specs[-1] = {**specs[-1], "cache_control": {"type": "ephemeral"}}
             payload["tools"] = specs
+        # output_config.effort：本轮的思考强度。只认有效档位，空串不下发
+        # （没声明就不给，让供应商用它自己的默认，而不是塞一个空值过去）。
+        if effort:
+            payload["output_config"] = {"effort": effort}
+        # thinking：扩展思考的开关与预算。budget_tokens 必须小于 max_tokens，
+        # 否则供应商会拒（思考要留出输出空间）。
+        if thinking:
+            payload["thinking"] = thinking
         return {k: v for k, v in payload.items() if v is not None}
 
-    async def invoke(self, messages, tools=None, **kwargs) -> ModelResponse:
+    async def invoke(self, messages, tools=None, *, effort: str = "", thinking: dict | None = None, **kwargs) -> ModelResponse:
         self.require_tools(tools or [])
         data = await self._request_json(
-            "POST", f"{self.base}/v1/messages", headers=self._headers(), json=self._payload(messages, tools, False)
+            "POST",
+            f"{self.base}/v1/messages",
+            headers=self._headers(),
+            json=self._payload(messages, tools, False, effort=effort, thinking=thinking),
         )
         text = "".join(block.get("text", "") for block in data.get("content", []) if block.get("type") == "text")
         tool_calls = [
@@ -120,14 +131,14 @@ class AnthropicAdapter(ModelAdapter):
             response_id=str(data.get("id") or ""),
         )
 
-    async def stream(self, messages, tools=None, **kwargs) -> AsyncIterator[str]:
+    async def stream(self, messages, tools=None, *, effort: str = "", thinking: dict | None = None, **kwargs) -> AsyncIterator[str]:
         self.require_tools(tools or [])
         async with self._client() as client:
             async with client.stream(
                 "POST",
                 f"{self.base}/v1/messages",
                 headers=self._headers(),
-                json=self._payload(messages, tools, True),
+                json=self._payload(messages, tools, True, effort=effort, thinking=thinking),
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
@@ -144,7 +155,7 @@ class AnthropicAdapter(ModelAdapter):
                         if text := delta.get("text"):
                             yield text
 
-    async def bind_tools_stream(self, tools, messages, *, on_delta=None, **kwargs) -> ModelResponse:
+    async def bind_tools_stream(self, tools, messages, *, on_delta=None, effort: str = "", thinking: dict | None = None, **kwargs) -> ModelResponse:
         """带工具调用的流式调用。
 
         Anthropic 的工具参数是 ``input_json_delta.partial_json`` 逐段下发的，而且
@@ -164,7 +175,7 @@ class AnthropicAdapter(ModelAdapter):
                 "POST",
                 f"{self.base}/v1/messages",
                 headers=self._headers(),
-                json=self._payload(messages, tools, True),
+                json=self._payload(messages, tools, True, effort=effort, thinking=thinking),
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")

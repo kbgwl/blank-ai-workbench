@@ -810,7 +810,7 @@ class AgentRuntime:
         )
 
     async def _fire_hooks(
-        self, scope: _RunScope, event: str, payload: dict, target: str = ""
+        self, scope: _RunScope, event: str, payload: dict, target: str = "", *, effort: str = ""
     ) -> list[HookResult]:
         """钩子是可选扩展（BLANK_HOOKS 配置）：失败绝不影响任务，但每次都要留审计记录。
 
@@ -818,8 +818,11 @@ class AgentRuntime:
         （startup / resume）、SessionEnd 按结束原因匹配——上游就是这么分流的。
         返回结果列表：SessionStart 的 additionalContext 要真的进模型上下文，
         "记了审计但正文被丢掉"正是 #123 修过的那种静默丢失。
+
+        ``effort`` 只在上游也带档位的场合传：会话生命周期钩子（SessionStart /
+        SessionEnd）上游的输入里没有 effort，只有 Stop 这类工具上下文事件才有。
         """
-        results = await scope.session.hooks.run(event, target, payload)
+        results = await scope.session.hooks.run(event, target, payload, effort=effort)
         if results:
             await scope.recorder.add(
                 "hook.completed",
@@ -847,7 +850,9 @@ class AgentRuntime:
                     payload["last_assistant_message"] = last[:4000]
         except Exception:  # noqa: BLE001 - 读不到就少一个可选字段，事件照发
             log.warning("StopFailure 读取最近回复失败 task=%s", scope.thread_id, exc_info=True)
-        await self._fire_hooks(scope, "stop_failure", payload, target=category)
+        await self._fire_hooks(
+            scope, "stop_failure", payload, target=category, effort=scope.session.turn_effort
+        )
 
     @staticmethod
     def _session_end_reason(result: dict, interrupts: list) -> str:

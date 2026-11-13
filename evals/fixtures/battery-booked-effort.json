@@ -1,0 +1,34 @@
+{
+ "M1 clamp 不压": [
+  "test_clamp_pushes_down_to_cap_and_leaves_below_unchanged",
+  "test_resolve_turn_effort_keyword_beats_request_then_gets_clamped",
+  "test_warning_is_none_when_not_clamped_and_names_model_cap_level"
+ ],
+ "M2 effective_cap 取松": [
+  "test_effective_cap_takes_stricter_of_family_and_provider"
+ ],
+ "M3 keyword 不抬档": [
+  "test_keyword_effort_raises_to_xhigh_with_the_right_reminder",
+  "test_resolve_turn_effort_keyword_beats_request_then_gets_clamped"
+ ],
+ "M4 占位符不替换": [
+  "test_render_prompt_carries_effort_through_to_placeholder",
+  "test_substitute_paths_replaces_claude_effort_placeholder"
+ ],
+ "M5 环境键不写": [
+  "test_apply_effort_writes_key_only_when_a_level_was_resolved"
+ ],
+ "M6 anthropic 不下发 effort": [
+  "test_anthropic_payload_emits_output_config_effort_and_thinking"
+ ],
+ "M7 thinking 关闭不回落": [
+  "test_clamp_without_thinking_only_clamps_when_all_three_conditions_hold"
+ ],
+ "M8 词表被改": [
+  "test_has_desirable_above_cap_tracks_model_capability_not_just_cap",
+  "test_level_vocabulary_is_the_five_canonical_levels_in_rank_order"
+ ],
+ "M9 openai_compat 不映射": [
+  "test_openai_compat_maps_effort_to_reasoning_effort_clamping_above_high"
+ ]
+}

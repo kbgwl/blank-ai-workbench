@@ -37,6 +37,7 @@ import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from blank_api.services.effort import effort_for_prompt, parse as parse_effort
 from blank_api.services.plugins_defs import discover_plugins
 from blank_api.services.prompt_args import argument_names, render_prompt
 from blank_api.services.skills_defs import (
@@ -97,6 +98,8 @@ class CommandDefinition:
     base_dir: str = ""
     ignored: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    # Claude 的 ``effort``：展开这条命令的正文时用的思考强度。空串 = 不声明。
+    effort: str = ""
 
     def as_entry(self) -> dict:
         """Shape consumed by ``tools.skills.SkillCatalog``."""
@@ -116,6 +119,7 @@ class CommandDefinition:
             "source": self.source,
             "path": self.path,
             "ignored": list(self.ignored),
+            "effort": self.effort,
         }
 
     def as_dict(self) -> dict:
@@ -139,6 +143,8 @@ class CommandDefinition:
             payload["disallowedTools"] = list(self.disallowed_tools)
         if self.ignored:
             payload["ignored"] = list(self.ignored)
+        if self.effort:
+            payload["effort"] = self.effort
         return payload
 
 
@@ -258,6 +264,13 @@ def _definition(path: Path, base: Path, source: str) -> tuple[CommandDefinition 
 
     if len(body) > MAX_BODY_CHARS:
         body = body[:MAX_BODY_CHARS].rstrip() + "\n…（命令正文过长，已截断）"
+    command_effort = ""
+    if meta.get("effort") is not None:
+        parsed_effort = parse_effort(meta.get("effort"))
+        if parsed_effort.level is None:
+            warnings.append(f"命令文件 {mask_path(str(path))} 的 effort {parsed_effort.warning}")
+        else:
+            command_effort = parsed_effort.level
     ignored = tuple(key for key in UNSUPPORTED_FIELDS if meta.get(key) is not None)
     return (
         CommandDefinition(
@@ -275,6 +288,7 @@ def _definition(path: Path, base: Path, source: str) -> tuple[CommandDefinition 
             base_dir=base_dir,
             ignored=ignored,
             warnings=tuple(warnings),
+            effort=command_effort,
         ),
         [],
         warnings,
@@ -381,6 +395,7 @@ def expand_user_input(
         project_dir=str(root or ""),
         session_id=session_id,
         skill_dir=str(entry.get("base_dir") or ""),
+        effort=effort_for_prompt(entry.get("effort")),
     )
     info = {
         "name": name,

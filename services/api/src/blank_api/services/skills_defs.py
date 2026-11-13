@@ -46,6 +46,7 @@ from pathlib import Path
 
 import yaml
 
+from blank_api.services.effort import parse as parse_effort
 from blank_api.services.plugins_defs import discover_plugins
 from blank_api.services.prompt_args import argument_names
 from blank_api.services.workspace import mask_path
@@ -63,6 +64,7 @@ PROJECT_SKILLS_DIR = Path(".blank") / "skills"
 RESERVED_DIRS = frozenset({"synced"})
 # Parsed for audit only; we do not apply them (see module docstring).
 # ``paths`` is *not* here: it is honoured as a conditional-activation gate.
+# ``effort`` 不在列：Skill 声明的思考强度在加载正文时展开进提示词。
 UNSUPPORTED_FIELDS = (
     "model",
     "when_to_use",
@@ -72,7 +74,6 @@ UNSUPPORTED_FIELDS = (
     "agent",
     "background",
     "fallback",
-    "effort",
     "shell",
     "created_by",
     "improved_by",
@@ -100,6 +101,8 @@ class SkillDefinition:
     path: str = ""
     ignored: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    # Claude 的 ``effort``：加载这份 Skill 的正文时用的思考强度。空串 = 不声明。
+    effort: str = ""
 
     @property
     def conditional(self) -> bool:
@@ -126,6 +129,7 @@ class SkillDefinition:
             "source": self.source,
             "path": self.path,
             "ignored": list(self.ignored),
+            "effort": self.effort,
         }
 
     def as_dict(self) -> dict:
@@ -155,6 +159,8 @@ class SkillDefinition:
             payload["conditional"] = True
         if self.ignored:
             payload["ignored"] = list(self.ignored)
+        if self.effort:
+            payload["effort"] = self.effort
         return payload
 
 
@@ -542,6 +548,14 @@ def _definition_from_dir(
 
     if len(body) > MAX_BODY_CHARS:
         body = body[:MAX_BODY_CHARS].rstrip() + "\n…（Skill 正文过长，已截断）"
+    # effort 与子代理定义同口径：认档位词与关键词，认不出告警丢弃，不猜值填入。
+    skill_effort = ""
+    if meta.get("effort") is not None:
+        parsed_effort = parse_effort(meta.get("effort"))
+        if parsed_effort.level is None:
+            warnings.append(f"Skill 文件 {mask_path(str(path))} 的 effort {parsed_effort.warning}")
+        else:
+            skill_effort = parsed_effort.level
     ignored = tuple(key for key in UNSUPPORTED_FIELDS if meta.get(key) is not None)
     return (
         SkillDefinition(
@@ -560,6 +574,7 @@ def _definition_from_dir(
             path=str(path),
             ignored=ignored,
             warnings=tuple(warnings),
+            effort=skill_effort,
         ),
         [],
         warnings,

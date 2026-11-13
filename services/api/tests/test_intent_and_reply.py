@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from blank_api.limits import READONLY_MAX_STEPS
 from blank_api.services.agent.graph import create_plan_node
@@ -230,6 +231,10 @@ class _Session:
         self.acceptance_criteria: list[str] = []
         self.steer_metrics = {"count": 0, "steps": []}
         self.max_steps = 200
+        self.turn_effort = ""
+        self.effort_reminder = ""
+        self.effort_warning = ""
+        self.context = SimpleNamespace(turn_state={})
         self._reply = reply
         self._tool_calls = tool_calls or []
         self.snapshot_calls: list[str] = []

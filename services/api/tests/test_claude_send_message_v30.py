@@ -89,6 +89,7 @@ def _session(root: Path, adapter: ModelAdapter, *, task_id: str):
         provider_id="",
         provider_name="",
         compactor=None,
+        turn_effort="",
         context=SimpleNamespace(root=Path(root), task_id=task_id),
     )
 

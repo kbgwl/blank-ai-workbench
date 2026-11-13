@@ -38,18 +38,22 @@ _SEGMENT_SPLIT = re.compile(r"&&|\|\||[;&|]")
 MAX_OUTPUT_CHARS = 8000
 
 
-def build_env(policy: str | None = None) -> dict[str, str]:
+def build_env(policy: str | None = None, *, effort: str = "") -> dict[str, str]:
     """子进程环境：allowlist + 密钥名过滤，策略见 services/shell_env.py。
 
     没有快照时（单测、外部集成）退回同一个过滤函数，口径与运行时一致，
     不会出现"测试能跑、线上把 OPENAI_API_KEY 漏给子进程"这种漂移。
+
+    ``effort`` 是本轮裁决出的思考强度：上游把它作为 ``CLAUDE_EFFORT`` 暴露给
+    Bash 子进程，模型写的脚本里 ``$CLAUDE_EFFORT`` 读到的就是这一档。
     """
+    from blank_api.services.shell_env import apply_effort
     from blank_api.services.shell_env import filter_env
     from blank_api.services.shell_env import _policy_from_env
 
     env = filter_env(os.environ, policy=policy or _policy_from_env())
     env["PYTHONIOENCODING"] = env.get("PYTHONIOENCODING", "utf-8")
-    return env
+    return apply_effort(env, effort)
 
 
 def _has_inline_code(command: str) -> bool:
@@ -699,6 +703,16 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
     # 有 shell 快照就用快照里的环境（含被前置的项目 venv），保证多步命令解析到同一个解释器
     snapshot = getattr(context, "shell", None)
     env = snapshot.env_for() if hasattr(snapshot, "env_for") else None
+    # 本轮的思考强度要一起带进子进程：上游把它作为 CLAUDE_EFFORT 暴露给 Bash，
+    # 模型写的脚本里 $CLAUDE_EFFORT 读到的就是这一档。快照分支与无快照分支都要补，
+    # 否则"有快照能看到档位、没快照看不到"，同一个工具两种说法。
+    from blank_api.services.shell_env import apply_effort
+
+    turn_effort = str(getattr(context, "turn_state", {}).get("effort", "") or "")
+    if env is None:
+        env = build_env(effort=turn_effort) if turn_effort else None
+    else:
+        env = apply_effort(env, turn_effort)
     safety = getattr(context, "safety", None)
     background = bool(arguments.get("run_in_background"))
     if background:

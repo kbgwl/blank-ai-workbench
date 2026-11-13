@@ -73,6 +73,7 @@ class CaptureSession:
         self.events: list[tuple[str, dict]] = []
         self.prompts: list[str] = []
         self._text = text
+        self.turn_effort = ""
         self.context = SimpleNamespace(subagent_runner=runner)
         self.recorder = self
         # 这个假会话只服务收尾节点；Stop 门会先问一次钩子，没配钩子就是空结果。

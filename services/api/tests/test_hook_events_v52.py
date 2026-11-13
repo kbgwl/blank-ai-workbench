@@ -128,7 +128,7 @@ class _Hooks:
         self.script = {key: list(value) for key, value in (script or {}).items()}
         self.calls: list[tuple[str, str, dict]] = []
 
-    async def run(self, event: str, target: str = "", payload: dict | None = None):
+    async def run(self, event: str, target: str = "", payload: dict | None = None, *, effort: str = ""):
         self.calls.append((event, target, dict(payload or {})))
         queue = self.script.get(event) or []
         return list(queue.pop(0)) if queue else []
@@ -279,6 +279,7 @@ def _gate_session(hooks: _Hooks, *, mode: str = permissions.MODE_DEFAULT):
         context=SimpleNamespace(task_id="task-gate", root=Path(".")),
         hook_context=[],
         run_id="run-gate",
+        turn_effort="",
     )
 
 
@@ -374,6 +375,7 @@ def _stop_session(hooks: _Hooks, *, background: list[dict] | None = None):
         recorder=_Recorder(),
         hook_context=[],
         context=SimpleNamespace(subagent_runner=runner),
+        turn_effort="",
     )
 
 

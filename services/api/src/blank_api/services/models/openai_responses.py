@@ -31,6 +31,7 @@ from blank_api.services.models.base import (
     retry_after_seconds,
 )
 from blank_api.services.models.streaming import ToolCallAccumulator
+from blank_api.services.effort import rank
 
 # 只有这两档的模型接受 reasoning 参数；其余模型带上去会 400。
 _REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
@@ -128,7 +129,7 @@ class OpenAIResponsesAdapter(ModelAdapter):
         """按稳定前缀算缓存键：系统提示相同即命中，与任务/会话无关。"""
         return hashlib.sha256(instructions.encode("utf-8")).hexdigest()[:32]
 
-    def _payload(self, messages, tools, stream: bool) -> dict:
+    def _payload(self, messages, tools, stream: bool, *, effort: str = "") -> dict:
         instructions, extras = self._split_system(messages)
         payload: dict = {
             "model": self.config.model,
@@ -150,8 +151,13 @@ class OpenAIResponsesAdapter(ModelAdapter):
                 }
                 for tool in tools
             ]
-        if self.config.reasoning_effort in _REASONING_EFFORTS:
-            payload["reasoning"] = {"effort": self.config.reasoning_effort}
+        # 本轮档位优先于配置里的静态值；xhigh/max 在 Responses 词汇表里没有
+        # 对应档，收口到 high。
+        reasoning = effort if effort in _REASONING_EFFORTS else (
+            "high" if effort and rank(effort) > rank("high") else self.config.reasoning_effort
+        )
+        if reasoning in _REASONING_EFFORTS:
+            payload["reasoning"] = {"effort": reasoning}
             payload["include"] = ["reasoning.encrypted_content"]
             # 推理模型不接受 temperature，带上会直接 400
         else:
@@ -201,10 +207,10 @@ class OpenAIResponsesAdapter(ModelAdapter):
             else "unknown",
         )
 
-    async def invoke(self, messages, tools=None, **kwargs) -> ModelResponse:
+    async def invoke(self, messages, tools=None, *, effort: str = "", **kwargs) -> ModelResponse:
         self.require_tools(tools or [])
         data = await self._request_json(
-            "POST", f"{self.base}/responses", headers=self._headers(), json=self._payload(messages, tools, False)
+            "POST", f"{self.base}/responses", headers=self._headers(), json=self._payload(messages, tools, False, effort=effort)
         )
         if data.get("error"):
             error = data["error"] or {}
@@ -219,14 +225,14 @@ class OpenAIResponsesAdapter(ModelAdapter):
             response_id=str(data.get("id") or ""),
         )
 
-    async def stream(self, messages, tools=None, **kwargs) -> AsyncIterator[str]:
+    async def stream(self, messages, tools=None, *, effort: str = "", **kwargs) -> AsyncIterator[str]:
         self.require_tools(tools or [])
         async with self._client() as client:
             async with client.stream(
                 "POST",
                 f"{self.base}/responses",
                 headers=self._headers(),
-                json=self._payload(messages, tools, True),
+                json=self._payload(messages, tools, True, effort=effort),
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
@@ -246,7 +252,7 @@ class OpenAIResponsesAdapter(ModelAdapter):
                         error = event.get("error") or {}
                         raise ModelError("model_stream_error", str(error.get("message") or error))
 
-    async def bind_tools_stream(self, tools, messages, *, on_delta=None, **kwargs) -> ModelResponse:
+    async def bind_tools_stream(self, tools, messages, *, on_delta=None, effort: str = "", **kwargs) -> ModelResponse:
         """Responses 的流式：文本 delta 与函数调用 delta 是两套事件。
 
         函数调用的参数按 ``item_id`` 聚合（不是 OpenAI Chat 那种 index），
@@ -267,7 +273,7 @@ class OpenAIResponsesAdapter(ModelAdapter):
                 "POST",
                 f"{self.base}/responses",
                 headers=self._headers(),
-                json=self._payload(messages, tools, True),
+                json=self._payload(messages, tools, True, effort=effort),
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")

@@ -18,6 +18,11 @@ from blank_api.services.models.base import (
     retry_after_seconds,
 )
 from blank_api.services.models.streaming import ToolCallAccumulator
+from blank_api.services.effort import rank
+
+# OpenAI 兼容层的 reasoning_effort 词汇表只有 low/medium/high；xhigh/max 没有
+# 对应档，收口到 high——塞一个网关不认识的值会被拒，比悄悄降级更糟。
+_OPENAI_EFFORTS = ("low", "medium", "high")
 
 
 class OpenAICompatibleAdapter(ModelAdapter):
@@ -36,7 +41,19 @@ class OpenAICompatibleAdapter(ModelAdapter):
             payload["tool_calls"] = message.tool_calls
         return payload
 
-    def _payload(self, messages: Sequence[ChatMessage], tools: Sequence[ToolSpecLite] | None, stream: bool) -> dict:
+    def _reasoning_effort(self, effort: str) -> str:
+        """本轮档位 → OpenAI 的 ``reasoning_effort``。
+
+        传了本轮档位就以它为准（xhigh/max 收口到 high）；没传就回落到配置里
+        静态写的那一份。空串两种情况都不下发。
+        """
+        if effort:
+            if effort in _OPENAI_EFFORTS:
+                return effort
+            return "high" if rank(effort) > rank("high") else effort
+        return self.config.reasoning_effort
+
+    def _payload(self, messages: Sequence[ChatMessage], tools: Sequence[ToolSpecLite] | None, stream: bool, *, effort: str = "") -> dict:
         payload = {
             "model": self.config.model,
             "messages": [self._message_payload(m) for m in messages],
@@ -44,6 +61,9 @@ class OpenAICompatibleAdapter(ModelAdapter):
             "max_tokens": self.config.max_tokens,
             "stream": stream,
         }
+        reasoning = self._reasoning_effort(effort)
+        if reasoning:
+            payload["reasoning_effort"] = reasoning
         if tools:
             payload["tools"] = [
                 {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.input_schema}}
@@ -51,10 +71,10 @@ class OpenAICompatibleAdapter(ModelAdapter):
             ]
         return payload
 
-    async def invoke(self, messages, tools=None, **kwargs) -> ModelResponse:
+    async def invoke(self, messages, tools=None, *, effort: str = "", **kwargs) -> ModelResponse:
         self.require_tools(tools or [])
         data = await self._request_json(
-            "POST", f"{self.base}/chat/completions", headers=self._headers(), json=self._payload(messages, tools, False)
+            "POST", f"{self.base}/chat/completions", headers=self._headers(), json=self._payload(messages, tools, False, effort=effort)
         )
         return self._parse_completion(data)
 
@@ -74,14 +94,14 @@ class OpenAICompatibleAdapter(ModelAdapter):
             response_id=str(data.get("id") or ""),
         )
 
-    async def stream(self, messages, tools=None, **kwargs) -> AsyncIterator[str]:
+    async def stream(self, messages, tools=None, *, effort: str = "", **kwargs) -> AsyncIterator[str]:
         self.require_tools(tools or [])
         async with self._client() as client:
             async with client.stream(
                 "POST",
                 f"{self.base}/chat/completions",
                 headers=self._headers(),
-                json=self._payload(messages, tools, True),
+                json=self._payload(messages, tools, True, effort=effort),
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
@@ -96,7 +116,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                     if content := delta.get("content"):
                         yield content
 
-    async def bind_tools_stream(self, tools, messages, *, on_delta=None, **kwargs) -> ModelResponse:
+    async def bind_tools_stream(self, tools, messages, *, on_delta=None, effort: str = "", **kwargs) -> ModelResponse:
         """带工具调用的流式调用。
 
         三件必须做对的事：
@@ -112,7 +132,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
           再花一次请求的钱去拿同一份数据。
         """
         self.require_tools(tools or [])
-        payload = self._payload(messages, tools, True)
+        payload = self._payload(messages, tools, True, effort=effort)
         payload["stream_options"] = {"include_usage": True}
 
         text: list[str] = []

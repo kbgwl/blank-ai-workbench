@@ -362,12 +362,12 @@ def _permission_tool(name: str) -> ToolDefinition:
 
 
 class NoHooks:
-    async def run(self, event: str, tool: str = "", payload: dict | None = None):
+    async def run(self, event: str, tool: str = "", payload: dict | None = None, *, effort: str = ""):
         return []
 
 
 class DenyAllHooks(NoHooks):
-    async def run(self, event: str, tool: str = "", payload: dict | None = None):
+    async def run(self, event: str, tool: str = "", payload: dict | None = None, *, effort: str = ""):
         if event == "pre_tool_use":
             return [HookResult(event=event, command=tool, status="ok", decision="deny", reason="测试拦截")]
         return []

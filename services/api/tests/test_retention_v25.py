@@ -101,7 +101,7 @@ class _CompactAdapter:
             tool_calls=[],
         )
 
-    async def bind_tools(self, _specs, _chat):
+    async def bind_tools(self, _specs, _chat, *, effort="", thinking=None):
         raise ModelError("upstream_error", "真正这次调用故意失败：压缩记录必须先于它落下")
 
 

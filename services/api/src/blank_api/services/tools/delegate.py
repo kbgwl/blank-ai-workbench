@@ -67,6 +67,9 @@ def _apply_definition(request: SubAgentRequest, definition) -> SubAgentRequest:
     request.agent_ignored = definition.ignored
     # permissionMode 只是"声明"，真正生效与否在 run_subagent 里按基线收紧判定。
     request.permission_mode = definition.permission_mode
+    # 思考强度：定义里声明的档位一路带到子代理，由 run_subagent 按模型封顶裁决。
+    # 空串表示定义没声明，子代理按兜底档跑。
+    request.effort = definition.effort
     # 上游 Szn：isolation 的生效值 = 派发参数 ?? 定义值；定义写 worktree 时
     # 调用方显式传 isolate:false 也压不住它——用户要的是"每次都在副本里跑"。
     if definition.isolation == "worktree":

@@ -45,6 +45,7 @@ from pathlib import Path
 
 import yaml
 
+from blank_api.services.effort import parse as parse_effort
 from blank_api.services.plugins_defs import discover_plugins
 from blank_api.services.skills_defs import _tool_list as _parse_tool_specs
 from blank_api.services.workspace import mask_path
@@ -82,12 +83,12 @@ MAPPABLE_PERMISSION_MODES = (
 )
 # Claude applies these; we cannot without widening/altering the parent boundary,
 # so a definition that sets them gets them named in the audit instead.
+# ``effort`` 不在列：它是本轮思考强度的声明，派发时按模型封顶钳制后生效。
 UNSUPPORTED_FIELDS = (
     "model",
     "hooks",
     "mcpServers",
     "memory",
-    "effort",
     "color",
     "initialPrompt",
 )
@@ -112,6 +113,9 @@ class AgentDefinition:
     # 的 ``run_in_background=false``。
     background: bool = False
     max_turns: int | None = None
+    # Claude 的 ``effort``：这一层子代理想用的思考强度。空串 = 不声明，
+    # 派发时按模型封顶取兜底档；认不出的值解析时告警并丢弃（与上游 _Ht 同口径）。
+    effort: str = ""
     source: str = "project"
     path: str = ""
     ignored: tuple[str, ...] = ()
@@ -144,6 +148,8 @@ class AgentDefinition:
             payload["background"] = True
         if self.max_turns is not None:
             payload["maxTurns"] = self.max_turns
+        if self.effort:
+            payload["effort"] = self.effort
         if self.ignored:
             payload["ignored"] = list(self.ignored)
         return payload
@@ -501,6 +507,16 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
                 f"{label} {where} 的 maxTurns 必须是正整数，已忽略"
             )
 
+    # effort 按上游 _Ht 的口径解析：认档位词、认关键词、认不出就告警丢弃，
+    # 不猜一个值填进去——定义里写错档位时，静默换成默认档会让用户以为配置生效了。
+    agent_effort = ""
+    if meta.get("effort") is not None:
+        parsed_effort = parse_effort(meta.get("effort"))
+        if parsed_effort.level is None:
+            warnings.append(f"{label} {where} 的 effort {parsed_effort.warning}")
+        else:
+            agent_effort = parsed_effort.level
+
     if len(body) > MAX_INSTRUCTIONS_CHARS:
         body = body[:MAX_INSTRUCTIONS_CHARS].rstrip() + "\n…（定义正文过长，已截断）"
     governed = tuple(
@@ -519,6 +535,7 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
             isolation=isolation,
             background=background,
             max_turns=max_turns,
+            effort=agent_effort,
             source=source,
             path=str(path),
             ignored=ignored,

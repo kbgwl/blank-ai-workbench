@@ -76,7 +76,7 @@ class _Hooks:
         self.notes = list(notes or [])
         self.calls: list[tuple[str, str, dict]] = []
 
-    async def run(self, event: str, target: str = "", payload: dict | None = None):
+    async def run(self, event: str, target: str = "", payload: dict | None = None, *, effort: str = ""):
         self.calls.append((event, target, dict(payload or {})))
         if event != "subagent_start" or not self.notes:
             return []

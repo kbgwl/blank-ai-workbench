@@ -353,7 +353,7 @@ async def test_task_totals_fall_back_to_turn_when_task_is_unbound(seeded, tmp_pa
     那时唯一诚实的任务级口径就是本回合自己。"""
     adapter = ScriptedAdapter("mock", [Usage(prompt_tokens=100, completion_tokens=10)])
     session = _session(tmp_path, adapter)
-    session.context = SimpleNamespace(root=session.context.root, task_id="", session_factory=session.session_factory)
+    session.context = SimpleNamespace(root=session.context.root, task_id="", session_factory=session.session_factory, turn_state={})
     await session.call_model([{"role": "user", "content": "无任务"}], "execute_action", step=0)
     record = (await _records())[0]
     assert record["task"] == record["turn"]

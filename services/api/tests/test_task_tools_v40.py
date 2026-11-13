@@ -350,7 +350,7 @@ class _RecordingHooks:
         self.denied = denied or set()
         self.calls: list[tuple[str, str, dict]] = []
 
-    async def run(self, event: str, target: str = "", payload: dict | None = None):
+    async def run(self, event: str, target: str = "", payload: dict | None = None, *, effort: str = ""):
         self.calls.append((event, target, dict(payload or {})))
         if event in self.denied:
             return [SimpleNamespace(denied=True, reason=f"{event} 被策略拒绝")]

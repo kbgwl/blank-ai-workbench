@@ -93,6 +93,12 @@ from blank_api.services.hooks import (
     stop_hook_block_cap,
 )
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
+from blank_api.services.effort import (
+    EffortPolicy,
+    ThinkingConfig,
+    resolve_turn_effort,
+    thinking_budget_ceiling,
+)
 from blank_api.services.plan import normalize_goal, normalize_steps, plan_progress
 from blank_api.services.agent.planner import (
     build_plan,
@@ -446,6 +452,11 @@ class AgentSession:
     provider_id: str
     provider_name: str
     goal: str
+    # 本轮思考强度（effort）的裁决结果：关键词升档、模型封顶、thinking 关断回落
+    # 在这里一次算清并缓存，call_model 每步复用，不每步重算、也不每步重发提醒。
+    turn_effort: str = ""
+    effort_reminder: str = ""
+    effort_warning: str = ""
     trace_id: str = ""
     # 回合归属（对标 Codex 的 turn_attribution：root_turn_id / parent_turn_id）。
     # 主代理这两项为空是**有意的**：根线程按"没有父的就是自己"在 root_thread_id() 里现算，
@@ -958,6 +969,48 @@ class AgentSession:
             },
         )
 
+    def _resolve_turn_effort(self, messages: list[dict]) -> bool:
+        """一轮一次：算清本轮 effort 并缓存，call_model 每步复用。
+
+        关键词（ultrathink / ultracode）从本轮用户输入里找；请求档位取供应商
+        配置的 ``reasoning_effort``；封顶与 thinking 关断回落由 effort 模块裁决。
+        返回是否本次刚算的（首次调用），调用方据此决定要不要记告警事件。
+        """
+        if self.turn_effort:
+            return False
+        model = str(getattr(self.adapter.config, "model", "") or "")
+        requested = str(getattr(self.adapter.config, "reasoning_effort", "") or "")
+        result = resolve_turn_effort(
+            requested,
+            model=model,
+            policy=EffortPolicy(),
+            thinking=ThinkingConfig(),
+            keyword_text=_effort_keyword_text(messages),
+        )
+        self.turn_effort = result.level
+        # 工具层展开 Skill/命令正文里的 ${CLAUDE_EFFORT} 时读的是上下文上这份：
+        # 占位符要的是本轮**实际生效**的档位，不是展开方手头能凑出来的默认档。
+        self.context.turn_state["effort"] = self.turn_effort
+        self.effort_reminder = result.reminder or ""
+        self.effort_warning = result.warning or ""
+        return True
+
+    def _thinking_payload(self, adapter: ModelAdapter) -> dict | None:
+        """把 ThinkingConfig 转成 Anthropic 的 ``thinking`` 参数。
+
+        ``auto`` 不发（让模型自己决定），``off`` 发 disabled，``extended`` 发
+        enabled + 预算。预算上限是模型输出上限减一（对标上游 lxr）。
+        当前没有配置源，默认 auto，因此通常返回 None。
+        """
+        thinking = ThinkingConfig()
+        if thinking.mode == "off":
+            return {"type": "disabled"}
+        if thinking.mode == "extended":
+            max_tokens = int(getattr(adapter.config, "max_tokens", 0) or 0)
+            budget = thinking.budget_tokens or thinking_budget_ceiling(max_tokens)
+            return {"type": "enabled", "budget_tokens": budget}
+        return None
+
     async def call_model(self, messages: list[dict], node: str, *, step: int = 0) -> tuple[Any, dict]:
         role = role_for_node(node)
         adapter = self.role_adapters.get(role, self.adapter)
@@ -1187,6 +1240,20 @@ class AgentSession:
                     {"event": "post_compact", "results": [item.as_dict() for item in hook_results]},
                 )
         await self.recorder.add("context.measured", node, report.as_dict())
+        # 本轮 effort 裁决：一轮只算一次，之后每步复用。关键词升档、模型封顶、
+        # thinking 关断回落都在这里定清；提醒注入本轮上下文、告警只记一次。
+        first_effort = self._resolve_turn_effort(compacted)
+        if first_effort and self.effort_warning:
+            await self.recorder.add(
+                "effort.warning",
+                node,
+                {"warning": self.effort_warning, "requested": self.turn_effort},
+            )
+        if self.effort_reminder:
+            compacted = [
+                *compacted,
+                authored({"role": "system", "content": self.effort_reminder}, self.run_id),
+            ]
         chat = [
             ChatMessage(
                 role=item["role"],
@@ -1204,7 +1271,10 @@ class AgentSession:
         await self._scope_tools(node, tier)
         specs = self.gateway.specs()
         try:
-            response = await self._call_adapter(adapter, specs, chat, node, role)
+            response = await self._call_adapter(
+                adapter, specs, chat, node, role,
+                effort=self.turn_effort, thinking=self._thinking_payload(adapter),
+            )
         except ModelError:
             latency_ms = int((time.perf_counter() - started) * 1000)
             # 失败的调用也要进账：一次任务里"发了多少次请求、有多少次根本没花 token"
@@ -1252,6 +1322,9 @@ class AgentSession:
         chat: list[ChatMessage],
         node: str,
         role: str,
+        *,
+        effort: str = "",
+        thinking: dict | None = None,
     ) -> Any:
         """一次模型调用。开关打开时走流式，流式不可用时自动退回非流式。
 
@@ -1268,7 +1341,9 @@ class AgentSession:
         否则用户会看到两遍开头。压缩那一路（`_invoke_with_retry`）复用同一道闸门。
         """
         if not self.stream_output:
-            return await self._call_non_stream(adapter, specs, chat, node, role)
+            return await self._call_non_stream(
+                adapter, specs, chat, node, role, effort=effort, thinking=thinking
+            )
 
         retries = 0
         transient = 0
@@ -1276,7 +1351,9 @@ class AgentSession:
             relay = OutputRelay(self.context.task_id, node)
             effects_before = self.tool_effects
             try:
-                response = await adapter.bind_tools_stream(specs, chat, on_delta=relay)
+                response = await adapter.bind_tools_stream(
+                    specs, chat, on_delta=relay, effort=effort, thinking=thinking
+                )
             except ModelError as error:
                 if relay.chunks:
                     relay.close()
@@ -1307,7 +1384,9 @@ class AgentSession:
                     node,
                     {"reason": error.message, "code": error.code, "status": error.status, "role": role},
                 )
-                return await self._call_non_stream(adapter, specs, chat, node, role)
+                return await self._call_non_stream(
+                    adapter, specs, chat, node, role, effort=effort, thinking=thinking
+                )
             except httpx.HTTPError as error:
                 if relay.chunks:
                     relay.close()
@@ -1318,7 +1397,9 @@ class AgentSession:
                     {"reason": f"{error.__class__.__name__}：{error}", "code": "stream_transport", "status": 0,
                      "role": role},
                 )
-                return await self._call_non_stream(adapter, specs, chat, node, role)
+                return await self._call_non_stream(
+                    adapter, specs, chat, node, role, effort=effort, thinking=thinking
+                )
             relay.close()
             if relay.chunks:
                 # 一条持久事件记清楚"这次确实流了、首字多久"。stream_output 要不要留着，
@@ -1335,6 +1416,9 @@ class AgentSession:
         chat: list[ChatMessage],
         node: str,
         role: str,
+        *,
+        effort: str = "",
+        thinking: dict | None = None,
     ) -> Any:
         """整包调用（开关关着或流式退路）同样按 429 退避重试，超时/断网也重试。"""
         retries = 0
@@ -1342,7 +1426,7 @@ class AgentSession:
         while True:
             effects_before = self.tool_effects
             try:
-                return await adapter.bind_tools(specs, chat)
+                return await adapter.bind_tools(specs, chat, effort=effort, thinking=thinking)
             except ModelError as error:
                 if _rate_limit_may_retry(error, retries):
                     retries += 1
@@ -2185,6 +2269,22 @@ def _last_user_text(state: AgentState) -> str:
     return ""
 
 
+def _effort_keyword_text(messages: list[dict]) -> str:
+    """取本轮用户输入里供关键词扫描的文本（ultrathink / ultracode）。
+
+    只扫真实的用户消息：工具回执也是 user 角色但带 ``tool_call_id``，
+    不是人的输入，扫到它没有意义。多条用户消息（追问、插话）一起拼上。
+    """
+    parts: list[str] = []
+    for item in messages:
+        if item.get("role") != "user" or item.get("tool_call_id"):
+            continue
+        content = item.get("content")
+        if isinstance(content, str) and content.strip():
+            parts.append(content)
+    return "\n".join(parts)
+
+
 async def create_plan_node(state: AgentState, session: AgentSession) -> AgentState:
     """第一步只做两件事：判意图、拆步骤。
 
@@ -2194,6 +2294,14 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
     """
     node = "create_plan"
     await session.recorder.add("node.started", node, {"task_id": state.get("task_id", "")})
+    # 新一轮开始：清掉上一轮的 effort 裁决缓存。effort 是「这一轮」的属性，
+    # 上一轮的 ultrathink 不能顺延到这一轮——否则用户换一句普通提问也会被抬到 xhigh。
+    session.turn_effort = ""
+    session.effort_reminder = ""
+    session.effort_warning = ""
+    # 上下文上那一份也要清：否则上一轮的档位会留在工具层，本轮第一个加载的
+    # Skill 正文会拿到上一轮的 ${CLAUDE_EFFORT}。
+    session.context.turn_state.pop("effort", None)
     goal = _last_user_text(state) or session.goal
     # 判意图只用用户原话。界面拼进来的「执行规则 / 你处于开发场景」本身就是
     # 「读取代码、修改文件、跑测试」，拿它判意图等于先设好结论再判。
@@ -2505,7 +2613,11 @@ async def _scan_pre_tool_hooks(
         if readonly and name not in READONLY_TOOLS:
             continue
         results = await session.hooks.run(
-            "pre_tool_use", name, {"tool": name, "arguments": arguments}
+            "pre_tool_use",
+            name,
+            {"tool": name, "arguments": arguments},
+            # 工具上下文事件：上游的钩子输入在这一类事件上带本轮档位。
+            effort=session.turn_effort,
         )
         if not results:
             continue
@@ -3126,6 +3238,7 @@ async def _approval_gate(
                     "tool_input": dict(arguments),
                     "permission_suggestions": options,
                 },
+                effort=session.turn_effort,
             )
             if results:
                 await session.recorder.add(
@@ -3163,6 +3276,7 @@ async def _approval_gate(
                         "tool_use_id": key,
                         "reason": reason,
                     },
+                    effort=session.turn_effort,
                 )
                 continue
             allowing = next((item for item in results if item.allowed), None)
@@ -3193,6 +3307,7 @@ async def _approval_gate(
                 "title": f"需要审批：{name}",
                 "notification_type": "permission_prompt",
             },
+            effort=session.turn_effort,
         )
         if notifications:
             await session.recorder.add(
@@ -4034,6 +4149,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                     "ok": bool(payload.get("ok")),
                     "status": payload.get("status"),
                 },
+                effort=session.turn_effort,
             )
             if post_results:
                 await session.recorder.add(
@@ -4055,6 +4171,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                         "status": payload.get("status"),
                         "error": str(payload.get("message") or payload.get("output") or "")[:500],
                     },
+                    effort=session.turn_effort,
                 )
                 if failure_results:
                     await session.recorder.add(
@@ -4166,6 +4283,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                     for item, payload in zip(planned, payloads)
                 ]
             },
+            effort=session.turn_effort,
         )
         if batch_results:
             await session.recorder.add(
@@ -5150,6 +5268,8 @@ async def _stop_hook_gate(
             "background_tasks": _running_background_tasks(session),
             "session_crons": [],
         },
+        # Stop 在上游属于工具上下文事件，钩子输入里带这一轮的档位。
+        effort=session.turn_effort,
     )
     if not results:
         return None

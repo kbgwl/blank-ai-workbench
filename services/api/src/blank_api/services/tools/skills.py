@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 
+from blank_api.services.effort import effort_for_prompt
 from blank_api.services.prompt_args import render_prompt
 from blank_api.services.skills_defs import match_skill_paths
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, fail, ok
@@ -64,6 +65,7 @@ def render_skill(
     project_dir: str = "",
     session_id: str = "",
     skill_dir: str = "",
+    effort: str = "",
 ) -> str:
     """把调用参数交给 Skill：与 Claude 的 ``qW`` 同一套占位符规则。"""
     return render_prompt(
@@ -73,6 +75,7 @@ def render_skill(
         project_dir=project_dir,
         session_id=session_id,
         skill_dir=skill_dir,
+        effort=effort,
     )
 
 
@@ -96,6 +99,7 @@ def preload_skills(
     project_dir: str = "",
     session_id: str = "",
     carried=(),
+    effort: str = "",
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """把 agent frontmatter 里声明的 Skill 正文预加载成消息正文。
 
@@ -103,6 +107,9 @@ def preload_skills(
     同样只是 log 一行 warning）；``carried`` 里的名字上一轮已经进过对话，跳过
     以免续聊把同一份正文越叠越长。预加载成功后名字记进 ``catalog.loaded``，
     子代理再调 ``skill`` 工具会得到「已加载」，不会把正文贴第二遍。
+
+    ``effort`` 是**环境档位**：Skill 自己声明了就以它为准，没声明时用调用方
+    给的这一份（子代理定义里的档位），两者都没有才回落默认档。
     """
     loaded: list[tuple[str, str]] = []
     problems: list[tuple[str, str]] = []
@@ -128,6 +135,7 @@ def preload_skills(
             project_dir=project_dir,
             session_id=session_id,
             skill_dir=entry["base_dir"],
+            effort=effort_for_prompt(entry.get("effort") or effort),
         )
         loaded.append((name, skill_loading_header(name) + "\n\n" + body))
     return loaded, problems
@@ -177,6 +185,8 @@ class SkillCatalog:
                 "argument_names": tuple(entry.get("argument_names") or ()),
                 "kind": str(entry.get("kind") or "skill"),
                 "base_dir": str(entry.get("base_dir") or ""),
+                # 命令/Skill 声明的思考强度：加载正文时替换 ${CLAUDE_EFFORT}。
+                "effort": str(entry.get("effort") or ""),
             }
         self.loaded: set[str] = set()
         self.activated: set[str] = set()
@@ -346,6 +356,11 @@ async def _skill(context: ToolContext, arguments: dict) -> ToolOutcome:
         project_dir=str(getattr(context, "root", "") or ""),
         session_id=str(getattr(context, "task_id", "") or ""),
         skill_dir=entry["base_dir"],
+        # Skill 自己声明了档位就以它为准；没声明时用本轮已经裁决好的那一份
+        # （超纲关键词把本轮抬到 xhigh 时，正文里的 ${CLAUDE_EFFORT} 就该是 xhigh）。
+        effort=effort_for_prompt(
+            entry.get("effort") or getattr(context, "turn_state", {}).get("effort", "")
+        ),
     )
     await _record(context, "skill.invoked", {"skill": name, "has_args": bool(args), "chars": len(body)})
     return ok(

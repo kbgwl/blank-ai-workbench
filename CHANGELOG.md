@@ -1,6 +1,71 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发
+
+- **思考强度（effort）五档裁决与三路下发（effort 批）**：Claude Code 的 thinking-effort
+  系统是"本轮思考强度"的一整套裁决与下发链路，从用户写的档位词、模型封顶、关键词升档、
+  thinking 关断回落，到最后落在模型载荷、提示词占位符、子进程环境变量三条路上。这批把
+  整条链路移植进仓库。上游锚点（逐字取证自 `claude.uniq.txt`）：五档词表
+  `low/medium/high/xhigh/max`、默认档 `high`、`med` 别名归一、关键词
+  `ultracode`/`ultrathink` 升到 `xhigh`、`maxEffortLevel` 封顶、thinking 关断时
+  钳到 `high`、`${CLAUDE_EFFORT}` 占位符替换、`CLAUDE_EFFORT` 环境变量写进子进程。
+  1. **`effort.py` 裁决模块**：`EFFORT_LEVELS` 五档词表、`EFF_RANK` 排序、
+  `LEVEL_ALIASES` 别名归一、`KEYWORD_EFFORTS` 关键词升档表、`THINKING_DISABLED_EFFORT_CAP`
+  关断钳位。`EffortPolicy` 数据类承载封顶三要素（`model_caps` 模型表 / `provider_cap`
+  供应商档 / `default_cap` 缺省档），`effective_cap` 取家族与供应商里更严的那个，
+  `clamp` 把超出封顶的档位往下推、`allows`/`allowed_levels` 按封顶给可用集，
+  `supports_xhigh`/`supports_max` 区分"模型支持但被封顶"与"模型根本不支持"。
+  `ThinkingConfig` 数据类承载 thinking 开关与预算，`disabled` 属性判关断，
+  `budget_tokens` 天花板是 `max_tokens - 1`。`resolve_turn_effort` 是整轮裁决的唯一入口：
+  关键词优先 → 用户请求 → 封顶钳制 → thinking 关断回落，返回 `TurnEffort`
+  （含最终档位、请求档位、警告文案、提醒文案、是否来自关键词、是否在封顶内）。
+  `clamp_without_thinking` 只在"thinking 关断 + 模型拒绝高阶 + 档位 > high"三个条件
+  同时成立时才钳，缺一不可。`exceeds_default_only_true_for_levels_above_high` 钉住
+  "高于 high 才算超出默认"的边界。
+  2. **`${CLAUDE_EFFORT}` 占位符**：`prompt_args.py` 的 `substitute_paths` 在 `effort`
+  非空时替换占位符，传的是**裁决后**的档位（过封顶、过钳制之后的终值），不是用户原始
+  请求。`render_prompt` 把 effort 透传到替换层，Skill/斜杠命令的参数正文因此能拿到
+  本轮真实强度。
+  3. **`CLAUDE_EFFORT` 环境变量**：`shell_env.py` 的 `apply_effort` 把裁决后的档位写进
+  子进程环境，只在非空时写键、空值不写——避免给子进程一个无意义的空字符串。钩子与
+  命令的子进程因此能读到本轮强度。
+  4. **适配器载荷三方言**：Anthropic 走 `output_config.effort` + `thinking` 两键；
+  OpenAI-compat 走 `reasoning_effort`，`xhigh`/`max` 映射到 `high`（该方言只认三档），
+  空值回落到供应商配置的 `reasoning_effort`；OpenAI-responses 走 `reasoning.effort`，
+  四档词表内直接发，超出的映射到 `high`，命中时附带 `reasoning.encrypted_content`
+  include 且不发 temperature。三方言的映射口径与上游逐字对齐。
+  5. **运行时接线**：`graph.py` 的 `AgentSession` 新增 `turn_effort`/`effort_reminder`/
+  `effort_warning` 三个字段；`_resolve_turn_effort` 在回合开始时裁决一次并缓存，
+  之后每一步调用复用同一档位（一轮的强度不逐步重算、不逐步变）。压缩路径在压缩后
+  重新裁决并把警告与提醒分别送进事件与系统消息。八个钩子调用点（权限请求、停止门、
+  压缩前、子代理停止等）在调用钩子时把 `effort=session.turn_effort` 透传，钩子子进程
+  因此能读到本轮强度。
+  6. **子代理强度**：`subagent.py` 在派发子代理时用与主代理同一套 `resolve_turn_effort`
+  裁决子代理的档位（定义里声明的档位 + 目标正文里的关键词），裁决一次后整轮复用。
+  定义没声明时回落到供应商配置的静态 `reasoning_effort`，与主代理同一份口径——同一家
+  供应商在主线程与子代理里不会跑出两个档位。
+  7. **判据**：`services/api/tests/test_effort_batch.py`（25 例，七区）：档位词表与别名
+  归一、封顶取严与可用集、钳制下压与警告文案、关键词升档与提醒、`${CLAUDE_EFFORT}`
+  占位符替换与透传、`CLAUDE_EFFORT` 环境变量写入条件、三方言载荷映射、thinking 关断
+  回落的三条件、预算天花板、ThinkingConfig 解析、超出默认的边界。每条判据都在"拿掉
+  对应实现就会红"的位置上。变异电池 `evals/effort_mutation_battery.py`（9 条变异，
+  红集合登记在 `evals/fixtures/battery-booked-effort.json`，第二轮逐字核对通过）：
+  M1 钳制不压 → 3 红；M2 封顶取松 → 1 红；M3 关键词不抬档 → 2 红；M4 占位符不替换
+  → 2 红；M5 环境键不写 → 1 红；M6 anthropic 不下发 effort → 1 红；M7 thinking 关断
+  不回落 → 1 红；M8 词表被改 → 2 红；M9 openai_compat 不映射 → 1 红。跑完按原字节
+  还原并核对 sha256。邻套件回归：effort 接线触到的钩子/子代理/团队/压缩/保留期等
+  20 个套件 **341 passed**，全量 **3621 passed / 28 skipped**。
+  改 `services/api/src/blank_api/services/effort.py`（新增）、`prompt_args.py`、
+  `shell_env.py`、`models/anthropic.py`、`models/openai_compat.py`、
+  `models/openai_responses.py`、`agent/graph.py`、`subagent.py`、`agents_defs.py`、
+  `commands_defs.py`、`hooks.py`、`skills_defs.py`、`tools/base.py`、`tools/delegate.py`、
+  `tools/gateway.py`、`tools/shell.py`、`tools/skills.py`、`agent/runtime.py`，
+  新增 `services/api/tests/test_effort_batch.py`、`evals/effort_mutation_battery.py`、
+  `evals/fixtures/battery-booked-effort.json`。
+  偏离/未移植：`EffortPolicy` 的 `model_caps`/`provider_cap`/`default_cap` 目前以空表
+  构造（配置来源尚未接进——裁决逻辑本身完整，接上配置源即可生效）；上游的
+  `maxEffortLevel` 模型表逐模型封顶在本仓库还没有配置面，先以"空表 = 不封顶"的口径
+  跑通裁决链，配置面留待后续批次接入。
 
 - **`UserPromptExpansion` 与 `TeammateIdle` 两个事件、钩子类型补到六种（AF 批）**：事件面
   在 AE 批之后还剩这两个没移植，钩子类型此前只支持 `command`——等于"能写钩子，但上游

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+from types import SimpleNamespace
+
 import pytest
 
 from blank_api.services.agent.graph import (
@@ -48,6 +50,7 @@ class _PlanSession:
         self.token_budget = 1_500_000
         self.hook_context: list[dict] = []
         self.recorded_questions = False
+        self.context = SimpleNamespace(turn_state={})
         self._intent_text = intent_text or json.dumps(
             {
                 "intent": "act",
