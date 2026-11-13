@@ -31,6 +31,13 @@ class MockModel:
         self.steps: list[dict] = []
         self.index = 0
         self.requests: list[dict] = []
+        # 非 0 时模型调用直接返回这个状态码：用来在图**内部**制造一次真实的
+        # ModelError（API 错误终结回合），而不是像 tools=False 那样在构造适配器时
+        # 就失败——后者走不到 graph.ainvoke，测不到 StopFailure 的触发点。
+        self.fail_status = 0
+        # 与 fail_status 配套：先正常回应这么多次，之后再返回 fail_status。
+        # 用来在图里先留下一条模型回复、再让下一次调用失败（测 last_assistant_message）。
+        self.fail_after = 0
 
     def reset(self, steps: list[dict]) -> None:
         self.steps = steps
@@ -42,6 +49,11 @@ class MockModel:
     def _handler(self, request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         self.requests.append(payload)
+        if self.fail_status and self.index >= self.fail_after:
+            return httpx.Response(
+                self.fail_status,
+                json={"error": {"message": f"mock upstream failure {self.fail_status}", "type": "mock_error"}},
+            )
         step = self.steps[self.index] if self.index < len(self.steps) else {"content": "已完成，无需更多操作"}
         self.index += 1
         message = {"content": step.get("content", "")}

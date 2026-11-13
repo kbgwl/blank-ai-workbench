@@ -60,6 +60,10 @@ HOOK_EVENTS = (
     # 回合结束：模型准备交付时触发。阻断 = 不让这一轮结束，把理由交回模型继续干活。
     # 子代理的同一时刻叫 SubagentStop（上游会把 agent 定义里写的 Stop 转成它）。
     "stop",
+    # 回合**因为 API 错误**结束：上游在这时替代 Stop 触发，而不是既发 Stop 又发它。
+    # fire-and-forget —— 上游明说钩子的输出与退出码一律忽略，所以它不进 BLOCKING_EVENTS；
+    # 匹配面是载荷里的 error 分类（见 stop_failure_error_category）。
+    "stop_failure",
     "subagent_stop",
     # 子代理刚要开始跑：上游按 agent_type 匹配，附加上下文注入子代理的启动上下文。
     # 它不是阻断事件——上游把它的退出码 2 渲染成父会话里一条"钩子报错"提示，
@@ -105,11 +109,71 @@ EVENT_ALIASES: dict[str, str] = {
     "PermissionDenied": "permission_denied",
     "PostToolBatch": "post_tool_batch",
     "Stop": "stop",
+    "StopFailure": "stop_failure",
     "SubagentStart": "subagent_start",
     "SubagentStop": "subagent_stop",
     "WorktreeCreate": "worktree_create",
     "WorktreeRemove": "worktree_remove",
 }
+
+# StopFailure 的匹配面：上游 matcher 按载荷里的 ``error`` 分类比对，取值就这十三个。
+# 本机没有"供应商原始错误对象"，ModelError 只带 code + HTTP 状态，所以这里做的是翻译层：
+# 先按状态码（供应商给出的那一层事实），再按本机收敛后的 code，都不认就 unknown。
+STOP_FAILURE_ERROR_CATEGORIES = (
+    "rate_limit",
+    "overloaded",
+    "authentication_failed",
+    "oauth_org_not_allowed",
+    "account_on_hold",
+    "verification_required",
+    "billing_error",
+    "invalid_request",
+    "model_not_found",
+    "server_error",
+    "max_output_tokens",
+    "cloud_credential_error",
+    "unknown",
+)
+
+# HTTP 状态 → 分类。状态码是供应商给出的那一层事实：429 一定是限流、402 一定是账单问题，
+# 拿 code 去猜会把"带 429 的传输层失败"错记成 server_error，用户就看不到"被限流了"这一层。
+_STOP_FAILURE_STATUS_CATEGORY = {
+    429: "rate_limit",
+    402: "billing_error",
+    401: "authentication_failed",
+    403: "authentication_failed",
+    404: "model_not_found",
+    400: "invalid_request",
+    503: "overloaded",
+}
+
+# 本机 ModelError 的 code → 分类，只收本机真实会抛的 code（见 models/ 与 routing.py）。
+# 传输层失败（超时、连不上、流中断）在上游没有专门分类，一律归 server_error：
+# 一句"服务端出错了"比 unknown 更能让用户决定下一步（重试还是换模型）。
+_STOP_FAILURE_CODE_CATEGORY = {
+    "model_timeout": "server_error",
+    "model_unreachable": "server_error",
+    "model_stream_error": "server_error",
+    "model_stream_empty": "server_error",
+    "model_http_error": "server_error",
+    "model_output_not_json": "invalid_request",
+    "model_tools_unsupported": "invalid_request",
+    "circuit_breaker_open": "overloaded",
+    "all_models_failed": "unknown",
+}
+
+
+def stop_failure_error_category(code: str | None = None, status: int = 0) -> str:
+    """把本机 ``ModelError`` 翻译成上游 StopFailure 载荷里的 ``error`` 分类。"""
+    if status:
+        category = _STOP_FAILURE_STATUS_CATEGORY.get(int(status))
+        if category:
+            return category
+    if code:
+        category = _STOP_FAILURE_CODE_CATEGORY.get(code)
+        if category:
+            return category
+    return "unknown"
 
 # 上游的 matcher 三种形态：空串/"*"/".*" 全中；纯名单按 `|` 或 `,` 拆分后**精确**
 # 比对；其余当正则（未锚定）搜。纯名单判定沿用上游那张字符表 —— 名单里不可能

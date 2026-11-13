@@ -32,6 +32,7 @@ from blank_api.services.agent.goals import GoalTracker
 from blank_api.services.agent.graph import (
     AgentSession,
     _changed_paths,
+    _last_assistant_text,
     _with_delivery_notes,
     assumption_ledger,
     build_agent_graph,
@@ -72,6 +73,7 @@ from blank_api.services.hooks import (
     HookResult,
     HookRunner,
     non_blocking_errors,
+    stop_failure_error_category,
     usable_context,
 )
 from blank_api.services.instructions import load_layers, provenance
@@ -818,6 +820,27 @@ class AgentRuntime:
             )
         return list(results or [])
 
+    async def _fire_stop_failure(self, scope: _RunScope, exc: ModelError) -> None:
+        """API 错误终结回合时发 StopFailure（上游在这时**替代** Stop 触发）。
+
+        fire-and-forget：上游明说钩子的输出与退出码一律忽略，所以这里只留审计，
+        不读结果、不注入上下文、也不把退出码 2 当成错误——任务已经因为模型失败而
+        收尾，钩子说什么都不该再改这个结论。matcher 的比对对象是错误分类
+        （见 :func:`stop_failure_error_category`），上游就是这么分流的。
+        """
+        category = stop_failure_error_category(exc.code, exc.status)
+        payload = {"error": category, "error_details": exc.message[:500]}
+        try:
+            snapshot = await scope.graph.aget_state(scope.config)
+            values = getattr(snapshot, "values", None) or {}
+            if isinstance(values, dict):
+                last = _last_assistant_text(values.get("messages") or [])
+                if last:
+                    payload["last_assistant_message"] = last[:4000]
+        except Exception:  # noqa: BLE001 - 读不到就少一个可选字段，事件照发
+            log.warning("StopFailure 读取最近回复失败 task=%s", scope.thread_id, exc_info=True)
+        await self._fire_hooks(scope, "stop_failure", payload, target=category)
+
     @staticmethod
     def _session_end_reason(result: dict, interrupts: list) -> str:
         """收尾原因：上游 SessionEnd 的 reason 是钩子的分派键（match=reason）。
@@ -1187,6 +1210,9 @@ class AgentRuntime:
                 reason=exc.message,
                 extra={"code": exc.code, "retryable": exc.retryable, "thread_id": thread_id},
             )
+            # 上游用 StopFailure 顶掉 Stop：这一轮是**因为 API 错误**结束的，
+            # 钩子需要知道是"被拦下"还是"模型挂了"，两者的处置完全不同。
+            await self._fire_stop_failure(scope, exc)
             await self._close_hooks(scope)
             raise ApiError(code=exc.code, message=exc.message, status_code=502) from None
         except GraphInterrupt as exc:
@@ -1276,6 +1302,8 @@ class AgentRuntime:
                 reason=exc.message,
                 extra={"code": exc.code, "thread_id": thread_id},
             )
+            # 续跑路径同样：恢复后模型又挂了，也要按"API 错误终结"发 StopFailure。
+            await self._fire_stop_failure(scope, exc)
             await self._close_hooks(scope)
             raise ApiError(code=exc.code, message=exc.message, status_code=502) from None
         except GraphInterrupt as exc:

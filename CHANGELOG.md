@@ -1,6 +1,6 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）
 
 - **SubagentStart 钩子与 SessionStart 的附加上下文（AD 批）**：钩子作者在子代理派发点能
   拦一句话，而 `SessionStart` 给的 `additionalContext` 此前只进审计、正文被丢掉——等于
@@ -44,6 +44,50 @@
   M5 结果丢 `hook_warnings` → 1 红；M6 target 换成 agent_id → 2 红；M7 注销事件 → 4 红；
   每条红集合均实测）；相邻钩子/子代理/设置套件 **195 passed**（47.30s），全量
   **3552 passed / 28 skipped（721.02s）**。
+
+- **StopFailure 钩子事件：API 错误终结回合时顶掉 Stop（AE 批）**："回合因为 API 错误
+  结束"与"正常结束"是两件事，钩子作者需要分清"被拦下"和"模型挂了"——两者的处置完全
+  不同。此前本机两条 `except ModelError` 终态既不发 Stop 也不发任何事件，这条信息没有
+  出口。上游锚点：`summary:"When the turn ends due to an API error"`、
+  `description:"Fires instead of Stop when an API error (rate limit, auth failure, etc.)
+  ended the turn. Fire-and-forget — hook output and exit codes are ignored."`、
+  `matcherMetadata:{fieldToMatch:"error"}`、十三个分类取值，载荷
+  `{hook_event_name, error, error_details?, last_assistant_message?}`。
+  改 `services/hooks.py`、`services/agent/runtime.py`。
+  1. **事件面**：`HOOK_EVENTS` 增 `stop_failure`（19 → 20），别名 `StopFailure`；
+     **不进** `BLOCKING_EVENTS`——上游明说 fire-and-forget，退出码 2 不能变成"拒绝执行"，
+     否则一个已经因模型失败而收尾的任务，会被钩子的报错再判成"被拦下"。
+  2. **错误分类翻译层**：新增 `stop_failure_error_category(code, status)`，**状态码优先**
+     （429→`rate_limit`、401/403→`authentication_failed`、402→`billing_error`、
+     404→`model_not_found`、400→`invalid_request`、503→`overloaded`），再按 code 兜底
+     （`model_timeout` / `model_unreachable` / `model_stream_error` /
+     `model_stream_empty` / `model_http_error`→`server_error`、
+     `model_output_not_json` / `model_tools_unsupported`→`invalid_request`、
+     `circuit_breaker_open`→`overloaded`、`all_models_failed`→`unknown`），都落不上→
+     `unknown`。状态码必须压过 code：带 429 的传输层失败要记成"被限流"，否则用户看不到
+     这一层。分类表与上游十三个取值逐字相同（探针实测 21 组映射）。
+  3. **触发接线**：run 路径（runtime.py:1215）与续跑路径（runtime.py:1306）两条
+     `except ModelError` 终态，都在 `_finish` 之后、`_close_hooks` 之前调
+     `_fire_stop_failure`（runtime.py:823）；载荷带 `error` 分类、`error_details`
+     （错误文本前 500 字）、`last_assistant_message`（图里最近一条助手文本前 4000 字；
+     读不到就省略该字段、事件照发，只留一条 warning）。**不发 Stop**——上游是"替代"，
+     不是既发 Stop 又发它。
+  4. **matcher 的比对对象是错误分类**：target 传分类值，于是 `matcher:
+     "rate_limit|server_error"` 这种分流是有效的；退出码 2 与非 0 一律忽略——不注入上下文、
+     不落 `hook.turn_blocked`、不叫模型再跑一轮，只留 `hook.completed` 审计（任务仍按
+     API 错误失败收尾，钩子说什么都不改这个结论）。
+  偏离：上游 `error_details` 是结构化错误对象，本机只有错误文本（前 500 字截断）；
+  `last_assistant_message` 仅在图里已有助手回复时给（模型一次都没回上就没有这条）；
+  `agent_transcript_path` 仍未移植。
+  判据 `services/api/tests/test_stop_failure_hooks_v55.py`（8 例：事件面与别名、21 格
+  分类表、matcher 按错误分类分流、API 错误只发 StopFailure 不发 Stop、载荷带
+  last_assistant_message、fire-and-forget 四点、续跑路径同样触发、无钩子零改动），
+  变异 13/13 红（M1 摘注册 → 6 红；M2 摘别名 → 1 红；M3 塞进阻断集合 → 1 红；M4
+  401 错译 → 5 红；M5 `model_timeout` 错译 → 1 红；M6 run 路径不接线 → 4 红；M7 续跑
+  路径不接线 → 1 红；M8 多发一个 Stop → 2 红；M9 把 exit 2 当拦截 → 1 红；M10 把
+  exit 2 当指令再叫模型 → 1 红；M11 target 传空 → 2 红；M12 不带 last_assistant_message
+  → 2 红；M13 不带 error_details → 1 红；每条红集合均实测）；相邻钩子/子代理/设置套件
+  **256 passed（92.42s）**，全量 **3560 passed / 28 skipped（1308.44s，RC=0）**。
 
 - **settings.json 的钩子配置面与 matcher 语义（AC 批）**：钩子作者真正用的入口是
   settings.json 的 `hooks`，此前只有 `BLANK_HOOKS` 能配——等于"能写钩子，但没地方放"。
