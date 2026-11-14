@@ -32,6 +32,7 @@ from blank_api.services.hooks import (
     non_blocking_errors,
     stop_hook_block_cap,
     usable_context,
+    write_transcript,
 )
 from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
 from blank_api.services.effort import (
@@ -1020,6 +1021,10 @@ async def run_subagent(
                     "session_crons": [],
                     "agent_id": agent_id,
                     "agent_type": request.agent_name or BUILTIN_AGENT,
+                    "agent_transcript_path": write_transcript(
+                        messages,
+                        run_root / ".blank" / "context" / "subagent-transcript.jsonl",
+                    ),
                 },
                 # 上游的 SubagentStop 属于工具上下文事件，钩子输入里带这一轮的档位。
                 effort=child_effort.level,

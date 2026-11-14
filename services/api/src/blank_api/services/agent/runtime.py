@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from collections.abc import Sequence
@@ -77,6 +78,7 @@ from blank_api.services.hooks import (
     run_expansion_hooks,
     stop_failure_error_category,
     usable_context,
+    write_transcript,
 )
 from blank_api.services.instructions import load_layers, provenance
 from blank_api.services.context_curator import curate
@@ -845,9 +847,17 @@ class AgentRuntime:
             snapshot = await scope.graph.aget_state(scope.config)
             values = getattr(snapshot, "values", None) or {}
             if isinstance(values, dict):
-                last = _last_assistant_text(values.get("messages") or [])
+                messages = values.get("messages") or []
+                last = _last_assistant_text(messages)
                 if last:
                     payload["last_assistant_message"] = last[:4000]
+                payload["agent_transcript_path"] = write_transcript(
+                    messages,
+                    Path(scope.session.context.root)
+                    / ".blank"
+                    / "context"
+                    / "agent-transcript.jsonl",
+                )
         except Exception:  # noqa: BLE001 - 读不到就少一个可选字段，事件照发
             log.warning("StopFailure 读取最近回复失败 task=%s", scope.thread_id, exc_info=True)
         await self._fire_hooks(
@@ -1162,6 +1172,76 @@ class AgentRuntime:
                     ],
                 },
             )
+        # SessionStart 钩子输出四字段（#304，对齐上游 Sn()）：
+        # sessionTitle → 更新会话标题；initialUserMessage → 注入首条 user 消息；
+        # watchPaths → 写 .blank/context/watch.json；reloadSkills → 重扫 Skill 目录。
+        # 四字段各自有独立消费端，互不影响：一个钩子只给其中一两个也照常生效。
+        session_title = next(
+            (item.session_title for item in start_hook_results if item.session_title), ""
+        )
+        initial_user_message = next(
+            (
+                item.initial_user_message
+                for item in start_hook_results
+                if item.initial_user_message
+            ),
+            "",
+        )
+        watch_paths = [
+            path for item in start_hook_results for path in item.watch_paths
+        ]
+        reload_skills = any(item.reload_skills for item in start_hook_results)
+
+        if session_title:
+            async with scope.store() as db:
+                # thread_id 是检查点格式（task:<id>:attempt:<n>），Thread.id 是 UUID，
+                # 两者不是同一个标识。必须经 Task.thread_id 这一 FK 才能查到 Thread 行。
+                task = await db.get(Task, request.task_id)
+                thread = (
+                    await db.get(Thread, task.thread_id)
+                    if task is not None and task.thread_id
+                    else None
+                )
+                if thread is not None:
+                    thread.title = session_title
+                    await db.commit()
+            await recorder.add(
+                "hook.session_title",
+                "receive_task",
+                {"event": "session_start", "title": session_title},
+            )
+
+        if watch_paths:
+            watch_dir = Path(session.context.root) / ".blank" / "context"
+            watch_dir.mkdir(parents=True, exist_ok=True)
+            (watch_dir / "watch.json").write_text(
+                json.dumps(watch_paths, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            await recorder.add(
+                "hook.watch_paths",
+                "receive_task",
+                {"event": "session_start", "count": len(watch_paths)},
+            )
+
+        if reload_skills:
+            root = Path(session.context.root)
+            disk_skills = discover_skills(root)
+            disk_commands = discover_commands(root)
+            reloaded = SkillCatalog(
+                merge_skill_entries(
+                    request.skill_catalog,
+                    [item.as_entry() for item in disk_skills.entries.values()],
+                    [item.as_entry() for item in disk_commands.entries.values()],
+                )
+            )
+            session.skill_catalog = reloaded.listing()
+            await recorder.add(
+                "hook.skills_reloaded",
+                "receive_task",
+                {"event": "session_start", "count": len(reloaded.listing())},
+            )
+
         # shell 快照与指令来源：出问题时能回答"当时是什么环境、读了哪些约定文件"
         if session.shell is not None:
             await recorder.add("shell.snapshot", "receive_task", session.shell.as_dict())
@@ -1234,6 +1314,7 @@ class AgentRuntime:
                 output_style=scope.output_style,
                 run_id=recorder.run_id,
                 hook_context=session_hook_notes,
+                initial_user_message=initial_user_message,
             ),
             "plan": [],
             "steps": 0,

@@ -30,6 +30,7 @@ import signal
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 HOOK_EVENTS = (
     "session_start",
@@ -196,6 +197,27 @@ def stop_failure_error_category(code: str | None = None, status: int = 0) -> str
         if category:
             return category
     return "unknown"
+
+
+def write_transcript(messages: list[dict], path: Path) -> str:
+    """把对话消息写成 JSONL transcript 文件，返回绝对路径字符串。
+
+    上游 SubagentStop / StopFailure 的 stdin 载荷带 ``agent_transcript_path``，
+    指向一份 JSONL 格式的对话记录文件，钩子可以读取它来检查整段对话。
+    本机此前没有 transcript 落盘机制——钩子拿到这个路径也没东西可读。
+    这里在触发点把当前对话消息写成一份 JSONL 快照：每行一条 ``{"role", "content"}``，
+    与上游的 JSONL transcript 格式一致。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = []
+    for msg in messages or []:
+        role = str(msg.get("role") or "")
+        content = msg.get("content")
+        if not isinstance(content, str):
+            content = str(content or "")
+        lines.append(json.dumps({"role": role, "content": content}, ensure_ascii=False))
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return str(path)
 
 # 上游的 matcher 三种形态：空串/"*"/".*" 全中；纯名单按 `|` 或 `,` 拆分后**精确**
 # 比对；其余当正则（未锚定）搜。纯名单判定沿用上游那张字符表 —— 名单里不可能
@@ -421,6 +443,15 @@ class HookResult:
     # "TeammateIdle hook prevented continuation"。只认真布尔 true，理由只取字符串。
     prevent_continuation: bool = False
     stop_reason: str = ""
+    # SessionStart 钩子输出四字段（对齐上游 Sn() 校验函数）。
+    # sessionTitle（string）：更新会话标题（Thread.title）。
+    session_title: str = ""
+    # initialUserMessage（string）：作为会话第一条 user 消息注入模型上下文。
+    initial_user_message: str = ""
+    # watchPaths（string[]）：写入 .blank/context/watch.json。
+    watch_paths: list[str] = field(default_factory=list)
+    # reloadSkills（bool，只认 true）：重新发现 Skill 目录并刷新会话目录。
+    reload_skills: bool = False
     # 这条结果是后台跑完的（配置里 async:true）。审计时读它，
     # 否则"钩子跑完了、但模型没等它"这件事在时间线上看不出来。
     background: bool = False
@@ -465,6 +496,14 @@ class HookResult:
             body["prevent_continuation"] = True
             if self.stop_reason:
                 body["stop_reason"] = self.stop_reason
+        if self.session_title:
+            body["session_title"] = self.session_title
+        if self.initial_user_message:
+            body["initial_user_message_chars"] = len(self.initial_user_message)
+        if self.watch_paths:
+            body["watch_paths_count"] = len(self.watch_paths)
+        if self.reload_skills:
+            body["reload_skills"] = True
         if self.background:
             body["async"] = True
         if self.exit_code is not None:
@@ -569,6 +608,31 @@ def parse_hook_output(text: str) -> dict:
         stop = parsed.get("stopReason")
     if isinstance(stop, str) and stop.strip():
         body_out["stop_reason"] = stop.strip()[:300]
+    # SessionStart 钩子输出四字段（对齐上游 Sn() 的类型校验）：
+    # sessionTitle / initialUserMessage 只认字符串，非字符串即错型不解析；
+    # watchPaths 只认字符串数组，非数组或含非字符串元素即错型不解析；
+    # reloadSkills 只认真布尔 true——false、字符串 "true"、1 都是写错的钩子，
+    # 把它读成"要重载"等于让一次错型变成一次静默的目录重扫。
+    title = body.get("sessionTitle")
+    if not isinstance(title, str):
+        title = parsed.get("sessionTitle")
+    if isinstance(title, str) and title.strip():
+        body_out["session_title"] = title.strip()[:300]
+    init_msg = body.get("initialUserMessage")
+    if not isinstance(init_msg, str):
+        init_msg = parsed.get("initialUserMessage")
+    if isinstance(init_msg, str) and init_msg.strip():
+        body_out["initial_user_message"] = init_msg.strip()[:MAX_CONTEXT]
+    watch = body.get("watchPaths")
+    if not isinstance(watch, list):
+        watch = parsed.get("watchPaths")
+    if isinstance(watch, list) and all(isinstance(item, str) for item in watch):
+        body_out["watch_paths"] = [item.strip() for item in watch if item.strip()]
+    reload_skills = body.get("reloadSkills")
+    if reload_skills is not True:
+        reload_skills = parsed.get("reloadSkills")
+    if reload_skills is True:
+        body_out["reload_skills"] = True
     return body_out
 
 
@@ -1220,6 +1284,10 @@ class HookRunner:
             suppress_original=bool(parsed.get("suppress_original_prompt")),
             prevent_continuation=bool(parsed.get("prevent_continuation")),
             stop_reason=str(parsed.get("stop_reason") or ""),
+            session_title=str(parsed.get("session_title") or ""),
+            initial_user_message=str(parsed.get("initial_user_message") or ""),
+            watch_paths=list(parsed.get("watch_paths") or []),
+            reload_skills=bool(parsed.get("reload_skills")),
             exit_code=exit_code,
         )
 

@@ -1,6 +1,57 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）
+
+- **SessionStart 钩子输出四字段（#304）**：对齐上游 `Sn()` 校验函数定义的
+  SessionStart 钩子输出四字段，此前钩子作者写出这四个字段只会被静默丢掉——
+  正文进了审计但没有任何消费端。这批把四字段的解析、组装、审计与消费端全部接通。
+  上游锚点（逐字取证自 `claude.uniq.txt` 的 `Sn()`）：`sessionTitle` / `initialUserMessage`
+  为字符串字段，`watchPaths` 为字符串数组（经 `i1t()` 校验），`reloadSkills` 为布尔、
+  只认 `true`。
+  1. **`hooks.py` 四字段解析与组装**：`HookResult` 新增 `session_title` /
+     `initial_user_message` / `watch_paths` / `reload_skills` 四个字段（含默认值）；
+     `parse_hook_output` 对齐上游 `Sn()` 的类型校验——`sessionTitle` /
+     `initialUserMessage` 只认字符串、非字符串即错型不解析；`watchPaths` 只认字符串数组、
+     非数组或含非字符串元素即错型不解析；`reloadSkills` 只认真布尔 `true`，
+     `false` / 字符串 `"true"` / `1` 都当写错的钩子、不解析（把它读成"要重载"等于让一次
+     错型变成一次静默的目录重扫）。同时支持 `hookSpecificOutput` 嵌套形状与顶层字段两种
+     写法。`as_dict` 序列化：空字段省略、`initial_user_message` 只记字符数、
+     `watch_paths` 只记条数。`_finish` 把四字段从解析结果装配进 `HookResult`。
+  2. **`runtime.py` 四字段消费端**：`sessionTitle` → 经 `Task.thread_id`（UUID FK）
+     更新 `Thread.title`（检查点 thread_id 是 `task:<id>:attempt:<n>` 格式，不是 UUID，
+     必须经 Task 行桥接）；`initialUserMessage` → 透传 `initial_messages()`；
+     `watchPaths` → 写入 `.blank/context/watch.json`；`reloadSkills` → 重扫磁盘 Skill 与
+     命令目录、重建 `SkillCatalog` 并替换 `session.skill_catalog`。四字段各自独立消费，
+     互不影响：一个钩子只给其中一两个也照常生效。各自落审计事件
+     （`hook.session_title` / `hook.watch_paths` / `hook.skills_reloaded`）。
+  3. **`graph.py` 首条消息注入**：`initial_messages()` 新增 `initial_user_message` 参数，
+     有值时在系统提示之后、历史之前插入一条 user 消息（`[:8000]` 截断）。
+  判据 `services/api/tests/test_session_start_output_v304.py`（22 例：纯解析类型校验
+  正反两路、HookResult 组装与默认值、as_dict 序列化、initial_messages 注入位置、
+  HTTP 端到端四字段各自消费与无字段零副作用），变异 8/8 红（解析层四字段各拔一条 →
+  4-5 红，消费层四字段各拔一条 → 1 红，每条红集合均实测），相邻钩子/代理套件
+  **57 passed**，全量回归见下方读数。
+
+- **agent_transcript_path 补齐（#305）**：对齐上游 `SubagentStop` / `StopFailure`
+  载荷里的 `agent_transcript_path`。此前两个事件都已注册、都能触发，但载荷里没有这个
+  字段——本机根本没有 transcript 落盘机制，钩子拿到路径也没东西可读。这批把"触发点
+  落盘 + 载荷带路径"接通。
+  1. **`hooks.py` 落盘助手**：新增 `write_transcript(messages, path)`，把对话消息写成
+     JSONL 快照——每行一条 `{"role", "content"}`，与上游的 JSONL transcript 格式一致。
+     content 非字符串时 `str()` 兜底（工具返回的列表/对象不会让写盘炸掉），空消息列表
+     写空文件，父目录自动创建，返回绝对路径字符串。
+  2. **`subagent.py` `stop_gate`**：触发 `subagent_stop` 钩子前，把子代理的 `messages`
+     写成 `.blank/context/subagent-transcript.jsonl`（与 #304 的 `watch.json` 同目录），
+     载荷带 `agent_transcript_path`。没配钩子时 `stop_gate` 直接返回，不写文件。
+  3. **`runtime.py` `_fire_stop_failure`**：读取检查点消息时，把 `messages` 写成
+     `.blank/context/agent-transcript.jsonl`，载荷带 `agent_transcript_path`。该字段与
+     `last_assistant_message` 同在 try 块里——读不到检查点就少一个可选字段，事件照发。
+  判据 `services/api/tests/test_agent_transcript_path_v305.py`（10 例：write_transcript
+  四单元（JSONL 格式 / 非字符串 coercion / 空消息 / 父目录创建）、事件面注册、SubagentStop
+  端到端载荷带路径且文件内容逐行 JSON 含 goal 与助手回复、无钩子不写文件、StopFailure
+  端到端载荷带路径、transcript 反映检查点消息、无钩子零改动），变异 4/4 红（摘
+  SubagentStop 路径 → 1 红；摘 StopFailure 路径 → 2 红；write_transcript 不写文件 → 7 红；
+  去掉非字符串 coercion → 1 红，红集合均实测），相邻钩子/代理套件 **73 passed**。
 
 - **思考强度（effort）五档裁决与三路下发（effort 批）**：Claude Code 的 thinking-effort
   系统是"本轮思考强度"的一整套裁决与下发链路，从用户写的档位词、模型封顶、关键词升档、
@@ -218,9 +269,7 @@
      退出码 2 走 `hook.non_blocking_error`、不注入。目标原文一个字不动。
   偏离：上游 `isolatedContext` 子代理跳过注入、`hookContextCarried` 去重未移植（续聊整轮
   不重跑，效果等价；隔离副本仍会收到）；stdin 未提供 `session_id` / `transcript_path` /
-  `scratchpad_dir` / `prompt_id` / `served_call` / `caller_session_id` / `effort`；
-  SessionStart 的 `initialUserMessage` / `sessionTitle` / `watchPaths` / `reloadSkills`
-  未移植。
+  `scratchpad_dir` / `prompt_id` / `served_call` / `caller_session_id` / `effort`。
   判据 `services/api/tests/test_subagent_start_hooks_v54.py`（9 例：事件面与别名、exit 2
   分流单元、真子进程按 agent_type 分发、注入位置与 goal 原文、exit 2 可见但不注入、
   无钩子零改动、续聊不重跑、SessionStart 正反两路 HTTP 端到端），变异 7/7 红（M1
@@ -262,7 +311,8 @@
      API 错误失败收尾，钩子说什么都不改这个结论）。
   偏离：上游 `error_details` 是结构化错误对象，本机只有错误文本（前 500 字截断）；
   `last_assistant_message` 仅在图里已有助手回复时给（模型一次都没回上就没有这条）；
-  `agent_transcript_path` 仍未移植。
+  `agent_transcript_path` 本批（#305）已补齐——触发点把检查点里的 `messages` 写成
+  `.blank/context/agent-transcript.jsonl`，载荷带路径，钩子可读。
   判据 `services/api/tests/test_stop_failure_hooks_v55.py`（8 例：事件面与别名、21 格
   分类表、matcher 按错误分类分流、API 错误只发 StopFailure 不发 Stop、载荷带
   last_assistant_message、fire-and-forget 四点、续跑路径同样触发、无钩子零改动），
@@ -332,9 +382,12 @@
      端到端实测 `stop_hook_active` 恒 false 后修正）。
   5. **PreCompact 是一次性的**：输出拼进压缩提示词且用完即清；`SessionStart` 按
      `source=startup`、`SessionEnd` 按 `reason=completed|waiting_approval|interrupted` 分派。
-  6. 偏离/未移植：`UserPromptExpansion` / `TeammateIdle` 两个事件仍未移植，`session_crons`
-     恒空、`background_tasks` 形状是 `{id, description, status}`、SubagentStop 无
-     `agent_transcript_path`、Notification 只接 `permission_prompt`/`agent_completed` 两类、
+  6. 偏离/未移植：`UserPromptExpansion` / `TeammateIdle` 两个事件已由 AF 批移植，
+     `session_crons`
+     恒空、`background_tasks` 形状是 `{id, description, status}`、SubagentStop 的
+     `agent_transcript_path` 已由 #305 批补齐（触发点把 `messages` 写成
+     `.blank/context/subagent-transcript.jsonl`，载荷带路径）、Notification 只接
+     `permission_prompt`/`agent_completed` 两类、
      SessionEnd 只有三种 reason。
   测试：新增 `tests/test_hook_events_v52.py` 24 例（事件注册与阻断集合、stdin
   `hook_event_name`、网关侧 allow/deny/计划模式/permission_denied/notification、**图内真实

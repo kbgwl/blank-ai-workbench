@@ -1749,6 +1749,7 @@ def initial_messages(
     goal_spec: dict | None = None,
     session_goal: str = "",
     hook_context: Sequence[str] = (),
+    initial_user_message: str = "",
 ) -> list[dict]:
     from blank_api.services.instructions import compose
 
@@ -1888,10 +1889,19 @@ def initial_messages(
             + "\n\n".join(notes)
         )
         injected.append(authored({"role": "user", "content": text[:8000]}, run_id))
+    # SessionStart 钩子的 initialUserMessage（对齐上游 Cyr() → prependUserMessage）：
+    # 作为会话第一条 user 消息插在 system 之后、历史与目标之前。它是钩子给模型
+    # 的第一条输入，不是上下文补充——位置在最前，模型先看到它再看到任务目标。
+    initial_msgs: list[dict] = []
+    if initial_user_message:
+        initial_msgs.append(
+            authored({"role": "user", "content": initial_user_message[:8000]}, run_id)
+        )
     # 图片本身不写进消息：见 AgentSession.vision_images 的说明。这里只留一句
     # "它给了几张图"的文本，让 state 里也有据可查（检查点、回放都读得到）。
     return [
         authored({"role": "system", "content": system}, run_id),
+        *initial_msgs,
         *carried,
         *injected,
         authored({"role": "user", "content": prompt}, run_id),
