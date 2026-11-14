@@ -190,6 +190,11 @@ class SkillCatalog:
                 # 命令/Skill 声明的模型：skill 工具调用后覆盖本轮后续步骤的主模型。
                 # 对齐上游 SkillTool 返回的 {kind:"model", mainLoopModel}。
                 "model": str(entry.get("model") or ""),
+                # Skill 声明的钩子：事件名 → HookSpec 列表。注册时直接传给
+                # HookRunner.register_skill_hooks，不经过序列化往返。
+                "hooks": entry.get("hooks") or {},
+                # upstream unloadableGuard：hooks 无效时为 True，此时不注册钩子。
+                "unloadable_guard": bool(entry.get("unloadable_guard", False)),
             }
         self.loaded: set[str] = set()
         self.activated: set[str] = set()
@@ -352,6 +357,19 @@ async def _skill(context: ToolContext, arguments: dict) -> ToolOutcome:
             already_loaded=True,
         )
     catalog.loaded.add(name)
+    # Skill 声明的钩子：加载时注册进 HookRunner（对齐上游 SkillTool 加载即注册）。
+    # unloadable_guard=True 时钩子整体无效，不注册；hooks 为空时跳过。
+    skill_hooks = entry.get("hooks") or {}
+    if not entry.get("unloadable_guard") and skill_hooks:
+        runner = getattr(context, "hooks", None)
+        if runner is not None and hasattr(runner, "register_skill_hooks"):
+            added = runner.register_skill_hooks(name, skill_hooks)
+            if added:
+                await _record(
+                    context,
+                    "skill.hooks_registered",
+                    {"skill": name, "added": added},
+                )
     # Skill 声明的模型：本次调用之后，本轮后续步骤的主模型改用这一份。
     # 对齐上游 SkillTool 返回的 {kind:"model", mainLoopModel}——模型切换发生在
     # skill 工具调用之后，影响的是下一步及之后的模型调用，不是当前这一步。

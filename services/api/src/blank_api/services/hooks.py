@@ -287,6 +287,27 @@ class HookSpec:
     def applies(self, target: str) -> bool:
         return matcher_matches(self.match, target)
 
+    def as_dict(self) -> dict:
+        """审计视图：只放影响执行的字段，不含命令正文以外的细节。"""
+        body: dict = {
+            "kind": self.kind,
+            "command": self.command,
+            "match": self.match,
+            "timeout": self.timeout,
+        }
+        if self.async_run:
+            body["async"] = True
+        if self.source != "env":
+            body["source"] = self.source
+        if self.url:
+            body["url"] = self.url
+        if self.prompt:
+            body["prompt_chars"] = len(self.prompt)
+        if self.server or self.tool:
+            body["server"] = self.server
+            body["tool"] = self.tool
+        return body
+
 
 def _clamp_timeout(raw: object) -> float:
     try:
@@ -779,6 +800,41 @@ class HookRunner:
             "sources": sorted({spec.source for specs in self.hooks.values() for spec in specs}),
             "warnings": list(self.warnings),
         }
+
+    def register_skill_hooks(
+        self,
+        skill_name: str,
+        hooks: dict[str, list[HookSpec]],
+    ) -> int:
+        """把 Skill 声明的钩子并入当前运行器。
+
+        上游在 Skill 加载时把 hooks 注册进会话级钩子集合，同一条
+        （事件 + 命令 + matcher + 超时）只跑一次。这里沿用 ``from_env``
+        的指纹去重口径，新注册的条目 ``source`` 标为 ``skill``。
+
+        返回本次实际新增的条数。
+        """
+        if self.disabled or not hooks:
+            return 0
+        seen = {
+            (event, spec.command, spec.match, spec.timeout)
+            for event, specs in self.hooks.items()
+            for spec in specs
+        }
+        added = 0
+        for event, specs in hooks.items():
+            for spec in specs:
+                fingerprint = (event, spec.command, spec.match, spec.timeout)
+                if fingerprint in seen:
+                    continue
+                seen.add(fingerprint)
+                # Skill 钩子带着自己的 source，不改已有条目——
+                # 已有条目是 settings/env 配的，优先级不受 Skill 影响。
+                self.hooks.setdefault(event, []).append(spec)
+                added += 1
+        if added:
+            self.warnings.append(f"Skill {skill_name} 注册了 {added} 条钩子")
+        return added
 
     async def run(
         self,

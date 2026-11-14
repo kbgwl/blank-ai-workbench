@@ -47,6 +47,11 @@ from pathlib import Path
 import yaml
 
 from blank_api.services.effort import parse as parse_effort
+from blank_api.services.hooks import (
+    EVENT_ALIASES,
+    HOOK_EVENTS,
+    _build_specs,
+)
 from blank_api.services.plugins_defs import discover_plugins
 from blank_api.services.prompt_args import argument_names
 from blank_api.services.workspace import mask_path
@@ -63,14 +68,15 @@ PROJECT_SKILLS_DIR = Path(".blank") / "skills"
 # would duplicate whatever the sync layer already installed.
 RESERVED_DIRS = frozenset({"synced"})
 # Parsed for audit only; we do not apply them (see module docstring).
-# ``paths`` is *not* here: it is honoured as a conditional-activation gate.
+# ``paths`` 是 *not* here: it is honoured as a conditional-activation gate.
 # ``effort`` 不在列：Skill 声明的思考强度在加载正文时展开进提示词。
 # ``model`` 不在列：Skill 声明的模型在 skill 工具调用后覆盖本轮后续步骤的主模型
 # （对齐上游 SkillTool 返回的 ``{kind:"model", mainLoopModel}``）。
+# ``hooks`` 不在列：Skill frontmatter 的 hooks 被解析并注册进 HookRunner
+# （对齐上游 ``lJs``），无效时置 ``unloadable_guard=True`` 且清空 allowed-tools。
 UNSUPPORTED_FIELDS = (
     "when_to_use",
     "version",
-    "hooks",
     "context",
     "agent",
     "background",
@@ -107,6 +113,12 @@ class SkillDefinition:
     # Claude 的 ``model``：skill 工具调用后，本轮后续步骤的主模型覆盖。
     # 空串 = 不声明，不改变当前模型。
     model: str = ""
+    # Skill frontmatter 声明的 hooks（对齐上游 ``lJs``）。事件名 → HookSpec 列表。
+    # 空 dict = 没声明 hooks。
+    hooks: dict[str, list] = field(default_factory=dict)
+    # 上游 ``lJs`` 的 ``unloadableGuard``：hooks 无效时为 True。此时 Skill 仍加载
+    # （正文可用），但无 hooks 且无 allowed-tools（上游 ``Se=pe?[]:OI(...)``）。
+    unloadable_guard: bool = False
 
     @property
     def conditional(self) -> bool:
@@ -135,6 +147,8 @@ class SkillDefinition:
             "ignored": list(self.ignored),
             "effort": self.effort,
             "model": self.model,
+            "hooks": dict(self.hooks),
+            "unloadable_guard": self.unloadable_guard,
         }
 
     def as_dict(self) -> dict:
@@ -573,6 +587,11 @@ def _definition_from_dir(
         else:
             warnings.append(f"Skill 文件 {mask_path(str(path))} 的 model 不是非空字符串，已忽略")
     ignored = tuple(key for key in UNSUPPORTED_FIELDS if meta.get(key) is not None)
+    # 上游 lJs：hooks 解析 + unloadableGuard。guard 开启时 Skill 仍加载，
+    # 但 hooks 与 allowed-tools 都被清空（``Se=pe?[]:OI(...)``）。
+    skill_hooks, unloadable_guard = _parse_skill_hooks(meta, str(path), warnings)
+    if unloadable_guard:
+        allowed_tools = ()
     return (
         SkillDefinition(
             name=name,
@@ -592,10 +611,64 @@ def _definition_from_dir(
             warnings=tuple(warnings),
             effort=skill_effort,
             model=skill_model,
+            hooks=skill_hooks,
+            unloadable_guard=unloadable_guard,
         ),
         [],
         warnings,
     )
+
+
+def _parse_skill_hooks(
+    meta: dict,
+    label: str,
+    warnings: list[str],
+) -> tuple[dict[str, list], bool]:
+    """解析 Skill frontmatter 的 ``hooks`` 字段（对齐上游 ``lJs``）。
+
+    返回 ``(hooks, unloadable_guard)``：
+
+    * 顶层 ``pre_tool_use`` / ``permission_request``（不在 ``hooks`` 内）→
+      ``unloadable_guard=True``、``hooks={}``；
+    * 无 ``hooks`` 字段 → ``hooks={}``、``unloadable_guard=False``；
+    * ``hooks`` 结构无效（坏事件名、缺命令等）→ ``unloadable_guard=True``、
+      ``hooks={}``，告警进 ``warnings``。
+    """
+    # 上游 lJs：PreToolUse/PermissionRequest 写在顶层（不在 hooks 内）→ unloadableGuard
+    for top_key in ("pre_tool_use", "permission_request"):
+        if meta.get(top_key) is not None:
+            warnings.append(
+                f"Skill 文件 {label} 的 {top_key} 写在顶层，不在 hooks 内——"
+                "该事件必须放进 hooks 块，hooks 已整体禁用"
+            )
+            return {}, True
+
+    raw_hooks = meta.get("hooks")
+    if raw_hooks is None:
+        return {}, False
+    if not isinstance(raw_hooks, dict):
+        warnings.append(f"Skill 文件 {label} 的 hooks 不是对象，hooks 已整体禁用")
+        return {}, True
+
+    hooks: dict[str, list] = {}
+    hook_warnings: list[str] = []
+    for raw_event, items in raw_hooks.items():
+        event = EVENT_ALIASES.get(str(raw_event), str(raw_event))
+        if event not in HOOK_EVENTS:
+            hook_warnings.append(f"未支持的事件 {raw_event}，已跳过")
+            continue
+        if not isinstance(items, list):
+            hook_warnings.append(f"事件 {raw_event} 的配置不是数组，已跳过")
+            continue
+        specs = _build_specs(event, items, source="skill", warnings=hook_warnings)
+        if specs:
+            hooks[event] = specs
+    if hook_warnings:
+        # 上游 cK().safeParse 失败 → unloadableGuard：任何一条告警都意味着
+        # hooks 结构不完整，整体禁用而不是部分注册。
+        warnings.extend(hook_warnings)
+        return {}, True
+    return hooks, False
 
 
 def _skill_dirs(root: Path) -> list[Path]:
