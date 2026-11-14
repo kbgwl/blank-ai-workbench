@@ -1777,7 +1777,11 @@ def initial_messages(
         if not name:
             continue
         description = str(entry.get("description") or "").strip()
-        catalog_lines.append(f"- {name}：{description}" if description else f"- {name}")
+        when_to_use = str(entry.get("when_to_use") or "").strip()
+        # 对齐上游 ZNn：[name, description, whenToUse].filter(Boolean).join(" ")。
+        # kbgai 沿用 name：description 的中文冒号风格，when_to_use 以「；」续接。
+        parts = [part for part in (description, when_to_use) if part]
+        catalog_lines.append(f"- {name}：" + "；".join(parts) if parts else f"- {name}")
     if catalog_lines:
         system += (
             "\n可用 Skill（当任务属于某个 Skill 覆盖的范围时，先调用 skill 工具加载它的正文，"

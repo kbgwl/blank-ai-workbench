@@ -190,6 +190,9 @@ class SkillCatalog:
                 # 命令/Skill 声明的模型：skill 工具调用后覆盖本轮后续步骤的主模型。
                 # 对齐上游 SkillTool 返回的 {kind:"model", mainLoopModel}。
                 "model": str(entry.get("model") or ""),
+                # Skill 声明的"何时使用"提示：进系统提示 Skill 清单。
+                # 对齐上游 ZNn：[name, description, whenToUse].filter(Boolean).join(" ")。
+                "when_to_use": str(entry.get("when_to_use") or "").strip(),
                 # Skill 声明的钩子：事件名 → HookSpec 列表。注册时直接传给
                 # HookRunner.register_skill_hooks，不经过序列化往返。
                 "hooks": entry.get("hooks") or {},
@@ -229,9 +232,13 @@ class SkillCatalog:
         return any(item["model_invocable"] for item in self._entries.values())
 
     def listing(self) -> list[dict]:
-        """系统提示里那一栏的形状：只有名字与一句话说明，不放正文。"""
+        """系统提示里那一栏的形状：名字、说明与"何时使用"，不放正文。"""
         return [
-            {"name": item["name"], "description": item["description"]}
+            {
+                "name": item["name"],
+                "description": item["description"],
+                "when_to_use": item["when_to_use"],
+            }
             for item in self._visible_entries()
             if item["model_invocable"]
         ]

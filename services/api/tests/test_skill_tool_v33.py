@@ -315,7 +315,9 @@ async def test_prepare_builds_the_catalog_and_keeps_the_skill_tool(workspace) ->
 
     assert scope.session.context.skills is not None
     assert scope.session.context.skills.names() == ["deploy"]
-    assert scope.session.skill_catalog == [{"name": "deploy", "description": "上线步骤"}]
+    assert scope.session.skill_catalog == [
+        {"name": "deploy", "description": "上线步骤", "when_to_use": ""}
+    ]
     assert "skill" in [tool.name for tool in scope.session.gateway.registry.visible()]
 
 

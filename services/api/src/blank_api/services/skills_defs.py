@@ -74,8 +74,9 @@ RESERVED_DIRS = frozenset({"synced"})
 # （对齐上游 SkillTool 返回的 ``{kind:"model", mainLoopModel}``）。
 # ``hooks`` 不在列：Skill frontmatter 的 hooks 被解析并注册进 HookRunner
 # （对齐上游 ``lJs``），无效时置 ``unloadable_guard=True`` 且清空 allowed-tools。
+# ``when_to_use`` 不在列：Skill 的"何时使用"提示，进系统提示的 Skill 清单
+# （对齐上游 ``lme`` 的 ``whenToUse`` 与 ``ZNn`` 的拼接口径）。
 UNSUPPORTED_FIELDS = (
-    "when_to_use",
     "version",
     "context",
     "agent",
@@ -113,6 +114,9 @@ class SkillDefinition:
     # Claude 的 ``model``：skill 工具调用后，本轮后续步骤的主模型覆盖。
     # 空串 = 不声明，不改变当前模型。
     model: str = ""
+    # Claude 的 ``when_to_use``：进系统提示 Skill 清单的"何时使用"提示。
+    # 空串 = 不声明（上游 ``$e=O.when_to_use!=null?String(O.when_to_use):void 0``）。
+    when_to_use: str = ""
     # Skill frontmatter 声明的 hooks（对齐上游 ``lJs``）。事件名 → HookSpec 列表。
     # 空 dict = 没声明 hooks。
     hooks: dict[str, list] = field(default_factory=dict)
@@ -147,6 +151,7 @@ class SkillDefinition:
             "ignored": list(self.ignored),
             "effort": self.effort,
             "model": self.model,
+            "when_to_use": self.when_to_use,
             "hooks": dict(self.hooks),
             "unloadable_guard": self.unloadable_guard,
         }
@@ -586,6 +591,12 @@ def _definition_from_dir(
             skill_model = raw_model.strip()
         else:
             warnings.append(f"Skill 文件 {mask_path(str(path))} 的 model 不是非空字符串，已忽略")
+    # when_to_use：系统提示 Skill 清单的"何时使用"提示。上游 ``String()``
+    # 口径——非 null 就转字符串，null 留空；不猜值、不告警（字符串化是安全的）。
+    skill_when_to_use = ""
+    raw_when = meta.get("when_to_use")
+    if raw_when is not None:
+        skill_when_to_use = str(raw_when)
     ignored = tuple(key for key in UNSUPPORTED_FIELDS if meta.get(key) is not None)
     # 上游 lJs：hooks 解析 + unloadableGuard。guard 开启时 Skill 仍加载，
     # 但 hooks 与 allowed-tools 都被清空（``Se=pe?[]:OI(...)``）。
@@ -611,6 +622,7 @@ def _definition_from_dir(
             warnings=tuple(warnings),
             effort=skill_effort,
             model=skill_model,
+            when_to_use=skill_when_to_use,
             hooks=skill_hooks,
             unloadable_guard=unloadable_guard,
         ),
