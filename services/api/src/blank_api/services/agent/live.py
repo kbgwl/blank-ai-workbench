@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
+from collections.abc import Awaitable, Callable
 
 # 单个订阅者最多攒这么多帧。超过就丢最旧的：每帧都是"到目前为止的尾巴"，
 # 丢旧帧不会让界面拼错，只会让首帧出现得更晚一点。
@@ -105,9 +107,18 @@ class OutputRelay:
       允许丢帧的前提。
     * **按时间或字数攒批**。每片都发等于让模型等广播；一次调用可能有几百片。
     * **不写事件表**。见模块开头的理由。
+
+    ``display_hook`` 是 MessageDisplay 钩子的挂接点（#306）：每帧展示前调用一次，
+    返回非空字符串就用它替换展示文本。钩子是展示层——落库的消息与模型上下文
+    一字不改。没有挂钩子时传 ``None``，``_flush`` 走纯发布路径，零开销。
     """
 
-    def __init__(self, task_id: str, node: str) -> None:
+    def __init__(
+        self,
+        task_id: str,
+        node: str,
+        display_hook: Callable[[dict], Awaitable[str]] | None = None,
+    ) -> None:
         self.task_id = task_id
         self.node = node
         self.chunks = 0
@@ -118,6 +129,9 @@ class OutputRelay:
         self._sent_at = 0.0
         self._sent_chars = 0
         self._closed = False
+        self._display_hook = display_hook
+        self._message_id = str(uuid.uuid4())
+        self._flush_index = 0
 
     async def __call__(self, piece: str) -> None:
         """适配器每收到一段文字就调一次（签名 async 是为了背压口径一致）。"""
@@ -132,15 +146,15 @@ class OutputRelay:
         now = time.monotonic()
         if self.chars - self._sent_chars < FLUSH_CHARS and now - self._sent_at < FLUSH_SECONDS:
             return
-        self._flush(done=False)
+        await self._flush(done=False)
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """收尾：补一帧 done，让界面知道这批文字到此为止。"""
         if self._closed:
             return
         self._closed = True
         if self.chars:
-            self._flush(done=True)
+            await self._flush(done=True)
 
     def metrics(self) -> dict:
         return {
@@ -149,14 +163,33 @@ class OutputRelay:
             "first_delta_ms": self.first_delta_ms,
         }
 
-    def _flush(self, done: bool) -> None:
+    async def _flush(self, done: bool) -> None:
         tail = self._text[-TAIL_CHARS:]
+        display_text = tail
+        if self._display_hook is not None:
+            # MessageDisplay 钩子：给 displayContent 就替换展示文本，不给/失败
+            # 就照原样展示（上游同口径："emitting original text"）。
+            try:
+                replacement = await self._display_hook(
+                    {
+                        "turn_id": self.task_id,
+                        "message_id": self._message_id,
+                        "index": self._flush_index,
+                        "final": done,
+                        "delta": tail,
+                    }
+                )
+            except Exception:
+                replacement = ""
+            if replacement:
+                display_text = replacement
+        self._flush_index += 1
         LiveFeed.publish(
             self.task_id,
             {
                 "task_id": self.task_id,
                 "node": self.node,
-                "text": tail,
+                "text": display_text,
                 "chars": self.chars,
                 "truncated": len(self._text) > len(tail),
                 "done": done,

@@ -53,6 +53,30 @@
   SubagentStop 路径 → 1 红；摘 StopFailure 路径 → 2 红；write_transcript 不写文件 → 7 红；
   去掉非字符串 coercion → 1 红，红集合均实测），相邻钩子/代理套件 **73 passed**。
 
+- **MessageDisplay 钩子（#306）**：对齐上游 MessageDisplay 事件——每批流式输出展示给
+  用户时触发，仅展示层：落库的消息与模型上下文一字不改。上游语义（逐字取证自
+  `claude.uniq.txt`）：载荷含 `turn_id` / `message_id` / `index` / `final` / `delta`
+  五字段，输出 `displayContent`（从 `hookSpecificOutput` 读）替换展示文本，省略则照原
+  样展示，钩子抛异常时回落原文（"emitting original text"），非阻断（不在 BLOCKING_EVENTS）。
+  1. **`hooks.py` 注册与解析**：`HOOK_EVENTS` 加 `message_display`，`EVENT_ALIASES` 加
+     `MessageDisplay` 别名；`HookResult` 加 `display_content` 字段，`as_dict` 按非空串
+     序列化 `display_content_chars`；`parse_hook_output` 只认字符串类型的 `displayContent`
+     ——非字符串是写错的钩子，把它读成"要替换"等于让一次错型变成一次静默的界面篡改。
+  2. **`live.py` OutputRelay 触发点**：`_flush` 与 `close` 改为 async，每帧展示前调用
+     `display_hook` 回调，传五字段载荷（`index` 用 `_flush_index` 递增、`message_id` 用
+     每 relay 唯一 uuid4），返回非空串就替换展示文本，空串或异常回落原文。无钩子时
+     `_make_relay` 传 `display_hook=None`，`_flush` 走纯发布路径零开销。
+  3. **`graph.py` 接线**：`_make_relay` 检查 `self.hooks` 非空且注册了 `message_display`
+     才挂回调，回调跑 `hooks.run("message_display", node, payload)`，取第一个
+     `display_content` 非空的 HookResult；三处 `relay.close()` 改为 `await relay.close()`。
+  判据 `services/api/tests/test_message_display_v306.py`（16 例：事件注册与别名、非阻断
+  地位、`parse_hook_output` 的 displayContent 类型校验（hookSpecificOutput / 顶层 /
+  非字符串拒绝 / 空串省略 / 缺席不替换）、HookResult 组装与 as_dict 序列化、OutputRelay
+  无钩子发布原文 / 有钩子替换 / 钩子失败回落 / 空返回保原文 / index 递增、端到端
+  `_call_adapter` 有钩子替换帧与无钩子保原文），变异 3/3 红（拔 displayContent 解析 →
+  3 红；拔钩子触发 → 3 红；拔文本替换 → 2 红，红集合均实测），相邻钩子/流式套件
+  **57 passed**。
+
 - **思考强度（effort）五档裁决与三路下发（effort 批）**：Claude Code 的 thinking-effort
   系统是"本轮思考强度"的一整套裁决与下发链路，从用户写的档位词、模型封顶、关键词升档、
   thinking 关断回落，到最后落在模型载荷、提示词占位符、子进程环境变量三条路上。这批把

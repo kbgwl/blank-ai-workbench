@@ -85,6 +85,10 @@ HOOK_EVENTS = (
     # 有了这两个事件，用户可以自己决定副本建在哪（远端、快照、专用卷）。
     "worktree_create",
     "worktree_remove",
+    # MessageDisplay：每批流式输出展示给用户时触发。仅展示层——落库的消息与模型
+    # 看到的原文一字不改。钩子给 displayContent 就替换展示文本，不给就照原样展示。
+    # 非阻断（不在 BLOCKING_EVENTS）：它的输出不改变执行，只改界面看到什么。
+    "message_display",
 )
 # 只有这些事件可以阻止后续动作；其余是通知性质。
 # 提交事件在 Claude 的阻断集合里（UserPromptSubmit/UserPromptExpansion 同一族）：
@@ -137,6 +141,7 @@ EVENT_ALIASES: dict[str, str] = {
     "SubagentStop": "subagent_stop",
     "WorktreeCreate": "worktree_create",
     "WorktreeRemove": "worktree_remove",
+    "MessageDisplay": "message_display",
 }
 
 # StopFailure 的匹配面：上游 matcher 按载荷里的 ``error`` 分类比对，取值就这十三个。
@@ -452,6 +457,9 @@ class HookResult:
     watch_paths: list[str] = field(default_factory=list)
     # reloadSkills（bool，只认 true）：重新发现 Skill 目录并刷新会话目录。
     reload_skills: bool = False
+    # displayContent（string）：MessageDisplay 钩子替换展示文本（#306）。
+    # 只展示层生效——落库消息与模型上下文不受影响。空串等于没替换，照原样展示。
+    display_content: str = ""
     # 这条结果是后台跑完的（配置里 async:true）。审计时读它，
     # 否则"钩子跑完了、但模型没等它"这件事在时间线上看不出来。
     background: bool = False
@@ -504,6 +512,8 @@ class HookResult:
             body["watch_paths_count"] = len(self.watch_paths)
         if self.reload_skills:
             body["reload_skills"] = True
+        if self.display_content:
+            body["display_content_chars"] = len(self.display_content)
         if self.background:
             body["async"] = True
         if self.exit_code is not None:
@@ -633,6 +643,13 @@ def parse_hook_output(text: str) -> dict:
         reload_skills = parsed.get("reloadSkills")
     if reload_skills is True:
         body_out["reload_skills"] = True
+    # displayContent（MessageDisplay 钩子输出，对齐上游 schema）：只认字符串——
+    # 非字符串是写错的钩子，把它读成"要替换"等于让一次错型变成一次静默的界面篡改。
+    display = body.get("displayContent")
+    if not isinstance(display, str):
+        display = parsed.get("displayContent")
+    if isinstance(display, str) and display.strip():
+        body_out["display_content"] = display.strip()[:MAX_CONTEXT]
     return body_out
 
 
@@ -1288,6 +1305,7 @@ class HookRunner:
             initial_user_message=str(parsed.get("initial_user_message") or ""),
             watch_paths=list(parsed.get("watch_paths") or []),
             reload_skills=bool(parsed.get("reload_skills")),
+            display_content=str(parsed.get("display_content") or ""),
             exit_code=exit_code,
         )
 

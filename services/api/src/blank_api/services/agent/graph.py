@@ -1316,6 +1316,25 @@ class AgentSession:
         )
         return response, accumulate_usage(usage)
 
+    async def _make_relay(self, node: str) -> OutputRelay:
+        """构造流式输出的攒批器，挂上 MessageDisplay 钩子（#306）。
+
+        钩子每帧展示前跑一次：给 displayContent 就替换展示文本，不给/失败就
+        照原样。仅展示层——落库消息与模型上下文不受影响。没有 message_display
+        钩子时返回不挂回调的 relay，_flush 走纯发布路径。
+        """
+        async def display_hook(payload: dict) -> str:
+            results = await self.hooks.run("message_display", node, payload)
+            for result in results:
+                if result.display_content:
+                    return result.display_content
+            return ""
+
+        has_hook = bool(self.hooks and self.hooks.hooks.get("message_display"))
+        return OutputRelay(
+            self.context.task_id, node, display_hook=display_hook if has_hook else None
+        )
+
     async def _call_adapter(
         self,
         adapter: ModelAdapter,
@@ -1350,7 +1369,7 @@ class AgentSession:
         retries = 0
         transient = 0
         while True:
-            relay = OutputRelay(self.context.task_id, node)
+            relay = await self._make_relay(node)
             effects_before = self.tool_effects
             try:
                 response = await adapter.bind_tools_stream(
@@ -1358,7 +1377,7 @@ class AgentSession:
                 )
             except ModelError as error:
                 if relay.chunks:
-                    relay.close()
+                    await relay.close()
                     raise
                 if _rate_limit_may_retry(error, retries):
                     retries += 1
@@ -1391,7 +1410,7 @@ class AgentSession:
                 )
             except httpx.HTTPError as error:
                 if relay.chunks:
-                    relay.close()
+                    await relay.close()
                     raise
                 await self.recorder.add(
                     "model.stream_fallback",
@@ -1402,7 +1421,7 @@ class AgentSession:
                 return await self._call_non_stream(
                     adapter, specs, chat, node, role, effort=effort, thinking=thinking
                 )
-            relay.close()
+            await relay.close()
             if relay.chunks:
                 # 一条持久事件记清楚"这次确实流了、首字多久"。stream_output 要不要留着，
                 # 判断依据就是这些数字，而不是感觉。

@@ -262,7 +262,7 @@ async def test_relay_sends_tails_not_full_text():
     assert first["text"] == "a" * 200
     assert first["done"] is False
 
-    relay.close()
+    await relay.close()
     last = queue.get_nowait()
     # done 帧让界面知道这一屏说完了，可以清掉
     assert last["done"] is True
@@ -277,7 +277,7 @@ async def test_relay_keeps_only_the_tail():
 
     for _ in range(10):
         await relay("x" * 200)  # 累计 2000 字，超过尾窗
-    relay.close()
+    await relay.close()
 
     frames = []
     while not queue.empty():
