@@ -90,9 +90,10 @@ UNSUPPORTED_FIELDS = (
 )
 
 # Skill 侧的"不支持"清单：比 UNSUPPORTED_FIELDS 少了 agent 与 background——
-# 这两个字段 Skill 已移植（对齐上游 lme 的 agent/background，见 #303），
-# 命令侧仍留在 UNSUPPORTED_FIELDS（命令的 agent/background 在输入管道，
-# expand_user_input 不是工具处理器，本批不实现）。
+# 这两个字段 Skill 已移植（对齐上游 lme 的 agent/background，见 #303）。
+# 命令侧同样已移植（见 #311）：命令的 agent/background 走输入管道
+# （expand_user_input 的 info），运行时从 expansion 读出后派发子代理，
+# 对应的 COMMAND_UNSUPPORTED_FIELDS 在 commands_defs.py。
 SKILL_UNSUPPORTED_FIELDS = tuple(
     key for key in UNSUPPORTED_FIELDS if key not in ("agent", "background")
 )

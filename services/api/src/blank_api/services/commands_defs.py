@@ -71,6 +71,14 @@ EXPANSION_PAYLOAD_KEYS: tuple[str, ...] = (
     "prompt",
 )
 
+# 命令侧的"不支持"清单：比 UNSUPPORTED_FIELDS 少了 agent 与 background——
+# 这两个字段命令已移植（对齐上游 lme 的 agent/background，见 #311），
+# 命令的 agent/background 走输入管道（expand_user_input 的 info），
+# 运行时从 expansion 读出后派发子代理。
+COMMAND_UNSUPPORTED_FIELDS: tuple[str, ...] = tuple(
+    key for key in UNSUPPORTED_FIELDS if key not in ("agent", "background")
+)
+
 
 def expansion_payload(info: dict | None) -> dict:
     """从 `expand_user_input` 的 info 里取出上游 UserPromptExpansion 的载荷。
@@ -101,6 +109,12 @@ class CommandDefinition:
     warnings: tuple[str, ...] = ()
     # Claude 的 ``effort``：展开这条命令的正文时用的思考强度。空串 = 不声明。
     effort: str = ""
+    # agent：命令声明以哪个子代理类型派发执行正文（对齐上游 ``lme`` 的
+    # ``O.agent!=null?String(O.agent):void 0``）。空串 = 不声明，走常规注入。
+    # background：是否后台派发子代理（对齐上游 ``m1(O.background)``，只认 true）。
+    # 两者任一非默认值时，展开正文派给子代理而不是注入主代理循环。
+    agent: str = ""
+    background: bool = False
     # 插件来源时才有：${CLAUDE_PLUGIN_ROOT} 与 ${CLAUDE_PLUGIN_DATA} 的替换值。
     # 非插件命令保持空串，substitute_paths 不展开这两个占位符（与上游
     # ``C9`` 的 ``n.source`` 门控一致）。
@@ -126,6 +140,8 @@ class CommandDefinition:
             "path": self.path,
             "ignored": list(self.ignored),
             "effort": self.effort,
+            "agent": self.agent,
+            "background": self.background,
             "plugin_root": self.plugin_root,
             "plugin_data": self.plugin_data,
         }
@@ -295,7 +311,29 @@ def _definition(
             warnings.append(f"命令文件 {mask_path(str(path))} 的 effort {parsed_effort.warning}")
         else:
             command_effort = parsed_effort.level
-    ignored = tuple(key for key in UNSUPPORTED_FIELDS if meta.get(key) is not None)
+    # agent：命令声明以哪个子代理类型派发执行正文。上游 ``lme`` 口径：
+    # ``O.agent!=null?String(O.agent):void 0``——null/缺省留空，非空转字符串。
+    # 与 Skill 侧同一句：非字符串但非 null 的告警丢弃，名字写错在派发时报错。
+    command_agent = ""
+    raw_agent = meta.get("agent")
+    if raw_agent is not None:
+        if isinstance(raw_agent, str) and raw_agent.strip():
+            command_agent = raw_agent.strip()
+        else:
+            warnings.append(f"命令文件 {mask_path(str(path))} 的 agent 不是非空字符串，已忽略")
+    # background：命令是否后台派发子代理执行正文。上游 ``lme`` 的 ``m1(O.background)``
+    # 口径：只认 ``true``；``false``/缺省/null 等同不声明。非布尔的告警丢弃。
+    command_background = False
+    raw_background = meta.get("background")
+    if raw_background is not None:
+        parsed_bg, bg_problem = _flag(raw_background, False)
+        if bg_problem:
+            warnings.append(
+                f"命令文件 {mask_path(str(path))} 的 background {bg_problem}"
+            )
+        else:
+            command_background = parsed_bg
+    ignored = tuple(key for key in COMMAND_UNSUPPORTED_FIELDS if meta.get(key) is not None)
     return (
         CommandDefinition(
             name=name,
@@ -313,6 +351,8 @@ def _definition(
             ignored=ignored,
             warnings=tuple(warnings),
             effort=command_effort,
+            agent=command_agent,
+            background=command_background,
             plugin_root=str(plugin_root) if plugin_root else "",
             plugin_data=str(plugin_data) if plugin_data else "",
         ),
@@ -484,6 +524,11 @@ def expand_user_input(
         # 本轮后续步骤的工具池按这份收窄（对齐上游 allowedTools/disallowedTools）。
         "allowed_tools": list(entry.get("allowed_tools") or ()),
         "disallowed_tools": list(entry.get("disallowed_tools") or ()),
+        # 命令声明的派发方式：运行时从 expansion 里读出 agent/background，
+        # 两者任一非默认值时把展开正文派给子代理而不是注入主代理循环。
+        "agent": str(entry.get("agent") or ""),
+        "background": bool(entry.get("background") or False),
+
     }
     if entry.get("path"):
         info["path"] = mask_path(str(entry["path"]))

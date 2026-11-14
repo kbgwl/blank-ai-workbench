@@ -90,7 +90,7 @@ from blank_api.services.notes import NoteStore
 from blank_api.services.safety import SafetyPolicy
 from blank_api.services.settings import SettingsStore
 from blank_api.services.shell_env import capture as capture_shell
-from blank_api.services.subagent import SubAgentRunner
+from blank_api.services.subagent import DEFAULT_STEPS, SubAgentRequest, SubAgentRunner
 from blank_api.services.threads import history_for, session_goal_for, summarize_history
 from blank_api.services.models.base import ModelAdapter, ModelError
 from blank_api.services.permissions import MODE_DEFAULT, PermissionPolicy
@@ -98,6 +98,7 @@ from blank_api.services.tools import TEAM_ADMIN_TOOL_NAMES, SkillCatalog, build_
 from blank_api.services.tools.base import ToolContext
 from blank_api.services.tools.file_state import FileStateCache
 from blank_api.services.tools.gateway import ToolGateway
+from blank_api.services.tools.delegate import _apply_definition, _resolve_agent
 from blank_api.services.sandbox import SnapshotStore
 from blank_api.services.sandbox.tiers import (
     TierDowngrade,
@@ -1016,6 +1017,89 @@ class AgentRuntime:
             suppressed=True,
         )
 
+    async def _dispatch_command_as_subagent(
+        self, scope: _RunScope, prompt: _PromptDecision
+    ) -> dict | None:
+        """斜杠命令声明了 ``agent`` / ``background`` 时，把正文派给子代理执行。
+
+        对齐上游 ``vQt`` / ``EQt``：命令声明了派发方式就不再注入主代理循环，
+        而是派一个子代理跑展开后的正文。返回证据包 dict 时表示已派发（调用方
+        应直接返回、不再走 ``graph.ainvoke``）；返回 None 表示没声明，按常规
+        路径继续。
+
+        未知 agent 类型 fail-closed：宁可明确报错，也不静默降级到常规注入。
+        """
+        expansion = scope.expansion
+        if not expansion:
+            return None
+        command_agent = str(expansion.get("agent") or "").strip()
+        command_background = bool(expansion.get("background") or False)
+        if not command_agent and not command_background:
+            return None
+
+        request = SubAgentRequest(
+            goal=prompt.goal_for_model or "",
+            max_steps=DEFAULT_STEPS,
+            label=f"command:{str(expansion.get('command_name') or '')}",
+        )
+        definition, error = _resolve_agent(scope.session.context, command_agent)
+        if error:
+            await self._finish(
+                scope, "failed", summary="", reason=error, steps=0
+            )
+            return await build_evidence(scope.store, scope.task_id)
+        _apply_definition(request, definition)
+
+        await scope.recorder.add(
+            "command.dispatched",
+            "receive_task",
+            {
+                "command": str(expansion.get("command_name") or ""),
+                "agent": request.agent_name,
+                "background": command_background,
+                "goal_chars": len(request.goal),
+            },
+        )
+
+        if command_background:
+            agent_id, error_result = await scope.subagents.spawn_background(request)
+            if error_result is not None:
+                await self._finish(
+                    scope,
+                    "failed",
+                    summary="",
+                    reason=error_result.error or "后台子代理启动失败",
+                    steps=0,
+                )
+                return await build_evidence(scope.store, scope.task_id)
+            await self._finish(
+                scope,
+                "succeeded",
+                summary=f"已在后台派出子代理 {agent_id} 执行命令。",
+                reason="background_dispatched",
+                steps=0,
+            )
+            return await build_evidence(scope.store, scope.task_id)
+
+        result = await scope.subagents(request)
+        if not result.ok:
+            await self._finish(
+                scope,
+                "failed",
+                summary="",
+                reason=result.error or "子代理执行命令失败",
+                steps=result.steps,
+            )
+            return await build_evidence(scope.store, scope.task_id)
+        await self._finish(
+            scope,
+            "succeeded",
+            summary=result.summary,
+            reason="command_subagent_succeeded",
+            steps=result.steps,
+        )
+        return await build_evidence(scope.store, scope.task_id)
+
     async def _close_hooks(self, scope: _RunScope) -> None:
         """任务收尾：给后台钩子一个有界窗口，并如实记下没等到 / 没送到的那些。
 
@@ -1132,6 +1216,12 @@ class AgentRuntime:
                 "snapshot_id": session.snapshot_id,
             },
         )
+        # 命令侧 agent/background 派发（#311）：声明了派发方式的斜杠命令不再
+        # 注入主代理循环，而是派给子代理执行。放在 task.started 之后、会话钩子
+        # 之前：任务已开始，但主代理会话没启动（session_start 不触发）。
+        dispatched = await self._dispatch_command_as_subagent(scope, prompt)
+        if dispatched is not None:
+            return dispatched
         # 会话生命周期钩子：对标 Codex 的 session_start。
         # user_prompt_submit 不在这里——它在 task.started 之前就跑完了（#123），
         # 因为它的决定是"这条正文进不进模型"，晚一步就已经进了。

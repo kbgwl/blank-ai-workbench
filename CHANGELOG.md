@@ -1,6 +1,35 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理
+
+- **命令侧 `agent` / `background` 派发子代理（#311）**：对齐 Claude Code 的命令
+  frontmatter 语义——命令声明了 `agent`（子代理类型名）或 `background: true` 时，
+  展开出的正文不再注入主代理循环，而是派给一个子代理执行。`agent` 决定用哪个定义，
+  `background` 决定前台等结果还是后台跑。两者都没声明时走常规注入。这是 #303 Skill
+  侧的镜像：Skill 的 agent/background 走工具处理器，命令的走输入管道。
+  上游锚点：`vQt(e,n){if(n||_c()||Te())return!1;return e.background??!0}` 判定是否
+  派发，`EQt` 后台派发，`agent` 决定子代理类型。
+  1. **声明携带**：`commands_defs.py` 的 `CommandDefinition` 新增 `agent`（str，默认
+     空串）与 `background`（bool，默认 False）字段，`as_entry()` 一并携带；
+     新增 `COMMAND_UNSUPPORTED_FIELDS`，从 `UNSUPPORTED_FIELDS` 里去掉 `agent` 与
+     `background`——命令侧已支持，不再当"不支持"字段告警。frontmatter 解析对
+     `agent: null` 留空不告警，非字符串告警丢弃；`background` 只认布尔，非法值告警
+     丢弃。
+  2. **展开管道**：`expand_user_input` 的 `info` 载荷携带 `agent` 与 `background`
+     （未声明时为默认值，键仍在），运行时从 `request.expansion` 读出。
+  3. **运行时派发**：`runtime.py` 新增 `_dispatch_command_as_subagent`，在
+     `task.started` 之后、会话钩子之前调用。声明了 `agent` 或 `background` 时，
+     用 `_resolve_agent` 解析子代理定义（未知类型 fail-closed，不静默降级），
+     `_apply_definition` 挂上定义字段，前台走 `SubAgentRunner.__call__`、后台走
+     `spawn_background`。返回证据包 dict 时调用方直接返回，不再走 `graph.ainvoke`；
+     返回 None 时按常规路径继续。
+  判据 `services/api/tests/test_command_agent_background_v311.py`（23 例：定义字段
+  默认值/携带、frontmatter 解析各档（agent 字符串/null/非字符串、background
+  true/false/非法、两者同声明）、as_entry 携带、expand info 携带与默认值、不支持
+  清单排除、运行时前台派发/后台派发/无声明不派发/未知类型 fail-closed、_resolve_agent
+  行为），变异 5/5 红（摘派发调用 → 前台/后台派发红；摘解析块 → 解析红；摘
+  fail-closed → fail-closed 红；摘 info 键 → 展开红；摘无声明守卫 → 不派发红，
+  红集合均实测），相邻命令/技能/代理/子代理套件连同本批 **128 passed**。
 
 - **命令/Skill 的 `allowed-tools` / `disallowed-tools` 工具池收窄（#310）**：对齐上游
   命令 frontmatter 与 Skill 元数据的 `allowedTools` / `disallowedTools` 语义——声明了
