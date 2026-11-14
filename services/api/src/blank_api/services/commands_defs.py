@@ -480,6 +480,10 @@ def expand_user_input(
         "command_args": args,
         "command_source": str(entry.get("source") or ""),
         "prompt": str(text),
+        # 命令声明的工具约束：运行时从 expansion 里取出初始化 turn_state，
+        # 本轮后续步骤的工具池按这份收窄（对齐上游 allowedTools/disallowedTools）。
+        "allowed_tools": list(entry.get("allowed_tools") or ()),
+        "disallowed_tools": list(entry.get("disallowed_tools") or ()),
     }
     if entry.get("path"):
         info["path"] = mask_path(str(entry["path"]))

@@ -419,6 +419,48 @@ class ToolGateway:
                 started,
                 deny(risk, "scenario_excluded", outcome.message),
             )
+        # 命令/Skill 声明的工具约束：turn_state 里带了 allowed/disallowed 就硬拦。
+        # 放在场景闸门之后、路径闸门之前：这是"这份提示文件声明了不准用"，与场景
+        # 同级的硬禁，审批放行也救不回来。模型凭记忆硬调一个被禁工具时，答案必须
+        # 是"被拒绝"，而不是"照常跑了"。
+        turn_state = getattr(context, "turn_state", None)
+        if isinstance(turn_state, dict):
+            allowed = set(turn_state.get("skill_allowed_tools") or ())
+            disallowed = set(turn_state.get("skill_disallowed_tools") or ())
+            if allowed and name not in allowed:
+                risk = self.tools[name].resolve_risk(arguments) if name in self.tools else "high"
+                outcome = ToolOutcome(
+                    ok=False,
+                    status="denied",
+                    message=f"当前命令/Skill 的 allowed-tools 不含 {name}，不能使用该工具。",
+                )
+                return await self._finish(
+                    name,
+                    arguments,
+                    outcome,
+                    context,
+                    node,
+                    risk,
+                    started,
+                    deny(risk, "skill_allowed_blocked", outcome.message),
+                )
+            if "*" in disallowed or name in disallowed:
+                risk = self.tools[name].resolve_risk(arguments) if name in self.tools else "high"
+                outcome = ToolOutcome(
+                    ok=False,
+                    status="denied",
+                    message=f"当前命令/Skill 的 disallowed-tools 包含 {name}，不能使用该工具。",
+                )
+                return await self._finish(
+                    name,
+                    arguments,
+                    outcome,
+                    context,
+                    node,
+                    risk,
+                    started,
+                    deny(risk, "skill_disallowed_blocked", outcome.message),
+                )
         # 场景的文件类型闸门：文档场景能写 .md，不能写 .py（v164 §4）。
         #
         # 放在工具分发之前、审批之前：这类拒绝是"这个场景根本不允许"，不是"这次没批"。

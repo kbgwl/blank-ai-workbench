@@ -1,6 +1,35 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄
+
+- **命令/Skill 的 `allowed-tools` / `disallowed-tools` 工具池收窄（#310）**：对齐上游
+  命令 frontmatter 与 Skill 元数据的 `allowedTools` / `disallowedTools` 语义——声明了
+  工具约束之后，本轮后续步骤的**可见工具表**与**可执行工具池**都按这份收窄。此前声明
+  写了只进审计，模型照样看见、照样能调，约束形同虚设。这批把"声明→收窄→执行硬拦"
+  整条链路接通，两层各自独立、互不替代。
+  1. **声明携带**：`commands_defs.py` 的 `expand_user_input` 在命令 frontmatter 解析
+     时把 `allowed_tools` / `disallowed_tools` 放进 `info` 载荷（未声明时为空列表，键仍在）；
+     Skill 侧的 `allowed_tools` / `disallowed_tools` 由 SkillCatalog 解析携带。
+  2. **用户侧入口（`/name` 展开）**：`runtime.py` 新增 `_turn_state_from_expansion`，从
+     `request.expansion` 取两份列表构造 `turn_state` 初始值，传入 `ToolContext`。用户敲
+     `/name args` 后，本轮后续步骤的工具池按这份收窄。
+  3. **模型侧入口（`skill` 工具）**：`skills.py` 的 `_skill` 处理器在写 `skill_model`
+     之后，把 Skill 声明的 `allowed_tools` / `disallowed_tools` 写进 `context.turn_state`。
+     模型调用 skill 加载正文后，本轮后续步骤按这份收窄。
+  4. **可见层**：`graph.py` 在下发工具 schema 前调用 `filter_specs_by_turn_state`，按
+     `turn_state` 过滤 `specs`——被禁工具模型**看不见**。
+  5. **执行层**：`gateway.py` 的 `execute` 在场景闸门之后、路径闸门之前，按 `turn_state`
+     硬拦——不在 `allowed` 集合里 → `denied`；在 `disallowed` 集合里或 `disallowed`
+     含 `*` → `denied`。审批放行也救不回来，这是"这份声明不准用"的硬禁，与场景同级。
+  两层独立生效：可见层管"模型看得见什么"，执行层管"模型调得动什么"，任一层被摘掉，
+  另一层照常兜底。`*` 在 disallowed 里表示禁用全部工具。
+  判据 `services/api/tests/test_command_tool_restrictions_v310.py`（20 例：命令展开载荷
+  携带工具约束、运行时从 expansion 构造 turn_state、skill 处理器写 turn_state、可见层
+  specs 过滤、执行层 allowed 硬拦 / disallowed 硬拦 / `*` 全禁 / 无约束放行、两层独立
+  生效的正反两路），变异 5/5 红（摘网关执行层硬拦 → 3 红；摘 `filter_specs_by_turn_state`
+  调用 → 2 红；摘运行时 expansion→turn_state 接线 → 1 红；摘 skill 处理器 turn_state
+  写入 → 4 红；摘命令展开载荷工具键 → 5 红，红集合均实测），相邻命令/技能套件
+  **295 passed**、相邻网关/代理/权限套件 **231 passed**。
 
 - **SessionStart 钩子输出四字段（#304）**：对齐上游 `Sn()` 校验函数定义的
   SessionStart 钩子输出四字段，此前钩子作者写出这四个字段只会被静默丢掉——

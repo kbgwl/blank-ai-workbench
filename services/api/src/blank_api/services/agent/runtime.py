@@ -738,6 +738,11 @@ class AgentRuntime:
             sandbox_tier=sandbox.tier,
             isolation_profile=isolation.profile_name if isolation is not None else "",
             file_state=file_state,
+            # 斜杠命令展开带来的工具约束：expansion 里有 allowed_tools /
+            # disallowed_tools 就写进 turn_state，本轮工具池按这份收窄。
+            # 对齐上游命令的 allowedTools/disallowedTools——用户敲 /name 后，
+            # 后续步骤看得见的工具与能执行的工具都受这份约束。
+            turn_state=_turn_state_from_expansion(request.expansion),
         )
         session = AgentSession(
             adapter=request.adapter,
@@ -1858,6 +1863,25 @@ def _goal_id_of(*specs: object) -> str:
             if value:
                 return value
     return ""
+
+
+def _turn_state_from_expansion(expansion: dict | None) -> dict:
+    """从斜杠命令展开载荷里提取工具约束，构造 turn_state 的初始值。
+
+    expansion 里的 ``allowed_tools`` / ``disallowed_tools`` 是 expand_user_input
+    从命令 frontmatter 解析来的。没有声明时返回空 dict——运行时不做任何收窄，
+    与"没有约束"等价。
+    """
+    if not isinstance(expansion, dict):
+        return {}
+    state: dict = {}
+    allowed = list(expansion.get("allowed_tools") or ())
+    disallowed = list(expansion.get("disallowed_tools") or ())
+    if allowed:
+        state["skill_allowed_tools"] = tuple(allowed)
+    if disallowed:
+        state["skill_disallowed_tools"] = tuple(disallowed)
+    return state
 
 
 def resolve_status(result: dict) -> str:

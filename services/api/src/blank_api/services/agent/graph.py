@@ -197,6 +197,30 @@ def tool_profile(tier: str) -> str:
     """
     return PROFILE_LEAN if tier == LIGHT else PROFILE_FULL
 
+
+def filter_specs_by_turn_state(specs, turn_state: dict) -> list:
+    """按 turn_state 里的命令/Skill 工具约束过滤工具表。
+
+    ``skill_allowed_tools`` 非空时只保留交集；``skill_disallowed_tools`` 再减去。
+    ``*`` 出现在禁止项里按"全部禁用"处理（对齐子代理 _child_allowed_tools 语义）。
+    没有约束时原样返回，不做任何拷贝以外的操作。
+    """
+    allowed = set(turn_state.get("skill_allowed_tools") or ())
+    disallowed = set(turn_state.get("skill_disallowed_tools") or ())
+    if not allowed and not disallowed:
+        return specs
+    if "*" in disallowed:
+        return []
+    result = []
+    for spec in specs:
+        name = getattr(spec, "name", "")
+        if allowed and name not in allowed:
+            continue
+        if name in disallowed:
+            continue
+        result.append(spec)
+    return result
+
 _SYSTEM_HEAD = (
     "你是空白格 AI 操作台的执行 Agent，工作在受限工作区内。\n"
     # 先问再干排在最前：这一行里最贵的浪费不是"每步多花一点"，是猜错了整段重做。
@@ -1269,7 +1293,9 @@ class AgentSession:
         # 工具表跟着档位走。这里放在压缩之后、真正发请求之前：可见工具数会改变
         # 上下文体积，但改的是"下发的 schema"，不是已经算好的对话 token。
         await self._scope_tools(node, tier)
-        specs = self.gateway.specs()
+        specs = filter_specs_by_turn_state(
+            self.gateway.specs(), getattr(self.context, "turn_state", {}) or {}
+        )
         try:
             response = await self._call_adapter(
                 adapter, specs, chat, node, role,

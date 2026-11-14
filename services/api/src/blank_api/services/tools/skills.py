@@ -401,6 +401,18 @@ async def _skill(context: ToolContext, arguments: dict) -> ToolOutcome:
         turn_state = getattr(context, "turn_state", None)
         if isinstance(turn_state, dict):
             turn_state["skill_model"] = skill_model
+    # Skill 声明的工具约束：本次调用之后，本轮后续步骤的工具池按这份收窄。
+    # 对齐上游 SkillTool 的 allowedTools / disallowedTools——模型加载正文后，
+    # 看得见的工具与能执行的工具都受这份约束。
+    skill_allowed = tuple(entry.get("allowed_tools") or ())
+    skill_disallowed = tuple(entry.get("disallowed_tools") or ())
+    if skill_allowed or skill_disallowed:
+        turn_state = getattr(context, "turn_state", None)
+        if isinstance(turn_state, dict):
+            if skill_allowed:
+                turn_state["skill_allowed_tools"] = skill_allowed
+            if skill_disallowed:
+                turn_state["skill_disallowed_tools"] = skill_disallowed
     body = render_skill(
         entry["instructions"],
         args,
