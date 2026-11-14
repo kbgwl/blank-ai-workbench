@@ -141,6 +141,8 @@ def render_prompt(
     session_id: str = "",
     skill_dir: str = "",
     effort: str = "",
+    plugin_root: str = "",
+    plugin_data: str = "",
 ) -> str:
     """Expand one prompt file: arguments first, then Claude's placeholders."""
     clean = str(args) if args is not None and str(args) != "" else None
@@ -151,6 +153,8 @@ def render_prompt(
         session_id=session_id,
         skill_dir=skill_dir,
         effort=effort,
+        plugin_root=plugin_root,
+        plugin_data=plugin_data,
     )
 
 
@@ -161,8 +165,10 @@ def substitute_paths(
     session_id: str = "",
     skill_dir: str = "",
     effort: str = "",
+    plugin_root: str = "",
+    plugin_data: str = "",
 ) -> str:
-    """Replace Claude's directory/session/effort placeholders.
+    """Replace Claude's directory/session/effort/plugin placeholders.
 
     ``$CLAUDE_SKILL_DIR`` only applies to a file whose name is ``SKILL.md``
     (Claude passes a base directory for those and nothing for plain commands).
@@ -171,12 +177,22 @@ def substitute_paths(
     raw request: upstream substitutes the value after the model cap and the
     thinking-disabled clamp have been applied, so a body written for Claude
     that says "think at ${CLAUDE_EFFORT}" gets the level actually granted.
+
+    ``${CLAUDE_PLUGIN_ROOT}`` is expanded whenever a plugin root is provided
+    (upstream ``C9`` always rewrites it). ``${CLAUDE_PLUGIN_DATA}`` is only
+    expanded when plugin_data is non-empty — upstream gates it on
+    ``n.source`` (plugin-sourced components only), so a non-plugin body that
+    mentions it keeps the literal text.
     """
     result = str(text)
     if skill_dir:
         result = result.replace("${CLAUDE_SKILL_DIR}", _posix(skill_dir))
     if project_dir:
         result = result.replace("${CLAUDE_PROJECT_DIR}", _posix(project_dir))
+    if plugin_root:
+        result = result.replace("${CLAUDE_PLUGIN_ROOT}", _posix(plugin_root))
+    if plugin_data:
+        result = result.replace("${CLAUDE_PLUGIN_DATA}", _posix(plugin_data))
     if session_id:
         result = result.replace("${CLAUDE_SESSION_ID}", str(session_id))
     if effort:

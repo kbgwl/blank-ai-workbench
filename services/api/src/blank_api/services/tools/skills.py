@@ -66,6 +66,8 @@ def render_skill(
     session_id: str = "",
     skill_dir: str = "",
     effort: str = "",
+    plugin_root: str = "",
+    plugin_data: str = "",
 ) -> str:
     """把调用参数交给 Skill：与 Claude 的 ``qW`` 同一套占位符规则。"""
     return render_prompt(
@@ -76,6 +78,8 @@ def render_skill(
         session_id=session_id,
         skill_dir=skill_dir,
         effort=effort,
+        plugin_root=plugin_root,
+        plugin_data=plugin_data,
     )
 
 
@@ -136,6 +140,8 @@ def preload_skills(
             session_id=session_id,
             skill_dir=entry["base_dir"],
             effort=effort_for_prompt(entry.get("effort") or effort),
+            plugin_root=str(entry.get("plugin_root") or ""),
+            plugin_data=str(entry.get("plugin_data") or ""),
         )
         loaded.append((name, skill_loading_header(name) + "\n\n" + body))
     return loaded, problems
@@ -204,6 +210,10 @@ class SkillCatalog:
                 # Skill 声明的 background：True 时后台派发子代理，False/缺省前台。
                 # 对齐上游 lme 的 background 字段与 SkillTool 的 vQt 判断。
                 "background": bool(entry.get("background", False)),
+                # 插件来源的路径占位符：正文里的 ${CLAUDE_PLUGIN_ROOT} /
+                # ${CLAUDE_PLUGIN_DATA} 在 handler 里交给 substitute_paths 展开。
+                "plugin_root": str(entry.get("plugin_root") or ""),
+                "plugin_data": str(entry.get("plugin_data") or ""),
             }
         self.loaded: set[str] = set()
         self.activated: set[str] = set()
@@ -403,6 +413,10 @@ async def _skill(context: ToolContext, arguments: dict) -> ToolOutcome:
         effort=effort_for_prompt(
             entry.get("effort") or getattr(context, "turn_state", {}).get("effort", "")
         ),
+        # 插件来源的 Skill 携带 plugin_root/plugin_data，正文里的
+        # ${CLAUDE_PLUGIN_ROOT} / ${CLAUDE_PLUGIN_DATA} 由 substitute_paths 展开。
+        plugin_root=str(entry.get("plugin_root") or ""),
+        plugin_data=str(entry.get("plugin_data") or ""),
     )
     await _record(context, "skill.invoked", {"skill": name, "has_args": bool(args), "chars": len(body)})
     # agent / background：Skill 声明了就派生子代理执行正文，而不是主线程注入。

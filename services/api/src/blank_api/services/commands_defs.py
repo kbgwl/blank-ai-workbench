@@ -101,6 +101,11 @@ class CommandDefinition:
     warnings: tuple[str, ...] = ()
     # Claude 的 ``effort``：展开这条命令的正文时用的思考强度。空串 = 不声明。
     effort: str = ""
+    # 插件来源时才有：${CLAUDE_PLUGIN_ROOT} 与 ${CLAUDE_PLUGIN_DATA} 的替换值。
+    # 非插件命令保持空串，substitute_paths 不展开这两个占位符（与上游
+    # ``C9`` 的 ``n.source`` 门控一致）。
+    plugin_root: str = ""
+    plugin_data: str = ""
 
     def as_entry(self) -> dict:
         """Shape consumed by ``tools.skills.SkillCatalog``."""
@@ -121,6 +126,8 @@ class CommandDefinition:
             "path": self.path,
             "ignored": list(self.ignored),
             "effort": self.effort,
+            "plugin_root": self.plugin_root,
+            "plugin_data": self.plugin_data,
         }
 
     def as_dict(self) -> dict:
@@ -217,6 +224,7 @@ def _definition(
     *,
     project_root: str | Path | None = None,
     plugin_root: str | Path | None = None,
+    plugin_data: str | Path | None = None,
 ) -> tuple[CommandDefinition | None, list[str], list[str]]:
     named = _name_for(path, base)
     if named is None:
@@ -249,10 +257,13 @@ def _definition(
     if problem:
         warnings.append(f"命令文件 {mask_path(str(path))} 的 allowed-tools {problem}")
     # 对齐上游 lme 的 Se/C9：命令的 allowed-tools 展开 ${CLAUDE_PROJECT_DIR}
-    # （所有层）与 ${CLAUDE_PLUGIN_ROOT}（插件命令），但不展开
-    # ${CLAUDE_SKILL_DIR}——那是 skill 模式（isSkillMode）专属。
+    # （所有层）与 ${CLAUDE_PLUGIN_ROOT} / ${CLAUDE_PLUGIN_DATA}（插件命令），
+    # 但不展开 ${CLAUDE_SKILL_DIR}——那是 skill 模式（isSkillMode）专属。
     # base_dir 传 None，SKILL_DIR 保持字面量。
-    allowed_tools = _tool_placeholders(allowed_tools, None, project_root, plugin_root=plugin_root)
+    allowed_tools = _tool_placeholders(
+        allowed_tools, None, project_root,
+        plugin_root=plugin_root, plugin_data=plugin_data,
+    )
     raw_disallowed = meta.get("disallowed-tools", meta.get("disallowedTools"))
     disallowed_tools, problem = _tool_list(raw_disallowed)
     if problem:
@@ -302,6 +313,8 @@ def _definition(
             ignored=ignored,
             warnings=tuple(warnings),
             effort=command_effort,
+            plugin_root=str(plugin_root) if plugin_root else "",
+            plugin_data=str(plugin_data) if plugin_data else "",
         ),
         [],
         warnings,
@@ -316,6 +329,7 @@ def _layer(
     prefix: str = "",
     project_root: str | Path | None = None,
     plugin_root: str | Path | None = None,
+    plugin_data: str | Path | None = None,
 ) -> None:
     grouped: dict[Path, list[Path]] = {}
     for path in _markdown_files(directory):
@@ -338,6 +352,7 @@ def _layer(
                 source,
                 project_root=project_root,
                 plugin_root=plugin_root,
+                plugin_data=plugin_data,
             )
             discovery.errors.extend(errors)
             discovery.warnings.extend(warnings)
@@ -356,7 +371,16 @@ def _plugin_layers(
     for plugin in catalog.enabled():
         # 插件命令按 ``<plugin>:<command>`` 命名（Claude 的命名空间），
         # 所以留到本地层之后加载也不会与普通命令撞名。
-        # 插件命令的 allowed-tools 可展开 ${CLAUDE_PLUGIN_ROOT}（plugin.path）。
+        # 插件命令的 allowed-tools 可展开 ${CLAUDE_PLUGIN_ROOT}（plugin.path）
+        # 与 ${CLAUDE_PLUGIN_DATA}（<plugin.path>/data/<plugin.name>）。
+        # 上游 Bwe：创建目录是副作用（mkdirSync）。
+        plugin_root_str = plugin.path
+        plugin_data_dir = Path(plugin.path) / "data" / plugin.name
+        try:
+            plugin_data_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        plugin_data_str = str(plugin_data_dir)
         for directory in plugin.component_dirs("commands"):
             _layer(
                 directory,
@@ -364,7 +388,8 @@ def _plugin_layers(
                 discovery,
                 prefix=f"{plugin.name}:",
                 project_root=root,
-                plugin_root=plugin.path,
+                plugin_root=plugin_root_str,
+                plugin_data=plugin_data_str,
             )
 
 
@@ -436,6 +461,8 @@ def expand_user_input(
         session_id=session_id,
         skill_dir=str(entry.get("base_dir") or ""),
         effort=effort_for_prompt(entry.get("effort")),
+        plugin_root=str(entry.get("plugin_root") or ""),
+        plugin_data=str(entry.get("plugin_data") or ""),
     )
     info = {
         "name": name,

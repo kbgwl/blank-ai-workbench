@@ -137,6 +137,11 @@ class SkillDefinition:
     # 上游 ``lme`` 的 ``background``：Skill 是否后台派发子代理执行正文。
     # False = 不声明（等同没写），前台派发或主线程注入。
     background: bool = False
+    # 插件来源时才有：${CLAUDE_PLUGIN_ROOT} 与 ${CLAUDE_PLUGIN_DATA} 的替换值。
+    # 非插件 Skill 保持空串，substitute_paths 不展开这两个占位符（与上游
+    # ``C9`` 的 ``n.source`` 门控一致）。
+    plugin_root: str = ""
+    plugin_data: str = ""
 
     @property
     def conditional(self) -> bool:
@@ -170,6 +175,8 @@ class SkillDefinition:
             "unloadable_guard": self.unloadable_guard,
             "agent": self.agent,
             "background": self.background,
+            "plugin_root": self.plugin_root,
+            "plugin_data": self.plugin_data,
         }
 
     def as_dict(self) -> dict:
@@ -500,6 +507,7 @@ def _tool_placeholders(
     project_root: Path | None,
     *,
     plugin_root: str | Path | None = None,
+    plugin_data: str | Path | None = None,
 ) -> tuple[str, ...]:
     """Expand ``${CLAUDE_*}`` placeholders in allowed-tools (not disallowed-tools).
 
@@ -508,7 +516,9 @@ def _tool_placeholders(
     adds ``${CLAUDE_SKILL_DIR}`` only when building a Skill (``isSkillMode``).
     Paths are normalized to forward slashes so a Windows backslash does not get
     treated as an escape in the resulting tool spec. ``plugin_root`` is the
-    plugin's root directory, available for plugin-sourced components.
+    plugin's root directory, ``plugin_data`` its data directory
+    (``<plugin_root>/data/<plugin_name>``); both only set for plugin-sourced
+    components, matching upstream ``C9``'s ``n.source`` gate on PLUGIN_DATA.
     """
     if not tools:
         return tools
@@ -522,6 +532,9 @@ def _tool_placeholders(
     if plugin_root is not None:
         root = str(plugin_root).replace("\\", "/")
         expanded = [item.replace("${CLAUDE_PLUGIN_ROOT}", root) for item in expanded]
+    if plugin_data is not None:
+        data = str(plugin_data).replace("\\", "/")
+        expanded = [item.replace("${CLAUDE_PLUGIN_DATA}", data) for item in expanded]
     return tuple(expanded)
 
 
@@ -530,6 +543,8 @@ def _definition_from_dir(
     source: str,
     *,
     project_root: Path | None = None,
+    plugin_root: str | Path | None = None,
+    plugin_data: str | Path | None = None,
 ) -> tuple[SkillDefinition | None, list[str], list[str]]:
     """Parse one ``<name>/SKILL.md``. Returns (definition, errors, warnings)."""
     name = directory.name.strip()
@@ -574,7 +589,10 @@ def _definition_from_dir(
     allowed_tools, problem = _tool_list(meta.get("allowed-tools"))
     if problem:
         warnings.append(f"Skill 文件 {mask_path(str(path))} 的 allowed-tools {problem}")
-    allowed_tools = _tool_placeholders(allowed_tools, directory, project_root)
+    allowed_tools = _tool_placeholders(
+        allowed_tools, directory, project_root,
+        plugin_root=plugin_root, plugin_data=plugin_data,
+    )
     raw_disallowed = meta.get("disallowed-tools", meta.get("disallowedTools"))
     disallowed_tools, problem = _tool_list(raw_disallowed)
     if problem:
@@ -679,6 +697,8 @@ def _definition_from_dir(
             unloadable_guard=unloadable_guard,
             agent=skill_agent,
             background=skill_background,
+            plugin_root=str(plugin_root) if plugin_root else "",
+            plugin_data=str(plugin_data) if plugin_data else "",
         ),
         [],
         warnings,
@@ -775,9 +795,21 @@ def discover_skills(root: str | Path, *, env: dict[str, str] | None = None) -> S
     discovery.errors.extend(catalog.errors)
     discovery.warnings.extend(catalog.warnings)
     for plugin in catalog.enabled():
+        # 上游 Bwe：plugin_data 是 <plugin_root>/data/<plugin_name>，
+        # 创建目录是副作用（mkdirSync）。C9 在 n.source 非空时才展开它。
+        plugin_root_str = plugin.path
+        plugin_data_dir = Path(plugin.path) / "data" / plugin.name
+        try:
+            plugin_data_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        plugin_data_str = str(plugin_data_dir)
         for plugin_dir in plugin.component_dirs("skills"):
             definition, errors, warnings = _definition_from_dir(
-                plugin_dir, f"plugin:{plugin.name}", project_root=project_root
+                plugin_dir, f"plugin:{plugin.name}",
+                project_root=project_root,
+                plugin_root=plugin_root_str,
+                plugin_data=plugin_data_str,
             )
             discovery.errors.extend(errors)
             discovery.warnings.extend(warnings)
@@ -791,7 +823,10 @@ def discover_skills(root: str | Path, *, env: dict[str, str] | None = None) -> S
                 continue
             for skill_dir in _skill_dirs(plugin_dir):
                 definition, errors, warnings = _definition_from_dir(
-                    skill_dir, f"plugin:{plugin.name}", project_root=project_root
+                    skill_dir, f"plugin:{plugin.name}",
+                    project_root=project_root,
+                    plugin_root=plugin_root_str,
+                    plugin_data=plugin_data_str,
                 )
                 discovery.errors.extend(errors)
                 discovery.warnings.extend(warnings)
@@ -808,12 +843,16 @@ def load_skill(
     *,
     source: str = "project",
     project_root: str | Path | None = None,
+    plugin_root: str | Path | None = None,
+    plugin_data: str | Path | None = None,
 ) -> tuple[SkillDefinition | None, list[str], list[str]]:
     """Single-file entry point used by tests and by future editing tools."""
     return _definition_from_dir(
         Path(path).parent,
         source,
         project_root=Path(project_root) if project_root is not None else None,
+        plugin_root=plugin_root,
+        plugin_data=plugin_data,
     )
 
 
