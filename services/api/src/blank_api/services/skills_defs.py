@@ -637,6 +637,19 @@ def discover_skills(root: str | Path, *, env: dict[str, str] | None = None) -> S
     discovery.warnings.extend(catalog.warnings)
     for plugin in catalog.enabled():
         for plugin_dir in plugin.component_dirs("skills"):
+            definition, errors, warnings = _definition_from_dir(
+                plugin_dir, f"plugin:{plugin.name}", project_root=project_root
+            )
+            discovery.errors.extend(errors)
+            discovery.warnings.extend(warnings)
+            if definition is not None:
+                # 上游 Nkn：根即技能时名字取 frontmatter name，缺省取目录名
+                skill_name = definition.display_name or definition.name
+                definition = replace(
+                    definition, name=f"{plugin.name}:{skill_name}"
+                )
+                discovery.entries[definition.name] = definition
+                continue
             for skill_dir in _skill_dirs(plugin_dir):
                 definition, errors, warnings = _definition_from_dir(
                     skill_dir, f"plugin:{plugin.name}", project_root=project_root

@@ -413,7 +413,7 @@ uv run alembic revision --autogenerate -m "描述"
   并标注（Claude 原样使用）；未支持字段（`model` / `effort` / `hooks` / `mcpServers` /
   `lspServers` / `context` / `agent` 等）只进 `ignored`；`paths` 条件激活已于 AA 批
   补齐（见上表；偏离：匹配器是 gitignore 近似，不是上游 `ignore()` 库的同款实现，
-  罕见边界可能有出入）；`synced` 同步根（只跳过、未实现同步）、嵌套 Skill 目录未移植。
+  罕见边界可能有出入）；`synced` 同步根（只跳过、未实现同步）未移植。
   S2 当时「本机还没有斜杠
   命令入口、`disable-model-invocation` 的 Skill 用户侧也没有触发路径」这句话已由 S3 改写：
   Skill 与命令共用 `/名字` 入口，`disable-model-invocation` 只挡模型、不再挡用户）。

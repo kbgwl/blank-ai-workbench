@@ -333,7 +333,7 @@
      （首版实现里提醒会晚一轮注入，端到端实测暴露后修正）。
   6. 偏离/未移植：匹配器是 gitignore 近似（`*` / `?` 不跨 `/`、`**` 跨、尾缀 `/**` 去尾、
      `!pattern` 取反、无 `/` 的 pattern 任意层级），不是上游同款 `ignore` 库，罕见边界
-     可能有出入；`synced` 同步根与嵌套 Skill 目录仍未移植。
+     可能有出入；`synced` 同步根仍未移植。
   测试：新增 `tests/test_skill_paths_v51.py` 25 例（解析与 `ignored` 口径、`y1r` 形状、
   13 条匹配参数含取反与锚定、绝对与 `..` 拒绝、目录可见性与幂等、台账只认成功文件工具、
   工具闸门与报错不泄漏、子代理预加载绕过、提醒文案、五步真实运行时端到端含
@@ -510,8 +510,7 @@
      `~/.blank`；用户层与项目层、插件层同一口径。
   3. **正斜杠**：Windows 反斜杠在工具名/规格里会被当转义，替换后统一 `/`（与上游
      `qYe` 的 `replaceAll("\\", "/")` 同一口径）。
-  4. 仍未移植：嵌套 Skill 目录（上游扫描只走一层，未找到反例，不凭猜实现）；
-     `${CLAUDE_EFFORT}` 在当前上游转储里没有出现，按未验证处理；自定义斜杠命令的
+  4. 仍未移植：`${CLAUDE_EFFORT}` 在当前上游转储里没有出现，按未验证处理；自定义斜杠命令的
      `allowed-tools` 不替换——转储里能看到插件命令把工具表交给 `lme`，但看不到 `lme`
      是否与 Skill 共用 `Iot`，没有证据就不动。
   测试：`tests/test_skills_disk_v45.py` 新增 2 例（两占位符同时替换且 disallowed
@@ -848,7 +847,7 @@
   偏离：目录用 `.blank/skills` 而不是 `.claude/skills`、用户层是 `~/.blank/skills`，
   且刻意只读 `.blank`；`allowed-tools` / `disallowed-tools` 只解析留审计、不改变工具池；
   正文超过 20000 字截断（Claude 原样使用）；未支持字段只进 `ignored`；plugin 命名空间、
-  `synced` 同步根（只跳过、未实现同步）、嵌套 Skill 目录以及 `allowed-tools` 里的
+  `synced` 同步根（只跳过、未实现同步）以及 `allowed-tools` 里的
   `${CLAUDE_SKILL_DIR}` / `${CLAUDE_PROJECT_DIR}` 替换未移植。S2 当时「本机还没有斜杠
   命令入口，`disable-model-invocation` 的 Skill 用户侧也没有触发路径」已由 S3 改写：
   Skill 与命令共用 `/名字` 入口，`disable-model-invocation` 只挡模型、不再挡用户。
@@ -1963,6 +1962,22 @@ Linux 原生后端按项目决定移出范围，判据只作留档；任务级�
    机器上输出逐项一致的边界账（或差异有明确原因），受限令牌后端自检全绿才启用。红了长
    啥样：第二台机器上后端自检假绿、文件边界在真实路径上不成立。哑弹风险：只在相同 build
    上复跑、对照项与判定项用同一套代码自证。
+
+- **插件技能目录根即技能加载（嵌套 Skill 目录，Nkn 批）**：上游插件技能加载器 `Nkn`
+  的语义是——先检查插件技能目录自身有没有 `SKILL.md`，有则整个目录就是一个 Skill，
+  立即返回（不扫描子目录），名字取 `${pluginName}:${frontmatter name}`（frontmatter
+  缺省时取目录名）；没有 `SKILL.md` 才 `readdir` 扫描子目录。用户层加载器 `Fkn`
+  只扫描子目录，不检查根 `SKILL.md`。此前 kbgai 的 `discover_skills` 只调
+  `_skill_dirs(plugin_dir)` 扫描子目录，从不检查插件技能目录自身的 `SKILL.md`。
+  本批在插件技能目录扫描前加根即技能检查：先调 `_definition_from_dir(plugin_dir)`
+  判目录自身是否含 `SKILL.md`，非空则以 `plugin:` 命名空间加载并 `continue` 跳过
+  子目录扫描；名字用 `display_name or name`（frontmatter name 优先，缺省取目录名），
+  与上游 `Nkn` 同口径。用户层与项目层不改动，仍只扫描子目录（与上游 `Fkn` 一致）。
+  判据 `services/api/tests/test_skill_nested_v53.py`（7 例：根即技能加载、frontmatter
+  名字优先、缺省取目录名、根技能时跳过子目录、无根技能正常扫描子目录、用户/项目层
+  不检查根 SKILL.md、多 skills 目录混合）。变异 4/4 红（撤掉根即技能检查、撤掉
+  `continue`、名字只取目录名不用 frontmatter、给用户/项目层加根检查），每条红在
+  指定判据上。相邻 6 套件 158 passed。全量回归见提交记录。
 
 ## v0.11.2 — 收口「说真话」，接通更新源（2026-11-09）
 
