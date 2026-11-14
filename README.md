@@ -424,8 +424,8 @@ uv run alembic revision --autogenerate -m "描述"
   自定义斜杠命令已于 S3 补齐（见上表；七处偏离：目录用 `.blank/commands` 而不是
   `.claude/commands`，用户层是 `~/.blank/commands`；只认 `.md` 后缀、`SKILL.md` 匹配
   大小写不敏感，命令名本身按文件名原样（Windows 大小写不敏感文件系统下两条只差大小写的
-  文件不会同时存在）；`!` 前缀的 shell 执行块不执行，原样留在正文里（Claude 会先跑再把
-  输出嵌回去）；未知 `/名字` 按普通文本入库而不是报「未知命令」——本机没有补全/选择器，
+  文件不会同时存在）；`!` 前缀的 shell 执行块已移植（行首 ``!`` 开头的行当
+  shell 命令跑，stdout 嵌回正文，行中 ``!`` 不动；``root`` 为空时原样保留）；未知 `/名字` 按普通文本入库而不是报「未知命令」——本机没有补全/选择器，
   把 `/path/to/file` 当错误会误伤正常消息；团队群聊消息与定时/工作流等非手输任务不走
   用户侧展开（群消息是发言，不是 slash 调用）；`allowed-tools` / `disallowed-tools` 只审计
   不改变工具池，且 `allowed-tools` 里的 `${CLAUDE_SKILL_DIR}` / `${CLAUDE_PROJECT_DIR}`

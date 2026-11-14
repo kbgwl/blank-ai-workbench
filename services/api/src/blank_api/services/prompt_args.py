@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from pathlib import Path
 
 SENTINEL = "\uFFFF"
 WRAPPER = "\uFFFE"
@@ -132,6 +133,54 @@ def expand_arguments(
     return text.replace(SENTINEL, "$").replace(WRAPPER, "")
 
 
+# `!` shell block：行首 ``!`` 开头的行当 shell 命令跑，stdout 嵌回正文。
+# Claude Code 在渲染命令文件正文时执行 ``!command`` 行，本批对齐这一行为。
+_SHELL_BLOCK = re.compile(r"^!(.+)$", re.MULTILINE)
+
+
+def execute_shell_blocks(
+    text: str,
+    *,
+    root: str | Path | None = None,
+    timeout: float = 10.0,
+) -> str:
+    """Execute ``!command`` lines and embed stdout back into the text.
+
+    只匹配行首 ``!``（``^!``，MULTILINE）。行中 ``!``（如 "不是 !echo"）不
+    算 shell 块，原样保留。``root`` 为空时没有工作区可跑，``!`` 行原样留在
+    正文——不猜、不抛，宁可留字面文本也不要在无根环境里乱跑命令。
+    """
+    if not root:
+        return text
+
+    from blank_api.services.tools.shell import (
+        _run_blocking,
+        build_env,
+        normalize_relative_executable,
+    )
+
+    root_path = Path(root)
+
+    def replace(match: re.Match[str]) -> str:
+        command = match.group(1).strip()
+        if not command:
+            return match.group(0)
+        normalized = normalize_relative_executable(command, root_path)
+        cmd_str = normalized if isinstance(normalized, str) else " ".join(normalized)
+        result = _run_blocking(cmd_str, root_path, timeout, shell=True, env=build_env())
+        if result.get("timed_out"):
+            return f"[命令超时: {command}]"
+        stdout = result.get("stdout", "").strip()
+        if result.get("exit_code") != 0:
+            stderr = result.get("stderr", "").strip()
+            if stderr:
+                return f"[命令失败 exit={result['exit_code']}: {stderr}]"
+            return f"[命令失败 exit={result['exit_code']}]"
+        return stdout
+
+    return _SHELL_BLOCK.sub(replace, text)
+
+
 def render_prompt(
     instructions: str,
     args: str | None,
@@ -144,10 +193,10 @@ def render_prompt(
     plugin_root: str = "",
     plugin_data: str = "",
 ) -> str:
-    """Expand one prompt file: arguments first, then Claude's placeholders."""
+    """Expand one prompt file: arguments, placeholders, then `!` shell blocks."""
     clean = str(args) if args is not None and str(args) != "" else None
     text = expand_arguments(instructions, clean, names=names)
-    return substitute_paths(
+    text = substitute_paths(
         text,
         project_dir=project_dir,
         session_id=session_id,
@@ -156,6 +205,7 @@ def render_prompt(
         plugin_root=plugin_root,
         plugin_data=plugin_data,
     )
+    return execute_shell_blocks(text, root=project_dir or None)
 
 
 def substitute_paths(

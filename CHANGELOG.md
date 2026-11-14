@@ -329,6 +329,28 @@
   → 2 红；M7 去掉 hooks.run 的 effort 参数 → 1 红；M8 去掉 scratchpad mkdir → 1 红；
   每条红集合均实测）；相邻钩子/子代理套件 **41 passed**（18.74s）。
 
+- **`!` shell 执行块（#309 批）**：Claude Code 在渲染命令文件正文时，把行首 ``!``
+  开头的行当 shell 命令跑，stdout 嵌回正文替换掉 ``!command`` 那一行。此前本机把
+  ``!`` 行原样留在正文里，模型读到的是命令文本而不是命令输出。改
+  `services/prompt_args.py`。
+  1. **`execute_shell_blocks(text, *, root, timeout=10.0)`**：正则 ``^!(.+)$``
+    （MULTILINE）只匹配行首 ``!``；行中 ``!``（如 "不是 !echo"）不动。``root``
+    为空时没有工作区可跑，``!`` 行原样保留——不猜、不抛。每条匹配用
+    `tools/shell.py` 的 `_run_blocking` 执行（`shell=True`、`build_env()`、
+    `normalize_relative_executable` 补相对路径），stdout `strip()` 后嵌回；
+    退出码非 0 时嵌 `[命令失败 exit=N: stderr]`；超时嵌 `[命令超时: cmd]`。
+  2. **`render_prompt` 接线**：`expand_arguments` → `substitute_paths` →
+     `execute_shell_blocks`，保证 ``$ARGUMENTS`` 与 ``${CLAUDE_PROJECT_DIR}``
+     等占位符先展开、再执行 ``!`` 行。`project_dir` 作为 `root` 传入，
+     `render_skill` 与 `expand_user_input` 两条路径都覆盖。
+  判据 `services/api/tests/test_command_shell_blocks_v309.py`（10 例：执行嵌回、
+  多行独立执行、`$ARGUMENTS` 先展开、`${CLAUDE_PROJECT_DIR}` 先替换、行中 `!`
+  不动、失败嵌错误、空 root 跳过、单独 `!` 不动、`expand_user_input` 端到端、
+  `render_prompt` 空 project_dir），变异 5/5 红（M1 去掉 render_prompt 里的调用 → 3 红；
+  M2 去掉正则 ``^`` 锚点 → 1 红；M3 去掉 ``if not root`` 守卫 → 2 红；
+  M4 ``shell=True`` 改 ``False`` → 6 红；M5 去掉退出码检查 → 1 红；每条红集合均实测）；
+  相邻命令/插件/Skill 套件 **109 + 29 passed**。
+
 - **StopFailure 钩子事件：API 错误终结回合时顶掉 Stop（AE 批）**："回合因为 API 错误
   结束"与"正常结束"是两件事，钩子作者需要分清"被拦下"和"模型挂了"——两者的处置完全
   不同。此前本机两条 `except ModelError` 终态既不发 Stop 也不发任何事件，这条信息没有
