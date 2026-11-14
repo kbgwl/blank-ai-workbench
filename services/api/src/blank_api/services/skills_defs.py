@@ -89,6 +89,14 @@ UNSUPPORTED_FIELDS = (
     "lspServers",
 )
 
+# Skill 侧的"不支持"清单：比 UNSUPPORTED_FIELDS 少了 agent 与 background——
+# 这两个字段 Skill 已移植（对齐上游 lme 的 agent/background，见 #303），
+# 命令侧仍留在 UNSUPPORTED_FIELDS（命令的 agent/background 在输入管道，
+# expand_user_input 不是工具处理器，本批不实现）。
+SKILL_UNSUPPORTED_FIELDS = tuple(
+    key for key in UNSUPPORTED_FIELDS if key not in ("agent", "background")
+)
+
 _LEADING_MARKS = re.compile(r"^[#>*\-\s]+")
 
 
@@ -123,6 +131,12 @@ class SkillDefinition:
     # 上游 ``lJs`` 的 ``unloadableGuard``：hooks 无效时为 True。此时 Skill 仍加载
     # （正文可用），但无 hooks 且无 allowed-tools（上游 ``Se=pe?[]:OI(...)``）。
     unloadable_guard: bool = False
+    # 上游 ``lme`` 的 ``agent``：Skill 声明以哪个 agent 类型派发执行正文。
+    # 空串 = 不声明，主线程注入正文。非空字符串按名字查 AgentCatalog。
+    agent: str = ""
+    # 上游 ``lme`` 的 ``background``：Skill 是否后台派发子代理执行正文。
+    # False = 不声明（等同没写），前台派发或主线程注入。
+    background: bool = False
 
     @property
     def conditional(self) -> bool:
@@ -154,6 +168,8 @@ class SkillDefinition:
             "when_to_use": self.when_to_use,
             "hooks": dict(self.hooks),
             "unloadable_guard": self.unloadable_guard,
+            "agent": self.agent,
+            "background": self.background,
         }
 
     def as_dict(self) -> dict:
@@ -187,6 +203,10 @@ class SkillDefinition:
             payload["effort"] = self.effort
         if self.model:
             payload["model"] = self.model
+        if self.agent:
+            payload["agent"] = self.agent
+        if self.background:
+            payload["background"] = True
         return payload
 
 
@@ -606,7 +626,30 @@ def _definition_from_dir(
     raw_when = meta.get("when_to_use")
     if raw_when is not None:
         skill_when_to_use = str(raw_when)
-    ignored = tuple(key for key in UNSUPPORTED_FIELDS if meta.get(key) is not None)
+    # agent：Skill 声明以哪个 agent 类型派发执行正文。上游 ``lme`` 口径：
+    # ``O.agent!=null?String(O.agent):void 0``——null/缺省留空，非空转字符串。
+    # 这里只做类型检查：非字符串但非 null 的告警丢弃（名字写错应在派发时报错，
+    # 不是在这里猜一个值）。空串与 null 等价（不声明）。
+    skill_agent = ""
+    raw_agent = meta.get("agent")
+    if raw_agent is not None:
+        if isinstance(raw_agent, str) and raw_agent.strip():
+            skill_agent = raw_agent.strip()
+        else:
+            warnings.append(f"Skill 文件 {mask_path(str(path))} 的 agent 不是非空字符串，已忽略")
+    # background：Skill 是否后台派发子代理执行正文。上游 ``lme`` 的 ``m1(O.background)``
+    # 口径：只认 ``true``；``false``/缺省/null 等同不声明。非布尔的告警丢弃。
+    skill_background = False
+    raw_background = meta.get("background")
+    if raw_background is not None:
+        parsed_bg, bg_problem = _flag(raw_background, False)
+        if bg_problem:
+            warnings.append(
+                f"Skill 文件 {mask_path(str(path))} 的 background {bg_problem}"
+            )
+        else:
+            skill_background = parsed_bg
+    ignored = tuple(key for key in SKILL_UNSUPPORTED_FIELDS if meta.get(key) is not None)
     # 上游 lJs：hooks 解析 + unloadableGuard。guard 开启时 Skill 仍加载，
     # 但 hooks 与 allowed-tools 都被清空（``Se=pe?[]:OI(...)``）。
     skill_hooks, unloadable_guard = _parse_skill_hooks(meta, str(path), warnings)
@@ -634,6 +677,8 @@ def _definition_from_dir(
             when_to_use=skill_when_to_use,
             hooks=skill_hooks,
             unloadable_guard=unloadable_guard,
+            agent=skill_agent,
+            background=skill_background,
         ),
         [],
         warnings,

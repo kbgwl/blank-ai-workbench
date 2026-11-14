@@ -198,6 +198,12 @@ class SkillCatalog:
                 "hooks": entry.get("hooks") or {},
                 # upstream unloadableGuard：hooks 无效时为 True，此时不注册钩子。
                 "unloadable_guard": bool(entry.get("unloadable_guard", False)),
+                # Skill 声明的 agent 类型：非空时 skill 工具派生子代理执行正文。
+                # 对齐上游 lme 的 agent 字段与 SkillTool 的 vQt 派发逻辑。
+                "agent": str(entry.get("agent") or ""),
+                # Skill 声明的 background：True 时后台派发子代理，False/缺省前台。
+                # 对齐上游 lme 的 background 字段与 SkillTool 的 vQt 判断。
+                "background": bool(entry.get("background", False)),
             }
         self.loaded: set[str] = set()
         self.activated: set[str] = set()
@@ -399,6 +405,56 @@ async def _skill(context: ToolContext, arguments: dict) -> ToolOutcome:
         ),
     )
     await _record(context, "skill.invoked", {"skill": name, "has_args": bool(args), "chars": len(body)})
+    # agent / background：Skill 声明了就派生子代理执行正文，而不是主线程注入。
+    # 对齐上游 SkillTool 的 vQt：有 agent 或 background 时走子代理派发，
+    # 正文作为 goal 传给子代理，主线程只收到派发回执。
+    skill_agent = str(entry.get("agent") or "")
+    skill_background = bool(entry.get("background", False))
+    if skill_agent or skill_background:
+        # 延迟导入避免循环：subagent.py 在模块级 import 了本模块的 SkillCatalog。
+        from blank_api.services.subagent import DEFAULT_STEPS, SubAgentRequest
+        from blank_api.services.tools.delegate import _apply_definition, _resolve_agent
+
+        runner = getattr(context, "subagent_runner", None)
+        if runner is None:
+            return fail("error", "Skill 声明了 agent/background，需要子代理运行时，但当前运行时没有启用子代理。")
+        # 有 agent 就按名字查目录；没有 agent 但声明了 background 时用默认类型。
+        definition, error = _resolve_agent(context, skill_agent or "")
+        if error:
+            return fail("error", error)
+        request = SubAgentRequest(
+            goal=body,
+            max_steps=DEFAULT_STEPS,
+            label=f"skill:{name}",
+        )
+        _apply_definition(request, definition)
+        if skill_background:
+            if not hasattr(runner, "spawn_background"):
+                return fail("error", "Skill 声明了 background，需要后台子代理运行时，但当前运行时不支持后台子代理。")
+            agent_id, error_result = await runner.spawn_background(request)
+            if error_result is not None:
+                return fail("error", error_result.error or "后台子代理启动失败")
+            return ok(
+                f"已在后台派出子代理 {agent_id}（类型 {definition.name}）执行 Skill「{name}」。"
+                f"它还在运行；用 task_output(agent_id=\"{agent_id}\") 取结论，"
+                f"不需要了用 task_stop(agent_id=\"{agent_id}\") 取消。",
+                skill=name,
+                already_loaded=False,
+                status="forked",
+                background=True,
+                agent_id=agent_id,
+                agent_type=definition.name,
+            )
+        result = await runner(request)
+        if not result.ok:
+            return fail("error", result.error or "子代理执行 Skill 失败")
+        return ok(
+            f"已派子代理 {definition.name} 执行 Skill「{name}」。\n\n{result.summary}",
+            skill=name,
+            already_loaded=False,
+            status="forked",
+            agent_type=definition.name,
+        )
     return ok(
         f"已加载 Skill「{name}」，按以下说明执行：\n\n{body}",
         skill=name,

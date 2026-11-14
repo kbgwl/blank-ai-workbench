@@ -67,6 +67,46 @@
   `maxEffortLevel` 模型表逐模型封顶在本仓库还没有配置面，先以"空表 = 不封顶"的口径
   跑通裁决链，配置面留待后续批次接入。
 
+- **Skill frontmatter `agent` / `background`（#303）**：对齐上游 `lme` 的
+  `agent:O.agent!=null?String(O.agent):void 0` 与 `background:m1(O.background)`
+  口径——声明 `agent` 时 Skill 正文不注入主线程、而是作为 goal 派发对应类型的子代理
+  执行（前台等结论），声明 `background: true` 时后台派发并返回句柄（`agent_id`、
+  `status="forked"`、`background=True`）。命令侧的 `agent`/`background` 不在本批
+  范围内（`expand_user_input` 是同步的、拿不到 `subagent_runner`），仍留在
+  `UNSUPPORTED_FIELDS` 只审计不生效。
+  1. **解析**：`skills_defs.py` 的 `_definition_from_dir` 读 frontmatter 的
+  `agent`（非空字符串才保留、空串与 null 等价、非字符串告警丢弃）与 `background`
+  （只认 `true`、`false`/缺省/null 等同不声明、非布尔告警丢弃），值传进
+  `SkillDefinition`（`agent: str = ""` / `background: bool = False`），
+  `as_entry()` / `as_dict()` 原样带出。`ignored` 检查从 `UNSUPPORTED_FIELDS`
+  切换到 `SKILL_UNSUPPORTED_FIELDS`（后者排除 `agent`/`background`），命令侧
+  不受影响。
+  2. **派发接线**：`tools/skills.py` 的 `_skill` handler 在 `skill.invoked`
+  记录之后、主线程注入之前插入子代理派发分支——`agent` 或 `background` 任一
+  声明即走子代理：`_resolve_agent` 按名字查 `context.agents` 目录（空名字回落
+  到默认 `general-purpose`，未知类型 fail-closed 并列出可用名字），
+  `_apply_definition` 把定义字段写进 `SubAgentRequest`，`background: true`
+  走 `runner.spawn_background` 返回句柄、否则前台 `runner(request)` 等结论。
+  无 `subagent_runner` 或后台运行时不支持 `spawn_background` 时明确报错，
+  不静默回退到主线程注入。子代理执行失败把子代理的 `error` 透传为
+  `fail("error", …)`。延迟导入 `subagent`/`delegate` 避免循环（`subagent.py`
+  在模块级 import 了本模块的 `SkillCatalog`）。
+  3. **判据**：`services/api/tests/test_skill_agent_background_v303.py`（29 例，
+  七区）：frontmatter 解析（agent 非空/去空白/非字符串丢弃、background 布尔
+  三态/非法告警）、`SKILL_UNSUPPORTED_FIELDS` 与 `UNSUPPORTED_FIELDS` 的包含
+  关系（skill 侧不含、命令侧仍含）、`as_entry`/`as_dict` 字段携带、`SkillCatalog`
+  条目携带与缺省、handler 派发（前台子代理收到正文、主线程不注入、未知类型
+  fail-closed、无 runner 报错、后台派发返回句柄、`background:false` 回落注入、
+  两字段均缺省回落注入）、`discover_skills` 端到端携带。变异电池 4 条：
+  M1 移除 agent 检查 → 4 红；M2 移除 background 检查 → 2 红；M3 无字段也派生
+  → 2 红；M4 background/foreground 互换 → 2 红。邻套件回归 473 例全绿。
+  改 `services/api/src/blank_api/services/skills_defs.py`、
+  `services/api/src/blank_api/services/tools/skills.py`，
+  新增 `services/api/tests/test_skill_agent_background_v303.py`。
+  偏离/未移植：命令侧的 `agent`/`background` 未移植（输入管道无异步上下文、
+  拿不到子代理运行时）；上游 Skill 的 `agent` 指向自定义 agent 类型，本批
+  与子代理目录解析同口径，插件 agent 的名字回退（文件名/描述）已在 Y 批落地。
+
 - **`UserPromptExpansion` 与 `TeammateIdle` 两个事件、钩子类型补到六种（AF 批）**：事件面
   在 AE 批之后还剩这两个没移植，钩子类型此前只支持 `command`——等于"能写钩子，但上游
   能配的四类（prompt/agent/http/mcp_tool/script）配了也认不出来"。这批把两件事一次收掉。
