@@ -475,14 +475,20 @@ def _skill_file(directory: Path) -> Path | None:
 
 
 def _tool_placeholders(
-    tools: tuple[str, ...], base_dir: Path | None, project_root: Path | None
+    tools: tuple[str, ...],
+    base_dir: Path | None,
+    project_root: Path | None,
+    *,
+    plugin_root: str | Path | None = None,
 ) -> tuple[str, ...]:
-    """Expand ``${CLAUDE_SKILL_DIR}`` / ``${CLAUDE_PROJECT_DIR}`` in allowed-tools.
+    """Expand ``${CLAUDE_*}`` placeholders in allowed-tools (not disallowed-tools).
 
-    Claude only rewrites ``allowedTools`` (not ``disallowed-tools``), and only
-    when there is something to rewrite: the Skill directory goes in first, then
-    the project root. Paths are normalized to forward slashes so a Windows
-    backslash does not get treated as an escape in the resulting tool spec.
+    Claude's ``C9`` rewrites ``${CLAUDE_PLUGIN_ROOT}``, ``${CLAUDE_PROJECT_DIR}``
+    and ``${CLAUDE_PLUGIN_DATA}`` for both Skills and commands; ``lme``'s ``Se``
+    adds ``${CLAUDE_SKILL_DIR}`` only when building a Skill (``isSkillMode``).
+    Paths are normalized to forward slashes so a Windows backslash does not get
+    treated as an escape in the resulting tool spec. ``plugin_root`` is the
+    plugin's root directory, available for plugin-sourced components.
     """
     if not tools:
         return tools
@@ -493,6 +499,9 @@ def _tool_placeholders(
     if project_root is not None:
         project = str(project_root).replace("\\", "/")
         expanded = [item.replace("${CLAUDE_PROJECT_DIR}", project) for item in expanded]
+    if plugin_root is not None:
+        root = str(plugin_root).replace("\\", "/")
+        expanded = [item.replace("${CLAUDE_PLUGIN_ROOT}", root) for item in expanded]
     return tuple(expanded)
 
 

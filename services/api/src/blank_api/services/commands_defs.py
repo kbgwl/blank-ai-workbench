@@ -48,6 +48,7 @@ from blank_api.services.skills_defs import (
     _parse_frontmatter,
     _summary,
     _tool_list,
+    _tool_placeholders,
 )
 from blank_api.services.workspace import mask_path
 
@@ -209,7 +210,14 @@ def _name_for(path: Path, base: Path) -> tuple[str, str] | None:
     return ":".join(parts)[: -len(COMMAND_SUFFIX)], ""
 
 
-def _definition(path: Path, base: Path, source: str) -> tuple[CommandDefinition | None, list[str], list[str]]:
+def _definition(
+    path: Path,
+    base: Path,
+    source: str,
+    *,
+    project_root: str | Path | None = None,
+    plugin_root: str | Path | None = None,
+) -> tuple[CommandDefinition | None, list[str], list[str]]:
     named = _name_for(path, base)
     if named is None:
         return None, [], []
@@ -240,6 +248,11 @@ def _definition(path: Path, base: Path, source: str) -> tuple[CommandDefinition 
     allowed_tools, problem = _tool_list(meta.get("allowed-tools"))
     if problem:
         warnings.append(f"命令文件 {mask_path(str(path))} 的 allowed-tools {problem}")
+    # 对齐上游 lme 的 Se/C9：命令的 allowed-tools 展开 ${CLAUDE_PROJECT_DIR}
+    # （所有层）与 ${CLAUDE_PLUGIN_ROOT}（插件命令），但不展开
+    # ${CLAUDE_SKILL_DIR}——那是 skill 模式（isSkillMode）专属。
+    # base_dir 传 None，SKILL_DIR 保持字面量。
+    allowed_tools = _tool_placeholders(allowed_tools, None, project_root, plugin_root=plugin_root)
     raw_disallowed = meta.get("disallowed-tools", meta.get("disallowedTools"))
     disallowed_tools, problem = _tool_list(raw_disallowed)
     if problem:
@@ -295,7 +308,15 @@ def _definition(path: Path, base: Path, source: str) -> tuple[CommandDefinition 
     )
 
 
-def _layer(directory: Path, source: str, discovery: CommandDiscovery, *, prefix: str = "") -> None:
+def _layer(
+    directory: Path,
+    source: str,
+    discovery: CommandDiscovery,
+    *,
+    prefix: str = "",
+    project_root: str | Path | None = None,
+    plugin_root: str | Path | None = None,
+) -> None:
     grouped: dict[Path, list[Path]] = {}
     for path in _markdown_files(directory):
         grouped.setdefault(path.parent, []).append(path)
@@ -311,7 +332,13 @@ def _layer(directory: Path, source: str, discovery: CommandDiscovery, *, prefix:
                 )
             files = skill_files[:1]
         for path in files:
-            definition, errors, warnings = _definition(path, directory, source)
+            definition, errors, warnings = _definition(
+                path,
+                directory,
+                source,
+                project_root=project_root,
+                plugin_root=plugin_root,
+            )
             discovery.errors.extend(errors)
             discovery.warnings.extend(warnings)
             if definition is not None:
@@ -329,8 +356,16 @@ def _plugin_layers(
     for plugin in catalog.enabled():
         # 插件命令按 ``<plugin>:<command>`` 命名（Claude 的命名空间），
         # 所以留到本地层之后加载也不会与普通命令撞名。
+        # 插件命令的 allowed-tools 可展开 ${CLAUDE_PLUGIN_ROOT}（plugin.path）。
         for directory in plugin.component_dirs("commands"):
-            _layer(directory, f"plugin:{plugin.name}", discovery, prefix=f"{plugin.name}:")
+            _layer(
+                directory,
+                f"plugin:{plugin.name}",
+                discovery,
+                prefix=f"{plugin.name}:",
+                project_root=root,
+                plugin_root=plugin.path,
+            )
 
 
 def discover_commands(
@@ -342,9 +377,14 @@ def discover_commands(
     scanned, the same way Claude has no project commands outside a project.
     """
     discovery = CommandDiscovery()
-    _layer(user_commands_dir(env), "user", discovery)
+    _layer(user_commands_dir(env), "user", discovery, project_root=root)
     if root is not None:
-        _layer(Path(root) / PROJECT_COMMANDS_DIR, "project", discovery)
+        _layer(
+            Path(root) / PROJECT_COMMANDS_DIR,
+            "project",
+            discovery,
+            project_root=root,
+        )
     _plugin_layers(root, discovery, env)
     return discovery
 
