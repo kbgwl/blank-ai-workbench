@@ -292,8 +292,8 @@
      `[:8000]`，写明只作参考、不得覆盖安全/审批/工作区边界），落 `hook.context_injected`；
      退出码 2 走 `hook.non_blocking_error`、不注入。目标原文一个字不动。
   偏离：上游 `isolatedContext` 子代理跳过注入、`hookContextCarried` 去重未移植（续聊整轮
-  不重跑，效果等价；隔离副本仍会收到）；stdin 未提供 `session_id` / `transcript_path` /
-  `scratchpad_dir` / `prompt_id` / `served_call` / `caller_session_id` / `effort`。
+  不重跑，效果等价；隔离副本仍会收到）；stdin 未提供 `served_call`（语义不明、不在官方
+  文档里，留作文档偏离）。
   判据 `services/api/tests/test_subagent_start_hooks_v54.py`（9 例：事件面与别名、exit 2
   分流单元、真子进程按 agent_type 分发、注入位置与 goal 原文、exit 2 可见但不注入、
   无钩子零改动、续聊不重跑、SessionStart 正反两路 HTTP 端到端），变异 7/7 红（M1
@@ -301,6 +301,33 @@
   M5 结果丢 `hook_warnings` → 1 红；M6 target 换成 agent_id → 2 红；M7 注销事件 → 4 红；
   每条红集合均实测）；相邻钩子/子代理/设置套件 **195 passed**（47.30s），全量
   **3552 passed / 28 skipped（721.02s）**。
+
+- **SubagentStart 钩子 stdin 字段补齐（#308 批）**：AD 批的 SubagentStart 载荷只带了
+  十个字段，上游还有六个常用字段缺位——钩子作者拿到 `session_id` / `transcript_path` /
+  `scratchpad_dir` / `prompt_id` / `caller_session_id` / `effort` 才能写"查这次派发的
+  会话""读 transcript""往 scratchpad 写中间产物"这类钩子。上游锚点：官方 hooks 文档的
+  SubagentStart 输入里这六个字段与十个已有字段同在。改 `services/subagent.py`。
+  1. **`session_id`** → 派发用的 `task_id`（子代理的会话标识就是这一轮的作业 ID）。
+  2. **`transcript_path`** → `str(run_root / ".blank" / "context" / "subagent-transcript.jsonl")`，
+     与 SubagentStop 的 `agent_transcript_path` 同一个路径——钩子在启动时就能拿到
+     将来收尾时会落盘的 transcript 位置。
+  3. **`scratchpad_dir`** → `str(run_root / ".blank" / "context" / "scratchpad")`，
+     在派发点 `mkdir(parents=True, exist_ok=True)`——上游给钩子一个可写的草稿目录，
+     不创建就等于"给了路径但没给地方"。
+  4. **`prompt_id`** → `uuid.uuid4().hex`，每次派发一个新 UUID——上游把它当本次提示
+     的唯一标识，钩子可据此做幂等或去重。
+  5. **`caller_session_id`** → `parent_thread_id`（发起这次派发的父会话线程）。
+  6. **`effort`** → `{"level": child_effort.level}`（对象，与官方文档一致），同时
+     `hooks.run(..., effort=child_effort.level)` 把同一档位作为 `CLAUDE_EFFORT` 写进
+     钩子子进程环境变量——两条出口同源，钩子脚本里 `$CLAUDE_EFFORT` 与 payload 里的
+     `effort.level` 永远一致。
+  偏离：`served_call` 语义不明、不在官方文档里，仍不实现、只记文档偏离。
+  判据 `services/api/tests/test_subagent_start_stdin_v308.py`（8 例：六个字段各一条
+  可失败判据 + 一次性到位 + `CLAUDE_EFFORT` 子进程环境变量），变异 8/8 红（M1 去掉
+  session_id → 2 红；M2 去掉 transcript_path → 2 红；M3 去掉 scratchpad_dir → 2 红；
+  M4 去掉 prompt_id → 2 红；M5 去掉 caller_session_id → 2 红；M6 去掉 payload effort
+  → 2 红；M7 去掉 hooks.run 的 effort 参数 → 1 红；M8 去掉 scratchpad mkdir → 1 红；
+  每条红集合均实测）；相邻钩子/子代理套件 **41 passed**（18.74s）。
 
 - **StopFailure 钩子事件：API 错误终结回合时顶掉 Stop（AE 批）**："回合因为 API 错误
   结束"与"正常结束"是两件事，钩子作者需要分清"被拦下"和"模型挂了"——两者的处置完全

@@ -804,6 +804,9 @@ async def run_subagent(
     hook_warnings: list[str] = []
     agent_type = request.agent_name or BUILTIN_AGENT
     if start_hooks and hooks is not None and hooks.enabled:
+        scratchpad_dir = run_root / ".blank" / "context" / "scratchpad"
+        scratchpad_dir.mkdir(parents=True, exist_ok=True)
+        transcript_file = run_root / ".blank" / "context" / "subagent-transcript.jsonl"
         start_results = await hooks.run(
             "subagent_start",
             agent_type,
@@ -818,7 +821,14 @@ async def run_subagent(
                 "workspace": str(run_root),
                 "permission_mode": effective_mode,
                 "fork": bool(request.fork),
+                "session_id": task_id,
+                "transcript_path": str(transcript_file),
+                "scratchpad_dir": str(scratchpad_dir),
+                "prompt_id": uuid.uuid4().hex,
+                "caller_session_id": parent_thread_id,
+                "effort": {"level": child_effort.level},
             },
+            effort=child_effort.level,
         )
         if start_results:
             await log.add(
