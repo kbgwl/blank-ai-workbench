@@ -73,9 +73,9 @@ class AnthropicAdapter(ModelAdapter):
             converted[-1]["content"][-1]["cache_control"] = {"type": "ephemeral"}
         return converted
 
-    def _payload(self, messages, tools, stream: bool, *, effort: str = "", thinking: dict | None = None) -> dict:
+    def _payload(self, messages, tools, stream: bool, *, effort: str = "", thinking: dict | None = None, model: str = "") -> dict:
         payload = {
-            "model": self.config.model,
+            "model": model or self.config.model,
             "system": self._system_blocks(messages),
             "messages": self._message_payload(messages, cache_last=bool(self.config.prompt_cache)),
             "temperature": self.config.temperature,
@@ -98,13 +98,13 @@ class AnthropicAdapter(ModelAdapter):
             payload["thinking"] = thinking
         return {k: v for k, v in payload.items() if v is not None}
 
-    async def invoke(self, messages, tools=None, *, effort: str = "", thinking: dict | None = None, **kwargs) -> ModelResponse:
+    async def invoke(self, messages, tools=None, *, effort: str = "", thinking: dict | None = None, model: str = "", **kwargs) -> ModelResponse:
         self.require_tools(tools or [])
         data = await self._request_json(
             "POST",
             f"{self.base}/v1/messages",
             headers=self._headers(),
-            json=self._payload(messages, tools, False, effort=effort, thinking=thinking),
+            json=self._payload(messages, tools, False, effort=effort, thinking=thinking, model=model),
         )
         text = "".join(block.get("text", "") for block in data.get("content", []) if block.get("type") == "text")
         tool_calls = [
@@ -125,20 +125,20 @@ class AnthropicAdapter(ModelAdapter):
                 cache_write_tokens=cache_write,
                 source="provider" if (usage.get("input_tokens") or usage.get("output_tokens")) else "unknown",
             ),
-            model=data.get("model") or self.config.model,
+            model=data.get("model") or (model or self.config.model),
             tool_calls=tool_calls,
             finish_reason=data.get("stop_reason"),
             response_id=str(data.get("id") or ""),
         )
 
-    async def stream(self, messages, tools=None, *, effort: str = "", thinking: dict | None = None, **kwargs) -> AsyncIterator[str]:
+    async def stream(self, messages, tools=None, *, effort: str = "", thinking: dict | None = None, model: str = "", **kwargs) -> AsyncIterator[str]:
         self.require_tools(tools or [])
         async with self._client() as client:
             async with client.stream(
                 "POST",
                 f"{self.base}/v1/messages",
                 headers=self._headers(),
-                json=self._payload(messages, tools, True, effort=effort, thinking=thinking),
+                json=self._payload(messages, tools, True, effort=effort, thinking=thinking, model=model),
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
@@ -155,7 +155,7 @@ class AnthropicAdapter(ModelAdapter):
                         if text := delta.get("text"):
                             yield text
 
-    async def bind_tools_stream(self, tools, messages, *, on_delta=None, effort: str = "", thinking: dict | None = None, **kwargs) -> ModelResponse:
+    async def bind_tools_stream(self, tools, messages, *, on_delta=None, effort: str = "", thinking: dict | None = None, model: str = "", **kwargs) -> ModelResponse:
         """带工具调用的流式调用。
 
         Anthropic 的工具参数是 ``input_json_delta.partial_json`` 逐段下发的，而且
@@ -166,7 +166,7 @@ class AnthropicAdapter(ModelAdapter):
         text: list[str] = []
         calls = ToolCallAccumulator()
         usage = Usage()
-        model = self.config.model
+        model = model or self.config.model
         stop_reason: str | None = None
         message_id = ""  # 供应商那一笔响应的 id，Anthropic 在 message_start 帧里给
 
@@ -175,7 +175,7 @@ class AnthropicAdapter(ModelAdapter):
                 "POST",
                 f"{self.base}/v1/messages",
                 headers=self._headers(),
-                json=self._payload(messages, tools, True, effort=effort, thinking=thinking),
+                json=self._payload(messages, tools, True, effort=effort, thinking=thinking, model=model),
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")

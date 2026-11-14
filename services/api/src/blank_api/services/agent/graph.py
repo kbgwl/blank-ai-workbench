@@ -1274,6 +1274,7 @@ class AgentSession:
             response = await self._call_adapter(
                 adapter, specs, chat, node, role,
                 effort=self.turn_effort, thinking=self._thinking_payload(adapter),
+                model=str(getattr(self.context, "turn_state", {}).get("skill_model", "") or ""),
             )
         except ModelError:
             latency_ms = int((time.perf_counter() - started) * 1000)
@@ -1325,6 +1326,7 @@ class AgentSession:
         *,
         effort: str = "",
         thinking: dict | None = None,
+        model: str = "",
     ) -> Any:
         """一次模型调用。开关打开时走流式，流式不可用时自动退回非流式。
 
@@ -1342,7 +1344,7 @@ class AgentSession:
         """
         if not self.stream_output:
             return await self._call_non_stream(
-                adapter, specs, chat, node, role, effort=effort, thinking=thinking
+                adapter, specs, chat, node, role, effort=effort, thinking=thinking, model=model
             )
 
         retries = 0
@@ -1352,7 +1354,7 @@ class AgentSession:
             effects_before = self.tool_effects
             try:
                 response = await adapter.bind_tools_stream(
-                    specs, chat, on_delta=relay, effort=effort, thinking=thinking
+                    specs, chat, on_delta=relay, effort=effort, thinking=thinking, model=model
                 )
             except ModelError as error:
                 if relay.chunks:
@@ -1419,6 +1421,7 @@ class AgentSession:
         *,
         effort: str = "",
         thinking: dict | None = None,
+        model: str = "",
     ) -> Any:
         """整包调用（开关关着或流式退路）同样按 429 退避重试，超时/断网也重试。"""
         retries = 0
@@ -1426,7 +1429,7 @@ class AgentSession:
         while True:
             effects_before = self.tool_effects
             try:
-                return await adapter.bind_tools(specs, chat, effort=effort, thinking=thinking)
+                return await adapter.bind_tools(specs, chat, effort=effort, thinking=thinking, model=model)
             except ModelError as error:
                 if _rate_limit_may_retry(error, retries):
                     retries += 1

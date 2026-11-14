@@ -217,7 +217,7 @@ class _FakeAdapter:
         self.last_provider = "fake"
         self.calls: list[list] = []
 
-    async def bind_tools(self, _specs, chat, *, effort="", thinking=None):
+    async def bind_tools(self, _specs, chat, *, effort="", thinking=None, model=""):
         self.calls.append(list(chat))
         return ModelResponse(
             text="ok",

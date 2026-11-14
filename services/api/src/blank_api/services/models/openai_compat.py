@@ -53,9 +53,9 @@ class OpenAICompatibleAdapter(ModelAdapter):
             return "high" if rank(effort) > rank("high") else effort
         return self.config.reasoning_effort
 
-    def _payload(self, messages: Sequence[ChatMessage], tools: Sequence[ToolSpecLite] | None, stream: bool, *, effort: str = "") -> dict:
+    def _payload(self, messages: Sequence[ChatMessage], tools: Sequence[ToolSpecLite] | None, stream: bool, *, effort: str = "", model: str = "") -> dict:
         payload = {
-            "model": self.config.model,
+            "model": model or self.config.model,
             "messages": [self._message_payload(m) for m in messages],
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
@@ -71,14 +71,14 @@ class OpenAICompatibleAdapter(ModelAdapter):
             ]
         return payload
 
-    async def invoke(self, messages, tools=None, *, effort: str = "", **kwargs) -> ModelResponse:
+    async def invoke(self, messages, tools=None, *, effort: str = "", model: str = "", **kwargs) -> ModelResponse:
         self.require_tools(tools or [])
         data = await self._request_json(
-            "POST", f"{self.base}/chat/completions", headers=self._headers(), json=self._payload(messages, tools, False, effort=effort)
+            "POST", f"{self.base}/chat/completions", headers=self._headers(), json=self._payload(messages, tools, False, effort=effort, model=model)
         )
-        return self._parse_completion(data)
+        return self._parse_completion(data, model=model)
 
-    def _parse_completion(self, data: dict) -> ModelResponse:
+    def _parse_completion(self, data: dict, *, model: str = "") -> ModelResponse:
         """非流式响应体 → ModelResponse。
 
         ``invoke`` 和"网关其实给了整包"的退路共用它：同一份数据不该有两套解析。
@@ -88,20 +88,20 @@ class OpenAICompatibleAdapter(ModelAdapter):
         return ModelResponse(
             text=message.get("content") or "",
             usage=_usage_from(data.get("usage") or {}),
-            model=data.get("model") or self.config.model,
+            model=data.get("model") or (model or self.config.model),
             tool_calls=message.get("tool_calls") or [],
             finish_reason=choice.get("finish_reason"),
             response_id=str(data.get("id") or ""),
         )
 
-    async def stream(self, messages, tools=None, *, effort: str = "", **kwargs) -> AsyncIterator[str]:
+    async def stream(self, messages, tools=None, *, effort: str = "", model: str = "", **kwargs) -> AsyncIterator[str]:
         self.require_tools(tools or [])
         async with self._client() as client:
             async with client.stream(
                 "POST",
                 f"{self.base}/chat/completions",
                 headers=self._headers(),
-                json=self._payload(messages, tools, True, effort=effort),
+                json=self._payload(messages, tools, True, effort=effort, model=model),
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
@@ -116,7 +116,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                     if content := delta.get("content"):
                         yield content
 
-    async def bind_tools_stream(self, tools, messages, *, on_delta=None, effort: str = "", **kwargs) -> ModelResponse:
+    async def bind_tools_stream(self, tools, messages, *, on_delta=None, effort: str = "", model: str = "", **kwargs) -> ModelResponse:
         """带工具调用的流式调用。
 
         三件必须做对的事：
@@ -132,13 +132,13 @@ class OpenAICompatibleAdapter(ModelAdapter):
           再花一次请求的钱去拿同一份数据。
         """
         self.require_tools(tools or [])
-        payload = self._payload(messages, tools, True, effort=effort)
+        payload = self._payload(messages, tools, True, effort=effort, model=model)
         payload["stream_options"] = {"include_usage": True}
 
         text: list[str] = []
         calls = ToolCallAccumulator()
         usage = Usage()
-        model = self.config.model
+        model = model or self.config.model
         finish_reason: str | None = None
         # 流式帧每片都带同一个 `id`（供应商那一笔响应的 id）；帧里拿不到就用响应头。
         # 两个都要不上才写空串——空串是"这家没给 id"这个事实，不是"还没实现"。
@@ -192,7 +192,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
         if not text and not len(calls):
             whole = _whole_completion(plain)
             if whole is not None:
-                response = self._parse_completion(whole)
+                response = self._parse_completion(whole, model=model)
                 # 整包也要推一次，否则界面等到最后才蹦出全文，流式就白开了
                 if on_delta is not None and response.text:
                     await on_delta(response.text)

@@ -129,10 +129,10 @@ class OpenAIResponsesAdapter(ModelAdapter):
         """按稳定前缀算缓存键：系统提示相同即命中，与任务/会话无关。"""
         return hashlib.sha256(instructions.encode("utf-8")).hexdigest()[:32]
 
-    def _payload(self, messages, tools, stream: bool, *, effort: str = "") -> dict:
+    def _payload(self, messages, tools, stream: bool, *, effort: str = "", model: str = "") -> dict:
         instructions, extras = self._split_system(messages)
         payload: dict = {
-            "model": self.config.model,
+            "model": model or self.config.model,
             "input": [*extras, *self._input_items(messages)],
             "max_output_tokens": self.config.max_tokens,
             "stream": stream,
@@ -207,10 +207,10 @@ class OpenAIResponsesAdapter(ModelAdapter):
             else "unknown",
         )
 
-    async def invoke(self, messages, tools=None, *, effort: str = "", **kwargs) -> ModelResponse:
+    async def invoke(self, messages, tools=None, *, effort: str = "", model: str = "", **kwargs) -> ModelResponse:
         self.require_tools(tools or [])
         data = await self._request_json(
-            "POST", f"{self.base}/responses", headers=self._headers(), json=self._payload(messages, tools, False, effort=effort)
+            "POST", f"{self.base}/responses", headers=self._headers(), json=self._payload(messages, tools, False, effort=effort, model=model)
         )
         if data.get("error"):
             error = data["error"] or {}
@@ -219,20 +219,20 @@ class OpenAIResponsesAdapter(ModelAdapter):
         return ModelResponse(
             text=text,
             usage=self._parse_usage(data),
-            model=data.get("model") or self.config.model,
+            model=data.get("model") or (model or self.config.model),
             tool_calls=tool_calls,
             finish_reason=status,
             response_id=str(data.get("id") or ""),
         )
 
-    async def stream(self, messages, tools=None, *, effort: str = "", **kwargs) -> AsyncIterator[str]:
+    async def stream(self, messages, tools=None, *, effort: str = "", model: str = "", **kwargs) -> AsyncIterator[str]:
         self.require_tools(tools or [])
         async with self._client() as client:
             async with client.stream(
                 "POST",
                 f"{self.base}/responses",
                 headers=self._headers(),
-                json=self._payload(messages, tools, True, effort=effort),
+                json=self._payload(messages, tools, True, effort=effort, model=model),
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
@@ -252,7 +252,7 @@ class OpenAIResponsesAdapter(ModelAdapter):
                         error = event.get("error") or {}
                         raise ModelError("model_stream_error", str(error.get("message") or error))
 
-    async def bind_tools_stream(self, tools, messages, *, on_delta=None, effort: str = "", **kwargs) -> ModelResponse:
+    async def bind_tools_stream(self, tools, messages, *, on_delta=None, effort: str = "", model: str = "", **kwargs) -> ModelResponse:
         """Responses 的流式：文本 delta 与函数调用 delta 是两套事件。
 
         函数调用的参数按 ``item_id`` 聚合（不是 OpenAI Chat 那种 index），
@@ -263,7 +263,7 @@ class OpenAIResponsesAdapter(ModelAdapter):
         text: list[str] = []
         calls = ToolCallAccumulator()
         usage = Usage()
-        model = self.config.model
+        model = model or self.config.model
         finished: ModelResponse | None = None
         # item_id → 累积器里的 index，两套编号需要一个映射
         item_index: dict[str, int] = {}
@@ -273,7 +273,7 @@ class OpenAIResponsesAdapter(ModelAdapter):
                 "POST",
                 f"{self.base}/responses",
                 headers=self._headers(),
-                json=self._payload(messages, tools, True, effort=effort),
+                json=self._payload(messages, tools, True, effort=effort, model=model),
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")

@@ -187,6 +187,9 @@ class SkillCatalog:
                 "base_dir": str(entry.get("base_dir") or ""),
                 # 命令/Skill 声明的思考强度：加载正文时替换 ${CLAUDE_EFFORT}。
                 "effort": str(entry.get("effort") or ""),
+                # 命令/Skill 声明的模型：skill 工具调用后覆盖本轮后续步骤的主模型。
+                # 对齐上游 SkillTool 返回的 {kind:"model", mainLoopModel}。
+                "model": str(entry.get("model") or ""),
             }
         self.loaded: set[str] = set()
         self.activated: set[str] = set()
@@ -349,6 +352,14 @@ async def _skill(context: ToolContext, arguments: dict) -> ToolOutcome:
             already_loaded=True,
         )
     catalog.loaded.add(name)
+    # Skill 声明的模型：本次调用之后，本轮后续步骤的主模型改用这一份。
+    # 对齐上游 SkillTool 返回的 {kind:"model", mainLoopModel}——模型切换发生在
+    # skill 工具调用之后，影响的是下一步及之后的模型调用，不是当前这一步。
+    skill_model = str(entry.get("model") or "")
+    if skill_model:
+        turn_state = getattr(context, "turn_state", None)
+        if isinstance(turn_state, dict):
+            turn_state["skill_model"] = skill_model
     body = render_skill(
         entry["instructions"],
         args,

@@ -65,8 +65,9 @@ RESERVED_DIRS = frozenset({"synced"})
 # Parsed for audit only; we do not apply them (see module docstring).
 # ``paths`` is *not* here: it is honoured as a conditional-activation gate.
 # ``effort`` 不在列：Skill 声明的思考强度在加载正文时展开进提示词。
+# ``model`` 不在列：Skill 声明的模型在 skill 工具调用后覆盖本轮后续步骤的主模型
+# （对齐上游 SkillTool 返回的 ``{kind:"model", mainLoopModel}``）。
 UNSUPPORTED_FIELDS = (
-    "model",
     "when_to_use",
     "version",
     "hooks",
@@ -103,6 +104,9 @@ class SkillDefinition:
     warnings: tuple[str, ...] = ()
     # Claude 的 ``effort``：加载这份 Skill 的正文时用的思考强度。空串 = 不声明。
     effort: str = ""
+    # Claude 的 ``model``：skill 工具调用后，本轮后续步骤的主模型覆盖。
+    # 空串 = 不声明，不改变当前模型。
+    model: str = ""
 
     @property
     def conditional(self) -> bool:
@@ -130,6 +134,7 @@ class SkillDefinition:
             "path": self.path,
             "ignored": list(self.ignored),
             "effort": self.effort,
+            "model": self.model,
         }
 
     def as_dict(self) -> dict:
@@ -161,6 +166,8 @@ class SkillDefinition:
             payload["ignored"] = list(self.ignored)
         if self.effort:
             payload["effort"] = self.effort
+        if self.model:
+            payload["model"] = self.model
         return payload
 
 
@@ -556,6 +563,15 @@ def _definition_from_dir(
             warnings.append(f"Skill 文件 {mask_path(str(path))} 的 effort {parsed_effort.warning}")
         else:
             skill_effort = parsed_effort.level
+    # model：skill 调用后覆盖本轮后续步骤的主模型。只认非空字符串，
+    # 其余类型告警丢弃——模型名写错的报错应该来自供应商，不是在这里猜一个值。
+    skill_model = ""
+    raw_model = meta.get("model")
+    if raw_model is not None:
+        if isinstance(raw_model, str) and raw_model.strip():
+            skill_model = raw_model.strip()
+        else:
+            warnings.append(f"Skill 文件 {mask_path(str(path))} 的 model 不是非空字符串，已忽略")
     ignored = tuple(key for key in UNSUPPORTED_FIELDS if meta.get(key) is not None)
     return (
         SkillDefinition(
@@ -575,6 +591,7 @@ def _definition_from_dir(
             ignored=ignored,
             warnings=tuple(warnings),
             effort=skill_effort,
+            model=skill_model,
         ),
         [],
         warnings,

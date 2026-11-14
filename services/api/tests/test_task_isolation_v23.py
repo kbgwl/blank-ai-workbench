@@ -415,7 +415,7 @@ class _SilentAdapter:
 
     last_provider = ""
 
-    async def bind_tools(self, specs, chat, *, effort="", thinking=None):
+    async def bind_tools(self, specs, chat, *, effort="", thinking=None, model=""):
         return ModelResponse(text="done", usage=Usage(), model="fake", response_id="r1")
 
 

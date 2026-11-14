@@ -495,7 +495,8 @@ def test_invalid_tool_shape_is_a_warning_not_a_crash(tmp_path: Path) -> None:
 
 def test_unsupported_fields_are_reported_not_applied(tmp_path: Path) -> None:
     # paths 已不再是"只看不用"的字段（AA 批起按条件激活生效），effort 也已生效
-    # （加载正文时展开 ${CLAUDE_EFFORT}），这里只钉余下仍不生效的。
+    # （加载正文时展开 ${CLAUDE_EFFORT}），model 也已生效（skill 调用后覆盖本轮主模型，
+    # #287–#290）。这里只钉余下仍不生效的。
     _write_skill(
         tmp_path,
         "deploy",
@@ -505,10 +506,13 @@ def test_unsupported_fields_are_reported_not_applied(tmp_path: Path) -> None:
     found = _discover(tmp_path)
     item = found.entries["deploy"]
 
-    assert set(item.ignored) == {"model", "context"}
+    # model 已生效：解析进 SkillDefinition.model，不再进 ignored
+    assert item.model == "sonnet"
+    assert set(item.ignored) == {"context"}
     audit = item.as_dict()
-    assert "sonnet" not in str(audit)
-    assert audit["ignored"] == ["model", "context"]
+    assert "sonnet" in str(audit)
+    assert audit["model"] == "sonnet"
+    assert audit["ignored"] == ["context"]
 
 
 # --------------------------------------------------------------------------- #

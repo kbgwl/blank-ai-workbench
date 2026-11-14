@@ -32,9 +32,9 @@ class OllamaAdapter(ModelAdapter):
     def __init__(self, config: AdapterConfig) -> None:
         super().__init__(config)
         self.base = config.base_url.rstrip("/")
-    def _payload(self, messages, tools, stream: bool) -> dict:
+    def _payload(self, messages, tools, stream: bool, *, model: str = "") -> dict:
         payload = {
-            "model": self.config.model,
+            "model": model or self.config.model,
             "messages": [_ollama_message(m) for m in messages],
             "stream": stream,
             "options": {"temperature": self.config.temperature, "num_predict": self.config.max_tokens},
@@ -46,9 +46,9 @@ class OllamaAdapter(ModelAdapter):
             ]
         return payload
 
-    async def invoke(self, messages, tools=None, **kwargs) -> ModelResponse:
+    async def invoke(self, messages, tools=None, *, model: str = "", **kwargs) -> ModelResponse:
         self.require_tools(tools or [])
-        data = await self._request_json("POST", f"{self.base}/api/chat", json=self._payload(messages, tools, False))
+        data = await self._request_json("POST", f"{self.base}/api/chat", json=self._payload(messages, tools, False, model=model))
         usage = Usage(
             prompt_tokens=int(data.get("prompt_eval_count") or 0),
             completion_tokens=int(data.get("eval_count") or 0),
@@ -60,16 +60,16 @@ class OllamaAdapter(ModelAdapter):
         return ModelResponse(
             text=message.get("content") or "",
             usage=usage,
-            model=data.get("model") or self.config.model,
+            model=data.get("model") or (model or self.config.model),
             tool_calls=message.get("tool_calls") or [],
             finish_reason="stop" if data.get("done") else None,
         )
 
-    async def stream(self, messages, tools=None, **kwargs) -> AsyncIterator[str]:
+    async def stream(self, messages, tools=None, *, model: str = "", **kwargs) -> AsyncIterator[str]:
         self.require_tools(tools or [])
         async with self._client() as client:
             async with client.stream(
-                "POST", f"{self.base}/api/chat", json=self._payload(messages, tools, True)
+                "POST", f"{self.base}/api/chat", json=self._payload(messages, tools, True, model=model)
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
@@ -85,7 +85,7 @@ class OllamaAdapter(ModelAdapter):
                     if chunk.get("done"):
                         return
 
-    async def bind_tools_stream(self, tools, messages, *, on_delta=None, **kwargs) -> ModelResponse:
+    async def bind_tools_stream(self, tools, messages, *, on_delta=None, model: str = "", **kwargs) -> ModelResponse:
         """Ollama 是 NDJSON（每行一个完整 JSON），不是 SSE——所以这里不认 ``data:`` 前缀。
 
         工具调用一次性出现在某一行里（不是碎片），但仍然走同一个聚合器：
@@ -95,12 +95,12 @@ class OllamaAdapter(ModelAdapter):
         text: list[str] = []
         calls = ToolCallAccumulator()
         usage = Usage()
-        model = self.config.model
+        model = model or self.config.model
         done = False
 
         async with self._client() as client:
             async with client.stream(
-                "POST", f"{self.base}/api/chat", json=self._payload(messages, tools, True)
+                "POST", f"{self.base}/api/chat", json=self._payload(messages, tools, True, model=model)
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
