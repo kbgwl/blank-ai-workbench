@@ -25,9 +25,9 @@ The frontmatter shares the Skill schema (``description``, ``argument-hint``,
 Our boundaries: user layer ``~/.blank/commands``, project layer
 ``<root>/.blank/commands``; project wins on a name collision; 1 MB per file;
 a bad frontmatter degrades instead of skipping; a body over 20,000 chars is
-clipped; ``allowed-tools`` / ``disallowed-tools`` are audited but not enforced;
-shell execution blocks (``!`cmd` ``) are **not** executed — they stay in the
-body as text.
+clipped; ``allowed-tools`` / ``disallowed-tools`` are enumerated by the caller;
+``!command`` execution blocks run under the shell declared by ``shell``
+(``bash`` / ``powershell``), or the host shell when not declared.
 """
 
 from __future__ import annotations
@@ -46,6 +46,7 @@ from blank_api.services.skills_defs import (
     UNSUPPORTED_FIELDS,
     _flag,
     _parse_frontmatter,
+    _parse_shell,
     _summary,
     _tool_list,
     _tool_placeholders,
@@ -119,6 +120,9 @@ class CommandDefinition:
     # context：上游只认 ``"fork"``——只有声明了它才把正文派给子代理，
     # ``agent`` / ``background`` 只是 fork 分支下的子选项。空串 = 不声明。
     context: str = ""
+    # 上游 ``Osn`` 的 ``shell``：``!`` 块用哪个解释器（bash / powershell）。
+    # 空串 = 不声明，走原来的 host shell（本机有意的偏离，见 README）。
+    shell: str = ""
     # 插件来源时才有：${CLAUDE_PLUGIN_ROOT} 与 ${CLAUDE_PLUGIN_DATA} 的替换值。
     # 非插件命令保持空串，substitute_paths 不展开这两个占位符（与上游
     # ``C9`` 的 ``n.source`` 门控一致）。
@@ -147,6 +151,7 @@ class CommandDefinition:
             "agent": self.agent,
             "background": self.background,
             "context": self.context,
+            "shell": self.shell,
             "plugin_root": self.plugin_root,
             "plugin_data": self.plugin_data,
         }
@@ -174,6 +179,8 @@ class CommandDefinition:
             payload["ignored"] = list(self.ignored)
         if self.effort:
             payload["effort"] = self.effort
+        if self.shell:
+            payload["shell"] = self.shell
         return payload
 
 
@@ -355,6 +362,7 @@ def _definition(
             warnings.append(
                 f"命令文件 {mask_path(str(path))} 的 context 不是字符串，已忽略"
             )
+    command_shell = _parse_shell(meta, f"命令文件 {mask_path(str(path))}", warnings)
     ignored = tuple(key for key in COMMAND_UNSUPPORTED_FIELDS if meta.get(key) is not None)
     return (
         CommandDefinition(
@@ -376,6 +384,7 @@ def _definition(
             agent=command_agent,
             background=command_background,
             context=command_context,
+            shell=command_shell,
             plugin_root=str(plugin_root) if plugin_root else "",
             plugin_data=str(plugin_data) if plugin_data else "",
         ),
@@ -526,6 +535,7 @@ def expand_user_input(
         effort=effort_for_prompt(entry.get("effort")),
         plugin_root=str(entry.get("plugin_root") or ""),
         plugin_data=str(entry.get("plugin_data") or ""),
+        shell=str(entry.get("shell") or ""),
     )
     info = {
         "name": name,

@@ -496,11 +496,12 @@ def test_invalid_tool_shape_is_a_warning_not_a_crash(tmp_path: Path) -> None:
 def test_unsupported_fields_are_reported_not_applied(tmp_path: Path) -> None:
     # paths 已不再是"只看不用"的字段（AA 批起按条件激活生效），effort 也已生效
     # （加载正文时展开 ${CLAUDE_EFFORT}），model 也已生效（skill 调用后覆盖本轮主模型，
-    # #287–#290），context 也已生效（#312 起是子代理派发闸门）。这里只钉余下仍不生效的。
+    # #287–#290），context 也已生效（#312 起是子代理派发闸门），shell 也已生效
+    # （#313 起驱动 ! 块解释器）。这里只钉余下仍不生效的。
     _write_skill(
         tmp_path,
         "deploy",
-        _skill(extra="model: sonnet\nshell: powershell\n"),
+        _skill(extra="model: sonnet\nversion: 2\n"),
     )
 
     found = _discover(tmp_path)
@@ -508,11 +509,11 @@ def test_unsupported_fields_are_reported_not_applied(tmp_path: Path) -> None:
 
     # model 已生效：解析进 SkillDefinition.model，不再进 ignored
     assert item.model == "sonnet"
-    assert set(item.ignored) == {"shell"}
+    assert set(item.ignored) == {"version"}
     audit = item.as_dict()
     assert "sonnet" in str(audit)
     assert audit["model"] == "sonnet"
-    assert audit["ignored"] == ["shell"]
+    assert audit["ignored"] == ["version"]
 
 
 # --------------------------------------------------------------------------- #

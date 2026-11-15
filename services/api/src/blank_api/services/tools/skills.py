@@ -68,6 +68,7 @@ def render_skill(
     effort: str = "",
     plugin_root: str = "",
     plugin_data: str = "",
+    shell: str = "",
 ) -> str:
     """把调用参数交给 Skill：与 Claude 的 ``qW`` 同一套占位符规则。"""
     return render_prompt(
@@ -80,6 +81,7 @@ def render_skill(
         effort=effort,
         plugin_root=plugin_root,
         plugin_data=plugin_data,
+        shell=shell,
     )
 
 
@@ -142,6 +144,7 @@ def preload_skills(
             effort=effort_for_prompt(entry.get("effort") or effort),
             plugin_root=str(entry.get("plugin_root") or ""),
             plugin_data=str(entry.get("plugin_data") or ""),
+            shell=str(entry.get("shell") or ""),
         )
         loaded.append((name, skill_loading_header(name) + "\n\n" + body))
     return loaded, problems
@@ -213,6 +216,9 @@ class SkillCatalog:
                 # Skill 声明的 context：只有 "fork" 才派发子代理；agent/background
                 # 是 fork 分支下的子选项（对齐上游 SkillTool 的 vQt 闸门，#312）。
                 "context": str(entry.get("context") or ""),
+                # Skill 声明的 shell：``!`` 块的解释器（bash / powershell），
+                # 空串走 host shell（对齐上游 Osn，#313）。
+                "shell": str(entry.get("shell") or ""),
                 # 插件来源的路径占位符：正文里的 ${CLAUDE_PLUGIN_ROOT} /
                 # ${CLAUDE_PLUGIN_DATA} 在 handler 里交给 substitute_paths 展开。
                 "plugin_root": str(entry.get("plugin_root") or ""),
@@ -432,6 +438,7 @@ async def _skill(context: ToolContext, arguments: dict) -> ToolOutcome:
         # ${CLAUDE_PLUGIN_ROOT} / ${CLAUDE_PLUGIN_DATA} 由 substitute_paths 展开。
         plugin_root=str(entry.get("plugin_root") or ""),
         plugin_data=str(entry.get("plugin_data") or ""),
+        shell=str(entry.get("shell") or ""),
     )
     await _record(context, "skill.invoked", {"skill": name, "has_args": bool(args), "chars": len(body)})
     # context: fork：Skill 声明了这个闸门才派生子代理执行正文，而不是主线程注入。

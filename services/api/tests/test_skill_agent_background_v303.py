@@ -269,12 +269,13 @@ def test_background_still_in_command_unsupported_fields() -> None:
 
 
 def test_skill_unsupported_is_subset_of_command_unsupported() -> None:
-    """``SKILL_UNSUPPORTED_FIELDS`` 是 ``UNSUPPORTED_FIELDS`` 去掉 agent/background/context。
+    """``SKILL_UNSUPPORTED_FIELDS`` 是 ``UNSUPPORTED_FIELDS`` 去掉已移植字段。
 
-    两个列表的差集不是恰好 {agent, background, context}，说明分叉写错了。
+    agent/background/context 见 #303/#312；fallback 只在 Skill 侧生效（#314），
+    命令 schema 上游没有这个字段，所以命令侧仍按不支持审计。差集写错就红。
     """
     removed = set(UNSUPPORTED_FIELDS) - set(SKILL_UNSUPPORTED_FIELDS)
-    assert removed == {"agent", "background", "context"}
+    assert removed == {"agent", "background", "context", "fallback"}
 
 
 # --------------------------------------------------------------------------- #

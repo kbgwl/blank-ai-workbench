@@ -597,13 +597,21 @@ class AgentRuntime:
                     "active": active_style.name if active_style is not None else "default",
                 },
             )
+        dropped_fallbacks: list[str] = []
         skills = SkillCatalog(
             merge_skill_entries(
                 request.skill_catalog,
                 [item.as_entry() for item in disk_skills.entries.values()],
                 [item.as_entry() for item in commands.entries.values()],
+                dropped=dropped_fallbacks,
             )
         )
+        if dropped_fallbacks:
+            await recorder.add(
+                "skills.fallback_shadowed",
+                "receive_task",
+                {"dropped": list(dropped_fallbacks)},
+            )
         # 一个模型可加载的都没有时，工具也一并拿掉——列不出名字却摆着加载入口，
         # 只会让模型反复试错。
         if not skills.model_available():
@@ -1326,13 +1334,24 @@ class AgentRuntime:
             root = Path(session.context.root)
             disk_skills = discover_skills(root)
             disk_commands = discover_commands(root)
+            dropped_fallbacks: list[str] = []
             reloaded = SkillCatalog(
                 merge_skill_entries(
                     request.skill_catalog,
                     [item.as_entry() for item in disk_skills.entries.values()],
                     [item.as_entry() for item in disk_commands.entries.values()],
+                    dropped=dropped_fallbacks,
                 )
             )
+            if dropped_fallbacks:
+                await recorder.add(
+                    "skills.fallback_shadowed",
+                    "receive_task",
+                    {
+                        "event": "session_start",
+                        "dropped": list(dropped_fallbacks),
+                    },
+                )
             session.skill_catalog = reloaded.listing()
             await recorder.add(
                 "hook.skills_reloaded",

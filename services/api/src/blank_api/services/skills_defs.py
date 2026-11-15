@@ -82,7 +82,6 @@ UNSUPPORTED_FIELDS = (
     "agent",
     "background",
     "fallback",
-    "shell",
     "created_by",
     "improved_by",
     "mcpServers",
@@ -95,9 +94,11 @@ UNSUPPORTED_FIELDS = (
 # agent/background/context 走输入管道（expand_user_input 的 info），运行时从
 # expansion 读出后按 context == "fork" 决定是否派发子代理，对应的
 # COMMAND_UNSUPPORTED_FIELDS 在 commands_defs.py。
+# shell 已从基础清单移除：Skill 与命令都解析并驱动 ``!`` 块的解释器（#313）。
+# fallback 只在 Skill 侧生效（上游命令 schema 没有这个字段，#314）。
 SKILL_UNSUPPORTED_FIELDS = tuple(
     key for key in UNSUPPORTED_FIELDS
-    if key not in ("agent", "background", "context")
+    if key not in ("agent", "background", "context", "fallback")
 )
 
 _LEADING_MARKS = re.compile(r"^[#>*\-\s]+")
@@ -140,9 +141,16 @@ class SkillDefinition:
     # 上游 ``lme`` 的 ``background``：Skill 是否后台派发子代理执行正文。
     # False = 不声明（等同没写），前台派发或主线程注入。
     background: bool = False
+    # 上游 ``v2e`` 的 ``fallback``：薄指针 Skill 的同名占位。加载了同后缀
+    # 的插件/MCP 技能（``<plugin>:<name>``）后，这份让位（上游 ``q9`` 丢弃）。
+    # False = 不声明。
+    fallback: bool = False
     # 上游只认 ``"fork"`` 的 ``context``：只有声明了它才把正文派给子代理，
     # agent/background 是 fork 分支下的子选项。空串 = 不声明。
     context: str = ""
+    # 上游 ``Osn`` 的 ``shell``：``!`` 块用哪个解释器（bash / powershell）。
+    # 空串 = 不声明，走原来的 host shell（本机有意的偏离，见 README）。
+    shell: str = ""
     # 插件来源时才有：${CLAUDE_PLUGIN_ROOT} 与 ${CLAUDE_PLUGIN_DATA} 的替换值。
     # 非插件 Skill 保持空串，substitute_paths 不展开这两个占位符（与上游
     # ``C9`` 的 ``n.source`` 门控一致）。
@@ -181,7 +189,9 @@ class SkillDefinition:
             "unloadable_guard": self.unloadable_guard,
             "agent": self.agent,
             "background": self.background,
+            "fallback": self.fallback,
             "context": self.context,
+            "shell": self.shell,
             "plugin_root": self.plugin_root,
             "plugin_data": self.plugin_data,
         }
@@ -221,8 +231,12 @@ class SkillDefinition:
             payload["agent"] = self.agent
         if self.background:
             payload["background"] = True
+        if self.fallback:
+            payload["fallback"] = True
         if self.context:
             payload["context"] = self.context
+        if self.shell:
+            payload["shell"] = self.shell
         return payload
 
 
@@ -487,6 +501,30 @@ def _flag(value, default: bool) -> tuple[bool, str]:
     return default, f"不是布尔值（{value!r}），按 {str(default).lower()} 处理"
 
 
+# 上游 ``Osn``：``R = ["bash","powershell"]``，trim + 小写后精确匹配。
+SHELL_CHOICES: tuple[str, ...] = ("bash", "powershell")
+
+
+def _parse_shell(meta: dict, label: str, warnings: list[str]) -> str:
+    """解析 frontmatter 的 ``shell``（上游 ``Osn(e,n)``）。
+
+    null / 缺省 / 空串 → 不声明（空串，不告警）；``bash`` / ``powershell``
+    大小写不敏感；其他值告警并按未声明处理——不猜一个解释器。
+    """
+    raw = meta.get("shell")
+    if raw is None:
+        return ""
+    candidate = str(raw).strip().lower()
+    if not candidate:
+        return ""
+    if candidate in SHELL_CHOICES:
+        return candidate
+    warnings.append(
+        f"{label} 的 shell {raw!r} 不被识别，只支持 bash / powershell，已回落到默认 shell"
+    )
+    return ""
+
+
 def _summary(text: str) -> str:
     for raw in str(text or "").splitlines():
         line = _LEADING_MARKS.sub("", raw).strip()
@@ -676,6 +714,18 @@ def _definition_from_dir(
             )
         else:
             skill_background = parsed_bg
+    # fallback：上游 ``v2e`` 只认 ``fallback===!0``；``false``/缺省/null 等同
+    # 不声明。沿用 ``_flag`` 的字符串宽容口径（与 background 一致）。
+    skill_fallback = False
+    raw_fallback = meta.get("fallback")
+    if raw_fallback is not None:
+        parsed_fb, fb_problem = _flag(raw_fallback, False)
+        if fb_problem:
+            warnings.append(
+                f"Skill 文件 {mask_path(str(path))} 的 fallback {fb_problem}"
+            )
+        else:
+            skill_fallback = parsed_fb
     # context：上游只认 "fork"。声明了它才派发子代理；其他值告警丢弃、不猜。
     # null/缺省等同不声明（不告警）；空串同理。
     skill_context = ""
@@ -693,6 +743,7 @@ def _definition_from_dir(
             warnings.append(
                 f"Skill 文件 {mask_path(str(path))} 的 context 不是字符串，已忽略"
             )
+    skill_shell = _parse_shell(meta, f"Skill 文件 {mask_path(str(path))}", warnings)
     ignored = tuple(key for key in SKILL_UNSUPPORTED_FIELDS if meta.get(key) is not None)
     # 上游 lJs：hooks 解析 + unloadableGuard。guard 开启时 Skill 仍加载，
     # 但 hooks 与 allowed-tools 都被清空（``Se=pe?[]:OI(...)``）。
@@ -723,7 +774,9 @@ def _definition_from_dir(
             unloadable_guard=unloadable_guard,
             agent=skill_agent,
             background=skill_background,
+            fallback=skill_fallback,
             context=skill_context,
+            shell=skill_shell,
             plugin_root=str(plugin_root) if plugin_root else "",
             plugin_data=str(plugin_data) if plugin_data else "",
         ),
@@ -883,13 +936,20 @@ def load_skill(
     )
 
 
-def merge_skill_entries(*groups) -> list[dict]:
+def merge_skill_entries(
+    *groups, dropped: list[str] | None = None
+) -> list[dict]:
     """Merge catalogues in precedence order (earlier first, later wins).
 
     A Skill the model may not invoke cannot hide a same-named Skill it can
     invoke: Claude's command de-duplication keeps the invocable copy in that
     case (``aNs``), and doing otherwise would silently remove a capability
     because a lower layer added a user-only file.
+
+    ``dropped``（可选）收集被顶掉的 fallback Skill：上游 ``q9`` 在合并后的
+    命令表上丢弃 ``fallback===!0`` 且名字命中「已加载的插件/MCP 命令后缀」
+    的条目并告警；本机没有 bundled / MCP prompt 技能链路，只看 ``plugin:``
+    来源、可模型调用、带冒号的名字（等价 ``lastIndexOf(":") > 0``）。
     """
     merged: dict[str, dict] = {}
     for group in groups:
@@ -907,4 +967,26 @@ def merge_skill_entries(*groups) -> list[dict]:
             ):
                 continue
             merged[name] = dict(entry, name=name)
-    return list(merged.values())
+    entries = list(merged.values())
+    suffixes: set[str] = set()
+    for entry in entries:
+        if not str(entry.get("source") or "").startswith("plugin:"):
+            continue
+        if not bool(entry.get("model_invocable", True)):
+            continue
+        plugin_name = str(entry.get("name") or "")
+        if ":" in plugin_name:
+            suffixes.add(plugin_name.rsplit(":", 1)[1])
+    if not suffixes:
+        return entries
+    kept: list[dict] = []
+    for entry in entries:
+        name = str(entry.get("name") or "")
+        if entry.get("fallback") is True and name in suffixes:
+            if dropped is not None:
+                dropped.append(
+                    f"丢弃 fallback Skill '{name}'：同后缀的插件技能已加载"
+                )
+            continue
+        kept.append(entry)
+    return kept

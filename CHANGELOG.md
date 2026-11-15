@@ -1,6 +1,81 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）
+
+- **Skill 的 `fallback` 薄指针让位（#314）**：Skill 声明 `fallback: true` 时，一旦
+  加载了**同后缀**的插件技能（`<plugin>:<name>`），这份占位就丢弃并留告警。
+  上游锚点（均以 `grep -bo` 复核）：Skill schema 的 `fallback` 描述（`@internal —
+  interim defense-in-depth for thin-pointer skill stubs. If true, this skill yields
+  to a same-suffix plugin or MCP skill ...`，6475337）、合并层过滤函数 `q9(e)`
+  （12713520：先收集 `loadedFrom ∈ {plugin,bundled,mcp}`、非
+  `disableModelInvocation`、非 `Rj` 的 prompt 命令名的最后一段
+  （`lastIndexOf(":") > 0`），再丢弃 `v2e` 为真且名字命中的条目并告警
+  `Dropping fallback skill '<name>' — ...`，12713951）、`v2e(e)`
+  （12715657：`type==="prompt" && fallback===!0 && loadedFrom!=="syncedSkills"`）。
+  1. **解析**：`SkillDefinition` 新增 `fallback`（bool，默认 False）。`_definition_from_dir`
+     沿用 `_flag` 口径：`true` / `false` 与字符串 `"true"` / `"yes"` / `"1"` / `"on"`
+     （及反值）都认，其他值告警并按 False 处理，`null` / 缺省静默。`as_entry()`
+     恒携带（合并层要读它），`as_dict()` 仅在 True 时写出。`SKILL_UNSUPPORTED_FIELDS`
+     排除 `fallback`（`UNSUPPORTED_FIELDS` 全局保留）；命令侧上游 schema 无此字段，
+     `COMMAND_UNSUPPORTED_FIELDS` 仍包含它。
+  2. **合并**：`merge_skill_entries(*groups, dropped=None)` 在既有去重之后做一次
+     后缀过滤——收集「`source` 以 `plugin:` 开头 + 可模型调用 + 名字带冒号」的
+     最后一段为集合；`fallback is True` 且名字命中该集合的条目丢弃，命中的名字
+     追加进 `dropped`。runtime 两处合并点（`receive_task` 与 SessionStart 重载）
+     收集 `dropped` 并落 `skills.fallback_shadowed` 事件（重载那份带
+     `event: "session_start"`），让「薄指针被顶掉」进证据时间线而不是静默消失。
+  3. **偏离项**：本机没有 bundled / MCP prompt 技能与 `syncedSkills` 链路，
+     后缀集合只看 `plugin:` 来源；`_flag` 对字符串真值的宽容与 `background`
+     一致，上游 zod boolean 只收布尔。
+  判据 `services/api/tests/test_skill_fallback_v314.py`（26 例：默认 false、true /
+  false、字符串真值四档、非布尔告警、`null` 静默、`as_entry` / `as_dict` 携带、
+  审计省略 false、三份清单关系、`ignored` 不含 fallback；合并层后缀命中丢弃 /
+  未命中保留 / 非 fallback 不丢 / 不可调用插件项不触发 / 插件命令同样触发 /
+  dropped 告警文本 / 无命中空 / 多 fallback 只丢命中 / 无插件层原样 / 目录清单
+  隐藏 / 非插件来源带冒号不触发 / 无冒号不触发 / 端到端 two 例；运行时
+  `receive_task` 与 reloadSkills 两条链路各一条真跑，钉住
+  `skills.fallback_shadowed` 事件与 `dropped` 载荷），变异 13/13 红（解析恒 False
+  → 6 红；非法值不告警 → 1 红；`as_entry` 不携带 → 4 红；留在不支持清单 → 2 红；
+  合并从不丢弃 → 8 红；不可调用插件项计入 → 1 红；任意来源计入 → 1 红；忽略
+  fallback 标志 → 2 红；dropped 不记录 → 3 红；两处接线各摘一条 → 各 1 红；
+  两处事件名各改一处 → 各 1 红；红集合逐条实测、还原后 26 绿），相邻十九套件
+  **512 passed**（同步修正 v303 里钉住旧差集的判据）。
+
+- **Skill / 命令的 `shell` 字段（#313）**：`!` 命令块按 frontmatter 声明的解释器
+  执行，而不是一律走 host shell。上游锚点（均以 `grep -bo` 复核）：
+  Skill schema 的 `shell` 描述（`Shell for \`!\`-command blocks: \`bash\` or
+  \`powershell\`. Defaults to bash regardless of platform.`，6474227）、解析函数
+  `Osn(e,n)`（17187055：`R=["bash","powershell"]`，`String(e).trim().toLowerCase()`
+  后精确匹配；`null`/空串直接返回 undefined；非法值告警
+  `Frontmatter 'shell: ...' in ... is not recognized. Valid values: bash,
+  powershell. Falling back to bash.` 并按未声明处理）、插件侧缺二进制的提示文案
+  （4020401）。
+  1. **解析**：`SkillDefinition` / `CommandDefinition` 新增 `shell`（str，默认空串）；
+     `skills_defs._parse_shell` 由两侧共用，首尾空白与大小写归一后精确匹配
+     `bash` / `powershell`；`null` / 缺省 / 空串静默按「未声明」；非法值与非字符串
+     告警并丢弃（不猜一个解释器）。`shell` 从 `UNSUPPORTED_FIELDS` 移除，
+     `SKILL_UNSUPPORTED_FIELDS` / `COMMAND_UNSUPPORTED_FIELDS` 随之不再包含它，
+     也不再进 `ignored` 审计。
+  2. **执行**：`prompt_args._resolve_shell_command` 把 `bash` 解析成
+     `[bash, -c]`、`powershell` 解析成 `[pwsh|powershell, -NoProfile, -Command]`
+     （`pwsh` 优先，与上游插件侧检查的两个名字一致）；`execute_shell_blocks` 用
+     `shell=False` 的 argv 前缀运行 `!` 块；`render_prompt` → `render_skill` →
+     命令展开 / skill 工具 / 子代理预加载五条路径全部透传 `shell`。
+  3. **偏离项**：**未声明时沿用 host shell（Windows 上是 cmd），不是上游「默认
+     bash、不分平台」**——`!` 块的既有契约（#309）就是 host shell，无声明即改 bash
+     会悄悄改变存量命令文件的执行语义；显式 `shell: bash` / `shell: powershell`
+     才切换。声明的二进制在 PATH 上找不到时同样静默回落 host shell（上游在插件
+     侧告警，本机没有插件级可用性检查这条链路）。本字段只影响渲染时的 `!` 块，
+     不改变 `run_shell` 工具的执行方式。
+  判据 `services/api/tests/test_shell_field_v313.py`（22 例：默认空串、大小写/空白
+  归一、非法值告警并丢弃、`null` 不告警、非字符串告警、`as_entry` 与审计携带、
+  未声明不进审计、两份不支持清单排除；命令侧解析与非法值两例；真实 PowerShell
+  语法 `<mark>` 跑通 + host shell 反证、真实 bash 算术 `$((6*7))` + host 反证、
+  二进制缺失回落；`render_prompt` / `render_skill` / 命令展开 / 预加载 / 工具处理器
+  五条透传路径与目录条目），变异 7/7 红（解析恒不返回候选值 → 6 红；非法值不
+  告警 → 3 红；`shell` 留在不支持清单 → 3 红；执行忽略 `shell` 参数 → 7 红；
+  `render_prompt` 不传 → 5 红；`render_skill` 不传 → 3 红；目录条目不携带 → 3 红；
+  红集合逐条实测、互不相同，还原后 22 绿），相邻九套件连同本批 **200 passed**。
 
 - **命令/Skill 的 `context: fork` 派发闸门（#312）**：修正 #311 的语义偏差——上游
   的派发闸门是 `context == "fork"`，`agent` 只是"fork 时用哪个子代理类型"，

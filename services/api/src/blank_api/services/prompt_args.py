@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 import shlex
+import shutil
 from pathlib import Path
 
 SENTINEL = "\uFFFF"
@@ -137,18 +138,43 @@ def expand_arguments(
 # Claude Code 在渲染命令文件正文时执行 ``!command`` 行，本批对齐这一行为。
 _SHELL_BLOCK = re.compile(r"^!(.+)$", re.MULTILINE)
 
+# frontmatter ``shell`` 允许的两个取值（上游 ``Osn`` 的 ``R = ["bash","powershell"]``）。
+_SHELL_CHOICES = ("bash", "powershell")
+
+
+def _resolve_shell_command(shell: str) -> list[str] | None:
+    """把声明的 shell 解析成 ``argv 前缀``；未声明/不可用返回 ``None``。
+
+    ``bash`` 优先找 PATH 上的 bash，``powershell`` 先试 ``pwsh`` 再试
+    ``powershell``（上游插件侧检查的也是这两个）。找不到二进制时返回
+    ``None``，调用方回落到 host shell——上游同样"回落 bash"，只是它的默认
+    本来就是 bash。
+    """
+    name = str(shell or "").strip().lower()
+    if name == "bash":
+        path = shutil.which("bash")
+        return [path, "-c"] if path else None
+    if name == "powershell":
+        path = shutil.which("pwsh") or shutil.which("powershell")
+        return [path, "-NoProfile", "-Command"] if path else None
+    return None
+
 
 def execute_shell_blocks(
     text: str,
     *,
     root: str | Path | None = None,
     timeout: float = 10.0,
+    shell: str = "",
 ) -> str:
     """Execute ``!command`` lines and embed stdout back into the text.
 
     只匹配行首 ``!``（``^!``，MULTILINE）。行中 ``!``（如 "不是 !echo"）不
     算 shell 块，原样保留。``root`` 为空时没有工作区可跑，``!`` 行原样留在
     正文——不猜、不抛，宁可留字面文本也不要在无根环境里乱跑命令。
+
+    ``shell`` 来自 frontmatter（``bash`` / ``powershell``）：声明了就换解释器，
+    未声明或二进制不可用时走原来的 host shell。
     """
     if not root:
         return text
@@ -160,6 +186,7 @@ def execute_shell_blocks(
     )
 
     root_path = Path(root)
+    interpreter = _resolve_shell_command(shell)
 
     def replace(match: re.Match[str]) -> str:
         command = match.group(1).strip()
@@ -167,7 +194,16 @@ def execute_shell_blocks(
             return match.group(0)
         normalized = normalize_relative_executable(command, root_path)
         cmd_str = normalized if isinstance(normalized, str) else " ".join(normalized)
-        result = _run_blocking(cmd_str, root_path, timeout, shell=True, env=build_env())
+        if interpreter:
+            result = _run_blocking(
+                [*interpreter, cmd_str],
+                root_path,
+                timeout,
+                shell=False,
+                env=build_env(),
+            )
+        else:
+            result = _run_blocking(cmd_str, root_path, timeout, shell=True, env=build_env())
         if result.get("timed_out"):
             return f"[命令超时: {command}]"
         stdout = result.get("stdout", "").strip()
@@ -192,6 +228,7 @@ def render_prompt(
     effort: str = "",
     plugin_root: str = "",
     plugin_data: str = "",
+    shell: str = "",
 ) -> str:
     """Expand one prompt file: arguments, placeholders, then `!` shell blocks."""
     clean = str(args) if args is not None and str(args) != "" else None
@@ -205,7 +242,7 @@ def render_prompt(
         plugin_root=plugin_root,
         plugin_data=plugin_data,
     )
-    return execute_shell_blocks(text, root=project_dir or None)
+    return execute_shell_blocks(text, root=project_dir or None, shell=shell)
 
 
 def substitute_paths(
