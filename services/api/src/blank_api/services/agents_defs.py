@@ -21,6 +21,9 @@ but the *rules around it*:
   ``isolation: worktree`` always wins over a caller's ``isolate: false``;
   ``background: true`` wins over ``run_in_background: false``;
 * ``maxTurns`` is a positive integer; anything else is ignored with a warning;
+* ``model`` overrides the model for this agent's calls. ``inherit`` (and an
+  absent/empty value) means the spawning session's model; the literal is never
+  sent to a provider, and forks always inherit regardless of the declaration;
 * plugin agents fall back to the file name for ``name`` and to
   ``description`` → ``when_to_use`` → ``when-to-use`` → ``Agent from <plugin>
   plugin`` for the description, and ignore ``permissionMode`` / ``hooks`` /
@@ -28,12 +31,12 @@ but the *rules around it*:
 * one bad file never takes the whole catalog down.
 
 What a definition still may *not* do here is widen the boundary. We parse
-``model`` / ``hooks`` / ``mcpServers`` (and a few other Claude-only knobs) but
-never apply them; they are reported per definition so the omission is visible
-instead of silently changing what the user thinks they configured. Tool lists
-only ever narrow the child pool — a custom agent that lists ``run_shell`` stays
-read-only unless it was spawned with ``isolate``. Permission modes only move
-toward stricter; a declaration looser than the spawn baseline is ignored.
+``hooks`` / ``mcpServers`` (and a few other Claude-only knobs) but never apply
+them; they are reported per definition so the omission is visible instead of
+silently changing what the user thinks they configured. Tool lists only ever
+narrow the child pool — a custom agent that lists ``run_shell`` stays read-only
+unless it was spawned with ``isolate``. Permission modes only move toward
+stricter; a declaration looser than the spawn baseline is ignored.
 """
 
 from __future__ import annotations
@@ -85,7 +88,6 @@ MAPPABLE_PERMISSION_MODES = (
 # so a definition that sets them gets them named in the audit instead.
 # ``effort`` 不在列：它是本轮思考强度的声明，派发时按模型封顶钳制后生效。
 UNSUPPORTED_FIELDS = (
-    "model",
     "hooks",
     "mcpServers",
     "memory",
@@ -113,6 +115,9 @@ class AgentDefinition:
     # 的 ``run_in_background=false``。
     background: bool = False
     max_turns: int | None = None
+    # 上游 agent schema 的 ``model``（自由字符串，``inherit`` = 父会话模型）。
+    # 空串 = 没声明，子代理沿用供应商配置的模型；fork 恒继承，忽略它。
+    model: str = ""
     # Claude 的 ``effort``：这一层子代理想用的思考强度。空串 = 不声明，
     # 派发时按模型封顶取兜底档；认不出的值解析时告警并丢弃（与上游 _Ht 同口径）。
     effort: str = ""
@@ -148,6 +153,8 @@ class AgentDefinition:
             payload["background"] = True
         if self.max_turns is not None:
             payload["maxTurns"] = self.max_turns
+        if self.model:
+            payload["model"] = self.model
         if self.effort:
             payload["effort"] = self.effort
         if self.ignored:
@@ -507,6 +514,16 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
                 f"{label} {where} 的 maxTurns 必须是正整数，已忽略"
             )
 
+    # 上游 agent schema 的 model 是自由字符串（``inherit`` 是语义值）。非字符串
+    # 告警丢弃；空白串按"没写"处理——把空模型名发给供应商只会换来一次 400。
+    agent_model = ""
+    raw_model = meta.get("model")
+    if raw_model is not None:
+        if isinstance(raw_model, str):
+            agent_model = raw_model.strip()
+        else:
+            warnings.append(f"{label} {where} 的 model 必须是字符串，已忽略")
+
     # effort 按上游 _Ht 的口径解析：认档位词、认关键词、认不出就告警丢弃，
     # 不猜一个值填进去——定义里写错档位时，静默换成默认档会让用户以为配置生效了。
     agent_effort = ""
@@ -535,6 +552,7 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
             isolation=isolation,
             background=background,
             max_turns=max_turns,
+            model=agent_model,
             effort=agent_effort,
             source=source,
             path=str(path),

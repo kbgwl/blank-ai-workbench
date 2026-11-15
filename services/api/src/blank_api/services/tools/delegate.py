@@ -70,6 +70,8 @@ def _apply_definition(request: SubAgentRequest, definition) -> SubAgentRequest:
     # 思考强度：定义里声明的档位一路带到子代理，由 run_subagent 按模型封顶裁决。
     # 空串表示定义没声明，子代理按兜底档跑。
     request.effort = definition.effort
+    # 模型覆盖：``inherit``/空串由 run_subagent 回落到父会话模型；fork 恒继承。
+    request.model = definition.model
     # 上游 Szn：isolation 的生效值 = 派发参数 ?? 定义值；定义写 worktree 时
     # 调用方显式传 isolate:false 也压不住它——用户要的是"每次都在副本里跑"。
     if definition.isolation == "worktree":

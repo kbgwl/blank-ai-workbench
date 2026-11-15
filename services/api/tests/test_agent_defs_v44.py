@@ -713,7 +713,9 @@ async def test_definition_body_and_tool_narrowing_reach_the_real_child(tmp_path:
     assert started, session.recorder.types()
     assert started[0]["agent_type"] == "reviewer"
     assert started[0]["agent_tools"] == ["read_file"]
-    assert started[0]["agent_ignored"] == ["model"]
+    # #315：``model`` 不再是"识别但不生效"的字段，它真的改这一轮用的模型。
+    assert started[0]["agent_ignored"] == []
+    assert started[0]["agent_model"] == "sonnet"
 
 
 def _skill_catalog(*entries: tuple[str, str]) -> SkillCatalog:

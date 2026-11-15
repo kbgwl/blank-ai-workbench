@@ -184,7 +184,7 @@ class SubAgentRequest:
     # 定义里声明的 Skill 名字：派发时把正文预加载进子代理的启动消息（对齐
     # Claude 的 agent frontmatter ``skills``）。解析失败的项只告警，不阻断派发。
     skills: tuple[str, ...] = ()
-    # 定义里写了、但我们不支持因此没有生效的字段（model/permissionMode/...）。
+    # 定义里写了、但我们不支持因此没有生效的字段（hooks/mcpServers/...）。
     # 只用于审计：绝不能悄悄吞掉，否则用户以为那条权限模式起了作用。
     agent_ignored: tuple[str, ...] = ()
     # 对齐 Claude 的 fork 子代理：继承父会话到此刻为止的完整对话与工具权限。
@@ -200,6 +200,9 @@ class SubAgentRequest:
     # 派发时按模型封顶取兜底档。认不出的值在定义解析阶段就已经告警丢弃，
     # 到这里只会是档位词或关键词升档后的结果。
     effort: str = ""
+    # 定义里声明的模型覆盖（上游 agent schema 的 ``model``）。``inherit`` 与
+    # 空串都表示沿用父会话模型；字面量永远不发给供应商。fork 恒继承，忽略它。
+    model: str = ""
 
     def normalized(self) -> "SubAgentRequest":
         return SubAgentRequest(
@@ -222,6 +225,7 @@ class SubAgentRequest:
             permission_mode=str(self.permission_mode or "").strip(),
             definition_background=bool(self.definition_background),
             effort=str(self.effort or "").strip(),
+            model=str(self.model or "").strip(),
         )
 
 
@@ -626,6 +630,10 @@ async def run_subagent(
         # 子代理只能继承父级的边界，不许自己挑一个更宽的。这不是参数错，是越权。
         return SubAgentResult(ok=False, error=str(exc), agent_path=agent_path, depth=depth)
 
+    # 子代理这一轮实际用的模型：定义里的覆盖，``inherit``/空串回落到供应商配置；
+    # fork 恒继承父会话模型（上游 ``Jt ? "inherit" : we``）。一轮只算一次，
+    # 每一步调用都用同一个——子代理是同一次作业，中途换模型会让账与裁决各说各话。
+    child_model = "" if request.fork or request.model in ("", "inherit") else request.model
     # 子代理这一轮的思考强度：定义里声明的档位 + 目标正文里的关键词，走与主代理
     # 同一套裁决（模型封顶、thinking 关断回落）。一轮只算一次，之后每一步调用
     # 都复用它——子代理的每一步都是同一次作业，档位不该逐步重算、更不该逐步变。
@@ -634,7 +642,7 @@ async def run_subagent(
     # 放在越权守卫之后：被守卫拦下时一个适配器字段都不该读，adapter=None 也能走到守卫。
     child_effort = resolve_turn_effort(
         request.effort or str(getattr(adapter.config, "reasoning_effort", "") or ""),
-        model=str(getattr(adapter.config, "model", "") or ""),
+        model=child_model or str(getattr(adapter.config, "model", "") or ""),
         policy=EffortPolicy(),
         thinking=ThinkingConfig(),
         keyword_text=request.goal,
@@ -995,7 +1003,11 @@ async def run_subagent(
         started = time.perf_counter()
         try:
             response = await adapter.bind_tools(
-                specs, chat, effort=child_effort.level, thinking=child_thinking
+                specs,
+                chat,
+                effort=child_effort.level,
+                thinking=child_thinking,
+                model=child_model,
             )
         except ModelError:
             await account("", Usage(), int((time.perf_counter() - started) * 1000), "error")
@@ -1324,6 +1336,8 @@ class SubAgentRunner:
                 # 封顶裁决，被压下来时由 effort.warning 事件记录——这里只记声明，
                 # 不在这里重算一遍，免得两处裁决各写一份、迟早写歪。
                 "agent_effort_declared": request.effort,
+                # 模型覆盖：空串表示沿用父会话模型（inherit / 未声明 / fork）。
+                "agent_model": "" if request.fork or request.model in ("", "inherit") else request.model,
                 "agent_path": prepared.agent_path,
                 "agent_id": prepared.agent_id,
                 "depth": prepared.depth,
@@ -1406,6 +1420,9 @@ class SubAgentRunner:
             "permission_mode": prepared.request.permission_mode,
             "max_steps": prepared.request.max_steps,
             "fork": bool(prepared.request.fork),
+            # 模型覆盖也要带到下一轮：第一轮用 mock-fast、第二轮悄悄换回父模型，
+            # 就是同一段对话中途换了个脑子。
+            "model": prepared.request.model,
         }
         while len(bucket) > MAX_CONVERSATIONS:
             bucket.pop(next(iter(bucket)))
@@ -1458,6 +1475,7 @@ class SubAgentRunner:
             # 否则第二轮会悄悄退回到只读基线。定义里声明的审批档同样要记住，
             # 免得第一轮是 plan、第二轮却按 default 问一遍。
             permission_mode=str(entry.get("permission_mode") or ""),
+            model=str(entry.get("model") or ""),
             fork=bool(entry.get("fork")),
         ).normalized()
         if not request.goal:
