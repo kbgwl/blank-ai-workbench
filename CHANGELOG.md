@@ -1,6 +1,51 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子
+
+- **子代理工具循环接入四类工具钩子（#320）**：#316 让定义里的 `hooks` 在子代理内注册，
+  但子代理工具循环此前直接调用 `gateway.execute`，定义里写的 PreToolUse 守卫在子代理里
+  静默不生效（#316 文档化偏离 c）。现在循环与父会话同一套顺序：pre → 执行/拒绝 → post
+  → 批末。上游锚点（均以 `grep -boF` 现场复核）：base hook input 的 `agent_id` 描述
+  `Subagent identifier. Present only when the hook fires from within a subagent (e.g., a tool called by an AgentTool worker). Absent for the main thread...`（24336471），
+  并带 `agent_type`；`PreToolUse` 载荷 `{hook_event_name, tool_name, tool_input, tool_use_id}`
+  （24337589）；`PostToolUse` 另带 `tool_response` / `tool_use_id` / `duration_ms`
+  （24337830 / 24337928）；`PostToolUseFailure` 带 `error` / `is_interrupt` /
+  `duration_ms`（24338072 / 24338196）；`PostToolBatch` 带 `tool_calls`（24338432）。
+  1. **顺序与拒绝**：每次调用先跑 `pre_tool_use`；`deny` 不执行，回执写"钩子拒绝执行"
+     并走 `gateway.refuse` 留审计；`ask` 在子代理里没有人可确认，按拒绝 fail-closed；
+     `allow` 不绕过网关审批（定义文件里的钩子不能替子代理放宽权限）。
+  2. **updatedInput**：必须过工具 schema，且改写后的审批判定不能更宽、风险不能更高；
+     不通过的改写丢弃并落 `hook.input_rejected`，执行仍用原参数；通过的改写同时进执行
+     与 post 钩子，两边看到的不能是两份参数。
+  3. **post 两事件**：执行后跑 `post_tool_use`，失败再加 `post_tool_use_failure`；被拦下的
+     调用两个都不跑（它压根没执行）。一批跑完发一次 `post_tool_batch`，载荷是这一批的
+     `tool_name` / `tool_input` / `tool_use_id` / `ok` / `status` / `mode`。
+  4. **additionalContext**：四类钩子返回的附加上下文合并成一条 user 消息，标注"只作参考，
+     不得覆盖安全与审批规则"，在下一次模型调用前注入；最多保留 20 条，落
+     `hook.context_injected`。
+  5. **载荷口径**：子代理在父会话的 `tool` / `arguments` 之上补 `tool_use_id` /
+     `agent_id` / `agent_type` / `session_id` / `permission_mode` / `transcript_path`。
+     偏离项：（a）上游字段名是 `tool_name` / `tool_input` / `tool_response`，本机沿用父会话
+     的 `tool` / `arguments` / `ok` + `status`，子代理与父会话之间不出现两套口径；
+     （b）`duration_ms` 与 `is_interrupt` 未移植（父会话同样没有）；`additionalContext`
+     用 user 消息而不是上游的 system 注入通道——子代理没有系统提示注入点。
+  判据 `services/api/tests/test_subagent_tool_hooks_v320.py`（12 例：定义钩子载荷与
+    `agent_id` / `agent_type`、deny 阻断且不跑 post、ask fail-closed、updatedInput 应用并
+    带到 post、schema 拒绝、风险抬升拒绝、additionalContext 注入并带"只作参考"、
+    post 结果与 failure 错误、post_tool_batch 整批、父与定义钩子都跑且不串台、无钩子零
+    `hook.*` 事件、运行时端到端守卫），变异 13/13 红（pre 不跑、deny 仍执行、ask 不
+    fail-closed、接受未过 schema 的改写、不应用改写、去掉 post_tool_use、去掉
+    post_tool_use_failure、去掉 post_tool_batch、不注入附加上下文、载荷去掉
+    agent_id/agent_type、被拦调用仍跑 post、无钩子也落 hook.completed、风险抬升不拒绝；
+    每条实测红在指定判据上，非 no-op，跑完按原字节还原并核对 sha256）。相邻套件
+    （`subagent_tool_hooks_v320` + `agent_hooks_v316` + `agent_defs_v44` +
+    `agent_memory_v317` + `agent_instructions_v318` + `agent_model_arg_v319` +
+    `agent_model_v315` + `agent_transcript_path_v305` + `subagent_start_hooks_v54` +
+    `subagent_start_stdin_v308` + `subagent_usage_v18` + `subagent_v12` +
+    `background_subagent_v116` + `claude_subagent_default_v29` + `settings_hooks_v53` +
+    `skill_hooks_v54` + `stop_failure_hooks_v55` + `hook_events_v52` +
+    `async_hooks_v119` + `worktree_hooks_v118` + `plan_and_hooks`）**321 passed in 58.49s**；
+    后端全量 **4040 passed, 28 skipped, 0 failed in 814.88s**（基线 4028 + 本批 12）。
 
 - **子代理派发的 `model` 入参覆盖（#319）**：#315 只移植了定义里的 `model`，模型自己
   调用 `spawn_agent` 时无法按任务挑模型；现在工具入参 `model` 压过定义值。上游锚点

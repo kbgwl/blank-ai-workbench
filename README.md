@@ -409,14 +409,14 @@ uv run alembic revision --autogenerate -m "描述"
   生效而 `acceptEdits` / `bypassPermissions` 的声明被忽略，Claude 允许从 default 父档
   升到 acceptEdits 的行为没有移植；`remote` 隔离形态冻结（见下方已知限制），解析时
   按本地运行并告警）；插件 agent 的 `permissionMode` / `hooks` / `mcpServers` 按上游
-  `Skn` 只告警忽略。定义 `hooks` 已于 #316 生效（三处偏离：本机没有工作区信任对话框，
+  `Skn` 只告警忽略。定义 `hooks` 已于 #316 生效（两处偏离：本机没有工作区信任对话框，
   工作区/用户来源的定义一律视为可信，钩子命令会直接执行——这与 settings 层「只有用户层
   / 管理层能配钩子」的收口不同，定义文件本身就是用户自己放进工作区的；未知事件键里若
   藏着守卫内容（比如拼错成 `PreToolUSe`）上游会整份拒绝该 Agent，本机只按未知事件丢弃
-  并告警；子代理工具循环不执行 PreToolUse / PostToolUse（父会话的这两类钩子在子代理里
-  同样不跑，是既有缺口），所以定义里写它们只会在子代理内静默不生效，只有
-  `permission_request` / `subagent_stop` / `notification` / `worktree_remove` 等走
-  真实管线的事件可观测）。定义 `memory` 已于 #317 生效（三处偏离：不自动补
+  并告警）；子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure /
+  PostToolBatch 已于 #320 生效（载荷带 `agent_id` / `agent_type`；子代理里钩子 `ask`
+  没有人可确认，按拒绝 fail-closed；钩子 `allow` 不绕过网关审批；`additionalContext`
+  以一条 user 消息注入下一次调用）。定义 `memory` 已于 #317 生效（三处偏离：不自动补
   Read/Write/Edit 工具——上游给声明了 `memory` 的 agent 补读写工具，本机子代理工具池
   不因定义扩大，改为注入一个只能写本作用域 `MEMORY.md` 的 `memory_write` 工具；
   上游「一文件一记忆 + MEMORY.md 索引」的布局压缩成单一 `MEMORY.md` 条目流，格式与主
