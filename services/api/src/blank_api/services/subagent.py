@@ -31,6 +31,7 @@ from blank_api.services.agent_memory import (
     render_memory_section,
 )
 from blank_api.services.agents_defs import BUILTIN_AGENT, MAX_INSTRUCTIONS_CHARS
+from blank_api.services.instructions import compose, load_layers, provenance
 from blank_api.services.hooks import (
     MAX_CONTEXT,
     HookRunner,
@@ -216,6 +217,8 @@ class SubAgentRequest:
     # 定义里声明的持久记忆作用域（user/project/local）。空串 = 不声明：
     # 派发时不建目录、不注入记忆段、也不挂写入工具。
     memory_scope: str = ""
+    # 定义里声明的 ``omitClaudeMd``：为 true 时不继承用户/项目指令文件。
+    omit_claude_md: bool = False
 
     def normalized(self) -> "SubAgentRequest":
         return SubAgentRequest(
@@ -241,6 +244,7 @@ class SubAgentRequest:
             model=str(self.model or "").strip(),
             agent_hooks=dict(self.agent_hooks or {}),
             memory_scope=str(self.memory_scope or "").strip().lower(),
+            omit_claude_md=bool(self.omit_claude_md),
         )
 
 
@@ -1042,8 +1046,42 @@ async def run_subagent(
             },
         )
     compactor = ContextCompactor(**(watermark or {}))
+    # 子代理默认继承工作区指令文件（本机是 AGENTS.md 那套）——上游 CLAUDE.md 的
+    # 对应物。定义里声明 ``omitClaudeMd`` 时一个都不注入：上游只留托管策略文件，
+    # 本机没有托管策略级指令层，所以就是零层。fork 的系统提示是父会话原文，里面
+    # 已经带着这些指令，再拼一份等于让模型读两遍、还多占一倍上下文。
+    instruction_layers = (
+        [] if request.fork or request.omit_claude_md else load_layers(run_root)
+    )
     base_text = FORK_SYSTEM if request.fork else SUBAGENT_SYSTEM
-    system_message = {"role": "system", "content": base_text.format(steps=request.max_steps)}
+    system_message = {
+        "role": "system",
+        "content": compose(base_text.format(steps=request.max_steps), instruction_layers),
+    }
+    if not request.fork:
+        # 审计只报层来源、掩码后的路径与规模，不复制指令正文。
+        if request.omit_claude_md:
+            await log.add(
+                "subagent.instructions",
+                "subagent",
+                {
+                    "agent_id": agent_id,
+                    "agent_type": agent_type,
+                    "omitted": True,
+                    "layers": [],
+                },
+            )
+        elif instruction_layers:
+            await log.add(
+                "subagent.instructions",
+                "subagent",
+                {
+                    "agent_id": agent_id,
+                    "agent_type": agent_type,
+                    "omitted": False,
+                    "layers": provenance(instruction_layers),
+                },
+            )
     if child_effort.reminder:
         # 关键词（目标正文里的 ultrathink/ultracode）升档时，与主代理同一条提醒：
         # 档位是模型参数，模型看不见"用户要求更深推理"这句话就可能按默认档想。
@@ -1594,6 +1632,9 @@ class SubAgentRunner:
             "agent_hooks": dict(prepared.request.agent_hooks),
             # 记忆作用域也要带到下一轮：同一个子代理接着说话，不能第二轮就丢失记忆。
             "memory_scope": prepared.request.memory_scope,
+            # 指令继承开关同理：第一轮 omit 掉 AGENTS.md、第二轮又悄悄读回来，
+            # 它就看见了第一轮没看见的项目约定。
+            "omit_claude_md": bool(prepared.request.omit_claude_md),
         }
         while len(bucket) > MAX_CONVERSATIONS:
             bucket.pop(next(iter(bucket)))
@@ -1649,6 +1690,7 @@ class SubAgentRunner:
             model=str(entry.get("model") or ""),
             agent_hooks=dict(entry.get("agent_hooks") or {}),
             memory_scope=str(entry.get("memory_scope") or ""),
+            omit_claude_md=bool(entry.get("omit_claude_md")),
             fork=bool(entry.get("fork")),
         ).normalized()
         if not request.goal:

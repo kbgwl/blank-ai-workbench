@@ -133,6 +133,9 @@ class AgentDefinition:
     # Claude 的 ``memory``：这个子代理的持久记忆作用域（user/project/local）。
     # 空串 = 不声明，派发时既不建目录也不注入记忆段。
     memory: str = ""
+    # Claude 的 ``omitClaudeMd``：子代理默认继承用户/项目指令文件；true 时
+    # 一个都不注入（上游只留托管策略文件，本机没有托管策略级指令层）。
+    omit_claude_md: bool = False
     source: str = "project"
     path: str = ""
     ignored: tuple[str, ...] = ()
@@ -176,6 +179,8 @@ class AgentDefinition:
             payload["effort"] = self.effort
         if self.memory:
             payload["memory"] = self.memory
+        if self.omit_claude_md:
+            payload["omitClaudeMd"] = True
         if self.ignored:
             payload["ignored"] = list(self.ignored)
         return payload
@@ -549,6 +554,11 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
     if unsupported:
         ignored_extra.add("background")
 
+    # omitClaudeMd 上游只认字面 true（布尔或字符串 "true"），其余值静默按
+    # 未声明处理——写错这个开关不会让整份定义失效，也不会多一条告警。
+    raw_omit = meta.get("omitClaudeMd")
+    omit_claude_md = raw_omit is True or raw_omit == "true"
+
     max_turns = None
     if meta.get("maxTurns") is not None:
         max_turns = _positive_int(meta.get("maxTurns"))
@@ -612,6 +622,7 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
             model=agent_model,
             effort=agent_effort,
             memory=agent_memory,
+            omit_claude_md=omit_claude_md,
             hooks=agent_hooks,
             source=source,
             path=str(path),

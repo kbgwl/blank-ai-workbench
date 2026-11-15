@@ -1,6 +1,49 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关
+
+- **子代理默认继承 AGENTS.md 指令，`omitClaudeMd` 可关闭（#318）**：此前子代理系统提示
+  只有基础规则与定义正文，项目/用户 AGENTS.md 一个都不带；现在默认继承，定义里写
+  `omitClaudeMd: true` 时关闭。上游锚点（均以 `grep -boF` 现场复核）：agent schema 键
+  `omitClaudeMd`（6478360）与描述
+  `If true, the agent runs without the user, project and local CLAUDE.md instruction files when spawned as a subagent; managed policy files are kept.`（6478399）；
+  同块 `initialPrompt` 明确
+  `Auto-submitted first message when this agent runs as the main session (via --agent or settings). Not read when spawned as a subagent.`（6478009），
+  故不用于子代理、本批不做；文件解析
+  `pe=r.omitClaudeMd,Se=pe==="true"||pe===!0?!0:void 0`（20542883）；派发闸门
+  `e.omitClaudeMd&&!Se?.userContext?await wDs(e,Ko,r):{userContext:Ko,managedInstructionsOnly:!1}`
+  （15186251）；`wDs` 先摘掉 `claudeMd`，内置/策略来源直接返回，否则读托管策略内容、
+  非空时放回并置 `managedInstructionsOnly:!0`（15205840）；内置 Explore（9239069）与
+  Plan（11209824）写死 `omitClaudeMd:!0`；插件/JSON 路径原样携带（25141156）。
+  1. **解析**：`AgentDefinition.omit_claude_md`；只认字面 `true`（布尔或字符串 `"true"`），
+     其余值静默按未声明处理、不进 `ignored`（上游 `Se` 同口径）；`as_dict()` 只在声明时
+     带 `omitClaudeMd`。
+  2. **派发**：`run_subagent` 非 fork 默认 `load_layers(run_root)`，用 `compose` 拼进
+     子代理系统提示（基础规则 → 指令层 → 记忆段 → 定义正文）；`omit_claude_md` 为真时
+     指令层为零层，定义正文与基础规则照旧。成功注入落 `subagent.instructions`
+     （`omitted:false` + `provenance(layers)`：source / 掩码路径 / chars / sha /
+     truncated），omit 生效落 `omitted:true` + `layers:[]`；没有指令文件时不发事件；
+     fork 不发事件、也不重复注入（父会话系统提示里已带）。
+  3. **携带**：`delegate._apply_definition` 把定义带进 `SubAgentRequest.omit_claude_md`
+     （`spawn_agent` / `spawn_agents` 同一路）；`_remember` 保存、`send_message` 恢复，
+     续聊仍是同一个子代理，第二轮不会把第一轮关掉的指令悄悄读回来。
+  4. **偏离项**：（a）指令文件是本地那套 `AGENTS.md` / `.blank/AGENTS.md` / harness /
+     `BLANK_INSTRUCTIONS_FILE`，不是 CLAUDE.md；（b）本机没有托管策略级指令层，所以
+     omit 生效时一个指令层都不注入，上游会保留托管策略内容；（c）fork 不重复注入——
+     fork 的系统提示就是父会话原文，父提示里已经带着指令层；（d）本机内置子代理只有
+     `general-purpose` / `fork`，没有上游 Explore / Plan 那两档，所以没有对应的
+     `omitClaudeMd:!0` 写死项。
+  判据 `services/api/tests/test_agent_instructions_v318.py`（16 例：解析五组含布尔/字符串
+    true、四种非 true 静默 False、缺失、插件 agent；派发六例含项目/用户 AGENTS.md 注入与
+    审计事件（层来源、掩码路径、字符数、JSON 不含工作区绝对路径）、omit 不注入但保留
+    定义正文、无文件不发事件、fork 不注入且不发事件；携带两例批量派发与续聊；变异 11/11
+    红（解析恒 False、非 true 也置位、派发忽略 omit、默认不注入、fork 也注入、事件整块
+    消失、空层也发事件、路径未掩码、delegate 不携带、续聊丢 omit、续聊不保存），每条
+    实测红在指定判据上，跑完按原字节还原并核对 sha256）。相邻套件（`agent_instructions_v318`
+    + `agent_memory_v317` + `agent_model_v315` + `agent_hooks_v316` + `agent_defs_v44` +
+    `subagent_v12` + `subagent_start_hooks_v54` + `background_subagent_v116` +
+    `claude_fork_v30`）**180 passed in 19.12s**；后端全量 **4016 passed, 28 skipped,
+    0 failed in 835.80s**（基线 4000 + 本批 16）。
 
 - **子代理定义的 `memory` 持久记忆（#317）**：agent frontmatter 的 `memory` 从「识别但
   不生效」变成真的给这个子代理一套跨会话记忆。上游锚点（均以 `grep -boF` 复核）：

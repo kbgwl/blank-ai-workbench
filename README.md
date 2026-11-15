@@ -420,7 +420,13 @@ uv run alembic revision --autogenerate -m "描述"
   不因定义扩大，改为注入一个只能写本作用域 `MEMORY.md` 的 `memory_write` 工具；
   上游「一文件一记忆 + MEMORY.md 索引」的布局压缩成单一 `MEMORY.md` 条目流，格式与主
   代理的项目长期记忆一致；远程记忆目录（`CLAUDE_CODE_REMOTE_MEMORY_DIR`）与
-  `primedEntrypoint` 未移植——本机没有远程记忆存储）。正文超过 20000 字截断
+  `primedEntrypoint` 未移植——本机没有远程记忆存储）。定义 `omitClaudeMd` 已于 #318
+  生效（四处偏离：指令文件是本地那套 `AGENTS.md` / `.blank/AGENTS.md` / harness /
+  `BLANK_INSTRUCTIONS_FILE` 追加文件，不是 CLAUDE.md；本机没有托管策略级指令层，
+  所以 `true` 时一个指令层都不注入，上游会保留托管策略内容；fork 子代理沿用父会话
+  系统提示、父提示里本来就带着指令层，不重复注入，只有非 fork 的子代理才按定义
+  继承或关闭；本机内置子代理只有 `general-purpose` / `fork`，没有上游 Explore / Plan
+  那两档，因此没有对应的 `omitClaudeMd:!0` 写死项）。正文超过 20000 字截断
   （Claude 原样使用），fork 已于 T 批补齐（见上表），remote 形态冻结（见下方已知限制）。
   子代理 `skills` 预加载已于 X 批补齐（见上表；两处未移植：账户同步 Skill 的
   `syncedSkills` 分支与「非 prompt 型 / 策略禁用」两类上游 warning——本机 Skill 目录
