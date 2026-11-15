@@ -269,6 +269,12 @@ _SYSTEM_HEAD = (
     "· 用户才能给的信息（登录、密钥、拍板）是例外：问一句就是正确的下一步，不算半途而废。\n"
     "· 结果如实：测试没过就贴失败输出，跳过的步骤就说跳过，做完且验证过就直说，不加「应该」；"
     "不要把没做的写成做完了，也不要把做过的说成没做。\n"
+    "· 收尾前看最后一段：如果它是计划、分析、待办清单或「接下来我会……」，先把那件事用工具"
+    "做完再收尾；下一步已经定了，就在这一轮做完，不要只说出来把控制权交回去"
+    "（Claude：「if the next step is decided, run it」）。\n"
+    "· 说结果时分清「验证过的」和「推断的」：跑过命令、读过文件、看到输出才算验证过；"
+    "没查过、只是觉得如此的，写明是推断（Claude：「be accurate about what you verified vs. "
+    "what you assumed」）。\n"
 )
 
 # 编程纪律：逐条对应两家系统提示词原文（Codex 的 coding guidelines、
@@ -301,6 +307,15 @@ CODING_INSTRUCTIONS = (
     "禁止把未转义的值拼进 innerHTML；密钥不写进代码、日志或交付文本。"
     "发现刚写的代码不安全，立刻改（Claude：「Be careful not to introduce security vulnerabilities "
     "such as command injection, XSS, SQL injection, and other OWASP top 10 vulnerabilities」）。\n"
+    "· 最少代码：只做被要求的事。不为假设的未来需求设计，不为不会发生的场景加兜底和校验"
+    "（信任内部代码与框架的保证，只在系统边界校验输入）；一次性的操作不要抽一层；"
+    "不留半成品，也不加开关或向后兼容垫片——能直接改代码就直接改，旧路径该删就删"
+    "（Claude：「No half-finished implementations either」「Don't use feature flags or "
+    "backwards-compatibility shims」）。\n"
+    "· 网页/前端改动的验证要落到用户能用的路径上：起服务或用脚本打开页面，黄金路径与边界输入"
+    "都走一遍，顺带看别的功能有没有被改坏。单测和类型检查只证明代码正确，不证明页面能用；"
+    "确实没法在浏览器里点（没有浏览器、沙箱禁网），就在交付里明说这部分没验过，"
+    "不要把「能打开」写成「功能对」。\n"
     "· 临时验证脚本放工作区的 `.blank/scratchpad/`，不要放项目根：它不属于交付物，"
     "而且 shell 的 del/rm 会被安全策略拒绝，删除不是清场手段；收尾时由 harness 统一收走。\n"
     "· 交付说明要能让用户验货：改到的文件名、若有网页则入口文件、怎么打开或怎么跑起来；"
@@ -4759,6 +4774,24 @@ def _tests_were_working(results: list[dict]) -> bool:
     )
 
 
+def _test_command_detected(session: AgentSession) -> bool | None:
+    """工作区里有没有 run_tests 能识别的测试配置；拿不到根目录时返回 None。
+
+    与 ``tools.testing.detect_test_command`` 同源——run_tests 不传 command 时用的
+    就是它，所以「检测不到」与工具回执里那句「未识别到测试命令」不会漂移。
+    返回 None 表示判不了，调用方按老路径走，不自行下结论。
+    """
+    root = getattr(getattr(session, "context", None), "root", None)
+    if root is None:
+        return None
+    from blank_api.services.tools.testing import detect_test_command
+
+    try:
+        return detect_test_command(root) is not None
+    except OSError:
+        return None
+
+
 def _skipped_validation(reason: str, *, command: str = "", output_tail: str = "") -> dict:
     """构造「本次没有自动化校验」的结论。
 
@@ -4922,6 +4955,18 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
             },
         }
     else:
+        # 工作区没有可识别的测试配置、本轮也从没跑通过测试：这次 run_tests 注定
+        # 只会换回一句「未识别到测试命令」。为它弹审批卡会把已经做完的收尾挂在
+        # 最后一步——UI 对比装置实测（runs/ui-ours-events.json seq 160-161）：
+        # 10 分钟超时停在最后一个 run_tests 审批上，交付正文为空。
+        # 「本轮跑通过、之后配置被改坏」不算这一类，照旧执行并判失败。
+        if _test_command_detected(session) is False and not _tests_were_working(results):
+            validation = _skipped_validation(
+                "工作区没有可识别的测试配置（pytest 配置或 package.json 的 test 脚本）",
+                command="run_tests",
+            )
+            await session.recorder.add("validation.completed", node, validation)
+            return {"validation": validation}
         # 校验通道的 run_tests 与主循环走同一张审批卡：先判定，要批就走中断，
         # 批准后这一次真的会跑。驳回记 skipped 而不是 failed——代码没问题，
         # 是命令没获批，判 failed 会把模型引去「修」一个不存在的 bug。

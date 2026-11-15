@@ -1,6 +1,6 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）、Claude「Doing tasks」六条与无测试配置时的收尾空跑（#384–#386）
 
 - **UI 对比暴露的四处产品差距：交付文件名与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码（#379–#383）**：
   同一模型、同一提示词的三方 UI 对比（任务 076ad3a1…）暴露的不是模型能力，而是产品口径：
@@ -30,6 +30,32 @@
   改前 12 红；变异电池 13/13 实测红在指定判据上、非 no-op、按原字节还原并核对 sha256。
   相邻套件 93 passed；后端全量 **4089 passed, 28 skipped, 0 failed in 804.41s**
   （上一基线 4073 + 本批 16；首轮唯一红是默认提示词哈希钉，随有意扩充更新后复跑全绿）。
+
+- **Claude「Doing tasks」段六条与无测试配置时的收尾空跑（#384–#386）**：
+  继续回答「同一模型为什么比不过」：三方对比用的是同一个模型（Spark），差距只能出在
+  harness。上游 2.1.271 的 `Doing tasks` 段取证（`grep -boF` 现场复核偏移 101028812 /
+  101029148 / 101030000 / 101031196 / 101031816 / 197932215）显示有六条我们一条没写：
+  网页改动要真跑、不为假设需求设计、不为不会发生的场景兜底、不留兼容垫片与半成品、
+  收尾不能停在「接下来我会……」、报告要分清验证过的与推断的。
+  装置实物还抓到一条更直接的原因：UI 对比那一轮我们的任务 10 分钟超时在最后一次
+  `run_tests` 审批上（`runs/ui-ours-events.json` seq 160–161），交付正文为空；工作区里
+  既没有 pytest 配置也没有 package.json 的 test 脚本，这次审批注定只会换回
+  「未识别到测试命令」。
+  1. **提示词**：`CODING_INSTRUCTIONS` 增「最少代码」（不为假设的未来需求设计、只在系统
+     边界校验、不留半成品与向后兼容垫片）与「网页/前端真跑」（单测和类型检查只证明代码
+     正确、不证明页面能用；没法在浏览器里点就在交付里明说没验过）；收尾条件增「最后一段
+     若是计划就先做完」与「验证过的 vs 推断的」。输出样式语义不变：编程三条随
+     `keep-coding-instructions`，收尾两条属于永久段。
+  2. **校验预检**：`_test_command_detected` 复用 `tools.testing.detect_test_command`
+     （与 `run_tests` 不传 command 时同源）；检测不到测试配置、且本轮从没跑通过测试时
+     直接记 skipped，不判定审批也不执行；「本轮跑通过、之后把配置改坏」仍走执行并判失败。
+  判据：`tests/test_doing_tasks_prompt_v167.py`（10 例：7 条提示词 + 3 条校验预检，
+  含「有配置照旧走闸门」「配置被本轮改坏仍失败」两条反向守卫）；改前 8 红。
+  变异电池 7/7 实测红在指定判据上、非 no-op、按原字节还原并核对 sha256。
+  真实工作区新旧同跑（`E:/tmp/replay_v167.py`，工作区取 UI 对比装置的 `runs/ui-ours`，
+  旧代码取 HEAD 版 graph.py）：旧 decide=1 / execute=1，新 decide=0 / execute=0，
+  结论 skipped。相邻套件 105 passed；后端全量 **4099 passed, 28 skipped, 0 failed
+  in 812.84s**（上一基线 4089 + 本批 10）。
 
 - **产品间同提示词对比：评测器 `--plain-prompt`（#377）**：
   UI 交付对比要求三方收到同一段原文：`run.mjs` 新增开关，把 goal 拼成
