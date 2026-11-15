@@ -416,7 +416,14 @@ uv run alembic revision --autogenerate -m "描述"
   并告警）；子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure /
   PostToolBatch 已于 #320 生效（载荷带 `agent_id` / `agent_type`；子代理里钩子 `ask`
   没有人可确认，按拒绝 fail-closed；钩子 `allow` 不绕过网关审批；`additionalContext`
-  以一条 user 消息注入下一次调用）。定义 `memory` 已于 #317 生效（三处偏离：不自动补
+  以一条 user 消息注入下一次调用）。工具钩子的载荷字段已于 #321 对齐上游：父会话与
+  子代理都同时下发 `tool_name` / `tool_input` / `tool_use_id`（旧名 `tool` /
+  `arguments` 保留，老钩子不静默失效）；`post_tool_use` 与 `post_tool_use_failure`
+  增 `tool_response` / `duration_ms`，失败事件增 `is_interrupt`（本机没有"用户中断
+  工具"这一维度，恒为 false）；`post_tool_batch` 每项增 `tool_response`。
+  `tool_response` 是回执投影 `{ok, status, output, data}`，不含 `tool_call_id` /
+  `permission` / `sandbox_backend` 这类账本与审批内部字段——钩子是观察者，不该顺走
+  治理数据。定义 `memory` 已于 #317 生效（三处偏离：不自动补
   Read/Write/Edit 工具——上游给声明了 `memory` 的 agent 补读写工具，本机子代理工具池
   不因定义扩大，改为注入一个只能写本作用域 `MEMORY.md` 的 `memory_write` 工具；
   上游「一文件一记忆 + MEMORY.md 索引」的布局压缩成单一 `MEMORY.md` 条目流，格式与主

@@ -173,6 +173,16 @@ def render_tool_hook_notes(items: list[dict]) -> str:
     return "\n".join(lines)[:8000]
 
 
+def hook_tool_response(payload: dict) -> dict:
+    """回执投影：钩子是观察者，只给工具结果，不顺走账本与审批内部字段。"""
+    return {
+        "ok": bool(payload.get("ok")),
+        "status": payload.get("status"),
+        "output": str(payload.get("output") or payload.get("message") or "")[:4000],
+        "data": payload.get("data") or {},
+    }
+
+
 # fork 拿父会话的工具表，但这几类必须拿掉：子代理不能再派子代理（深度上限靠
 # 工具表缺失成立，不靠计数器），REPL/LSP 绑定父会话的网关与进程，workflow 内部
 # 也会派子代理。拿掉它们不是收窄权限——父会话本来能做这些事，只是分身不能。
@@ -1318,11 +1328,14 @@ async def run_subagent(
 
     def _tool_hook_payload(name: str, arguments: dict, call_id: str) -> dict:
         # 上游 base hook input 用 agent_id / agent_type 区分子代理里的调用
-        # （24336471）；父会话的 pre/post 载荷只有 tool/arguments，这里补齐
-        # 子代理独有的事实，不伪造父会话的字段。
+        # （24336471），工具字段是 tool_name / tool_input / tool_use_id
+        # （24337589）。tool/arguments 是本机早先的名字，两个都下发，老钩子
+        # 不静默失效。
         return {
             "tool": name,
             "arguments": arguments,
+            "tool_name": name,
+            "tool_input": arguments,
             "tool_use_id": call_id,
             "agent_id": agent_id,
             "agent_type": agent_type,
@@ -1424,13 +1437,23 @@ async def run_subagent(
         return arguments, ""
 
     async def _post_tool_hooks(name: str, arguments: dict, call_id: str, payload: dict) -> None:
+        response = hook_tool_response(payload)
         body = _tool_hook_payload(name, arguments, call_id)
-        body.update({"ok": bool(payload.get("ok")), "status": payload.get("status")})
+        body.update(
+            {
+                "ok": bool(payload.get("ok")),
+                "status": payload.get("status"),
+                "tool_response": response,
+                "duration_ms": payload.get("duration_ms"),
+            }
+        )
         results = await _run_tool_hooks("post_tool_use", name, body)
         _collect_hook_notes("post_tool_use", name, results)
         if not payload.get("ok"):
             failure = dict(body)
             failure["error"] = str(payload.get("message") or payload.get("output") or "")[:500]
+            # 本机没有"用户中断工具"这一维度：失败就是失败。
+            failure["is_interrupt"] = False
             failed = await _run_tool_hooks("post_tool_use_failure", name, failure)
             _collect_hook_notes("post_tool_use_failure", name, failed)
 
@@ -1510,6 +1533,7 @@ async def run_subagent(
                         "ok": bool(payload.get("ok")),
                         "status": payload.get("status"),
                         "mode": mode,
+                        "tool_response": hook_tool_response(payload),
                     }
                 )
             await _post_tool_batch(step_calls)

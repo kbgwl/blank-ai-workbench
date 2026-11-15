@@ -2652,6 +2652,31 @@ async def _collect_hook_context(
     )
 
 
+def _tool_hook_fields(name: str, arguments: dict, call_id: str) -> dict:
+    """上游字段名（tool_name/tool_input/tool_use_id）与历史字段名一起下发。
+
+    照着 Claude 文档写钩子的人读 ``tool_name``；本机早先的钩子读 ``tool``。
+    两个名字指同一份事实，不存在"哪份新哪份旧"的分歧。
+    """
+    return {
+        "tool": name,
+        "arguments": arguments,
+        "tool_name": name,
+        "tool_input": arguments,
+        "tool_use_id": call_id,
+    }
+
+
+def _hook_tool_response(payload: dict) -> dict:
+    """回执投影：钩子是观察者，只给工具结果，不顺走账本与审批内部字段。"""
+    return {
+        "ok": bool(payload.get("ok")),
+        "status": payload.get("status"),
+        "output": str(payload.get("output") or payload.get("message") or "")[:4000],
+        "data": payload.get("data") or {},
+    }
+
+
 async def _scan_pre_tool_hooks(
     session: AgentSession,
     node: str,
@@ -2677,7 +2702,7 @@ async def _scan_pre_tool_hooks(
         results = await session.hooks.run(
             "pre_tool_use",
             name,
-            {"tool": name, "arguments": arguments},
+            _tool_hook_fields(name, arguments, key),
             # 工具上下文事件：上游的钩子输入在这一类事件上带本轮档位。
             effort=session.turn_effort,
         )
@@ -4202,14 +4227,16 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 },
             )
         elif item.mode != "blocked" and not item.hook_blocked:
+            tool_response = _hook_tool_response(payload)
             post_results = await session.hooks.run(
                 "post_tool_use",
                 name,
                 {
-                    "tool": name,
-                    "arguments": item.arguments,
+                    **_tool_hook_fields(name, item.arguments, _call_key(item.call)),
                     "ok": bool(payload.get("ok")),
                     "status": payload.get("status"),
+                    "tool_response": tool_response,
+                    "duration_ms": payload.get("duration_ms"),
                 },
                 effort=session.turn_effort,
             )
@@ -4227,11 +4254,14 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                     "post_tool_use_failure",
                     name,
                     {
-                        "tool": name,
-                        "arguments": item.arguments,
+                        **_tool_hook_fields(name, item.arguments, _call_key(item.call)),
                         "ok": False,
                         "status": payload.get("status"),
                         "error": str(payload.get("message") or payload.get("output") or "")[:500],
+                        "tool_response": tool_response,
+                        "duration_ms": payload.get("duration_ms"),
+                        # 本机没有"用户中断工具"这一维度：失败就是失败。
+                        "is_interrupt": False,
                     },
                     effort=session.turn_effort,
                 )
@@ -4341,6 +4371,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                         "ok": bool(payload.get("ok")),
                         "status": payload.get("status"),
                         "mode": item.mode,
+                        "tool_response": _hook_tool_response(payload),
                     }
                     for item, payload in zip(planned, payloads)
                 ]
