@@ -54,6 +54,7 @@ from pathlib import Path
 
 import yaml
 
+from blank_api.services.agent_memory import MEMORY_SCOPES
 from blank_api.services.effort import parse as parse_effort
 from blank_api.services.hooks import HookSpec, parse_agent_hooks, top_level_guard_key
 from blank_api.services.plugins_defs import discover_plugins
@@ -96,7 +97,6 @@ MAPPABLE_PERMISSION_MODES = (
 # ``effort`` 不在列：它是本轮思考强度的声明，派发时按模型封顶钳制后生效。
 UNSUPPORTED_FIELDS = (
     "mcpServers",
-    "memory",
     "color",
     "initialPrompt",
 )
@@ -130,6 +130,9 @@ class AgentDefinition:
     # Claude 的 ``effort``：这一层子代理想用的思考强度。空串 = 不声明，
     # 派发时按模型封顶取兜底档；认不出的值解析时告警并丢弃（与上游 _Ht 同口径）。
     effort: str = ""
+    # Claude 的 ``memory``：这个子代理的持久记忆作用域（user/project/local）。
+    # 空串 = 不声明，派发时既不建目录也不注入记忆段。
+    memory: str = ""
     source: str = "project"
     path: str = ""
     ignored: tuple[str, ...] = ()
@@ -171,6 +174,8 @@ class AgentDefinition:
             }
         if self.effort:
             payload["effort"] = self.effort
+        if self.memory:
+            payload["memory"] = self.memory
         if self.ignored:
             payload["ignored"] = list(self.ignored)
         return payload
@@ -572,6 +577,20 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
         else:
             agent_effort = parsed_effort.level
 
+    # memory 只认上游的三个作用域（插件 agent 也接受，见 Skn 的 _kn）。
+    # 非法值只告警丢弃：一个写错作用域的记忆配置不该让整份定义失效。
+    agent_memory = ""
+    raw_memory = meta.get("memory")
+    if raw_memory is not None:
+        candidate = raw_memory.strip().lower() if isinstance(raw_memory, str) else ""
+        if candidate in MEMORY_SCOPES:
+            agent_memory = candidate
+        else:
+            warnings.append(
+                f"{label} {where} 的 memory 只能是 {'/'.join(MEMORY_SCOPES)}，已忽略"
+            )
+            ignored_extra.add("memory")
+
     if len(body) > MAX_INSTRUCTIONS_CHARS:
         body = body[:MAX_INSTRUCTIONS_CHARS].rstrip() + "\n…（定义正文过长，已截断）"
     governed = tuple(
@@ -592,6 +611,7 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
             max_turns=max_turns,
             model=agent_model,
             effort=agent_effort,
+            memory=agent_memory,
             hooks=agent_hooks,
             source=source,
             path=str(path),

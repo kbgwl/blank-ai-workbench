@@ -1,6 +1,58 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）
+
+- **子代理定义的 `memory` 持久记忆（#317）**：agent frontmatter 的 `memory` 从「识别但
+  不生效」变成真的给这个子代理一套跨会话记忆。上游锚点（均以 `grep -boF` 复核）：
+  agent schema 的 `memory` 描述与枚举
+  （`Scope for auto-loading agent memory files. 'user' - ~/.claude/agent-memory/<agentType>/, 'project' - .claude/agent-memory/<agentType>/, 'local' - .claude/agent-memory-local/<agentType>/`，24362146）、
+  名字消毒 `nl`（23276603）、目录 `Zf`（23276684）与 `MVe`（23276905）、派发
+  `oNt`（23277568，三条 scope 指导语 + `Pe(h,r)` 建目录 + `Pa`）、模板 `Pa`
+  （22492834，先 `zo(...)` 再 push `## MEMORY.md` 段：有内容内联、为空写空态）、
+  `gc="MEMORY.md"`（29014865）、插件 agent 的 memory 校验（`_kn` 5853486；非法值
+  只告警 `has invalid memory value`，5854579）。
+  1. **解析**：`AgentDefinition.memory`；`memory` 从 `UNSUPPORTED_FIELDS` 移除、不再
+     默认进 `ignored`。字符串 trim + 小写后只认 `user` / `project` / `local`；非法值
+     与非字符串只告警并进 `ignored`，不拒绝整份定义；插件 agent 同口径（上游
+     `_kn.includes(dt)`，非法只告警）。`as_dict()` 只在声明时带 `memory`。
+  2. **目录**：`sanitize_agent_name` 对齐 `nl`（`[^A-Za-z0-9\-_]` → `-`，空串 →
+     `unknown`）；`project` → `<项目根>/.blank/agent-memory/<name>`、`local` →
+     `<项目根>/.blank/agent-memory-local/<name>`、`user` →
+     `<用户配置根>/agent-memory/<name>`（默认 `~/.blank/agent-memory`，
+     `BLANK_USER_AGENT_MEMORY_DIR` 可改）。
+  3. **提示段**：`render_memory_section` 按上游 `Pa` 的顺序拼
+     `# Persistent Agent Memory` → 目录介绍 → 构建/记住遗忘 → 类型 → What NOT →
+     How to save → When to access → Before recommending → 三条 scope 指导语（逐字）→
+     `## MEMORY.md` + 内联内容或空态文案。读入的 `MEMORY.md` 超 12000 字时保留尾部
+     并加一行截断标记（记忆是追加写的，最新在末尾）。
+  4. **接线**：`_apply_definition` 把定义带进 `SubAgentRequest.memory_scope`（批量
+     派发同一条路），`normalized()` 保留。`run_subagent` 在
+     `assert_not_looser` 之后建目录（`fork` 形态不建），把提示段接在子代理系统提示
+     末尾（`instructions` 之前），并往工具池追加 `memory_write`——目录钉死在闭包里、
+     没有路径参数，所以子代理只可能写本作用域的 `MEMORY.md`；`disallowedTools`
+     含 `*` 或 `memory_write` 时不追加（定义说了禁用就禁用）。建目录/读文件失败回
+     `subagent.memory_failed`（scope + 错误），成功落 `subagent.memory_enabled`
+     （scope / 打码目录 / 字符数）。续聊由 `_remember` / `send_message` 保留作用域。
+  5. **偏离项**：（a）不自动给子代理补 Read/Write/Edit 工具——上游会给声明了
+     `memory` 的 agent 补读写工具，本机子代理工具池不因定义扩大，改为只注入
+     `memory_write` 单工具；（b）上游「一文件一记忆 + `MEMORY.md` 索引」的布局压缩成
+     单一 `MEMORY.md` 条目流（与主代理项目长期记忆同一格式，300 字上限、同句去重、
+     超限丢最旧）；（c）远程记忆目录（`CLAUDE_CODE_REMOTE_MEMORY_DIR`）与
+     `primedEntrypoint` 未移植——本机没有远程记忆存储；（d）截断按字符数保留尾部，
+     不移植上游按行/字节统计的 `was_line_truncated` / `was_byte_truncated` 标注。
+  判据 `services/api/tests/test_agent_memory_v317.py`（28 例：解析八例含插件与非法值、
+    目录三例含名字消毒与环境变量覆盖、提示段与追加六例含三条指导语逐字/空态/内联/截尾、
+    接线十一例含真实派发建目录与注入、`memory_write` 落盘后下一轮读得到、去重、坏类型
+    拒绝、未声明零副作用、`disallowedTools` 只挡工具不挡提示段、fork 不建目录、续聊保留、
+    批量派发携带），变异 20/20 红（逐条改坏实现：名字空串不回落、project/local 目录
+    互换、丢 scope 指导语、丢空态文案、读文件头而不是尾、关掉去重、关掉建目录、关掉
+    超限裁剪、关掉类型校验、不加 `memory_write`、不注入提示段、关掉 fork 闸门、关掉
+    `disallowedTools` 闸门、续聊保存/恢复各丢一次作用域、`delegate` 不携带作用域、
+    非法值不告警、不发审计事件、事件里用未打码绝对路径；红在指定判据上，跑完按原字节
+    还原并核对 sha256）。相邻套件（`agent_memory_v317` + `agent_model_v315` +
+    `agent_hooks_v316` + `agent_defs_v44` + `subagent_v12` + `subagent_start_hooks_v54` +
+    `background_subagent_v116`）**149 passed in 18.70s**；后端全量 **4000 passed,
+    28 skipped, 0 failed in 834.17s**（基线 3972 + 本批 28）。
 
 - **子代理定义的 `hooks` 作用域注册（#316）**：agent frontmatter 的 `hooks` 从「识别但
   不生效」变成真的在这一轮子代理里跑，且只影响这个子代理、不改父会话。上游锚点（均以

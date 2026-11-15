@@ -25,6 +25,11 @@ from typing import Any
 
 from blank_api.services.agent.context import ContextCompactor
 from blank_api.services.agent.usage import account_call, merge_usage
+from blank_api.services.agent_memory import (
+    agent_memory_dir,
+    agent_memory_tools,
+    render_memory_section,
+)
 from blank_api.services.agents_defs import BUILTIN_AGENT, MAX_INSTRUCTIONS_CHARS
 from blank_api.services.hooks import (
     MAX_CONTEXT,
@@ -69,6 +74,7 @@ from blank_api.services.worktree import (
     remove_worktree_with_hooks,
     render_diff,
 )
+from blank_api.services.workspace import mask_path
 
 READ_ONLY_TOOLS = (
     "read_file",
@@ -207,6 +213,9 @@ class SubAgentRequest:
     # 定义里声明的钩子：注册进这个子代理自己的作用域，不污染父会话。
     # ``stop`` 在注册时改写成 ``subagent_stop``；解析阶段保留原事件名。
     agent_hooks: dict[str, tuple[HookSpec, ...]] = field(default_factory=dict)
+    # 定义里声明的持久记忆作用域（user/project/local）。空串 = 不声明：
+    # 派发时不建目录、不注入记忆段、也不挂写入工具。
+    memory_scope: str = ""
 
     def normalized(self) -> "SubAgentRequest":
         return SubAgentRequest(
@@ -231,6 +240,7 @@ class SubAgentRequest:
             effort=str(self.effort or "").strip(),
             model=str(self.model or "").strip(),
             agent_hooks=dict(self.agent_hooks or {}),
+            memory_scope=str(self.memory_scope or "").strip().lower(),
         )
 
 
@@ -707,6 +717,34 @@ async def run_subagent(
         # 子代理只能继承父级的边界，不许自己挑一个更宽的。这不是参数错，是越权。
         return SubAgentResult(ok=False, error=str(exc), agent_path=agent_path, depth=depth)
 
+    # 定义声明的持久记忆：目录按**父工作区**解析——隔离子代理的临时副本跑完就删，
+    # 记忆写在那里面等于没写。目录建不出来时不注入提示（否则等于告诉模型一个
+    # 不存在的记忆目录），照常派发并留一条事件。
+    memory_dir: Path | None = None
+    memory_section = ""
+    memory_error = ""
+    if request.memory_scope and not request.fork:
+        try:
+            memory_dir = agent_memory_dir(
+                request.memory_scope, request.agent_name, Path(root)
+            )
+            memory_dir.mkdir(parents=True, exist_ok=True)
+            memory_section = render_memory_section(
+                scope=request.memory_scope,
+                agent_name=request.agent_name,
+                directory=memory_dir,
+            )
+            # 记忆写入是定义声明的作用域能力；显式禁掉这个工具的定义仍然说了算。
+            if (
+                "*" not in request.disallowed_tools
+                and "memory_write" not in request.disallowed_tools
+            ):
+                tools = [*tools, *agent_memory_tools(memory_dir)]
+        except OSError as exc:
+            memory_dir = None
+            memory_section = ""
+            memory_error = f"{exc.__class__.__name__}: {exc}"
+
     # 子代理这一轮实际用的模型：定义里的覆盖，``inherit``/空串回落到供应商配置；
     # fork 恒继承父会话模型（上游 ``Jt ? "inherit" : we``）。一轮只算一次，
     # 每一步调用都用同一个——子代理是同一次作业，中途换模型会让账与裁决各说各话。
@@ -810,6 +848,30 @@ async def run_subagent(
         parent_thread_id=parent_thread_id,
         root_thread_id=root_thread_id,
     )
+    if memory_error:
+        await log.add(
+            "subagent.memory_failed",
+            "subagent",
+            {
+                "agent_id": agent_id,
+                "agent_type": request.agent_name or BUILTIN_AGENT,
+                "scope": request.memory_scope,
+                "error": memory_error[:300],
+            },
+        )
+    elif memory_dir is not None:
+        # 审计只报作用域与条目规模，不复制记忆正文（里面可能有项目敏感信息）。
+        await log.add(
+            "subagent.memory_enabled",
+            "subagent",
+            {
+                "agent_id": agent_id,
+                "agent_type": request.agent_name or BUILTIN_AGENT,
+                "scope": request.memory_scope,
+                "path": mask_path(str(memory_dir)),
+                "chars": len(memory_section),
+            },
+        )
     if child_effort.warning:
         # 档位被压下来必须留痕：定义里写了 max、模型只认 high 时，子代理照跑，
         # 但读事件的人得能看出来"这一轮没有按声明的档位走"。
@@ -986,6 +1048,9 @@ async def run_subagent(
         # 关键词（目标正文里的 ultrathink/ultracode）升档时，与主代理同一条提醒：
         # 档位是模型参数，模型看不见"用户要求更深推理"这句话就可能按默认档想。
         system_message["content"] += "\n" + str(child_effort.reminder)
+    if memory_section:
+        # 记忆段排在定义正文之前：先告诉它有哪些跨会话的记忆，再接这个类型的做法。
+        system_message["content"] += "\n" + memory_section
     if request.instructions:
         # 定义正文是"这个类型怎么做"，不是另一套权限。放在基础规则之后，
         # 并写死不得放宽上面的规则——定义文件不能变成绕过审批的侧门。
@@ -1527,6 +1592,8 @@ class SubAgentRunner:
             # 第二轮不能悄悄失去它的 Stop/PreToolUse 守卫。
             "model": prepared.request.model,
             "agent_hooks": dict(prepared.request.agent_hooks),
+            # 记忆作用域也要带到下一轮：同一个子代理接着说话，不能第二轮就丢失记忆。
+            "memory_scope": prepared.request.memory_scope,
         }
         while len(bucket) > MAX_CONVERSATIONS:
             bucket.pop(next(iter(bucket)))
@@ -1581,6 +1648,7 @@ class SubAgentRunner:
             permission_mode=str(entry.get("permission_mode") or ""),
             model=str(entry.get("model") or ""),
             agent_hooks=dict(entry.get("agent_hooks") or {}),
+            memory_scope=str(entry.get("memory_scope") or ""),
             fork=bool(entry.get("fork")),
         ).normalized()
         if not request.goal:
