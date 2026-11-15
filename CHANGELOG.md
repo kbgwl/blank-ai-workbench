@@ -1,6 +1,39 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖
+
+- **子代理派发的 `model` 入参覆盖（#319）**：#315 只移植了定义里的 `model`，模型自己
+  调用 `spawn_agent` 时无法按任务挑模型；现在工具入参 `model` 压过定义值。上游锚点
+  （均以 `grep -boF` 现场复核）：Agent 工具 schema 的 `subagent_type`
+  （4299449）与 `model` 描述
+  `Optional model override for this agent. Takes precedence over the agent definition's model frontmatter and the configured default subagent model. If omitted, uses the agent definition's model, else the default (inherits from the parent unless a default subagent model is configured).`（4299605），
+  同句
+  `Ignored for subagent_type: "fork" — forks always inherit the parent model.`（4299889）；
+  运行期把工具模型带进派发、fork 形态直接丢弃（`model:Jt?void 0:we`，4311121；
+  插件 spawn 路径同口径 4311566），队友路径的 `modelSource:pe?"tool":"frontmatter"`
+  （4307321）确认「工具值优先于定义值」。
+  1. **优先级**：显式 `model` 压过定义 frontmatter；不传、`null` 时仍用定义；显式空串
+     或 `inherit` 是「回落父会话」的语义值，会压掉定义值；空白裁掉；非字符串
+     fail-closed（把 `123` 当模型名发给供应商只会换来 400），不会派出子代理。
+  2. **fork**：入参 `model` 被忽略，分身恒继承父会话模型（事件里 `agent_model` 仍记空）。
+  3. **批量与续聊**：`spawn_agents` 每个子任务各自携带 `model`，未写的沿用定义；
+     `_remember` / `send_message` 让续聊沿用第一轮的生效值，不会漂回定义值。
+  4. **偏离项**：（a）上游 `sonnet` / `opus` / `haiku` / `fable` 四别名枚举没有强制——
+     本机供应商模型名不同，任意字符串原样透传（与 #315 定义口径一致，写错由供应商报）；
+     （b）`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` / 协作模式下强制 worker 继承的链路未移植，
+     本机没有对等环境变量。
+  判据 `services/api/tests/test_agent_model_arg_v319.py`（12 例：schema 两例；工具入参
+    压过定义、不传保留定义、空串回落、`inherit` 保留、非字符串 fail-closed 五例；
+    fork 忽略一例；批量每任务携带、批量非字符串拒绝、续聊沿用三例；端到端一例——mock
+    供应商在子代理那次请求里看到 `mock-tool-model`、且不再发定义里的 `mock-fast`），
+    变异 10/10 红（忽略工具入参、fork 不排除、非字符串原样接受、缺失当成空串覆盖、
+    批量忽略 per-task model、批量不校验、schema 缺 model、批量文档缺 model、空白不裁、
+    空串当缺失；每条实测红在指定判据上，非 no-op，跑完按原字节还原并核对 sha256）。
+    相邻套件（`agent_model_arg_v319` + `agent_model_v315` + `agent_defs_v44` +
+    `claude_fork_v30` + `claude_subagent_default_v29` + `claude_send_message_v30` +
+    `background_subagent_v116` + `parallel_budget_v26` + `worktree_parallel_v13` +
+    `subagent_v12`）**165 passed in 22.94s**；后端全量 **4028 passed, 28 skipped,
+    0 failed in 842.76s**（基线 4016 + 本批 12）。
 
 - **子代理默认继承 AGENTS.md 指令，`omitClaudeMd` 可关闭（#318）**：此前子代理系统提示
   只有基础规则与定义正文，项目/用户 AGENTS.md 一个都不带；现在默认继承，定义里写

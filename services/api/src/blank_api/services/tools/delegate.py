@@ -88,6 +88,23 @@ def _apply_definition(request: SubAgentRequest, definition) -> SubAgentRequest:
     return request
 
 
+_MODEL_MISSING = object()
+
+
+def _tool_model(arguments: dict) -> tuple:
+    """工具入参的 ``model``：显式给出时压过定义里的 ``model``。
+
+    空串与 ``inherit`` 是"回落父会话"的语义值，会压掉定义值；``None`` 等同没传。
+    类型不对就 fail-closed——把 ``123`` 当模型名发给供应商只会换来一个 400。
+    """
+    raw = arguments.get("model", _MODEL_MISSING)
+    if raw is _MODEL_MISSING or raw is None:
+        return _MODEL_MISSING, ""
+    if not isinstance(raw, str):
+        return _MODEL_MISSING, "model 必须是字符串（不传则用定义或父会话模型）"
+    return raw.strip(), ""
+
+
 def _request_steps(raw, definition) -> int:
     """没显式传步数时用定义的 maxTurns；两者都受子代理全局上限约束。"""
     if raw is None or raw == "":
@@ -108,14 +125,21 @@ def _parse_tasks(raw, context: ToolContext) -> tuple[list[SubAgentRequest], str]
         if isinstance(item, str):
             goal = item.strip()
             isolate, steps, label, agent_type = True, 4, "", BUILTIN_AGENT
+            model = _MODEL_MISSING
         elif isinstance(item, dict):
             goal = str(item.get("goal") or "").strip()
             isolate = bool(item.get("isolate", True))
             steps = item.get("max_steps")
             label = str(item.get("label") or "")
             agent_type = item.get("subagent_type")
+            model, model_error = _tool_model(item)
+            if model_error:
+                return [], f"子任务的 {model_error}"
         else:
-            return [], "子任务必须是字符串或 {goal, isolate, max_steps, subagent_type} 对象"
+            return [], (
+                "子任务必须是字符串或 "
+                "{goal, isolate, max_steps, subagent_type, model} 对象"
+            )
         if not goal:
             return [], "每个子任务都需要具体的 goal"
         definition, error = _resolve_agent(context, agent_type)
@@ -136,7 +160,10 @@ def _parse_tasks(raw, context: ToolContext) -> tuple[list[SubAgentRequest], str]
             max_steps=resolved_steps,
             label=label or "par",
         )
-        requests.append(_apply_definition(request, definition))
+        _apply_definition(request, definition)
+        if model is not _MODEL_MISSING:
+            request.model = model
+        requests.append(request)
     return requests, ""
 
 
@@ -147,6 +174,9 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
     definition, error = _resolve_agent(context, arguments.get("subagent_type"))
     if error:
         return fail("error", error)
+    model, model_error = _tool_model(arguments)
+    if model_error:
+        return fail("error", model_error)
     try:
         request = SubAgentRequest(
             goal=str(arguments.get("goal") or ""),
@@ -159,6 +189,9 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
     if not request.goal.strip():
         return fail("error", "spawn_agent 需要具体的子任务目标")
     _apply_definition(request, definition)
+    # 上游 ``model:Jt?void 0:we``：工具入参压过定义，fork 形态直接丢掉它。
+    if model is not _MODEL_MISSING and not request.fork:
+        request.model = model
 
     # Claude Code 的 Agent 工具默认后台跑：不传就是后台，只有「下一步马上就要结论、
     # 期间没有别的事可做」时才显式传 false。旧参数名 background 继续接受。
@@ -664,6 +697,14 @@ def delegate_tools() -> list[ToolDefinition]:
                             "fork 是内置分身（继承当前对话，只能前台）"
                         ),
                     },
+                    "model": {
+                        "type": "string",
+                        "description": (
+                            "可选模型覆盖，压过子代理定义里的 model；不传就用定义，"
+                            "定义也没写就继承父会话模型。传空串或 inherit 表示回落父会话。"
+                            "fork 形态忽略此参数（分身恒继承父会话模型）。"
+                        ),
+                    },
                     "isolate": {
                         "type": "boolean",
                         "description": "是否在临时隔离副本中执行（允许写文件，但只影响副本）",
@@ -705,7 +746,8 @@ def delegate_tools() -> list[ToolDefinition]:
                         "type": "array",
                         "description": (
                             f"子任务列表，最多 {MAX_PARALLEL_AGENTS} 个；元素可以是字符串或 "
-                            "{goal, isolate, max_steps, subagent_type}。"
+                            "{goal, isolate, max_steps, subagent_type, model}；"
+                            "model 压过子代理定义里的 model，不传就用定义。"
                             "subagent_type 不传就是内置 general-purpose，"
                             "也可以用工作区 .blank/agents 里定义的类型；未知类型整批拒绝；"
                             "fork 只能走 spawn_agent，放进这里会整批拒绝"
