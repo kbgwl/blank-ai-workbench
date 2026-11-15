@@ -11,6 +11,7 @@ from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutco
 from blank_api.services.tools.shell import (
     execute_command,
     mask_output,
+    normalize_python_command,
     policy_gate,
     project_python,
     python_test_command,
@@ -22,6 +23,14 @@ SUMMARY = re.compile(r"(\d+)\s+(passed|failed|errors?|skipped|xfailed|xpassed|er
 PYTEST_MARKERS = ("pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py")
 CONTAINER_PYTHON = "python3"
 GO_MARKERS = ("go.mod", "go.sum")
+
+# 「命令根本没启动」的退出码与回执片段（Windows cmd 9009 / POSIX 127）。
+# 这跟「测试没通过」是两件事：前者该去补命令/改调用方式，后者才该改代码。
+NOT_FOUND_EXIT_CODES = (9009, 127)
+NOT_FOUND_OUTPUT = (
+    re.compile(r"不是内部或外部命令"),
+    re.compile(r"is not recognized as an internal or external command", re.IGNORECASE),
+)
 
 # 「跑不了测试」的特征：解释器里没 pytest，或 PATH 上压根没有这个命令。
 # 只认这几个稳定片段，不要把任何非零退出都归成环境问题——那样会把真失败洗白。
@@ -39,6 +48,13 @@ def missing_runner(output: str) -> str:
         if pattern.search(output or ""):
             return name
     return ""
+
+
+def missing_command(output: str, exit_code: int | None = None) -> bool:
+    """命令根本没启动（不是测试跑完失败）。"""
+    if exit_code in NOT_FOUND_EXIT_CODES:
+        return True
+    return any(pattern.search(output or "") for pattern in NOT_FOUND_OUTPUT)
 
 
 def detect_test_command(root) -> tuple[list[str], bool] | None:
@@ -95,7 +111,14 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
     tier = getattr(context, "sandbox_tier", "") or ""
     override = arguments.get("command")
     if override:
-        argv: list[str] | str = str(override)
+        # 和不传 command 的那一路同源解析解释器：venv 优先，否则本进程解释器；容器档
+        # 用镜像自带的 python3。裸 python 原样交给 cmd 会落到 PATH 上第一个同名程序
+        # ——本机是商店占位符，退出码 9009，被记成「测试未通过」，模型只好去下载
+        # 便携运行时（coding-012/028/035 真机轨迹）。
+        if runs_in_docker(tier):
+            argv = normalize_python_command(str(override), None, fallback=CONTAINER_PYTHON)
+        else:
+            argv = normalize_python_command(str(override), context.root, fallback=sys.executable)
         shell = True
     else:
         detected = detect_test_command(context.root)
@@ -198,6 +221,31 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
                     "exit_code": result["exit_code"],
                     "passed": False,
                     "missing_test_runner": missing,
+                    "sandbox": result["sandbox"],
+                    "tier": result.get("tier", {}),
+                    "enforcement": result["enforcement"],
+                    "summary": summarize_exit_codes(combined),
+                },
+            )
+        if missing_command(combined, result["exit_code"]):
+            # 9009 / 127：命令没启动。真机里这被写成「测试未通过，退出码 9009」，
+            # 模型据此认定环境没有解释器，下载便携 Python 进工作区、污染交付。
+            head = re.match(r'\s*["\']?([^\s"\']+)', command_text)
+            name = head.group(1) if head else command_text
+            return ToolOutcome(
+                ok=False,
+                status="error",
+                output=combined,
+                message=(
+                    f"测试命令不存在：系统找不到 `{name}`（退出码 {result['exit_code']}），"
+                    "测试没有启动。这不是测试未通过。改用 run_tests 默认识别（不传 command）"
+                    "或显式写解释器的绝对路径后重跑；不要为了跑测试在工作区里下载运行时。"
+                ),
+                data={
+                    "command": command_text,
+                    "exit_code": result["exit_code"],
+                    "passed": False,
+                    "command_not_found": True,
                     "sandbox": result["sandbox"],
                     "tier": result.get("tier", {}),
                     "enforcement": result["enforcement"],

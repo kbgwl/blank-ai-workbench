@@ -115,6 +115,69 @@ def test_a_question_in_the_body_does_not_look_like_an_incomplete_delivery():
     assert verdict["blocking"] is False and verdict["checks"]["delivery_says_done"] is True
 
 
+# ── 收尾交接不等于没做完（coding-012/028/035 真机）────────────────────────
+# 三题测试退出码都是 0、文件都改对了，交付却写「需要你：手动删除验证残留…」，
+# 被 _HANDOFF_MARKS 里的「手动/手工」命中判成任务未完成。那些残留是模型自证
+# 时留下的，删除动作被执行域不可逆闸门拦下——这是执行域的正确行为，不是交付
+# 物没做完。判据只认让用户**重做/恢复工作**的交接。
+
+HOUSEKEEPING_DELIVERY = (
+    "完成：storage.py 新增公共 save_record 函数，并让 models 复用同一份序列化逻辑\n"
+    "改动：2 个文件、2 处 Diff\n"
+    "验证：python -m pytest -q（退出码 0）\n"
+    "需要你：手动删除验证残留：工作区下的 alice.json、tmpcheck/、__pycache__/、.pytest_cache/"
+)
+TOOLCHAIN_DELIVERY = (
+    "完成：合并逻辑已抽到 merge.py 并让 store 调用\n"
+    "改动：2 个文件、3 处 Diff\n"
+    "验证：.toolchain\\python312\\python.exe -m pytest -q（退出码 0）\n"
+    "需要你：手工执行 rd /s /q .toolchain，再装系统 Python 后复跑 pytest 确认"
+)
+
+
+def test_a_cleanup_handoff_is_not_an_incomplete_delivery():
+    verdict = verify(
+        goal_spec={"objective": "抽公共函数并跑测试"},
+        tool_results=[_write("storage.py"), _write("models.py"), _test("ok")],
+        validation={"status": "ok", "passed": True, "exit_code": 0},
+        changed_paths=["storage.py", "models.py"],
+        report=HOUSEKEEPING_DELIVERY,
+    )
+    assert verdict["checks"]["delivery_says_done"] is True
+    assert verdict["blocking"] is False
+    assert verdict["verdict"] == "passed"
+
+
+def test_a_toolchain_handoff_is_not_an_incomplete_delivery():
+    verdict = verify(
+        goal_spec={"objective": "抽公共函数并跑测试"},
+        tool_results=[_write("merge.py"), _write("store.py"), _test("ok")],
+        validation={"status": "ok", "passed": True, "exit_code": 0},
+        changed_paths=["merge.py", "store.py"],
+        report=TOOLCHAIN_DELIVERY,
+    )
+    assert verdict["checks"]["delivery_says_done"] is True
+    assert verdict["blocking"] is False
+
+
+def test_a_handoff_that_asks_the_user_to_redo_work_is_still_blocking():
+    """反向守卫：让用户恢复/重做/修复的交接仍然是没做完的证据，不能一起放过。"""
+    for needs in (
+        "需要你：从 `.blank_backups` 恢复这两个文件",
+        "需要你：手动修复 styles.css 里的布局回退",
+        "需要你：重做一遍改动",
+    ):
+        verdict = verify(
+            goal_spec={},
+            tool_results=[_write("a.css"), _test("ok")],
+            validation={"status": "ok", "passed": True, "exit_code": 0},
+            changed_paths=["a.css"],
+            report=f"完成：样式已调整\n改动：1 个文件\n{needs}",
+        )
+        assert verdict["checks"]["delivery_says_done"] is False, needs
+        assert verdict["blocking"] is True, needs
+
+
 # ── Verifier：本轮把测试配置改坏 ────────────────────────────────────────────
 
 

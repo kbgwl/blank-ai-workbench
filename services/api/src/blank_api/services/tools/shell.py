@@ -1013,18 +1013,24 @@ def python_test_command(root=None) -> list[str]:
 _BARE_PYTHON = ("python", "python3", "py")
 
 
-def normalize_python_command(command: str | list[str], root) -> str | list[str]:
+def normalize_python_command(
+    command: str | list[str], root, *, fallback: str = ""
+) -> str | list[str]:
     """把命令首段的裸 `python`/`python3`/`py` 换成工作区的 venv 解释器。
 
     只换**确实存在**的项目 venv，其余原样返回——没匹配上就不猜。用于处理模型直接
     写 `run_shell("python -m pytest …")` 而非走 `run_tests` 的情况：那一路不经过
     `python_test_command`，会落到系统解释器。
 
+    ``fallback`` 给没有 venv 时用的解释器，只有测试通道传（与
+    ``python_test_command`` 的 `project_python or sys.executable` 同源）：run_shell
+    不传，行为保持不变。
+
     注意：这跟 `normalize_relative_executable` 是两件事。那个补的是
     `.venv/Scripts/python.exe` 这种相对路径首段；这个补的是裸 `python`。两条都
     在服务 `run_process` 之前，分别覆盖不同的写法。
     """
-    venv = project_python(root)
+    venv = project_python(root) or fallback
     if not venv:
         return command
 

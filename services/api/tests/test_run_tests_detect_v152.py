@@ -159,6 +159,105 @@ async def test_run_tests_reports_environment_error_when_pytest_missing(tmp_path:
     assert "pytest" in outcome.message
 
 
+# ── 覆盖命令里的裸 python 也要解析（coding-012/028/035 真机轨迹）──────────────
+# 真机：`run_tests` 传 `python -m pytest -q`，本机 PATH 上的 python 是商店占位符，
+# 退出码 9009 被记成「测试未通过」。模型据此认定环境没有 Python，下载便携运行时
+# 进工作区，最后清不掉残留。run_shell 的换法是「有 venv 才换」，测试通道不能照搬：
+# 不传 command 时走 `project_python(root) or sys.executable`，传了 command 却原样
+# 交给 cmd —— 同一个工具两条路径解析出不同解释器，这本身就是缺陷。
+
+
+async def _capture(monkeypatch):
+    captured: dict = {}
+
+    async def run(argv, root, timeout, **kwargs):
+        captured["argv"] = argv
+        captured["shell"] = kwargs.get("shell")
+        return {
+            "stdout": "1 passed",
+            "stderr": "",
+            "exit_code": 0,
+            "timed_out": False,
+            "sandbox": {},
+            "enforcement": {},
+            "tier": {},
+        }
+
+    monkeypatch.setattr(testing_mod, "policy_gate", lambda *a, **k: None)
+    monkeypatch.setattr(testing_mod, "execute_command", run)
+    return captured
+
+
+async def test_override_bare_python_prefers_project_venv(tmp_path: Path, monkeypatch):
+    venv_python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_bytes(b"")
+    captured = await _capture(monkeypatch)
+    context = ToolContext(root=tmp_path, task_id="t-override-venv", session_factory=None)
+    outcome = await testing_mod._run_tests(context, {"command": "python -m pytest -q"})
+    assert outcome.status == "ok"
+    assert captured["argv"].lstrip('"').startswith(str(venv_python))
+    assert captured["shell"] is True
+
+
+async def test_override_bare_python_without_venv_uses_real_interpreter(tmp_path: Path, monkeypatch):
+    import sys
+
+    captured = await _capture(monkeypatch)
+    context = ToolContext(root=tmp_path, task_id="t-override-sys", session_factory=None)
+    outcome = await testing_mod._run_tests(context, {"command": "python -m pytest -q"})
+    assert outcome.status == "ok"
+    # 与不传 command 的那一路同源：venv 不存在的回退必须是会真的跑起来的解释器
+    assert captured["argv"].lstrip('"').startswith(sys.executable)
+
+
+async def test_override_bare_python_in_container_uses_image_interpreter(tmp_path: Path, monkeypatch):
+    captured = await _capture(monkeypatch)
+    monkeypatch.setattr(testing_mod, "runs_in_docker", lambda tier: True)
+    context = ToolContext(
+        root=tmp_path, task_id="t-override-docker", session_factory=None, sandbox_tier="docker"
+    )
+    outcome = await testing_mod._run_tests(context, {"command": "python -m pytest -q"})
+    assert outcome.status == "ok"
+    # 宿主解释器不在镜像里，容器档必须换成镜像自带的 python3
+    assert captured["argv"].startswith("python3 ")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'set "PATH=C:\\Python312;%PATH%" && python -m pytest -q',  # 自己写 PATH 的，意图明确
+        ".toolchain\\python312\\python.exe -m pytest -q",  # 显式解释器路径
+        "npm test -- --runInBand",
+    ],
+)
+async def test_override_with_explicit_runner_is_not_rewritten(tmp_path: Path, monkeypatch, command):
+    captured = await _capture(monkeypatch)
+    context = ToolContext(root=tmp_path, task_id="t-override-keep", session_factory=None)
+    outcome = await testing_mod._run_tests(context, {"command": command})
+    assert outcome.status == "ok"
+    assert captured["argv"] == command
+
+
+async def test_run_tests_distinguishes_missing_command_from_test_failure(tmp_path: Path, monkeypatch):
+    """退出码 9009 / 「不是内部或外部命令」是命令没启动，不是测试没通过。"""
+    monkeypatch.setattr(testing_mod, "policy_gate", lambda *a, **k: None)
+    monkeypatch.setattr(
+        testing_mod,
+        "execute_command",
+        await _fake_execute(
+            {"stderr": "'pytestrunner' 不是内部或外部命令，也不是可运行的程序", "exit_code": 9009}
+        ),
+    )
+    context = ToolContext(root=tmp_path, task_id="t-cmd-missing", session_factory=None)
+    outcome = await testing_mod._run_tests(context, {"command": "pytestrunner -q"})
+    assert outcome.status == "error"
+    assert outcome.data["command_not_found"] is True
+    assert "不存在" in outcome.message
+    # 回执要告诉模型怎么办，而不是让它去改本来没问题的代码
+    assert "解释器" in outcome.message or "run_tests" in outcome.message
+
+
 async def test_run_tests_keeps_failed_for_real_test_failure(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(testing_mod, "policy_gate", lambda *a, **k: None)
     monkeypatch.setattr(
