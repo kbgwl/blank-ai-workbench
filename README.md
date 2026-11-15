@@ -400,10 +400,12 @@ uv run alembic revision --autogenerate -m "描述"
   子代理自己的调用、不改父
   会话；Agent 工具入参的 `model` 已于 #319 生效：显式值压过定义、空串与 `inherit`
   回落父会话、fork 忽略、`spawn_agents` 每个子任务各自携带、续聊沿用第一轮的值；
-  两处偏离：上游 `sonnet` / `opus` / `haiku` / `fable` 四别名枚举没有强制——本机
+  一处偏离：上游 `sonnet` / `opus` / `haiku` / `fable` 四别名枚举没有强制——本机
   供应商模型名不同，任意字符串原样透传（写错由供应商报错，不做本地映射）；
-  `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` 会剥离调用方显式模型的链路未移植——本机没有
-  这个环境变量的对等物）；`hooks` 的移植口径见 #316 条与下方偏离；
+  `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` 已于 #322 移植：非空即开，置位时 `spawn_agent`
+  schema 不再暴露 `model`，工具入参与定义里的 `model` 一并失效（回执留 `model_ignored`）；
+  本机没有 `CLAUDE_CODE_SUBAGENT_MODEL` 的对等物，生效值是继承父会话模型，而不是
+  上游的「子代理专用模型优先」）；`hooks` 的移植口径见 #316 条与下方偏离；
   `permissionMode` / `isolation` / `background` 已于 Y 批生效（见上表；
   两处偏离：声明档只收紧——隔离副本基线是 `accept_edits`，所以 `plan` / `default` 可
   生效而 `acceptEdits` / `bypassPermissions` 的声明被忽略，Claude 允许从 default 父档

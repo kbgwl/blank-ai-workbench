@@ -17,6 +17,8 @@ the point; the parent decides what lands.
 
 from __future__ import annotations
 
+import os
+
 from blank_api.services.agents_defs import (
     BUILTIN_AGENT,
     BUILTIN_FORK,
@@ -35,6 +37,30 @@ from blank_api.services.subagent import (
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, fail, ok
 
 MAX_GOAL_CHARS = 2_000
+
+MODEL_FORCE_ENV = "CLAUDE_CODE_SUBAGENT_MODEL_FORCE"
+
+
+def _model_forced() -> bool:
+    """上游按字符串真值判定：``a.CLAUDE_CODE_SUBAGENT_MODEL_FORCE`` 非空即开。"""
+    return bool(os.environ.get(MODEL_FORCE_ENV))
+
+
+def _ignored_model(arguments: dict) -> str:
+    """置位时调用方仍塞进来的 ``model``：不生效，但要留痕，别让模型反复重试。"""
+    if not _model_forced():
+        return ""
+    raw = arguments.get("model", _MODEL_MISSING)
+    if raw is _MODEL_MISSING or raw is None:
+        return ""
+    return str(raw)
+
+
+def _ignored_note(model: str) -> str:
+    return (
+        f"{MODEL_FORCE_ENV} 已设置：忽略传入的 model {model!r}，"
+        "子代理沿用父会话模型。"
+    )
 
 
 def _resolve_agent(context: ToolContext, raw) -> tuple:
@@ -71,7 +97,8 @@ def _apply_definition(request: SubAgentRequest, definition) -> SubAgentRequest:
     # 空串表示定义没声明，子代理按兜底档跑。
     request.effort = definition.effort
     # 模型覆盖：``inherit``/空串由 run_subagent 回落到父会话模型；fork 恒继承。
-    request.model = definition.model
+    # FORCE 置位时定义里的覆盖同样失效（上游在解析入口把 n 置空，36500302）。
+    request.model = "" if _model_forced() else definition.model
     # 定义钩子跟着请求走，由 run_subagent 注册进子代理自己的作用域。
     request.agent_hooks = dict(getattr(definition, "hooks", None) or {})
     # 记忆作用域：派发时解析目录、注入记忆段并挂上作用域内的写入工具。
@@ -98,6 +125,9 @@ def _tool_model(arguments: dict) -> tuple:
     类型不对就 fail-closed——把 ``123`` 当模型名发给供应商只会换来一个 400。
     """
     raw = arguments.get("model", _MODEL_MISSING)
+    if _model_forced():
+        # 上游先 ``n=void 0`` 再解析：值不会被使用，类型也就不该再把派发拒掉。
+        return _MODEL_MISSING, ""
     if raw is _MODEL_MISSING or raw is None:
         return _MODEL_MISSING, ""
     if not isinstance(raw, str):
@@ -177,6 +207,7 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
     model, model_error = _tool_model(arguments)
     if model_error:
         return fail("error", model_error)
+    ignored_model = _ignored_model(arguments)
     try:
         request = SubAgentRequest(
             goal=str(arguments.get("goal") or ""),
@@ -221,21 +252,30 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
             return fail("error", error_result.error or "后台子代理启动失败")
         # 只给句柄，不给结论：结论要等 task_output。返回里写清"去哪儿取"，
         # 否则模型会把"已派出"读成"已完成"。
-        return ok(
+        body = (
             f"已在后台派出子代理 {agent_id}（{request.goal[:120]}）。"
             f"它还在运行；用 task_output(agent_id=\"{agent_id}\") 取结论，"
-            f"不需要了用 task_stop(agent_id=\"{agent_id}\") 取消。",
+            f"不需要了用 task_stop(agent_id=\"{agent_id}\") 取消。"
+        )
+        if ignored_model:
+            body = f"{body}\n{_ignored_note(ignored_model)}"
+        return ok(
+            body,
             agent_id=agent_id,
             status="running",
             goal=request.goal[:200],
             agent_type=definition.name,
+            **({"model_ignored": ignored_model} if ignored_model else {}),
         )
 
     result = await runner(request)
     if not result.ok and not result.summary:
         return fail("error", result.error or "子代理执行失败")
+    body = result.render()[:8_000]
+    if ignored_model:
+        body = f"{body}\n\n{_ignored_note(ignored_model)}"
     return ok(
-        result.render()[:8_000],
+        body,
         ok=result.ok,
         summary=result.summary,
         steps=result.steps,
@@ -247,6 +287,7 @@ async def _spawn_agent(context: ToolContext, arguments: dict) -> ToolOutcome:
         diff=result.diff[:20_000],
         error=result.error,
         usage=result.usage,
+        **({"model_ignored": ignored_model} if ignored_model else {}),
     )
 
 
@@ -697,14 +738,21 @@ def delegate_tools() -> list[ToolDefinition]:
                             "fork 是内置分身（继承当前对话，只能前台）"
                         ),
                     },
-                    "model": {
-                        "type": "string",
-                        "description": (
-                            "可选模型覆盖，压过子代理定义里的 model；不传就用定义，"
-                            "定义也没写就继承父会话模型。传空串或 inherit 表示回落父会话。"
-                            "fork 形态忽略此参数（分身恒继承父会话模型）。"
-                        ),
-                    },
+                    # 上游 4302142：FORCE 置位时 schema 直接把 model 剃掉。
+                    **(
+                        {}
+                        if _model_forced()
+                        else {
+                            "model": {
+                                "type": "string",
+                                "description": (
+                                    "可选模型覆盖，压过子代理定义里的 model；不传就用定义，"
+                                    "定义也没写就继承父会话模型。传空串或 inherit 表示回落父会话。"
+                                    "fork 形态忽略此参数（分身恒继承父会话模型）。"
+                                ),
+                            }
+                        }
+                    ),
                     "isolate": {
                         "type": "boolean",
                         "description": "是否在临时隔离副本中执行（允许写文件，但只影响副本）",
@@ -746,9 +794,14 @@ def delegate_tools() -> list[ToolDefinition]:
                         "type": "array",
                         "description": (
                             f"子任务列表，最多 {MAX_PARALLEL_AGENTS} 个；元素可以是字符串或 "
-                            "{goal, isolate, max_steps, subagent_type, model}；"
-                            "model 压过子代理定义里的 model，不传就用定义。"
-                            "subagent_type 不传就是内置 general-purpose，"
+                            + (
+                                "{goal, isolate, max_steps, subagent_type}；"
+                                f"model 在本会话被 {MODEL_FORCE_ENV} 忽略，不要传。"
+                                if _model_forced()
+                                else "{goal, isolate, max_steps, subagent_type, model}；"
+                                "model 压过子代理定义里的 model，不传就用定义。"
+                            )
+                            + "subagent_type 不传就是内置 general-purpose，"
                             "也可以用工作区 .blank/agents 里定义的类型；未知类型整批拒绝；"
                             "fork 只能走 spawn_agent，放进这里会整批拒绝"
                         ),
