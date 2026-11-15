@@ -190,6 +190,8 @@ async def test_enter_creates_branch_tree_and_moves_the_root(repo: Path) -> None:
     assert data == {
         "name": "feat",
         "branch": "blank/worktree-feat",
+        # 这个仓库没有远端跟踪分支：fresh 默认回落本地 HEAD。
+        "base_ref": "HEAD",
         "path": ".blank-worktrees/feat",
         "owned": True,
     }

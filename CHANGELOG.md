@@ -1,6 +1,42 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）
+
+- **任务级工作树的基准引用（`worktree.baseRef`，#323）**：此前 `enter_worktree` 一律从本地
+  HEAD 建树，上游的设置项 `worktree.baseRef` 在本机没有对应物（README 一直列为偏离）。
+  上游锚点（均以 `grep -boF` 现场复核）：设置面板的 `worktreeBaseRef` 选项
+  `["fresh","head"]`（35550204）；设置键白名单（22632867）；工具描述
+  `fresh` 默认从 `origin/<default-branch>`、`head` 从当前本地 HEAD（7059636）；
+  建树消费点 `h = r?.fromHead ?? (!r?.prNumber && Ge().worktree?.baseRef==="head")`
+  （26601992），非 head 且无 PR 时走远端基准（26605082），命令
+  `git worktree add --no-track -B <branch> <path> <base>`；默认分支解析
+  `git symbolic-ref --short refs/remotes/origin/HEAD` → 去 `origin/` 前缀并验证，
+  否则候选 `main` / `master` 逐个验证，都不行返回 `main`（27311697）。
+  1. **设置归一**：`normalize` 同时收 `base_ref` 与上游驼峰 `baseRef`（下划线优先），
+     裁空白、转小写；认不出的值回落 `fresh`。`worktree` 段进 `DEFAULTS`，因此项目层
+     / 本机层 / 用户层 / 管理层都能设置，且 `settings.py` 的既有层级合并直接生效。
+  2. **服务层判定**：`worktree_session.enter(..., base_ref=)` 对非 `fresh`/`head` 的值
+     归一成 `fresh`——这是公开入口，工具层已归一也不把它当 `head` 用。
+  3. **`fresh` 路径**：默认分支按上游三段式解析；只读本机已有的
+     `refs/remotes/origin/<branch>`，命中则基准为该远端提交；没有远端跟踪分支回落
+     本地 HEAD（`base_ref` 记 `HEAD`）。
+  4. **`head` 路径**：与旧行为一致，从当前本地 HEAD 建树。
+  5. **可观察面**：`enter_worktree` 回执与 `worktree.entered` 事件都带
+     `base_ref`（`origin/<branch>` 或 `HEAD`），回执文案写明基准；工具描述说明设置项。
+  偏离项：（a）上游在 `FETCH_HEAD` 超过 24h 时发起 `git fetch`（5s 超时，失败告警并
+  回落本地 HEAD）；本机**不在建树路径上发起 fetch**——网络出口统一归沙箱策略管，
+  不在这条路径上偷偷开口子，只读已有远端跟踪分支；（b）建分支用 `-b` 而不是上游的
+  `-B`：同名分支已存在时拒绝并提示换名字，而不是强制重置那棵树的分支。
+  判据 `services/api/tests/test_worktree_base_ref_v323.py`（10 例：默认值与两种写法、
+  项目层段不被拒、fresh 走 origin、head 走本地 HEAD、无远端回落、默认分支跟
+  `origin/HEAD`、回落 `origin/master`、坏值按 fresh、服务层直调坏值也按 fresh、
+  工具描述点名设置），变异 14/14 红（默认值改 head、只认下划线、删 `origin/HEAD`
+  解析、候选表去掉 master、fresh 路径置空、无远端时返回空基准、工具恒返 fresh、
+  工具恒返 head、工具不传 base_ref、工具描述改名、`tool_data` 丢 `base_ref`、
+  服务层去掉归一、项目层拒收 `worktree`、session 的 `base_ref` 写死 HEAD；每条实测
+  红在指定判据上，非 no-op，跑完按原字节还原并核对 sha256）。相邻套件（worktree 三套
+  + settings 四套 + 本批）**167 passed in 28.91s**；后端全量
+  **4063 passed, 28 skipped, 0 failed in 809.90s**（基线 4053 + 本批 10）。
 
 - **子代理工具循环接入四类工具钩子（#320）**：#316 让定义里的 `hooks` 在子代理内注册，
   但子代理工具循环此前直接调用 `gateway.execute`，定义里写的 PreToolUse 守卫在子代理里

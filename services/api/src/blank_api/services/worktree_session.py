@@ -32,6 +32,10 @@ from pathlib import Path
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 WORKTREE_DIRNAME = ".blank-worktrees"
 BRANCH_PREFIX = "blank/worktree-"
+# 新树的基准引用（对齐 Claude 的 worktree.baseRef）：fresh 从远端默认分支，
+# head 从当前本地 HEAD。都没有可用的远端跟踪分支时一律回落 HEAD。
+BASE_REFS: tuple[str, ...] = ("fresh", "head")
+DEFAULT_BRANCH_CANDIDATES: tuple[str, ...] = ("main", "master")
 GIT_TIMEOUT = 120.0
 MAX_REPORTED_ENTRIES = 20
 
@@ -45,6 +49,8 @@ class WorktreeSession:
     repo: Path
     branch: str
     base_commit: str
+    # 实际用的基准线："origin/<默认分支>" 或 "HEAD"（fresh 无远端跟踪时回落）。
+    base_ref: str
     # 本任务用 name 创建的才是 True；path 进入的为 False，remove 会被拒绝。
     owned: bool
 
@@ -65,6 +71,8 @@ class WorktreeSession:
             "origin": str(self.origin),
             "repo": str(self.repo),
             "branch": self.branch,
+            "base_commit": self.base_commit,
+            "base_ref": self.base_ref,
             "owned": self.owned,
         }
 
@@ -73,6 +81,7 @@ class WorktreeSession:
         return {
             "name": self.name,
             "branch": self.branch,
+            "base_ref": self.base_ref,
             "path": self.display,
             "owned": self.owned,
         }
@@ -176,6 +185,41 @@ def _current_branch(path: Path) -> str:
 def _head_commit(repo: Path) -> str:
     result = _run_git(["rev-parse", "HEAD"], repo)
     return result.out.strip() if result.code == 0 else ""
+
+
+def _ref_commit(repo: Path, ref: str) -> str:
+    result = _run_git(["rev-parse", "--verify", f"{ref}^{{commit}}"], repo)
+    return result.out.strip() if result.code == 0 else ""
+
+
+def _default_branch(repo: Path) -> str:
+    """远端默认分支：origin/HEAD 的符号引用 → main/master → 按 main 试一次。"""
+    result = _run_git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repo)
+    if result.code == 0:
+        name = result.out.strip()
+        if name.startswith("origin/"):
+            name = name[len("origin/") :]
+        if name and _ref_commit(repo, f"refs/remotes/origin/{name}"):
+            return name
+    for name in DEFAULT_BRANCH_CANDIDATES:
+        if _ref_commit(repo, f"refs/remotes/origin/{name}"):
+            return name
+    return "main"
+
+
+def _resolve_base(repo: Path, base_ref: str) -> tuple[str, str]:
+    """返回 (commit, 可读基准名)。
+
+    fresh 只读已有的远端跟踪分支：本机不在建树路径上发起 ``git fetch``，网络出口
+    统一归沙箱策略管。远端跟踪分支不存在时回落本地 HEAD（与上游 fetch 失败后的
+    回落一致），基准名跟着实际用的那条线走。
+    """
+    if base_ref == "fresh":
+        branch = _default_branch(repo)
+        commit = _ref_commit(repo, f"refs/remotes/origin/{branch}")
+        if commit:
+            return commit, f"origin/{branch}"
+    return _head_commit(repo), "HEAD"
 
 
 def _ensure_excluded(repo: Path) -> None:
@@ -312,11 +356,14 @@ def _enter_by_path(root: Path, task_id: str, raw_path: str, current: WorktreeSes
         repo=repo,
         branch=_current_branch(candidate),
         base_commit="",
+        base_ref="",
         owned=False,
     )
 
 
-def _create(root: Path, task_id: str, raw_name: str) -> WorktreeSession:
+def _create(
+    root: Path, task_id: str, raw_name: str, *, base_ref: str = "fresh"
+) -> WorktreeSession:
     name = _validate_name(raw_name) if raw_name else f"wt-{uuid.uuid4().hex[:8]}"
     repo = _repo_of(root)
     if repo is None:
@@ -324,9 +371,11 @@ def _create(root: Path, task_id: str, raw_name: str) -> WorktreeSession:
             "当前工作区不在 git 仓库里，无法创建 worktree。"
             "EnterWorktree 需要 git（或者先在工作区里 git init 并提交一次）。"
         )
-    base = _head_commit(repo)
+    base, effective_ref = _resolve_base(repo, base_ref)
     if not base:
-        raise ValueError("仓库还没有任何提交，无法从 HEAD 创建工作树；先提交一次再试。")
+        raise ValueError(
+            f"仓库还没有任何提交，无法从 {effective_ref} 创建工作树；先提交一次再试。"
+        )
 
     branch = BRANCH_PREFIX + name
     verify = _run_git(["rev-parse", "--verify", f"refs/heads/{branch}"], repo)
@@ -351,17 +400,28 @@ def _create(root: Path, task_id: str, raw_name: str) -> WorktreeSession:
         repo=repo,
         branch=branch,
         base_commit=base,
+        base_ref=effective_ref,
         owned=True,
     )
 
 
-def enter(root: Path | str, task_id: str, *, name: str = "", path: str = "") -> WorktreeSession:
+def enter(
+    root: Path | str,
+    task_id: str,
+    *,
+    name: str = "",
+    path: str = "",
+    base_ref: str = "fresh",
+) -> WorktreeSession:
     """建新工作树或进入已有的；失败抛 ValueError（消息直接回给模型）。"""
     task_id = str(task_id or "")
     if not task_id:
         raise ValueError("缺少任务 id，无法记录 worktree 会话")
     if name and path:
         raise ValueError("name 与 path 只能给一个：name 新建工作树，path 进入已有的。")
+    base_ref = str(base_ref or "").strip().lower()
+    if base_ref not in BASE_REFS:
+        base_ref = BASE_REFS[0]
 
     origin_root = Path(root).resolve()
     if not origin_root.is_dir():
@@ -381,7 +441,7 @@ def enter(root: Path | str, task_id: str, *, name: str = "", path: str = "") -> 
                 f"已经在 worktree「{current.name}」里。要换一棵已有的树请用 path；"
                 "要新建请先 exit_worktree。"
             )
-        session = _create(origin_root, task_id, name)
+        session = _create(origin_root, task_id, name, base_ref=base_ref)
 
     with _LOCK:
         _SESSIONS[task_id] = session

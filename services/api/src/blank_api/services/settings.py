@@ -95,6 +95,10 @@ DEFAULTS: dict[str, Any] = {
         # 工具超过一定数量后按需检索加载（tool_search）
         "search": True,
     },
+    # enter_worktree 新建工作树的基准引用（对齐 Claude 的 worktree.baseRef）：
+    # fresh = 从 origin/<默认分支> 建；head = 从当前本地 HEAD 建。没有远端跟踪
+    # 分支时一律回落本地 HEAD。
+    "worktree": {"base_ref": "fresh"},
     # 选中的输出样式名（.blank/output-styles 里的文件名或 frontmatter name）。
     # 和 Claude 的 settings.outputStyle 同一语义：精确查表，认不出的名字静默回落 default。
     "output_style": "default",
@@ -299,6 +303,7 @@ def normalize(raw: Any) -> dict[str, Any]:
     compaction = data.get("compaction") if isinstance(data.get("compaction"), dict) else {}
     permissions = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
     tools = data.get("tools") if isinstance(data.get("tools"), dict) else {}
+    worktree = data.get("worktree") if isinstance(data.get("worktree"), dict) else {}
     sandbox = data.get("sandbox") if isinstance(data.get("sandbox"), dict) else {}
     safety = data.get("safety") if isinstance(data.get("safety"), dict) else {}
     background = data.get("background") if isinstance(data.get("background"), dict) else {}
@@ -344,6 +349,11 @@ def normalize(raw: Any) -> dict[str, Any]:
     output_style = str(data.get("output_style") or "").strip()
     if not output_style or len(output_style) > 256:
         output_style = DEFAULTS["output_style"]
+    # Claude 用驼峰 baseRef；两种写法都收，下划线写法优先。认不出的值回落 fresh
+    # ——工作树从哪条线起，不能由一个拼错的词随机决定。
+    base_ref = str(worktree.get("base_ref") or worktree.get("baseRef") or "").strip().lower()
+    if base_ref not in ("fresh", "head"):
+        base_ref = DEFAULTS["worktree"]["base_ref"]
 
     return {
         "guardian": {
@@ -388,6 +398,7 @@ def normalize(raw: Any) -> dict[str, Any]:
             )
         },
         "tools": {"search": _as_bool(tools.get("search"), DEFAULTS["tools"]["search"])},
+        "worktree": {"base_ref": base_ref},
         "output_style": output_style,
         # 只收认得出布尔语义的值：手改文件时写成字符串 "on" 也认，写成一坨
         # 无法解释的东西就丢掉，让注册表默认值接手，而不是让开关变成随机行为。

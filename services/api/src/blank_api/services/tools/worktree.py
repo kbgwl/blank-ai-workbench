@@ -11,6 +11,7 @@ import asyncio
 from pathlib import Path
 
 from blank_api.services import worktree_session
+from blank_api.services.settings import SettingsStore
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, fail, ok
 from blank_api.services.tools.file_state import FileStateCache
 
@@ -38,6 +39,16 @@ async def _record(context: ToolContext, event: str, payload: dict) -> None:
         await recorder.add(event, "worktree", payload)
 
 
+def _base_ref(context: ToolContext) -> str:
+    """worktree.baseRef：按 用户 < 项目 < 本机 < 管理 叠一次，读生效值。"""
+    settings = SettingsStore().read_layered(context.root).settings
+    section = settings.get("worktree") if isinstance(settings, dict) else None
+    value = str((section or {}).get("base_ref") or "").strip().lower()
+    if value not in worktree_session.BASE_REFS:
+        value = worktree_session.BASE_REFS[0]
+    return value
+
+
 async def _enter_worktree(context: ToolContext, arguments: dict) -> ToolOutcome:
     name = str(arguments.get("name") or "").strip()
     path = str(arguments.get("path") or "").strip()
@@ -48,6 +59,7 @@ async def _enter_worktree(context: ToolContext, arguments: dict) -> ToolOutcome:
             context.task_id,
             name=name,
             path=path,
+            base_ref=_base_ref(context),
         )
     except ValueError as exc:
         return fail("error", str(exc))
@@ -57,7 +69,8 @@ async def _enter_worktree(context: ToolContext, arguments: dict) -> ToolOutcome:
 
     if session.owned:
         text = (
-            f"已进入 worktree「{session.name}」（分支 {session.branch}，位置 {session.display}）。"
+            f"已进入 worktree「{session.name}」（分支 {session.branch}，"
+            f"基准 {session.base_ref}，位置 {session.display}）。"
             "接下来所有工具调用都在这个工作树里执行；"
             '结束后用 exit_worktree(action="keep") 保留改动，或 action="remove" 删除。'
         )
@@ -130,7 +143,9 @@ def worktree_tools() -> list[ToolDefinition]:
             description=(
                 "创建或进入一个隔离的 git worktree，之后本任务的工具都在那棵树里执行。"
                 "只在用户或项目指令明确要求 worktree 时使用；name 新建（新分支），"
-                "path 进入 git worktree list 里已有的那棵。"
+                "path 进入 git worktree list 里已有的那棵。新建时基准由设置 "
+                "worktree.baseRef 决定：fresh（默认）从 origin/<默认分支>，head 从当前"
+                "本地 HEAD；没有可用的远端跟踪分支时回落本地 HEAD。"
             ),
             input_schema={
                 "type": "object",
