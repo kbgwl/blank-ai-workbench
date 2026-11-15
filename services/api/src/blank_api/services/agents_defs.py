@@ -30,13 +30,19 @@ but the *rules around it*:
   ``mcpServers`` with a warning (upstream ``Skn``);
 * one bad file never takes the whole catalog down.
 
+* ``hooks`` registers into the child's own hook scope when the agent is
+  dispatched (``Stop`` becomes ``SubagentStop``). A broken guard entry
+  (``PreToolUse`` / ``PermissionRequest``) or a guard written outside the
+  ``hooks`` block rejects the whole definition; other broken entries are
+  dropped with a warning and the definition still loads.
+
 What a definition still may *not* do here is widen the boundary. We parse
-``hooks`` / ``mcpServers`` (and a few other Claude-only knobs) but never apply
-them; they are reported per definition so the omission is visible instead of
-silently changing what the user thinks they configured. Tool lists only ever
-narrow the child pool — a custom agent that lists ``run_shell`` stays read-only
-unless it was spawned with ``isolate``. Permission modes only move toward
-stricter; a declaration looser than the spawn baseline is ignored.
+``mcpServers`` (and a few other Claude-only knobs) but never apply them; they
+are reported per definition so the omission is visible instead of silently
+changing what the user thinks they configured. Tool lists only ever narrow the
+child pool — a custom agent that lists ``run_shell`` stays read-only unless it
+was spawned with ``isolate``. Permission modes only move toward stricter; a
+declaration looser than the spawn baseline is ignored.
 """
 
 from __future__ import annotations
@@ -49,6 +55,7 @@ from pathlib import Path
 import yaml
 
 from blank_api.services.effort import parse as parse_effort
+from blank_api.services.hooks import HookSpec, parse_agent_hooks, top_level_guard_key
 from blank_api.services.plugins_defs import discover_plugins
 from blank_api.services.skills_defs import _tool_list as _parse_tool_specs
 from blank_api.services.workspace import mask_path
@@ -88,7 +95,6 @@ MAPPABLE_PERMISSION_MODES = (
 # so a definition that sets them gets them named in the audit instead.
 # ``effort`` 不在列：它是本轮思考强度的声明，派发时按模型封顶钳制后生效。
 UNSUPPORTED_FIELDS = (
-    "hooks",
     "mcpServers",
     "memory",
     "color",
@@ -118,6 +124,9 @@ class AgentDefinition:
     # 上游 agent schema 的 ``model``（自由字符串，``inherit`` = 父会话模型）。
     # 空串 = 没声明，子代理沿用供应商配置的模型；fork 恒继承，忽略它。
     model: str = ""
+    # 定义里声明的钩子，注册进这个子代理自己的作用域（``Stop`` 在注册时
+    # 改写成 ``SubagentStop``）。解析阶段保留定义里的原事件名。
+    hooks: dict[str, tuple[HookSpec, ...]] = field(default_factory=dict)
     # Claude 的 ``effort``：这一层子代理想用的思考强度。空串 = 不声明，
     # 派发时按模型封顶取兜底档；认不出的值解析时告警并丢弃（与上游 _Ht 同口径）。
     effort: str = ""
@@ -155,6 +164,11 @@ class AgentDefinition:
             payload["maxTurns"] = self.max_turns
         if self.model:
             payload["model"] = self.model
+        if self.hooks:
+            # 审计只报"每个事件几条"：命令正文里可能有 token/路径。
+            payload["hooks"] = {
+                event: len(specs) for event, specs in sorted(self.hooks.items())
+            }
         if self.effort:
             payload["effort"] = self.effort
         if self.ignored:
@@ -454,6 +468,30 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
     warnings: list[str] = []
     ignored_extra: set[str] = set()
 
+    # 定义里的 hooks：插件 agent 一律忽略（上游 Skn）；文件 agent 按上游
+    # SOo/Z5 口径解析——顶层误写守卫、hooks 非映射、守卫条目坏都让整份定义
+    # 不加载，非守卫条目的坏结构只丢弃并告警。
+    agent_hooks: dict[str, tuple[HookSpec, ...]] = {}
+    if not plugin_source:
+        misplaced = top_level_guard_key(meta)
+        if misplaced:
+            return None, [
+                f"{label} {where} 的 {misplaced} 写在顶层（不在 hooks 内）——"
+                "这两个事件必须放进 hooks 块；不会加载该 Agent"
+            ]
+        if meta.get("hooks") is not None:
+            parsed_hooks, hook_notes, hook_fatal = parse_agent_hooks(
+                meta.get("hooks"),
+                label=f"{label} {where}",
+                source=f"agent:{name}",
+            )
+            warnings.extend(hook_notes)
+            if hook_fatal:
+                return None, [*warnings, hook_fatal]
+            agent_hooks = {
+                event: tuple(specs) for event, specs in parsed_hooks.items()
+            }
+
     tools, problem = _tool_list(meta["tools"] if "tools" in meta else _MISSING)
     if problem:
         warnings.append(f"{label} {where} 的 tools {problem}")
@@ -554,6 +592,7 @@ def _definition_from_file(path: Path, source: str) -> tuple[AgentDefinition | No
             max_turns=max_turns,
             model=agent_model,
             effort=agent_effort,
+            hooks=agent_hooks,
             source=source,
             path=str(path),
             ignored=ignored,

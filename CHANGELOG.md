@@ -1,6 +1,57 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）
+
+- **子代理定义的 `hooks` 作用域注册（#316）**：agent frontmatter 的 `hooks` 从「识别但
+  不生效」变成真的在这一轮子代理里跑，且只影响这个子代理、不改父会话。上游锚点（均以
+  `grep -bo` 复核）：派发函数在 SubagentStart 迭代**之后**才注册定义钩子
+  （`let ia=!oc("hooks")||hV(e.source);if(SQt(e.hooks)&&ia)...hkr(...)`，15189617）、
+  注册函数 `hkr` 把 `Stop` 改写为 `SubagentStop` 并记
+  `Converting Stop hook to SubagentStop for ... (subagents trigger SubagentStop)`
+  （15178981）、解析函数 `Z5` / `xt` 的守卫口径（17401050，判定理由字符串
+  `a PreToolUse/PermissionRequest hook that cannot be loaded may be what guards the
+  permissions declared beside it, so nothing it sits in is applied until the entry is
+  fixed or removed`，17400867）、插件 agent 的 `permissionMode` / `hooks` /
+  `mcpServers` 一律忽略（`Skn`，5853669 / 5854869）。
+  1. **解析**：`AgentDefinition.hooks`（事件 → `HookSpec` 元组）。收 Claude 的嵌套形状
+     （数组项含 `matcher` + `hooks` 数组），PascalCase 事件名折成内部蛇形名；`Stop` 在
+     解析层原样保留（改写发生在注册期）。守卫事件 `pre_tool_use` / `permission_request`
+     的坏条目（事件值不是数组、条目非对象、缺 `type`、未知 `type`、schema 不过）→
+     **整份 Agent 不加载**并点名 `hooks.<event>`；非守卫事件的坏条目只丢弃并告警；未知
+     事件丢弃并告警；`hooks` 不是对象同样不加载。`hooks` 从 `UNSUPPORTED_FIELDS` 移除、
+     不再进 `ignored`；插件 agent 的 `hooks` 仍整段忽略。`as_dict()` 只报每个事件几条
+     （命令正文里可能有 token/路径，审计不回显）。
+  2. **组装**：`SubAgentRequest.agent_hooks` 由 `_apply_definition` 从定义带进请求
+     （`spawn_agent` 与 `spawn_agents` 两条路都走这里），`normalized()` 保留。
+  3. **运行期**：`run_subagent` 在 SubagentStart 钩子跑完**之后**调 `_scope_agent_hooks`：
+     新建一份合并映射（父事件 + 定义事件，按「事件 + 命令 + matcher + 超时」去重），
+     `Stop` 注册成 `subagent_stop`；父 runner 的映射不被改写；新 runner 复制
+     `settle_timeout` / `warnings` / `prompt_runner` / `mcp_runner`，并共享
+     `_tasks` / `_completed` / `_wakeups` 异步队列；`disableAllHooks` 下直接沿用父
+     runner、不复活定义钩子；定义钩子看不到自己的 SubagentStart（start 仍走父 runner）；
+     注册结果落 `subagent.hooks_registered`（`events` / `sources` / `converted`）。
+     stop gate、完成通知、worktree 清理三处改走 `child_hooks`。
+  4. **续聊**：`_remember` 保存、`send_message` 恢复 `agent_hooks`——第二轮仍按同一份
+     定义钩子跑。
+  5. **偏离项**：（a）本机没有工作区信任对话框，工作区/用户来源的定义一律视为可信；
+     上游对不可信来源会跳过 frontmatter hooks（`sze`，5853669 同一行）；（b）未知事件键
+     里若藏着守卫内容（如拼错成 `PreToolUSe`）上游整份拒绝该 Agent，本机只按未知事件
+     丢弃并告警；（c）子代理工具循环不执行 PreToolUse / PostToolUse（父会话的这两类
+     钩子在子代理里同样不跑，是既有缺口），因此定义里写它们只在子代理内静默不生效，
+     可观测的是 `permission_request` / `subagent_stop` / `notification` /
+     `worktree_remove` 这些走真实管线的事件。
+  判据 `services/api/tests/test_agent_hooks_v316.py`（20 例：解析九例含守卫整份拒绝、
+    非守卫丢弃、未知事件、插件忽略、`as_dict` 不泄漏命令；组装三例含批量派发与
+    续聊载荷；运行期七例含定义 `permission_request` 在真实工具循环里放行、`Stop` →
+    `subagent_stop`、完成通知、worktree 清理、看不到自己的 SubagentStart、
+    `disableAllHooks`、续聊两次都跑；端到端一例走真实 HTTP 任务派发文件型子代理），
+  变异 14/14 红（逐条改坏实现：解析开关关掉、守卫坏条目只丢弃、不查顶层守卫键、
+  `Stop` 不改写、注册进父 runner、无视 `disableAllHooks`、先注册再跑 Start、
+  `as_dict` 泄漏命令、插件 agent 也解析、不发注册事件、续聊丢定义钩子、批量派发不带
+  钩子、通知回到父 runner、副本清理回到父 runner；红在指定判据上，跑完按原字节还原并
+  核对 sha256）。相邻四十二套件 686 passed（153.18s，含 agent/subagent/hook/skill/
+  worktree/claude/team/background 各家族）；后端全量 **3972 passed / 28 skipped /
+  0 failed**（831.32s，退出码 0），较 #315 基线的 3952 恰为本批新增 20 例。
 
 - **子代理定义的 `model` 覆盖（#315）**：agent frontmatter 的 `model` 从「识别但不
   生效」变成真的改这一轮子代理用的模型。上游锚点（均以 `grep -bo` 复核）：agent

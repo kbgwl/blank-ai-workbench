@@ -336,6 +336,65 @@ class HookSpec:
         return body
 
 
+# 守卫类事件：它们的条目坏了就不能部分注册——一个"以为拦住了"的守卫比没有
+# 守卫更危险。上游把这类坏结构记为 unloadableGuard，整份定义不加载。
+GUARD_EVENTS = frozenset({"pre_tool_use", "permission_request"})
+
+# 上游对 agent frontmatter 的顶层扫描：这两个事件写在 ``hooks`` 外面是配置错误，
+# 不是"另一个字段"，整份定义不可加载（metadata/mcpServers/lspServers 是合法顶层键）。
+_TOP_LEVEL_GUARD_KEYS = ("PreToolUse", "pre_tool_use", "PermissionRequest", "permission_request")
+
+
+def top_level_guard_key(meta: dict) -> str:
+    """返回误写在顶层的守卫事件名；没有则空串。"""
+    for key in meta:
+        if str(key) in _TOP_LEVEL_GUARD_KEYS:
+            return str(key)
+    return ""
+
+
+def parse_agent_hooks(
+    raw: object, *, label: str, source: str
+) -> tuple[dict[str, list[HookSpec]], list[str], str]:
+    """解析 agent 定义 frontmatter 的 ``hooks``（对齐上游 SOo/Z5/Nd）。
+
+    返回 ``(hooks, warnings, fatal)``：``fatal`` 非空表示整份定义不该加载。
+    守卫事件（PreToolUse / PermissionRequest）的条目有任何问题都是 fatal；
+    其余事件沿用 ``_build_specs`` 的"坏条目丢弃 + 告警"口径。
+    """
+    warnings: list[str] = []
+    if not isinstance(raw, dict):
+        return {}, warnings, f"{label} 的 hooks 不是对象，不会加载该 Agent"
+    hooks: dict[str, list[HookSpec]] = {}
+    for raw_event, items in raw.items():
+        event = EVENT_ALIASES.get(str(raw_event), str(raw_event))
+        if event not in HOOK_EVENTS:
+            warnings.append(f"{label} 的 hooks.{raw_event}: 未知事件，已忽略")
+            continue
+        if not isinstance(items, list):
+            if event in GUARD_EVENTS:
+                return {}, warnings, (
+                    f"{label} 的 hooks.{raw_event} 必须是数组"
+                    "（守卫事件结构不完整），不会加载该 Agent"
+                )
+            warnings.append(f"{label} 的 hooks.{raw_event} 不是数组，已忽略")
+            continue
+        event_warnings: list[str] = []
+        specs = _build_specs(event, items, source=source, warnings=event_warnings)
+        if event in GUARD_EVENTS and event_warnings:
+            warnings.extend(
+                f"{label} 的 hooks.{raw_event}: {note}" for note in event_warnings
+            )
+            return {}, warnings, (
+                f"{label} 的 hooks.{raw_event} 有无效条目"
+                "（守卫事件不允许部分注册），不会加载该 Agent"
+            )
+        warnings.extend(f"{label} 的 hooks.{raw_event}: {note}" for note in event_warnings)
+        if specs:
+            hooks[event] = specs
+    return hooks, warnings, ""
+
+
 def _clamp_timeout(raw: object) -> float:
     try:
         value = float(raw) if raw is not None else DEFAULT_TIMEOUT

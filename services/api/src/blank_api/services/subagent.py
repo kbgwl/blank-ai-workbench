@@ -29,6 +29,7 @@ from blank_api.services.agents_defs import BUILTIN_AGENT, MAX_INSTRUCTIONS_CHARS
 from blank_api.services.hooks import (
     MAX_CONTEXT,
     HookRunner,
+    HookSpec,
     non_blocking_errors,
     stop_hook_block_cap,
     usable_context,
@@ -203,6 +204,9 @@ class SubAgentRequest:
     # 定义里声明的模型覆盖（上游 agent schema 的 ``model``）。``inherit`` 与
     # 空串都表示沿用父会话模型；字面量永远不发给供应商。fork 恒继承，忽略它。
     model: str = ""
+    # 定义里声明的钩子：注册进这个子代理自己的作用域，不污染父会话。
+    # ``stop`` 在注册时改写成 ``subagent_stop``；解析阶段保留原事件名。
+    agent_hooks: dict[str, tuple[HookSpec, ...]] = field(default_factory=dict)
 
     def normalized(self) -> "SubAgentRequest":
         return SubAgentRequest(
@@ -226,6 +230,7 @@ class SubAgentRequest:
             definition_background=bool(self.definition_background),
             effort=str(self.effort or "").strip(),
             model=str(self.model or "").strip(),
+            agent_hooks=dict(self.agent_hooks or {}),
         )
 
 
@@ -571,6 +576,78 @@ def _fork_tools(session) -> list:
     ]
 
 
+def _scope_agent_hooks(
+    parent: HookRunner | None,
+    extra: dict[str, tuple[HookSpec, ...]],
+    *,
+    agent_name: str,
+) -> tuple[HookRunner | None, dict[str, int], list[str]]:
+    """把这个子代理定义的钩子并入一个**独立**运行器。
+
+    上游在派发点把定义钩子注册进子会话的钩子注册表：``Stop`` 改写成
+    ``SubagentStop``，注册发生在 SubagentStart 之后。本机父子共享一个
+    ``HookRunner``，直接往里面加会泄漏到父会话的下一轮，所以这里复制一份
+    映射给子代理用——父 runner 的配置一个字都不动。
+
+    返回 ``(runner, 新注册的事件计数, 被改写的事件名列表)``。``disableAllHooks``
+    为真时返回父 runner 本身、零注册：总开关下定义钩子也不能复活。
+    """
+    if not extra:
+        return parent, {}, []
+    if parent is not None and parent.disabled:
+        return parent, {}, []
+
+    converted: list[str] = []
+    added: dict[str, list[HookSpec]] = {}
+    for event, specs in extra.items():
+        target = "subagent_stop" if event == "stop" else event
+        if target != event:
+            converted.append(event)
+        added.setdefault(target, []).extend(specs)
+
+    merged: dict[str, list[HookSpec]] = {
+        event: list(specs) for event, specs in (parent.hooks.items() if parent else ())
+    }
+    registered: dict[str, int] = {}
+    for event, specs in added.items():
+        fingerprints = {
+            (spec.command, spec.match, spec.timeout)
+            for spec in merged.get(event, [])
+        }
+        fresh: list[HookSpec] = []
+        for spec in specs:
+            fingerprint = (spec.command, spec.match, spec.timeout)
+            if fingerprint in fingerprints:
+                continue
+            fingerprints.add(fingerprint)
+            fresh.append(spec)
+        if fresh:
+            merged.setdefault(event, []).extend(fresh)
+            registered[event] = len(fresh)
+    if not registered:
+        return parent, {}, []
+
+    if parent is None:
+        runner = HookRunner(merged)
+    else:
+        runner = HookRunner(
+            merged,
+            settle_timeout=parent.settle_timeout,
+            warnings=list(parent.warnings),
+            prompt_runner=parent.prompt_runner,
+            mcp_runner=parent.mcp_runner,
+        )
+        # 异步钩子的完成结果与唤醒是会话级事实：父子共用同一份队列，
+        # 否则子代理这边 drain 不到父会话刚跑完的后台结果。
+        runner._tasks = parent._tasks
+        runner._completed = parent._completed
+        runner._wakeups = parent._wakeups
+    runner.warnings.append(
+        f"Agent {agent_name or '?'} 注册了 {sum(registered.values())} 条定义钩子"
+    )
+    return runner, registered, converted
+
+
 async def run_subagent(
     *,
     adapter: ModelAdapter,
@@ -777,6 +854,12 @@ async def run_subagent(
                 "fork": bool(request.fork),
             },
         )
+    # 定义钩子在这里装配成子代理**自己的**作用域运行器（父钩子照旧可见）。
+    # 注册必须排在 SubagentStart 之后：定义里写的 SubagentStart 钩子看不到
+    # 自己这次启动，与上游一致。
+    child_hooks, registered_hooks, converted_hooks = _scope_agent_hooks(
+        hooks, request.agent_hooks, agent_name=request.agent_name
+    )
     context = ToolContext(
         root=run_root,
         task_id=task_id,
@@ -800,10 +883,10 @@ async def run_subagent(
         turn_state={"effort": child_effort.level},
         # 子代理的工具调用走同一条网关，所以 PermissionRequest / PermissionDenied /
         # 审批通知这些钩子也必须在子代理里成立——否则"派下去干活"就是钩子看不见的盲区。
-        hooks=hooks,
+        hooks=child_hooks,
         # 只在配了钩子时才把事件记录器交给网关（钩子结果要落 hook.completed）；
         # 没配钩子时保持原样，免得别的工具突然开始在子代理里写事件。
-        recorder=log if hooks is not None else None,
+        recorder=log if child_hooks is not None else None,
     )
     # SubagentStart：派发前问一次，附加上下文注入子代理的启动上下文（上游按
     # agent_type 匹配）。退出码 2 是"钩子报错"，上游把它渲染成父会话里一条可见
@@ -877,6 +960,25 @@ async def run_subagent(
                         "reasons": hook_warnings,
                     },
                 )
+    if registered_hooks:
+        # 注册发生在 SubagentStart 之后，审计事件也按这个顺序落。
+        await log.add(
+            "subagent.hooks_registered",
+            "subagent",
+            {
+                "agent_id": agent_id,
+                "agent_type": agent_type,
+                "events": dict(registered_hooks),
+                "sources": sorted(
+                    {
+                        spec.source
+                        for specs in request.agent_hooks.values()
+                        for spec in specs
+                    }
+                ),
+                "converted": list(converted_hooks),
+            },
+        )
     compactor = ContextCompactor(**(watermark or {}))
     base_text = FORK_SYSTEM if request.fork else SUBAGENT_SYSTEM
     system_message = {"role": "system", "content": base_text.format(steps=request.max_steps)}
@@ -1030,10 +1132,10 @@ async def run_subagent(
         交回子代理继续干，`stop_hook_active` 从第二次起为 true。
         """
         nonlocal stop_blocks
-        if hooks is None:
+        if child_hooks is None:
             return False
         results = list(
-            await hooks.run(
+            await child_hooks.run(
                 "subagent_stop",
                 "",
                 {
@@ -1157,7 +1259,7 @@ async def run_subagent(
             )
         else:
             await log.add("worktree.removed", "subagent", {"path": str(tree.path), "mode": tree.mode})
-            removed_hooks = await remove_worktree_with_hooks(tree, hooks=hooks)
+            removed_hooks = await remove_worktree_with_hooks(tree, hooks=child_hooks)
             if removed_hooks:
                 await log.add(
                     "hook.completed",
@@ -1214,10 +1316,10 @@ async def run_subagent(
     )
     # 上游的 agent 完成通知：外部看到"这个后台代理回来了"，靠的不是轮询 task_output。
     # 通知钩子失败不改变结果——这时候活已经干完了。
-    if hooks is not None:
+    if child_hooks is not None:
         try:
             notified = list(
-                await hooks.run(
+                await child_hooks.run(
                     "notification",
                     "agent_completed",
                     {
@@ -1421,8 +1523,10 @@ class SubAgentRunner:
             "max_steps": prepared.request.max_steps,
             "fork": bool(prepared.request.fork),
             # 模型覆盖也要带到下一轮：第一轮用 mock-fast、第二轮悄悄换回父模型，
-            # 就是同一段对话中途换了个脑子。
+            # 就是同一段对话中途换了个脑子。定义钩子同理——续聊仍是同一个子代理，
+            # 第二轮不能悄悄失去它的 Stop/PreToolUse 守卫。
             "model": prepared.request.model,
+            "agent_hooks": dict(prepared.request.agent_hooks),
         }
         while len(bucket) > MAX_CONVERSATIONS:
             bucket.pop(next(iter(bucket)))
@@ -1476,6 +1580,7 @@ class SubAgentRunner:
             # 免得第一轮是 plan、第二轮却按 default 问一遍。
             permission_mode=str(entry.get("permission_mode") or ""),
             model=str(entry.get("model") or ""),
+            agent_hooks=dict(entry.get("agent_hooks") or {}),
             fork=bool(entry.get("fork")),
         ).normalized()
         if not request.goal:

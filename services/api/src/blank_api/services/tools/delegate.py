@@ -72,6 +72,8 @@ def _apply_definition(request: SubAgentRequest, definition) -> SubAgentRequest:
     request.effort = definition.effort
     # 模型覆盖：``inherit``/空串由 run_subagent 回落到父会话模型；fork 恒继承。
     request.model = definition.model
+    # 定义钩子跟着请求走，由 run_subagent 注册进子代理自己的作用域。
+    request.agent_hooks = dict(getattr(definition, "hooks", None) or {})
     # 上游 Szn：isolation 的生效值 = 派发参数 ?? 定义值；定义写 worktree 时
     # 调用方显式传 isolate:false 也压不住它——用户要的是"每次都在副本里跑"。
     if definition.isolation == "worktree":
