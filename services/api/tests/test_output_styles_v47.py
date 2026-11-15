@@ -323,9 +323,11 @@ def test_default_composition_is_byte_identical_to_the_old_prompt() -> None:
     baseline = SYSTEM_PROMPT + "\n" + STYLE_PROMPT
 
     assert compose_system_prompt(None) == baseline
+    # 哈希会随提示词的有意扩充而变（本批加入 OWASP/输出编码与 scratchpad 约束）；
+    # 它钉的是「默认组合就是 SYSTEM_PROMPT + STYLE_PROMPT，没有别处再拼一遍」。
     assert (
         hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()
-        == "0c05c3558e3fc6da04ebe015cda0544c826c26c084bb7ca8536c6be854276111"
+        == "f8ad8af48ebd2dcf8c30011d72cd33922d7ce3c89b28ca0499e924681cb04aae"
     )
     # 空正文的样式与没选样式等价：不能因为选中了一个空文件就把纪律句弄丢。
     assert compose_system_prompt({"name": "x", "prompt": "  ", "keep_coding_instructions": False}) == baseline

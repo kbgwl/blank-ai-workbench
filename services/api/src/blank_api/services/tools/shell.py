@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key, ok
@@ -1067,16 +1068,26 @@ def normalize_python_command(
 # 模型为了"自证清白"常在工作区写一个 `verify_*.py` / `*_check.py` / `temp_*.py`，
 # 验证完却忘了删。判分器按 expectedFiles 硬比对，这些遗留文件就记成 misEditedFiles。
 # 这里把"显然是临时产物"的文件挑出来，交付前清场——它们不在任何任务的预期产出里。
-SCRATCH_FILE_PATTERNS = (
-    "verify_*.py",
-    "*_verify.py",
-    "*_check.py",
-    "temp_*.py",
-    "tmp_*.py",
-    "scratch_*.py",
-    "test_scratch*.py",
-    "*.scratch.py",
+#
+# 只覆盖 .py 时，模型改用 `node _selftest.js` 自测就漏网了（UI 基准实测：22 项全过，
+# 脚本却留在工作区）。扩展名单按"命名意图"而非语言枚举：同样是 verify/check/temp/
+# scratch/selftest 打头的脚本，换什么后缀都还是临时产物。
+_SCRATCH_EXTENSIONS = ("py", "js", "mjs", "cjs", "ts", "tsx", "sh", "ps1")
+_SCRATCH_STEMS = (
+    "verify_*",
+    "*_verify",
+    "*_check",
+    "temp_*",
+    "tmp_*",
+    "scratch_*",
+    "test_scratch*",
+    "_selftest*",
+    "*_selftest",
+    "selftest_*",
 )
+SCRATCH_FILE_PATTERNS = tuple(
+    f"{stem}.{ext}" for ext in _SCRATCH_EXTENSIONS for stem in _SCRATCH_STEMS
+) + ("*.scratch.py",)
 
 SCRATCH_GLOBS = (
     "verify_*",
@@ -1085,7 +1096,14 @@ SCRATCH_GLOBS = (
     "temp_*",
     "tmp_*",
     "scratch_*",
+    "_selftest*",
+    "*_selftest",
+    "selftest_*",
 )
+
+
+def _is_scratch_name(name: str) -> bool:
+    return any(fnmatch.fnmatch(name, pattern) for pattern in SCRATCH_FILE_PATTERNS)
 
 
 def list_scratch_files(root) -> list[str]:
@@ -1096,12 +1114,54 @@ def list_scratch_files(root) -> list[str]:
         return []
     if not base.exists():
         return []
-    found: list[str] = []
-    for pattern in SCRATCH_FILE_PATTERNS:
-        for path in base.glob(pattern):
-            if path.is_file():
-                found.append(str(path.relative_to(base)))
+    found = [
+        str(path.relative_to(base)).replace("\\", "/")
+        for path in base.glob("*")
+        if path.is_file() and _is_scratch_name(path.name)
+    ]
     return sorted(set(found))
+
+
+def quarantine_scratch_files(
+    root, created: Iterable[str] | None = None, keep: Iterable[str] | None = None
+) -> list[tuple[str, Path]]:
+    """把本轮新建的临时脚本移进 ``.blank/scratchpad``，返回 ``(相对路径, 新位置)``。
+
+    三条同时成立才动：本轮 created 过、命中临时命名模式、用户没在 keep 里点名。
+    只移动不删除——guardian 对 ``del``/``rm`` 的拒绝是对的，这里不该去求它放行；
+    移动本身可逆，也能在证据里说清"哪个文件被收去哪儿了"。
+    """
+    try:
+        base = Path(root)
+    except TypeError:
+        return []
+    keep_set = {str(name).replace("\\", "/") for name in (keep or [])}
+    dest_dir = base / ".blank" / "scratchpad"
+    moved: list[tuple[str, Path]] = []
+    for raw in created or []:
+        candidate = Path(str(raw))
+        if candidate.is_absolute():
+            try:
+                candidate = candidate.relative_to(base)
+            except ValueError:
+                continue
+        rel = str(candidate).replace("\\", "/")
+        if not rel or rel.startswith("../") or rel in keep_set:
+            continue
+        if not _is_scratch_name(candidate.name):
+            continue
+        source = base / candidate
+        if not source.is_file():
+            continue
+        dest = dest_dir / candidate
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            source.replace(dest)
+        except OSError:
+            continue
+        moved.append((rel, dest))
+    return moved
+
 
 
 def cleanup_scratch_files(root, keep: Iterable[str] | None = None) -> list[str]:

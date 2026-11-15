@@ -283,7 +283,7 @@ def test_delivery_text_is_rendered_from_facts_not_model_prose():
     text = graph._delivery_text(report, state, None)
     assert text.splitlines() == [
         "完成：登录令牌改成 30 天有效",
-        "改动：2 个文件、2 处 Diff",
+        "改动：2 个文件（auth.py、config.py）、2 处 Diff",
         "验证：pytest -q（退出码 0）",
         "需要你：重启服务生效",
     ]
@@ -300,7 +300,7 @@ def test_delivery_text_hides_the_verify_line_when_nothing_ran():
     lines = text.splitlines()
     assert "验证：" not in text, "没跑过就绝不能出现验证行"
     assert lines[0] == "完成：改好了"
-    assert lines[1] == "改动：1 个文件、1 处 Diff"
+    assert lines[1] == "改动：1 个文件（a.py）、1 处 Diff"
 
 
 def test_delivery_text_strips_empty_praise_and_keeps_one_line():
@@ -342,7 +342,7 @@ def test_delivery_text_hides_needs_user_when_model_writes_none():
     }
     text = graph._delivery_text("结论\n- 改好了\n下一步\n- 无", state, None)
     assert "需要你" not in text
-    assert text.splitlines() == ["完成：改好了", "改动：1 个文件、1 处 Diff", "验证：pytest -q（退出码 0）"]
+    assert text.splitlines() == ["完成：改好了", "改动：1 个文件（a.py）、1 处 Diff", "验证：pytest -q（退出码 0）"]
 
 
 # ── 暂停与取消是两种语义（执行节点）────────────────────────────────────────

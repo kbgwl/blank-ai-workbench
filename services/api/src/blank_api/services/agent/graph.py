@@ -250,7 +250,9 @@ _SYSTEM_HEAD = (
     "然后用绝对路径或把它加进 PATH，用 run_tests 重跑刚才失败的测试。"
     "PATH 之类的前置条件要写进同一条 run_tests 命令（run_tests 支持 command 覆盖，"
     "例如 `set \"PATH=C:\\Program Files\\nodejs;%PATH%\" && npm test`）；"
-    "run_shell 里跑通不算验证证据——验证闸门只采信 run_tests 的结果。仓库注释、README、记忆里"
+    "run_shell 里跑通不算验证证据——验证闸门只采信 run_tests，或最后一次改动之后"
+    "跑通的测试型命令（pytest、npm test、node _selftest.js 这类）；普通运行（node app.js）不算。"
+    "仓库注释、README、记忆里"
     "写着「本机没有它」只能当线索，不能当证据。缺的是项目依赖（node_modules、pytest 这类）时，"
     "用项目自己的包管理器装（npm install / pip install -r requirements.txt / uv pip install），"
     "不要直接判做不了。确实装不上（断网、没权限）才停下来，"
@@ -294,6 +296,15 @@ CODING_INSTRUCTIONS = (
     "不能只丢一句「与本次改动无关」。\n"
     "· 能跑起来验证的就真跑一遍看行为，不能只凭单测和类型检查下结论；真跑不了，"
     "在交付里说清哪部分没验证。\n"
+    "· 不引入安全漏洞（OWASP Top 10）：命令用参数列表而不是拼 shell 字符串；SQL 用参数化查询；"
+    "页面里的不可信数据（用户输入、localStorage、URL）一律先转义或用 textContent 写入，"
+    "禁止把未转义的值拼进 innerHTML；密钥不写进代码、日志或交付文本。"
+    "发现刚写的代码不安全，立刻改（Claude：「Be careful not to introduce security vulnerabilities "
+    "such as command injection, XSS, SQL injection, and other OWASP top 10 vulnerabilities」）。\n"
+    "· 临时验证脚本放工作区的 `.blank/scratchpad/`，不要放项目根：它不属于交付物，"
+    "而且 shell 的 del/rm 会被安全策略拒绝，删除不是清场手段；收尾时由 harness 统一收走。\n"
+    "· 交付说明要能让用户验货：改到的文件名、若有网页则入口文件、怎么打开或怎么跑起来；"
+    "验证命令与真实退出码照实写。\n"
     "· 不提交、不建分支、不推送，除非用户明确要求；永远不 force push 到主分支；"
     "不跳过钩子、不改 git 配置。\n"
     "· 工作区里已有的改动属于用户：不回退、不清理、不覆盖；和本次任务冲突就停下来问"
@@ -4642,18 +4653,94 @@ def _changed_paths(results: list[dict]) -> list[str]:
     return paths
 
 
+def _is_mutation(item: dict) -> bool:
+    """这条工具结果是不是一次成功的写动作。"""
+    if not isinstance(item, dict) or not item.get("ok"):
+        return False
+    data = item.get("data") or {}
+    return item.get("tool") in MUTATING_TOOLS or bool(data.get("change_type"))
+
+
 def _mutated_after(results: list[dict], entry: dict) -> bool:
     """``entry`` 之后还有没有成功的写动作。用身份找位置，避免两份相同结果认错。"""
     index = next((i for i in range(len(results) - 1, -1, -1) if results[i] is entry), -1)
     if index < 0:
         return False
-    for item in results[index + 1:]:
-        if not item.get("ok"):
-            continue
-        data = item.get("data") or {}
-        if item.get("tool") in MUTATING_TOOLS or data.get("change_type"):
+    return any(_is_mutation(item) for item in results[index + 1:])
+
+
+# 测试型命令的两张脸：跑测试框架，或跑名字里带 test/selftest/verify 的脚本。
+# 后者是模型自测最常见的形态（UI 基准：`node _selftest.js` 22/22 通过）。
+_TEST_RUNNER = re.compile(
+    r"(?i)(?:^|[\s;&|(])("
+    r"pytest(?:\.exe)?(?:\s|$)|"
+    r"python[0-9.]*\s+-m\s+(?:pytest|unittest)\b|"
+    r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|"
+    r"npx\s+(?:jest|vitest|mocha|playwright)\b|"
+    r"(?:jest|vitest|mocha|phpunit|ctest)(?:\s|$)|"
+    r"go\s+test\b|cargo\s+test\b|dotnet\s+test\b|mvn\s+(?:-\S+\s+)*test\b|"
+    r"gradlew?(?:\.bat)?\s+test\b|node\s+--test\b"
+    r")"
+)
+_TEST_FILE = re.compile(
+    r"(?i)(?:^|[\s;&|])(?:node|python[0-9.]*|py|bash|sh|pwsh|powershell|zsh)\s+"
+    r"[\"']?([^\s\"';&|]+\.(?:js|mjs|cjs|ts|tsx|py|sh|ps1))\b"
+)
+_TEST_NAME_HINTS = ("selftest", "self_test", "_test", "test_", ".test.", ".spec.", "check", "verify")
+
+
+def _is_test_command(command: str) -> bool:
+    text = str(command or "")
+    if not text.strip():
+        return False
+    if _TEST_RUNNER.search(text):
+        return True
+    for match in _TEST_FILE.finditer(text):
+        name = match.group(1).replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if any(hint in name for hint in _TEST_NAME_HINTS):
             return True
     return False
+
+
+def _self_run_validation(results: list[dict]) -> dict | None:
+    """把本轮最后一次改动之后真正跑过的测试型 shell 命令当作校验结论。
+
+    模型常自己写脚本自测（`node _selftest.js`），但校验通道原先只认 run_tests，
+    于是 22/22 全过、交付里仍写「未做自动化校验」。这里补上这条证据链：
+    只看最后一次写动作之后的那条测试命令；没有退出码（被拒、超时）不算证据；
+    非零退出判 ``failed`` 进修复回路，而不是一律 skipped。
+    """
+    last_index = -1
+    command = ""
+    for index in range(len(results) - 1, -1, -1):
+        item = results[index]
+        if not isinstance(item, dict) or str(item.get("tool") or "") != "run_shell":
+            continue
+        data = item.get("data") or {}
+        text = str(data.get("command") or "")
+        if _is_test_command(text):
+            last_index = index
+            command = text
+            break
+    if last_index < 0:
+        return None
+    if any(_is_mutation(item) for item in results[last_index + 1:]):
+        return None
+    item = results[last_index]
+    data = item.get("data") or {}
+    exit_code = data.get("exit_code")
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        return None
+    passed = item.get("status") == "ok" and exit_code == 0
+    return {
+        "command": command,
+        "passed": passed,
+        "status": "ok" if passed else "failed",
+        "exit_code": exit_code,
+        "summary": {},
+        "output_tail": str(item.get("output") or data.get("stdout") or "")[-2000:],
+        "source": "self_run",
+    }
 
 
 def _tests_were_working(results: list[dict]) -> bool:
@@ -4818,6 +4905,22 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
             "output": last.get("output", ""),
             "data": last.get("data") or {},
         }
+    elif (self_run := _self_run_validation(results)) is not None:
+        # 本轮最后一次改动之后已经真跑过的测试型命令，就是当前代码的校验证据。
+        # 不再为此另起一次 run_tests：重复跑同一件事实在浪费一轮，而且本就没有
+        # pytest/package.json 的纯静态页面也跑不出结果。
+        payload = {
+            "ok": self_run["passed"],
+            "status": self_run["status"],
+            "message": self_run["command"],
+            "output": self_run["output_tail"],
+            "data": {
+                "command": self_run["command"],
+                "exit_code": self_run["exit_code"],
+                "summary": self_run["summary"],
+                "self_run": True,
+            },
+        }
     else:
         # 校验通道的 run_tests 与主循环走同一张审批卡：先判定，要批就走中断，
         # 批准后这一次真的会跑。驳回记 skipped 而不是 failed——代码没问题，
@@ -4928,6 +5031,9 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         "summary": data.get("summary") or {},
         "output_tail": str(payload.get("output") or payload.get("message") or "")[-2000:],
     }
+    if data.get("self_run"):
+        # 证据来源要能区分：run_tests 与「模型自己跑通的测试命令」在审计上是两件事。
+        validation["source"] = "self_run"
     if config_broken_by_this_run:
         # 让事件、证据页、交付文本都能说清「为什么这次不能算没测试」：
         # 不是环境缺配置，是本轮把原本能跑的配置改坏了。
@@ -5210,8 +5316,12 @@ def _report_sections(report: str) -> tuple[str, str]:
     return conclusion, next_step or unfinished
 
 
-def _change_facts(state: AgentState) -> tuple[int, int]:
-    """改动事实：几个文件、几处 Diff 段。取自工具结果，不从正文里再猜一遍。"""
+def _change_facts(state: AgentState) -> tuple[list[str], int]:
+    """改动事实：改到哪些文件（按首次出现顺序）、几处 Diff 段。
+
+    只给计数时，用户拿到「3 个文件」没法验收「文件结构 + 怎么打开」；名字与入口
+    都从工具结果来，仍然是事实而不是模型自述。
+    """
     hunks_by_path: dict[str, int] = {}
     for item in state.get("tool_results") or []:
         if not item.get("ok"):
@@ -5225,7 +5335,7 @@ def _change_facts(state: AgentState) -> tuple[int, int]:
             continue
         hunks = sum(1 for line in diff.splitlines() if line.startswith("@@")) if diff else 0
         hunks_by_path[path] = max(hunks_by_path.get(path, 0), hunks)
-    return len(hunks_by_path), sum(hunks_by_path.values())
+    return list(hunks_by_path), sum(hunks_by_path.values())
 
 
 def _delivery_facts(report: str, state: AgentState) -> DeliveryFacts:
@@ -5246,11 +5356,12 @@ def _delivery_facts(report: str, state: AgentState) -> DeliveryFacts:
     files, hunks = _change_facts(state)
     return DeliveryFacts(
         completed=conclusion,
-        changed_files=files,
+        changed_files=len(files),
         diff_count=hunks,
         verify_command=command,
         verify_exit=exit_code,
         needs_user=needs_user,
+        files=tuple(files),
     )
 
 
@@ -5408,6 +5519,50 @@ async def summarize_result_node(state: AgentState, session: AgentSession) -> Age
     return result
 
 
+async def _quarantine_scratch(state: AgentState, session: AgentSession, node: str) -> AgentState:
+    """收尾前把本轮新建的临时验证脚本挪进 ``.blank/scratchpad``。
+
+    只移动，不删除：guardian 拒绝 ``del``/``rm`` 是对的，不该为了让清场跑通去放宽它。
+    两条保护：只碰本轮 change_type=created 的文件；如果本轮新建的全是这类脚本，
+    说明它可能就是交付物（用户点的「写个 verify 脚本」），那就不动。
+    返回用于交付事实的 state 副本：被挪走的文件不再算改动。
+    """
+    results = list(state.get("tool_results") or [])
+    created = [
+        str((item.get("data") or {}).get("path"))
+        for item in results
+        if isinstance(item, dict) and item.get("ok")
+        and (item.get("data") or {}).get("change_type") == "created"
+        and (item.get("data") or {}).get("path")
+    ]
+    root = getattr(getattr(session, "context", None), "root", None)
+    if not created or not root:
+        return state
+    from blank_api.services.tools.shell import _is_scratch_name, quarantine_scratch_files
+
+    def _name(path: str) -> str:
+        return str(path).replace("\\", "/").rsplit("/", 1)[-1]
+
+    if all(_is_scratch_name(_name(path)) for path in created):
+        return state
+    moved = await asyncio.to_thread(quarantine_scratch_files, root, created, [])
+    if not moved:
+        return state
+    await session.recorder.add(
+        "workspace.quarantined",
+        node,
+        {"moved": [{"path": rel, "to": str(dest)} for rel, dest in moved]},
+    )
+    moved_paths = {rel for rel, _ in moved}
+    return {
+        **state,
+        "tool_results": [
+            item for item in results
+            if str((item.get("data") or {}).get("path") or "").replace("\\", "/") not in moved_paths
+        ],
+    }
+
+
 async def _summarize_result_body(state: AgentState, session: AgentSession) -> AgentState:
     node = "summarize_result"
     await session.recorder.add("node.started", node, {})
@@ -5466,6 +5621,7 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
 
     # 执行型任务：交付文本固定两段（结论 / 下一步）。
     # 有验收条件时把验收判断并进同一次调用，省一轮往返也省一次费用。
+    delivery_state = await _quarantine_scratch(state, session, node)
     hint = raw.strip()[:1200]
     if session.acceptance_criteria:
         # 把计划进度一并给它：验收不通过时最常见的形态是"某一步压根没做"，
@@ -5546,8 +5702,8 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
                         "step_ids": [str(sid) for sid in (link.get("step_ids") or [])],
                     }
                 )
-            text = _delivery_text(report, state, session)
-            await session.recorder.add("delivery.recorded", node, _delivery_payload(report, state, "report", text))
+            text = _delivery_text(report, delivery_state, session)
+            await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, "report", text))
             return {
                 "summary": _enforce_no_false_claim(
                     _validation_note(
@@ -5567,8 +5723,8 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
                 for item in session.acceptance_criteria
             ]
             report = as_report(raw)
-            text = _delivery_text(report, state, session)
-            await session.recorder.add("delivery.recorded", node, _delivery_payload(report, state, "fallback", text))
+            text = _delivery_text(report, delivery_state, session)
+            await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, "fallback", text))
             return {
                 "summary": _enforce_no_false_claim(
                     _validation_note(
@@ -5592,8 +5748,8 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
         report = as_report(raw)
         usage = state.get("usage") or {}
         mode = "fallback"
-    text = _delivery_text(report, state, session)
-    await session.recorder.add("delivery.recorded", node, _delivery_payload(report, state, mode, text))
+    text = _delivery_text(report, delivery_state, session)
+    await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, mode, text))
     return {
         "summary": _enforce_no_false_claim(
             _validation_note(

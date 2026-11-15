@@ -23,6 +23,18 @@ _NOISE = re.compile(
 )
 # 一句话结果最多这么长：再长就不是"一句话"，而是又一段汇报。
 _MAX_COMPLETED = 120
+# 改动行里最多列这么多文件名。再多就只是堆名字，计数已经说清规模了。
+_MAX_LISTED_FILES = 5
+_ENTRY_NAMES = ("index.html", "index.htm")
+
+
+def entrypoint(files: tuple[str, ...]) -> str:
+    """从改动文件里挑出入口页；挑不出来就返回空串，不硬造。"""
+    html = [name for name in files if str(name).lower().endswith((".html", ".htm"))]
+    for name in html:
+        if name.rsplit("/", 1)[-1].lower() in _ENTRY_NAMES:
+            return name
+    return html[0] if len(html) == 1 else ""
 
 
 @dataclass(frozen=True)
@@ -35,6 +47,8 @@ class DeliveryFacts:
     verify_command: str = ""
     verify_exit: int | None = None
     needs_user: str = ""
+    # 文件名按第一次出现的顺序；只放计数不留名字，用户就没法按「文件结构」验收。
+    files: tuple[str, ...] = ()
 
 
 def _one_line(text: str, *, limit: int = _MAX_COMPLETED) -> str:
@@ -59,8 +73,17 @@ def render(facts: DeliveryFacts) -> str:
         lines.append(f"完成：{completed}")
     if int(facts.changed_files or 0) > 0:
         detail = f"{int(facts.changed_files)} 个文件"
+        names = tuple(str(name).strip() for name in facts.files if str(name).strip())
+        if names:
+            listed = "、".join(names[:_MAX_LISTED_FILES])
+            if len(names) > _MAX_LISTED_FILES:
+                listed += "…"
+            detail += f"（{listed}）"
         if int(facts.diff_count or 0) > 0:
             detail += f"、{int(facts.diff_count)} 处 Diff"
+        entry = entrypoint(names)
+        if entry:
+            detail += f"，入口 {entry}"
         lines.append(f"改动：{detail}")
     if str(facts.verify_command or "").strip() and facts.verify_exit is not None:
         lines.append(f"验证：{str(facts.verify_command).strip()}（退出码 {int(facts.verify_exit)}）")
@@ -76,6 +99,8 @@ def as_dict(facts: DeliveryFacts) -> dict:
         "completed": _one_line(facts.completed),
         "changed_files": int(facts.changed_files or 0),
         "diff_count": int(facts.diff_count or 0),
+        "files": [str(name) for name in facts.files],
+        "entry": entrypoint(tuple(str(name) for name in facts.files)),
         "verify": {
             "command": str(facts.verify_command or "").strip(),
             "exit": facts.verify_exit,
@@ -85,4 +110,4 @@ def as_dict(facts: DeliveryFacts) -> dict:
     }
 
 
-__all__ = ["DeliveryFacts", "as_dict", "render"]
+__all__ = ["DeliveryFacts", "as_dict", "entrypoint", "render"]

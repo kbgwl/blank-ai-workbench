@@ -44,6 +44,9 @@ const LIMIT = Number(argOf("--limit", "0")) || Infinity;
 const ONLY = argOf("--only") ?? argOf("--task"); // 逗号分隔任务 id（--task 是 --only 的别名）
 const REPORT = argOf("--report");
 const PAUSE_SECONDS = Number(argOf("--pause", "0")) || 0;
+// 产品间对比用：goal 直接是 CLI 产品收到的同一段原文，不再单发验收条件/约束。
+// 判分口径完全不变（仍按 testCommand + expectedFiles 硬比对）。
+const PLAIN_PROMPT = argv.includes("--plain-prompt");
 
 function die(msg) {
   console.error(`✗ ${msg}`);
@@ -152,6 +155,22 @@ function diffSnapshot(before, after) {
   return { changed, added };
 }
 
+/**
+ * 与 CLI 产品（run-wb.mjs / run-qoder.mjs 的 buildPrompt）逐字相同的任务文本。
+ * 产品间同提示词盲评时用它当 goal：模型读到的任务描述一致，差异只剩系统提示与
+ * 工具面——那才是产品本身。
+ */
+function plainPrompt(def) {
+  const lines = [def.goal, "", "验收标准：", ...def.acceptance.map((a) => `- ${a}`)];
+  if (def.expectedFiles.length) {
+    lines.push(
+      "",
+      `只允许创建或修改这些文件：${def.expectedFiles.join("、")}。其余文件（尤其测试文件）一律不要改动。`
+    );
+  }
+  return lines.join("\n");
+}
+
 /* ── 单任务执行 ── */
 async function runTask(def, providerId) {
   const workdir = path.join(tmpdir(), `blank-bench-${def.id}-${Date.now()}`);
@@ -169,12 +188,14 @@ async function runTask(def, providerId) {
   if (bind.status !== 201) return { id: def.id, status: "setup_failed", error: JSON.stringify(bind.json).slice(0, 200) };
   const task = await api("POST", `/projects/${project.json.id}/tasks`, {
     title: def.id,
-    goal: def.goal,
-    acceptance_criteria: def.acceptance,
+    goal: PLAIN_PROMPT ? plainPrompt(def) : def.goal,
+    acceptance_criteria: PLAIN_PROMPT ? [] : def.acceptance,
     max_steps: 40,
     // §3.4 文件边界提示：expectedFiles 必须让模型看见才算约束（产品侧 initial_messages
     // 会把 goal_spec.constraints 渲染进首轮提示）。判分仍按 expectedFiles 硬比对，不放宽。
-    goal_spec: def.expectedFiles.length
+    goal_spec: PLAIN_PROMPT
+      ? undefined
+      : def.expectedFiles.length
       ? {
           constraints: [
             `只允许创建或修改这些文件：${def.expectedFiles.join("、")}。其余文件（尤其测试文件）一律不要改动。`,

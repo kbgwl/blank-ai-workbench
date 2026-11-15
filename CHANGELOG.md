@@ -1,6 +1,41 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）
+
+- **UI 对比暴露的四处产品差距：交付文件名与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码（#379–#383）**：
+  同一模型、同一提示词的三方 UI 对比（任务 076ad3a1…）暴露的不是模型能力，而是产品口径：
+  我方交付只有「4 个文件」计数，用户按「文件结构 + 怎么打开」无法验收；`node _selftest.js`
+  22/22 通过（seq 91），校验通道仍写「未做自动化校验」；模型两次 `del _selftest.js` 被
+  guardian 拒绝（seq 100/136），临时脚本留在工作区；前端把分类/日期直接拼进 innerHTML。
+  上游取证（`grep -boF` 现场复核偏移 101031256 / 197934220）后逐条补齐：
+  1. **交付结构**：`DeliveryFacts` 增 `files`，改动行输出
+     `改动：3 个文件（index.html、styles.css、app.js），入口 index.html`；最多列 5 个名字
+     （计数照旧），无 HTML 不造入口；`as_dict` 同口径给 `files` / `entry`。事实仍取自工具结果，
+     不由模型自述。
+  2. **自测验证通道**：新增 `_self_run_validation`，只采信「最后一次写动作之后」的测试型
+     `run_shell`（pytest / npm test / node _selftest.js 等，普通 `node app.js` 不算）；
+     有退出码且为 0 才记为 `ok`，非零记 `failed` 并进修复回路；证据带 `source="self_run"`。
+     `run_tests` 已真跑过时仍以它为先。
+  3. **清场不放宽安全策略**：临时命名识别从 `.py` 扩到 js/mjs/cjs/ts/tsx/sh/ps1 与
+     `_selftest*`；新增 `quarantine_scratch_files`，只把「本轮新建 + 命中临时命名 + 用户未点名」
+     的顶层文件移进 `.blank/scratchpad/`（移动而非删除，事件 `workspace.quarantined`，
+     被移走的文件不再计入交付改动）。本轮新建的全是这类脚本时不动——它可能就是用户要的交付物。
+  4. **安全编码与可验货**：`CODING_INSTRUCTIONS` 写入上游 OWASP 原句与前端输出编码要求
+     （不可信数据先转义或 `textContent`，禁止未转义拼 `innerHTML`；密钥不进代码/日志/交付）；
+     交付提示要求文件名、网页入口、怎么打开与真实退出码；`REPORT_INSTRUCTION` 把临时脚本
+     指向 `.blank/scratchpad/` 并说明 del/rm 会被安全策略拒绝。
+  判据：`tests/test_product_gaps_ui_v166.py`（16 例，含 4 条节点接线：验证节点采纳/失败进修复、
+  清场剔除交付事实、孤立临时文件保护）与 `tests/test_v163_super_agent.py` 交付断言更新；
+  `tests/test_output_styles_v47.py` 的默认提示词哈希钉随有意扩充同步更新。
+  改前 12 红；变异电池 13/13 实测红在指定判据上、非 no-op、按原字节还原并核对 sha256。
+  相邻套件 93 passed；后端全量 **4089 passed, 28 skipped, 0 failed in 804.41s**
+  （上一基线 4073 + 本批 16；首轮唯一红是默认提示词哈希钉，随有意扩充更新后复跑全绿）。
+
+- **产品间同提示词对比：评测器 `--plain-prompt`（#377）**：
+  UI 交付对比要求三方收到同一段原文：`run.mjs` 新增开关，把 goal 拼成
+  `goal + 验收标准 + 文件边界`，不再单发 `acceptance_criteria` / `goal_spec`，
+  与 CLI 产品侧对比脚本的 `buildPrompt` 逐字同源；判分口径不放宽
+  （仍按 `testCommand` + `expectedFiles` 硬比对）。
 
 - **跑分暴露的三处产品缺陷：测试通道解释器解析 / 命令不存在归类 / 收尾交接收窄（#376）**：
   55 题基准在 DeepSeek 上丢的三题（coding-012/028/035）不是模型能力问题，是产品缺陷链：
