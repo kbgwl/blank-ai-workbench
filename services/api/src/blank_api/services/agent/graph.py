@@ -5361,11 +5361,24 @@ def _report_sections(report: str) -> tuple[str, str]:
     return conclusion, next_step or unfinished
 
 
+def _in_scratchpad(path: str) -> bool:
+    """路径是否落在 harness 自己的临时区：提示词已说明那片目录不属于交付物。"""
+    rel = str(path).replace("\\", "/")
+    while rel.startswith("./"):
+        rel = rel[2:]
+    return rel == ".blank/scratchpad" or rel.startswith(".blank/scratchpad/")
+
+
 def _change_facts(state: AgentState) -> tuple[list[str], int]:
     """改动事实：改到哪些文件（按首次出现顺序）、几处 Diff 段。
 
     只给计数时，用户拿到「3 个文件」没法验收「文件结构 + 怎么打开」；名字与入口
     都从工具结果来，仍然是事实而不是模型自述。
+
+    `.blank/scratchpad/` 里的自测脚本不算改动：模型按提示词把它放那儿，它就不是
+    交付物；算进去会让「改动：N 个文件」凭空多出几个用户没要的文件（真机任务
+    a5e7dda8 里 3 个交付文件被写成 5 个）。按目录排除，不按文件名猜——根目录下
+    用户点名的 `_selftest.js` 仍是交付物。
     """
     hunks_by_path: dict[str, int] = {}
     for item in state.get("tool_results") or []:
@@ -5373,7 +5386,7 @@ def _change_facts(state: AgentState) -> tuple[list[str], int]:
             continue
         data = item.get("data") or {}
         path = str(data.get("path") or "")
-        if not path:
+        if not path or _in_scratchpad(path):
             continue
         diff = str(data.get("diff") or "")
         if not diff and not data.get("change_type"):
