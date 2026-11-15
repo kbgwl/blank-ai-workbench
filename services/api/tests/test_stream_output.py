@@ -447,6 +447,41 @@ async def test_unstreamable_gateway_falls_back_to_one_shot(seeded, tmp_path):
     assert payloads and payloads[0]["code"] == "model_stream_empty"
 
 
+async def test_fallback_keeps_the_model_override(seeded, tmp_path):
+    """退路是"换一条路问同一个问题"，不是"换一个模型再问一遍"。
+
+    流式不可用退回非流式时丢掉 ``model``，子代理/Skill 指定的模型会在这一步
+    悄悄变回供应商默认值——结果看着正常，钱和答案都不是原来那笔。
+    两条退路（流式报错 / 传输失败）都要带上它。
+    """
+
+    class RecordingFallback(StreamingAdapter):
+        def __init__(self, *, transport: bool = False) -> None:
+            super().__init__("m", empty=True)
+            self.transport = transport
+            self.models: list[str | None] = []
+
+        async def bind_tools_stream(self, tools, messages, *, on_delta=None, **kwargs):
+            if self.transport:
+                raise httpx.ConnectError("连接被拒")
+            return await super().bind_tools_stream(tools, messages, on_delta=on_delta, **kwargs)
+
+        async def bind_tools(self, tools, messages, **kwargs):
+            self.models.append(kwargs.get("model"))
+            return await super().bind_tools(tools, messages, **kwargs)
+
+    for transport in (False, True):
+        adapter = RecordingFallback(transport=transport)
+        session = _session(tmp_path, adapter, stream=True)
+
+        response = await session._call_adapter(
+            adapter, TOOLS, [ChatMessage("user", "hi")], "execute_action", "coder", model="mock-fast"
+        )
+
+        assert response.text == "非流式结果", transport
+        assert adapter.models == ["mock-fast"], transport
+
+
 async def test_failure_after_first_chunk_is_not_retried(seeded, tmp_path):
     """已经收到文字之后再出错，不能退回去重跑。
 

@@ -1,6 +1,6 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）、Claude「Doing tasks」六条与无测试配置时的收尾空跑（#384–#386）、交付改动排除 scratchpad 自测脚本（#388）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）、Claude「Doing tasks」六条与无测试配置时的收尾空跑（#384–#386）、交付改动排除 scratchpad 自测脚本（#388）、空响应与零交付不许算成功（#394–#397）
 
 - **UI 对比暴露的四处产品差距：交付文件名与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码（#379–#383）**：
   同一模型、同一提示词的三方 UI 对比（任务 076ad3a1…）暴露的不是模型能力，而是产品口径：
@@ -61,6 +61,33 @@
   交付正文 281 字，校验采纳自跑脚本（`node .blank\scratchpad\selftest.js &&
   node .blank\scratchpad\servetest.js`，退出码 0），verifier 21 项判定全过；
   页面探针 22 步 0 失败。
+
+- **空响应与零交付不许算成功（#394–#397）**：
+  复杂题真模型复跑（:8066、Spark、任务 9eac5bed）出现一次「什么都没做也算成功」：
+  seq23 `model.stream_fallback code=model_stream_empty`；seq24 非流式那次
+  `completion_tokens=8192 / reasoning_tokens=8192`，正文与 tool_calls 皆空；旧 harness
+  照常放行；seq35 验证节点对「零改动 + 交付自述没实现」判 `incomplete / passed=true /
+  blocking=false`；seq36 `task.completed status=succeeded`，交付物 0 个文件。
+  四处各自独立，逐条补：
+  1. **空响应闸门**：`ask()` 在正文与工具调用都为空时记 `model.empty_response`，
+     并带一条系统提示重试一次（`model.empty_response.retry`，提示里点明「你上一条回复
+     是空的」且不替换原对话）；连续两次空抛 `ModelError("model_empty_response")`，
+     API 返回 502、任务 `failed`，不再往下走去 summarize。
+  2. **未完成词表**：`_INCOMPLETE_MARKS` 增「未实现 / 仍为空 / 没有任何改动 /
+     未做任何改动」，交付正文自认没做就不得算完成。
+  3. **零交付判据**：`verifier` 增 `delivery_matches_plan`——目标给了验收标准、计划里
+     确实有 `edit`/`repair` 步、磁盘却零改动，判 blocking / failed；没有验收标准、
+     没有编辑计划、或只读调研仍按原口径（纯问答不受影响）。
+  4. **退路模型覆盖**：`_call_adapter` 的两条退路（流式报错 / 传输失败）此前丢掉了
+     `model` 覆盖，退路等于换一个模型再问一遍；现在都带上。
+  判据：`tests/test_empty_response_zero_delivery.py`（7 例，含「重试一次就恢复」「纯问答
+  零改动不算失败」「有计划无验收标准仍是 incomplete」「只读调研 not_applicable」四条
+  反向守卫）与 `tests/test_stream_output.py::test_fallback_keeps_the_model_override`
+  （两条退路各断言一次）；改前目标全红。变异电池 8/8 实测红在指定判据上、非 no-op、
+  按原字节还原并核对 sha256（`tests/mutation_battery_empty_response_v395.py`）。
+  电池顺带抓到一条写宽的判据：重试提示的断言原本只查单字「空」，而系统提示本来就有
+  这个字，改为「role=system + 专指短语」后 B 才如期红。相邻套件 148 passed；后端全量
+  **4113 passed, 28 skipped, 0 failed in 825.68s**（上一基线 4105 + 本批 8）。
 
 - **交付改动排除 scratchpad 自测脚本（#388）**：
   同一轮真模型复跑的交付正文写「改动：5 个文件（index.html、styles.css、app.js、

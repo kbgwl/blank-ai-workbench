@@ -157,6 +157,12 @@ MAX_REVIEW_ROUNDS = 2
 # 推回一轮并给出补齐顺序；第二次之后仍没有动作就允许如实收尾——断网、没权限这类
 # 真装不上也是一种结论，但必须带着试过什么、报错是什么（见 remediation.py）。
 MAX_REMEDIATION_ROUNDS = 2
+# 模型返回「既没有正文也没有工具调用」时补的这一句。放在 system 里而不是 user：
+# 它不是用户说的话，回放历史时也不该被当成一次人工追问。
+EMPTY_RESPONSE_NUDGE = (
+    "你上一条回复是空的（既没有正文，也没有工具调用）。请直接给出下一步："
+    "要么调用工具继续完成任务，要么输出中文结论；不要再次返回空内容。"
+)
 
 # 只读调研允许用的工具。用白名单而不是「排除写类」：新增一个会落盘的工具时，
 # 黑名单会自动放它进来，白名单则默认拦住——后者错了只是少看一处，前者错了是
@@ -812,6 +818,52 @@ class AgentSession:
                 },
             )
         response, usage = await self.call_model(messages, node, step=int(state.get("steps") or 0))
+        if not str(response.text or "").strip() and not response.tool_calls:
+            # 推理型模型可能把输出预算全烧在 reasoning 上，正文与工具调用一起空。
+            # 这种「什么都没说」不是答复：放过去会让零交付一路走到收尾并被判成功
+            # （真机 9eac5bed）。先留一条可读事实，再明确要求一次输出；仍空就失败。
+            await self.recorder.add(
+                "model.empty_response",
+                node,
+                {
+                    "attempt": 1,
+                    "model": response.model,
+                    "finish_reason": response.finish_reason,
+                    "role": role_for_node(node),
+                    "usage": dict(usage or {}),
+                },
+            )
+            await self.recorder.add(
+                "model.empty_response.retry",
+                node,
+                {"attempt": 2, "model": response.model, "role": role_for_node(node)},
+            )
+            retry_messages = [
+                *messages,
+                authored({"role": "system", "content": EMPTY_RESPONSE_NUDGE}, self.run_id),
+            ]
+            retry, retry_usage = await self.call_model(
+                retry_messages, node, step=int(state.get("steps") or 0)
+            )
+            usage = merge_usage(usage, retry_usage)
+            if not str(retry.text or "").strip() and not retry.tool_calls:
+                await self.recorder.add(
+                    "model.empty_response",
+                    node,
+                    {
+                        "attempt": 2,
+                        "model": retry.model,
+                        "finish_reason": retry.finish_reason,
+                        "role": role_for_node(node),
+                        "usage": dict(retry_usage or {}),
+                    },
+                )
+                raise ModelError(
+                    "model_empty_response",
+                    f"模型 {retry.model or self.adapter.config.model} 连续两次返回空响应"
+                    "（既没有正文也没有工具调用），已停止本轮",
+                )
+            response = retry
         assistant: dict[str, Any] = authored({"role": "assistant", "content": response.text}, self.run_id)
         if response.tool_calls:
             assistant["tool_calls"] = response.tool_calls
@@ -1458,7 +1510,7 @@ class AgentSession:
                     {"reason": error.message, "code": error.code, "status": error.status, "role": role},
                 )
                 return await self._call_non_stream(
-                    adapter, specs, chat, node, role, effort=effort, thinking=thinking
+                    adapter, specs, chat, node, role, effort=effort, thinking=thinking, model=model
                 )
             except httpx.HTTPError as error:
                 if relay.chunks:
@@ -1471,7 +1523,7 @@ class AgentSession:
                      "role": role},
                 )
                 return await self._call_non_stream(
-                    adapter, specs, chat, node, role, effort=effort, thinking=thinking
+                    adapter, specs, chat, node, role, effort=effort, thinking=thinking, model=model
                 )
             await relay.close()
             if relay.chunks:

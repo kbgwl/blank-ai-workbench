@@ -27,6 +27,7 @@ CHECKS = (
     "delivery_says_done",
     "tests_still_runnable",
     "not_zero_change",
+    "delivery_matches_plan",
     "delivery_evidence",
 )
 
@@ -45,6 +46,9 @@ _WRITE_TOOLS = frozenset({"apply_patch", "edit_file", "write_file", "notebook_ed
 _INCOMPLETE_MARKS = (
     "未修好", "没修好", "未修复", "没有修复", "未完成", "没完成",
     "无法完成", "未解决", "没解决", "改坏了",
+    # 真机 9eac5bed：交付写「完成：工作区仍为空，三个文件均未创建，功能尚未实现」，
+    # 旧词表没有覆盖「未实现/仍为空」，整轮被判 succeeded 且零个文件。
+    "未实现", "仍为空", "没有任何改动", "未做任何改动",
 )
 # 「需要你：」里要求用户**重做/恢复/修复工作**，才是没做完的证据。
 # 清理验证残留、补装工具链这类收尾交接不算：真机 coding-012/028/035 测试退出码
@@ -247,6 +251,18 @@ def verify(
     done_when = [
         str(item).strip() for item in ((goal_spec or {}).get("done_when") or []) if str(item).strip()
     ]
+    # ⑨a 零交付：有验收标准、计划里也确实要求改文件，磁盘却一个文件都没动。
+    # 只有「计划要求改动」才算硬事实——纯问答与「调研后判断不需要改」不在此列，
+    # 否则会把正常回答判成失败。
+    plan_edits = any(
+        str(item.get("kind") or "") in ("edit", "repair")
+        for item in ((plan or {}).get("steps") or [])
+        if isinstance(item, dict)
+    )
+    checks["delivery_matches_plan"] = not (not paths and bool(done_when) and plan_edits)
+    if not checks["delivery_matches_plan"]:
+        findings.append("目标有验收标准、计划要求改动，但磁盘零改动（零交付）")
+        blocking = True
     has_delivery = bool(str(report or "").strip())
     checks["goal_met"] = not blocking and not budget_exhausted and (not done_when or has_delivery)
     if done_when and not has_delivery:
