@@ -4,6 +4,8 @@
 ``background: true`` 时，``expand_user_input`` 展开出的正文不再注入主代理
 循环，而是派发给一个子代理执行——``agent`` 决定用哪个定义，``background``
 决定前台等结果还是后台跑。两者都没声明时走常规路径（注入主代理）。
+（#312 收口：真正的派发闸门是 ``context: fork``——本文件里的派发用例都同时
+声明了它；没有 fork 时即使写了 agent/background 也不派发。）
 
 上游锚点：``vQt(e,n){if(n||_c()||Te())return!1;return e.background??!0}``
 判定是否派发；``EQt`` 后台派发；``agent`` 决定 ``agentType``。
@@ -12,9 +14,9 @@
 1. **声明携带**：``CommandDefinition`` 字段、frontmatter 解析、``as_entry``、
    ``expand_user_input`` 的 info；
 2. **不支持清单**：命令侧不再把 ``agent``/``background`` 当"不支持"字段；
-3. **运行时派发**：声明了 agent 或 background 时，运行时走子代理而不是
-   ``graph.ainvoke``；前台 ``__call__``、后台 ``spawn_background``、无声明
-   不派发、未知类型 fail-closed。
+3. **运行时派发**：#312 起闸门是 ``context: fork``——命令声明了 ``context: fork``
+   且带 agent/background 时，运行时走子代理而不是 ``graph.ainvoke``；前台
+   ``__call__``、后台 ``spawn_background``、无 fork 不派发、未知类型 fail-closed。
 
 钉的不是「字段存在」——每条判据指向一个会走形的具体行为：解析丢了字段、
 目录不携带、info 不带、运行时不派发、无声明误派发、未知类型不报错。
@@ -360,7 +362,7 @@ async def test_runtime_dispatches_foreground_when_agent_set(
     _write_command(
         workspace,
         "review.md",
-        _command_md("评审这份代码。", extra="agent: reviewer\n"),
+        _command_md("评审这份代码。", extra="context: fork\nagent: reviewer\n"),
     )
     project_id = await create_project(env, workspace)
     provider_id = await create_provider(env)
@@ -419,7 +421,7 @@ async def test_runtime_dispatches_background_when_background_true(
     _write_command(
         workspace,
         "bg.md",
-        _command_md("后台执行。", extra="background: true\n"),
+        _command_md("后台执行。", extra="context: fork\nbackground: true\n"),
     )
     project_id = await create_project(env, workspace)
     provider_id = await create_provider(env)
@@ -522,7 +524,7 @@ async def test_runtime_fails_closed_on_unknown_agent(
     _write_command(
         workspace,
         "bad.md",
-        _command_md("执行。", extra="agent: nonexistent\n"),
+        _command_md("执行。", extra="context: fork\nagent: nonexistent\n"),
     )
     project_id = await create_project(env, workspace)
     provider_id = await create_provider(env)

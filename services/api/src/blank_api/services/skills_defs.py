@@ -89,13 +89,15 @@ UNSUPPORTED_FIELDS = (
     "lspServers",
 )
 
-# Skill 侧的"不支持"清单：比 UNSUPPORTED_FIELDS 少了 agent 与 background——
-# 这两个字段 Skill 已移植（对齐上游 lme 的 agent/background，见 #303）。
-# 命令侧同样已移植（见 #311）：命令的 agent/background 走输入管道
-# （expand_user_input 的 info），运行时从 expansion 读出后派发子代理，
-# 对应的 COMMAND_UNSUPPORTED_FIELDS 在 commands_defs.py。
+# Skill 侧的"不支持"清单：比 UNSUPPORTED_FIELDS 少了 agent / background / context——
+# 这三个字段 Skill 已移植（agent/background 见 #303，context: fork 见 #312）。
+# 命令侧同样已移植（agent/background 见 #311，context 见 #312）：命令的
+# agent/background/context 走输入管道（expand_user_input 的 info），运行时从
+# expansion 读出后按 context == "fork" 决定是否派发子代理，对应的
+# COMMAND_UNSUPPORTED_FIELDS 在 commands_defs.py。
 SKILL_UNSUPPORTED_FIELDS = tuple(
-    key for key in UNSUPPORTED_FIELDS if key not in ("agent", "background")
+    key for key in UNSUPPORTED_FIELDS
+    if key not in ("agent", "background", "context")
 )
 
 _LEADING_MARKS = re.compile(r"^[#>*\-\s]+")
@@ -138,6 +140,9 @@ class SkillDefinition:
     # 上游 ``lme`` 的 ``background``：Skill 是否后台派发子代理执行正文。
     # False = 不声明（等同没写），前台派发或主线程注入。
     background: bool = False
+    # 上游只认 ``"fork"`` 的 ``context``：只有声明了它才把正文派给子代理，
+    # agent/background 是 fork 分支下的子选项。空串 = 不声明。
+    context: str = ""
     # 插件来源时才有：${CLAUDE_PLUGIN_ROOT} 与 ${CLAUDE_PLUGIN_DATA} 的替换值。
     # 非插件 Skill 保持空串，substitute_paths 不展开这两个占位符（与上游
     # ``C9`` 的 ``n.source`` 门控一致）。
@@ -176,6 +181,7 @@ class SkillDefinition:
             "unloadable_guard": self.unloadable_guard,
             "agent": self.agent,
             "background": self.background,
+            "context": self.context,
             "plugin_root": self.plugin_root,
             "plugin_data": self.plugin_data,
         }
@@ -215,6 +221,8 @@ class SkillDefinition:
             payload["agent"] = self.agent
         if self.background:
             payload["background"] = True
+        if self.context:
+            payload["context"] = self.context
         return payload
 
 
@@ -668,6 +676,23 @@ def _definition_from_dir(
             )
         else:
             skill_background = parsed_bg
+    # context：上游只认 "fork"。声明了它才派发子代理；其他值告警丢弃、不猜。
+    # null/缺省等同不声明（不告警）；空串同理。
+    skill_context = ""
+    raw_context = meta.get("context")
+    if raw_context is not None:
+        if isinstance(raw_context, str):
+            candidate = raw_context.strip()
+            if candidate == "fork":
+                skill_context = "fork"
+            elif candidate:
+                warnings.append(
+                    f"Skill 文件 {mask_path(str(path))} 的 context {candidate!r} 只支持 \"fork\"，已忽略"
+                )
+        else:
+            warnings.append(
+                f"Skill 文件 {mask_path(str(path))} 的 context 不是字符串，已忽略"
+            )
     ignored = tuple(key for key in SKILL_UNSUPPORTED_FIELDS if meta.get(key) is not None)
     # 上游 lJs：hooks 解析 + unloadableGuard。guard 开启时 Skill 仍加载，
     # 但 hooks 与 allowed-tools 都被清空（``Se=pe?[]:OI(...)``）。
@@ -698,6 +723,7 @@ def _definition_from_dir(
             unloadable_guard=unloadable_guard,
             agent=skill_agent,
             background=skill_background,
+            context=skill_context,
             plugin_root=str(plugin_root) if plugin_root else "",
             plugin_data=str(plugin_data) if plugin_data else "",
         ),

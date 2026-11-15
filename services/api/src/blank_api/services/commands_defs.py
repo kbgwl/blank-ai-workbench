@@ -71,12 +71,13 @@ EXPANSION_PAYLOAD_KEYS: tuple[str, ...] = (
     "prompt",
 )
 
-# 命令侧的"不支持"清单：比 UNSUPPORTED_FIELDS 少了 agent 与 background——
-# 这两个字段命令已移植（对齐上游 lme 的 agent/background，见 #311），
-# 命令的 agent/background 走输入管道（expand_user_input 的 info），
-# 运行时从 expansion 读出后派发子代理。
+# 命令侧的"不支持"清单：比 UNSUPPORTED_FIELDS 少了 agent / background / context——
+# 这三个字段命令已移植（agent/background 见 #311，context 见 #312），
+# 命令的 agent/background/context 走输入管道（expand_user_input 的 info），
+# 运行时按 context == "fork" 决定是否派发子代理。
 COMMAND_UNSUPPORTED_FIELDS: tuple[str, ...] = tuple(
-    key for key in UNSUPPORTED_FIELDS if key not in ("agent", "background")
+    key for key in UNSUPPORTED_FIELDS
+    if key not in ("agent", "background", "context")
 )
 
 
@@ -112,9 +113,12 @@ class CommandDefinition:
     # agent：命令声明以哪个子代理类型派发执行正文（对齐上游 ``lme`` 的
     # ``O.agent!=null?String(O.agent):void 0``）。空串 = 不声明，走常规注入。
     # background：是否后台派发子代理（对齐上游 ``m1(O.background)``，只认 true）。
-    # 两者任一非默认值时，展开正文派给子代理而不是注入主代理循环。
+    # 两者都不是派发闸门——闸门是 ``context == "fork"``（见下）。
     agent: str = ""
     background: bool = False
+    # context：上游只认 ``"fork"``——只有声明了它才把正文派给子代理，
+    # ``agent`` / ``background`` 只是 fork 分支下的子选项。空串 = 不声明。
+    context: str = ""
     # 插件来源时才有：${CLAUDE_PLUGIN_ROOT} 与 ${CLAUDE_PLUGIN_DATA} 的替换值。
     # 非插件命令保持空串，substitute_paths 不展开这两个占位符（与上游
     # ``C9`` 的 ``n.source`` 门控一致）。
@@ -142,6 +146,7 @@ class CommandDefinition:
             "effort": self.effort,
             "agent": self.agent,
             "background": self.background,
+            "context": self.context,
             "plugin_root": self.plugin_root,
             "plugin_data": self.plugin_data,
         }
@@ -333,6 +338,23 @@ def _definition(
             )
         else:
             command_background = parsed_bg
+    # context：上游只认 "fork"。声明了它才派发子代理；其他值告警丢弃，不猜。
+    # null/缺省等同不声明（不告警）；空串同理。
+    command_context = ""
+    raw_context = meta.get("context")
+    if raw_context is not None:
+        if isinstance(raw_context, str):
+            candidate = raw_context.strip()
+            if candidate == "fork":
+                command_context = "fork"
+            elif candidate:
+                warnings.append(
+                    f"命令文件 {mask_path(str(path))} 的 context {candidate!r} 只支持 \"fork\"，已忽略"
+                )
+        else:
+            warnings.append(
+                f"命令文件 {mask_path(str(path))} 的 context 不是字符串，已忽略"
+            )
     ignored = tuple(key for key in COMMAND_UNSUPPORTED_FIELDS if meta.get(key) is not None)
     return (
         CommandDefinition(
@@ -353,6 +375,7 @@ def _definition(
             effort=command_effort,
             agent=command_agent,
             background=command_background,
+            context=command_context,
             plugin_root=str(plugin_root) if plugin_root else "",
             plugin_data=str(plugin_data) if plugin_data else "",
         ),
@@ -524,10 +547,12 @@ def expand_user_input(
         # 本轮后续步骤的工具池按这份收窄（对齐上游 allowedTools/disallowedTools）。
         "allowed_tools": list(entry.get("allowed_tools") or ()),
         "disallowed_tools": list(entry.get("disallowed_tools") or ()),
-        # 命令声明的派发方式：运行时从 expansion 里读出 agent/background，
-        # 两者任一非默认值时把展开正文派给子代理而不是注入主代理循环。
+        # 命令声明的派发方式：运行时从 expansion 里读出 context，只有
+        # ``context == "fork"`` 才把展开正文派给子代理；agent/background 是
+        # fork 分支下的子选项（`agent` 选类型，`background` 选前后台）。
         "agent": str(entry.get("agent") or ""),
         "background": bool(entry.get("background") or False),
+        "context": str(entry.get("context") or ""),
 
     }
     if entry.get("path"):

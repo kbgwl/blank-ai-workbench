@@ -1,6 +1,40 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门
+
+- **命令/Skill 的 `context: fork` 派发闸门（#312）**：修正 #311 的语义偏差——上游
+  的派发闸门是 `context == "fork"`，`agent` 只是"fork 时用哪个子代理类型"，
+  `background` 只是"fork 时前台等结果还是后台跑"。没有 `context: fork` 时，即使写了
+  `agent` / `background` 也不派发，按常规路径注入。上游锚点：
+  `vQt(e,n){if(n||_c()||Te())return!1;return e.background??!0}`；官方文档：
+  `context` 只接受 `fork`，`agent` 是"context: fork 时使用的子代理类型"，
+  `background` 是"仅配合 context: fork；默认 true"。
+  1. **声明携带**：`CommandDefinition` / `SkillDefinition` 新增 `context`（str，默认
+     空串）。解析只认 `"fork"`（去空白后精确匹配；其他非空值告警丢弃，非字符串
+     告警丢弃；`null`/缺省/空串等同不声明），大小写不敏感不做，`Fork` 一律拒绝。
+     `as_entry()` 携带，`expand_user_input` 的 `info` 载荷携带，`SkillDefinition.
+     as_dict()` 仅在非空时写出。`COMMAND_UNSUPPORTED_FIELDS` / `SKILL_UNSUPPORTED_
+     FIELDS` 从各自清单里去掉 `context`（`UNSUPPORTED_FIELDS` 全局仍保留它，仅两份
+     派生清单排除）。
+  2. **运行时闸门**：`runtime._dispatch_command_as_subagent` 的守卫从"`agent` 或
+     `background` 任一非默认"改成"`context == "fork"`"；Skill 工具处理器
+     （`tools/skills.py`）的派发条件从 `agent or background` 改成 `context == "fork"`。
+     fork 分支里的 `agent`（缺省 general-purpose）与 `background` 语义不变。
+  3. **偏离项**：`background` 缺省仍为 False（沿用 #311 口径），与上游"默认 true"
+     不同；本批只改闸门、不动缺省，避免把"声明了 fork 但没写 background"的既有
+     行为翻成后台。`test_command_context_fork_v312.py` 明确钉住这个偏离
+     （`fork + agent`、无 background → 前台）。
+  判据 `services/api/tests/test_command_context_fork_v312.py`（34 例：定义字段默认值/
+  携带、frontmatter 解析各档（fork/其他值/null/非字符串/大小写 `Fork` 拒绝/空白去
+  噪）、`as_entry` 与 expand info 携带、两份不支持清单排除、运行时 fork+agent→前台 /
+  fork+background→后台 / fork 无 agent→general-purpose 前台 / agent 无 fork→不派发 /
+  background 无 fork→不派发 / 无字段→不派发、Skill 侧的解析与 `as_entry`/`as_dict`、
+  skill fork+agent→前台 / fork 无 agent→默认 / agent 无 fork→返回正文 /
+  background 无 fork→返回正文 / fork+background→后台），变异 6/6 红（打断命令
+  context 解析 → 9 红；拆运行时闸门 → 4 红；摘 expand info 的 context → 10 红；摘
+  SkillCatalog 的 context → 10 红；处理器闸门退回 `agent or background` → 3 红；
+  打断 Skill context 解析 → 1 红，红集合均实测），相邻命令/技能/代理/子代理套件连同
+  本批 **125 passed**。
 
 - **命令侧 `agent` / `background` 派发子代理（#311）**：对齐 Claude Code 的命令
   frontmatter 语义——命令声明了 `agent`（子代理类型名）或 `background: true` 时，

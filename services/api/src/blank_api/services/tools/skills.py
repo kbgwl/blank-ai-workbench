@@ -210,6 +210,9 @@ class SkillCatalog:
                 # Skill 声明的 background：True 时后台派发子代理，False/缺省前台。
                 # 对齐上游 lme 的 background 字段与 SkillTool 的 vQt 判断。
                 "background": bool(entry.get("background", False)),
+                # Skill 声明的 context：只有 "fork" 才派发子代理；agent/background
+                # 是 fork 分支下的子选项（对齐上游 SkillTool 的 vQt 闸门，#312）。
+                "context": str(entry.get("context") or ""),
                 # 插件来源的路径占位符：正文里的 ${CLAUDE_PLUGIN_ROOT} /
                 # ${CLAUDE_PLUGIN_DATA} 在 handler 里交给 substitute_paths 展开。
                 "plugin_root": str(entry.get("plugin_root") or ""),
@@ -431,19 +434,20 @@ async def _skill(context: ToolContext, arguments: dict) -> ToolOutcome:
         plugin_data=str(entry.get("plugin_data") or ""),
     )
     await _record(context, "skill.invoked", {"skill": name, "has_args": bool(args), "chars": len(body)})
-    # agent / background：Skill 声明了就派生子代理执行正文，而不是主线程注入。
-    # 对齐上游 SkillTool 的 vQt：有 agent 或 background 时走子代理派发，
-    # 正文作为 goal 传给子代理，主线程只收到派发回执。
+    # context: fork：Skill 声明了这个闸门才派生子代理执行正文，而不是主线程注入。
+    # agent 只是"fork 时用哪个类型"，background 只是"fork 时前台还是后台"。
+    # 对齐上游 SkillTool 的 vQt 闸门（#312）。
+    skill_context = str(entry.get("context") or "").strip()
     skill_agent = str(entry.get("agent") or "")
     skill_background = bool(entry.get("background", False))
-    if skill_agent or skill_background:
+    if skill_context == "fork":
         # 延迟导入避免循环：subagent.py 在模块级 import 了本模块的 SkillCatalog。
         from blank_api.services.subagent import DEFAULT_STEPS, SubAgentRequest
         from blank_api.services.tools.delegate import _apply_definition, _resolve_agent
 
         runner = getattr(context, "subagent_runner", None)
         if runner is None:
-            return fail("error", "Skill 声明了 agent/background，需要子代理运行时，但当前运行时没有启用子代理。")
+            return fail("error", "Skill 声明了 context: fork，需要子代理运行时，但当前运行时没有启用子代理。")
         # 有 agent 就按名字查目录；没有 agent 但声明了 background 时用默认类型。
         definition, error = _resolve_agent(context, skill_agent or "")
         if error:

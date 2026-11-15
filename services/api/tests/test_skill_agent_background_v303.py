@@ -269,12 +269,12 @@ def test_background_still_in_command_unsupported_fields() -> None:
 
 
 def test_skill_unsupported_is_subset_of_command_unsupported() -> None:
-    """``SKILL_UNSUPPORTED_FIELDS`` 是 ``UNSUPPORTED_FIELDS`` 去掉 agent/background。
+    """``SKILL_UNSUPPORTED_FIELDS`` 是 ``UNSUPPORTED_FIELDS`` 去掉 agent/background/context。
 
-    两个列表的差集不是恰好 {agent, background}，说明分叉写错了。
+    两个列表的差集不是恰好 {agent, background, context}，说明分叉写错了。
     """
     removed = set(UNSUPPORTED_FIELDS) - set(SKILL_UNSUPPORTED_FIELDS)
-    assert removed == {"agent", "background"}
+    assert removed == {"agent", "background", "context"}
 
 
 # --------------------------------------------------------------------------- #
@@ -381,6 +381,7 @@ async def test_skill_with_agent_spawns_foreground_subagent() -> None:
                 "name": "review",
                 "description": "d",
                 "instructions": "评审这份代码。",
+                "context": "fork",
                 "agent": "reviewer",
             }
         ]
@@ -412,6 +413,7 @@ async def test_skill_with_agent_body_goes_to_subagent_not_prompt() -> None:
                 "name": "review",
                 "description": "d",
                 "instructions": "评审这份代码并给出结论。",
+                "context": "fork",
                 "agent": "reviewer",
             }
         ]
@@ -439,6 +441,7 @@ async def test_skill_with_unknown_agent_fails_closed() -> None:
                 "name": "bad",
                 "description": "d",
                 "instructions": "body",
+                "context": "fork",
                 "agent": "nonexistent",
             }
         ]
@@ -465,6 +468,7 @@ async def test_skill_with_agent_no_runner_errors() -> None:
                 "name": "review",
                 "description": "d",
                 "instructions": "body",
+                "context": "fork",
                 "agent": "reviewer",
             }
         ]
@@ -493,6 +497,7 @@ async def test_skill_with_background_spawns_background_subagent() -> None:
                 "name": "bg",
                 "description": "d",
                 "instructions": "后台跑的任务。",
+                "context": "fork",
                 "background": True,
             }
         ]
@@ -522,6 +527,7 @@ async def test_skill_with_agent_and_background_spawns_bg_subagent_of_type() -> N
                 "name": "review-bg",
                 "description": "d",
                 "instructions": "后台评审。",
+                "context": "fork",
                 "agent": "reviewer",
                 "background": True,
             }
@@ -554,6 +560,7 @@ async def test_skill_with_background_no_spawn_background_errors() -> None:
                 "name": "bg",
                 "description": "d",
                 "instructions": "body",
+                "context": "fork",
                 "background": True,
             }
         ]

@@ -1020,22 +1020,25 @@ class AgentRuntime:
     async def _dispatch_command_as_subagent(
         self, scope: _RunScope, prompt: _PromptDecision
     ) -> dict | None:
-        """斜杠命令声明了 ``agent`` / ``background`` 时，把正文派给子代理执行。
+        """斜杠命令声明了 ``context: fork`` 时，把正文派给子代理执行。
 
-        对齐上游 ``vQt`` / ``EQt``：命令声明了派发方式就不再注入主代理循环，
-        而是派一个子代理跑展开后的正文。返回证据包 dict 时表示已派发（调用方
-        应直接返回、不再走 ``graph.ainvoke``）；返回 None 表示没声明，按常规
-        路径继续。
+        对齐上游 ``vQt`` / ``EQt``：``context == "fork"`` 是派发闸门，``agent``
+        只是"fork 时用哪个子代理类型"（缺省 general-purpose），``background``
+        只是"fork 时前台等还是后台跑"。没有 ``context: fork`` 时，即使写了
+        ``agent`` / ``background`` 也不派发——按常规路径继续。
+
+        返回证据包 dict 时表示已派发（调用方应直接返回、不再走 ``graph.ainvoke``）；
+        返回 None 表示没声明 fork，按常规路径继续。
 
         未知 agent 类型 fail-closed：宁可明确报错，也不静默降级到常规注入。
         """
         expansion = scope.expansion
         if not expansion:
             return None
+        if str(expansion.get("context") or "").strip() != "fork":
+            return None
         command_agent = str(expansion.get("agent") or "").strip()
         command_background = bool(expansion.get("background") or False)
-        if not command_agent and not command_background:
-            return None
 
         request = SubAgentRequest(
             goal=prompt.goal_for_model or "",
@@ -1216,7 +1219,7 @@ class AgentRuntime:
                 "snapshot_id": session.snapshot_id,
             },
         )
-        # 命令侧 agent/background 派发（#311）：声明了派发方式的斜杠命令不再
+        # 命令侧 ``context: fork`` 派发（#312）：声明了 fork 的斜杠命令不再
         # 注入主代理循环，而是派给子代理执行。放在 task.started 之后、会话钩子
         # 之前：任务已开始，但主代理会话没启动（session_start 不触发）。
         dispatched = await self._dispatch_command_as_subagent(scope, prompt)
