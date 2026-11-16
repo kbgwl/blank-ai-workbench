@@ -57,6 +57,22 @@ _INCOMPLETE_MARKS = (
 _HANDOFF_MARKS = ("恢复", "重做", "重新落", "修复")
 # 校验通道把「本轮把测试配置改坏」误写成 skipped 时用；见 graph.run_validation_node。
 _UNTESTABLE_STATUSES = frozenset({"skipped", "error"})
+# 这些 skipped 原因只说明「这次没跑」，不说明「本轮把配置改坏」：审批没过、
+# 环境不可用、工具链缺失、只读/无改动。空字符串是升级前的旧结论——仍按
+# 「动过测试文件才拦」处理，不能因为缺字段就回到旧误判。
+_SKIPS_NEVER_A_BREAK = frozenset(
+    {"readonly", "no_change", "awaiting_approval", "not_authorized",
+     "env_unavailable", "toolchain_missing"}
+)
+# 测试文件/测试配置的判据只认文件名与目录名，不读内容：hidden 测试被移出后
+# 工作区里本来就没有测试，只能靠「本轮动了哪个路径」这个事实。
+_TEST_CONFIG_NAMES = frozenset(
+    {"conftest.py", "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml",
+     "package.json", "jest.config.js", "jest.config.ts", "vitest.config.js",
+     "vitest.config.ts", "playwright.config.js", "playwright.config.ts",
+     ".mocharc.json", ".mocharc.yml", "phpunit.xml"}
+)
+_TEST_DIR_NAMES = frozenset({"tests", "test", "__tests__", "spec", "specs"})
 
 
 def _results(tool_results: Iterable[Any]) -> list[dict[str, Any]]:
@@ -110,17 +126,40 @@ def _delivery_is_incomplete(report: str) -> bool:
     return bool(needs) and any(mark in needs for mark in _HANDOFF_MARKS)
 
 
+def _touches_test_artifact(path: str) -> bool:
+    """这个路径是不是测试文件或测试配置（本轮动过它，才有资格说配置被改坏）。"""
+    normalized = str(path or "").replace("\\", "/").strip()
+    if not normalized:
+        return False
+    name = normalized.rsplit("/", 1)[-1].lower()
+    if name.startswith("test_") or name.endswith(("_test.py", ".test.js", ".test.ts", ".spec.js", ".spec.ts")):
+        return True
+    if name in _TEST_CONFIG_NAMES:
+        return True
+    return any(part.lower() in _TEST_DIR_NAMES for part in normalized.split("/")[:-1])
+
+
 def _broke_test_config(
-    rows: list[dict[str, Any]], validation_status: str, paths: list[str]
+    rows: list[dict[str, Any]], validation: dict[str, Any], paths: list[str]
 ) -> bool:
     """本轮本来能跑测试，改完却认不出测试命令 —— 配置被这一轮改坏了。
 
     真·环境没配（第一条测试就报「未识别到测试命令」）不算，那是 v0.9.1 明确
-    不许改判成代码失败的情形。只有「已有一次 ok 的 run_tests + 有文件改动 +
-    最后没有可采信的测试结果」三条同时成立才拦。
+    不许改判成代码失败的情形。
+
+    ``error``（命令还在但跑不起来了）沿用老判据：曾有一次 ok 的 run_tests +
+    有文件改动。``skipped`` 本身不是证据——隐藏测试被移出工作区时 pytest 必然
+    exit 5，本来就没什么可收集（2026-11-16 严格评测 coding-008 t2 实测：只改了
+    fib.py，却被打成「配置被改坏」）；只有本轮确实动过测试文件/测试配置才算。
+    审批没过、环境不可用这类 skipped 更不是证据，一律不拦。
     """
-    if validation_status not in _UNTESTABLE_STATUSES or not paths:
+    status = str(validation.get("status") or "")
+    if status not in _UNTESTABLE_STATUSES or not paths:
         return False
+    if status == "skipped":
+        if str(validation.get("skip_code") or "") in _SKIPS_NEVER_A_BREAK:
+            return False
+        return any(_touches_test_artifact(path) for path in paths)
     return any(
         str(row.get("tool") or "") == "run_tests"
         and str(row.get("status") or "") == "ok"
@@ -236,9 +275,12 @@ def verify(
     # ⑦ 本轮把测试配置改坏：曾有测试跑通，最后却没有可采信的测试结果。
     # 与 graph 的校验通道同源，但这里是独立的最后一道闸——预算耗尽、修复回路
     # 没机会跑时，也不能让任务带着「测试没跑成」判成功。
-    checks["tests_still_runnable"] = not _broke_test_config(rows, status, paths)
+    checks["tests_still_runnable"] = not _broke_test_config(rows, val, paths)
     if not checks["tests_still_runnable"]:
-        findings.append("本轮改动前有测试可用，改完后测试命令无法识别（配置被改坏）")
+        if status == "skipped":
+            findings.append("本轮改动了测试文件或测试配置，之后一条测试也没收集到（配置被改坏）")
+        else:
+            findings.append("本轮改动前有测试可用，改完后测试命令无法识别（配置被改坏）")
         blocking = True
 
     # ⑧ 最终交付证据

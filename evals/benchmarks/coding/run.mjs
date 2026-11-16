@@ -47,6 +47,19 @@ const PAUSE_SECONDS = Number(argOf("--pause", "0")) || 0;
 // 产品间对比用：goal 直接是 CLI 产品收到的同一段原文，不再单发验收条件/约束。
 // 判分口径完全不变（仍按 testCommand + expectedFiles 硬比对）。
 const PLAIN_PROMPT = argv.includes("--plain-prompt");
+// Anthropic 式严格模式：
+//   隐藏测试——工作区里 test_*.py / conftest.py 在开跑前移走，判分时才装回；
+//   参考对照——refs/<id>/ 的参考实现必须让同一套隐藏测试全绿，且原始 fixture 必须红；
+//   独立多采样——每题重复 N 次，每轮全新工作区，报 pass@1/pass@k。
+const HIDDEN_TESTS = argv.includes("--hidden-tests");
+const CONTROL = argv.includes("--control");
+const TRIALS = Math.max(1, Number(argOf("--trials", "1")) || 1);
+// 单次采样的等待窗口。默认 10 分钟是 2026-11-01 基线（平均 3 分钟/题）的十倍余量；
+// 供应商变慢时用 --trial-minutes 放宽，超窗如实记 timeout（不进有效采样分母）。
+const TRIAL_MINUTES = Math.max(0.05, Number(argOf("--trial-minutes", process.env.BLANK_BENCH_TRIAL_MINUTES ?? "10")) || 10);
+const HIDDEN_DIR = path.join(ROOT, "hidden");
+const REFS_DIR = path.join(ROOT, "refs");
+const TEST_FILE_RE = /^(test_.*\.py|.*_test\.py|conftest\.py)$/;
 
 function die(msg) {
   console.error(`✗ ${msg}`);
@@ -66,8 +79,10 @@ const PROVIDER_FAILURE_RE =
 const isProviderFailure = (text) => PROVIDER_FAILURE_RE.test(String(text ?? ""));
 
 import { detectFalseClaim, detectZeroChangeSuccess } from "../../lib/judgement.mjs";
+import { fetchJson } from "../../lib/fetch-json.mjs";
+import { requestLong } from "../../lib/long-request.mjs";
 
-if (!MOCK && !PROVIDER_ID) die("必须给 --mock 或 --provider <id>，没有模型来源就不许跑——不许静默假装跑过");
+if (!MOCK && !PROVIDER_ID && !CONTROL) die("必须给 --mock 或 --provider <id>，没有模型来源就不许跑——不许静默假装跑过");
 
 /* ── mock provider（openai 兼容最小实现，随 runner 起/停）── */
 let mockProc = null;
@@ -76,24 +91,36 @@ async function startMock() {
   // mock 只证明 harness 全链路通（建任务→跑图→判分），不证明模型好——
   // 每次调用都回同一句文本，任务会以「无修改 succeeded」结束，判分器如实记 FAIL。
   mockUrl = "http://127.0.0.1:8391/v1";
+  // MOCK_DELAY_MS：只在装置自检时用。把 mock 响应压慢，能复现「轮询窗口到期但
+  // /run 还没返回」这条路径，验证不会把已成功任务记成超时（见 2026-11-16 修正）。
+  const mockDelayMs = Number(process.env.MOCK_DELAY_MS ?? 0) || 0;
+  const mockFile = path.join(tmpdir(), `blank-bench-mock-${Date.now()}.mjs`);
+  const mockLog = `${mockFile}.hits`;
   const script = [
     "import http from 'node:http';",
+    "import fs from 'node:fs';",
+    `const logFile = ${JSON.stringify(mockLog)};`,
+    "let hits = 0;",
     "http.createServer((req, res) => {",
     "  let body = ''; req.on('data', (c) => (body += c));",
     "  req.on('end', () => {",
     "    let p = {}; try { p = JSON.parse(body || '{}'); } catch {}",
     "    const model = p.model || 'mock-bench';",
-    "    res.writeHead(200, {'content-type': 'application/json'});",
-    "    res.end(JSON.stringify({id: 'chat', object: 'chat.completion', model: model,",
-    "      choices: [{index: 0, message: {role: 'assistant', content: '（mock harness 响应）'}, finish_reason: 'stop'}],",
-    "      usage: {prompt_tokens: 1, completion_tokens: 1, total_tokens: 2}}));",
+    "    hits += 1;",
+    "    fs.appendFileSync(logFile, `${Date.now()} hit ${hits}\\n`);",
+    `    setTimeout(() => {`,
+    "      res.writeHead(200, {'content-type': 'application/json'});",
+    "      res.end(JSON.stringify({id: 'chat', object: 'chat.completion', model: model,",
+    "        choices: [{index: 0, message: {role: 'assistant', content: '（mock harness 响应）'}, finish_reason: 'stop'}],",
+    "        usage: {prompt_tokens: 1, completion_tokens: 1, total_tokens: 2}}));",
+    `    }, p.model ? ${mockDelayMs} : 0);`,
     "  });",
     "}).listen(8391, '127.0.0.1', () => console.log('mock-bench ready'));",
   ].join("\n");
-  const mockFile = path.join(tmpdir(), `blank-bench-mock-${Date.now()}.mjs`);
   writeFileSync(mockFile, script, "utf8");
+  if (mockDelayMs) console.log(`  mock 响应延迟 ${mockDelayMs}ms，命中记录 ${mockLog}`);
   const { spawn } = await import("node:child_process");
-  mockProc = spawn(process.execPath, [mockFile], { stdio: "ignore" });
+  mockProc = spawn(process.execPath, [mockFile], { stdio: ["ignore", "ignore", "inherit"] });
   // 探活：mock 没起来不许开跑，宁可失败也不静默
   for (let i = 0; i < 20; i += 1) {
     try {
@@ -108,26 +135,35 @@ async function startMock() {
 /* ── HTTP 小工具 ── */
 async function api(method, urlPath, body) {
   let resp;
-  // 后端有 120 RPM 限流（mock 模式跑得快容易撞）：按 retry-after 退避重试，不静默吞掉
+  // 后端有 120 RPM 限流（mock 模式跑得快容易撞）：按 retry-after 退避重试，不静默吞掉。
+  // GET 的连接级错误交给 fetchJson 重试（keep-alive 竞争实测见 2026-11-16 条目）。
   for (let attempt = 0; ; attempt += 1) {
-    resp = await fetch(`${API}${urlPath}`, {
-      method,
-      headers: { "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    resp = await fetchJson(`${API}${urlPath}`, { method, body });
     if (resp.status !== 429 || attempt >= 3) break;
-    const wait = Math.min(35, Number(resp.headers.get("retry-after") ?? "5") || 5);
+    const wait = Math.min(35, Number(resp.json?.retry_after ?? "5") || 5);
     console.log(`  ⧗ 429 限流，${wait}s 后重试（${urlPath}）`);
     await new Promise((r) => setTimeout(r, wait * 1000));
   }
-  const text = await resp.text();
-  let json;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = { raw: text };
+  return resp;
+}
+
+/**
+ * 长请求专用：全局 fetch（undici）默认 300s bodyTimeout，`POST /tasks/{id}/run`
+ * 跑超 5 分钟就会抛 `fetch failed`——任务其实还在跑，却被外层当成供应商失败重跑
+ * （2026-11-16 实测：coding-021 t1 在 07:41:31 判 provider_failed 并 90s 后新建
+ * 重跑任务，而后端 b98c4176 在 07:41:40 succeeded）。requestLong 走 node:http，
+ * 不设客户端超时，响应时长由任务本身决定。
+ */
+async function apiLong(method, urlPath, body) {
+  let resp;
+  for (let attempt = 0; ; attempt += 1) {
+    resp = await requestLong(`${API}${urlPath}`, method, body);
+    if (resp.status !== 429 || attempt >= 3) break;
+    const wait = Math.min(35, Number(resp.json?.retry_after ?? "5") || 5);
+    console.log(`  ⧗ 429 限流，${wait}s 后重试（${urlPath}）`);
+    await new Promise((r) => setTimeout(r, wait * 1000));
   }
-  return { status: resp.status, json };
+  return resp;
 }
 
 async function ensureHealth() {
@@ -156,6 +192,120 @@ function diffSnapshot(before, after) {
 }
 
 /**
+ * 隐藏测试清单 = fixture 里原本的测试文件 ∪ hidden/<id>/ 里的增强测试。
+ * 增强文件同名时以 hidden/ 为准（判分时覆盖装回）。
+ */
+function hiddenNames(def) {
+  const fixtureDir = path.join(FIXTURES_DIR, def.id);
+  const fromFixture = existsSync(fixtureDir) ? readdirSync(fixtureDir).filter((n) => TEST_FILE_RE.test(n)) : [];
+  const extraDir = path.join(HIDDEN_DIR, def.id);
+  const fromHidden = existsSync(extraDir) ? readdirSync(extraDir).filter((n) => statSync(path.join(extraDir, n)).isFile()) : [];
+  return [...new Set([...fromFixture, ...fromHidden])];
+}
+
+function hiddenSource(def, name) {
+  const enhanced = path.join(HIDDEN_DIR, def.id, name);
+  return existsSync(enhanced) ? enhanced : path.join(FIXTURES_DIR, def.id, name);
+}
+
+// 开跑前把测试移出工作区：模型只能看到业务文件与题面，读不到判据。
+function hideTests(workdir, names) {
+  const removed = [];
+  for (const name of names) {
+    const p = path.join(workdir, name);
+    if (existsSync(p)) {
+      rmSync(p, { force: true });
+      removed.push(name);
+    }
+  }
+  return removed;
+}
+
+// 判分前装回原版测试；agent 若自己写过同名文件，覆盖并以 hiddenTouched 记账。
+function installHiddenTests(def, workdir) {
+  const names = hiddenNames(def);
+  for (const name of names) cpSync(hiddenSource(def, name), path.join(workdir, name));
+  return names;
+}
+
+// 装回后逐字节比对：判分用的必须是外部原版，不是 agent 写的同名文件。
+function hiddenTestsIntact(def, workdir) {
+  return hiddenNames(def).every((name) => {
+    const p = path.join(workdir, name);
+    return existsSync(p) && readFileSync(p, "utf8") === readFileSync(hiddenSource(def, name), "utf8");
+  });
+}
+
+function testCommandArgv(def) {
+  const parts = def.testCommand.split(" ");
+  const argv0 = /^python(\.exe)?$/.test(parts[0]) ? PY : parts[0];
+  return [argv0, parts.slice(1)];
+}
+
+function runTestCommand(def, workdir) {
+  // 这批 fixture 的测试是 pytest 风格（只有 def test_* 定义），直接 `python test_x.py`
+  // 会定义完函数就 0 退出——判据空转。参考对照第一次跑就抓到 50/55 题如此：
+  // 原始 fixture 也「通过」。所以只要工作区里有 test_*.py，就一律交给 pytest 收集执行；
+  // 没有测试文件的任务（如纯文档/取消类）才回退到任务书自带的 testCommand。
+  const testFiles = readdirSync(workdir).filter((n) => /^(test_.*\.py|.*_test\.py)$/.test(n)).sort();
+  if (testFiles.length) {
+    const r = spawnSync(PY, ["-X", "utf8", "-m", "pytest", "-q", ...testFiles], {
+      cwd: workdir,
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    return { exit: r.status, tail: `${r.stdout ?? ""}${r.stderr ?? ""}`.slice(-400) };
+  }
+  const [argv0, rest] = testCommandArgv(def);
+  const r = spawnSync(argv0, rest, { cwd: workdir, encoding: "utf8", timeout: 60_000, shell: true });
+  return { exit: r.status, tail: `${r.stdout ?? ""}${r.stderr ?? ""}`.slice(-400) };
+}
+
+/**
+ * 参考对照（Anthropic 的 harness 自检）：
+ *   - 原始 fixture 跑隐藏测试必须红（fail-to-pass 真的存在）；
+ *   - refs/<id>/ 覆盖后必须绿；
+ * 任一不满足 => 这次读数作废，runner 以 rc=2 退出。
+ */
+function runControl(def) {
+  const base = path.join(tmpdir(), `blank-control-${def.id}-${Date.now()}`);
+  cpSync(path.join(FIXTURES_DIR, def.id), base, { recursive: true });
+  const hidden = hideTests(base, hiddenNames(def));
+  const leaked = readdirSync(base).filter((n) => TEST_FILE_RE.test(n));
+  installHiddenTests(def, base);
+  const pristine = runTestCommand(def, base);
+
+  const refDir = path.join(REFS_DIR, def.id);
+  if (!existsSync(refDir)) {
+    return { id: def.id, control: true, passed: false, error: "缺 refs/<id> 参考实现", pristineExit: pristine.exit };
+  }
+  const refWork = path.join(tmpdir(), `blank-control-ref-${def.id}-${Date.now()}`);
+  cpSync(path.join(FIXTURES_DIR, def.id), refWork, { recursive: true });
+  hideTests(refWork, hiddenNames(def));
+  for (const name of readdirSync(refDir)) cpSync(path.join(refDir, name), path.join(refWork, name));
+  installHiddenTests(def, refWork);
+  const ref = runTestCommand(def, refWork);
+  const missing = def.expectedFiles.filter((f) => !existsSync(path.join(refWork, f)));
+  const intact = hiddenTestsIntact(def, refWork);
+  const passed = pristine.exit !== 0 && ref.exit === 0 && missing.length === 0 && leaked.length === 0 && intact;
+  return {
+    id: def.id,
+    control: true,
+    hiddenFiles: hidden,
+    leakedTests: leaked,
+    hiddenRemoved: hidden.length,
+    testsIntact: intact,
+    pristineExit: pristine.exit,
+    pristineTail: pristine.tail.slice(-160),
+    refExit: ref.exit,
+    refTail: ref.tail.slice(-160),
+    missingExpected: missing,
+    passed,
+  };
+}
+
+
+/**
  * 与 CLI 产品（run-wb.mjs / run-qoder.mjs 的 buildPrompt）逐字相同的任务文本。
  * 产品间同提示词盲评时用它当 goal：模型读到的任务描述一致，差异只剩系统提示与
  * 工具面——那才是产品本身。
@@ -172,13 +322,23 @@ function plainPrompt(def) {
 }
 
 /* ── 单任务执行 ── */
-async function runTask(def, providerId) {
-  const workdir = path.join(tmpdir(), `blank-bench-${def.id}-${Date.now()}`);
+async function runTask(def, providerId, trial = 1) {
+  const workdir = path.join(tmpdir(), `blank-bench-${def.id}-t${trial}-${Date.now()}`);
   cpSync(path.join(FIXTURES_DIR, def.id), workdir, { recursive: true });
   // 迁移类任务先 seed data.db
   if (existsSync(path.join(workdir, "init_db.py"))) {
     const seed = spawnSync(PY, ["-X", "utf8", "init_db.py"], { cwd: workdir, encoding: "utf8" });
-    if (seed.status !== 0) return { id: def.id, status: "seed_failed", error: seed.stderr?.slice(0, 300) };
+    if (seed.status !== 0) return { id: def.id, trial, status: "seed_failed", error: seed.stderr?.slice(0, 300) };
+  }
+  // 严格模式：测试在开跑前移出工作区。档案里的「隐藏文件数」是判分自检的一部分。
+  const hidden = HIDDEN_TESTS ? hiddenNames(def) : [];
+  if (HIDDEN_TESTS) {
+    hideTests(workdir, hidden);
+    const leaked = hidden.filter((n) => existsSync(path.join(workdir, n)));
+    // 隐藏不成功就不许开跑：否则模型看到判据，整批读数失真。
+    if (leaked.length) {
+      return { id: def.id, trial, status: "runner_error", error: `测试未隐藏：${leaked.join(",")}`, passed: false };
+    }
   }
   const before = snapshot(workdir);
 
@@ -209,7 +369,8 @@ async function runTask(def, providerId) {
   // /run 是长请求：图跑到中断或终态才返回。绝不能 await 它——否则取消窗口永远
   // 赶不上趟（实测 coding-051：cancel 从第 4 秒被拖到第 109 秒，任务带着
   // notes.txt 的修改"成功"收场）。发出去就轮询，靠任务状态与取消端点推进。
-  const runPromise = api("POST", `/tasks/${task.json.id}/run`, { provider_id: providerId }).catch(
+  // 走 apiLong 而不是 fetch：后者 300s bodyTimeout 会把长任务掐断并误判成供应商失败。
+  const runPromise = apiLong("POST", `/tasks/${task.json.id}/run`, { provider_id: providerId }).catch(
     (error) => ({ status: 0, json: { error: String(error).slice(0, 200) } })
   );
   const early = await Promise.race([runPromise, Promise.resolve(null)]);
@@ -217,6 +378,8 @@ async function runTask(def, providerId) {
     const detail = JSON.stringify(early.json).slice(0, 200);
     // 首轮模型调用就 429/超时时，`/run` 会即刻把错误体交回来。这不是装置没搭好，
     // 是供应商按住了闸门——单独一类，交给外层按 provider_failed 重跑。
+    // 重跑会新建工作区；被放弃的这个后端任务必须收掉，否则它继续占着审批/子进程。
+    await api("POST", `/tasks/${task.json.id}/cancel`).catch(() => {});
     return { id: def.id, status: isProviderFailure(detail) ? "provider_failed" : "setup_failed", error: detail };
   }
 
@@ -229,7 +392,8 @@ async function runTask(def, providerId) {
   let final = null;
   let approvals = 0;
   let cancelled = false;
-  while (Date.now() - t0 < 10 * 60_000) {
+  const TERMINAL = ["succeeded", "failed", "cancelled"];
+  while (Date.now() - t0 < TRIAL_MINUTES * 60_000) {
     await new Promise((r) => setTimeout(r, 1000));
     const { json } = await api("GET", `/tasks/${task.json.id}`);
     final = json;
@@ -256,16 +420,46 @@ async function runTask(def, providerId) {
     if (["succeeded", "failed", "cancelled"].includes(json.status)) break;
   }
   const elapsedMs = Date.now() - t0;
-  const run = await runPromise;
-  if (run.status !== 200) {
+  const windowExpired = !final || !TERMINAL.includes(final.status);
+  // `/run` 可能比轮询窗口晚很久才返回（2026-11-16 实测：coding-008 单题 25 分钟）。
+  // 窗口结束时 `final` 还是旧的 running 快照，直接据此判超时会把已经成功的任务
+  // 记成 timeout 再 cancel 掉。这里以服务端最新状态为准；请求仍未返回时最多再等
+  // 一分钟，之后主动 cancel 并给后端 30 秒落终态。
+  const run = await Promise.race([
+    runPromise,
+    new Promise((resolve) => setTimeout(() => resolve(null), 60_000)),
+  ]);
+  if (!final || !TERMINAL.includes(final.status)) {
+    const refreshed = await api("GET", `/tasks/${task.json.id}`).catch(() => ({}));
+    if (refreshed.json?.status) final = refreshed.json;
+  }
+  if (!final || !TERMINAL.includes(final.status)) {
+    await api("POST", `/tasks/${task.json.id}/cancel`).catch(() => {});
+    for (let i = 0; i < 30; i += 1) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const { json } = await api("GET", `/tasks/${task.json.id}`).catch(() => ({}));
+      if (json?.status && TERMINAL.includes(json.status)) {
+        final = json;
+        break;
+      }
+    }
+  }
+  if (run && run.status !== 200 && !(final && TERMINAL.includes(final.status))) {
     // 供应商限流/不可达（429 等）不是装置坏：归到 provider_failed 走外层退避重试，
     // 不让它静默记成 setup_failed（装置问题）从而被漏掉重跑（上一轮整例 429 即此路径）。
+    // 重跑会新建工作区；后端任务若还活着必须收掉。
     const detail = JSON.stringify(run.json).slice(0, 200);
+    await api("POST", `/tasks/${task.json.id}/cancel`).catch(() => {});
     return { id: def.id, status: isProviderFailure(detail) ? "provider_failed" : "setup_failed", error: detail };
   }
-  if (!final || !["succeeded", "failed", "cancelled"].includes(final.status)) {
+  if (!final || !TERMINAL.includes(final.status)) {
     await api("POST", `/tasks/${task.json.id}/cancel`).catch(() => {});
-    return { id: def.id, status: "timeout", elapsedMs, error: final?.status };
+    return { id: def.id, trial, status: "timeout", elapsedMs, error: final?.status };
+  }
+  // 超窗后我们自己 cancel 出来的 cancelled 不是取消类任务的「预期取消」——
+  // 它是没能在窗口内收尾，按 timeout 记（不进有效采样分母），不冒充取消能力。
+  if (windowExpired && final.status === "cancelled" && def.expectedStatus !== "cancelled") {
+    return { id: def.id, trial, status: "timeout", elapsedMs, error: "window_expired" };
   }
 
   const ev = await api("GET", `/tasks/${task.json.id}/evidence`);
@@ -277,7 +471,10 @@ async function runTask(def, providerId) {
   if (providerFailure) console.log(`\n  [provider] ${def.id}: ${failureReason.slice(0, 120)}`);
   const after = snapshot(workdir);
   const { changed, added } = diffSnapshot(before, after);
-  const touched = [...changed, ...added];
+  // 隐藏测试被 agent 自己写出来/改掉：先记账，再无条件用原版覆盖后才判分。
+  // 它不计入「误修改文件」（那是业务文件纪律），但单独列出——判分不靠 agent 的测试。
+  const hiddenTouched = hidden.filter((f) => f in after);
+  const touched = [...changed, ...added].filter((f) => !hidden.includes(f));
   const expectedTouched = def.expectedFiles.filter((f) => touched.includes(f));
   // 任务定义可声明 testSideEffectFiles：pytest 一跑就会写出的数据文件（如 save() 落盘）
   // 不算 agent 误改——但 changedFiles 仍如实记录全集，报告里看得到。
@@ -289,17 +486,20 @@ async function runTask(def, providerId) {
     (f) => !def.expectedFiles.includes(f) && !sideEffects.includes(f),
   );
 
-  // testCommand 真实执行
+  // testCommand 真实执行。严格模式下先把原版隐藏测试装回（覆盖 agent 同名文件），
+  // 判分只认外部测试，不认 agent 自己写的验证。
   let testExit = null;
   let testTail = "";
   if (def.expectedStatus === "succeeded") {
-    const parts = def.testCommand.split(" ");
-    // testCommand 里的裸 python 必须换成评测 venv python：系统 PATH 上的
-    // Python 没装 pytest，会让所有 pytest 任务假阴。
-    const argv0 = /^python(\.exe)?$/.test(parts[0]) ? PY : parts[0];
-    const r = spawnSync(argv0, parts.slice(1), { cwd: workdir, encoding: "utf8", timeout: 60_000, shell: true });
-    testExit = r.status;
-    testTail = `${r.stdout ?? ""}${r.stderr ?? ""}`.slice(-400);
+    if (HIDDEN_TESTS) {
+      installHiddenTests(def, workdir);
+      if (!hiddenTestsIntact(def, workdir)) {
+        return { id: def.id, trial, status: "runner_error", error: "隐藏测试装回校验失败", passed: false };
+      }
+    }
+    const r = runTestCommand(def, workdir);
+    testExit = r.exit;
+    testTail = r.tail;
   }
 
   // 交付正文单独取：risks 里会原样引用验收条件（例如「交付文本不含「已完成」」），
@@ -342,6 +542,11 @@ async function runTask(def, providerId) {
     ),
   };
   const passed = Object.values(checks).every(Boolean);
+  // Anthropic 口径的「解出」：终态符合预期且外部隐藏测试全绿。文件纪律仍由 passed
+  // （全部 checks）单独把关，两者分开报，避免把「多写了一个文件」混进解出率。
+  const solved =
+    final.status === def.expectedStatus &&
+    (def.expectedStatus === "cancelled" ? true : testExit === 0);
 
   // 证据包的 usage 段是唯一权威（§4.3）：按账本行汇总，带 by_model 与来源标记。
   // 旧路径 task.token_usage 从来不存在——之前 totalTokens=0 是读错了地方，不是没账。
@@ -363,7 +568,11 @@ async function runTask(def, providerId) {
   };
   return {
     id: def.id,
+    trial,
     category: def.category,
+    hiddenFiles: hidden.length,
+    hiddenTouched,
+    solved,
     // provider_failed 只表示"这一例的终态是供应商造成的"，判分细节仍原样留在 checks 里。
     status: providerFailure ? "provider_failed" : final.status,
     agentStatus: final.status,
@@ -383,6 +592,46 @@ async function runTask(def, providerId) {
 }
 
 /* ── 主流程 ── */
+const defs = readdirSync(TASKS_DIR)
+  .filter((f) => f.endsWith(".json"))
+  .map((f) => JSON.parse(readFileSync(path.join(TASKS_DIR, f), "utf8")))
+  .filter((d) => (ONLY ? ONLY.split(",").map((s) => s.trim()).includes(d.id) : true))
+  .slice(0, LIMIT);
+
+// 参考对照先跑：对照不过，后面模型读数一律作废（与 uibench 的 rc=2 同一口径）。
+let controls = [];
+if (CONTROL) {
+  console.log(`参考对照：${defs.length} 题（原始 fixture 跑隐藏测试必须红，refs/ 必须绿）`);
+  controls = defs.map(runControl);
+  for (const c of controls) {
+    console.log(
+      `  ${c.passed ? "✓" : "✗"} ${c.id} 原始 exit=${c.pristineExit} 参考 exit=${c.refExit}` +
+        (c.hiddenRemoved !== undefined ? ` 移出测试=${c.hiddenRemoved} 装回一致=${c.testsIntact}` : "") +
+        (c.error ? ` (${c.error})` : "") +
+        (c.missingExpected?.length ? ` 缺文件=${c.missingExpected.join(",")}` : "")
+    );
+    if (!c.passed) console.log(`    原始尾部: ${c.pristineTail}\n    参考尾部: ${c.refTail}`);
+  }
+  const bad = controls.filter((c) => !c.passed);
+  if (bad.length) {
+    console.error(`✗ 参考对照未通过 ${bad.length} 题：${bad.map((c) => c.id).join(", ")}——本次读数作废，不出分`);
+    if (REPORT) {
+      mkdirSync(path.dirname(path.resolve(REPORT)), { recursive: true });
+      writeFileSync(path.resolve(REPORT), JSON.stringify({ controls, summary: { control: "failed" } }, null, 2), "utf8");
+    }
+    process.exit(2);
+  }
+  console.log(`✓ 参考对照 ${controls.length}/${controls.length} 通过`);
+  if (!MOCK && !PROVIDER_ID) {
+    // 只跑对照时也落盘：testsIntact / leakedTests 是「判据没被模型污染」的证据。
+    if (REPORT) {
+      mkdirSync(path.dirname(path.resolve(REPORT)), { recursive: true });
+      writeFileSync(path.resolve(REPORT), JSON.stringify({ controls, summary: { control: "passed" } }, null, 2), "utf8");
+    }
+    process.exit(0);
+  }
+}
+
 await ensureHealth();
 if (MOCK) await startMock();
 let providerId = PROVIDER_ID;
@@ -399,16 +648,11 @@ if (MOCK) {
   providerId = created.json.id;
 }
 
-const defs = readdirSync(TASKS_DIR)
-  .filter((f) => f.endsWith(".json"))
-  .map((f) => JSON.parse(readFileSync(path.join(TASKS_DIR, f), "utf8")))
-  .filter((d) => (ONLY ? ONLY.split(",").map((s) => s.trim()).includes(d.id) : true))
-  .slice(0, LIMIT);
-
-console.log(`开始评测 ${defs.length} 个任务（provider=${MOCK ? "mock" : providerId}）`);
+console.log(`开始评测 ${defs.length} 个任务 × ${TRIALS} 次（provider=${MOCK ? "mock" : providerId}${HIDDEN_TESTS ? "，隐藏测试" : ""}）`);
 const results = [];
 for (const def of defs) {
-  process.stdout.write(`- ${def.id} (${def.category}) … `);
+  for (let trial = 1; trial <= TRIALS; trial += 1) {
+  process.stdout.write(`- ${def.id} t${trial}/${TRIALS} (${def.category}) … `);
   let result;
   let attempts = 0;
   // 供应商限流（429）不是这例能力不够，给它干净的机会再判：
@@ -423,7 +667,7 @@ for (const def of defs) {
   for (;;) {
     attempts += 1;
     try {
-      result = await runTask(def, providerId);
+      result = await runTask(def, providerId, trial);
     } catch (error) {
       // 本地连接抖一下（fetch failed / ECONNRESET / 5xx）既不该记成 Agent 失败，
       // 也不该记成装置坏了（runner_error）——它就是供应商那一侧的网络问题，和 429 同属
@@ -444,16 +688,20 @@ for (const def of defs) {
     }
     if (result.status !== "provider_failed" || attempts > PROVIDER_RETRIES) break;
     const wait = PROVIDER_WAITS[attempts - 1];
-    console.log(`\n  ↻ 供应商限流，${wait / 1000}s 后重跑这一例（第 ${attempts + 1} 次）`);
+    // 把原因打出来：只写「供应商限流」会把「本地读证据时连接被服务端关掉」也读成
+    // 限流，事后只能去翻后端访问日志才看得清（2026-11-16 就是这么查的）。
+    const why = result.error ? `: ${String(result.error).slice(0, 120)}` : "";
+    console.log(`\n  ↻ 供应商/网络故障${why}，${wait / 1000}s 后重跑这一例（第 ${attempts + 1} 次）`);
     await new Promise((resolve) => setTimeout(resolve, wait));
   }
   result.attempts = attempts;
   results.push(result);
   console.log(result.passed ? "PASS" : `FAIL (${result.status}${result.error ? `: ${result.error}` : ""})`);
   // 免费档模型（如 glm flash）有 RPM 限制，全量连跑会被 429 打穿；--pause 拉开任务节奏。
-  if (PAUSE_SECONDS > 0 && def.id !== defs[defs.length - 1].id) {
+  if (PAUSE_SECONDS > 0 && results.length < defs.length * TRIALS) {
     console.log(`  ⏸ 间隔 ${PAUSE_SECONDS}s（--pause）`);
     await new Promise((resolve) => setTimeout(resolve, PAUSE_SECONDS * 1000));
+  }
   }
 }
 
@@ -508,8 +756,7 @@ const summary = {
   // 分母永远是"要跑几例"（55），不是"跑成了几例"：拿 judged 当分母，供应商一限流
   // 分母就跟着缩水，14 例没跑成也能印出 passRate 100%——这正是任务书 §2 不让做的
   // 「把失败藏进分母」。judged 只用来定位能力问题，不参与达标判定。
-  total: results.length,
-  judged: judged.length,
+  total: results.length,  judged: judged.length,
   setupFailed,
   runnerError: results.filter((r) => r.status === "runner_error").length,
   timedOut: results.filter((r) => r.status === "timeout").length,
@@ -542,12 +789,42 @@ const summary = {
   zeroChangeSuccessCount: judged.filter((r) => !r.checks?.noZeroChangeFalseSuccess).length,
   unauthorizedHighRisk: judged.filter((r) => !r.checks?.highRiskUnauthorized).length,
 };
+// Anthropic 式读数：pass@1 = 有效采样里「终态符合 + 隐藏测试全绿」的比例；
+// pass@k = 每题 k 次里至少一次解出的题占比。装置/供应商失败不进有效采样分母。
+const validTrials = results.filter((r) => r.checks && (r.solved === true || r.solved === false));
+const perTask = {};
+for (const r of results) {
+  const b = (perTask[r.id] ??= { trials: 0, valid: 0, solved: 0 });
+  b.trials += 1;
+  if (r.solved === true || r.solved === false) {
+    b.valid += 1;
+    if (r.solved) b.solved += 1;
+  }
+}
+for (const b of Object.values(perTask)) b.passAtK = b.solved > 0;
+const strict = {
+  hiddenTests: HIDDEN_TESTS,
+  trials: TRIALS,
+  effectiveTrials: validTrials.length,
+  passAt1: validTrials.length ? Math.round((validTrials.filter((r) => r.solved).length / validTrials.length) * 1000) / 1000 : null,
+  passAtK: defs.length
+    ? Math.round((Object.values(perTask).filter((b) => b.passAtK).length / defs.length) * 1000) / 1000
+    : null,
+  hiddenTouchedCount: results.reduce((s, r) => s + (r.hiddenTouched?.length ?? 0), 0),
+  perTask,
+};
+summary.strict = strict;
 console.log("\n===== 基线汇总 =====");
 console.log(JSON.stringify(summary, null, 2));
+console.log("\n===== 严格模式读数 =====");
+console.log(JSON.stringify(strict, null, 2));
+if (controls.length) {
+  console.log(`\n参考对照：${controls.filter((c) => c.passed).length}/${controls.length} 通过`);
+}
 
 if (REPORT) {
   mkdirSync(path.dirname(path.resolve(REPORT)), { recursive: true });
-  writeFileSync(path.resolve(REPORT), JSON.stringify({ summary, results }, null, 2), "utf8");
+  writeFileSync(path.resolve(REPORT), JSON.stringify({ summary, controls, results }, null, 2), "utf8");
   console.log(`报告已写入 ${path.resolve(REPORT)}`);
 }
 

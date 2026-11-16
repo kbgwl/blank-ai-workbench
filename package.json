@@ -10,7 +10,7 @@
     "test:api": "node scripts/run_api_tests.mjs",
     "test:web": "pnpm -C web test",
     "test:desktop": "node --test desktop/tests/gpu-guard.test.cjs desktop/tests/api-base.test.cjs desktop/tests/shell-policy.test.cjs desktop/tests/update-policy.test.cjs desktop/tests/main-wiring.test.cjs desktop/tests/splash.test.cjs desktop/tests/app-identity.test.cjs desktop/tests/sign-policy.test.cjs",
-    "test:evals": "node --test evals/tests/judgement.test.mjs",
+    "test:evals": "node --test evals/tests/judgement.test.mjs evals/tests/fetch-json.test.mjs",
     "check:versions": "node scripts/check_versions.mjs",
     "feed:update": "node scripts/make_update_feed.mjs",
     "runtime:desktop": "node scripts/prepare_desktop_runtime.mjs",

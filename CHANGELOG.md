@@ -1,6 +1,53 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）、Claude「Doing tasks」六条与无测试配置时的收尾空跑（#384–#386）、交付改动排除 scratchpad 自测脚本（#388）、空响应与零交付不许算成功（#394–#397）、玻璃题收场清场外移与前四条前端纪律（#401）、事故台题五条前端纪律与 id 引用同步（#402）、Anthropic 式 UI 评测装置与真跑（#403）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）、Claude「Doing tasks」六条与无测试配置时的收尾空跑（#384–#386）、交付改动排除 scratchpad 自测脚本（#388）、空响应与零交付不许算成功（#394–#397）、玻璃题收场清场外移与前四条前端纪律（#401）、事故台题五条前端纪律与 id 引用同步（#402）、Anthropic 式 UI 评测装置与真跑（#403）、Anthropic 式编码评测装置与七处诚实口径（#405–#411）
+
+- **Anthropic 式编码评测装置与七处诚实口径（#405–#411）**：
+  按 SWE-bench / Claude Code 的做法重做 55 题编码基准：开跑前把 `test_*.py` /
+  `conftest.py` 移出工作区，判分时把 `hidden/<id>/`（没有则 fixture 原版）覆盖装回并
+  逐字节复验；每题新建工作区、每题多次独立采样；`solved` = 终态符合 `expectedStatus`
+  且隐藏测试退出码 0。参考对照（`--control`）要求原始 fixture 跑隐藏测试必须红、
+  `refs/<id>/` 必须绿，任一不过 rc=2、不出分。pass@1 / pass@k 只在有效采样上计算，
+  setup/seed/runner/timeout/provider 失败都单独计数并点名，不并进解出率。
+  1. **旧读数撤回**：修复前 50/55 题的 `testCommand` 只定义 `def test_*` 就 0 退出，
+     `testPassRate=100%` 不能证明测试通过；只有严格模式下重烧的读数可引用。
+  2. **`/run` 长请求 300s 客户端超时（#406）**：undici 的 headersTimeout 把「跑到
+     终态才回响应」的长任务当成 `fetch failed`，runner 记 `provider_failed` 并换新
+     工作区重跑，而后端任务其实还活着。改走 `evals/lib/long-request.mjs`（node:http，
+     无客户端超时），放弃时先 cancel 后端任务。
+  3. **GET 撞 keep-alive 竞争（#407）**：读 `/evidence` 时服务端按 5s keep-alive
+     关连接，被外层 catch 记成供应商失败。GET 改走 `evals/lib/fetch-json.mjs`
+     （连接级错误重试 4 次），POST 不重试（建项目/建任务不幂等）。
+  4. **隐藏测试移出后产品校验必然 exit 5（#405）**：`run_tests` 与自选命令两条路
+     都把「命令是 pytest + 输出说没收集到测试」豁免成 skipped，别家脚本的 exit 5、
+     pytest 的 exit 1 照旧失败。另把覆盖命令首段的裸 `pytest` / `pytest.exe` 换成
+     同一解释器的 `-m pytest`（与不传 command 那一路同源），避免 9009 后模型去
+     满盘装 Python。
+  5. **Verifier 把 skipped 当成「改坏了测试配置」（#409）**：校验通道每个跳过分支
+     写机器可读的 `skip_code`；只有本轮确实动过测试文件或测试配置才算改坏，
+     `readonly` / `no_change` / `awaiting_approval` / `not_authorized` /
+     `env_unavailable` / `toolchain_missing` 与空串旧结论分开处理，`error` 那条
+     老路径不放宽。
+  6. **cmd.exe 吞 `;`（#410）**：`python -m pytest; echo …` 在 cmd 下模块名读成
+     `pytest;`，回执 `No module named pytest;` 被认成「pytest 没装」。新增
+     `cmd_semicolon_hint`（cmd 方言 + 命令含 `;` + 回执出现带 `;` 的被吞 token 三条
+     同时成立），`run_tests` 在环境缺失之前先解释，`run_shell` 的非零退出回执同样
+     带上；只解释不改写命令。
+  7. **链式 `run_tests` 的链尾裸解释器（#411）**：`python -m pytest 2>nul ||
+     python -m unittest 2>nul || python -c …` 里首段被解析成项目解释器，后两段的裸
+     `python` 仍落到 PATH 上的商店占位符；`2>nul` 吞掉报错但退出码 9009 顶替了整条
+     命令的结果，`run_tests` 回「测试命令不存在：系统找不到 python.exe」，模型据此
+     花 10 分钟 `where` / `reg` / `winget` 找解释器（coding-031 t1）。新增
+     `normalize_chained_interpreters`：只在**每一段首词都是裸 python/pytest** 时逐段
+     解析成同一解释器，分隔符与 `2>nul` 原样保留；显式路径、`set PATH`、其它程序
+     整条不动。另在 `missing_command` 分支区分「段首没启动」与「链尾没启动」：前半段
+     确有测试输出时不再诬告段首，明确写「这不是环境缺 Python，别去装运行时」。
+  判据：`services/api/tests/test_verifier_skipped_validation_v409.py`（5）、
+  `services/api/tests/test_cmd_semicolon_v410.py`（8）、
+  `services/api/tests/test_run_tests_chain_v411.py`（11）、
+  `services/api/tests/test_run_tests_detect_v152.py`、`test_product_gaps_ui_v166.py`、
+  `evals/tests/fetch-json.test.mjs`；变异（#410 五组、#411 四组）分别只红对应判据。
+  教训与实测形状记在 `evals/benchmarks/coding/README.md`。
 
 - **Anthropic 式 UI 评测装置与真跑（#403）**：
   新增 `evals/uibench/`：同一提示词（事故指挥台，17 组 38 条隐藏判据）对同一供应商做多次

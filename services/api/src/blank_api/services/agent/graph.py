@@ -148,6 +148,7 @@ from blank_api.services.tools.skills import (
     activate_from_tool_results,
     render_skill_activation,
 )
+from blank_api.services.tools.testing import is_pytest_no_tests
 
 MAX_REPAIR_ROUNDS = 3
 # 审查最多跑几轮。审查不通过会回到执行，而执行不一定有新东西可改；没有这个上限，
@@ -4828,6 +4829,12 @@ def _self_run_validation(results: list[dict]) -> dict | None:
     exit_code = data.get("exit_code")
     if not isinstance(exit_code, int) or isinstance(exit_code, bool):
         return None
+    if exit_code == 5 and is_pytest_no_tests(
+        command, f"{item.get('output') or ''} {data.get('stdout') or ''}"
+    ):
+        # 没收集到测试 ≠ 测试失败：这不是「当前代码好不好」的证据，交给后面的
+        # run_tests / 跳过判定，别把模型引去修一个不存在的 bug。
+        return None
     passed = item.get("status") == "ok" and exit_code == 0
     return {
         "command": command,
@@ -4874,7 +4881,9 @@ def _test_command_detected(session: AgentSession) -> bool | None:
         return None
 
 
-def _skipped_validation(reason: str, *, command: str = "", output_tail: str = "") -> dict:
+def _skipped_validation(
+    reason: str, *, command: str = "", output_tail: str = "", skip_code: str = ""
+) -> dict:
     """构造「本次没有自动化校验」的结论。
 
     ``passed`` 必须是 ``None`` 而不是 ``True``。控制流走 ``status == "skipped"``
@@ -4882,8 +4891,12 @@ def _skipped_validation(reason: str, *, command: str = "", output_tail: str = ""
     会进 ``validation.completed`` 事件、任务 extra 和前端时间线。写成 True 就等于
     对用户说"测试跑过且通过了"，而实际上一行都没跑——正是 AGENTS 里禁止的
     「把没验过说成验过」。收成一个函数也是为了这个：新增跳过分支时没法各写一遍 True。
+
+    ``skip_code`` 是给 Verifier 读的机器可读原因：skipped 本身说明不了代码好坏，
+    但「隐藏测试被移出后 pytest exit 5」和「本轮把测试配置改坏」在旧规则里长得
+    一样（2026-11-16 coding-008 t2 实测）。原因字符串会变，语义不变。
     """
-    return {
+    validation = {
         "command": command,
         "passed": None,
         "status": "skipped",
@@ -4892,6 +4905,9 @@ def _skipped_validation(reason: str, *, command: str = "", output_tail: str = ""
         "output_tail": output_tail,
         "skipped_reason": reason,
     }
+    if skip_code:
+        validation["skip_code"] = skip_code
+    return validation
 
 
 async def _ask_run_tests_approval(
@@ -5004,12 +5020,16 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
     if state.get("readonly") or session.readonly:
         # 只读调研里被拒掉的 run_tests 也会出现在 results 里。不在这里提前返回，
         # 它会走进下面的测试判定，拿一个 refused 当失败，然后把整个任务判成没通过。
-        validation = _skipped_validation("只读调研，未改动任何文件，无需执行测试")
+        validation = _skipped_validation(
+            "只读调研，未改动任何文件，无需执行测试", skip_code="readonly"
+        )
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}
     if not executed and not changed:
         # 纯问答/纯排查：没有可校验的产物，直接放行，不要凭空造一条失败
-        validation = _skipped_validation("本次没有改动任何文件，无需执行测试")
+        validation = _skipped_validation(
+            "本次没有改动任何文件，无需执行测试", skip_code="no_change"
+        )
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}
     if executed:
@@ -5046,6 +5066,7 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
             validation = _skipped_validation(
                 "工作区没有可识别的测试配置（pytest 配置或 package.json 的 test 脚本）",
                 command="run_tests",
+                skip_code="no_test_config",
             )
             await session.recorder.add("validation.completed", node, validation)
             return {"validation": validation}
@@ -5061,7 +5082,11 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
                     session, node, validation_decision
                 )
                 if not granted:
-                    validation = _skipped_validation("命令执行未获授权，测试没有执行", command="run_tests")
+                    validation = _skipped_validation(
+                        "命令执行未获授权，测试没有执行",
+                        command="run_tests",
+                        skip_code="not_authorized",
+                    )
                     await session.recorder.add("validation.completed", node, validation)
                     return {"validation": validation}
         # 批准后必须有「开始执行」这一半事件，否则前端只看到 granted + completed，
@@ -5108,6 +5133,7 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
             "工作区没有可识别的测试配置（pytest 配置或 package.json 的 test 脚本），本次未做自动化校验",
             command=data.get("command") or "run_tests",
             output_tail=hint[-2000:],
+            skip_code="no_test_config",
         )
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}
@@ -5115,11 +5141,18 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         # 工具自己判定「这次跑不了」（典型：Go 项目，而本机没有 go 工具链）。
         # 必须把工具给的 reason 带出来：收尾文案会读它，不能让用户只看到一句
         # 空泛的「未做自动化校验」，然后自己翻证据包才知道缺的是 Go。
+        if data.get("no_tests_collected"):
+            tool_skip_code = "no_tests_collected"
+        elif data.get("missing_test_runner"):
+            tool_skip_code = "toolchain_missing"
+        else:
+            tool_skip_code = ""
         validation = _skipped_validation(
             str(data.get("skipped_reason") or payload.get("message") or "")
             or "本次没有执行自动化校验",
             command=data.get("command") or "run_tests",
             output_tail=str(payload.get("message") or payload.get("output") or "")[-2000:],
+            skip_code=tool_skip_code,
         )
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}
@@ -5131,6 +5164,7 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
             "测试在等待你批准，本次未执行；批准后重跑即可拿到结论",
             command=data.get("command") or "run_tests",
             output_tail=str(payload.get("message") or payload.get("output") or "")[-2000:],
+            skip_code="awaiting_approval",
         )
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}
@@ -5147,6 +5181,7 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
             reason,
             command=data.get("command") or "run_tests",
             output_tail=str(payload.get("message") or payload.get("output") or "")[-2000:],
+            skip_code="not_authorized" if status == "denied" else "env_unavailable",
         )
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}

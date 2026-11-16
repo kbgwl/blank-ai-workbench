@@ -34,6 +34,17 @@ def _shell(command: str, exit_code: int = 0) -> dict:
     }
 
 
+def _shell_out(command: str, exit_code: int, output: str) -> dict:
+    ok = exit_code == 0
+    return {
+        "tool": "run_shell",
+        "status": "ok" if ok else "failed",
+        "ok": ok,
+        "data": {"command": command, "exit_code": exit_code},
+        "output": output,
+    }
+
+
 # ── 交付：文件名与入口 ────────────────────────────────────────────────────
 
 
@@ -93,6 +104,37 @@ def test_failed_self_run_is_a_failed_validation_not_a_skip():
     assert validation is not None
     assert validation["status"] == "failed"
     assert validation["passed"] is False
+
+
+def test_pytest_exit5_is_not_evidence_of_failure():
+    """pytest exit 5 = 没收集到测试，不是测试没通过。
+
+    严格评测把隐藏测试移出工作区后，agent 常跑 `pytest --collect-only` 或裸 `pytest`
+    自检，拿到 exit 5。旧逻辑把它当失败判据，已经改对的代码被反复「修复」到失败
+    （2026-11-16 coding-008 t2 / coding-012 t2 实测）。
+    """
+    results = [
+        _write("fib.py"),
+        _shell_out("python -m pytest fib.py -q --collect-only", 5, "no tests ran in 0.01s"),
+    ]
+    assert graph._self_run_validation(results) is None
+
+
+def test_pytest_exit5_without_pytest_is_still_failed():
+    """exit 5 豁免只给 pytest 的「没收集到测试」，不能顺带放过别家脚本的非零退出。"""
+    validation = graph._self_run_validation(
+        [_write("app.js"), _shell_out("node _selftest.js", 5, "no tests ran")]
+    )
+    assert validation is not None
+    assert validation["status"] == "failed"
+
+
+def test_pytest_exit1_stays_failed():
+    validation = graph._self_run_validation(
+        [_write("fib.py"), _shell_out("pytest -q", 1, "1 failed, 0 passed in 0.02s")]
+    )
+    assert validation is not None
+    assert validation["status"] == "failed"
 
 
 # ── 清场：只移动本轮新建的临时脚本 ────────────────────────────────────────

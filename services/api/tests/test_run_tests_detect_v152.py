@@ -223,11 +223,48 @@ async def test_override_bare_python_in_container_uses_image_interpreter(tmp_path
     assert captured["argv"].startswith("python3 ")
 
 
+async def test_override_bare_pytest_uses_project_venv(tmp_path: Path, monkeypatch):
+    venv_python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_bytes(b"")
+    captured = await _capture(monkeypatch)
+    context = ToolContext(root=tmp_path, task_id="t-override-pytest-venv", session_factory=None)
+    outcome = await testing_mod._run_tests(context, {"command": "pytest -q"})
+    assert outcome.status == "ok"
+    assert captured["argv"].lstrip('"').startswith(str(venv_python))
+    assert captured["argv"].rstrip().endswith("-m pytest -q")
+
+
+async def test_override_bare_pytest_without_venv_uses_real_interpreter(tmp_path: Path, monkeypatch):
+    import sys
+
+    captured = await _capture(monkeypatch)
+    context = ToolContext(root=tmp_path, task_id="t-override-pytest-sys", session_factory=None)
+    outcome = await testing_mod._run_tests(context, {"command": "pytest -q"})
+    assert outcome.status == "ok"
+    # 与不传 command 的自动识别同源：裸 pytest 在 PATH 上不存在时不该 9009，
+    # 该换成真正装了 pytest 的解释器（真机 coding-026 因此烧掉 10 分钟窗口）。
+    assert captured["argv"].lstrip('"').startswith(sys.executable)
+    assert "-m pytest -q" in captured["argv"]
+
+
+async def test_override_bare_pytest_in_container_uses_image_interpreter(tmp_path: Path, monkeypatch):
+    captured = await _capture(monkeypatch)
+    monkeypatch.setattr(testing_mod, "runs_in_docker", lambda tier: True)
+    context = ToolContext(
+        root=tmp_path, task_id="t-override-pytest-docker", session_factory=None, sandbox_tier="docker"
+    )
+    outcome = await testing_mod._run_tests(context, {"command": "pytest -q"})
+    assert outcome.status == "ok"
+    assert captured["argv"].startswith("python3 -m pytest")
+
+
 @pytest.mark.parametrize(
     "command",
     [
         'set "PATH=C:\\Python312;%PATH%" && python -m pytest -q',  # 自己写 PATH 的，意图明确
         ".toolchain\\python312\\python.exe -m pytest -q",  # 显式解释器路径
+        ".venv\\Scripts\\pytest.exe -q",  # 显式运行器路径，不能抢换成别的解释器
         "npm test -- --runInBand",
     ],
 )
@@ -269,6 +306,58 @@ async def test_run_tests_keeps_failed_for_real_test_failure(tmp_path: Path, monk
     outcome = await testing_mod._run_tests(context, {"command": "python -m pytest -q"})
     assert outcome.status == "failed"
     assert outcome.data["passed"] is False
+
+
+# ── exit 5 = 没收集到测试，不是测试没通过 ──────────────────────────────────
+# 严格评测把隐藏测试移出工作区后，校验通道自动识别到 pytest 配置、跑 `pytest -q`
+# 必然拿 exit 5。旧逻辑记 failed，任务判「测试未通过」，交付里明明写着 fib 已改对
+# （2026-11-16 coding-008 t1 后端任务 1bc0bd26 实测）。
+
+
+async def test_pytest_exit5_no_tests_is_skipped_not_failed(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(testing_mod, "policy_gate", lambda *a, **k: None)
+    monkeypatch.setattr(
+        testing_mod,
+        "execute_command",
+        await _fake_execute(
+            {"stdout": "no tests ran in 0.01s", "exit_code": 5}
+        ),
+    )
+    context = ToolContext(root=tmp_path, task_id="t-no-tests", session_factory=None)
+    outcome = await testing_mod._run_tests(context, {"command": "python -m pytest -q"})
+    assert outcome.status == "skipped"
+    assert outcome.ok is False
+    assert outcome.data["no_tests_collected"] is True
+    assert outcome.data["exit_code"] == 5
+    # 回执要告诉模型别为这件事改代码（它拿到 failed 会去"修"不存在的 bug）
+    assert "不是测试未通过" in outcome.message
+
+
+async def test_exit5_from_non_pytest_command_stays_failed(tmp_path: Path, monkeypatch):
+    """exit 5 豁免只给 pytest 的「没收集到测试」，别家脚本非零退出照旧失败。"""
+    monkeypatch.setattr(testing_mod, "policy_gate", lambda *a, **k: None)
+    monkeypatch.setattr(
+        testing_mod,
+        "execute_command",
+        await _fake_execute({"stdout": "no tests ran", "exit_code": 5}),
+    )
+    context = ToolContext(root=tmp_path, task_id="t-exit5-node", session_factory=None)
+    outcome = await testing_mod._run_tests(context, {"command": "node _selftest.js"})
+    assert outcome.status == "failed"
+    assert outcome.data["passed"] is False
+
+
+async def test_pytest_exit5_without_no_tests_output_stays_failed(tmp_path: Path, monkeypatch):
+    """没有「没收集到测试」的原文时不能豁免：别的 exit 5 仍是失败。"""
+    monkeypatch.setattr(testing_mod, "policy_gate", lambda *a, **k: None)
+    monkeypatch.setattr(
+        testing_mod,
+        "execute_command",
+        await _fake_execute({"stdout": "internal error", "exit_code": 5}),
+    )
+    context = ToolContext(root=tmp_path, task_id="t-exit5-other", session_factory=None)
+    outcome = await testing_mod._run_tests(context, {"command": "python -m pytest -q"})
+    assert outcome.status == "failed"
 
 
 # ── 识别出了测试命令、但本机没有这个运行器（Go 样例在评测机上的真实形态）──

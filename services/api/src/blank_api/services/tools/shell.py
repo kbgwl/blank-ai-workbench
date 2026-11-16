@@ -826,9 +826,15 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
     if result["exit_code"] != 0:
         # 用错 shell 方言是最常见的失败原因，且一次提示就能改对，值得单独说清楚。
         hint = shell_mismatch_hint(command, stderr)
+        # `;` 被 cmd 吞进参数也长得像「命令不存在 / 环境缺东西」，模型会去满盘找
+        # Python（2026-11-16 coding-012 t1 真机烧掉整个窗口）。
+        semicolon = cmd_semicolon_hint(command, combined)
         message = f"命令返回非零退出码：{result['exit_code']}"
         if hint:
             message = f"{message}。{hint}"
+        if semicolon:
+            message = f"{message}。{semicolon}"
+        data_hint = "windows_cmd_syntax" if hint else ("windows_cmd_semicolon" if semicolon else "")
         return ToolOutcome(
             ok=False,
             status="failed",
@@ -843,7 +849,7 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
                 # 限额被内核拒的时候走的正是这一支（非零退出码），账必须记在这里才看得见。
                 "enforcement": result["enforcement"],
                 **_bypass_data(result),
-                **({"hint": "windows_cmd_syntax"} if hint else {}),
+                **({"hint": data_hint} if data_hint else {}),
             },
         )
     return ok(
@@ -900,6 +906,31 @@ _POSIX_TO_CMD = {
     "which": "where",
     "head": "more",
 }
+
+
+# cmd.exe 不把 `;` 当命令分隔符：整段都会变成前一条命令的参数，报错里的名字带着 `;`。
+# 真机（2026-11-16 严格评测 coding-012 t1）：`python -m pytest; echo ...` 得到
+# `No module named pytest;`，被 missing_runner 认成「pytest 没装」，模型据此烧掉
+# 整个 10 分钟窗口找 Python。只认这两个稳定形状，别把正常的测试失败算进来。
+_SWALLOWED_SEMICOLON = (
+    re.compile(r"No module named ['\"]?[^\s'\"]+;"),
+    re.compile(r"['\"][^'\"\r\n]+;['\"] (?:is not recognized|不是内部或外部命令)", re.IGNORECASE),
+)
+
+
+def cmd_semicolon_hint(command: str, output: str) -> str:
+    """命令里的 `;` 被 cmd.exe 当成参数吞掉时，给一句能立刻改对的提示。"""
+    if shell_dialect() != "cmd":
+        return ""
+    if ";" not in str(command or ""):
+        return ""
+    if not any(pattern.search(str(output or "")) for pattern in _SWALLOWED_SEMICOLON):
+        return ""
+    return (
+        "这条命令在 Windows cmd.exe 里跑：`;` 不是命令分隔符，后半段被当成了前一条命令的"
+        "参数（所以报错里的名字带着 `;`）。不要把这条报错当成环境缺东西——"
+        "要串联命令请用 `&&`，或者拆成两次调用后重跑。"
+    )
 
 
 def shell_mismatch_hint(command: str, stderr: str) -> str:
