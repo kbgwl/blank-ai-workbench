@@ -1,6 +1,32 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）、Claude「Doing tasks」六条与无测试配置时的收尾空跑（#384–#386）、交付改动排除 scratchpad 自测脚本（#388）、空响应与零交付不许算成功（#394–#397）、玻璃题收场清场外移与前四条前端纪律（#401）、事故台题五条前端纪律与 id 引用同步（#402）、Anthropic 式 UI 评测装置与真跑（#403）、Anthropic 式编码评测装置与七处诚实口径（#405–#411）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）、Claude「Doing tasks」六条与无测试配置时的收尾空跑（#384–#386）、交付改动排除 scratchpad 自测脚本（#388）、空响应与零交付不许算成功（#394–#397）、玻璃题收场清场外移与前四条前端纪律（#401）、事故台题五条前端纪律与 id 引用同步（#402）、Anthropic 式 UI 评测装置与真跑（#403）、Anthropic 式编码评测装置与七处诚实口径（#405–#411）、玻璃题第二轮五条前端纪律与入口引用核对（#420–#423）
+
+- **玻璃题第二轮五条前端纪律与入口引用核对（#420–#423）**：
+  升级后（Qoder CLI 1.1.89、WB 5.11.3、ours 0.11.2 + `0f2f222`）用同一提示词、同一 31 条判据
+  重跑：ours 26/31（+4）、WB 5/31、Qoder 7/31。把 ours 仍红的四处与新暴露的交付形态写进
+  `CODING_INSTRUCTIONS`，每条都有真机证据：
+  1. **WebGL 初始化失败不许静默**：ours 片元着色器直接引用顶点着色器的 attribute（`aPos`），
+     又没经 varying 传值，编译失败后只把画布 `display:none`，首屏背景整块消失（canvas 0×0、
+     draw 调用恒 0）。纪律要求编译后读 `getShaderInfoLog`、attribute 自己声明或经 varying 传入，
+     失败时在控制台说明原因并留静态背景兜底。
+  2. **rAF 常驻循环的启动门控必须可重启**：`parallaxTick()` 首次执行因 `pointer.active=false`
+     early-return，`pointermove` 只置 active 不重启循环，视差永远停在第一帧。纪律要求由状态
+     变化的事件重新启动，或循环常驻、在循环内部决定这一帧画不画。
+  3. **窄屏溢出先量再二分、Grid 轨道显式收窄**：`.hero__stage` 未写 `grid-template-columns`，
+     auto 轨道被 `.hero__panel` 的 max-content 撑到 394px，390px 视口出现横滚。纪律要求拿
+     `document.documentElement.scrollWidth` 对视口宽、对可疑区块 `display:none` 二分定位，
+     容器写 `minmax(0, 1fr)`、子项补 `min-width:0`。
+  4. **装饰层文字同样受 14px 下限**：`aria-hidden` 浮签里 0.78rem（12.5px）的可见文字不算豁免，
+     徽标、脚注这类小字一样要换算成 px 再判断。
+  5. **交付前按入口文件核对引用**：WB 与 Qoder 都只交 index.html + styles.css，
+     `<script src>` 指向的 app.js 缺失，静态服务器 404×5、24 条行为判据连片红、reveal 停在
+     opacity 0。纪律要求逐个确认 `<script src>` / `<link href>` / 图片字体目标真在交付目录，
+     并用静态服务器打开一次看控制台。
+  判据 `tests/test_frontend_discipline_v171.py` 6 条（写入前实测 6 红）；变异电池
+  `tests/mutation_battery_frontend_discipline_v171.py` 6/6：五格各删一条新纪律，红集合精确
+  等于对应判据（元测试同源红单列），第六格改 `compose_system_prompt` 组合逻辑只红三条输出
+  样式元测试；每格都核过锚点恰好 1 次、sha256 必变、字节级还原、还原后全绿。
 
 - **Anthropic 式编码评测装置与七处诚实口径（#405–#411）**：
   按 SWE-bench / Claude Code 的做法重做 55 题编码基准：开跑前把 `test_*.py` /
