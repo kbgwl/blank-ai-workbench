@@ -212,7 +212,7 @@ export function ProvidersView() {
                   </Button>
                 </div>
                 {selectedTest?.status === "done" && (
-                  <div className="rounded-lg border border-line bg-surface/60 px-3 py-2.5">
+                  <div className="rounded-lg border border-line bg-surface px-3 py-2.5">
                     <TestSummary result={selectedTest.result} />
                   </div>
                 )}

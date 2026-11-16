@@ -114,7 +114,7 @@ export function PlanPanel({ task, onChanged }: Props) {
   };
 
   return (
-    <section className="rounded-xl border border-line bg-surface-2/50 px-3.5 py-3">
+    <section className="rounded-xl border border-line bg-surface-2 px-3.5 py-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-baseline gap-2">
           <span className="font-mono text-[10px] tracking-wide text-faint uppercase">执行计划</span>
@@ -146,7 +146,7 @@ export function PlanPanel({ task, onChanged }: Props) {
       )}
 
       {(objective || doneWhen.length > 0) && (
-        <div className="mb-2.5 rounded-lg border border-line/70 bg-surface px-2.5 py-2">
+        <div className="mb-2.5 rounded-lg border border-line bg-surface px-2.5 py-2">
           {objective && <p className="text-[12px] leading-relaxed text-text/85">{objective}</p>}
           {doneWhen.length > 0 && (
             <ul className="mt-1 flex flex-col gap-0.5">
@@ -203,7 +203,7 @@ export function PlanPanel({ task, onChanged }: Props) {
                     className={[
                       "mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border text-[9px] transition-colors",
                       step.status === "completed"
-                        ? "border-brand bg-brand text-white"
+                        ? "border-brand bg-brand text-on-brand"
                         : step.status === "in_progress"
                           ? "border-brand/60 bg-brand/15 text-brand"
                           : "border-line bg-surface-3 text-transparent hover:border-line-strong",

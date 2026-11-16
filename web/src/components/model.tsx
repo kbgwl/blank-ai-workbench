@@ -53,7 +53,7 @@ export function useModel() {
 export function ModelSwitcher() {
   const { providers, modelId, setModelId } = useModel();
   const selected = providers.find((provider) => provider.id === modelId);
-  return <label className="flex items-center gap-2 rounded-md border border-line bg-surface/40 px-2 py-1 text-[11px] text-muted">
+  return <label className="flex items-center gap-2 rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-muted">
     <span className="text-faint">模型</span>
     <SelectPopover size="compact" ariaLabel="选择模型" value={modelId}
       disabled={providers.length === 0}

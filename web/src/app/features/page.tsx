@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { PageBody, PageHeader } from "@/components/page";
 
 type Feature = {
   id: string;
@@ -46,15 +47,14 @@ export default function FeaturesPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-6">
-      <header>
-        <div className="text-[11px] text-muted">空白格 / 功能</div>
-        <h1 className="mt-2 text-xl font-semibold tracking-tight">按需加载功能</h1>
-        <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-muted">核心保持轻量。启用功能后，相关工具、提示词和可选依赖才会进入当前工作区。</p>
-      </header>
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+    <PageBody>
+      <PageHeader
+        title="按需加载功能"
+        description="核心保持轻量。启用功能后，相关工具、提示词和可选依赖才会进入当前工作区。"
+      />
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {features.map((feature) => (
-          <article key={feature.id} className="flex min-h-32 flex-col justify-between rounded-lg border border-line bg-surface/30 p-4 transition-colors hover:border-line-strong">
+          <article key={feature.id} className="flex min-h-32 flex-col justify-between rounded-lg border border-line bg-surface p-4 transition-colors hover:border-line-strong">
             <div>
               <div className="flex items-center gap-2">
                 <span className={`size-1.5 rounded-full ${feature.status === "core" || feature.status === "installed" ? "bg-accent" : "bg-faint"}`} />
@@ -65,12 +65,16 @@ export default function FeaturesPage() {
             </div>
             <div className="mt-4 flex items-center justify-between gap-3">
               <span className="font-mono text-[10px] text-faint">{feature.dependency}</span>
-              {feature.status !== "core" && <button type="button" onClick={() => toggle(feature.id)} className={`rounded-md px-2.5 py-1.5 text-[11px] ${feature.status === "installed" ? "bg-surface-2 text-muted hover:text-text" : "bg-brand text-bg hover:bg-brand/85"}`}>{feature.status === "installed" ? "停用" : "启用"}</button>}
+              {feature.status !== "core" && <button type="button" onClick={() => toggle(feature.id)} className={`rounded-md px-2.5 py-1.5 text-[11px] ${
+                feature.status === "installed"
+                  ? "bg-surface-2 text-muted hover:text-text"
+                  : "bg-brand text-on-brand hover:bg-brand/90"
+              }`}>{feature.status === "installed" ? "停用" : "启用"}</button>}
             </div>
           </article>
         ))}
       </div>
       <p className="font-mono text-[10px] text-faint">重型依赖会在首次使用时询问安装；当前页面保存的是本机功能开关。</p>
-    </div>
+    </PageBody>
   );
 }

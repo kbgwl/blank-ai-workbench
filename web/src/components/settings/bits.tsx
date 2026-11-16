@@ -47,7 +47,7 @@ export function ParamBadge({ total, active }: { total: number; active: number })
           : `稠密模型：总参数 ${totalText}`
       }
       className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${
-        sparse ? "border-brand/25 bg-brand/[0.08] text-brand" : "border-line bg-surface-2/60 text-muted"
+        sparse ? "border-brand/25 bg-brand/[0.08] text-brand" : "border-line bg-surface-2 text-muted"
       }`}
     >
       {sparse ? `${totalText} / ${activeText}` : totalText}
@@ -59,7 +59,7 @@ export function Chip({ active, children }: { active: boolean; children: ReactNod
   return (
     <span
       className={`rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${
-        active ? "border-accent/30 bg-accent/10 text-accent" : "border-line bg-surface-2/60 text-faint line-through"
+        active ? "border-accent/30 bg-accent/10 text-accent" : "border-line bg-surface-2 text-faint line-through"
       }`}
     >
       {children}
@@ -150,7 +150,7 @@ export function StatusLine({ result }: { result: TestResult }) {
 
 export function StatTile({ label, value, tone = "text" }: { label: string; value: string; tone?: "text" | "warn" }) {
   return (
-    <div className="rounded-lg border border-line bg-surface/60 px-3 py-2">
+    <div className="rounded-lg border border-line bg-surface px-3 py-2">
       <div className="font-mono text-[10px] tracking-wide text-faint uppercase">{label}</div>
       <div className={`mt-0.5 text-[15px] font-semibold ${tone === "warn" ? "text-warn" : "text-text"}`}>{value}</div>
     </div>

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Panel } from "@/components/panel";
+import { PageBody, PageHeader } from "@/components/page";
 import { AgentRuntimePanel } from "./agent-runtime-panel";
 import { ChannelsPanel } from "./channels-panel";
 import { FeatureFlagsPanel } from "./feature-flags-panel";
@@ -196,29 +197,23 @@ export function SettingsView() {
   const section = SECTIONS[index] ?? SECTIONS[0];
 
   return (
-    <div className="mx-auto w-full max-w-[1360px] px-4 py-6 sm:px-6 lg:px-8">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 font-mono text-[10px] tracking-[0.16em] text-faint uppercase">
-            <span className="size-1.5 rounded-full bg-brand" />
-            本机工作区配置
-          </div>
-          <h1 className="mt-2 text-[24px] font-semibold tracking-tight">设置</h1>
-          <p className="mt-1 max-w-[660px] text-[13px] leading-relaxed text-muted">
-            按分类管理这台机器上的运行方式。改动只保存在本机后端，不会同步到其他设备。
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <span className="rounded-md border border-line bg-surface px-2.5 py-1 font-mono text-[10px] text-faint">
-            {SECTIONS.length} 个分类
-          </span>
-          <span className="rounded-md border border-brand/25 bg-brand/[0.06] px-2.5 py-1 font-mono text-[10px] text-brand">
-            API Key 加密存储
-          </span>
-        </div>
-      </header>
+    <PageBody>
+      <PageHeader
+        title="设置"
+        description="按分类管理这台机器上的运行方式。改动只保存在本机后端，不会同步到其他设备。"
+        actions={
+          <>
+            <span className="rounded-md border border-line bg-surface px-2.5 py-1 font-mono text-[10px] text-faint">
+              {SECTIONS.length} 个分类
+            </span>
+            <span className="rounded-md border border-brand/25 bg-brand/[0.06] px-2.5 py-1 font-mono text-[10px] text-brand">
+              API Key 加密存储
+            </span>
+          </>
+        }
+      />
 
-      <div className="mt-6 grid items-start gap-5 lg:grid-cols-[15.5rem_minmax(0,1fr)] xl:gap-8">
+      <div className="grid items-start gap-5 lg:grid-cols-[15.5rem_minmax(0,1fr)] xl:gap-8">
         <div className="min-w-0 lg:sticky lg:top-5">
           <nav
             aria-label="设置分类"
@@ -235,7 +230,7 @@ export function SettingsView() {
                   className={`relative flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors lg:w-full lg:gap-3 lg:py-2.5 ${
                     selected
                       ? "bg-surface-2 text-text"
-                      : "text-muted hover:bg-surface-2/60 hover:text-text"
+                      : "text-muted hover:bg-surface-2 hover:text-text"
                   }`}
                 >
                   {selected && (
@@ -260,7 +255,7 @@ export function SettingsView() {
               );
             })}
           </nav>
-          <div className="mt-3 hidden rounded-xl border border-line bg-surface/60 p-3 lg:block">
+          <div className="mt-3 hidden rounded-xl border border-line bg-surface p-3 lg:block">
             <div className="flex items-center gap-2 text-[11px] font-medium text-muted">
               <svg {...iconProps} className="size-3.5">
                 <rect x="5" y="10" width="14" height="10" rx="2" />
@@ -277,12 +272,12 @@ export function SettingsView() {
         <section ref={contentRef} aria-labelledby="settings-section-title" className="min-w-0 scroll-mt-4">
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-4">
             <div className="flex min-w-0 items-start gap-3">
-              <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-brand/20 bg-brand/[0.06] text-brand">
+              <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-brand/20 bg-brand/[0.06] text-brand">
                 {section.icon}
               </span>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 id="settings-section-title" className="text-[18px] font-semibold tracking-tight">
+                  <h2 id="settings-section-title" className="text-[15px] font-semibold tracking-tight">
                     {section.label}
                   </h2>
                   <span className="rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-[10px] text-faint">
@@ -304,6 +299,6 @@ export function SettingsView() {
           </div>
         </section>
       </div>
-    </div>
+    </PageBody>
   );
 }

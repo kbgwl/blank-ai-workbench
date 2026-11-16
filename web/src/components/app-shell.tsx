@@ -15,6 +15,7 @@ const TITLES: Record<string, string> = {
   "/monitor": "监控",
   "/evidence": "证据库",
   "/skills": "技能",
+  "/tasks": "任务",
   "/tasks/detail": "任务详情",
   "/brainstorm": "头脑风暴",
   "/daily": "日常",
@@ -71,11 +72,11 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
-      <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-bg px-3">
+      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-canvas px-3">
         <Link
           href="/"
           title="返回工作台（Esc）"
-          className="flex shrink-0 items-center gap-1.5 rounded-md border border-line-strong bg-surface px-2 py-1 text-[12px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-text"
+          className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[12px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-text"
         >
           <svg viewBox="0 0 24 24" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
             <path d="m14 6-6 6 6 6" />
@@ -115,7 +116,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         )}
 
         <div className="ml-auto flex shrink-0 items-center gap-2.5">
-          <kbd className="hidden items-center gap-1 rounded-md border border-line bg-surface px-2 py-1 font-mono text-[10px] text-faint lg:flex">
+          <kbd className="hidden items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-faint lg:flex">
             {shortcutHint(PALETTE_SHORTCUT)} 命令
           </kbd>
           <ModelSwitcher />
@@ -123,7 +124,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <HealthPill />
         </div>
       </header>
-      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</main>
+      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-canvas">{children}</main>
       <CommandPalette />
     </div>
   );

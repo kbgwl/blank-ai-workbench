@@ -172,7 +172,7 @@ function PlanCard({ block }: { block: Extract<Block, { kind: "plan" }> }) {
                       className={[
                         "mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border font-mono text-[9px]",
                         step.status === "completed"
-                          ? "border-brand/60 bg-brand text-white"
+                          ? "border-brand/60 bg-brand text-on-brand"
                           : step.status === "in_progress"
                             ? "border-brand/60 bg-brand/15 text-brand"
                             : "border-line bg-surface-3 text-faint",
@@ -322,7 +322,7 @@ function ToolCard({ block }: { block: Extract<Block, { kind: "tool" }> }) {
   return (
     <CardShell
       block={block}
-      accent={failed ? "border-danger/30 bg-danger/[0.05]" : "border-line bg-surface/60"}
+      accent={failed ? "border-danger/30 bg-danger/[0.05]" : "border-line bg-surface"}
       icon={
         <span className={running ? "text-brand" : "text-muted"}>
           <BlockIcon kind="tool" />
@@ -492,7 +492,7 @@ function QuestionCard({
   return (
     <CardShell
       block={block}
-      accent={answered ? "border-line bg-surface/60" : "border-brand/35 bg-brand/[0.05]"}
+      accent={answered ? "border-line bg-surface" : "border-brand/35 bg-brand/[0.05]"}
       icon={
         <span className={answered ? "text-faint" : "text-brand"}>
           <BlockIcon kind="question" />
@@ -532,7 +532,7 @@ function QuestionCard({
                     className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${
                       active
                         ? "border-brand/50 bg-brand/15 text-text"
-                        : "border-line text-muted hover:border-line/80 hover:text-text"
+                        : "border-line text-muted hover:border-line hover:text-text"
                     } disabled:cursor-not-allowed disabled:opacity-50`}
                   >
                     {option.label}
@@ -553,7 +553,7 @@ function QuestionCard({
       ))}
       {!answered && activePreview && (
         // preview 是模型给的 HTML 片段：这里只按纯文本展示，绝不塞进 innerHTML。
-        <pre className="max-h-40 overflow-auto rounded-md border border-line bg-surface/70 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-text/85">
+        <pre className="max-h-40 overflow-auto rounded-md border border-line bg-surface p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-text/85">
           {activePreview}
         </pre>
       )}
@@ -664,7 +664,7 @@ function ResultCard({ block }: { block: Extract<Block, { kind: "result" }> }) {
       ? { accent: "border-accent/35 bg-accent/[0.06]", text: "text-accent", label: "结果", tag: "成功" }
       : block.status === "failed"
         ? { accent: "border-danger/35 bg-danger/[0.06]", text: "text-danger", label: "执行失败", tag: "失败" }
-        : { accent: "border-line bg-surface/60", text: "text-faint", label: "已取消", tag: "取消" };
+        : { accent: "border-line bg-surface", text: "text-faint", label: "已取消", tag: "取消" };
   return (
     <CardShell
       block={block}
@@ -691,7 +691,7 @@ function ResultCard({ block }: { block: Extract<Block, { kind: "result" }> }) {
 
 function ChangeCard({ block, onHighlight }: { block: Extract<Block, { kind: "change" }>; onHighlight: (path: string) => void }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface/50 px-3 py-2">
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
       <span className="text-text/80">
         <BlockIcon kind="change" />
       </span>

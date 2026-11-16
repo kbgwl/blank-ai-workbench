@@ -115,8 +115,8 @@ export function FileTree({ projectId, workspaceId, activePath, onOpen }: Props) 
                   active
                     ? "bg-surface-2 text-brand"
                     : entry.is_dir
-                      ? "text-text/90 hover:bg-surface-2/70"
-                      : "text-muted hover:bg-surface-2/70 hover:text-text"
+                      ? "text-text/90 hover:bg-surface-2"
+                      : "text-muted hover:bg-surface-2 hover:text-text"
                 }`}
               >
                 <span className={entry.is_dir ? "text-faint" : "w-3"}>

@@ -165,7 +165,7 @@ export function WorkspacePane({ project, onChanged }: Props) {
                 return (
                   <li
                     key={item.id}
-                    className="flex flex-col gap-1.5 rounded-lg border border-line bg-surface/60 px-3 py-2"
+                    className="flex flex-col gap-1.5 rounded-lg border border-line bg-surface px-3 py-2"
                   >
                     <div className="flex flex-wrap items-center gap-2">
                       <ActiveDot active={item.is_active} />

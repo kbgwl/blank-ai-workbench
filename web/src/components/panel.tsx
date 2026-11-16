@@ -10,12 +10,12 @@ export function Panel({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-lg border border-line/80 bg-surface/25">
-      <header className="flex items-start justify-between gap-3 border-b border-line/80 px-3.5 py-2.5">
+    <section className="rounded-lg border border-line bg-surface">
+      <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
         <h2 className="shrink-0 text-[13px] font-medium tracking-tight">{title}</h2>
-        {hint && <span className="min-w-0 text-right font-mono text-[10px] leading-relaxed text-faint">{hint}</span>}
+        {hint && <span className="min-w-0 truncate text-right font-mono text-[10.5px] text-faint">{hint}</span>}
       </header>
-      <div className="p-3">{children}</div>
+      <div className="p-4">{children}</div>
     </section>
   );
 }

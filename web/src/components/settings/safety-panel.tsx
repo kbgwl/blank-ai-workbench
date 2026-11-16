@@ -84,7 +84,7 @@ function ListEditor({
   return (
     <div className="flex flex-col gap-2">
       {items.length === 0 ? (
-        <p className="rounded-md border border-dashed border-line bg-surface-2/40 px-2.5 py-2 text-[11.5px] text-faint">
+        <p className="rounded-md border border-dashed border-line bg-surface-2 px-2.5 py-2 text-[11.5px] text-faint">
           {emptyText}
         </p>
       ) : (
@@ -92,7 +92,7 @@ function ListEditor({
           {items.map((item) => (
             <li
               key={item}
-              className="flex items-center justify-between gap-2 rounded-md border border-line bg-surface-2/50 px-2 py-1.5"
+              className="flex items-center justify-between gap-2 rounded-md border border-line bg-surface-2 px-2 py-1.5"
             >
               <code className="min-w-0 truncate font-mono text-[11.5px] text-text" title={item}>
                 {item}
@@ -376,7 +376,7 @@ export function SafetyPanel() {
             </Row>
           </div>
           {!safety.shell_enabled && (
-            <p className="mt-1 rounded-md border border-line bg-surface-2/50 px-2.5 py-2 text-[11px] leading-relaxed text-faint">
+            <p className="mt-1 rounded-md border border-line bg-surface-2 px-2.5 py-2 text-[11px] leading-relaxed text-faint">
               默认是禁止的：装好就能跑命令的产品，第一次误删就没人敢用了。需要 Agent 自己跑测试或构建时再打开。
             </p>
           )}
@@ -415,7 +415,7 @@ export function SafetyPanel() {
               />
             </div>
 
-            <div className="border-t border-line/70 pt-3">
+            <div className="border-t border-line pt-3">
               <div className="mb-1.5 flex items-center justify-between">
                 <span className="text-[12.5px] text-text">禁止的命令前缀</span>
                 <span className="font-mono text-[10px] text-faint">

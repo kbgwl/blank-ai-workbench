@@ -19,7 +19,7 @@ const STAGE_LABELS: Record<string, string> = {
 };
 
 const STAGE_STYLES: Record<string, string> = {
-  stable: "border-line bg-surface-2/60 text-muted",
+  stable: "border-line bg-surface-2 text-muted",
   beta: "border-warn/40 bg-warn/10 text-warn",
   deprecated: "border-danger/40 bg-danger/10 text-danger",
 };
@@ -36,7 +36,7 @@ function FlagRow({
   // 环境变量优先级最高：按钮点了也不会生效，所以直接禁用，别让人白点
   const locked = flag.source === "env";
   return (
-    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line/60 py-2.5 last:border-b-0">
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line py-2.5 last:border-b-0">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="font-mono text-[12px] text-text">{flag.name}</span>
@@ -45,7 +45,7 @@ function FlagRow({
           >
             {STAGE_LABELS[flag.stage] ?? flag.stage}
           </span>
-          <span className="rounded border border-line bg-surface-2/60 px-1 py-0.5 text-[10px] text-faint">
+          <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
             来自{SOURCE_LABELS[flag.source] ?? flag.source}
           </span>
           {locked && (
@@ -134,7 +134,7 @@ export function FeatureFlagsPanel() {
         </p>
       )}
 
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line/70 pt-2">
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
         <span className="text-[11px] text-faint">
           {notice || error || "开关值会写入设置文件；环境变量优先级更高，用来临时压过界面上的选择"}
         </span>

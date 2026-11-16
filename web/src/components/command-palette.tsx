@@ -88,7 +88,7 @@ export function CommandPalette() {
   return (
     <div
       data-overlay-open="command-palette"
-      className="fixed inset-0 z-50 flex items-start justify-center bg-text/25 px-4 pt-[12vh] backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-text/30 px-4 pt-[12vh]"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) setOpen(false);
       }}

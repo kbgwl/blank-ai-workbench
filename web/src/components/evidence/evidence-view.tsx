@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Panel } from "@/components/panel";
+import { PageBody, PageHeader } from "@/components/page";
 import { errorMessage } from "@/lib/http";
 import { formatDateTime } from "@/components/tasks/format";
 import {
@@ -100,14 +101,11 @@ export function EvidenceView() {
   );
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-5 py-6">
-      <header className="mb-5">
-        <h1 className="text-[17px] font-semibold tracking-tight">证据库</h1>
-        <p className="mt-1.5 max-w-2xl text-[12.5px] leading-relaxed text-muted">
-          每一次交付留下的验收条件、改动文件、测试结论与用量。点开一条看它当时凭什么说做完了——
-          这里不做汇总美化，只把记录原样摆出来。
-        </p>
-      </header>
+    <PageBody>
+      <PageHeader
+        title="证据库"
+        description="每一次交付留下的验收条件、改动文件、测试结论与用量。点开一条看它当时凭什么说做完了——这里不做汇总美化，只把记录原样摆出来。"
+      />
 
       <div className="mb-4 flex items-center gap-2">
         <div className="flex flex-1 items-center gap-1.5 rounded-lg border border-line-strong bg-surface px-2 py-1.5">
@@ -150,7 +148,7 @@ export function EvidenceView() {
             const evidence = cache[task.id] ?? null;
             const digest = evidence ? evidenceDigest(evidence) : null;
             return (
-              <div key={task.id} className="rounded-lg border border-line/70 bg-surface/40">
+              <div key={task.id} className="rounded-lg border border-line bg-surface">
                 <button
                   type="button"
                   onClick={() => void expand(task)}
@@ -168,7 +166,7 @@ export function EvidenceView() {
                 </button>
 
                 {expanded && (
-                  <div className="border-t border-line/70 px-3 py-2.5">
+                  <div className="border-t border-line px-3 py-2.5">
                     {loadingId === task.id && <p className="font-mono text-[11px] text-faint">读取证据…</p>}
                     {!loadingId && evidence === null && (
                       <p className="text-[11.5px] text-faint">这条没有可读的证据记录。</p>
@@ -238,7 +236,7 @@ export function EvidenceView() {
           })}
         </div>
       </Panel>
-    </div>
+    </PageBody>
   );
 }
 
@@ -254,10 +252,10 @@ function uniquePaths(evidence: Evidence) {
 function DigestChips({ digest }: { digest: EvidenceDigest }) {
   return (
     <span className="hidden shrink-0 items-center gap-1 md:flex">
-      <span className="rounded border border-line bg-surface-2/60 px-1 py-0.5 font-mono text-[9.5px] text-muted">
+      <span className="rounded border border-line bg-surface-2 px-1 py-0.5 font-mono text-[9.5px] text-muted">
         {digest.covered}/{digest.criteriaTotal} 验收
       </span>
-      <span className="rounded border border-line bg-surface-2/60 px-1 py-0.5 font-mono text-[9.5px] text-muted">
+      <span className="rounded border border-line bg-surface-2 px-1 py-0.5 font-mono text-[9.5px] text-muted">
         {digest.files} 文件
       </span>
       <span
@@ -266,7 +264,7 @@ function DigestChips({ digest }: { digest: EvidenceDigest }) {
             ? "border-accent/30 bg-accent/10 text-accent"
             : digest.test === "failed"
               ? "border-danger/25 bg-danger/[0.06] text-danger"
-              : "border-line bg-surface-2/60 text-faint"
+              : "border-line bg-surface-2 text-faint"
         }`}
       >
         {digest.test === "passed" ? "测试通过" : digest.test === "failed" ? "测试失败" : digest.testText}

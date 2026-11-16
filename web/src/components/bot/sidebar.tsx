@@ -28,6 +28,12 @@ function NavIcon({ id }: { id: NavId }) {
           <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l1.5 2h9A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-10Z" />
         </svg>
       );
+    case "monitor":
+      return (
+        <svg {...ICON} aria-hidden>
+          <path d="M3 12h4l2.5-6 4 12 2.5-6H21" />
+        </svg>
+      );
     case "evidence":
       return (
         <svg {...ICON} aria-hidden>
@@ -179,8 +185,8 @@ export function Sidebar(props: SidebarProps) {
   }
 
   return (
-    <aside className="flex w-[260px] shrink-0 flex-col border-r border-line bg-sidebar">
-      <div className="flex items-center gap-2 px-3 pt-3 pb-2">
+    <aside className="flex w-[264px] shrink-0 flex-col border-r border-line bg-sidebar">
+      <div className="flex items-center gap-2 px-3 pt-3 pb-2.5">
         <span className="grid size-6 shrink-0 place-items-center rounded-md bg-logo-bg">
           <span className="size-2 rounded-[2px] bg-logo-accent" />
         </span>
@@ -204,7 +210,7 @@ export function Sidebar(props: SidebarProps) {
         <button
           type="button"
           onClick={props.onNew}
-          className="flex w-full items-center gap-2 rounded-lg border border-line-strong bg-surface px-2.5 py-2 text-[12.5px] font-medium text-text transition-colors hover:border-brand/40 hover:bg-surface-2"
+          className="flex w-full items-center gap-2 rounded-md border border-line bg-surface px-2.5 py-[7px] text-[12.5px] font-medium text-text transition-colors hover:border-line-strong hover:bg-surface-2"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} className="size-3.5" aria-hidden>
             <path d="M12 5v14M5 12h14" />
@@ -214,7 +220,7 @@ export function Sidebar(props: SidebarProps) {
       </div>
 
       <div className="px-3 pb-2">
-        <div className="flex items-center gap-1.5 rounded-lg bg-surface-2 px-2 py-1.5">
+        <div className="flex items-center gap-1.5 rounded-md border border-transparent bg-surface-2 px-2 py-1.5 transition-colors focus-within:border-line-strong focus-within:bg-surface">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="size-3.5 shrink-0 text-faint" aria-hidden>
             <path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM16.5 16.5 21 21" />
           </svg>
@@ -232,7 +238,7 @@ export function Sidebar(props: SidebarProps) {
         <Link
           href="/projects"
           title="项目与目录"
-          className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] transition-colors ${
+          className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] transition-colors ${
             isNavActive(pathname, "/projects")
               ? "bg-surface-3 text-text"
               : "text-muted hover:bg-surface-2 hover:text-text"
@@ -277,7 +283,7 @@ export function Sidebar(props: SidebarProps) {
                     <button
                       type="button"
                       onClick={() => props.onSelect(thread.id)}
-                      className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 pr-8 text-left transition-colors ${
+                      className={`flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 pr-8 text-left transition-colors ${
                         active ? "bg-surface-3 text-text" : "text-muted hover:bg-surface-2 hover:text-text"
                       }`}
                     >
@@ -310,7 +316,7 @@ export function Sidebar(props: SidebarProps) {
             key={item.id}
             href={item.href}
             title={item.hint}
-            className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] transition-colors ${
+            className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] transition-colors ${
               isNavActive(pathname, item.href)
                 ? "bg-surface-3 text-text"
                 : "text-muted hover:bg-surface-2 hover:text-text"
@@ -323,7 +329,7 @@ export function Sidebar(props: SidebarProps) {
         <div className="my-1 border-t border-line" />
         <Link
           href="/team"
-          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-3.5 text-faint" aria-hidden>
             <circle cx="9" cy="8" r="3" />
@@ -333,7 +339,7 @@ export function Sidebar(props: SidebarProps) {
         </Link>
         <Link
           href="/settings"
-          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-3.5 text-faint" aria-hidden>
             <circle cx="12" cy="12" r="3" />

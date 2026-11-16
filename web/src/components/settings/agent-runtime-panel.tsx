@@ -207,7 +207,7 @@ export function AgentRuntimePanel() {
                 className={`rounded-md border px-3 py-2 text-left transition ${
                   active
                     ? "border-brand/60 bg-brand/10"
-                    : "border-line bg-surface/40 hover:border-line-strong"
+                    : "border-line bg-surface hover:border-line-strong"
                 }`}
               >
                 <div className="flex items-center justify-between">
@@ -408,7 +408,7 @@ export function AgentRuntimePanel() {
             {settings.tools.search ? "已开启" : "已关闭"}
           </button>
         </Row>
-        <div className="mt-1 flex flex-wrap items-center justify-between gap-2 border-t border-line/70 pt-2">
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
           <span className="text-[11px] text-faint">
             {notice || error || "改动立即写入设置文件，下一个任务生效"}
           </span>

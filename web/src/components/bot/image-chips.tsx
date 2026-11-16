@@ -45,7 +45,7 @@ export function DraftImageChips({
           )}
 
           {image.uploading && (
-            <span className="absolute inset-0 grid place-items-center bg-bg/70 font-mono text-[10px] text-muted">
+            <span className="absolute inset-0 grid place-items-center bg-$1 font-mono text-[10px] text-muted">
               上传中
             </span>
           )}

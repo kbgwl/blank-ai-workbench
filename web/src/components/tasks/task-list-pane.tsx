@@ -274,7 +274,7 @@ export function TaskListPane({
                     className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
                       active
                         ? "border-brand/40 bg-brand/[0.07]"
-                        : "border-line bg-surface/60 hover:border-line-strong hover:bg-surface-2/70"
+                        : "border-line bg-surface hover:border-line-strong hover:bg-surface-2"
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">

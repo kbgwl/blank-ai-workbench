@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   answerTask,
@@ -148,6 +149,9 @@ function eventHint(event: AgentEvent): string {
 }
 
 export function Workbench() {
+  // 首页没有顶栏，左栏就是唯一品牌与状态位；/tasks 走顶栏，左栏里就不再重复。
+  const pathname = usePathname();
+  const inShell = pathname !== "/" && pathname !== "/index" && pathname !== "/index.html";
   const [projects, setProjects] = useState<Project[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [tasks, setTasks] = useState<Task[] | null>(null);
@@ -462,16 +466,18 @@ export function Workbench() {
     <div className="grid h-full min-h-0 grid-cols-[240px_minmax(0,1fr)_300px] bg-bg text-text">
       {/* ── 左栏 ── */}
       <aside className="flex min-h-0 flex-col border-r border-line bg-sidebar">
-        <div className="flex items-center gap-2 px-3 pt-3 pb-2">
-          <span className="grid size-6 place-items-center rounded-[7px] bg-logo-bg">
-            <span className="size-2.5 rounded-[2px] bg-logo-accent" />
-          </span>
-          <span className="text-[13.5px] font-semibold tracking-tight">空白格</span>
-        </div>
+        {!inShell && (
+          <div className="flex items-center gap-2 px-3 pt-3 pb-2">
+            <span className="grid size-6 place-items-center rounded-[7px] bg-logo-bg">
+              <span className="size-2.5 rounded-[2px] bg-logo-accent" />
+            </span>
+            <span className="text-[13.5px] font-semibold tracking-tight">空白格</span>
+          </div>
+        )}
         <button
           type="button"
           onClick={newTask}
-          className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-line-strong bg-surface px-2.5 py-2 text-left text-[13px] font-medium hover:bg-surface-2"
+          className={`mx-3 mb-2 flex items-center gap-2 rounded-lg border border-line-strong bg-surface px-2.5 py-2 text-left text-[13px] font-medium hover:bg-surface-2 ${inShell ? "mt-3" : ""}`}
         >
           <Icon d="M12 5v14M5 12h14" />
           新的任务
@@ -547,12 +553,14 @@ export function Workbench() {
           <RailLink href="/projects" label="项目与工作区" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
           <div className="my-1.5 h-px bg-line" />
           <RailLink href="/settings" label="设置" d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4 0a1.7 1.7 0 0 0 .3 1.9 2 2 0 1 1-2.8 2.8 1.7 1.7 0 0 0-2.9 1.2 2 2 0 0 1-4 0 1.7 1.7 0 0 0-1.9-1.2 2 2 0 1 1-2.8-2.8A1.7 1.7 0 0 0 4.6 15a2 2 0 0 1 0-4 1.7 1.7 0 0 0 1.2-1.1 1.7 1.7 0 0 0-.3-1.9 2 2 0 1 1 2.8-2.8A1.7 1.7 0 0 0 11 4.6a2 2 0 0 1 4 0 1.7 1.7 0 0 0 2.9 1.2 2 2 0 1 1 2.8 2.8 1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1 2 2 0 0 1 0 4z" />
-          <p className="truncate px-2 pt-1 text-[10.5px] text-faint">
-            {provider?.model || "未配置模型"}
-          </p>
-          <p className="px-2 pt-0.5">
-            <HealthPill compact />
-          </p>
+          {!inShell && (
+            <>
+              <p className="truncate px-2 pt-1 text-[10.5px] text-faint">{provider?.model || "未配置模型"}</p>
+              <p className="px-2 pt-0.5">
+                <HealthPill compact />
+              </p>
+            </>
+          )}
         </div>
       </aside>
 
@@ -678,7 +686,7 @@ export function Workbench() {
 
         <div className="shrink-0 border-t border-line bg-bg py-3">
           <div className="mx-auto w-full max-w-[720px] px-6">
-            <div className="rounded-[10px] border border-line-strong bg-surface p-2.5 shadow-[0_1px_2px_rgba(16,24,40,0.04)] focus-within:border-brand">
+            <div className="rounded-lg border border-line-strong bg-surface p-2.5 shadow-sm focus-within:border-brand">
               <textarea
                 ref={composer}
                 value={draft}
@@ -702,7 +710,7 @@ export function Workbench() {
                   onClick={() => void onSend()}
                   disabled={busy !== null || !draft.trim()}
                   title={steerable ? "插话" : "创建并运行"}
-                  className="ml-auto grid size-[30px] place-items-center rounded-full bg-brand text-white transition-colors hover:brightness-110 disabled:opacity-40"
+                  className="ml-auto grid size-[30px] place-items-center rounded-full bg-brand text-on-brand transition-colors hover:brightness-110 disabled:opacity-40"
                 >
                   <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 19V5M5 12l7-7 7 7" />
@@ -838,7 +846,7 @@ export function Workbench() {
 }
 
 const primaryBtn =
-  "rounded-md bg-brand px-2.5 py-1 text-[12px] font-medium text-white transition-colors hover:brightness-110 disabled:opacity-50";
+  "rounded-md bg-brand px-2.5 py-1 text-[12px] font-medium text-on-brand transition-colors hover:brightness-110 disabled:opacity-50";
 const ghostBtn =
   "rounded-md border border-line-strong bg-surface px-2.5 py-1 text-[12px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-text disabled:opacity-50";
 

@@ -257,7 +257,7 @@ export function SelectPopover(props: SelectPopoverProps) {
               maxWidth: position?.maxWidth,
               maxHeight: Math.min(MAX_MENU_HEIGHT, position?.maxHeight ?? MAX_MENU_HEIGHT),
             }}
-            className="z-50 overflow-y-auto rounded-xl border border-line bg-surface py-1 shadow-[0_12px_32px_-12px_rgba(16,24,40,0.28)]"
+            className="z-50 overflow-y-auto rounded-lg border border-line bg-surface py-1 shadow-lg"
           >
             {options.length === 0 && (
               <p className="px-3 py-3 text-center text-[11.5px] text-faint">没有可选项</p>

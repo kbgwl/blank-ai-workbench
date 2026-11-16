@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Panel } from "@/components/panel";
+import { PageBody, PageHeader } from "@/components/page";
 import { errorMessage } from "@/lib/http";
 import {
   controlTrigger,
@@ -45,7 +46,7 @@ const CONTROL_BUTTON =
 
 function Stat({ label, value, hint, tone }: { label: string; value: number; hint?: string; tone?: "warn" }) {
   return (
-    <div className="rounded-lg border border-line/70 bg-surface/40 px-3 py-2.5">
+    <div className="rounded-lg border border-line bg-surface px-3 py-2.5">
       <p className="font-mono text-[10px] uppercase tracking-wide text-faint">{label}</p>
       <p className={`mt-1 text-[19px] font-semibold leading-none ${tone === "warn" ? "text-warn" : ""}`}>{value}</p>
       {hint && <p className="mt-1 text-[10.5px] leading-relaxed text-faint">{hint}</p>}
@@ -140,28 +141,25 @@ export function MonitorView() {
   const drafts = ordered.filter((item) => item.status === "draft").length;
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-5 py-6">
-      <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-[17px] font-semibold tracking-tight">监控</h1>
-          <p className="mt-1.5 max-w-2xl text-[12.5px] leading-relaxed text-muted">
-            它现在在盯什么。监督者每收到一条消息都会判一次——要不要动手、要不要问、要不要接着上一轮——
-            以前这件事只发生在事件流里，看不见。这里不做美化：等不到事件的待触发项、没接通的聊天软件，都照实写。
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <span className="font-mono text-[10px] text-faint">
-            {data.now ? `读数 ${clockTime(data.now)}` : "读取中…"}
-          </span>
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="rounded-md border border-line bg-surface-2 px-2.5 py-1 text-[11.5px] text-muted transition-colors hover:text-text"
-          >
-            刷新
-          </button>
-        </div>
-      </header>
+    <PageBody>
+      <PageHeader
+        title="监控"
+        description="它现在在盯什么。监督者每收到一条消息都会判一次——要不要动手、要不要问、要不要接着上一轮。这里不做美化：等不到事件的待触发项、没接通的聊天软件，都照实写。"
+        actions={
+          <>
+            <span className="font-mono text-[10.5px] text-faint">
+              {data.now ? `读数 ${clockTime(data.now)}` : "读取中…"}
+            </span>
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="rounded-md border border-line bg-surface px-2.5 py-1 text-[11.5px] text-muted transition-colors hover:border-line-strong hover:text-text"
+            >
+              刷新
+            </button>
+          </>
+        }
+      />
 
       {error && (
         <p className="mb-4 rounded-lg border border-danger/25 bg-danger/[0.04] px-3 py-2 text-[12px] text-danger">{error}</p>
@@ -191,7 +189,7 @@ export function MonitorView() {
             {watching.map((item) => (
               <div
                 key={item.task_id}
-                className="flex items-start gap-2 rounded-md border border-line/60 bg-surface/30 px-2.5 py-2"
+                className="flex items-start gap-2 rounded-md border border-line bg-surface px-2.5 py-2"
               >
                 <span className="mt-0.5 shrink-0 font-mono text-[10px] text-faint">
                   {clockTime(item.created_at)}
@@ -228,7 +226,7 @@ export function MonitorView() {
           )}
           <div className="space-y-1">
             {ordered.map((item) => (
-              <div key={item.task_id} className="flex items-center gap-2 rounded-md border border-line/60 bg-surface/30 px-2.5 py-2">
+              <div key={item.task_id} className="flex items-center gap-2 rounded-md border border-line bg-surface px-2.5 py-2">
                 <span
                   className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] ${STATUS_CLASS[statusTone(item.status)]}`}
                 >
@@ -263,7 +261,7 @@ export function MonitorView() {
           )}
           <div className="space-y-1">
             {pending.map((item) => (
-              <div key={item.trigger_id} className="rounded-md border border-line/60 bg-surface/30 px-2.5 py-2">
+              <div key={item.trigger_id} className="rounded-md border border-line bg-surface px-2.5 py-2">
                 <div className="flex items-start gap-2">
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[12.5px]">{item.goal || "（没有写要盯什么）"}</p>
@@ -324,7 +322,7 @@ export function MonitorView() {
           </p>
           <div className="space-y-1">
             {builtin.map((item) => (
-              <div key={item.id} className="flex items-start gap-2 rounded-md border border-line/60 bg-surface/30 px-2.5 py-1.5">
+              <div key={item.id} className="flex items-start gap-2 rounded-md border border-line bg-surface px-2.5 py-1.5">
                 <span className="mt-0.5 shrink-0 rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] text-accent">
                   已接通
                 </span>
@@ -338,7 +336,7 @@ export function MonitorView() {
               <div
                 key={item.id}
                 className={`flex items-start gap-2 rounded-md border px-2.5 py-1.5 ${
-                  item.connected ? "border-line/60 bg-surface/30" : "border-warn/25 bg-warn/[0.04]"
+                  item.connected ? "border-line bg-surface" : "border-warn/25 bg-warn/[0.04]"
                 }`}
               >
                 <span
@@ -356,7 +354,7 @@ export function MonitorView() {
             ))}
           </div>
           {imOff > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-line/60 bg-surface-2/50 px-2.5 py-1.5">
+            <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-1.5">
               <p className="min-w-0 flex-1 text-[10.5px] leading-relaxed text-muted">
                 {`${imOff} 个还没接通。企业微信/钉钉/飞书都在设置里配，不需要改代码：填凭据 → 验证 → 选收消息的方式。`}
               </p>
@@ -370,6 +368,6 @@ export function MonitorView() {
           )}
         </Panel>
       </div>
-    </div>
+    </PageBody>
   );
 }

@@ -1053,20 +1053,20 @@ export function BotApp() {
             )}
             {currentTurnView.length === 0 && !loadingConv && (
               <div className="flex min-h-[56vh] flex-col items-center justify-center text-center">
-                <span className="grid size-12 place-items-center rounded-2xl bg-logo-bg">
-                  <span className="size-4 rounded-[4px] bg-logo-accent" />
+                <span className="grid size-11 place-items-center rounded-xl bg-logo-bg">
+                  <span className="size-3.5 rounded-[3px] bg-logo-accent" />
                 </span>
-                <h2 className="mt-5 text-[24px] font-semibold tracking-tight">今天想做点什么？</h2>
-                <p className="mt-2 max-w-lg text-[13.5px] leading-relaxed text-muted">
+                <h2 className="mt-5 text-[22px] font-semibold tracking-tight">今天想做点什么？</h2>
+                <p className="mt-2 max-w-lg text-[13px] leading-relaxed text-muted">
                   说清楚要什么，它会先读代码再动手。改了什么、为什么改，都会留在对话里。
                 </p>
-                <div className="mt-8 grid w-full max-w-xl gap-2 sm:grid-cols-2">
+                <div className="mt-7 grid w-full max-w-xl gap-2 sm:grid-cols-2">
                   {SUGGESTIONS.map((text) => (
                     <button
                       key={text}
                       type="button"
                       onClick={() => setDraft(text)}
-                      className="rounded-xl border border-line bg-surface px-4 py-3 text-left text-[12.5px] leading-relaxed text-muted transition-colors hover:border-line-strong hover:bg-surface-2 hover:text-text"
+                      className="rounded-lg border border-line bg-surface px-3.5 py-2.5 text-left text-[12.5px] leading-relaxed text-muted transition-colors hover:border-line-strong hover:bg-surface-2 hover:text-text"
                     >
                       {text}
                     </button>

@@ -129,7 +129,7 @@ export function ProjectListPane({ projects, error, selectedId, onSelect, onCreat
                   className={`group rounded-xl border transition-colors ${
                     selected
                       ? "border-brand/40 bg-surface-2"
-                      : "border-line bg-surface/60 hover:border-line-strong"
+                      : "border-line bg-surface hover:border-line-strong"
                   }`}
                 >
                   <div className="flex items-start gap-2 p-3">

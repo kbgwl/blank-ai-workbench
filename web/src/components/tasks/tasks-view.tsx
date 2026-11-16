@@ -471,10 +471,10 @@ export function TasksView({ initialTaskId = null }: Props) {
         />
       </div>
 
-      <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-line/80 bg-surface/20">
-        <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line/80 px-2">
+      <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-surface">
+        <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-2">
           {rightTabs.map((tab) => (
-            <button key={tab.key} type="button" onClick={() => setRightTab(tab.key)} className={`rounded-md px-2.5 py-1.5 text-[11px] transition-colors ${rightTab === tab.key ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2/60 hover:text-text"}`}>
+            <button key={tab.key} type="button" onClick={() => setRightTab(tab.key)} className={`rounded-md px-2.5 py-1.5 text-[11px] transition-colors ${rightTab === tab.key ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2 hover:text-text"}`}>
               {tab.label}
             </button>
           ))}

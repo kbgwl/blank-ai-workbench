@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Panel } from "@/components/panel";
+import { PageBody, PageHeader } from "@/components/page";
 import { errorMessage } from "@/lib/http";
 import { formatDateTime } from "@/components/tasks/format";
 import {
@@ -150,14 +151,11 @@ export function SkillsView() {
   const pending = (candidates ?? []).filter((row) => row.status === "pending");
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-5 py-6">
-      <header className="mb-5">
-        <h1 className="text-[17px] font-semibold tracking-tight">技能</h1>
-        <p className="mt-1.5 max-w-2xl text-[12.5px] leading-relaxed text-muted">
-          技能是你确认过的做法，启用后会作为「工作偏好」进入每一轮任务的系统提示。
-          它压不过安全规则、审批规则和这次任务的目标——只能影响做事的方式。
-        </p>
-      </header>
+    <PageBody>
+      <PageHeader
+        title="技能"
+        description="技能是你确认过的做法，启用后会作为「工作偏好」进入每一轮任务的系统提示。它压不过安全规则、审批规则和这次任务的目标——只能影响做事的方式。"
+      />
 
       {error && (
         <p className="mb-4 rounded-lg border border-danger/25 bg-danger/[0.04] px-3 py-2 text-[12px] text-danger">
@@ -238,7 +236,7 @@ export function SkillsView() {
               return (
                 <div
                   key={skill.id}
-                  className="flex items-start gap-3 rounded-lg border border-line/70 bg-surface/40 px-3 py-2"
+                  className="flex items-start gap-3 rounded-lg border border-line bg-surface px-3 py-2"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
@@ -294,7 +292,7 @@ export function SkillsView() {
             {pending.map((candidate) => (
               <div
                 key={candidate.id}
-                className="flex items-start gap-3 rounded-lg border border-line/70 bg-surface/40 px-3 py-2"
+                className="flex items-start gap-3 rounded-lg border border-line bg-surface px-3 py-2"
               >
                 <div className="min-w-0 flex-1">
                   <p className="text-[12.5px] leading-relaxed">{candidate.text}</p>
@@ -325,6 +323,6 @@ export function SkillsView() {
           </div>
         </Panel>
       </div>
-    </div>
+    </PageBody>
   );
 }

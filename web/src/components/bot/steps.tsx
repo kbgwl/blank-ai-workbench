@@ -127,7 +127,7 @@ function ToolStepRow({ step }: { step: Extract<BotStep, { kind: "tool" }> }) {
 function PlanStep({ items }: { items: string[] }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="my-1.5 rounded-lg border border-line bg-surface-2/40">
+    <div className="my-1.5 rounded-lg border border-line bg-surface-2">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}

@@ -34,7 +34,7 @@ const STATE_LABELS: Record<string, string> = {
 const STATE_STYLES: Record<string, string> = {
   ready: "border-brand/40 bg-brand/10 text-brand",
   failed: "border-danger/40 bg-danger/10 text-danger",
-  skipped: "border-line bg-surface-2/60 text-muted",
+  skipped: "border-line bg-surface-2 text-muted",
 };
 
 const SCOPE_LABELS: Record<string, string> = {
@@ -84,13 +84,13 @@ function ServerRow({
   const style = STATE_STYLES[server.state] ?? STATE_STYLES.skipped;
   const pending = server.approval === "pending";
   return (
-    <div className="border-b border-line/60 py-2.5 last:border-b-0">
+    <div className="border-b border-line py-2.5 last:border-b-0">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="font-mono text-[12px] text-text">{server.name}</span>
         <span className={`rounded border px-1 py-0.5 text-[10px] ${style}`}>
           {STATE_LABELS[server.state] ?? server.state}
         </span>
-        <span className="rounded border border-line bg-surface-2/60 px-1 py-0.5 text-[10px] text-faint">
+        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
           {SCOPE_LABELS[server.scope] ?? server.scope}
         </span>
         {server.approval && server.approval !== "user" && (
@@ -104,7 +104,7 @@ function ServerRow({
             {APPROVAL_LABELS[server.approval] ?? server.approval}
           </span>
         )}
-        <span className="rounded border border-line bg-surface-2/60 px-1 py-0.5 text-[10px] text-faint">
+        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
           {server.transport || "未知传输"}
         </span>
         {server.state === "ready" && (
@@ -305,7 +305,7 @@ export function McpPanel() {
                   </p>
                 )}
               </div>
-              <pre className="overflow-x-auto rounded-md border border-line bg-surface-2/50 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-muted">
+              <pre className="overflow-x-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-muted">
                 {TEMPLATE}
               </pre>
               <p className="text-[11px] leading-relaxed text-faint">
@@ -336,7 +336,7 @@ export function McpPanel() {
             </>
           )}
 
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line/70 pt-2">
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
             <span className="min-w-0 flex-1 font-mono text-[10px] break-all text-faint">
               {data.config}
             </span>

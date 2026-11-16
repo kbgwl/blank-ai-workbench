@@ -67,7 +67,7 @@ export function LivePanels() {
             projects.slice(0, 4).map((project) => {
               const workspace = activeWorkspace(project);
               return (
-                <li key={project.id} className="rounded-lg border border-line bg-surface/60 px-3 py-2">
+                <li key={project.id} className="rounded-lg border border-line bg-surface px-3 py-2">
                   <div className="truncate text-[13px] font-medium">{project.name}</div>
                   {workspace ? (
                     <div className="mt-0.5 truncate font-mono text-[10px] text-faint">{workspace.path}</div>
@@ -95,7 +95,7 @@ export function LivePanels() {
             <StateLine>还没有供应商</StateLine>
           ) : (
             providers.slice(0, 4).map((provider) => (
-              <li key={provider.id} className="flex items-center gap-2 rounded-lg border border-line bg-surface/60 px-3 py-2">
+              <li key={provider.id} className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
                 <span className={`size-1.5 shrink-0 rounded-full ${provider.enabled ? "bg-accent" : "bg-faint"}`} />
                 <span className="min-w-0 flex-1 truncate text-[13px]">{provider.name}</span>
                 <span className="shrink-0 truncate font-mono text-[10px] text-faint">{provider.model}</span>
@@ -115,15 +115,15 @@ export function LivePanels() {
           <StateLine>暂无调用记录</StateLine>
         ) : (
           <div className="grid grid-cols-3 gap-2 text-center">
-            <div className="rounded-lg border border-line bg-surface/60 px-2 py-2">
+            <div className="rounded-lg border border-line bg-surface px-2 py-2">
               <div className="font-mono text-[10px] text-faint uppercase">调用</div>
               <div className="text-[15px] font-semibold">{usage.total_calls}</div>
             </div>
-            <div className="rounded-lg border border-line bg-surface/60 px-2 py-2">
+            <div className="rounded-lg border border-line bg-surface px-2 py-2">
               <div className="font-mono text-[10px] text-faint uppercase">失败</div>
               <div className={`text-[15px] font-semibold ${failed > 0 ? "text-warn" : "text-text"}`}>{failed}</div>
             </div>
-            <div className="rounded-lg border border-line bg-surface/60 px-2 py-2">
+            <div className="rounded-lg border border-line bg-surface px-2 py-2">
               <div className="font-mono text-[10px] text-faint uppercase">TOKENS</div>
               <div className="text-[15px] font-semibold">{tokens.toLocaleString("en-US")}</div>
             </div>

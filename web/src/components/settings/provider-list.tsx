@@ -59,7 +59,7 @@ export function ProviderList({ providers, error, selectedId, tests, onSelect, on
               <li
                 key={provider.id}
                 className={`rounded-xl border transition-colors ${
-                  selected ? "border-brand/40 bg-surface-2" : "border-line bg-surface/60 hover:border-line-strong"
+                  selected ? "border-brand/40 bg-surface-2" : "border-line bg-surface hover:border-line-strong"
                 }`}
               >
                 <div className="flex items-start gap-2 p-3">

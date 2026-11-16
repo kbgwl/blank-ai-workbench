@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
+import { PageBody, PageHeader } from "@/components/page";
 import { TasksView } from "@/components/tasks/tasks-view";
 
 /**
@@ -17,45 +18,44 @@ function DetailFallback() {
   return <div className="p-6 font-mono text-[12px] text-faint">正在打开任务…</div>;
 }
 
+function BackLink() {
+  return (
+    <Link
+      href="/tasks"
+      className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1 text-[11.5px] text-muted transition-colors hover:border-line-strong hover:text-text"
+    >
+      返回任务列表
+    </Link>
+  );
+}
+
 function TaskDetail() {
   const taskId = useSearchParams().get("id") ?? "";
 
   if (!taskId) {
     return (
-      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4 p-6">
-        <h1 className="text-[19px] font-semibold tracking-tight">任务详情</h1>
-        <p className="text-[13px] text-muted">缺少任务 ID。请从任务列表进入，或附带 <span className="font-mono">?id=</span> 参数。</p>
-        <Link
-          href="/tasks"
-          className="w-fit rounded-md bg-surface-2 px-3 py-1.5 text-[12px] text-muted ring-1 ring-line transition-colors hover:text-text hover:ring-line-strong"
-        >
-          返回任务列表
-        </Link>
-      </div>
+      <PageBody wide>
+        <PageHeader title="任务详情" description="缺少任务 ID。请从任务列表进入，或附带 ?id= 参数。" actions={<BackLink />} />
+      </PageBody>
     );
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-[19px] font-semibold tracking-tight">任务详情</h1>
-          <p className="mt-1 flex flex-wrap items-center gap-2 text-[13px] leading-relaxed text-muted">
-            <span>直接打开某条任务，时间线由事件接口完整恢复。</span>
-            <span className="rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-[11px] text-faint">
+    <PageBody wide>
+      <PageHeader
+        title="任务详情"
+        description={
+          <>
+            直接打开某条任务，时间线由事件接口完整恢复。
+            <span className="ml-2 rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-[10px] text-faint">
               {taskId}
             </span>
-          </p>
-        </div>
-        <Link
-          href="/tasks"
-          className="shrink-0 rounded-md bg-surface-2 px-3 py-1.5 text-[12px] text-muted ring-1 ring-line transition-colors hover:text-text hover:ring-line-strong"
-        >
-          返回任务列表
-        </Link>
-      </div>
+          </>
+        }
+        actions={<BackLink />}
+      />
       <TasksView initialTaskId={taskId} />
-    </div>
+    </PageBody>
   );
 }
 

@@ -8,7 +8,7 @@ const buttonBase =
   "inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50";
 
 const buttonVariants: Record<ButtonVariant, string> = {
-  primary: "bg-brand text-bg hover:bg-brand/85",
+  primary: "bg-brand text-on-brand hover:bg-brand/85",
   ghost: "bg-surface-2 text-muted ring-1 ring-line hover:text-text hover:ring-line-strong",
   danger: "bg-danger/10 text-danger ring-1 ring-danger/30 hover:bg-danger/20",
 };
@@ -77,7 +77,7 @@ export function Notice({
       ? "border-danger/30 bg-danger/[0.06] text-danger"
       : tone === "warn"
         ? "border-warn/30 bg-warn/[0.06] text-warn"
-        : "border-line bg-surface-2/60 text-muted";
+        : "border-line bg-surface-2 text-muted";
   return <div className={`rounded-lg border px-3 py-2 text-[12px] leading-relaxed ${toneClass}`}>{children}</div>;
 }
 

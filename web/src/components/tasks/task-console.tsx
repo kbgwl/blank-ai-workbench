@@ -162,7 +162,7 @@ export function TaskConsole({
               title={terminal ? "重新运行该任务" : "继续执行任务"}
               className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                 canRun
-                  ? "bg-brand text-bg hover:bg-brand/85"
+                  ? "bg-brand text-on-brand hover:bg-brand/85"
                   : "bg-surface-2 text-muted ring-1 ring-line hover:text-text hover:ring-line-strong"
               }`}
             >
@@ -181,7 +181,7 @@ export function TaskConsole({
           </div>
         </header>
 
-        <div className="rounded-xl border border-line bg-surface-2/50 px-3.5 py-3">
+        <div className="rounded-xl border border-line bg-surface-2 px-3.5 py-3">
           <div className="mb-1 font-mono text-[10px] tracking-wide text-faint uppercase">任务描述</div>
           <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-text/90">{task.prompt || "后端未返回任务描述"}</p>
           {task.acceptanceCriteria.length > 0 && (
@@ -248,7 +248,7 @@ export function TaskConsole({
         {/* 实时预览：这条不是事件，落下就没了——它是"模型此刻在说什么"，
             任务结束后由真正的总结块取代。 */}
         {streaming && (
-          <div className="mt-2.5 rounded-lg border border-dashed border-line bg-surface-2/30 p-3">
+          <div className="mt-2.5 rounded-lg border border-dashed border-line bg-surface-2 p-3">
             <div className="mb-1.5 flex items-center gap-1.5 text-[10.5px] text-faint">
               <span className="inline-block size-1.5 animate-pulse rounded-full bg-brand" />
               模型正在输出

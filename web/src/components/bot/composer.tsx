@@ -130,7 +130,7 @@ export function Composer(props: ComposerProps) {
   ];
 
   return (
-    <div className="bg-bg/95 px-4 pt-3 pb-3.5 backdrop-blur">
+    <div className="bg-bg px-4 pt-3 pb-3.5">
       <div className="mx-auto w-full max-w-3xl">
         {props.error && (
           <p className="mb-2 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-1.5 text-[11.5px] text-danger">
@@ -138,7 +138,7 @@ export function Composer(props: ComposerProps) {
           </p>
         )}
         {props.hint && (
-          <p className="mb-2 rounded-lg border border-line bg-surface-2/60 px-2.5 py-1.5 text-[11.5px] text-muted">
+          <p className="mb-2 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[11.5px] text-muted">
             {props.hint}
           </p>
         )}
@@ -146,7 +146,7 @@ export function Composer(props: ComposerProps) {
         {/* 没有分隔线，靠边框 + 一点投影把卡片从白底上托起来：页面和白卡同色，
             只留一条线的话线一去掉盒子就"化"进背景里了。 */}
         <div
-          className={`relative rounded-2xl border bg-surface shadow-[0_2px_6px_rgba(16,24,40,0.04),0_12px_28px_-16px_rgba(16,24,40,0.18)] transition-colors focus-within:border-brand/50 focus-within:shadow-[0_2px_8px_rgba(16,24,40,0.06),0_14px_32px_-16px_rgba(14,116,144,0.28)] ${
+          className={`relative rounded-xl border bg-surface shadow-sm transition-colors focus-within:border-brand/45 focus-within:shadow-md ${
             dragging ? "border-brand/60 ring-2 ring-brand/15" : "border-line-strong"
           }`}
           onDragEnter={(event) => {
@@ -176,7 +176,7 @@ export function Composer(props: ComposerProps) {
           <DraftImageChips images={props.images} onRemove={props.onRemoveImage} disabled={props.disabled} />
 
           {dragging && (
-            <span className="pointer-events-none absolute inset-0 grid place-items-center rounded-2xl bg-bg/80 font-mono text-[11px] text-brand">
+            <span className="pointer-events-none absolute inset-0 grid place-items-center rounded-xl bg-$1 font-mono text-[11px] text-brand">
               松手就加上这张图
             </span>
           )}
@@ -215,7 +215,7 @@ export function Composer(props: ComposerProps) {
                       ? "它正在做，可以插一句话调整方向…（Enter 发送）"
                       : `${placeholderText}（Enter 发送，Shift+Enter 换行）`
             }
-            className="block max-h-[262px] min-h-[88px] w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] leading-[1.75] text-text placeholder:text-faint focus:outline-none"
+            className="block max-h-[262px] min-h-[80px] w-full resize-none bg-transparent px-4 pt-3 pb-2 text-[14px] leading-[1.7] text-text placeholder:text-faint focus:outline-none"
           />
 
           {/* 工具条：左边是"在哪儿干活、按什么规矩"，右边是"用哪个模型、发不发"。
@@ -416,7 +416,7 @@ export function Composer(props: ComposerProps) {
                 disabled={action === "disabled"}
                 title={action === "stop" ? "停止这一轮（想插一句话直接按 Enter）" : "发送（Enter）"}
                 aria-label={action === "stop" ? "停止这一轮" : "发送"}
-                className="grid size-9 shrink-0 place-items-center rounded-full bg-text text-bg transition-opacity hover:opacity-90 disabled:opacity-25"
+                className="grid size-8 shrink-0 place-items-center rounded-full bg-brand text-on-brand transition-opacity hover:opacity-90 disabled:opacity-30"
               >
                 {action === "stop" ? (
                   <span className="size-2.5 rounded-[2px] bg-current" />

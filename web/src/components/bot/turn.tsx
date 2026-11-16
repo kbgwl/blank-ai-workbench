@@ -281,7 +281,7 @@ export function TurnView(props: TurnViewProps) {
     <div className="group/turn">
       {/* 用户说的话：右侧淡色气泡，与助手的整段正文区分开 */}
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-3.5 py-2 text-[13.5px] leading-relaxed text-text">
+        <div className="max-w-[85%] rounded-xl rounded-br-md bg-surface-2 px-3.5 py-2 text-[13.5px] leading-relaxed text-text">
           {props.images.length > 0 && (
             <div className="mb-1.5 flex flex-wrap gap-1.5">
               {props.images.map((item) =>

@@ -36,19 +36,19 @@ function sourceLabel(source: string): string {
 function PluginRow({ plugin }: { plugin: ProjectPlugin }) {
   const components = Object.entries(plugin.components ?? {});
   return (
-    <div className="border-b border-line/60 py-2.5 last:border-b-0">
+    <div className="border-b border-line py-2.5 last:border-b-0">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="font-mono text-[12px] text-text">{plugin.name}</span>
         <span
           className={`rounded border px-1 py-0.5 text-[10px] ${
             plugin.enabled
               ? "border-brand/40 bg-brand/10 text-brand"
-              : "border-line bg-surface-2/60 text-faint line-through"
+              : "border-line bg-surface-2 text-faint line-through"
           }`}
         >
           {plugin.enabled ? "已启用" : "已停用"}
         </span>
-        <span className="rounded border border-line bg-surface-2/60 px-1 py-0.5 text-[10px] text-faint">
+        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
           {sourceLabel(plugin.source)}层
         </span>
         {plugin.version && (
@@ -57,7 +57,7 @@ function PluginRow({ plugin }: { plugin: ProjectPlugin }) {
         {components.map(([name, count]) => (
           <span
             key={name}
-            className="rounded border border-line bg-surface-2/60 px-1 py-0.5 font-mono text-[10px] text-muted"
+            className="rounded border border-line bg-surface-2 px-1 py-0.5 font-mono text-[10px] text-muted"
           >
             {COMPONENT_LABELS[name] ?? name} {count}
           </span>
@@ -194,10 +194,10 @@ export function PluginsPanel() {
               <p className="text-[12px] leading-relaxed text-muted">
                 这个工作区还没有插件。每个插件是一个目录，里面放一份清单：
               </p>
-              <p className="rounded-md border border-line bg-surface-2/50 px-2.5 py-1.5 font-mono text-[11px] break-all text-faint">
+              <p className="rounded-md border border-line bg-surface-2 px-2.5 py-1.5 font-mono text-[11px] break-all text-faint">
                 .claude-plugin/plugin.json
               </p>
-              <pre className="overflow-x-auto rounded-md border border-line bg-surface-2/50 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-muted">
+              <pre className="overflow-x-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-muted">
 {`{
   "name": "deploy-tools",
   "description": "部署相关命令",
@@ -239,7 +239,7 @@ export function PluginsPanel() {
             </p>
           ))}
 
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line/70 pt-2">
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
             <div className="min-w-0 flex-1 space-y-0.5 font-mono text-[10px] break-all text-faint">
               <p>用户层：{data.userDir}</p>
               <p>项目层（工作区下）：{data.projectDir || "（项目未绑定工作区）"}</p>

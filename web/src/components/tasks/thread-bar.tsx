@@ -53,8 +53,8 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
   }
 
   return (
-    <section className="mb-3 rounded-lg border border-line/80 bg-surface/30">
-      <header className="flex flex-wrap items-center gap-2 border-b border-line/60 px-3 py-2">
+    <section className="mb-3 rounded-lg border border-line bg-surface">
+      <header className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <span className="shrink-0 font-mono text-[10px] tracking-wide text-faint">会话</span>
         <span className="min-w-0 flex-1 truncate text-[13px] text-text">{thread.title}</span>
         {thread.forkedFrom && (
@@ -87,7 +87,7 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
       </header>
 
       {error && (
-        <p className="border-b border-line/60 px-3 py-1 text-[10px] text-muted">刷新会话失败：{error}</p>
+        <p className="border-b border-line px-3 py-1 text-[10px] text-muted">刷新会话失败：{error}</p>
       )}
 
       {turns.length === 0 ? (
@@ -105,7 +105,7 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
                   onClick={() => onOpenTurn(turn.id)}
                   aria-current={active}
                   className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
-                    active ? "bg-brand/[0.08]" : "hover:bg-surface-2/70"
+                    active ? "bg-brand/[0.08]" : "hover:bg-surface-2"
                   }`}
                 >
                   <span className={`mt-0.5 w-5 shrink-0 text-right font-mono text-[10px] ${active ? "text-brand" : "text-faint"}`}>
@@ -128,7 +128,7 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
         </ol>
       )}
 
-      <div className="border-t border-line/60 px-3 py-2">
+      <div className="border-t border-line px-3 py-2">
         <div className="flex items-end gap-2">
           <textarea
             value={draft}
@@ -149,7 +149,7 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
             type="button"
             onClick={submit}
             disabled={pending || archived || !draft.trim()}
-            className="shrink-0 rounded-lg bg-brand px-3 py-2 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+            className="shrink-0 rounded-lg bg-brand px-3 py-2 text-[12px] font-medium text-on-brand transition-opacity hover:opacity-90 disabled:opacity-40"
           >
             {busy === "continue" ? "创建中" : "继续聊"}
           </button>

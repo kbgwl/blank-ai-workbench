@@ -547,17 +547,7 @@ export function TeamView() {
   return (
     <div className="flex h-full min-h-0 bg-bg">
       <aside className="flex w-[286px] shrink-0 flex-col border-r border-line bg-sidebar">
-        <div className="flex items-center gap-2 px-3 pt-3 pb-2">
-          <span className="grid size-6 place-items-center rounded-md bg-logo-bg">
-            <span className="size-2 rounded-[2px] bg-logo-accent" />
-          </span>
-          <span className="text-[13px] font-semibold tracking-tight">Bot 团队</span>
-          <span className="rounded bg-surface-3 px-1 py-0.5 font-mono text-[9px] tracking-wide text-muted uppercase">
-            team
-          </span>
-        </div>
-
-        <div className="mx-3 mb-2 grid grid-cols-2 gap-1 rounded-lg bg-surface-2 p-1">
+        <div className="mx-3 mt-3 mb-2 grid grid-cols-2 gap-1 rounded-lg bg-surface-2 p-1">
           {(["chat", "bots"] as Tab[]).map((item) => (
             <button
               key={item}
@@ -922,10 +912,10 @@ function roundChipClass(status: string): string {
 function EmptyTeam({ onCreate }: { onCreate: () => void }) {
   return (
     <div className="flex flex-col items-center text-center">
-      <span className="grid size-12 place-items-center rounded-2xl bg-logo-bg">
-        <span className="size-4 rounded-[4px] bg-logo-accent" />
+      <span className="grid size-11 place-items-center rounded-xl bg-logo-bg">
+        <span className="size-3.5 rounded-[3px] bg-logo-accent" />
       </span>
-      <h2 className="mt-5 text-[22px] font-semibold tracking-tight">组一个能自己干活的 Bot 团队</h2>
+      <h2 className="mt-4 text-[20px] font-semibold tracking-tight">组一个能自己干活的 Bot 团队</h2>
       <p className="mt-2 max-w-md text-[13px] leading-relaxed text-muted">
         建一个群，把负责不同方向的 Bot 拉进来。小白管家会先接住你的需求，再按 @ 把活分给合适的人；
         成员可以用 [PASS] 保持安静。
@@ -953,7 +943,7 @@ function GroupEmpty({ group, members }: { group: TeamGroupSummary; members: Team
       <p className="mt-2 max-w-md text-[12.5px] leading-relaxed text-muted">
         {group.topic || "这个群还没有主题。直接说你要做什么，主理人会先回答，再安排成员接手。"}
       </p>
-      <p className="mt-4 rounded-lg border border-line bg-surface-2/60 px-3 py-2 text-[11.5px] leading-relaxed text-faint">
+      <p className="mt-4 rounded-lg border border-line bg-surface-2 px-3 py-2 text-[11.5px] leading-relaxed text-faint">
         试试：<span className="text-muted">@成员</span> 可以直接点名；成员回复里的 @ 会触发下一棒。
       </p>
     </div>
@@ -993,7 +983,7 @@ function MemberStrip({
               speaking
                 ? "border-brand/40 bg-brand/[0.06] text-brand"
                 : member.enabled
-                  ? "border-line bg-surface-2/60 text-muted"
+                  ? "border-line bg-surface-2 text-muted"
                   : "border-line bg-transparent text-faint line-through"
             }`}
           >
@@ -1022,7 +1012,7 @@ function MessageRow({ message, highlight = false }: { message: TeamMessage; high
   if (message.role === "user") {
     return (
       <div {...anchorProps} className={`flex justify-end transition-colors ${glow}`}>
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-3.5 py-2 text-[13.5px] leading-relaxed whitespace-pre-wrap">
+        <div className="max-w-[85%] rounded-xl rounded-br-md bg-surface-2 px-3.5 py-2 text-[13.5px] leading-relaxed whitespace-pre-wrap">
           {message.content}
         </div>
       </div>
@@ -1292,7 +1282,7 @@ function QuestionBlock({
                 className={`rounded-lg border px-2.5 py-1.5 text-left text-[11.5px] transition-colors ${
                   active
                     ? "border-brand/50 bg-brand/[0.07] text-brand"
-                    : "border-line bg-surface-2/60 text-muted hover:border-line-strong hover:text-text"
+                    : "border-line bg-surface-2 text-muted hover:border-line-strong hover:text-text"
                 }`}
               >
                 <span className="block font-medium">{option.label}</span>
@@ -1358,7 +1348,7 @@ function ComposerBar({
                 key={member.id}
                 type="button"
                 onClick={() => insert(member.name)}
-                className="rounded-full border border-line bg-surface-2/60 px-2 py-0.5 text-[10.5px] text-muted transition-colors hover:border-brand/40 hover:text-brand"
+                className="rounded-full border border-line bg-surface-2 px-2 py-0.5 text-[10.5px] text-muted transition-colors hover:border-brand/40 hover:text-brand"
               >
                 {member.name}
               </button>
@@ -1517,7 +1507,7 @@ function BotRoster({
                 </dl>
 
                 {bot.instructions && (
-                  <p className="mt-2.5 line-clamp-2 rounded-lg bg-surface-2/60 px-2.5 py-1.5 text-[11px] leading-relaxed text-faint">
+                  <p className="mt-2.5 line-clamp-2 rounded-lg bg-surface-2 px-2.5 py-1.5 text-[11px] leading-relaxed text-faint">
                     {bot.instructions}
                   </p>
                 )}
@@ -1854,7 +1844,7 @@ function GroupEditor({
                   className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] transition-colors ${
                     active
                       ? "border-brand/50 bg-brand/[0.07] text-brand"
-                      : "border-line bg-surface-2/60 text-muted hover:border-line-strong hover:text-text"
+                      : "border-line bg-surface-2 text-muted hover:border-line-strong hover:text-text"
                   }`}
                 >
                   <Avatar name={bot.name} size="sm" />

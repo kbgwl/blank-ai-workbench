@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { PageBody, PageHeader } from "@/components/page";
 import { activeWorkspace, fetchProjects, type Project } from "@/components/projects/api";
 import { Button, Field, Input, Notice, Spinner, StateLine } from "@/components/projects/ui";
 import { SelectPopover } from "@/components/ui/select-popover";
@@ -196,40 +197,37 @@ export default function ReverseLabPage() {
   const findings: Finding[] = report?.findings ?? [];
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="font-mono text-[10px] tracking-wide text-faint uppercase">REVERSE LAB</div>
-          <h1 className="mt-1 text-[16px] font-semibold">逆向分析</h1>
-          <p className="mt-1 text-[12px] text-muted">
-            挑一个真实产物，抽它的字符串线索，再把结论落成一条带 Evidence ID 的任务。
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <SelectPopover
-            size="compact"
-            ariaLabel="选择项目"
-            value={projectId}
-            options={projects.length === 0
-              ? [{ value: "", label: "没有项目" }]
-              : projects.map((item) => ({
-                  value: item.id,
-                  label: item.name,
-                  description: activeWorkspace(item) ? undefined : "未绑定工作区",
-                  disabled: !activeWorkspace(item),
-                }))}
-            onChange={chooseProject}
-            menuMinWidth={220}
-          />
-          <span className={`rounded-md border px-2 py-1 text-[11px] ${TONE_CLASS[tone]}`}>
-            {status ? adapterLabel(status.adapter.state) : "状态未知"}
-          </span>
-          <Button onClick={() => void reconnect()} disabled={!projectId || busy === "status"}>
-            {busy === "status" ? <Spinner /> : null}
-            重连
-          </Button>
-        </div>
-      </header>
+    <PageBody wide className="h-full min-h-0 overflow-y-auto">
+      <PageHeader
+        title="逆向分析"
+        description="挑一个真实产物，抽它的字符串线索，再把结论落成一条带 Evidence ID 的任务。"
+        actions={
+          <>
+            <SelectPopover
+              size="compact"
+              ariaLabel="选择项目"
+              value={projectId}
+              options={projects.length === 0
+                ? [{ value: "", label: "没有项目" }]
+                : projects.map((item) => ({
+                    value: item.id,
+                    label: item.name,
+                    description: activeWorkspace(item) ? undefined : "未绑定工作区",
+                    disabled: !activeWorkspace(item),
+                  }))}
+              onChange={chooseProject}
+              menuMinWidth={220}
+            />
+            <span className={`rounded-md border px-2 py-1 text-[11px] ${TONE_CLASS[tone]}`}>
+              {status ? adapterLabel(status.adapter.state) : "状态未知"}
+            </span>
+            <Button onClick={() => void reconnect()} disabled={!projectId || busy === "status"}>
+              {busy === "status" ? <Spinner /> : null}
+              重连
+            </Button>
+          </>
+        }
+      />
 
       {notice && <Notice tone={online ? "warn" : "error"}>{notice}</Notice>}
 
@@ -245,7 +243,7 @@ export default function ReverseLabPage() {
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[19rem_1fr_21rem]">
         {/* 左：候选实物 */}
-        <section className="flex min-h-0 flex-col rounded-lg border border-line bg-surface/15">
+        <section className="flex min-h-0 flex-col rounded-lg border border-line bg-surface">
           <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
             <span className="font-mono text-[10px] tracking-wide text-faint uppercase">候选实物</span>
             <span className="text-[10px] text-faint">{targets.length} 个</span>
@@ -296,7 +294,7 @@ export default function ReverseLabPage() {
         </section>
 
         {/* 中：字符串线索 + 调查 */}
-        <section className="flex min-h-0 flex-col rounded-lg border border-line bg-surface/15">
+        <section className="flex min-h-0 flex-col rounded-lg border border-line bg-surface">
           <div className="flex items-center justify-between gap-3 border-b border-line px-3 py-2">
             <div className="min-w-0">
               <div className="font-mono text-[10px] tracking-wide text-faint uppercase">字符串线索</div>
@@ -327,7 +325,7 @@ export default function ReverseLabPage() {
               <table className="w-full border-collapse text-[12px]">
                 <tbody>
                   {strings.map((hit) => (
-                    <tr key={`${hit.offset}-${hit.text}`} className="border-b border-line/60 last:border-0">
+                    <tr key={`${hit.offset}-${hit.text}`} className="border-b border-line last:border-0">
                       <td className="w-[7.5rem] px-3 py-1 align-top font-mono text-[11px] text-faint">
                         {offsetLabel(hit.offset)}
                       </td>
@@ -373,7 +371,7 @@ export default function ReverseLabPage() {
         </section>
 
         {/* 右：台账与证据 */}
-        <section className="flex min-h-0 flex-col gap-3 overflow-y-auto rounded-lg border border-line bg-surface/15 p-3">
+        <section className="flex min-h-0 flex-col gap-3 overflow-y-auto rounded-lg border border-line bg-surface p-3">
           <div>
             <div className="font-mono text-[10px] tracking-wide text-faint uppercase">证据与边界</div>
             <p className="mt-1 text-[11px] leading-relaxed text-muted">
@@ -395,7 +393,7 @@ export default function ReverseLabPage() {
           </dl>
 
           {status && (
-            <div className="rounded-md border border-line bg-surface-2/40 p-2 text-[10px] leading-relaxed text-faint">
+            <div className="rounded-md border border-line bg-surface-2 p-2 text-[10px] leading-relaxed text-faint">
               {status.adapter.boundary_note}
             </div>
           )}
@@ -427,7 +425,7 @@ export default function ReverseLabPage() {
           </p>
         </section>
       </div>
-    </div>
+    </PageBody>
   );
 }
 

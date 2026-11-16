@@ -84,19 +84,19 @@ function ChannelCard({
 }) {
   const style = STATUS_STYLE[channel.status] ?? STATUS_STYLE.unverified;
   return (
-    <div className="rounded-md border border-line/70 bg-surface/40 px-3 py-2.5">
+    <div className="rounded-md border border-line bg-surface px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="text-[12.5px] font-medium">{channel.name}</span>
-        <span className="rounded border border-line bg-surface-2/60 px-1 py-0.5 text-[10px] text-faint">
+        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
           {channel.kind_label}
         </span>
-        <span className="rounded border border-line bg-surface-2/60 px-1 py-0.5 text-[10px] text-faint">
+        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
           {adapter?.modes.find((item) => item.value === channel.mode)?.label ?? channel.mode}
         </span>
         <span className={`rounded border px-1 py-0.5 text-[10px] ${style}`}>
           {STATUS_LABEL[channel.status] ?? channel.status}
         </span>
-        <span className="rounded border border-line bg-surface-2/60 px-1 py-0.5 text-[10px] text-faint">
+        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
           {RECEIVE_LABEL[channel.receive_mode] ?? channel.receive_mode}
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -136,7 +136,7 @@ function ChannelCard({
         </p>
       )}
       {channel.receipt.url ? (
-        <div className="mt-1.5 flex items-center gap-2 rounded border border-line/70 bg-surface-2/40 px-2 py-1">
+        <div className="mt-1.5 flex items-center gap-2 rounded border border-line bg-surface-2 px-2 py-1">
           <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-faint">{channel.receipt.url}</span>
           <CopyButton value={channel.receipt.url} />
         </div>
@@ -265,7 +265,7 @@ function AddForm({
         </label>
       </div>
 
-      <details className="mt-2 rounded border border-line/70 bg-surface/40 px-2 py-1.5">
+      <details className="mt-2 rounded border border-line bg-surface px-2 py-1.5">
         <summary className="cursor-pointer text-[11px] text-muted">在厂商后台要点哪几步</summary>
         <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-[10.5px] leading-relaxed text-faint">
           {adapter.setup.map((step) => (
@@ -417,13 +417,13 @@ export function ChannelsPanel() {
           凭据加密存在本机；「已接通」只有在真打过厂商接口之后才会出现。
         </p>
         {!list.triggers_enabled && (
-          <p className="mt-2 rounded border border-line/70 bg-surface-2/40 px-2 py-1 text-[11px] leading-relaxed text-faint">
+          <p className="mt-2 rounded border border-line bg-surface-2 px-2 py-1 text-[11px] leading-relaxed text-faint">
             通道收发不依赖「后台主动执行」那个开关：消息是你主动发的，定时与盯着也是你交代的。
             那个开关管的是 Agent 自己发起的事（自动修复等）。
           </p>
         )}
         {list.channels.length === 0 ? (
-          <p className="mt-2 rounded border border-line/70 bg-surface-2/40 px-2 py-2 text-[11.5px] leading-relaxed text-faint">
+          <p className="mt-2 rounded border border-line bg-surface-2 px-2 py-2 text-[11.5px] leading-relaxed text-faint">
             还没有配置。下面选一家填上凭据即可——最快的路径是群机器人（只发提醒）或钉钉 Stream（可收发，不需要公网）。
           </p>
         ) : (
@@ -443,7 +443,7 @@ export function ChannelsPanel() {
           </div>
         )}
 
-        <div className="mt-3 border-t border-line/70 pt-2.5">
+        <div className="mt-3 border-t border-line pt-2.5">
           <p className="text-[11px] text-muted">加一条通道</p>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {catalog.adapters.map((adapter) => (
@@ -479,7 +479,7 @@ export function ChannelsPanel() {
       <Panel title="收消息要什么条件" hint={list.public_base ? `对外地址 ${list.public_base}` : "未配置对外地址"}>
         <div className="flex flex-col gap-1.5">
           {catalog.receive_notes.map((item) => (
-            <div key={item.mode} className="rounded border border-line/70 bg-surface/40 px-2 py-1.5">
+            <div key={item.mode} className="rounded border border-line bg-surface px-2 py-1.5">
               <p className="text-[11.5px] text-text">{item.label}</p>
               <p className="mt-0.5 text-[10.5px] leading-relaxed text-faint">{item.note}</p>
             </div>

@@ -105,7 +105,7 @@ export function SideNav() {
             className={`group flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors ${
               active
                 ? "bg-surface-2 text-text font-medium"
-                : "text-muted hover:bg-surface-2/60 hover:text-text"
+                : "text-muted hover:bg-surface-2 hover:text-text"
             }`}
           >
             <span className={active ? "text-brand" : "text-faint group-hover:text-muted"}>{item.icon}</span>

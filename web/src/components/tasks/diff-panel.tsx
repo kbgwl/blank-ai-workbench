@@ -77,7 +77,7 @@ export function DiffPanel({ changes, focusPath }: { changes: ChangeItem[]; focus
             }}
             className={`overflow-hidden rounded-lg border ${
               file.path === focusPath ? "border-brand/40" : "border-line"
-            } bg-surface/50`}
+            } bg-surface`}
           >
             <button
               type="button"
@@ -87,7 +87,7 @@ export function DiffPanel({ changes, focusPath }: { changes: ChangeItem[]; focus
                   paths: open ? base.filter((path) => path !== file.path) : [...base, file.path],
                 })
               }
-              className="flex w-full items-center gap-2 px-2.5 py-2 text-left hover:bg-surface-2/70"
+              className="flex w-full items-center gap-2 px-2.5 py-2 text-left hover:bg-surface-2"
             >
               <span className={`min-w-0 flex-1 truncate font-mono text-[11px] ${open ? "text-brand" : "text-text/90"}`} title={file.path}>
                 {clip(file.path, 46)}

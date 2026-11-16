@@ -42,7 +42,7 @@ export function RoutingEvidencePanel() {
       ? "border-ok/40 bg-ok/10 text-ok"
       : data?.verdict === "暂不转正"
         ? "border-warn/40 bg-warn/10 text-warn"
-        : "border-line bg-surface-2/60 text-muted";
+        : "border-line bg-surface-2 text-muted";
 
   return (
     <Panel title="转正依据">
@@ -68,13 +68,13 @@ export function RoutingEvidencePanel() {
 
           <div className="flex flex-wrap items-center gap-2">
             <span className={`rounded border px-2 py-0.5 text-[11px] ${tone}`}>{data.verdict}</span>
-            <span className="rounded border border-line bg-surface-2/60 px-2 py-0.5 font-mono text-[11px] text-muted">
+            <span className="rounded border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-muted">
               省下 {percent(data.saved_ratio)}
             </span>
-            <span className="rounded border border-line bg-surface-2/60 px-2 py-0.5 font-mono text-[11px] text-muted">
+            <span className="rounded border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-muted">
               切档 {percent(data.switch_ratio)}
             </span>
-            <span className="rounded border border-line bg-surface-2/60 px-2 py-0.5 font-mono text-[11px] text-muted">
+            <span className="rounded border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-muted">
               {data.calls} 步 / {data.sampled_tasks} 个任务
             </span>
             {data.escalations > 0 && (
@@ -92,7 +92,7 @@ export function RoutingEvidencePanel() {
           ) : (
             <div className="overflow-hidden rounded-lg border border-line">
               <table className="w-full text-left text-[11.5px]">
-                <thead className="bg-surface-2/60 text-faint">
+                <thead className="bg-surface-2 text-faint">
                   <tr>
                     <th className="px-2 py-1.5 font-normal">任务</th>
                     <th className="px-2 py-1.5 font-normal">结果</th>
@@ -103,7 +103,7 @@ export function RoutingEvidencePanel() {
                 </thead>
                 <tbody>
                   {data.recent.slice(0, 8).map((row) => (
-                    <tr key={row.task_id} className="border-t border-line/60">
+                    <tr key={row.task_id} className="border-t border-line">
                       <td className="px-2 py-1.5 font-mono text-[10.5px] text-muted">
                         {row.task_id.slice(0, 8)}
                       </td>

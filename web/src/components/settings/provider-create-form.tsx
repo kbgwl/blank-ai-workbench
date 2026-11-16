@@ -159,7 +159,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
               className={`rounded-md border px-2 py-1 text-[11px] transition-colors ${
                 active
                   ? "border-brand/50 bg-brand/15 text-brand"
-                  : "border-line bg-surface-2/60 text-muted hover:border-line-strong hover:text-text"
+                  : "border-line bg-surface-2 text-muted hover:border-line-strong hover:text-text"
               }`}
             >
               {presetLabels[key] ?? key}
@@ -172,7 +172,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
           className={`rounded-md border px-2 py-1 text-[11px] transition-colors ${
             draft.presetKey === ""
               ? "border-brand/50 bg-brand/15 text-brand"
-              : "border-line bg-surface-2/60 text-muted hover:border-line-strong hover:text-text"
+              : "border-line bg-surface-2 text-muted hover:border-line-strong hover:text-text"
           }`}
         >
           自定义
