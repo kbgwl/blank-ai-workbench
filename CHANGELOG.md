@@ -1,6 +1,94 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）、Claude「Doing tasks」六条与无测试配置时的收尾空跑（#384–#386）、交付改动排除 scratchpad 自测脚本（#388）、空响应与零交付不许算成功（#394–#397）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）、Claude「Doing tasks」六条与无测试配置时的收尾空跑（#384–#386）、交付改动排除 scratchpad 自测脚本（#388）、空响应与零交付不许算成功（#394–#397）、玻璃题收场清场外移与前四条前端纪律（#401）、事故台题五条前端纪律与 id 引用同步（#402）、Anthropic 式 UI 评测装置与真跑（#403）
+
+- **Anthropic 式 UI 评测装置与真跑（#403）**：
+  新增 `evals/uibench/`：同一提示词（事故指挥台，17 组 38 条隐藏判据）对同一供应商做多次
+  独立采样，判分只读交付文件在无头 Chrome 里的行为，不读模型自述。装置自检：参考实现
+  开跑前必须 38/38，否则 rc=2、本轮读数作废（三次开跑均为 38/38）。
+  1. **协议**（`run_eval.mjs`）：每次新建项目与全新空工作区、自动放行审批、轮询终态；
+     墙钟 70 分钟；分数按 38 条判据通过数；pass@1 为各次「得分/38」的均值，pass@N 为
+     「N 次里至少一次 38/38」，逐条给跨次通过率与红集。装置自身失败（没抓到交付物、
+     grader 崩溃）单独计数，不进 pass@1 的均值——装置问题不能记成产品问题。
+  2. **实测**（2026-11-16，Spark x2.6，:8066 隔离实例，提示词 sha256 71e840…）：
+     有效样本 A 21/38（status failed，3271s，4 次审批，三文件齐）；
+     有效样本 B 6/38（status runner_timeout，4201s，只写出 index.html/styles.css）；
+     另有一格无交付物（流式空响应后，非流式调用吃满 1800s 超时并进入重试，
+     70 分钟墙钟在重试途中到期），按口径不计入 pass@1，`effectiveTrials` 单独为 0。
+     **pass@1 = 27/76 = 35.5%，pass@2 = 否**；逐条：6 条两格都过（离线性、贴顶、
+     筛选面板初始隐藏、抽屉背景锁滚、reduced-motion 归零），15 条只 A 过，
+     17 条两格都红（A 的 17 条全部被 B 覆盖）。
+  3. **红集与产品行为**：A 的 17 条红仍是 #402 的六类根因（重渲染丢焦点、窗口化几何、
+     批量不重算、视图不落盘、空集启动、筛选计数/播报/排序标记），说明纪律写进提示词
+     一次采样并不保证落实。A 的交付正文自述「三处缺陷已改，未复跑验证、需要你重跑自测」，
+     校验器据此判 failed——#394–#397 在真模型上按预期生效，不是漏判。B 的 6 条全是
+     静态 HTML/CSS 属性（离线、sticky、初始 display:none、body 锁滚、reduce-motion），
+     功能面随缺失的 app.js 一起为 0。
+  4. **装置自身的两处口径修正**：`/run` 在服务端同步执行，等待请求头会被 undici 的
+     300s 头超时打断（采样记成 harness_error），改为发出后轮询终态；`/tasks/{id}/events`
+     的 limit 上限是 2000，传 4000 直接 422。另外 `BLANK_MODEL_TIMEOUT_SECONDS` 必须
+     显著大于单文件生成耗时：600 秒会把 2.6 万 token 的流切断，事件表现为
+     `model.stream_fallback / model_stream_empty`，测出来的是超时配置而不是产品。
+  5. **#401 清场在真跑里生效**：A 收尾后工作区只剩三个交付文件，`.blank/` 与
+     `.blank_backups/` 已外移到 `data/workspace-state/`。
+  变异电池与判据区分力沿用 #400 的 20 组单点变异记录；参考实现在每次开跑前自动复跑，
+  三次均为 38/38。
+
+- **3D 玻璃官网复杂题的收场清理与前四条前端纪律（#401）**：
+  Claude / WB / 我方三家同提示词跑同一道「3D 液态玻璃官网」复杂题（31 条探针判据、
+  15 组变异），我方没通过的 8 条归到 4 个根因，全部是产品行为而不是模型能力：
+  1. **交付目录不干净**：沙箱执行期只能写工作区，所以改动备份 `.blank_backups/<task>/*`
+     与自测脚本 `.blank/scratchpad/` 必然落在工作区；任务是超时收场，`summarize_result`
+     那条路根本到不了。真机交付目录里 3 个页面文件旁边躺着 21 个备份目录。
+     新增 `services/agent/workspace_state.py`：收尾时把 harness 自己的状态整体外移到
+     `data/workspace-state/<workspace>-<hash>/<task>/`（`BLANK_WORKSPACE_STATE_DIR` 可覆盖），
+     **只移动不删除**，落点写进事件 `workspace.state_externalized`；只挪本任务的备份子树，
+     `.blank/AGENTS.md`、`.blank/harness`、`.blank/output-styles` 这些用户配置一个字节不动；
+     task_id 过 `_safe_component` 防穿越；同名存档换名 `-2..-99` 不覆盖；重复调用是 no-op。
+     接线两条独立收尾路径：`summarize_result`（正常收尾）与 `TaskRuntime._finish`
+     （覆盖超时 / 失败 / 取消；等审批不是终点，不清场）。
+  2. **一条全局选择器压掉一片功能**：`body > *:not(#bg-canvas){position:relative}`
+     把导航 sticky、进度条 fixed、回到顶部 fixed 全退化成普通流，三条需求一起失效。
+  3. **`[hidden]` 被自定义 display 盖掉**：`.palette-item{display:flex}` 让命令面板过滤
+     「输入了没反应」。
+  4. **窄屏与自测断言**：390px 下徽标 `0.75rem`=12px 低于题面 14px；自测脚本断言了
+     实现里不存在的选择器，把正确实现判红、预算烧在「修一个不存在的 bug」上。
+  2–4 三条以纪律形式写进 `CODING_INSTRUCTIONS`（全局选择器先想会不会压掉 position、
+  `[hidden]{display:none}` 守卫、按 390px 断点真验且字号 ≥14px、自测脚本报红先核实断言
+  再动手），随 `keep-coding-instructions` 语义与编程段同进退。
+  判据：`tests/test_workspace_state_externalize_v169.py`（9 例：外移清单与用户配置保留、
+  别的任务备份不动、幂等、工作区不存在、task_id 穿越、同名存档不覆盖、正常收尾接线、
+  失败收尾接线、等待审批不清场）与 `tests/test_frontend_discipline_v169.py`（5 例，
+  含输出样式双向语义）。改前实测：前端 5 条全红（提示词未写入）与接线条 1 红；
+  另有 2 条判据自身写错（穿越用例误断言「一条都不移」、测试用 session 缺 hooks / turn_effort），
+  按实测修正后才当归为真实红。
+  变异电池 `tests/mutation_battery_workspace_state_v169.py` 12/12 实测红在指定判据上、
+  非 no-op、按原字节还原并核对 sha256，装置自身退出码 0。第一轮两条运行时锚点未命中，
+  原因是 `runtime.py` 整文件 CRLF 而 `graph.py` 是 LF——装置已改为按文件自身换行匹配；
+  另一条变异把 `if` 体也删成了语法错误（红在收集阶段），补回 `pass` 后才算有效读数。
+
+- **事故指挥台题（Incident Console）的六类前端缺陷上升为纪律（#402）**：
+  同一道离线单页复杂题（5000 条确定性数据、17 组验收 38 条探针判据），我方交付
+  28/38，10 条红收敛到 6 个根因，全部可以在交付前自查：
+  1. **重渲染丢焦点**：`el.tableBody.innerHTML = ''` 再 append 整块重建，滚动触发的
+     重渲染让 activeElement 在 47ms 内掉回 body，键盘 Enter 永远到不了行——7.1/7.2/9.1
+     连带 9.2/9.3 一起红；行点击与键盘是两条路径，点击那路压根没接抽屉。
+  2. **窗口化只有尾部 spacer**：没有顶部占位，滚动条比例缩短到 200/5000，
+     滚到底也到不了真实最后一条（6.2）。
+  3. **批量操作不重算派生视图**：只改 `rec.status`，`view` 不重算，
+     「只看未解决」里仍留着刚标记解决的记录，计数也不对（10.2）。
+  4. **视图状态只在启动时落盘**：`saveLocal()` 只有启动那一次，筛选/搜索后刷新即丢（11.2）。
+  5. **空结果集启动死页**：`buildRow(view[0])` 抛异常，`boot()` 里后面的 `bind*` 全部
+     被跳过，按钮、输入、快捷键整页失联（17.1，localStorage 确定性复现）。
+  6. **HTML id 与 JS 选择器对不上**（GLM 那格）：`incident-tbody` vs `incidents-table`，
+     首屏 `TypeError`，整页失效。
+  五条纪律写进 `CODING_INSTRUCTIONS`（焦点与键盘同路径 / 上下占位撑总高 / 派生视图一起
+  重算 / 每次变化都落盘 / 空数据不是异常且事件绑定先于渲染），另加一条 id 改名后的引用
+  检索与首屏控制台检查；随 `keep-coding-instructions` 语义与编程段同进退。
+  判据：`tests/test_frontend_discipline_v170.py`（7 例，含输出样式双向语义）；
+  区分力由删除规则的变异逐条反证（没有一条是只断言「提示词里出现过某词」就罢休）。变异电池
+  `tests/mutation_battery_frontend_discipline_v170.py` 7/7 实测红在指定判据上、
+  非 no-op、按原字节还原并核对 sha256，装置自身退出码 0。
 
 - **UI 对比暴露的四处产品差距：交付文件名与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码（#379–#383）**：
   同一模型、同一提示词的三方 UI 对比（任务 076ad3a1…）暴露的不是模型能力，而是产品口径：

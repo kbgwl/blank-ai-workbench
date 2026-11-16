@@ -322,6 +322,36 @@ CODING_INSTRUCTIONS = (
     "都走一遍，顺带看别的功能有没有被改坏。单测和类型检查只证明代码正确，不证明页面能用；"
     "确实没法在浏览器里点（没有浏览器、沙箱禁网），就在交付里明说这部分没验过，"
     "不要把「能打开」写成「功能对」。\n"
+    "· 一条全局选择器能压掉一片功能：写 `body > *`、`*`、裸元素选择器这类大范围规则时，"
+    "先想它会不会盖掉组件自己的 position——`position:relative` 会把 fixed/sticky 元素"
+    "退化成普通流，粘顶导航、滚动进度条、回到顶部按钮会一起失效；z-index 与 display 同理。"
+    "这类规则要么收窄作用域，要么显式排除。\n"
+    "· 用 `hidden` 属性切换显隐的元素，样式里必须有 `[hidden]{display:none}`（需要压过"
+    "组件自身的 display 时加 `!important`），否则 `.item{display:flex}` 之类的规则会让"
+    "隐藏失效——命令面板过滤「输入了没反应」多半就是这个。\n"
+    "· 响应式按断点真验：窄屏（约 390px）下不许横向滚动、内容单列、正文字号不小于 14px；"
+    "徽标、脚注这类小字同样算，rem 先换算成 px 再判断。\n"
+    "· 自测脚本先核实断言再信结论：报红时先确认脚本里的选择器、属性名、接口在实现里真的存在；"
+    "断言写错就改断言，不要为了一条错断言把本来正确的实现改坏；改不到通过就如实说明哪条没验过，"
+    "不要把半坏的状态交出去。\n"
+    "· 重渲染列表先想焦点与键盘：整块重建（`innerHTML=''` 再 append）会把焦点扔回 body，"
+    "滚动或筛选触发的重渲染甚至让键盘用户按 Enter 打不开详情。要么只更新变化的节点保留原连接，"
+    "要么重建后按 roving tabindex 把焦点、选中项、滚动位置恢复回去；鼠标点击与键盘操作"
+    "必须走同一条打开路径。\n"
+    "· 长列表做窗口化（只渲染可见行）时，上下都要有占位元素撑起真实总高度：滚动条长度要"
+    "对得上总行数，能滚到真实最后一条。只留尾部 spacer 会让比例缩短、滚不到底，"
+    "用户会以为数据丢了。\n"
+    "· 改了数据之后，所有派生视图一起重算：当前筛选结果、结果计数、空状态、分页与排序。"
+    "批量操作最容易漏——「只看未解决」的视图里还留着刚标记解决的记录，计数也不对；"
+    "同一份状态只保留一个来源，别让视图与数据各说各话。\n"
+    "· 视图状态（筛选、搜索、排序、分页）每次变化都要落盘：写 URL hash 或 localStorage，"
+    "并且恢复时优先级一致。只在启动时写一次等于没写——刷新就回到默认视图，用户以为筛选丢了。\n"
+    "· 启动路径要能扛空数据：首次渲染前判断结果集是否为空（取 `view[0]` 前先判空），"
+    "空数据与空筛选结果都只是空状态，不是异常。事件绑定不要挂在可能抛异常的首屏渲染之后——"
+    "一个初始化异常会让整页按钮、输入、快捷键全部失联；先绑定再渲染，或两段各自兜底。\n"
+    "· 改 HTML 结构、id、class 时同步检索 JS/CSS 里的引用（`getElementById`、`querySelector`、"
+    "样式选择器），确认没有指向已改名的节点；改名后打开一次页面看控制台，"
+    "第一条 TypeError 往往就是某处还在取旧 id。\n"
     "· 临时验证脚本放工作区的 `.blank/scratchpad/`，不要放项目根：它不属于交付物，"
     "而且 shell 的 del/rm 会被安全策略拒绝，删除不是清场手段；收尾时由 harness 统一收走。\n"
     "· 交付说明要能让用户验货：改到的文件名、若有网页则入口文件、怎么打开或怎么跑起来；"
@@ -5673,6 +5703,36 @@ async def _quarantine_scratch(state: AgentState, session: AgentSession, node: st
     }
 
 
+async def _externalize_workspace_state(
+    state: AgentState, session: AgentSession, node: str
+) -> dict:
+    """收尾前把 harness 自己的状态（备份 / scratchpad）移出交付目录。
+
+    执行期间它们必须留在工作区（沙箱只许写工作区），但任务结束后它们就是
+    「用户没要的文件」：玻璃题真机交付目录里 3 个页面文件旁边躺着 21 个
+    ``.blank_backups/<task>/*``。只移动不删除，落点写进事件，可复查。
+    清理失败不改判任务，但必须可见。
+    """
+    root = getattr(getattr(session, "context", None), "root", None)
+    task_id = getattr(getattr(session, "context", None), "task_id", "") or ""
+    if not root:
+        return {}
+    from blank_api.services.agent.workspace_state import externalize
+
+    try:
+        outcome = await asyncio.to_thread(externalize, root, task_id)
+    except OSError as exc:
+        await session.recorder.add(
+            "workspace.state_externalize_failed",
+            node,
+            {"reason": f"{exc.__class__.__name__}: {exc}"},
+        )
+        return {}
+    if outcome.get("moved"):
+        await session.recorder.add("workspace.state_externalized", node, outcome)
+    return outcome
+
+
 async def _summarize_result_body(state: AgentState, session: AgentSession) -> AgentState:
     node = "summarize_result"
     await session.recorder.add("node.started", node, {})
@@ -5732,6 +5792,7 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
     # 执行型任务：交付文本固定两段（结论 / 下一步）。
     # 有验收条件时把验收判断并进同一次调用，省一轮往返也省一次费用。
     delivery_state = await _quarantine_scratch(state, session, node)
+    await _externalize_workspace_state(delivery_state, session, node)
     hint = raw.strip()[:1200]
     if session.acceptance_criteria:
         # 把计划进度一并给它：验收不通过时最常见的形态是"某一步压根没做"，

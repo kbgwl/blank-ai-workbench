@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>事故指挥台 Incident Console</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar" id="topbar">
+  <h1>事故指挥台</h1>
+  <div class="topbar-meta" id="topbar-meta">共 5000 条事故</div>
+</header>
+
+<main>
+  <section class="filters" id="filters" aria-label="筛选">
+    <div class="sev-chips" role="group" aria-label="严重级别">
+      <label><input type="checkbox" class="sev" value="P1" checked> P1</label>
+      <label><input type="checkbox" class="sev" value="P2" checked> P2</label>
+      <label><input type="checkbox" class="sev" value="P3" checked> P3</label>
+      <label><input type="checkbox" class="sev" value="P4" checked> P4</label>
+    </div>
+    <select id="service-filter" aria-label="服务">
+      <option value="">全部服务</option>
+    </select>
+    <input id="search" type="search" placeholder="搜索标题或编号" aria-label="搜索">
+    <label class="inline"><input type="checkbox" id="only-open"> 只看未解决</label>
+    <button id="adv-toggle" class="ghost" type="button" aria-expanded="false" aria-controls="advanced">高级筛选</button>
+    <div id="result-count" class="result-count" role="status" aria-live="polite">5000 条结果</div>
+  </section>
+
+  <section id="advanced" class="advanced" hidden aria-label="高级筛选">
+    <label>最早开始时间 <input type="date" id="adv-from"></label>
+    <label>最晚开始时间 <input type="date" id="adv-to"></label>
+    <p class="hint">按开始时间窗口做二次筛选，与上方条件叠加。</p>
+  </section>
+
+  <section class="table-wrap" aria-label="事故列表">
+    <div class="thead" role="row">
+      <span class="col-check"><input type="checkbox" id="select-all" aria-label="全选当前筛选结果"></span>
+      <button class="col col-id" type="button" data-sort="id">编号</button>
+      <button class="col col-sev" type="button" data-sort="severity">级别<span class="arrow" data-arrow="severity"></span></button>
+      <span class="col col-svc">服务</span>
+      <span class="col col-title">标题</span>
+      <button class="col col-time" type="button" data-sort="startedAt">开始时间<span class="arrow" data-arrow="startedAt"></span></button>
+      <span class="col col-status">状态</span>
+    </div>
+    <div class="tbody" id="tbody" role="rowgroup">
+      <div id="top-spacer"></div>
+      <div id="rows"></div>
+      <div id="bottom-spacer"></div>
+    </div>
+  </section>
+
+  <section id="known-gaps" class="known-gaps" hidden aria-label="已知缺口"></section>
+  <pre id="selftest-result" hidden></pre>
+</main>
+
+<div class="toast" id="toast" role="status" hidden>
+  <span id="toast-text"></span>
+  <button id="toast-undo" class="link" type="button">撤销</button>
+</div>
+
+<footer class="toolbar" id="toolbar">
+  <span id="selection-summary">未选择</span>
+  <button id="bulk-ack" type="button" disabled>批量确认</button>
+  <button id="bulk-resolve" type="button" disabled>批量解决</button>
+  <button id="clear-selection" class="ghost" type="button" disabled>清空选择</button>
+</footer>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden>
+  <div class="drawer-head">
+    <h2 id="drawer-title">事故详情</h2>
+    <button id="drawer-close" class="ghost" type="button" aria-label="关闭详情">关闭</button>
+  </div>
+  <dl id="drawer-body"></dl>
+  <div class="drawer-actions">
+    <button id="act-ack" type="button">标记已确认</button>
+    <button id="act-resolve" type="button">标记已解决</button>
+  </div>
+</aside>
+
+<script src="app.js"></script>
+</body>
+</html>

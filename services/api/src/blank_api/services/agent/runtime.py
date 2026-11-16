@@ -1792,6 +1792,10 @@ class AgentRuntime:
         ):
             scope.isolation_settled = True
             await self._settle_isolation(scope, status)
+        # harness 自己的状态（.blank_backups、.blank/scratchpad）不是交付物。收尾这条
+        # 路必须独立走一遍：超时/取消时根本到不了 summarize_result，只靠那里清场会漏。
+        if status in ("succeeded", "failed", "cancelled"):
+            await self._externalize_workspace_state(scope, status)
         async with scope.store() as session:
             task = await session.get(Task, scope.task_id)
             if task is None:
@@ -1886,6 +1890,26 @@ class AgentRuntime:
                     {"reason": f"{exc.__class__.__name__}: {exc}"},
                 )
 
+    async def _externalize_workspace_state(self, scope: _RunScope, status: str) -> None:
+        """把备份与 scratchpad 移出工作区；失败只记账，不改判任务结论。"""
+        from blank_api.services.agent.workspace_state import externalize
+
+        root = getattr(getattr(scope.session, "context", None), "root", None)
+        if not root:
+            return
+        try:
+            outcome = await asyncio.to_thread(externalize, root, scope.task_id)
+        except OSError as exc:
+            await scope.recorder.add(
+                "workspace.state_externalize_failed",
+                "complete",
+                {"status": status, "reason": f"{exc.__class__.__name__}: {exc}"},
+            )
+            return
+        if outcome.get("moved"):
+            await scope.recorder.add(
+                "workspace.state_externalized", "complete", {"status": status, **outcome}
+            )
 
     async def _settle_isolation(self, scope: _RunScope, status: str) -> None:
         """收任务根：成功的先合并改动，再释放副本/容量卷/包；失败与取消只释放。
