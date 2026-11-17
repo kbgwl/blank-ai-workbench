@@ -1,20 +1,35 @@
 # 变更日志
 
-## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）、Claude「Doing tasks」六条与无测试配置时的收尾空跑（#384–#386）、交付改动排除 scratchpad 自测脚本（#388）、空响应与零交付不许算成功（#394–#397）、玻璃题收场清场外移与前四条前端纪律（#401）、事故台题五条前端纪律与 id 引用同步（#402）、Anthropic 式 UI 评测装置与真跑（#403）、Anthropic 式编码评测装置与七处诚实口径（#405–#411）、玻璃题第二轮五条前端纪律与入口引用核对（#420–#423）、Qoder 式全站外壳与设置行式布局（#425–#427）、Qoder 式外壳二次走查（#428）、空流退路总时限与运维控制台六条前端纪律（#429–#430）
+## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）、Claude「Doing tasks」六条与无测试配置时的收尾空跑（#384–#386）、交付改动排除 scratchpad 自测脚本（#388）、空响应与零交付不许算成功（#394–#397）、玻璃题收场清场外移与前四条前端纪律（#401）、事故台题五条前端纪律与 id 引用同步（#402）、Anthropic 式 UI 评测装置与真跑（#403）、Anthropic 式编码评测装置与七处诚实口径（#405–#411）、玻璃题第二轮五条前端纪律与入口引用核对（#420–#423）、Qoder 式全站外壳与设置行式布局（#425–#427）、Qoder 式外壳二次走查（#428）、空流退路的卡死链路与运维控制台六条前端纪律（#429–#430）
 
 - **空流退路总时限、运维控制台六条前端纪律、hydration 浮标（#429–#430）**：
   三方跑分（运维控制台题，reference 30/30、Qoder 22/30、ours 1/30）暴露的问题逐条拆开修：
-  1. **ours 零交付不是「模型不会」，是退路挂死**：真机任务 `01f1fa83` 的事件链
-     `seq20 00:55:28 model.stream_fallback(code=model_stream_empty)`
-     → `seq21 01:25:28`/`seq23 01:55:29` 两次 `model_timeout`（各 30 分钟）
+  1. **ours 零交付不是「模型不会」，卡死的链路已逐段量出**：真机任务 `01f1fa83` 的事件链
+     `seq18 00:47:10 tool.completed(list_files)`
+     → `seq20 00:55:28 model.stream_fallback(code=model_stream_empty)`：流式请求 8 分 18 秒
+     零正文后被网关断开 → `seq21 01:25:28`/`seq23 01:55:29` 两次 `model_timeout`（各整 30 分钟）
      → `seq26 02:25:34 task.failed`；评测端 30 分钟先放弃，交付目录只剩 transcript。
-     根因是退路整包调用继承 `BLANK_MODEL_TIMEOUT_SECONDS=1800`，超时又按瞬时失败重试两次。
-     现在退路有独立墙钟上限 `min(适配器配置, FALLBACK_TIMEOUT_SECONDS=120s)`，
-     超时抛 `model_fallback_timeout` 且不重试，预算写进 `model.stream_fallback` 事件
-     （`budget_ms`）。判据 `tests/test_stream_fallback_budget_v173.py` 4 条；变异电池
-     `tests/mutation_battery_stream_fallback_v173.py` 4/4（去接线 / 改可重试 / 不取 min /
-     不写预算，红集合逐项精确匹配，还原后 4/4 绿）。
-  2. **Qoder 的 8 处前端缺陷上升为产品纪律**（它们出现在交付物里，修在产品侧就是让 Agent
+     两段 30 分钟正好等于实例配置的 `BLANK_MODEL_TIMEOUT_SECONDS=1800`，说明退路的整包请求
+     在那 30 分钟里**一个字节都没收到**，超时又被当成可重试，于是同一件事重跑了两遍。
+     用同一份检查点对话直探供应商（`E:/tmp/probe-spark-*.py`）：
+     带工具回执的流式请求先吐 **272 条 reasoning 增量**（首条 6.0s、末条 57.7s），第一条正文
+     在 58.0s、`response.completed` 在 66.1s；同样的对话走整包，首个字节要等 59.8s
+     （等于整条响应完成），中途没有任何进度可看——所以「整包退路」在长思考模型上
+     天然表现为卡死。另测到一个陷阱：对话里若有 `function_call` 却缺配对的
+     `function_call_output`，网关 90 秒零字节；生产路径会补这条回执（实测该形状能完成），
+     不是本次触发点，但已记为独立风险。
+  2. **退路的两条闸门**（`graph.py`）：整包退路有自己的墙钟上限
+     `min(适配器配置, FALLBACK_TIMEOUT_SECONDS=120s)`，超时抛 `model_fallback_timeout`
+     且不重试，预算写进 `model.stream_fallback` 事件（`budget_ms`）。
+     更关键的是准入：流里**收到过思考增量**再判空，不许退整包——那说明流是通的，只是模型
+     只想不说；同一段思考换整包只会再跑一遍。报错改为「流式响应为空（期间收到 N 个思考增量、
+     M 字，没有正文与工具调用）」，并记 `model.stream_fallback_skipped`
+     （`reasoning_events` / `reasoning_chars`）；真的一行都没有时仍允许退整包（网关不认流）。
+     判据 `tests/test_reasoning_only_stream_v174.py` 4 条 + 退路预算
+     `tests/test_stream_fallback_budget_v173.py` 4 条；变异电池
+     `tests/mutation_battery_reasoning_only_v174.py` 4/4、
+     `tests/mutation_battery_stream_fallback_v173.py` 4/4，红集合逐项精确匹配。
+  3. **Qoder 的 8 处前端缺陷上升为产品纪律**（它们出现在交付物里，修在产品侧就是让 Agent
      不再犯）：虚拟化滚动容器必须自己定高（否则 spacer 撑高 `clientHeight`，5000 行全渲染、
      FPS 18）；滚动前确认 `scrollHeight > clientHeight`，内层不滚就找 document 并挂同一滚动体；
      演示数据的时间步恒定/递增，id 顺序与排序字段同序；roving tabindex 初始至少一行
@@ -23,13 +38,13 @@
      类名必须有 CSS 规则支撑（`.is-hidden{display:none}`），正常态与降级态各取一次 display。
      判据 `tests/test_frontend_discipline_v172.py` 7 条；变异电池
      `tests/mutation_battery_frontend_discipline_v172.py` 6/6 精确红；提示词哈希同步更新。
-  3. **开发浮标「1 Issue」的真实原因**：`#428` 关掉 `devIndicators` 只去掉静态指示器，
+  4. **开发浮标「1 Issue」的真实原因**：`#428` 关掉 `devIndicators` 只去掉静态指示器，
      Next 16 仍会展示真实错误——深色用户刷新时主题引导脚本在水合前改写
      `<html data-theme>`，React 报 hydration mismatch，红色徽标常驻并压住左栏底部入口。
      修法：根 `<html>` 加 `suppressHydrationWarning`（引导脚本行为不变）。
      实测：撤回该属性时浮标 `display:block`、`data-error=true`、控制台两条 hydration 错误；
      加回后 `display:none`、`data-error=false`、控制台无错误，深色截图里左栏底部完整可见。
-  4. **左栏对齐 Qoder 的两个细节**：分组标题右侧加「管理工作区」齿轮入口（16px，点击进
+  5. **左栏对齐 Qoder 的两个细节**：分组标题右侧加「管理工作区」齿轮入口（16px，点击进
      `/projects`，`aria-label` 可读）；「新的任务」去掉带边框的按钮外观，改为与其他导航行
      一致的无边框行（31px 高、透明底、图标 14px）。明暗两态实测一致，点击仍回 `/`。
 

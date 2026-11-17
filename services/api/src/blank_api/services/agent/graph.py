@@ -1563,7 +1563,9 @@ class AgentSession:
                     await self.recorder.add(
                         "model.stream_fallback_skipped",
                         node,
-                        {"reason": error.message, "code": error.code, "status": error.status, "role": role},
+                        {"reason": error.message, "code": error.code, "status": error.status, "role": role,
+                         "reasoning_events": error.reasoning_events,
+                         "reasoning_chars": error.reasoning_chars},
                     )
                     raise
                 # 有的网关不认 stream、有的中间层会吃掉 event-stream：这时一行都解析不出来。
@@ -1873,10 +1875,16 @@ def _fallback_can_help(error: ModelError) -> bool:
     `model_unreachable`（连接层面的失败，SSE 这条路被中间层掐了而普通 POST 通）、
     以及供应商拿 400 拒我们（400 是在拒**问法**，`stream` 这个参数常常就是被拒的那一个）。
 
+    例外：流里收到过思考增量、只是没有正文。那说明流是通的，问题在"模型想了太久/只想不说"，
+    换成整包只会把同一段思考再跑一遍，而且整包在整个思考期间一个字节都不发——
+    真机 01f1fa83 就是这样从 8 分钟拖成 90 分钟的。
+
     不能：429 与 5xx（它说的是"现在别问"，与问法无关）、超时（再等一轮而已）、
     401/403/404（鉴权与模型名，换形状不改答案）、以及读不出状态码的任何失败——
     读不出就当作不能，宁可让用户立刻看到真实原因，不要为了"看起来在努力"多打一次请求。
     """
+    if error.code == "model_stream_empty" and error.reasoning_events:
+        return False
     if error.code in {"model_stream_empty", "model_unreachable"}:
         return True
     return error.code == "model_http_error" and error.status == 400

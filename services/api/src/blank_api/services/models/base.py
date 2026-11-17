@@ -23,6 +23,8 @@ class ModelError(Exception):
         *,
         status: int = 0,
         retry_after: float = 0.0,
+        reasoning_events: int = 0,
+        reasoning_chars: int = 0,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -35,6 +37,11 @@ class ModelError(Exception):
         # 供应商在 429 上明说的等待秒数（`Retry-After`，0 = 没说）。退避取它与
         # 指数退避的较大者：服务器已经说了多久后再来，比客户端自己猜的更有依据。
         self.retry_after = retry_after
+        # 流式响应里收到的思考增量。`model_stream_empty` 不能一律当成"网关不认流"：
+        # 收到过思考增量说明流是通的，只是模型把预算全花在思考上、没给正文——
+        # 这种请求退回整包只会把同一段思考再跑一遍（真机 01f1fa83 卡了 90 分钟）。
+        self.reasoning_events = reasoning_events
+        self.reasoning_chars = reasoning_chars
 
 
 def retry_after_seconds(value: str | None, *, now: float | None = None) -> float:

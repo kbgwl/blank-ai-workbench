@@ -265,6 +265,11 @@ class OpenAIResponsesAdapter(ModelAdapter):
         usage = Usage()
         model = model or self.config.model
         finished: ModelResponse | None = None
+        # 思考增量单独计数：本家会在正文之前推几十条 reasoning 事件（实测同一段对话
+        # 先思考 52s、第 66s 才出正文）。一行正文都没有时，要能分清"网关没认流"
+        # 与"模型只想不说"——后者退回整包只会让同一段思考再跑一遍。
+        reasoning_events = 0
+        reasoning_chars = 0
         # item_id → 累积器里的 index，两套编号需要一个映射
         item_index: dict[str, int] = {}
 
@@ -294,6 +299,9 @@ class OpenAIResponsesAdapter(ModelAdapter):
                             text.append(delta)
                             if on_delta is not None:
                                 await on_delta(delta)
+                    elif kind in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta"):
+                        reasoning_events += 1
+                        reasoning_chars += len(str(event.get("delta") or ""))
                     elif kind == "response.output_item.added":
                         item = event.get("item") or {}
                         if item.get("type") == "function_call":
@@ -327,7 +335,17 @@ class OpenAIResponsesAdapter(ModelAdapter):
         if finished is not None:
             return finished
         if not text and not len(calls):
-            raise ModelError("model_stream_empty", f"模型 {self.config.model} 的流式响应为空")
+            detail = (
+                f"（期间收到 {reasoning_events} 个思考增量、{reasoning_chars} 字，没有正文与工具调用）"
+                if reasoning_events
+                else ""
+            )
+            raise ModelError(
+                "model_stream_empty",
+                f"模型 {self.config.model} 的流式响应为空{detail}",
+                reasoning_events=reasoning_events,
+                reasoning_chars=reasoning_chars,
+            )
         # 没等到 response.completed（连接提前结束）：用累积到的碎片拼一条出来，
         # 但 usage 必然是空的——记账会显示 0，这是真实情况，不要伪造。
         return ModelResponse(
