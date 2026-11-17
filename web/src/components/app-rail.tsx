@@ -97,7 +97,23 @@ export function AppRail() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        <Group>工作区</Group>
+        <Group
+          action={
+            <Link
+              href="/projects"
+              title="管理工作区"
+              aria-label="管理工作区"
+              className="grid size-4 place-items-center rounded text-faint transition-colors hover:bg-surface-2 hover:text-text"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-3" aria-hidden>
+                <circle cx="12" cy="12" r="3" />
+                <path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8" />
+              </svg>
+            </Link>
+          }
+        >
+          工作区
+        </Group>
         {workspaces.length === 0 && (
           <Link
             href="/projects"
@@ -171,8 +187,13 @@ export function AppRail() {
   );
 }
 
-function Group({ children }: { children: string }) {
-  return <div className="px-2 pt-3 pb-1 text-[11px] font-medium text-faint">{children}</div>;
+function Group({ children, action }: { children: string; action?: ReactNode }) {
+  return (
+    <div className="flex items-center px-2 pt-3 pb-1 text-[11px] font-medium text-faint">
+      <span>{children}</span>
+      {action && <span className="ml-auto">{action}</span>}
+    </div>
+  );
 }
 
 function NavRow({ href, label, icon, active }: { href: string; label: string; icon: ReactNode; active: boolean }) {
