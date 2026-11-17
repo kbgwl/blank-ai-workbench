@@ -325,11 +325,11 @@ def test_default_composition_is_byte_identical_to_the_old_prompt() -> None:
     assert compose_system_prompt(None) == baseline
     # 哈希会随提示词的有意扩充而变（本批加入 OWASP/输出编码、scratchpad，
     # Claude Doing tasks 段的最少代码与 UI 真跑规则、玻璃题的四条前端纪律，
-    # 事故台题的五条前端纪律，以及玻璃题第二轮的五条前端纪律与入口引用核对）；
+    # 事故台题的五条前端纪律，玻璃题第二轮的五条，以及运维控制台题的六条前端纪律）；
     # 它钉的是「默认组合就是 SYSTEM_PROMPT + STYLE_PROMPT，没有别处再拼一遍」。
     assert (
         hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()
-        == "8caba1d1071344d0b38733af62bdf00d57c4c73984c008c370b669189a566d99"
+        == "d872f7fe8f33bf0b8c340ccc0632e67826a0960979c59b9c83ba6486f62a9ad5"
     )
     # 空正文的样式与没选样式等价：不能因为选中了一个空文件就把纪律句弄丢。
     assert compose_system_prompt({"name": "x", "prompt": "  ", "keep_coding_instructions": False}) == baseline

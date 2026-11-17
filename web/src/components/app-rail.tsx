@@ -73,9 +73,9 @@ export function AppRail() {
       <div className="px-2 pb-1">
         <Link
           href="/"
-          className="flex items-center gap-2 rounded-md border border-line bg-surface px-2.5 py-[7px] text-[12.5px] font-medium text-text transition-colors hover:border-line-strong hover:bg-surface-2"
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] font-medium text-text transition-colors hover:bg-surface-2"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} className="size-3.5" aria-hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} className="size-3.5 shrink-0 text-muted" aria-hidden>
             <path d="M12 5v14M5 12h14" />
           </svg>
           新的任务

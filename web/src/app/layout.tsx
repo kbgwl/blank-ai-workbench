@@ -16,7 +16,10 @@ const THEME_BOOTSTRAP = `try{if(localStorage.getItem('blank.theme')==='dark')doc
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="zh-CN">
+    // 皮肤引导脚本会在水合前改写 <html data-theme>，服务端 HTML 里没有这个属性。
+    // 不加 suppressHydrationWarning，React 会把这一处差异报成 hydration error，
+    // Next 开发浮标上常驻「1 Issue」压住左栏底部入口。
+    <html lang="zh-CN" suppressHydrationWarning>
       <body className="h-dvh overflow-hidden bg-bg text-text">
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
         <ModelProvider>

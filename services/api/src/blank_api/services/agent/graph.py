@@ -350,15 +350,33 @@ CODING_INSTRUCTIONS = (
     "· 重渲染列表先想焦点与键盘：整块重建（`innerHTML=''` 再 append）会把焦点扔回 body，"
     "滚动或筛选触发的重渲染甚至让键盘用户按 Enter 打不开详情。要么只更新变化的节点保留原连接，"
     "要么重建后按 roving tabindex 把焦点、选中项、滚动位置恢复回去；鼠标点击与键盘操作"
-    "必须走同一条打开路径。\n"
+    "必须走同一条打开路径。roving tabindex 的初始值不能是 null：列表里至少有一行 "
+    "`tabindex=0`，否则 Tab 根本进不来，挂在列表上的 keydown（`if (!focusId) return`）"
+    "也就永远不会执行；focusin/pointerdown 都要登记当前行，焦点行被重渲染移除"
+    "（`focusout` 的 relatedTarget 为 null）时按 id 把焦点补回去。\n"
     "· 长列表做窗口化（只渲染可见行）时，上下都要有占位元素撑起真实总高度：滚动条长度要"
     "对得上总行数，能滚到真实最后一条。只留尾部 spacer 会让比例缩短、滚不到底，"
-    "用户会以为数据丢了。\n"
+    "用户会以为数据丢了。滚动容器自己必须有确定高度（固定值，或视口内 `max-height` 加 "
+    "`overflow:auto`），窗口计算拿的是这个高度；让 spacer 把容器撑高，`clientHeight` 会变成"
+    "全部内容高度，5000 行一次性全渲染，帧率直接塌。验收看 DOM 行数远小于总行数、"
+    "滚到底能看到最后一条。\n"
+    "· 滚动的对象要找准：赋值 `scrollTop` 之前先确认该元素的 `scrollHeight` 大于 "
+    "`clientHeight`；内层容器不滚就说明真实滚动体是 document，`scrollTop` 写上去不会变化，"
+    "滚动监听也要挂在同一个滚动体上。先量再滚，滚完读回 `scrollTop` 与底部距离确认生效。\n"
+    "· 演示/种子数据也要守题面的不变量：题面要求编号按时间递增，生成时时间步就必须恒定或"
+    "递增——每条随机 30–209 秒会让 id 顺序和时间顺序对不上，一点排序就露出首尾颠倒。"
+    "造完数据先按排序字段核对正序首尾两条，再交付。\n"
+    "· 降级/兜底层默认隐藏，显隐只走有 CSS 规则支撑的开关（`[hidden]`、"
+    "`.is-hidden{display:none}` 或内联样式）：给元素加一个样式表里不存在的类名，它照样以 "
+    "`display:block` 全屏叠在页面上。正常态与降级态各取一次 `display` 或各截一次图，"
+    "确认只有一层可见。\n"
     "· 改了数据之后，所有派生视图一起重算：当前筛选结果、结果计数、空状态、分页与排序。"
     "批量操作最容易漏——「只看未解决」的视图里还留着刚标记解决的记录，计数也不对；"
     "同一份状态只保留一个来源，别让视图与数据各说各话。\n"
     "· 视图状态（筛选、搜索、排序、分页）每次变化都要落盘：写 URL hash 或 localStorage，"
-    "并且恢复时优先级一致。只在启动时写一次等于没写——刷新就回到默认视图，用户以为筛选丢了。\n"
+    "并且恢复时优先级一致。只在启动时写一次等于没写——刷新就回到默认视图，用户以为筛选丢了。"
+    "URL 明确压过本地存档：hash 里没有某个键时也按默认值来，不能让上一次存的值悄悄赢；"
+    "要保留「默认」这个选择，就把默认值也写进 hash。\n"
     "· 启动路径要能扛空数据：首次渲染前判断结果集是否为空（取 `view[0]` 前先判空），"
     "空数据与空筛选结果都只是空状态，不是异常。事件绑定不要挂在可能抛异常的首屏渲染之后——"
     "一个初始化异常会让整页按钮、输入、快捷键全部失联；先绑定再渲染，或两段各自兜底。\n"
@@ -1549,27 +1567,33 @@ class AgentSession:
                     )
                     raise
                 # 有的网关不认 stream、有的中间层会吃掉 event-stream：这时一行都解析不出来。
-                # 退回一次性调用——慢一点，但结果是可信的。
+                # 退回一次性调用——慢一点，但结果是可信的。退路带自己的总时限：
+                # 长跑实例把 BLANK_MODEL_TIMEOUT_SECONDS 调大时，退路不能跟着一起变长。
+                budget = _fallback_budget(adapter.config.timeout_seconds)
                 await self.recorder.add(
                     "model.stream_fallback",
                     node,
-                    {"reason": error.message, "code": error.code, "status": error.status, "role": role},
+                    {"reason": error.message, "code": error.code, "status": error.status, "role": role,
+                     "budget_ms": int(budget * 1000)},
                 )
                 return await self._call_non_stream(
-                    adapter, specs, chat, node, role, effort=effort, thinking=thinking, model=model
+                    adapter, specs, chat, node, role, effort=effort, thinking=thinking, model=model,
+                    budget_seconds=budget,
                 )
             except httpx.HTTPError as error:
                 if relay.chunks:
                     await relay.close()
                     raise
+                budget = _fallback_budget(adapter.config.timeout_seconds)
                 await self.recorder.add(
                     "model.stream_fallback",
                     node,
                     {"reason": f"{error.__class__.__name__}：{error}", "code": "stream_transport", "status": 0,
-                     "role": role},
+                     "role": role, "budget_ms": int(budget * 1000)},
                 )
                 return await self._call_non_stream(
-                    adapter, specs, chat, node, role, effort=effort, thinking=thinking, model=model
+                    adapter, specs, chat, node, role, effort=effort, thinking=thinking, model=model,
+                    budget_seconds=budget,
                 )
             await relay.close()
             if relay.chunks:
@@ -1591,14 +1615,31 @@ class AgentSession:
         effort: str = "",
         thinking: dict | None = None,
         model: str = "",
+        budget_seconds: float | None = None,
     ) -> Any:
-        """整包调用（开关关着或流式退路）同样按 429 退避重试，超时/断网也重试。"""
+        """整包调用（开关关着或流式退路）同样按 429 退避重试，超时/断网也重试。
+
+        ``budget_seconds`` 只由空流退路传入：它是这次退路的总墙钟上限，与适配器
+        自己的读超时无关（网关间歇性发心跳时，读超时永远不会触发）。到点即失败，
+        不再走瞬时重试——同一端点刚已经挂满整个退路预算，原样再问只会更久。
+        """
         retries = 0
         transient = 0
         while True:
             effects_before = self.tool_effects
             try:
-                return await adapter.bind_tools(specs, chat, effort=effort, thinking=thinking, model=model)
+                call = adapter.bind_tools(
+                    specs, chat, effort=effort, thinking=thinking, model=model
+                )
+                if budget_seconds:
+                    return await asyncio.wait_for(call, timeout=budget_seconds)
+                return await call
+            except asyncio.TimeoutError:
+                raise ModelError(
+                    "model_fallback_timeout",
+                    f"空流退路的整包调用 {budget_seconds:.0f}s 内没有返回，已停止本轮",
+                    retryable=False,
+                ) from None
             except ModelError as error:
                 if _rate_limit_may_retry(error, retries):
                     retries += 1
@@ -1766,6 +1807,24 @@ def _rate_limit_delay(retry: int, retry_after: float = 0.0) -> float:
 TRANSIENT_RETRIES = int(os.environ.get("BLANK_MODEL_TRANSIENT_RETRIES") or 2)
 TRANSIENT_BASE_DELAY_SECONDS = 0.4
 TRANSIENT_MAX_DELAY_SECONDS = 5.0
+
+# 空流退路的总时限。退路是「同一番话换个问法」，不是长任务，所以它必须比正常调用短，
+# 也不能跟着 BLANK_MODEL_TIMEOUT_SECONDS 一起变长。真机 01f1fa83（运维控制台题）：
+# 流式回包为空后，整包退路按 1800s 超时、再重试两次，从空流到 task.failed 用了 90 分钟；
+# 评测端 30 分钟先放弃，交付目录只剩 transcript。退路超时也不重试——同一端点已经
+# 30 分钟没答，原样再问只会把界面继续挂住。
+FALLBACK_TIMEOUT_SECONDS = float(os.environ.get("BLANK_FALLBACK_TIMEOUT_SECONDS") or 120)
+
+
+def _fallback_budget(configured_seconds: float) -> float:
+    """退路总时限：配置更短就用配置，否则封顶到 FALLBACK_TIMEOUT_SECONDS。
+
+    配置为 0/负数按「没配」处理。封顶而不是取配置值，就是这条时限存在的理由：
+    长跑实例会把 BLANK_MODEL_TIMEOUT_SECONDS 调到 1800，退路不能跟着变成半小时。
+    """
+    if not configured_seconds or configured_seconds <= 0:
+        return FALLBACK_TIMEOUT_SECONDS
+    return min(float(configured_seconds), FALLBACK_TIMEOUT_SECONDS)
 # 限流的三类写法：有的适配器填 status=429，有的只在 code 里写限流（桩与部分网关）。
 # 两种都必须落进「限流预算」而不是「网络预算」——否则同一笔限流会按两种语义各退一次。
 RATE_LIMIT_CODES = frozenset({"rate_limited", "rate_limit", "too_many_requests"})
