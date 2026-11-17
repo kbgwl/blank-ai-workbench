@@ -39,7 +39,7 @@ export function PageHeader(props: {
       <div className="min-w-0">
         <h1 className="sr-only">{props.title}</h1>
         {props.description && (
-          <p className="max-w-2xl text-[12.5px] leading-relaxed text-muted">{props.description}</p>
+          <p className="max-w-2xl text-[13.5px] leading-relaxed text-muted">{props.description}</p>
         )}
       </div>
       {props.actions && <div className="flex shrink-0 items-center gap-2">{props.actions}</div>}

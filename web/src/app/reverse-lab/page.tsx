@@ -218,7 +218,7 @@ export default function ReverseLabPage() {
               onChange={chooseProject}
               menuMinWidth={220}
             />
-            <span className={`rounded-md border px-2 py-1 text-[11px] ${TONE_CLASS[tone]}`}>
+            <span className={`rounded-md border px-2 py-1 text-[12px] ${TONE_CLASS[tone]}`}>
               {status ? adapterLabel(status.adapter.state) : "状态未知"}
             </span>
             <Button onClick={() => void reconnect()} disabled={!projectId || busy === "status"}>
@@ -245,8 +245,8 @@ export default function ReverseLabPage() {
         {/* 左：候选实物 */}
         <section className="flex min-h-0 flex-col rounded-lg border border-line bg-surface">
           <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
-            <span className="font-mono text-[10px] tracking-wide text-faint uppercase">候选实物</span>
-            <span className="text-[10px] text-faint">{targets.length} 个</span>
+            <span className="font-mono text-[11px] tracking-wide text-faint uppercase">候选实物</span>
+            <span className="text-[11px] text-faint">{targets.length} 个</span>
           </div>
           <div className="flex items-end gap-2 border-b border-line px-3 py-2">
             <Field label="子目录">
@@ -254,7 +254,7 @@ export default function ReverseLabPage() {
                 value={subPath}
                 onChange={(event) => setSubPath(event.target.value)}
                 placeholder="留空 = 工作区根"
-                className="py-1.5 text-[12px]"
+                className="py-1.5 text-[13px]"
               />
             </Field>
             <Button
@@ -280,16 +280,16 @@ export default function ReverseLabPage() {
                       active ? "bg-brand/10 text-text" : "text-muted hover:bg-surface-2 hover:text-text"
                     }`}
                   >
-                    <span className="w-full truncate font-mono text-[12px]">{item.target}</span>
-                    <span className="text-[10px] text-faint">{targetHint(item)}</span>
+                    <span className="w-full truncate font-mono text-[13px]">{item.target}</span>
+                    <span className="text-[11px] text-faint">{targetHint(item)}</span>
                   </button>
                 );
               })
             )}
             {truncated > 0 && (
-              <p className="px-2 py-2 text-[10px] text-faint">另有 {truncated} 个超出上限没列举</p>
+              <p className="px-2 py-2 text-[11px] text-faint">另有 {truncated} 个超出上限没列举</p>
             )}
-            {targetsNote && <p className="px-2 py-2 text-[10px] text-faint">{targetsNote}</p>}
+            {targetsNote && <p className="px-2 py-2 text-[11px] text-faint">{targetsNote}</p>}
           </div>
         </section>
 
@@ -297,8 +297,8 @@ export default function ReverseLabPage() {
         <section className="flex min-h-0 flex-col rounded-lg border border-line bg-surface">
           <div className="flex items-center justify-between gap-3 border-b border-line px-3 py-2">
             <div className="min-w-0">
-              <div className="font-mono text-[10px] tracking-wide text-faint uppercase">字符串线索</div>
-              <div className="mt-0.5 truncate font-mono text-[12px] text-text">
+              <div className="font-mono text-[11px] tracking-wide text-faint uppercase">字符串线索</div>
+              <div className="mt-0.5 truncate font-mono text-[13px] text-text">
                 {selected || "先从左栏挑一个目标"}
               </div>
             </div>
@@ -322,11 +322,11 @@ export default function ReverseLabPage() {
             ) : strings.length === 0 ? (
               <StateLine>{stringsNote || "前导区间里没有可读串"}</StateLine>
             ) : (
-              <table className="w-full border-collapse text-[12px]">
+              <table className="w-full border-collapse text-[13px]">
                 <tbody>
                   {strings.map((hit) => (
                     <tr key={`${hit.offset}-${hit.text}`} className="border-b border-line last:border-0">
-                      <td className="w-[7.5rem] px-3 py-1 align-top font-mono text-[11px] text-faint">
+                      <td className="w-[7.5rem] px-3 py-1 align-top font-mono text-[12px] text-faint">
                         {offsetLabel(hit.offset)}
                       </td>
                       <td className="px-3 py-1 break-all font-mono text-text">{hit.text}</td>
@@ -336,16 +336,16 @@ export default function ReverseLabPage() {
               </table>
             )}
             {strings && strings.length > 0 && stringsNote && (
-              <p className="px-3 py-2 text-[10px] text-faint">{stringsNote}</p>
+              <p className="px-3 py-2 text-[11px] text-faint">{stringsNote}</p>
             )}
           </div>
 
           {report && (
             <div className="border-t border-line p-3">
               <div className="flex items-center justify-between gap-2">
-                <span className="font-mono text-[10px] tracking-wide text-faint uppercase">调查结论</span>
+                <span className="font-mono text-[11px] tracking-wide text-faint uppercase">调查结论</span>
                 <span
-                  className={`rounded border px-1.5 py-0.5 text-[10px] ${
+                  className={`rounded border px-1.5 py-0.5 text-[11px] ${
                     report.ok ? TONE_CLASS.ok : TONE_CLASS.bad
                   }`}
                 >
@@ -353,15 +353,15 @@ export default function ReverseLabPage() {
                 </span>
               </div>
               {findings.length === 0 ? (
-                <p className="mt-2 text-[12px] text-muted">{report.reason || "这次没有产出结论"}</p>
+                <p className="mt-2 text-[13px] text-muted">{report.reason || "这次没有产出结论"}</p>
               ) : (
                 <ul className="mt-2 space-y-1.5">
                   {findings.map((item) => (
                     <li key={`${item.evidence_id}-${item.kind}-${item.value}`} className="flex items-start gap-2">
-                      <span className="mt-0.5 shrink-0 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-faint">
+                      <span className="mt-0.5 shrink-0 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-faint">
                         {item.evidence_id}
                       </span>
-                      <span className="text-[12px] text-text">{findingLabel(item)}</span>
+                      <span className="text-[13px] text-text">{findingLabel(item)}</span>
                     </li>
                   ))}
                 </ul>
@@ -373,13 +373,13 @@ export default function ReverseLabPage() {
         {/* 右：台账与证据 */}
         <section className="flex min-h-0 flex-col gap-3 overflow-y-auto rounded-lg border border-line bg-surface p-3">
           <div>
-            <div className="font-mono text-[10px] tracking-wide text-faint uppercase">证据与边界</div>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted">
+            <div className="font-mono text-[11px] tracking-wide text-faint uppercase">证据与边界</div>
+            <p className="mt-1 text-[12px] leading-relaxed text-muted">
               调查是一次真实工具调用，会留下任务、事件与工具账。
             </p>
           </div>
 
-          <dl className="space-y-2 text-[11px]">
+          <dl className="space-y-2 text-[12px]">
             <Row label="授权根" value={status?.root ?? workspace?.path ?? "—"} mono />
             <Row label="服务端" value={status?.adapter.server ?? "—"} />
             <Row
@@ -393,15 +393,15 @@ export default function ReverseLabPage() {
           </dl>
 
           {status && (
-            <div className="rounded-md border border-line bg-surface-2 p-2 text-[10px] leading-relaxed text-faint">
+            <div className="rounded-md border border-line bg-surface-2 p-2 text-[11px] leading-relaxed text-faint">
               {status.adapter.boundary_note}
             </div>
           )}
 
           {report && (
             <div className="space-y-2 border-t border-line pt-3">
-              <div className="font-mono text-[10px] tracking-wide text-faint uppercase">这次调查</div>
-              <dl className="space-y-2 text-[11px]">
+              <div className="font-mono text-[11px] tracking-wide text-faint uppercase">这次调查</div>
+              <dl className="space-y-2 text-[12px]">
                 <Row label="工具" value={report.evidence.tool ?? "—"} mono />
                 <Row label="调用号" value={report.evidence.tool_call_id ?? "—"} mono />
                 <Row
@@ -412,14 +412,14 @@ export default function ReverseLabPage() {
               </dl>
               <Link
                 href={`/tasks/detail?id=${report.task.id}`}
-                className="inline-block rounded-md border border-line px-2 py-1 text-[11px] text-muted hover:border-brand hover:text-text"
+                className="inline-block rounded-md border border-line px-2 py-1 text-[12px] text-muted hover:border-brand hover:text-text"
               >
                 打开任务 →
               </Link>
             </div>
           )}
 
-          <p className="mt-auto text-[10px] leading-relaxed text-faint">
+          <p className="mt-auto text-[11px] leading-relaxed text-faint">
             这一条链路调的是宿主进程里的 REA 子进程，不套任务的沙箱档位；文件与网络边界由「授权根 +
             路径闸门」保证，不是由容器保证。
           </p>
@@ -433,7 +433,7 @@ function Row({ label, value, mono = false }: { label: string; value: string; mon
   return (
     <div className="flex items-start justify-between gap-3">
       <dt className="shrink-0 text-faint">{label}</dt>
-      <dd className={`min-w-0 truncate text-right text-muted ${mono ? "font-mono text-[10px]" : ""}`}>{value}</dd>
+      <dd className={`min-w-0 truncate text-right text-muted ${mono ? "font-mono text-[11px]" : ""}`}>{value}</dd>
     </div>
   );
 }

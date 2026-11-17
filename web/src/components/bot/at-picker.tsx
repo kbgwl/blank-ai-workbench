@@ -128,7 +128,7 @@ export function AtPicker(props: {
             <path d="M15 18l-6-6 6-6" />
           </svg>
         </button>
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{dir ? `/${dir}` : "/"}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-faint">{dir ? `/${dir}` : "/"}</span>
       </div>
 
       <div className="border-b border-line p-2">
@@ -162,14 +162,14 @@ export function AtPicker(props: {
             }
           }}
           placeholder="按名字搜索，或直接浏览目录"
-          className="w-full rounded-md bg-surface-2 px-2 py-1.5 text-[12px] text-text placeholder:text-faint focus:outline-none"
+          className="w-full rounded-md bg-surface-2 px-2 py-1.5 text-[13px] text-text placeholder:text-faint focus:outline-none"
         />
       </div>
 
       <div ref={list} className="max-h-72 overflow-y-auto p-1">
-        {error && <p className="px-2 py-3 text-center text-[11.5px] text-danger">{error}</p>}
+        {error && <p className="px-2 py-3 text-center text-[12.5px] text-danger">{error}</p>}
         {!error && rows.length === 0 && (
-          <p className="px-2 py-3 text-center text-[11.5px] text-faint">
+          <p className="px-2 py-3 text-center text-[12.5px] text-faint">
             {searching
               ? tree === null
                 ? "读取工作区…"
@@ -193,12 +193,12 @@ export function AtPicker(props: {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-3.5 shrink-0 text-faint" aria-hidden>
               {entry.is_dir ? <path d="M3 7h6l2 2h10v10H3z" /> : <path d="M6 3h7l5 5v13H6z" />}
             </svg>
-            <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-text">{entry.name || entry.path}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-text">{entry.name || entry.path}</span>
           </button>
         ))}
       </div>
 
-      <p className="border-t border-line px-2.5 py-1.5 text-[10.5px] text-faint">
+      <p className="border-t border-line px-2.5 py-1.5 text-[11.5px] text-faint">
         回车选目录 / 引用文件，← 回上一层，Esc 关闭
       </p>
     </div>

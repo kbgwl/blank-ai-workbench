@@ -69,7 +69,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-dvh overflow-hidden bg-bg">
       <AppRail />
-      <div className="flex min-w-0 flex-1 flex-col py-2 pr-2">
+      <div className="flex min-w-0 flex-1 flex-col py-2 pr-2 pl-4">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-canvas shadow-[var(--shadow-sm)]">
           <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3">
             <Link
@@ -81,10 +81,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <path d="m14 6-6 6 6 6" />
               </svg>
             </Link>
-            <span className="min-w-0 truncate text-[13px] font-medium">{title || "空白格"}</span>
+            <span className="min-w-0 truncate text-[14px] font-medium">{title || "空白格"}</span>
 
             <div className="ml-auto flex shrink-0 items-center gap-2.5">
-              <kbd className="hidden items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-faint lg:flex">
+              <kbd className="hidden items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-faint lg:flex">
                 {shortcutHint(PALETTE_SHORTCUT)}
               </kbd>
               <ModelSwitcher />

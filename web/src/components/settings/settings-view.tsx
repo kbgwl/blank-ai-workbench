@@ -136,7 +136,7 @@ function SectionBody({ active }: { active: SectionKey }) {
       return (
         <div className="flex flex-col gap-4">
           <Panel title="任务默认模型" hint="按角色指定供应商">
-            <p className="text-[12px] leading-relaxed text-faint">
+            <p className="text-[13px] leading-relaxed text-faint">
               不选就跟随顶部主模型。任务接口支持备用模型，在可重试故障时自动切换。
             </p>
             <RoleModelSettings />
@@ -163,7 +163,7 @@ function SectionBody({ active }: { active: SectionKey }) {
           <FeatureFlagsPanel />
           <RoutingEvidencePanel />
           <Panel title="审计与回滚" hint="tool_calls · 文件快照">
-            <p className="text-[12.5px] leading-relaxed text-faint">
+            <p className="text-[13.5px] leading-relaxed text-faint">
               每次工具调用都落在 tool_calls 与任务事件里，含风险等级、权限判定与耗时；写文件前留备份，
               任务执行前留整树快照，可以按检查点回滚。
             </p>
@@ -208,7 +208,7 @@ export function SettingsView() {
                 href={`#${item.key}`}
                 aria-current={selected ? "page" : undefined}
                 onClick={() => select(item.key)}
-                className={`flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] transition-colors lg:w-full ${
+                className={`flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-[13.5px] transition-colors lg:w-full ${
                   selected ? "bg-surface-2 font-medium text-text" : "text-muted hover:bg-surface-2 hover:text-text"
                 }`}
               >
@@ -222,18 +222,18 @@ export function SettingsView() {
         <section ref={contentRef} aria-labelledby="settings-section-title" className="min-w-0 scroll-mt-4">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
             <div className="flex min-w-0 items-center gap-2">
-              <h2 id="settings-section-title" className="text-[13.5px] font-semibold tracking-tight">
+              <h2 id="settings-section-title" className="text-[14px] font-semibold tracking-tight">
                 {section.label}
               </h2>
-              <span className="rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-faint">
+              <span className="rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-faint">
                 {section.status}
               </span>
             </div>
-            <span className="shrink-0 font-mono text-[10px] text-faint">
+            <span className="shrink-0 font-mono text-[11px] text-faint">
               {String(index + 1).padStart(2, "0")} / {String(SECTIONS.length).padStart(2, "0")}
             </span>
           </div>
-          <p className="mt-2 text-[12px] leading-relaxed text-muted">{section.description}</p>
+          <p className="mt-2 text-[13px] leading-relaxed text-muted">{section.description}</p>
 
           <div className="mt-4">
             <SectionBody active={active} />

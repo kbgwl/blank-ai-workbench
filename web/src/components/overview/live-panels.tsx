@@ -68,11 +68,11 @@ export function LivePanels() {
               const workspace = activeWorkspace(project);
               return (
                 <li key={project.id} className="rounded-lg border border-line bg-surface px-3 py-2">
-                  <div className="truncate text-[13px] font-medium">{project.name}</div>
+                  <div className="truncate text-[14px] font-medium">{project.name}</div>
                   {workspace ? (
-                    <div className="mt-0.5 truncate font-mono text-[10px] text-faint">{workspace.path}</div>
+                    <div className="mt-0.5 truncate font-mono text-[11px] text-faint">{workspace.path}</div>
                   ) : (
-                    <div className="mt-0.5 font-mono text-[10px] text-warn">未绑定工作区</div>
+                    <div className="mt-0.5 font-mono text-[11px] text-warn">未绑定工作区</div>
                   )}
                 </li>
               );
@@ -81,7 +81,7 @@ export function LivePanels() {
         </ul>
         <Link
           href="/projects"
-          className="mt-3 inline-block font-mono text-[11px] text-brand hover:underline"
+          className="mt-3 inline-block font-mono text-[12px] text-brand hover:underline"
         >
           打开项目工作台 →
         </Link>
@@ -97,13 +97,13 @@ export function LivePanels() {
             providers.slice(0, 4).map((provider) => (
               <li key={provider.id} className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
                 <span className={`size-1.5 shrink-0 rounded-full ${provider.enabled ? "bg-accent" : "bg-faint"}`} />
-                <span className="min-w-0 flex-1 truncate text-[13px]">{provider.name}</span>
-                <span className="shrink-0 truncate font-mono text-[10px] text-faint">{provider.model}</span>
+                <span className="min-w-0 flex-1 truncate text-[14px]">{provider.name}</span>
+                <span className="shrink-0 truncate font-mono text-[11px] text-faint">{provider.model}</span>
               </li>
             ))
           )}
         </ul>
-        <Link href="/settings" className="mt-3 inline-block font-mono text-[11px] text-brand hover:underline">
+        <Link href="/settings" className="mt-3 inline-block font-mono text-[12px] text-brand hover:underline">
           前往模型设置 →
         </Link>
       </Panel>
@@ -116,20 +116,20 @@ export function LivePanels() {
         ) : (
           <div className="grid grid-cols-3 gap-2 text-center">
             <div className="rounded-lg border border-line bg-surface px-2 py-2">
-              <div className="font-mono text-[10px] text-faint uppercase">调用</div>
+              <div className="font-mono text-[11px] text-faint uppercase">调用</div>
               <div className="text-[15px] font-semibold">{usage.total_calls}</div>
             </div>
             <div className="rounded-lg border border-line bg-surface px-2 py-2">
-              <div className="font-mono text-[10px] text-faint uppercase">失败</div>
+              <div className="font-mono text-[11px] text-faint uppercase">失败</div>
               <div className={`text-[15px] font-semibold ${failed > 0 ? "text-warn" : "text-text"}`}>{failed}</div>
             </div>
             <div className="rounded-lg border border-line bg-surface px-2 py-2">
-              <div className="font-mono text-[10px] text-faint uppercase">TOKENS</div>
+              <div className="font-mono text-[11px] text-faint uppercase">TOKENS</div>
               <div className="text-[15px] font-semibold">{tokens.toLocaleString("en-US")}</div>
             </div>
           </div>
         )}
-        <Link href="/settings" className="mt-3 inline-block font-mono text-[11px] text-brand hover:underline">
+        <Link href="/settings" className="mt-3 inline-block font-mono text-[12px] text-brand hover:underline">
           查看用量明细 →
         </Link>
       </Panel>

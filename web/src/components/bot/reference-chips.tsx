@@ -27,7 +27,7 @@ export function ReferenceChips({
         <span
           key={path}
           title={path}
-          className="inline-flex max-w-[240px] items-center gap-1 rounded-md border border-line bg-surface-2 py-0.5 pl-1.5 pr-1 text-[11px] text-muted"
+          className="inline-flex max-w-[240px] items-center gap-1 rounded-md border border-line bg-surface-2 py-0.5 pl-1.5 pr-1 text-[12px] text-muted"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-3 shrink-0 text-faint" aria-hidden>
             <path d="M6 3h7l5 5v13H6z" />

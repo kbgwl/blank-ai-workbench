@@ -10,7 +10,7 @@ const KIND_LABEL: Record<DraftAttachment["kind"], string> = {
 
 function FileGlyph({ kind }: { kind: DraftAttachment["kind"] }) {
   return (
-    <span className="grid size-full place-items-center bg-surface-2 text-[10px] font-mono text-muted">
+    <span className="grid size-full place-items-center bg-surface-2 text-[11px] font-mono text-muted">
       {KIND_LABEL[kind]}
     </span>
   );
@@ -45,7 +45,7 @@ export function DraftImageChips({
           )}
 
           {image.uploading && (
-            <span className="absolute inset-0 grid place-items-center bg-$1 font-mono text-[10px] text-muted">
+            <span className="absolute inset-0 grid place-items-center bg-$1 font-mono text-[11px] text-muted">
               上传中
             </span>
           )}
@@ -62,7 +62,7 @@ export function DraftImageChips({
               type="button"
               onClick={() => onRemove(image.key)}
               aria-label={`移除 ${image.name}`}
-              className="absolute top-0.5 right-0.5 grid size-4 place-items-center rounded-full bg-text/70 text-[10px] leading-none text-bg transition-opacity hover:bg-text"
+              className="absolute top-0.5 right-0.5 grid size-4 place-items-center rounded-full bg-text/70 text-[11px] leading-none text-bg transition-opacity hover:bg-text"
             >
               ×
             </button>

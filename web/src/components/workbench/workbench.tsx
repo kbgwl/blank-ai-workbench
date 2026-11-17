@@ -489,27 +489,27 @@ export function Workbench() {
   })();
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[248px_minmax(0,1fr)_300px] bg-bg text-text">
+    <div className="grid h-full min-h-0 grid-cols-[308px_minmax(0,1fr)_300px] bg-bg text-text">
       {/* ── 左栏 ── */}
       <aside className="flex min-h-0 flex-col border-r border-line bg-sidebar">
         <div className="flex items-center gap-2 px-3 pt-3 pb-2">
           <span className="grid size-6 place-items-center rounded-[7px] bg-logo-bg">
             <span className="size-2.5 rounded-[2px] bg-logo-accent" />
           </span>
-          <span className="text-[13.5px] font-semibold tracking-tight">空白格</span>
-          <Link href="/" className="ml-auto rounded-md px-1.5 py-0.5 text-[11px] text-faint transition-colors hover:bg-surface-2 hover:text-text">
+          <span className="text-[14px] font-semibold tracking-tight">空白格</span>
+          <Link href="/" className="ml-auto rounded-md px-1.5 py-0.5 text-[12px] text-faint transition-colors hover:bg-surface-2 hover:text-text">
             工作台
           </Link>
         </div>
         <button
           type="button"
           onClick={newTask}
-          className={`mx-3 mb-2 flex items-center gap-2 rounded-lg border border-line-strong bg-surface px-2.5 py-2 text-left text-[13px] font-medium hover:bg-surface-2 ${inShell ? "mt-3" : ""}`}
+          className={`mx-1 mb-1 flex items-center gap-2 rounded-md px-3 py-2 text-left text-[14px] font-medium hover:bg-surface-2 ${inShell ? "mt-3" : ""}`}
         >
           <Icon d="M12 5v14M5 12h14" />
           新的任务
         </button>
-        <div className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-[12.5px] text-faint">
+        <div className="mx-2 mb-2 flex items-center gap-2 rounded-md border border-line bg-surface px-2.5 py-1.5 text-[14px] text-faint">
           <Icon d="M11 11a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM20 20l-3.5-3.5" box={24} />
           <input
             value={query}
@@ -522,7 +522,7 @@ export function Workbench() {
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
           <Group>工作区</Group>
           {workspaceGroups.length === 0 && (
-            <p className={`px-2 py-1 text-[11.5px] ${projectsError ? "text-danger" : "text-faint"}`}>
+            <p className={`px-2 py-1 text-[12.5px] ${projectsError ? "text-danger" : "text-faint"}`}>
               {projectsError ? "工作区读取失败" : "还没有工作区"}
             </p>
           )}
@@ -531,23 +531,23 @@ export function Workbench() {
               key={item.key}
               href="/projects"
               title={item.key}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] text-muted hover:bg-surface-3 hover:text-text"
+              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-[14px] text-muted hover:bg-surface-3 hover:text-text"
             >
               <Icon d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
               <span className="min-w-0 truncate">{item.label}</span>
-              {item.count > 1 && <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">{item.count}</span>}
+              {item.count > 1 && <span className="ml-auto shrink-0 font-mono text-[11px] text-faint">{item.count}</span>}
             </Link>
           ))}
           {workspaceGroups.length > 8 && (
-            <Link href="/projects" className="flex items-center gap-2 rounded-md px-2 py-1 text-[11.5px] text-faint hover:text-text">
+            <Link href="/projects" className="flex items-center gap-2 rounded-md px-2 py-1 text-[12.5px] text-faint hover:text-text">
               还有 {workspaceGroups.length - 8} 个工作区…
             </Link>
           )}
 
           <Group>最近任务</Group>
-          {tasks === null && <p className="px-2 py-1 text-[11.5px] text-faint">读取中…</p>}
+          {tasks === null && <p className="px-2 py-1 text-[12.5px] text-faint">读取中…</p>}
           {tasks !== null && filteredTasks.length === 0 && (
-            <p className={`px-2 py-1 text-[11.5px] ${tasksError ? "text-danger" : "text-faint"}`}>
+            <p className={`px-2 py-1 text-[12.5px] ${tasksError ? "text-danger" : "text-faint"}`}>
               {tasksError ? "任务读取失败" : query ? "没有匹配的任务" : "还没有任务，说一句就开始"}
             </p>
           )}
@@ -562,7 +562,7 @@ export function Workbench() {
                   type="button"
                   onClick={() => setSelectedId(item.id)}
                   title={item.title}
-                  className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] ${active ? "font-semibold text-text" : "text-muted group-hover:text-text"}`}
+                  className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13.5px] ${active ? "font-semibold text-text" : "text-muted group-hover:text-text"}`}
                 >
                   <span className="min-w-0 flex-1 truncate">{item.title}</span>
                   <Dot status={item.status} />
@@ -590,7 +590,7 @@ export function Workbench() {
           <RailLink href="/projects" label="项目与工作区" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
           <div className="my-1.5 h-px bg-line" />
           <RailLink href="/settings" label="设置" d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4 0a1.7 1.7 0 0 0 .3 1.9 2 2 0 1 1-2.8 2.8 1.7 1.7 0 0 0-2.9 1.2 2 2 0 0 1-4 0 1.7 1.7 0 0 0-1.9-1.2 2 2 0 1 1-2.8-2.8A1.7 1.7 0 0 0 4.6 15a2 2 0 0 1 0-4 1.7 1.7 0 0 0 1.2-1.1 1.7 1.7 0 0 0-.3-1.9 2 2 0 1 1 2.8-2.8A1.7 1.7 0 0 0 11 4.6a2 2 0 0 1 4 0 1.7 1.7 0 0 0 2.9 1.2 2 2 0 1 1 2.8 2.8 1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1 2 2 0 0 1 0 4z" />
-          <p className="truncate px-2 pt-1 text-[10.5px] text-faint">{provider?.model || "未配置模型"}</p>
+          <p className="truncate px-2 pt-1 text-[11.5px] text-faint">{provider?.model || "未配置模型"}</p>
           <p className="px-2 pt-0.5">
             <HealthPill compact />
           </p>
@@ -600,9 +600,9 @@ export function Workbench() {
       {/* ── 中栏 ── */}
       <main className="flex min-h-0 min-w-0 flex-col bg-canvas">
         <header className="flex h-[47px] shrink-0 items-center gap-2.5 border-b border-line bg-bg px-5">
-          <h1 className="min-w-0 truncate text-[13.5px] font-semibold">{task?.title ?? "新的任务"}</h1>
+          <h1 className="min-w-0 truncate text-[14px] font-semibold">{task?.title ?? "新的任务"}</h1>
           {task && (
-            <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusMeta(task.status).chip}`}>
+            <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[12px] font-medium ${statusMeta(task.status).chip}`}>
               {statusMeta(task.status).label}
             </span>
           )}
@@ -624,9 +624,9 @@ export function Workbench() {
           <div className="flex shrink-0 items-center gap-1.5 border-b border-line bg-bg px-5 py-1.5">
             {phases.map((phase, index) => (
               <span key={phase.key} className="flex items-center gap-1.5">
-                {index > 0 && <span className="text-[10px] text-faint/60">›</span>}
+                {index > 0 && <span className="text-[11px] text-faint/60">›</span>}
                 <span
-                  className={`flex items-center gap-1 text-[11px] ${
+                  className={`flex items-center gap-1 text-[12px] ${
                     phase.state === "done" ? "text-accent" : phase.state === "active" ? "text-brand" : "text-faint"
                   }`}
                 >
@@ -644,7 +644,7 @@ export function Workbench() {
               </span>
             ))}
             {goalNote && (
-              <span className="ml-auto min-w-0 truncate pl-3 text-[11px] text-muted" title={goalNote}>
+              <span className="ml-auto min-w-0 truncate pl-3 text-[12px] text-muted" title={goalNote}>
                 {goalNote}
               </span>
             )}
@@ -654,13 +654,13 @@ export function Workbench() {
         <div className="min-h-0 flex-1 overflow-y-auto py-6">
           <div className="mx-auto w-full max-w-[720px] px-6">
             {(liveNotice || notice) && (
-              <div className="mb-4 rounded-lg border border-warn/30 bg-warn-soft px-3 py-2 text-[12px] text-warn">
+              <div className="mb-4 rounded-lg border border-warn/30 bg-warn-soft px-3 py-2 text-[13px] text-warn">
                 {notice ?? liveNotice}
               </div>
             )}
 
             {task?.status === "failed" && task.failureReason && (
-              <div className="mb-4 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-[12px] leading-relaxed text-danger">
+              <div className="mb-4 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-[13px] leading-relaxed text-danger">
                 <span className="font-semibold">执行失败</span>
                 <span className="ml-1.5">{task.failureReason}</span>
               </div>
@@ -672,11 +672,11 @@ export function Workbench() {
                   <span className="size-3 rounded-[3px] bg-brand" />
                 </div>
                 <h2 className="mt-4 text-[17px] font-semibold">今天要做什么？</h2>
-                <p className="mt-2 max-w-md text-[12.5px] leading-relaxed text-muted">
+                <p className="mt-2 max-w-md text-[13.5px] leading-relaxed text-muted">
                   直接说目标，Agent 自己判断要不要读代码、改文件；下面输入框按 Enter 会创建并立刻跑起来。
                 </p>
                 {hasNoWorkspace && (
-                  <p className={`mt-3 text-[11.5px] ${projectsError ? "text-danger" : "text-faint"}`}>
+                  <p className={`mt-3 text-[12.5px] ${projectsError ? "text-danger" : "text-faint"}`}>
                     {projectsError
                       ? "工作区读取失败，请确认后端服务已启动后刷新。"
                       : "还没有工作区，先去「项目」绑定一个目录。"}
@@ -686,14 +686,14 @@ export function Workbench() {
             ) : (
               <>
                 <Message who="你" time={task.createdAt}>
-                  <div className="inline-block max-w-[88%] rounded-[10px] bg-surface-2 px-3.5 py-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap">
+                  <div className="inline-block max-w-[88%] rounded-[10px] bg-surface-2 px-3.5 py-2.5 text-[14px] leading-relaxed whitespace-pre-wrap">
                     {userText(task.prompt) || task.title}
                   </div>
                 </Message>
 
                 <Message who="空白格" agent time={task.createdAt}>
                   {blocks.length === 0 ? (
-                    <p className="text-[13px] leading-relaxed text-muted">
+                    <p className="text-[14px] leading-relaxed text-muted">
                       {terminal && !task.resultSummary ? "没有返回内容。" : "处理中…"}
                     </p>
                   ) : (
@@ -713,7 +713,7 @@ export function Workbench() {
                   {/* 最终回复兜底。事件流里没有结果块时，不渲染的话任务跑完只剩一串事件，
                       看着就像没回应。 */}
                   {task.resultSummary && !summaryShown && (
-                    <div className="mt-3 rounded-[10px] border border-line bg-surface px-3.5 py-3 text-[13.5px] leading-relaxed">
+                    <div className="mt-3 rounded-[10px] border border-line bg-surface px-3.5 py-3 text-[14px] leading-relaxed">
                       <ReplyView text={task.resultSummary} />
                     </div>
                   )}
@@ -738,7 +738,7 @@ export function Workbench() {
                 }}
                 rows={1}
                 placeholder={steerable ? "继续说 —— 补充要求、追问，或改方向…" : "描述要做的事，Enter 开始执行"}
-                className="max-h-40 min-h-[22px] w-full resize-none bg-transparent text-[13.5px] leading-relaxed outline-none placeholder:text-faint"
+                className="max-h-40 min-h-[22px] w-full resize-none bg-transparent text-[14px] leading-relaxed outline-none placeholder:text-faint"
               />
               <div className="mt-2 flex items-center gap-1.5">
                 <Chip>{project?.workspaces[0]?.label || project?.name || "未绑定工作区"}</Chip>
@@ -757,7 +757,7 @@ export function Workbench() {
                 </button>
               </div>
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11px] text-faint">
+            <div className="mt-2 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[12px] text-faint">
               <span className="h-1 w-16 overflow-hidden rounded-full bg-surface-2 ring-1 ring-line">
                 <span className="block h-full bg-brand" style={{ width: `${contextPercent(evidence)}%` }} />
               </span>
@@ -786,7 +786,7 @@ export function Workbench() {
               key={key}
               type="button"
               onClick={() => setTab(key)}
-              className={`rounded-md px-2.5 py-1.5 text-[12.5px] font-medium transition-colors ${tab === key ? "bg-surface-3 text-text" : "text-faint hover:text-text"}`}
+              className={`rounded-md px-2.5 py-1.5 text-[13.5px] font-medium transition-colors ${tab === key ? "bg-surface-3 text-text" : "text-faint hover:text-text"}`}
             >
               {label}
             </button>
@@ -794,12 +794,12 @@ export function Workbench() {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-3.5 py-3">
           {!task ? (
-            <p className="px-1 py-6 text-[11.5px] leading-relaxed text-faint">选一条任务后，这里显示这次改了哪些文件、证据和全部活动。</p>
+            <p className="px-1 py-6 text-[12.5px] leading-relaxed text-faint">选一条任务后，这里显示这次改了哪些文件、证据和全部活动。</p>
           ) : tab === "diff" ? (
             <div className="flex flex-col gap-4">
               <Block label="本次改动">
                 {(evidence?.changes.length ?? 0) === 0 ? (
-                  <p className="px-1 text-[11.5px] text-faint">还没有文件改动</p>
+                  <p className="px-1 text-[12.5px] text-faint">还没有文件改动</p>
                 ) : (
                   evidence?.changes.map((change) => {
                     const stat = diffStats(change.diff);
@@ -809,11 +809,11 @@ export function Workbench() {
                         key={change.path}
                         type="button"
                         onClick={() => setFocusPath(change.path)}
-                        className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-[12.5px] text-muted hover:bg-surface-3 hover:text-text"
+                        className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-[13.5px] text-muted hover:bg-surface-3 hover:text-text"
                       >
                         <Icon d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" />
-                        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px]">{change.path}</span>
-                        <span className="shrink-0 font-mono text-[10.5px] text-warn">
+                        <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{change.path}</span>
+                        <span className="shrink-0 font-mono text-[11.5px] text-warn">
                           {stat.added || stat.removed ? `+${stat.added} −${stat.removed}` : label}
                         </span>
                       </button>
@@ -837,8 +837,8 @@ export function Workbench() {
 
               <div className="border-t border-line pt-3">
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="text-[11px] font-semibold text-faint">Diff</span>
-                  <button type="button" onClick={() => setTab("evidence")} className="text-[11px] text-brand hover:underline">
+                  <span className="text-[12px] font-semibold text-faint">Diff</span>
+                  <button type="button" onClick={() => setTab("evidence")} className="text-[12px] text-brand hover:underline">
                     完整证据 →
                   </button>
                 </div>
@@ -849,27 +849,27 @@ export function Workbench() {
             <EvidencePanel taskId={task.id} evidence={evidence} error={evidenceError} />
           ) : (
             <div className="flex flex-col">
-              <div className="mb-1.5 text-[11px] font-semibold text-faint">全部活动</div>
+              <div className="mb-1.5 text-[12px] font-semibold text-faint">全部活动</div>
               {/* node.* 是图内部的节点起止，对用户没有信息量，跟对话流一样不列。 */}
-              {visibleEvents.length === 0 && <p className="px-1 py-4 text-[11.5px] text-faint">还没有事件</p>}
+              {visibleEvents.length === 0 && <p className="px-1 py-4 text-[12.5px] text-faint">还没有事件</p>}
               {visibleEvents.map((event) => {
                 const detail = eventDetail(event);
                 const hint = eventHint(event);
                 return (
-                  <div key={`${event.seq}-${event.type}`} className="flex items-start gap-2 border-b border-dashed border-line px-1 py-1.5 text-[11.5px] last:border-0">
-                    <span className="w-9 shrink-0 font-mono text-[10.5px] text-faint">#{event.seq}</span>
+                  <div key={`${event.seq}-${event.type}`} className="flex items-start gap-2 border-b border-dashed border-line px-1 py-1.5 text-[12.5px] last:border-0">
+                    <span className="w-9 shrink-0 font-mono text-[11.5px] text-faint">#{event.seq}</span>
                     <span className="min-w-0 flex-1 truncate text-muted" title={hint || undefined}>
                       {EVENT_LABELS[event.type] ?? event.type}
                       {detail && <span className="ml-1.5 text-faint">{detail}</span>}
                     </span>
-                    <span className="shrink-0 text-[10.5px] text-faint">{nodeLabel(event.node)}</span>
+                    <span className="shrink-0 text-[11.5px] text-faint">{nodeLabel(event.node)}</span>
                   </div>
                 );
               })}
               {/* 模型正在说的话：不落库，所以只在这里出现，也不带序号。 */}
               {streaming && (
-                <div className="flex items-start gap-2 border-b border-dashed border-line px-1 py-1.5 text-[11.5px]">
-                  <span className="w-9 shrink-0 font-mono text-[10.5px] text-faint">···</span>
+                <div className="flex items-start gap-2 border-b border-dashed border-line px-1 py-1.5 text-[12.5px]">
+                  <span className="w-9 shrink-0 font-mono text-[11.5px] text-faint">···</span>
                   <span className="min-w-0 flex-1 whitespace-pre-wrap text-text">
                     {streaming}
                     <span className="ml-0.5 inline-block size-1.5 animate-pulse rounded-full bg-brand align-middle" />
@@ -885,9 +885,9 @@ export function Workbench() {
 }
 
 const primaryBtn =
-  "rounded-md bg-brand px-2.5 py-1 text-[12px] font-medium text-on-brand transition-colors hover:brightness-110 disabled:opacity-50";
+  "rounded-md bg-brand px-2.5 py-1 text-[13px] font-medium text-on-brand transition-colors hover:brightness-110 disabled:opacity-50";
 const ghostBtn =
-  "rounded-md border border-line-strong bg-surface px-2.5 py-1 text-[12px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-text disabled:opacity-50";
+  "rounded-md border border-line-strong bg-surface px-2.5 py-1 text-[13px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-text disabled:opacity-50";
 
 /** 「活动」面板默认显示事件名，对用户来说太快餐；能翻成中文的都翻。 */
 const EVENT_LABELS: Record<string, string> = {
@@ -957,13 +957,13 @@ function tokenLabel(evidence: Evidence | null): string {
 }
 
 function Group({ children }: { children: React.ReactNode }) {
-  return <div className="px-2 pt-3 pb-1 text-[11px] font-semibold text-faint">{children}</div>;
+  return <div className="px-2 pt-3 pb-1 text-[12px] font-semibold text-faint">{children}</div>;
 }
 
 function Block({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="mb-1.5 text-[11px] font-semibold text-faint">{label}</div>
+      <div className="mb-1.5 text-[12px] font-semibold text-faint">{label}</div>
       <div className="flex flex-col">{children}</div>
     </div>
   );
@@ -971,9 +971,9 @@ function Block({ label, children }: { label: string; children: React.ReactNode }
 
 function Kv({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-dashed border-line px-1.5 py-1.5 text-[12.5px] last:border-0">
+    <div className="flex items-baseline justify-between gap-3 border-b border-dashed border-line px-1.5 py-1.5 text-[13.5px] last:border-0">
       <span className="shrink-0 text-faint">{k}</span>
-      <span className={`min-w-0 truncate text-right font-medium text-text ${mono ? "font-mono text-[11.5px]" : ""}`} title={v}>
+      <span className={`min-w-0 truncate text-right font-medium text-text ${mono ? "font-mono text-[12.5px]" : ""}`} title={v}>
         {v}
       </span>
     </div>
@@ -993,23 +993,23 @@ function Message({
 }) {
   return (
     <div className="mb-5">
-      <div className="mb-1.5 flex items-center gap-2 text-[12px] font-semibold text-muted">
+      <div className="mb-1.5 flex items-center gap-2 text-[13px] font-semibold text-muted">
         <span
           className={`grid size-[18px] place-items-center rounded-[5px] text-[9.5px] font-bold ${agent ? "bg-accent-soft text-brand" : "bg-surface-3 text-muted"}`}
         >
           {agent ? "AI" : "你"}
         </span>
         {who}
-        <span className="ml-auto text-[11px] font-normal text-faint">{time ? formatDateTime(time).slice(11) : ""}</span>
+        <span className="ml-auto text-[12px] font-normal text-faint">{time ? formatDateTime(time).slice(11) : ""}</span>
       </div>
-      <div className="pl-[26px] text-[13.5px] leading-relaxed">{children}</div>
+      <div className="pl-[26px] text-[14px] leading-relaxed">{children}</div>
     </div>
   );
 }
 
 function Chip({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-2 py-1 text-[11.5px] text-muted">
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-2 py-1 text-[12.5px] text-muted">
       {children}
     </span>
   );
@@ -1017,7 +1017,7 @@ function Chip({ children }: { children: React.ReactNode }) {
 
 function RailLink({ href, label, d }: { href: string; label: string; d: string }) {
   return (
-    <Link href={href} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] text-muted hover:bg-surface-3 hover:text-text">
+    <Link href={href} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13.5px] text-muted hover:bg-surface-3 hover:text-text">
       <Icon d={d} />
       <span className="truncate">{label}</span>
     </Link>

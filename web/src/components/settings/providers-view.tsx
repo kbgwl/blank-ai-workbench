@@ -160,7 +160,7 @@ export function ProvidersView() {
               />
             )}
             {creating && !presets && (
-              <div className="flex items-center gap-2 border-b border-line pb-3 font-mono text-[11px] text-faint">
+              <div className="flex items-center gap-2 border-b border-line pb-3 font-mono text-[12px] text-faint">
                 <Spinner />
                 读取预设列表…
               </div>
@@ -195,7 +195,7 @@ export function ProvidersView() {
               />
               <div className="flex flex-col gap-2 border-t border-line pt-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-[10px] tracking-wide text-faint uppercase">连接测试</span>
+                  <span className="font-mono text-[11px] tracking-wide text-faint uppercase">连接测试</span>
                   <Button
                     className="self-start"
                     disabled={selectedTest?.status === "running"}
@@ -218,7 +218,7 @@ export function ProvidersView() {
                 )}
                 {selectedTest?.status === "failed" && <Notice>{selectedTest.message}</Notice>}
                 {!selectedTest && (
-                  <p className="text-[11px] leading-relaxed text-faint">
+                  <p className="text-[12px] leading-relaxed text-faint">
                     未保存的修改不会参与测试；测试会记录一次调用与 Token 用量。
                   </p>
                 )}

@@ -169,9 +169,9 @@ export function WorkspacePane({ project, onChanged }: Props) {
                   >
                     <div className="flex flex-wrap items-center gap-2">
                       <ActiveDot active={item.is_active} />
-                      <span className="min-w-0 flex-1 truncate text-[13px]">{item.label}</span>
+                      <span className="min-w-0 flex-1 truncate text-[14px]">{item.label}</span>
                       {item.is_active ? (
-                        <span className="shrink-0 rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                        <span className="shrink-0 rounded-md border border-line px-1.5 py-0.5 font-mono text-[11px] text-muted">
                           活动
                         </span>
                       ) : (
@@ -198,12 +198,12 @@ export function WorkspacePane({ project, onChanged }: Props) {
                         type="button"
                         onClick={() => void reveal(item.id)}
                         title="显示完整路径"
-                        className="self-start truncate font-mono text-[10px] text-faint underline decoration-dotted transition-colors hover:text-muted"
+                        className="self-start truncate font-mono text-[11px] text-faint underline decoration-dotted transition-colors hover:text-muted"
                       >
                         {item.path} · 点击显示完整路径
                       </button>
                     ) : (
-                      <span className="truncate font-mono text-[10px] text-faint" title={real ?? item.path}>
+                      <span className="truncate font-mono text-[11px] text-faint" title={real ?? item.path}>
                         {real ?? item.path}
                       </span>
                     )}
@@ -224,7 +224,7 @@ export function WorkspacePane({ project, onChanged }: Props) {
                     aria-label="工作区绝对路径"
                     spellCheck={false}
                     autoComplete="off"
-                    className="flex-1 font-mono text-[12px]"
+                    className="flex-1 font-mono text-[13px]"
                     maxLength={1000}
                   />
                   {/* 只有桌面壳里才有系统目录对话框；浏览器里不渲染，避免点了没反应。 */}
@@ -251,7 +251,7 @@ export function WorkspacePane({ project, onChanged }: Props) {
                 />
               </Field>
             </div>
-            <p className="text-[11px] leading-relaxed text-faint">
+            <p className="text-[12px] leading-relaxed text-faint">
               {nativePicker
                 ? "点「浏览…」选一个已存在的目录；手填时必须写绝对路径。"
                 : "路径必须是运行后端的这台机器上已存在的目录，相对路径会被拒绝。"}
@@ -268,7 +268,7 @@ export function WorkspacePane({ project, onChanged }: Props) {
         {workspace ? (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]">
             <div className="flex min-w-0 flex-col gap-2">
-              <span className="font-mono text-[10px] tracking-wide text-faint uppercase">文件树</span>
+              <span className="font-mono text-[11px] tracking-wide text-faint uppercase">文件树</span>
               <FileTree
                 projectId={project.id}
                 workspaceId={workspace.id}
@@ -277,7 +277,7 @@ export function WorkspacePane({ project, onChanged }: Props) {
               />
             </div>
             <div className="flex min-w-0 flex-col gap-2">
-              <span className="font-mono text-[10px] tracking-wide text-faint uppercase">文件内容</span>
+              <span className="font-mono text-[11px] tracking-wide text-faint uppercase">文件内容</span>
               <FileViewer projectId={project.id} workspaceId={workspace.id} entry={openFile} />
             </div>
           </div>

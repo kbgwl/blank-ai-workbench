@@ -147,7 +147,7 @@ export function HighlightedCode({ text, lang }: { text: string; lang: string }) 
   const maxDigits = String(lineCount).length;
 
   return (
-    <pre className="overflow-auto bg-surface px-3 py-2.5 text-[12px] leading-relaxed font-mono">
+    <pre className="overflow-auto bg-surface px-3 py-2.5 text-[13px] leading-relaxed font-mono">
       <code className="table min-w-full">
         {lines.map((tokens, idx) => (
           <span key={idx} className="table-row group hover:bg-surface-2 transition-colors">

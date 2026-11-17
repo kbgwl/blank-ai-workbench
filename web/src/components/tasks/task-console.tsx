@@ -94,11 +94,11 @@ export function TaskConsole({
             <button
               type="button"
               onClick={onReload}
-              className="rounded-md bg-surface-2 px-3 py-1.5 text-[12px] text-muted ring-1 ring-line hover:text-text hover:ring-line-strong"
+              className="rounded-md bg-surface-2 px-3 py-1.5 text-[13px] text-muted ring-1 ring-line hover:text-text hover:ring-line-strong"
             >
               重新读取
             </button>
-            <Link href="/projects" className="text-[12px] text-brand hover:underline">
+            <Link href="/projects" className="text-[13px] text-brand hover:underline">
               去创建项目与工作区
             </Link>
           </div>
@@ -135,7 +135,7 @@ export function TaskConsole({
               <StatusBadge status={task.status} />
               <LiveBadge mode={mode} />
             </div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] text-faint">
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-faint">
               <span title={task.id}>任务 {task.id.slice(0, 8)}</span>
               <span title={task.projectId}>项目 {task.projectId ? task.projectId.slice(0, 8) : "未绑定"}</span>
               <span>
@@ -160,7 +160,7 @@ export function TaskConsole({
               disabled={busyAction !== null}
               onClick={() => onAction("run")}
               title={terminal ? "重新运行该任务" : "继续执行任务"}
-              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                 canRun
                   ? "bg-brand text-on-brand hover:bg-brand/85"
                   : "bg-surface-2 text-muted ring-1 ring-line hover:text-text hover:ring-line-strong"
@@ -173,7 +173,7 @@ export function TaskConsole({
               type="button"
               disabled={busyAction !== null || !canCancel}
               onClick={() => onAction("cancel")}
-              className="inline-flex items-center gap-1.5 rounded-md bg-danger/10 px-3 py-1.5 text-[12px] font-medium text-danger ring-1 ring-danger/30 transition-colors hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-md bg-danger/10 px-3 py-1.5 text-[13px] font-medium text-danger ring-1 ring-danger/30 transition-colors hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {busyAction === "cancel" && <Spinner />}
               取消
@@ -182,14 +182,14 @@ export function TaskConsole({
         </header>
 
         <div className="rounded-xl border border-line bg-surface-2 px-3.5 py-3">
-          <div className="mb-1 font-mono text-[10px] tracking-wide text-faint uppercase">任务描述</div>
-          <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-text/90">{task.prompt || "后端未返回任务描述"}</p>
+          <div className="mb-1 font-mono text-[11px] tracking-wide text-faint uppercase">任务描述</div>
+          <p className="text-[14px] leading-relaxed whitespace-pre-wrap text-text/90">{task.prompt || "后端未返回任务描述"}</p>
           {task.acceptanceCriteria.length > 0 && (
             <>
-              <div className="mt-2.5 mb-1 font-mono text-[10px] tracking-wide text-faint uppercase">验收条件</div>
+              <div className="mt-2.5 mb-1 font-mono text-[11px] tracking-wide text-faint uppercase">验收条件</div>
               <ul className="flex flex-col gap-1">
                 {task.acceptanceCriteria.map((item, index) => (
-                  <li key={`${item}-${index}`} className="flex items-start gap-2 text-[12px] leading-relaxed">
+                  <li key={`${item}-${index}`} className="flex items-start gap-2 text-[13px] leading-relaxed">
                     <span className="mt-1 size-1.5 shrink-0 rounded-full bg-line-strong" />
                     <span className="text-muted">{item}</span>
                   </li>
@@ -212,14 +212,14 @@ export function TaskConsole({
                 key={item.key}
                 type="button"
                 onClick={() => setFilter(item.key)}
-                className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
+                className={`rounded-full border px-2.5 py-1 text-[12px] transition-colors ${
                   active
                     ? "border-brand/40 bg-brand/10 text-brand"
                     : "border-line bg-surface-2 text-muted hover:text-text hover:ring-line-strong"
                 }`}
               >
                 {item.label}
-                <span className="ml-1 font-mono text-[10px] text-faint">{count}</span>
+                <span className="ml-1 font-mono text-[11px] text-faint">{count}</span>
               </button>
             );
           })}
@@ -249,11 +249,11 @@ export function TaskConsole({
             任务结束后由真正的总结块取代。 */}
         {streaming && (
           <div className="mt-2.5 rounded-lg border border-dashed border-line bg-surface-2 p-3">
-            <div className="mb-1.5 flex items-center gap-1.5 text-[10.5px] text-faint">
+            <div className="mb-1.5 flex items-center gap-1.5 text-[11.5px] text-faint">
               <span className="inline-block size-1.5 animate-pulse rounded-full bg-brand" />
               模型正在输出
             </div>
-            <p className="max-h-56 overflow-y-auto text-[12.5px] leading-relaxed whitespace-pre-wrap text-text">
+            <p className="max-h-56 overflow-y-auto text-[13.5px] leading-relaxed whitespace-pre-wrap text-text">
               {streaming}
             </p>
           </div>
@@ -275,14 +275,14 @@ function onDecideAction(
 function EmptyTimeline({ blocks, events }: { blocks: number; events: number }) {
   if (events === 0) {
     return (
-      <div className="flex flex-col gap-2 px-1 py-8 text-center font-mono text-[11px] text-faint">
+      <div className="flex flex-col gap-2 px-1 py-8 text-center font-mono text-[12px] text-faint">
         <p>还没有执行事件</p>
         <p>点上方「运行」让 Agent 开始工作，新事件会自动出现在这里</p>
       </div>
     );
   }
   return (
-    <p className="px-1 py-8 text-center font-mono text-[11px] text-faint">
+    <p className="px-1 py-8 text-center font-mono text-[12px] text-faint">
       当前筛选没有区块（共 {events} 条事件、{blocks} 个区块）
     </p>
   );

@@ -146,9 +146,9 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
           <span className="truncate text-[14px] font-medium text-text">{provider.name}</span>
           <KindBadge kind={provider.kind} />
         </div>
-        <span className="font-mono text-[10px] text-faint">PATCH /providers/{provider.id.slice(0, 8)}</span>
+        <span className="font-mono text-[11px] text-faint">PATCH /providers/{provider.id.slice(0, 8)}</span>
       </div>
-      <p className="-mt-1 text-[11px] leading-relaxed text-faint">
+      <p className="-mt-1 text-[12px] leading-relaxed text-faint">
         名称由后端唯一约束，当前版本不支持修改；API Key 只写不读，保存后仅返回掩码提示。
       </p>
 
@@ -175,7 +175,7 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
             aria-label="默认模型"
             spellCheck={false}
             autoComplete="off"
-            className="font-mono text-[12px]"
+            className="font-mono text-[13px]"
             maxLength={200}
           />
         </Field>
@@ -188,7 +188,7 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
           aria-label="接入点"
           spellCheck={false}
           autoComplete="off"
-          className="font-mono text-[12px]"
+          className="font-mono text-[13px]"
           maxLength={500}
         />
       </Field>
@@ -200,7 +200,7 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
             onChange={(event) => patch({ temperature: event.target.value })}
             aria-label="温度"
             inputMode="decimal"
-            className="font-mono text-[12px]"
+            className="font-mono text-[13px]"
           />
         </Field>
         <Field label="最大输出 TOKENS">
@@ -209,7 +209,7 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
             onChange={(event) => patch({ max_tokens: event.target.value })}
             aria-label="最大输出 tokens"
             inputMode="numeric"
-            className="font-mono text-[12px]"
+            className="font-mono text-[13px]"
           />
         </Field>
         <Field label="上下文窗口">
@@ -218,7 +218,7 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
             onChange={(event) => patch({ context_window: event.target.value })}
             aria-label="上下文窗口"
             inputMode="numeric"
-            className="font-mono text-[12px]"
+            className="font-mono text-[13px]"
           />
         </Field>
       </div>
@@ -256,7 +256,7 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
             placeholder="671，留空表示未填"
             aria-label="总参数"
             inputMode="decimal"
-            className="font-mono text-[12px]"
+            className="font-mono text-[13px]"
           />
         </Field>
         <Field label="激活参数（十亿 B）">
@@ -266,7 +266,7 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
             placeholder="37，稠密模型留空"
             aria-label="激活参数"
             inputMode="decimal"
-            className="font-mono text-[12px]"
+            className="font-mono text-[13px]"
           />
         </Field>
       </div>
@@ -280,7 +280,7 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
           aria-label="API Key"
           autoComplete="new-password"
           spellCheck={false}
-          className="font-mono text-[12px]"
+          className="font-mono text-[13px]"
         />
       </Field>
 
@@ -326,7 +326,7 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
             撤销修改
           </Button>
         )}
-        {savedAt && <span className="font-mono text-[10px] text-accent">已于 {savedAt} 保存</span>}
+        {savedAt && <span className="font-mono text-[11px] text-accent">已于 {savedAt} 保存</span>}
       </div>
     </form>
   );

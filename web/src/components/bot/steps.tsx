@@ -81,15 +81,15 @@ function ToolStepRow({ step }: { step: Extract<BotStep, { kind: "tool" }> }) {
         <span className={step.status === "failed" ? "text-danger" : "text-faint"}>
           <ToolIcon name={step.name} />
         </span>
-        <span className="shrink-0 font-mono text-[11.5px] text-muted">{step.name}</span>
+        <span className="shrink-0 font-mono text-[12.5px] text-muted">{step.name}</span>
         {hint && (
-          <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-faint" title={hint}>
+          <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-faint" title={hint}>
             {hint}
           </span>
         )}
         {!hint && <span className="flex-1" />}
         {step.durationMs !== null && (
-          <span className="shrink-0 font-mono text-[10px] text-faint">{formatDuration(step.durationMs)}</span>
+          <span className="shrink-0 font-mono text-[11px] text-faint">{formatDuration(step.durationMs)}</span>
         )}
         <StatusDot status={step.status} />
         {hasDetail && (
@@ -109,12 +109,12 @@ function ToolStepRow({ step }: { step: Extract<BotStep, { kind: "tool" }> }) {
       {open && (
         <div className="mt-1 mb-1.5 ml-[22px] space-y-1.5 border-l border-line pl-3">
           {Object.keys(step.args).length > 0 && (
-            <pre className="max-h-52 overflow-auto rounded-md bg-surface-2 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-muted">
+            <pre className="max-h-52 overflow-auto rounded-md bg-surface-2 px-2.5 py-2 font-mono text-[12px] leading-relaxed text-muted">
               {JSON.stringify(step.args, null, 2)}
             </pre>
           )}
           {step.output && (
-            <pre className="max-h-72 overflow-auto rounded-md border border-line bg-surface px-2.5 py-2 font-mono text-[11px] leading-relaxed text-text">
+            <pre className="max-h-72 overflow-auto rounded-md border border-line bg-surface px-2.5 py-2 font-mono text-[12px] leading-relaxed text-text">
               {step.output}
             </pre>
           )}
@@ -136,8 +136,8 @@ function PlanStep({ items }: { items: string[] }) {
         <span className="text-faint">
           <ToolIcon name="plan" />
         </span>
-        <span className="text-[12px] font-medium text-muted">计划</span>
-        <span className="font-mono text-[10px] text-faint">{items.length} 步</span>
+        <span className="text-[13px] font-medium text-muted">计划</span>
+        <span className="font-mono text-[11px] text-faint">{items.length} 步</span>
         <svg
           viewBox="0 0 24 24"
           fill="none"
@@ -150,7 +150,7 @@ function PlanStep({ items }: { items: string[] }) {
         </svg>
       </button>
       {open && (
-        <ol className="space-y-1 px-3 pb-2.5 pl-8 text-[12.5px] text-muted">
+        <ol className="space-y-1 px-3 pb-2.5 pl-8 text-[13.5px] text-muted">
           {items.map((item, index) => (
             <li key={index} className="list-decimal marker:text-faint">
               {item}
@@ -180,10 +180,10 @@ function ChangeStep({ path, changeType }: { path: string; changeType: string }) 
       <span className="text-faint">
         <ToolIcon name="write" />
       </span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-text" title={path}>
+      <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-text" title={path}>
         {path}
       </span>
-      <span className={`shrink-0 font-mono text-[10px] ${CHANGE_TONE[changeType] ?? "text-muted"}`}>
+      <span className={`shrink-0 font-mono text-[11px] ${CHANGE_TONE[changeType] ?? "text-muted"}`}>
         {CHANGE_LABEL[changeType] ?? changeType ?? "变更"}
       </span>
     </div>
@@ -197,9 +197,9 @@ export function StepView({ step }: { step: BotStep }) {
   if (step.kind === "question") {
     return (
       <div className="my-1.5 rounded-lg border border-warn/30 bg-warn/[0.05] px-3 py-2">
-        <p className="text-[12px] font-medium text-warn">问了你一句</p>
-        <p className="mt-0.5 text-[12.5px] text-text">{step.text}</p>
-        {step.answered && <p className="mt-1 font-mono text-[11px] text-muted">→ {step.answered}</p>}
+        <p className="text-[13px] font-medium text-warn">问了你一句</p>
+        <p className="mt-0.5 text-[13.5px] text-text">{step.text}</p>
+        {step.answered && <p className="mt-1 font-mono text-[12px] text-muted">→ {step.answered}</p>}
       </div>
     );
   }
@@ -211,13 +211,13 @@ export function StepView({ step }: { step: BotStep }) {
             {step.granted === false ? <path d="m6 6 12 12M18 6 6 18" /> : <path d="m5 13 4 4L19 7" />}
           </svg>
         </span>
-        <span className="text-[12px] text-muted">{step.text}</span>
+        <span className="text-[13px] text-muted">{step.text}</span>
       </div>
     );
   }
   return (
     <p
-      className={`px-1.5 py-0.5 text-[12px] ${
+      className={`px-1.5 py-0.5 text-[13px] ${
         step.tone === "danger" ? "text-danger" : step.tone === "warn" ? "text-warn" : "text-muted"
       }`}
     >

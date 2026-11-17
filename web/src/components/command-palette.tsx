@@ -112,10 +112,10 @@ export function CommandPalette() {
           aria-label={PALETTE_PLACEHOLDER}
           aria-controls="command-palette-list"
           aria-activedescendant={results[highlighted] ? `command-${results[highlighted].id}` : undefined}
-          className="w-full border-b border-line bg-transparent px-4 py-3 text-[13px] outline-none placeholder:text-faint"
+          className="w-full border-b border-line bg-transparent px-4 py-3 text-[14px] outline-none placeholder:text-faint"
         />
         <ul id="command-palette-list" role="listbox" className="max-h-72 overflow-y-auto p-1.5">
-          {results.length === 0 && <li className="px-3 py-6 text-center text-[12px] text-faint">没有匹配的命令</li>}
+          {results.length === 0 && <li className="px-3 py-6 text-center text-[13px] text-faint">没有匹配的命令</li>}
           {results.map((command, index) => (
             // option 内不放 button：焦点始终留在输入框（配合 aria-activedescendant），
             // 嵌可聚焦元素会让读屏器把同一项播报两次。点击用 onMouseDown 触发，
@@ -130,16 +130,16 @@ export function CommandPalette() {
                 event.preventDefault();
                 run(index);
               }}
-              className={`flex cursor-pointer items-center justify-between rounded-md px-3 py-2 text-[12.5px] ${
+              className={`flex cursor-pointer items-center justify-between rounded-md px-3 py-2 text-[13.5px] ${
                 index === highlighted ? "bg-surface-2 text-text" : "text-muted"
               }`}
             >
               <span>{command.label}</span>
-              <span className="font-mono text-[10px] text-faint">{command.group}</span>
+              <span className="font-mono text-[11px] text-faint">{command.group}</span>
             </li>
           ))}
         </ul>
-        <div className="flex items-center justify-between border-t border-line px-3 py-2 text-[10px] text-faint">
+        <div className="flex items-center justify-between border-t border-line px-3 py-2 text-[11px] text-faint">
           <span>↑↓ 选择 · Enter 打开 · Esc 关闭</span>
           <span className="font-mono">{shortcutHint(PALETTE_SHORTCUT)}</span>
         </div>

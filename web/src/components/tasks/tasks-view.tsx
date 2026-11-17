@@ -474,7 +474,7 @@ export function TasksView({ initialTaskId = null }: Props) {
       <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-surface">
         <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-2">
           {rightTabs.map((tab) => (
-            <button key={tab.key} type="button" onClick={() => setRightTab(tab.key)} className={`rounded-md px-2.5 py-1.5 text-[11px] transition-colors ${rightTab === tab.key ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2 hover:text-text"}`}>
+            <button key={tab.key} type="button" onClick={() => setRightTab(tab.key)} className={`rounded-md px-2.5 py-1.5 text-[12px] transition-colors ${rightTab === tab.key ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2 hover:text-text"}`}>
               {tab.label}
             </button>
           ))}
@@ -485,7 +485,7 @@ export function TasksView({ initialTaskId = null }: Props) {
           {rightTab === "evidence" && <EvidencePanel taskId={selectedId ?? ""} evidence={evidence} error={evidenceError} />}
           {rightTab === "terminal" && <div className="flex flex-col gap-2">
             {rightBlocks.filter((block) => block.kind === "terminal").map((block) => <TimelineBlock key={block.key} block={block} busyApprovalKey={null} onHighlight={() => undefined} onDecide={() => undefined} onAnswer={() => undefined} />)}
-            {rightBlocks.every((block) => block.kind !== "terminal") && <div className="py-8 text-center font-mono text-[11px] text-faint">还没有终端输出</div>}
+            {rightBlocks.every((block) => block.kind !== "terminal") && <div className="py-8 text-center font-mono text-[12px] text-faint">还没有终端输出</div>}
           </div>}
         </div>
       </aside>

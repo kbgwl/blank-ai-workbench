@@ -36,8 +36,8 @@ function Row({
   return (
     <div className="flex items-start justify-between gap-4 py-2.5">
       <div className="min-w-0">
-        <div className="text-[12.5px] text-text">{label}</div>
-        {hint && <div className="mt-0.5 text-[11px] leading-relaxed text-faint">{hint}</div>}
+        <div className="text-[13.5px] text-text">{label}</div>
+        {hint && <div className="mt-0.5 text-[12px] leading-relaxed text-faint">{hint}</div>}
       </div>
       <div className="shrink-0 pt-0.5">{children}</div>
     </div>
@@ -84,7 +84,7 @@ function ListEditor({
   return (
     <div className="flex flex-col gap-2">
       {items.length === 0 ? (
-        <p className="rounded-md border border-dashed border-line bg-surface-2 px-2.5 py-2 text-[11.5px] text-faint">
+        <p className="rounded-md border border-dashed border-line bg-surface-2 px-2.5 py-2 text-[12.5px] text-faint">
           {emptyText}
         </p>
       ) : (
@@ -94,14 +94,14 @@ function ListEditor({
               key={item}
               className="flex items-center justify-between gap-2 rounded-md border border-line bg-surface-2 px-2 py-1.5"
             >
-              <code className="min-w-0 truncate font-mono text-[11.5px] text-text" title={item}>
+              <code className="min-w-0 truncate font-mono text-[12.5px] text-text" title={item}>
                 {item}
               </code>
               <button
                 type="button"
                 disabled={disabled}
                 onClick={() => onRemove(item)}
-                className="shrink-0 rounded px-1.5 text-[11px] text-faint transition-colors hover:text-danger disabled:opacity-50"
+                className="shrink-0 rounded px-1.5 text-[12px] text-faint transition-colors hover:text-danger disabled:opacity-50"
                 aria-label={`移除 ${item}`}
               >
                 移除
@@ -122,18 +122,18 @@ function ListEditor({
           onKeyDown={(event) => {
             if (event.key === "Enter") submit();
           }}
-          className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 font-mono text-[11.5px] text-text outline-none focus:border-brand/50"
+          className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 font-mono text-[12.5px] text-text outline-none focus:border-brand/50"
         />
         <button
           type="button"
           disabled={disabled || !draft.trim()}
           onClick={submit}
-          className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-line-strong hover:text-text disabled:opacity-50"
+          className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-text disabled:opacity-50"
         >
           添加
         </button>
       </div>
-      {problem && <p className="text-[11px] text-danger">{problem}</p>}
+      {problem && <p className="text-[12px] text-danger">{problem}</p>}
     </div>
   );
 }
@@ -210,12 +210,12 @@ export function SafetyPanel() {
   if (!settings) {
     return (
       <Panel title="安全与权限" hint="GET /settings/safety/runtime">
-        <p className="text-[12px] text-faint">{error || "加载中…"}</p>
+        <p className="text-[13px] text-faint">{error || "加载中…"}</p>
         {error && (
           <button
             type="button"
             onClick={() => setReloadToken((token) => token + 1)}
-            className="mt-2 self-start rounded-md border border-line bg-surface px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-line-strong hover:text-text"
+            className="mt-2 self-start rounded-md border border-line bg-surface px-2.5 py-1 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-text"
           >
             重试
           </button>
@@ -244,7 +244,7 @@ export function SafetyPanel() {
       <div className="flex flex-col gap-2 rounded-lg border border-line bg-surface px-3.5 py-3">
         <div className="flex flex-wrap items-center gap-2">
           <span
-            className={`rounded-md border px-2 py-0.5 font-mono text-[10.5px] ${
+            className={`rounded-md border px-2 py-0.5 font-mono text-[11.5px] ${
               backend?.isolation === "container" || backend?.isolation === "appcontainer"
                 ? "border-ok/40 bg-ok-soft text-ok"
                 : "border-warn/40 bg-warn-soft text-warn"
@@ -252,12 +252,12 @@ export function SafetyPanel() {
           >
             {backend?.label ?? "检测中"}
           </span>
-          <span className="font-mono text-[10.5px] text-faint">
+          <span className="font-mono text-[11.5px] text-faint">
             {backend?.platform === "nt" ? "Windows" : backend?.platform}
           </span>
           {backend && (
             <span
-              className={`font-mono text-[10.5px] ${
+              className={`font-mono text-[11.5px] ${
                 dockerReadout(backend).warn ? "text-warn" : "text-faint"
               }`}
               title={backend.docker_detail || undefined}
@@ -270,19 +270,19 @@ export function SafetyPanel() {
               type="button"
               onClick={() => void reprobe()}
               disabled={reprobing}
-              className="rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-[10.5px] text-muted transition-colors hover:border-line-strong hover:text-text disabled:opacity-50"
+              className="rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-[11.5px] text-muted transition-colors hover:border-line-strong hover:text-text disabled:opacity-50"
             >
               {reprobing ? "探测中…" : "重新探测"}
             </button>
           )}
-          <span className="ml-auto flex items-center gap-1.5 font-mono text-[10.5px] text-faint">
+          <span className="ml-auto flex items-center gap-1.5 font-mono text-[11.5px] text-faint">
             执行能力
             <span className={safety.shell_enabled ? "text-ok" : "text-danger"}>
               {safety.shell_enabled ? "已允许" : "已禁止"}
             </span>
           </span>
         </div>
-        <p className="text-[11.5px] leading-relaxed text-muted">
+        <p className="text-[12.5px] leading-relaxed text-muted">
           {backend?.detail ??
             "命令执行的隔离方式取决于本机是否有可用的容器运行时；策略在所有情况下都生效。"}
         </p>
@@ -369,14 +369,14 @@ export function SafetyPanel() {
                   onKeyDown={(event) => {
                     if (event.key === "Enter") event.currentTarget.blur();
                   }}
-                  className="w-20 rounded-md border border-line bg-surface px-2 py-1 text-right font-mono text-[12px] text-text outline-none focus:border-brand/50"
+                  className="w-20 rounded-md border border-line bg-surface px-2 py-1 text-right font-mono text-[13px] text-text outline-none focus:border-brand/50"
                 />
-                <span className="text-[11px] text-faint">秒</span>
+                <span className="text-[12px] text-faint">秒</span>
               </div>
             </Row>
           </div>
           {!safety.shell_enabled && (
-            <p className="mt-1 rounded-md border border-line bg-surface-2 px-2.5 py-2 text-[11px] leading-relaxed text-faint">
+            <p className="mt-1 rounded-md border border-line bg-surface-2 px-2.5 py-2 text-[12px] leading-relaxed text-faint">
               默认是禁止的：装好就能跑命令的产品，第一次误删就没人敢用了。需要 Agent 自己跑测试或构建时再打开。
             </p>
           )}
@@ -386,12 +386,12 @@ export function SafetyPanel() {
           <div className="flex flex-col gap-4">
             <div>
               <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-[12.5px] text-text">额外允许的目录</span>
-                <span className="font-mono text-[10px] text-faint">
+                <span className="text-[13.5px] text-text">额外允许的目录</span>
+                <span className="font-mono text-[11px] text-faint">
                   {safety.allowed_roots.length} 项
                 </span>
               </div>
-              <p className="mb-2 text-[11px] leading-relaxed text-faint">
+              <p className="mb-2 text-[12px] leading-relaxed text-faint">
                 工作区自动包含。只有这里列出的目录，命令才允许读写；其余真实路径一律拒绝。
               </p>
               <ListEditor
@@ -417,13 +417,13 @@ export function SafetyPanel() {
 
             <div className="border-t border-line pt-3">
               <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-[12.5px] text-text">禁止的命令前缀</span>
-                <span className="font-mono text-[10px] text-faint">
+                <span className="text-[13.5px] text-text">禁止的命令前缀</span>
+                <span className="font-mono text-[11px] text-faint">
                   {safety.denied_commands.length} 项
                 </span>
               </div>
-              <p className="mb-2 text-[11px] leading-relaxed text-faint">
-                按前缀匹配，命中即拒绝，例：<code className="font-mono text-[10.5px]">{'git push'}</code>。
+              <p className="mb-2 text-[12px] leading-relaxed text-faint">
+                按前缀匹配，命中即拒绝，例：<code className="font-mono text-[11.5px]">{'git push'}</code>。
                 格式化磁盘、关机、改系统注册表这类内置禁止项不受此处影响，永远拒绝。
               </p>
               <ListEditor
@@ -454,14 +454,14 @@ export function SafetyPanel() {
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-        <span className="text-[11px] text-faint">
+        <span className="text-[12px] text-faint">
           {notice || error || "能力边界决定能不能做，权限档位决定要不要问 —— 两者必须都放行才会执行。"}
         </span>
-        <span className="font-mono text-[10.5px] text-faint">
+        <span className="font-mono text-[11.5px] text-faint">
           默认档位 · {runtime?.default_mode ?? settings.permissions.default_mode}
         </span>
       </div>
-      {error && <p className="text-[11px] text-danger">{error}</p>}
+      {error && <p className="text-[12px] text-danger">{error}</p>}
     </div>
   );
 }

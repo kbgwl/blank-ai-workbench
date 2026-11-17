@@ -974,11 +974,11 @@ export function BotApp() {
       <div className="flex min-w-0 flex-1 overflow-hidden rounded-xl border border-line bg-canvas shadow-[var(--shadow-sm)]">
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-4">
-          <h1 className="min-w-0 flex-1 truncate text-[13px] font-medium">
+          <h1 className="min-w-0 flex-1 truncate text-[14px] font-medium">
             {conv?.thread.title || "新对话"}
           </h1>
           {conv && (
-            <span className="shrink-0 font-mono text-[10px] text-faint">{conv.turns.length} 轮</span>
+            <span className="shrink-0 font-mono text-[11px] text-faint">{conv.turns.length} 轮</span>
           )}
           <button
             type="button"
@@ -999,7 +999,7 @@ export function BotApp() {
         {/* 后台任务条：还有别的任务在动、或者在等人点，就在这里说一句。
             关窗不等于结束——没有这条，用户重开只会看到当前会话，以为另一条没了。 */}
         {topBackground && (
-          <div className="flex shrink-0 items-center gap-2 border-b border-line bg-warn/[0.05] px-4 py-1.5 text-[11.5px]">
+          <div className="flex shrink-0 items-center gap-2 border-b border-line bg-warn/[0.05] px-4 py-1.5 text-[12.5px]">
             <span
               className={`size-1.5 shrink-0 rounded-full ${
                 topBackground.status === "waiting_approval" || topBackground.status === "paused"
@@ -1045,12 +1045,12 @@ export function BotApp() {
         <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl px-4 py-6">
             {bootError && (
-              <p className="mb-4 rounded-lg border border-danger/25 bg-danger/[0.04] px-3 py-2 text-[12px] text-danger">
+              <p className="mb-4 rounded-lg border border-danger/25 bg-danger/[0.04] px-3 py-2 text-[13px] text-danger">
                 连不上后端：{bootError}
               </p>
             )}
             {convError && (
-              <p className="mb-4 rounded-lg border border-danger/25 bg-danger/[0.04] px-3 py-2 text-[12px] text-danger">
+              <p className="mb-4 rounded-lg border border-danger/25 bg-danger/[0.04] px-3 py-2 text-[13px] text-danger">
                 对话读取失败：{convError}
               </p>
             )}
@@ -1060,7 +1060,7 @@ export function BotApp() {
                   <span className="size-3.5 rounded-[3px] bg-logo-accent" />
                 </span>
                 <h2 className="mt-5 text-[22px] font-semibold tracking-tight">今天想做点什么？</h2>
-                <p className="mt-2 max-w-lg text-[13px] leading-relaxed text-muted">
+                <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-muted">
                   说清楚要什么，它会先读代码再动手。改了什么、为什么改，都会留在对话里。
                 </p>
                 <div className="mt-7 grid w-full max-w-xl gap-2 sm:grid-cols-2">
@@ -1069,7 +1069,7 @@ export function BotApp() {
                       key={text}
                       type="button"
                       onClick={() => setDraft(text)}
-                      className="rounded-lg border border-line bg-surface px-3.5 py-2.5 text-left text-[12.5px] leading-relaxed text-muted transition-colors hover:border-line-strong hover:bg-surface-2 hover:text-text"
+                      className="rounded-lg border border-line bg-surface px-3.5 py-2.5 text-left text-[13.5px] leading-relaxed text-muted transition-colors hover:border-line-strong hover:bg-surface-2 hover:text-text"
                     >
                       {text}
                     </button>
@@ -1079,7 +1079,7 @@ export function BotApp() {
             )}
 
             {loadingConv && currentTurnView.length === 0 && (
-              <p className="py-10 text-center font-mono text-[11px] text-faint">读取对话…</p>
+              <p className="py-10 text-center font-mono text-[12px] text-faint">读取对话…</p>
             )}
 
             <div className="space-y-8">
@@ -1109,7 +1109,7 @@ export function BotApp() {
             </div>
 
             {live.notice && (
-              <p className="mt-4 font-mono text-[10.5px] text-faint">{live.notice}</p>
+              <p className="mt-4 font-mono text-[11.5px] text-faint">{live.notice}</p>
             )}
           </div>
         </div>

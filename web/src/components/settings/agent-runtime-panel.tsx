@@ -65,8 +65,8 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 py-2">
       <div className="min-w-0">
-        <div className="text-[12.5px] text-text">{label}</div>
-        {hint && <div className="mt-0.5 text-[11px] leading-relaxed text-faint">{hint}</div>}
+        <div className="text-[13.5px] text-text">{label}</div>
+        {hint && <div className="mt-0.5 text-[12px] leading-relaxed text-faint">{hint}</div>}
       </div>
       <div className="shrink-0">{children}</div>
     </div>
@@ -169,12 +169,12 @@ export function AgentRuntimePanel() {
   if (!settings) {
     return (
       <Panel title="执行与智能体" hint="GET /settings/agent">
-        <p className="text-[12px] text-faint">{error || "加载中…"}</p>
+        <p className="text-[13px] text-faint">{error || "加载中…"}</p>
         {error && (
           <button
             type="button"
             onClick={() => setReloadToken((token) => token + 1)}
-            className="mt-2 self-start rounded-md border border-line bg-surface px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-line-strong hover:text-text"
+            className="mt-2 self-start rounded-md border border-line bg-surface px-2.5 py-1 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-text"
           >
             重试
           </button>
@@ -211,10 +211,10 @@ export function AgentRuntimePanel() {
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-[12.5px] text-text">{mode.label}</span>
-                  {active && <span className="font-mono text-[10px] text-brand">当前</span>}
+                  <span className="text-[13.5px] text-text">{mode.label}</span>
+                  {active && <span className="font-mono text-[11px] text-brand">当前</span>}
                 </div>
-                <p className="mt-1 text-[11px] leading-relaxed text-muted">{mode.detail}</p>
+                <p className="mt-1 text-[12px] leading-relaxed text-muted">{mode.detail}</p>
               </button>
             );
           })}
@@ -234,13 +234,13 @@ export function AgentRuntimePanel() {
               onChange={(event) =>
                 void apply({ guardian: { timeout_seconds: Number(event.target.value) } }, "超时已更新")
               }
-              className="w-20 rounded-md border border-line bg-surface px-2 py-1 text-right font-mono text-[12px] text-text outline-none"
+              className="w-20 rounded-md border border-line bg-surface px-2 py-1 text-right font-mono text-[13px] text-text outline-none"
             />
-            <span className="text-[11px] text-faint">秒</span>
+            <span className="text-[12px] text-faint">秒</span>
           </div>
         </Row>
         {guardian.mode === "auto" && (
-          <p className="mt-1 rounded-md border border-warn/40 bg-warn/10 px-2.5 py-2 text-[11px] leading-relaxed text-warn">
+          <p className="mt-1 rounded-md border border-warn/40 bg-warn/10 px-2.5 py-2 text-[12px] leading-relaxed text-warn">
             可代批只在「可回滚」的动作上生效：删除、force push、读写密钥这类不可逆操作一律回到你面前。
           </p>
         )}
@@ -261,7 +261,7 @@ export function AgentRuntimePanel() {
               }
               className="w-32 accent-[var(--brand)]"
             />
-            <span className="w-10 text-right font-mono text-[12px] text-text">
+            <span className="w-10 text-right font-mono text-[13px] text-text">
               {Math.round(compaction.trigger_ratio * 100)}%
             </span>
           </div>
@@ -281,19 +281,19 @@ export function AgentRuntimePanel() {
               onChange={(event) =>
                 void apply({ compaction: { reserve_tokens: Number(event.target.value) } }, "预留已更新")
               }
-              className="w-24 rounded-md border border-line bg-surface px-2 py-1 text-right font-mono text-[12px] text-text outline-none"
+              className="w-24 rounded-md border border-line bg-surface px-2 py-1 text-right font-mono text-[13px] text-text outline-none"
             />
-            <span className="text-[11px] text-faint">tokens</span>
+            <span className="text-[12px] text-faint">tokens</span>
           </div>
         </Row>
-        <p className="mt-1 text-[11px] leading-relaxed text-faint">
+        <p className="mt-1 text-[12px] leading-relaxed text-faint">
           水位以模型回报的真实 prompt_tokens 校准：32k 窗口和 200k 窗口用的是同一套规则，只是位置不同。
           所有数值保存后对下一个任务生效，正在跑的任务不受影响。
         </p>
       </Panel>
 
       <Panel title="新任务的默认权限档位" hint="任务里仍可随时切换">
-        <div className="flex flex-col gap-1 text-[11px] text-muted">
+        <div className="flex flex-col gap-1 text-[12px] text-muted">
           <SelectPopover
             ariaLabel="新任务的默认权限档位"
             value={settings.permissions.default_mode}
@@ -306,13 +306,13 @@ export function AgentRuntimePanel() {
             menuMinWidth={220}
           />
         </div>
-        <p className="mt-2 text-[11px] leading-relaxed text-faint">
+        <p className="mt-2 text-[12px] leading-relaxed text-faint">
           档位只决定「要不要问」，不决定「能不能做」：不可逆命令在任何档位下都必须人工确认。
         </p>
       </Panel>
 
       <Panel title="自动化模式" hint="v165 §8 · 决定「要不要自己动」">
-        <div className="flex flex-col gap-1 text-[11px] text-muted">
+        <div className="flex flex-col gap-1 text-[12px] text-muted">
           <SelectPopover
             ariaLabel="自动化模式"
             value={settings.background?.automation_mode ?? "assist"}
@@ -330,7 +330,7 @@ export function AgentRuntimePanel() {
             menuMinWidth={220}
           />
         </div>
-        <p className="mt-2 text-[11px] leading-relaxed text-faint">
+        <p className="mt-2 text-[12px] leading-relaxed text-faint">
           这和上面的权限档位是两回事：档位决定「要不要问」，模式决定「要不要自己动」。
           自动驾驶可以连续执行、自动修复失败、后台常驻，但高风险操作仍然必须你审批。
         </p>
@@ -370,19 +370,19 @@ export function AgentRuntimePanel() {
               onKeyDown={(event) => {
                 if (event.key === "Enter") saveQuietHours();
               }}
-              className="w-36 rounded-md border border-line bg-surface px-2 py-1 text-center font-mono text-[12px] text-text outline-none"
+              className="w-36 rounded-md border border-line bg-surface px-2 py-1 text-center font-mono text-[13px] text-text outline-none"
             />
             <button
               type="button"
               disabled={busy}
               onClick={() => saveQuietHours()}
-              className="rounded-md border border-line bg-surface px-2.5 py-1 text-[11px] text-muted hover:border-line-strong"
+              className="rounded-md border border-line bg-surface px-2.5 py-1 text-[12px] text-muted hover:border-line-strong"
             >
               保存
             </button>
           </div>
         </Row>
-        <p className="mt-1 text-[11px] leading-relaxed text-faint">
+        <p className="mt-1 text-[12px] leading-relaxed text-faint">
           免打扰只压「做完了 / 有变化了」这类通知。<span className="text-text">审批永远会响</span>
           ——任务停在那儿等你点，压到第二天早上等于白跑一晚。
         </p>
@@ -399,7 +399,7 @@ export function AgentRuntimePanel() {
             onClick={() =>
               void apply({ tools: { search: !settings.tools.search } }, "工具加载策略已更新")
             }
-            className={`rounded-md border px-3 py-1.5 text-[11px] transition ${
+            className={`rounded-md border px-3 py-1.5 text-[12px] transition ${
               settings.tools.search
                 ? "border-brand/60 bg-brand/10 text-text"
                 : "border-line bg-surface text-muted"
@@ -409,19 +409,19 @@ export function AgentRuntimePanel() {
           </button>
         </Row>
         <div className="mt-1 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
-          <span className="text-[11px] text-faint">
+          <span className="text-[12px] text-faint">
             {notice || error || "改动立即写入设置文件，下一个任务生效"}
           </span>
           <button
             type="button"
             disabled={busy}
             onClick={() => void reset()}
-            className="rounded-md border border-line bg-surface px-2.5 py-1 text-[11px] text-muted hover:border-line-strong"
+            className="rounded-md border border-line bg-surface px-2.5 py-1 text-[12px] text-muted hover:border-line-strong"
           >
             恢复默认
           </button>
         </div>
-        {error && <p className="mt-1 text-[11px] text-danger">{error}</p>}
+        {error && <p className="mt-1 text-[12px] text-danger">{error}</p>}
       </Panel>
     </div>
   );

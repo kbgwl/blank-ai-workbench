@@ -136,22 +136,22 @@ export function ProjectListPane({ projects, error, selectedId, onSelect, onCreat
                     <button type="button" onClick={() => onSelect(project.id)} className="min-w-0 flex-1 text-left">
                       <div className="flex flex-wrap items-center gap-2">
                         <span
-                          className={`truncate text-[13px] font-medium ${selected ? "text-brand" : "text-text"}`}
+                          className={`truncate text-[14px] font-medium ${selected ? "text-brand" : "text-text"}`}
                         >
                           {project.name}
                         </span>
                         {workspace ? (
-                          <span className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                          <span className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-[11px] text-muted">
                             <ActiveDot active={workspace.is_active} />
                             <span className="max-w-[9rem] truncate">{workspace.label}</span>
                             {extra > 0 && <span className="text-faint">+{extra}</span>}
                           </span>
                         ) : (
-                          <span className="font-mono text-[10px] text-warn">未绑定工作区</span>
+                          <span className="font-mono text-[11px] text-warn">未绑定工作区</span>
                         )}
                       </div>
                       {project.description && (
-                        <p className="mt-1 line-clamp-2 text-[12px] leading-relaxed text-muted">
+                        <p className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-muted">
                           {project.description}
                         </p>
                       )}
@@ -196,14 +196,14 @@ export function ProjectListPane({ projects, error, selectedId, onSelect, onCreat
                         autoFocus
                         aria-label="新的项目名称"
                         maxLength={200}
-                        className="py-1.5 text-[12px]"
+                        className="py-1.5 text-[13px]"
                         onChange={(event) => setDraft(event.target.value)}
                       />
                       <Input
                         value={draftDescription}
                         aria-label="新的项目描述"
                         placeholder="项目描述（可选）"
-                        className="py-1.5 text-[12px]"
+                        className="py-1.5 text-[13px]"
                         onChange={(event) => setDraftDescription(event.target.value)}
                       />
                       <div className="flex gap-2">
@@ -224,7 +224,7 @@ export function ProjectListPane({ projects, error, selectedId, onSelect, onCreat
 
                   {confirmId === project.id && (
                     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line bg-danger/[0.04] px-3 py-2">
-                      <span className="text-[12px] text-muted">删除「{project.name}」及其工作区绑定？</span>
+                      <span className="text-[13px] text-muted">删除「{project.name}」及其工作区绑定？</span>
                       <div className="flex gap-2">
                         <Button
                           onClick={() => {

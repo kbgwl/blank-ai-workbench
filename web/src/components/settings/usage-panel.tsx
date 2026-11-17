@@ -56,7 +56,7 @@ export function UsagePanel({ summary, error, onRetry }: Props) {
         <StateLine>暂无调用记录 · 点供应商卡片上的「测试连接」即会产生用量</StateLine>
       ) : (
         <div className="overflow-hidden rounded-lg border border-line">
-          <div className="grid grid-cols-[minmax(0,1.6fr)_repeat(5,minmax(0,1fr))] gap-2 border-b border-line bg-surface-2 px-3 py-2 font-mono text-[10px] tracking-wide text-faint uppercase">
+          <div className="grid grid-cols-[minmax(0,1.6fr)_repeat(5,minmax(0,1fr))] gap-2 border-b border-line bg-surface-2 px-3 py-2 font-mono text-[11px] tracking-wide text-faint uppercase">
             <span>供应商 / 模型</span>
             <span className="text-right">调用</span>
             <span className="text-right">失败</span>
@@ -70,11 +70,11 @@ export function UsagePanel({ summary, error, onRetry }: Props) {
               return (
                 <li
                   key={`${row.provider}/${row.model}`}
-                  className="grid grid-cols-[minmax(0,1.6fr)_repeat(5,minmax(0,1fr))] gap-2 px-3 py-2 text-[12px]"
+                  className="grid grid-cols-[minmax(0,1.6fr)_repeat(5,minmax(0,1fr))] gap-2 px-3 py-2 text-[13px]"
                 >
                   <span className="min-w-0">
                     <span className="block truncate text-text">{row.provider}</span>
-                    <span className="block truncate font-mono text-[10px] text-faint">{row.model}</span>
+                    <span className="block truncate font-mono text-[11px] text-faint">{row.model}</span>
                   </span>
                   <span className="text-right font-mono text-muted">{row.calls}</span>
                   <span className={`text-right font-mono ${row.failed > 0 ? "text-warn" : "text-faint"}`}>

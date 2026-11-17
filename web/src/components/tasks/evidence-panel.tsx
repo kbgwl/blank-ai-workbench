@@ -50,19 +50,19 @@ function RollupList({ heading, entries, emptyText }: { heading: string; entries:
   const hidden = entries.length - shown.length;
   return (
     <div className="flex flex-col gap-1">
-      <h5 className="font-mono text-[10px] tracking-wide text-faint uppercase">{heading}</h5>
+      <h5 className="font-mono text-[11px] tracking-wide text-faint uppercase">{heading}</h5>
       {entries.length === 0 ? (
-        <p className="text-[11px] text-faint">{emptyText}</p>
+        <p className="text-[12px] text-faint">{emptyText}</p>
       ) : (
         <>
           <ul className="flex flex-col gap-0.5">
             {shown.map((entry, index) => (
-              <li key={`${heading}-${index}`} className="truncate font-mono text-[11px] text-text/80" title={entry}>
+              <li key={`${heading}-${index}`} className="truncate font-mono text-[12px] text-text/80" title={entry}>
                 {entry}
               </li>
             ))}
           </ul>
-          {hidden > 0 && <p className="text-[11px] text-faint">另有 {hidden} 条未展开</p>}
+          {hidden > 0 && <p className="text-[12px] text-faint">另有 {hidden} 条未展开</p>}
         </>
       )}
     </div>
@@ -73,7 +73,7 @@ function Row({ label, value, tone, title }: { label: string; value: string; tone
   const valueClass =
     tone === "accent" ? "text-accent" : tone === "danger" ? "text-danger" : tone === "warn" ? "text-warn" : "text-text/90";
   return (
-    <div className="flex items-baseline justify-between gap-3 text-[12px]">
+    <div className="flex items-baseline justify-between gap-3 text-[13px]">
       <span className="shrink-0 text-faint" title={title}>
         {label}
       </span>
@@ -138,18 +138,18 @@ function TestDetails({ test }: { test: TestInfo }) {
         tone={test.exitCode === null ? undefined : test.exitCode === 0 ? "accent" : "danger"}
       />
       <Row label="结论" value={verdict.label} tone={verdict.tone} />
-      {test.skippedReason && <p className="font-mono text-[10px] text-faint">原因：{test.skippedReason}</p>}
+      {test.skippedReason && <p className="font-mono text-[11px] text-faint">原因：{test.skippedReason}</p>}
       {test.output ? (
         <details className="group rounded-md border border-line bg-surface-2">
-          <summary className="cursor-pointer list-none px-2.5 py-1.5 font-mono text-[10px] text-faint hover:text-muted">
+          <summary className="cursor-pointer list-none px-2.5 py-1.5 font-mono text-[11px] text-faint hover:text-muted">
             输出片段（{test.output.split("\n").length} 行）
           </summary>
-          <pre className="max-h-40 overflow-auto border-t border-line px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-muted">
+          <pre className="max-h-40 overflow-auto border-t border-line px-2.5 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-words text-muted">
             {test.output}
           </pre>
         </details>
       ) : (
-        <p className="font-mono text-[10px] text-faint">无输出内容</p>
+        <p className="font-mono text-[11px] text-faint">无输出内容</p>
       )}
     </>
   );
@@ -172,13 +172,13 @@ function GovernanceDetails({ evidence }: { evidence: Evidence }) {
       />
       <Row label="执行边界" value={boundary} tone={risky ? "warn" : undefined} />
       {sb?.limits && <Row label="资源上限" value={sb.limits} />}
-      {sb?.denied && <p className="text-[11px] leading-relaxed text-warn">命令类工具当时会被直接拒掉：{sb.denied}</p>}
+      {sb?.denied && <p className="text-[12px] leading-relaxed text-warn">命令类工具当时会被直接拒掉：{sb.denied}</p>}
       {g.features.length > 0 && (
         <div className="flex flex-wrap gap-1 pt-0.5">
           {g.features.map((feature) => (
             <span
               key={feature.name}
-              className={`rounded border bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] ${
+              className={`rounded border bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] ${
                 feature.source === "legacy" ? "border-warn/30 text-warn" : "border-line text-muted"
               }`}
               title={`来源 ${feature.source}`}
@@ -191,12 +191,12 @@ function GovernanceDetails({ evidence }: { evidence: Evidence }) {
       )}
       {shifted && (
         <details className="group rounded-md border border-line bg-surface-2">
-          <summary className="cursor-pointer list-none px-2.5 py-1.5 font-mono text-[10px] text-warn">
+          <summary className="cursor-pointer list-none px-2.5 py-1.5 font-mono text-[11px] text-warn">
             执行中策略变过 {g.changes.length} 次
           </summary>
           <ul className="flex flex-col gap-1 border-t border-line px-2.5 py-2">
             {g.changes.map((item, index) => (
-              <li key={`${item.step}-${index}`} className="font-mono text-[11px] leading-relaxed text-muted">
+              <li key={`${item.step}-${index}`} className="font-mono text-[12px] leading-relaxed text-muted">
                 第 {item.step ?? "?"} 步（{item.node || "?"}）：模式 {item.mode || "未知"}
                 {item.model ? ` · 模型 ${item.model}` : ""}
                 {item.tier ? ` · 工具表 ${item.tier}` : ""}
@@ -205,7 +205,7 @@ function GovernanceDetails({ evidence }: { evidence: Evidence }) {
           </ul>
         </details>
       )}
-      <p className="font-mono text-[10px] text-faint">
+      <p className="font-mono text-[11px] text-faint">
         共 {g.snapshots} 条快照，只在策略真的变化时才新增。
       </p>
     </>
@@ -220,7 +220,7 @@ function WorldDetails({ evidence }: { evidence: Evidence }) {
   const world = evidence.world;
   const current = world.current;
   if (!current) {
-    return <p className="font-mono text-[10px] text-faint">这类快照上线之前的任务，环境没有记账（不是「环境为空」）。</p>;
+    return <p className="font-mono text-[11px] text-faint">这类快照上线之前的任务，环境没有记账（不是「环境为空」）。</p>;
   }
   const shifted = world.changes.length > 0;
   return (
@@ -254,12 +254,12 @@ function WorldDetails({ evidence }: { evidence: Evidence }) {
       />
       {current.instructions.length > 0 && (
         <details className="group rounded-md border border-line bg-surface-2">
-          <summary className="cursor-pointer list-none px-2.5 py-1.5 font-mono text-[10px] text-muted">
+          <summary className="cursor-pointer list-none px-2.5 py-1.5 font-mono text-[11px] text-muted">
             {current.instructions.length} 层指令（按指纹指认）
           </summary>
           <ul className="flex flex-col gap-1 border-t border-line px-2.5 py-2">
             {current.instructions.map((layer, index) => (
-              <li key={`${layer.sha}-${index}`} className="font-mono text-[11px] leading-relaxed text-muted">
+              <li key={`${layer.sha}-${index}`} className="font-mono text-[12px] leading-relaxed text-muted">
                 {layer.source} · {layer.path || "内联"} · {layer.chars ?? "?"} 字 ·{" "}
                 <span title={layer.sha}>{layer.sha.slice(0, 8)}</span>
                 {layer.truncated ? " · 已截断" : ""}
@@ -269,11 +269,11 @@ function WorldDetails({ evidence }: { evidence: Evidence }) {
         </details>
       )}
       {shifted && (
-        <p className="text-[11px] leading-relaxed text-warn">
+        <p className="text-[12px] leading-relaxed text-warn">
           执行中环境换过 {world.changes.length} 次（第 {world.changes.map((item) => item.node).join("、")} 处留下新快照）
         </p>
       )}
-      <p className="font-mono text-[10px] text-faint">
+      <p className="font-mono text-[11px] text-faint">
         共 {world.snapshots} 条环境快照，每条都是当时的全量，最后一条即终态。
       </p>
     </>
@@ -303,7 +303,7 @@ function BoundaryDetails({ boundaries }: { boundaries: Boundaries }) {
         title="要求什么档、实际落在哪档、有没有被部署策略降级，以及这一档由谁强制"
       />
       {boundaries.notice && (
-        <p className={`text-[11px] leading-relaxed ${risky ? "text-warn" : "text-muted"}`}>{boundaries.notice}</p>
+        <p className={`text-[12px] leading-relaxed ${risky ? "text-warn" : "text-muted"}`}>{boundaries.notice}</p>
       )}
       <Row
         label="文件边界"
@@ -324,7 +324,7 @@ function BoundaryDetails({ boundaries }: { boundaries: Boundaries }) {
         tone={profile.type === "unrestricted" ? "warn" : undefined}
         title="这份授权清单的来历：受管、不受限，还是当时压根没记"
       />
-      {profile.note && <p className="text-[11px] leading-relaxed text-muted">{profile.note}</p>}
+      {profile.note && <p className="text-[12px] leading-relaxed text-muted">{profile.note}</p>}
       <RollupList
         heading={`逐条授权（${profile.entries.length} 条）`}
         entries={profile.entries.map(permissionEntryLabel)}
@@ -334,7 +334,7 @@ function BoundaryDetails({ boundaries }: { boundaries: Boundaries }) {
             : "没有逐条授权记录——只有档位与审批模式在管，别把它读成「全禁止」"
         }
       />
-      {missingLine && <p className="font-mono text-[10px] text-faint">不存在的目标：{missingLine}</p>}
+      {missingLine && <p className="font-mono text-[11px] text-faint">不存在的目标：{missingLine}</p>}
       {networkLine && <Row label="网络闸门" value={networkLine} />}
       {shellLine && <Row label="命令执行" value={shellLine} />}
       <Row
@@ -375,12 +375,12 @@ function GuardianTrailDetails({ trail }: { trail: GuardianHistory }) {
         emptyText="这次任务没有发生压缩"
       />
       {trail.autoApprovals.length > 0 && (
-        <p className="text-[11px] leading-relaxed text-muted">
+        <p className="text-[12px] leading-relaxed text-muted">
           审查代批 {trail.autoApprovals.length} 次（只有可撤销的操作能被代批，审批指纹不上页面）
         </p>
       )}
       {trail.windowsUnrecorded === null && (
-        <p className="font-mono text-[10px] text-faint">这台后端还没有「压缩未记轨迹」这一格（早于 #79），不猜条数。</p>
+        <p className="font-mono text-[11px] text-faint">这台后端还没有「压缩未记轨迹」这一格（早于 #79），不猜条数。</p>
       )}
     </>
   );
@@ -417,12 +417,12 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
     return (
       <div className="flex flex-col gap-2">
         <Notice>{error}</Notice>
-        <p className="text-[11px] leading-relaxed text-faint">{"交付证明包需要后端提供 GET /tasks/{id}/evidence。"}</p>
+        <p className="text-[12px] leading-relaxed text-faint">{"交付证明包需要后端提供 GET /tasks/{id}/evidence。"}</p>
       </div>
     );
   }
   if (!evidence) {
-    return <p className="font-mono text-[11px] text-faint">读取证明包…</p>;
+    return <p className="font-mono text-[12px] text-faint">读取证明包…</p>;
   }
 
   const covered = evidence.acceptance.filter((item) => item.covered === true).length;
@@ -431,12 +431,12 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
   return (
     <div className="flex flex-col gap-3.5">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[12px] text-muted">任务结论</span>
+        <span className="text-[13px] text-muted">任务结论</span>
         <StatusBadge status={evidence.status} />
       </div>
 
       <section className="flex flex-col gap-1.5">
-        <h4 className="flex items-center justify-between font-mono text-[10px] tracking-wide text-faint uppercase">
+        <h4 className="flex items-center justify-between font-mono text-[11px] tracking-wide text-faint uppercase">
           <span>验收条件</span>
           {evidence.acceptance.length > 0 && (
             <span className="text-muted normal-case">
@@ -445,7 +445,7 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
           )}
         </h4>
         {evidence.acceptance.length === 0 ? (
-          <p className="text-[11px] text-faint">暂无验收条件</p>
+          <p className="text-[12px] text-faint">暂无验收条件</p>
         ) : (
           <ul className="flex flex-col gap-1.5">
             {evidence.acceptance.map((item, index) => (
@@ -463,13 +463,13 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
                 </span>
                 <span className="min-w-0 flex-1">
                   <span
-                    className={`block text-[12px] leading-relaxed ${
+                    className={`block text-[13px] leading-relaxed ${
                       item.covered === true ? "text-muted line-through decoration-line-strong" : "text-text/90"
                     }`}
                   >
                     {item.criterion}
                   </span>
-                  {item.note && <span className="mt-0.5 block font-mono text-[10px] text-faint">{item.note}</span>}
+                  {item.note && <span className="mt-0.5 block font-mono text-[11px] text-faint">{item.note}</span>}
                 </span>
               </li>
             ))}
@@ -478,16 +478,16 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
       </section>
 
       <section className="flex flex-col gap-1.5 border-t border-line pt-3">
-        <h4 className="font-mono text-[10px] tracking-wide text-faint uppercase">测试命令与结果</h4>
+        <h4 className="font-mono text-[11px] tracking-wide text-faint uppercase">测试命令与结果</h4>
         {!test ? (
-          <p className="text-[11px] text-faint">暂无（后端未返回 test/validation）</p>
+          <p className="text-[12px] text-faint">暂无（后端未返回 test/validation）</p>
         ) : (
           <TestDetails test={test} />
         )}
       </section>
 
       <section className="flex flex-col gap-1.5 border-t border-line pt-3">
-        <h4 className="font-mono text-[10px] tracking-wide text-faint uppercase">Token 用量</h4>
+        <h4 className="font-mono text-[11px] tracking-wide text-faint uppercase">Token 用量</h4>
         <Row label="输入" value={formatNumber(evidence.usage.promptTokens)} />
         <Row label="输出" value={formatNumber(evidence.usage.completionTokens)} />
         <Row label="合计" value={formatNumber(evidence.usage.totalTokens)} tone="accent" />
@@ -525,63 +525,63 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
 
       {evidence.governance.snapshots > 0 && (
         <section className="flex flex-col gap-1.5 border-t border-line pt-3">
-          <h4 className="font-mono text-[10px] tracking-wide text-faint uppercase">执行边界与策略</h4>
+          <h4 className="font-mono text-[11px] tracking-wide text-faint uppercase">执行边界与策略</h4>
           <GovernanceDetails evidence={evidence} />
         </section>
       )}
 
       {evidence.world.snapshots > 0 && (
         <section className="flex flex-col gap-1.5 border-t border-line pt-3">
-          <h4 className="font-mono text-[10px] tracking-wide text-faint uppercase">当时的环境</h4>
+          <h4 className="font-mono text-[11px] tracking-wide text-faint uppercase">当时的环境</h4>
           <WorldDetails evidence={evidence} />
         </section>
       )}
 
       {evidence.boundaries.recorded && (
         <section className="flex flex-col gap-1.5 border-t border-line pt-3">
-          <h4 className="font-mono text-[10px] tracking-wide text-faint uppercase">边界与授权</h4>
+          <h4 className="font-mono text-[11px] tracking-wide text-faint uppercase">边界与授权</h4>
           <BoundaryDetails boundaries={evidence.boundaries} />
         </section>
       )}
 
       {evidence.guardian_history.recorded && (
         <section className="flex flex-col gap-1.5 border-t border-line pt-3">
-          <h4 className="font-mono text-[10px] tracking-wide text-faint uppercase">审阅轨迹</h4>
+          <h4 className="font-mono text-[11px] tracking-wide text-faint uppercase">审阅轨迹</h4>
           <GuardianTrailDetails trail={evidence.guardian_history} />
         </section>
       )}
 
       {snapshots.length > 0 && (
         <section className="flex flex-col gap-1.5 border-t border-line pt-3">
-          <h4 className="font-mono text-[10px] tracking-wide text-faint uppercase">回滚点</h4>
+          <h4 className="font-mono text-[11px] tracking-wide text-faint uppercase">回滚点</h4>
           {snapshots.map((snapshot) => {
             const restorable = snapshot.restorable !== false;
             return (
               <div key={snapshot.id} className="flex flex-col gap-1 rounded-md border border-line bg-surface-2 px-2.5 py-2">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate text-[11px] text-muted" title={snapshot.reason}>{snapshot.reason}</span>
-                  <button type="button" disabled={restoring !== null || !restorable} title={restorable ? undefined : snapshot.skipped_reason} onClick={() => void restore(snapshot)} className="shrink-0 rounded border border-line px-2 py-1 text-[10px] text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50">
+                  <span className="min-w-0 truncate text-[12px] text-muted" title={snapshot.reason}>{snapshot.reason}</span>
+                  <button type="button" disabled={restoring !== null || !restorable} title={restorable ? undefined : snapshot.skipped_reason} onClick={() => void restore(snapshot)} className="shrink-0 rounded border border-line px-2 py-1 text-[11px] text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50">
                     {restoring === snapshot.id ? "恢复中" : restorable ? "恢复" : "仅清单"}
                   </button>
                 </div>
                 {!restorable && (
-                  <p className="text-[10px] leading-relaxed text-faint">
+                  <p className="text-[11px] leading-relaxed text-faint">
                     {snapshot.skipped_reason || "这份快照只记录了文件清单，没有复制文件内容，无法恢复。"}
                   </p>
                 )}
               </div>
             );
           })}
-          {snapshotError && <p className="text-[11px] text-muted">{snapshotError}</p>}
+          {snapshotError && <p className="text-[12px] text-muted">{snapshotError}</p>}
         </section>
       )}
 
       {evidence.unverified.length > 0 && (
         <section className="flex flex-col gap-1.5 border-t border-line pt-3">
-          <h4 className="font-mono text-[10px] tracking-wide text-warn uppercase">仍需关注</h4>
+          <h4 className="font-mono text-[11px] tracking-wide text-warn uppercase">仍需关注</h4>
           <ul className="flex flex-col gap-1">
             {evidence.unverified.map((item, index) => (
-              <li key={index} className="text-[11px] leading-relaxed text-warn">
+              <li key={index} className="text-[12px] leading-relaxed text-warn">
                 · {item}
               </li>
             ))}

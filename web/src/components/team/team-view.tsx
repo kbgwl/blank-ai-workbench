@@ -71,7 +71,7 @@ function timeOf(iso: string): string {
 }
 
 function Avatar({ name, admin = false, size = "md" }: { name: string; admin?: boolean; size?: "sm" | "md" }) {
-  const box = size === "sm" ? "size-6 text-[10px]" : "size-8 text-[11px]";
+  const box = size === "sm" ? "size-6 text-[11px]" : "size-8 text-[12px]";
   return (
     <span
       className={`grid ${box} shrink-0 place-items-center rounded-lg font-semibold tracking-wide ${
@@ -106,7 +106,7 @@ function Modal({
         <header className="flex shrink-0 items-start gap-3 border-b border-line px-4 py-3">
           <div className="min-w-0 flex-1">
             <h2 className="text-[14px] font-semibold tracking-tight">{title}</h2>
-            {subtitle && <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted">{subtitle}</p>}
+            {subtitle && <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted">{subtitle}</p>}
           </div>
           <button
             type="button"
@@ -159,11 +159,11 @@ function SearchResultList({
   onPick: (hit: ChatSearchHit) => void;
 }) {
   if (error) {
-    return <p className="px-2 py-4 text-[11.5px] leading-relaxed text-danger">搜索失败：{error}</p>;
+    return <p className="px-2 py-4 text-[12.5px] leading-relaxed text-danger">搜索失败：{error}</p>;
   }
   const hits = result?.results ?? [];
   if (!loading && result && hits.length === 0) {
-    return <p className="px-2 py-4 text-[11.5px] leading-relaxed text-faint">没有找到“{query}”相关内容。</p>;
+    return <p className="px-2 py-4 text-[12.5px] leading-relaxed text-faint">没有找到“{query}”相关内容。</p>;
   }
   return (
     <div className="pb-2">
@@ -187,12 +187,12 @@ function SearchResultList({
               >
                 {hit.source === "task" ? "任务结论" : hit.group_name || "群聊"}
               </span>
-              <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-text">
+              <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-text">
                 {hit.source === "task" ? hit.group_name || "任务" : hit.speaker}
               </span>
               <span className="shrink-0 font-mono text-[9px] text-faint">{timeOf(hit.created_at)}</span>
             </span>
-            <span className="mt-1 block text-[11px] leading-relaxed text-muted">
+            <span className="mt-1 block text-[12px] leading-relaxed text-muted">
               <Highlighted text={hit.snippet || hit.content.slice(0, 80)} tokens={result?.tokens ?? []} />
             </span>
           </button>
@@ -553,7 +553,7 @@ export function TeamView() {
               key={item}
               type="button"
               onClick={() => setTab(item)}
-              className={`rounded-md px-2 py-1.5 text-[12px] font-medium transition-colors ${
+              className={`rounded-md px-2 py-1.5 text-[13px] font-medium transition-colors ${
                 tab === item ? "bg-surface text-text shadow-sm" : "text-muted hover:text-text"
               }`}
             >
@@ -589,7 +589,7 @@ export function TeamView() {
                     }}
                     aria-label="搜索聊天与结论"
                     placeholder="搜索所有群与结论"
-                    className="w-full rounded-lg border border-line bg-surface-2 py-1.5 pr-7 pl-7 text-[12px] text-text placeholder:text-faint focus:border-brand/60 focus:outline-none"
+                    className="w-full rounded-lg border border-line bg-surface-2 py-1.5 pr-7 pl-7 text-[13px] text-text placeholder:text-faint focus:border-brand/60 focus:outline-none"
                   />
                   {searchQuery && (
                     <button
@@ -617,7 +617,7 @@ export function TeamView() {
                     <button
                       type="button"
                       onClick={() => void openGroupEditor(null)}
-                      className="flex w-full items-center gap-2 rounded-lg border border-line-strong bg-surface px-2.5 py-2 text-[12.5px] font-medium text-text transition-colors hover:border-brand/40 hover:bg-surface-2"
+                      className="flex w-full items-center gap-2 rounded-lg border border-line-strong bg-surface px-2.5 py-2 text-[13.5px] font-medium text-text transition-colors hover:border-brand/40 hover:bg-surface-2"
                     >
                       <svg viewBox="0 0 24 24" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={1.9}>
                         <path d="M12 5v14M5 12h14" />
@@ -626,7 +626,7 @@ export function TeamView() {
                     </button>
                   </div>
                   {groups.length === 0 && boot && (
-                    <p className="px-2 py-6 text-center text-[11.5px] leading-relaxed text-faint">
+                    <p className="px-2 py-6 text-center text-[12.5px] leading-relaxed text-faint">
                       还没有群。
                       <br />
                       建一个群，把 Bot 拉进来。
@@ -646,11 +646,11 @@ export function TeamView() {
                           }`}
                         >
                           <span className="flex items-center gap-2">
-                            <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{group.name}</span>
+                            <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{group.name}</span>
                             {live && <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-brand" />}
                             <span className="shrink-0 font-mono text-[9.5px] text-faint">{group.member_count}</span>
                           </span>
-                          <span className="mt-0.5 block truncate text-[11px] text-faint">
+                          <span className="mt-0.5 block truncate text-[12px] text-faint">
                             {group.last_message || group.topic || "还没有消息"}
                           </span>
                         </button>
@@ -666,7 +666,7 @@ export function TeamView() {
                 <button
                   type="button"
                   onClick={() => setBotEditing("new")}
-                  className="flex w-full items-center gap-2 rounded-lg border border-line-strong bg-surface px-2.5 py-2 text-[12.5px] font-medium text-text transition-colors hover:border-brand/40 hover:bg-surface-2"
+                  className="flex w-full items-center gap-2 rounded-lg border border-line-strong bg-surface px-2.5 py-2 text-[13.5px] font-medium text-text transition-colors hover:border-brand/40 hover:bg-surface-2"
                 >
                   <svg viewBox="0 0 24 24" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={1.9}>
                     <path d="M12 5v14M5 12h14" />
@@ -684,8 +684,8 @@ export function TeamView() {
                   >
                     <Avatar name={bot.name} admin={bot.is_admin} size="sm" />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[12.5px] font-medium">{bot.name}</span>
-                      <span className="block truncate text-[10.5px] text-faint">
+                      <span className="block truncate text-[13.5px] font-medium">{bot.name}</span>
+                      <span className="block truncate text-[11.5px] text-faint">
                         {bot.role || (bot.model ? bot.model : "未绑定模型")}
                       </span>
                     </span>
@@ -699,9 +699,9 @@ export function TeamView() {
         </div>
 
         <div className="border-t border-line px-3 py-2.5">
-          <p className="text-[10.5px] leading-relaxed text-faint">
+          <p className="text-[11.5px] leading-relaxed text-faint">
             主理人固定为<b className="text-muted"> 小白管家 </b>，先接住你的话，再按 @ 安排成员；成员可用
-            <code className="mx-0.5 rounded bg-surface-2 px-1 font-mono text-[10px]">[PASS]</code>
+            <code className="mx-0.5 rounded bg-surface-2 px-1 font-mono text-[11px]">[PASS]</code>
             保持安静。
           </p>
         </div>
@@ -740,24 +740,24 @@ export function TeamView() {
               <Avatar name={activeGroup.name} admin />
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 items-center gap-2">
-                  <h1 className="truncate text-[13.5px] font-semibold">{activeGroup.name}</h1>
+                  <h1 className="truncate text-[14px] font-semibold">{activeGroup.name}</h1>
                   {activeGroup.project_name && (
                     <span className="shrink-0 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[9.5px] text-faint">
                       {activeGroup.project_name}
                     </span>
                   )}
                   {round?.status && (
-                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${roundChipClass(round.status)}`}>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${roundChipClass(round.status)}`}>
                       {roundStatusLabel(round.status)}
                     </span>
                   )}
                 </div>
-                <p className="mt-0.5 truncate text-[11px] text-faint">{activeGroup.topic || "没有设置群主题"}</p>
+                <p className="mt-0.5 truncate text-[12px] text-faint">{activeGroup.topic || "没有设置群主题"}</p>
               </div>
 
               <div className="hidden shrink-0 items-center gap-2 sm:flex">
                 <div className="text-right">
-                  <p className="font-mono text-[10px] text-faint">
+                  <p className="font-mono text-[11px] text-faint">
                     {shortTokens(spend.tokens)} / {shortTokens(activeGroup.token_budget)}
                   </p>
                   <div className="mt-1 h-1 w-20 overflow-hidden rounded-full bg-surface-2">
@@ -786,7 +786,7 @@ export function TeamView() {
             <MemberStrip members={state?.members ?? []} round={round} messages={state?.messages ?? []} />
 
             {anchorId > 0 && (
-              <div className="flex shrink-0 items-center gap-2 border-b border-line bg-brand/[0.04] px-4 py-1.5 text-[11px] text-muted">
+              <div className="flex shrink-0 items-center gap-2 border-b border-line bg-brand/[0.04] px-4 py-1.5 text-[12px] text-muted">
                 <span>正在查看搜索结果附近的消息</span>
                 <button type="button" onClick={backToLatest} className="font-medium text-brand hover:underline">
                   回到最新
@@ -834,7 +834,7 @@ export function TeamView() {
                 )}
 
                 {state && state.pending.length === 0 && state.messages.length > 0 && busyRound && (
-                  <p className="mt-5 flex items-center gap-2 font-mono text-[10.5px] text-faint">
+                  <p className="mt-5 flex items-center gap-2 font-mono text-[11.5px] text-faint">
                     <Spinner /> 正在推进这一轮…
                   </p>
                 )}
@@ -916,7 +916,7 @@ function EmptyTeam({ onCreate }: { onCreate: () => void }) {
         <span className="size-3.5 rounded-[3px] bg-logo-accent" />
       </span>
       <h2 className="mt-4 text-[20px] font-semibold tracking-tight">组一个能自己干活的 Bot 团队</h2>
-      <p className="mt-2 max-w-md text-[13px] leading-relaxed text-muted">
+      <p className="mt-2 max-w-md text-[14px] leading-relaxed text-muted">
         建一个群，把负责不同方向的 Bot 拉进来。小白管家会先接住你的需求，再按 @ 把活分给合适的人；
         成员可以用 [PASS] 保持安静。
       </p>
@@ -940,10 +940,10 @@ function GroupEmpty({ group, members }: { group: TeamGroupSummary; members: Team
         ))}
       </div>
       <h2 className="mt-4 text-[19px] font-semibold tracking-tight">{group.name}</h2>
-      <p className="mt-2 max-w-md text-[12.5px] leading-relaxed text-muted">
+      <p className="mt-2 max-w-md text-[13.5px] leading-relaxed text-muted">
         {group.topic || "这个群还没有主题。直接说你要做什么，主理人会先回答，再安排成员接手。"}
       </p>
-      <p className="mt-4 rounded-lg border border-line bg-surface-2 px-3 py-2 text-[11.5px] leading-relaxed text-faint">
+      <p className="mt-4 rounded-lg border border-line bg-surface-2 px-3 py-2 text-[12.5px] leading-relaxed text-faint">
         试试：<span className="text-muted">@成员</span> 可以直接点名；成员回复里的 @ 会触发下一棒。
       </p>
     </div>
@@ -979,7 +979,7 @@ function MemberStrip({
             title={`${member.role || "成员"}${member.model ? ` · ${member.model}` : ""}${
               member.enabled ? "" : "（已停用）"
             }${roundTokens > 0 ? ` · 本轮 ${roundTokens.toLocaleString("en-US")} tokens` : ""}`}
-            className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10.5px] transition-colors ${
+            className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11.5px] transition-colors ${
               speaking
                 ? "border-brand/40 bg-brand/[0.06] text-brand"
                 : member.enabled
@@ -1012,7 +1012,7 @@ function MessageRow({ message, highlight = false }: { message: TeamMessage; high
   if (message.role === "user") {
     return (
       <div {...anchorProps} className={`flex justify-end transition-colors ${glow}`}>
-        <div className="max-w-[85%] rounded-xl rounded-br-md bg-surface-2 px-3.5 py-2 text-[13.5px] leading-relaxed whitespace-pre-wrap">
+        <div className="max-w-[85%] rounded-xl rounded-br-md bg-surface-2 px-3.5 py-2 text-[14px] leading-relaxed whitespace-pre-wrap">
           {message.content}
         </div>
       </div>
@@ -1024,7 +1024,7 @@ function MessageRow({ message, highlight = false }: { message: TeamMessage; high
       <div {...anchorProps} className={`flex items-center gap-2 transition-colors ${glow}`}>
         <span className="h-px flex-1 bg-line" />
         <span
-          className={`rounded-full px-2 py-0.5 text-[10.5px] ${
+          className={`rounded-full px-2 py-0.5 text-[11.5px] ${
             message.status === "failed" ? "bg-danger/[0.06] text-danger" : "bg-surface-2 text-faint"
           }`}
         >
@@ -1046,7 +1046,7 @@ function MessageRow({ message, highlight = false }: { message: TeamMessage; high
       <Avatar name={message.bot_name} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[12.5px] font-semibold">{message.bot_name}</span>
+          <span className="text-[13.5px] font-semibold">{message.bot_name}</span>
           {message.meta.wrap_up && (
             <span className="rounded bg-brand/[0.08] px-1.5 py-0.5 text-[9.5px] font-medium text-brand">收尾</span>
           )}
@@ -1073,17 +1073,17 @@ function MessageRow({ message, highlight = false }: { message: TeamMessage; high
           {message.created_at && <span className="ml-auto font-mono text-[9.5px] text-faint">{timeOf(message.created_at)}</span>}
         </div>
 
-        <div className="mt-1 text-[13px] leading-relaxed text-text/90">
+        <div className="mt-1 text-[14px] leading-relaxed text-text/90">
           {running && !message.content ? (
-            <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-faint">
+            <span className="inline-flex items-center gap-1.5 font-mono text-[12px] text-faint">
               <Spinner /> 正在读上下文、调用工具…
             </span>
           ) : pass ? (
-            <span className="text-[12px] text-faint italic">这一轮没有补充，保持安静。</span>
+            <span className="text-[13px] text-faint italic">这一轮没有补充，保持安静。</span>
           ) : message.content ? (
             <MarkdownView text={message.content} />
           ) : (
-            <span className="text-[12px] text-faint">{failed ? "这一轮没有完成。" : "（没有输出结论）"}</span>
+            <span className="text-[13px] text-faint">{failed ? "这一轮没有完成。" : "（没有输出结论）"}</span>
           )}
         </div>
 
@@ -1129,8 +1129,8 @@ function PendingCard({
   return (
     <div className="rounded-xl border border-warn/30 bg-warn/[0.04] px-4 py-3">
       <div className="flex items-center gap-2">
-        <span className="grid size-5 place-items-center rounded bg-warn/15 text-[11px] text-warn">!</span>
-        <span className="text-[12px] font-semibold text-warn">
+        <span className="grid size-5 place-items-center rounded bg-warn/15 text-[12px] text-warn">!</span>
+        <span className="text-[13px] font-semibold text-warn">
           {pending.bot_name} 需要你确认
         </span>
         <span className="font-mono text-[9.5px] text-faint">
@@ -1159,7 +1159,7 @@ function PendingCard({
           ))}
           <div className="flex items-center justify-end gap-2">
             {pending.question_expired === true && (
-              <span className="text-[11px] text-faint">问题已过期，重跑这一轮才会再生效。</span>
+              <span className="text-[12px] text-faint">问题已过期，重跑这一轮才会再生效。</span>
             )}
             <Button
               variant="ghost"
@@ -1196,27 +1196,27 @@ function ApprovalBlock({
   return (
     <div className="mt-3 rounded-lg border border-line bg-surface px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
-        <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-text">{approval.tool}</code>
+        <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[12px] text-text">{approval.tool}</code>
         <span className="rounded bg-danger/[0.06] px-1.5 py-0.5 text-[9.5px] text-danger">
           {approval.risk_level === "critical" ? "极高风险" : "高风险"}
         </span>
         {expired && (
           <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[9.5px] text-faint">已过期</span>
         )}
-        {approval.message && <span className="min-w-0 flex-1 truncate text-[11px] text-muted">{approval.message}</span>}
+        {approval.message && <span className="min-w-0 flex-1 truncate text-[12px] text-muted">{approval.message}</span>}
       </div>
       {args && (
-        <pre className="mt-2 max-h-28 overflow-auto rounded-md bg-surface-2 px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-text/80">
+        <pre className="mt-2 max-h-28 overflow-auto rounded-md bg-surface-2 px-2.5 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-words text-text/80">
           {args}
         </pre>
       )}
       {reviewNote && (
-        <p className="mt-2 text-[11px] leading-relaxed text-muted" title="独立审查员先看过了；它放行不等于安全，它说话也不会替你批准">
+        <p className="mt-2 text-[12px] leading-relaxed text-muted" title="独立审查员先看过了；它放行不等于安全，它说话也不会替你批准">
           {reviewNote}
         </p>
       )}
       {expired ? (
-        <p className="mt-2.5 text-[11px] text-faint">
+        <p className="mt-2.5 text-[12px] text-faint">
           这条审批已经过期，批准/驳回都不会再生效；要接着做，重跑这一轮。
         </p>
       ) : (
@@ -1268,7 +1268,7 @@ function QuestionBlock({
   return (
     <div className="rounded-lg border border-line bg-surface px-3 py-2.5">
       {question.header && <p className="font-mono text-[9.5px] tracking-wide text-faint uppercase">{question.header}</p>}
-      <p className="mt-0.5 text-[12.5px] leading-relaxed font-medium">{question.question}</p>
+      <p className="mt-0.5 text-[13.5px] leading-relaxed font-medium">{question.question}</p>
       {options.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {options.map((option) => {
@@ -1279,14 +1279,14 @@ function QuestionBlock({
                 type="button"
                 onClick={() => toggle(option.label)}
                 title={option.description || ""}
-                className={`rounded-lg border px-2.5 py-1.5 text-left text-[11.5px] transition-colors ${
+                className={`rounded-lg border px-2.5 py-1.5 text-left text-[12.5px] transition-colors ${
                   active
                     ? "border-brand/50 bg-brand/[0.07] text-brand"
                     : "border-line bg-surface-2 text-muted hover:border-line-strong hover:text-text"
                 }`}
               >
                 <span className="block font-medium">{option.label}</span>
-                {option.description && <span className="mt-0.5 block text-[10px] text-faint">{option.description}</span>}
+                {option.description && <span className="mt-0.5 block text-[11px] text-faint">{option.description}</span>}
               </button>
             );
           })}
@@ -1297,12 +1297,12 @@ function QuestionBlock({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder={options.length > 0 ? "或者直接输入…" : "输入你的回答…"}
-          className="mt-2 w-full rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[12px] placeholder:text-faint focus:border-brand/60 focus:outline-none"
+          className="mt-2 w-full rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[13px] placeholder:text-faint focus:border-brand/60 focus:outline-none"
         />
       )}
       {activePreview && (
         // 与任务页同一口径：模型给的 HTML 片段只按纯文本展示。
-        <pre className="mt-2 max-h-40 overflow-auto rounded-lg border border-line bg-surface-2 px-2.5 py-2 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap text-text/85">
+        <pre className="mt-2 max-h-40 overflow-auto rounded-lg border border-line bg-surface-2 px-2.5 py-2 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-text/85">
           {activePreview}
         </pre>
       )}
@@ -1348,7 +1348,7 @@ function ComposerBar({
                 key={member.id}
                 type="button"
                 onClick={() => insert(member.name)}
-                className="rounded-full border border-line bg-surface-2 px-2 py-0.5 text-[10.5px] text-muted transition-colors hover:border-brand/40 hover:text-brand"
+                className="rounded-full border border-line bg-surface-2 px-2 py-0.5 text-[11.5px] text-muted transition-colors hover:border-brand/40 hover:text-brand"
               >
                 {member.name}
               </button>
@@ -1370,7 +1370,7 @@ function ComposerBar({
             placeholder={
               busy ? "这一轮还在进行，等它说完再发…" : "说清楚你要做什么；@成员 可以直接点名，Enter 发送"
             }
-            className="max-h-40 min-h-[26px] flex-1 resize-none bg-transparent text-[13px] leading-relaxed text-text placeholder:text-faint focus:outline-none disabled:cursor-not-allowed"
+            className="max-h-40 min-h-[26px] flex-1 resize-none bg-transparent text-[14px] leading-relaxed text-text placeholder:text-faint focus:outline-none disabled:cursor-not-allowed"
           />
           <button
             type="button"
@@ -1426,7 +1426,7 @@ function BotRoster({
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-[18px] font-semibold tracking-tight">Bot 名册</h1>
-            <p className="mt-1 max-w-xl text-[12.5px] leading-relaxed text-muted">
+            <p className="mt-1 max-w-xl text-[13.5px] leading-relaxed text-muted">
               每个 Bot 绑定自己的模型、工作区与权限模式。团队里的每次发言仍是一条普通任务，
               审批、事件与用量都可以按任务回查。
             </p>
@@ -1451,7 +1451,7 @@ function BotRoster({
                   <Avatar name={bot.name} admin={bot.is_admin} />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <h2 className="text-[13.5px] font-semibold">{bot.name}</h2>
+                      <h2 className="text-[14px] font-semibold">{bot.name}</h2>
                       {bot.is_admin && (
                         <span className="rounded bg-brand/[0.08] px-1.5 py-0.5 text-[9.5px] font-medium text-brand">
                           主理人
@@ -1461,13 +1461,13 @@ function BotRoster({
                         <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[9.5px] text-faint">已停用</span>
                       )}
                     </div>
-                    <p className="mt-0.5 text-[11.5px] text-muted">{bot.role || "没有写角色"}</p>
+                    <p className="mt-0.5 text-[12.5px] text-muted">{bot.role || "没有写角色"}</p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
                     <button
                       type="button"
                       onClick={() => onEdit(bot)}
-                      className="rounded-md px-2 py-1 text-[11px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+                      className="rounded-md px-2 py-1 text-[12px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
                     >
                       编辑
                     </button>
@@ -1475,7 +1475,7 @@ function BotRoster({
                       <button
                         type="button"
                         onClick={() => onDelete(bot)}
-                        className="rounded-md px-2 py-1 text-[11px] text-faint transition-colors hover:bg-danger/[0.06] hover:text-danger"
+                        className="rounded-md px-2 py-1 text-[12px] text-faint transition-colors hover:bg-danger/[0.06] hover:text-danger"
                       >
                         删除
                       </button>
@@ -1483,7 +1483,7 @@ function BotRoster({
                   </div>
                 </div>
 
-                <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px]">
+                <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-[12px]">
                   <div className="col-span-2 flex min-w-0 items-center gap-1.5">
                     <dt className="shrink-0 text-faint">模型</dt>
                     <dd className="min-w-0 truncate text-muted">
@@ -1492,7 +1492,7 @@ function BotRoster({
                   </div>
                   <div className="col-span-2 flex min-w-0 items-center gap-1.5">
                     <dt className="shrink-0 text-faint">工作区</dt>
-                    <dd className="min-w-0 truncate font-mono text-[10.5px] text-muted" title={bot.workspace_path}>
+                    <dd className="min-w-0 truncate font-mono text-[11.5px] text-muted" title={bot.workspace_path}>
                       {bot.workspace_path || "跟随项目当前工作区"}
                     </dd>
                   </div>
@@ -1507,7 +1507,7 @@ function BotRoster({
                 </dl>
 
                 {bot.instructions && (
-                  <p className="mt-2.5 line-clamp-2 rounded-lg bg-surface-2 px-2.5 py-1.5 text-[11px] leading-relaxed text-faint">
+                  <p className="mt-2.5 line-clamp-2 rounded-lg bg-surface-2 px-2.5 py-1.5 text-[12px] leading-relaxed text-faint">
                     {bot.instructions}
                   </p>
                 )}
@@ -1692,7 +1692,7 @@ function BotEditor({
             value={form.instructions ?? ""}
             onChange={(event) => setForm((current) => ({ ...current, instructions: event.target.value }))}
             placeholder="这个 Bot 负责什么、有哪些约定、交付前要做什么检查…"
-            className="w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13px] leading-relaxed placeholder:text-faint focus:border-brand/60 focus:outline-none"
+            className="w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 text-[14px] leading-relaxed placeholder:text-faint focus:border-brand/60 focus:outline-none"
           />
         </Field>
 
@@ -1824,15 +1824,15 @@ function GroupEditor({
             value={form.topic ?? ""}
             onChange={(event) => setForm((current) => ({ ...current, topic: event.target.value }))}
             placeholder="这个群长期负责什么？主理人会把它带进每一轮上下文。"
-            className="w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13px] leading-relaxed placeholder:text-faint focus:border-brand/60 focus:outline-none"
+            className="w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 text-[14px] leading-relaxed placeholder:text-faint focus:border-brand/60 focus:outline-none"
           />
         </Field>
 
         <div>
-          <p className="font-mono text-[10px] tracking-wide text-faint uppercase">成员</p>
+          <p className="font-mono text-[11px] tracking-wide text-faint uppercase">成员</p>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {candidates.length === 0 && (
-              <p className="text-[11.5px] text-faint">还没有可加入的 Bot，先去名册建一个。</p>
+              <p className="text-[12.5px] text-faint">还没有可加入的 Bot，先去名册建一个。</p>
             )}
             {candidates.map((bot) => {
               const active = members.includes(bot.id);
@@ -1841,7 +1841,7 @@ function GroupEditor({
                   key={bot.id}
                   type="button"
                   onClick={() => toggleMember(bot.id)}
-                  className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] transition-colors ${
+                  className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12.5px] transition-colors ${
                     active
                       ? "border-brand/50 bg-brand/[0.07] text-brand"
                       : "border-line bg-surface-2 text-muted hover:border-line-strong hover:text-text"

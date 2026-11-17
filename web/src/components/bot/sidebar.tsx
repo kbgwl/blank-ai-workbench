@@ -185,12 +185,12 @@ export function Sidebar(props: SidebarProps) {
   }
 
   return (
-    <aside className="flex w-[248px] shrink-0 flex-col border-r border-line bg-sidebar">
+    <aside className="flex w-[308px] shrink-0 flex-col border-r border-line bg-sidebar">
       <div className="flex items-center gap-2 px-3 pt-3 pb-2.5">
         <span className="grid size-6 shrink-0 place-items-center rounded-md bg-logo-bg">
           <span className="size-2 rounded-[2px] bg-logo-accent" />
         </span>
-        <span className="text-[13px] font-semibold tracking-tight">空白格</span>
+        <span className="text-[14px] font-semibold tracking-tight">空白格</span>
         <span className="rounded bg-surface-3 px-1 py-0.5 font-mono text-[9px] tracking-wide text-muted uppercase">
           bot
         </span>
@@ -200,7 +200,7 @@ export function Sidebar(props: SidebarProps) {
           title="收起会话列表"
           className="ml-auto grid size-7 place-items-center rounded-md text-faint transition-colors hover:bg-surface-2 hover:text-text"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3.5" aria-hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-4" aria-hidden>
             <path d="M15 6l-6 6 6 6" />
           </svg>
         </button>
@@ -210,9 +210,9 @@ export function Sidebar(props: SidebarProps) {
         <button
           type="button"
           onClick={props.onNew}
-          className="flex w-full items-center gap-2 rounded-md border border-line bg-surface px-2.5 py-[7px] text-[12.5px] font-medium text-text transition-colors hover:border-line-strong hover:bg-surface-2"
+          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-[14px] font-medium text-text transition-colors hover:bg-surface-2"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} className="size-3.5" aria-hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} className="size-4" aria-hidden>
             <path d="M12 5v14M5 12h14" />
           </svg>
           新对话
@@ -221,14 +221,14 @@ export function Sidebar(props: SidebarProps) {
 
       <div className="px-3 pb-2">
         <div className="flex items-center gap-1.5 rounded-md border border-transparent bg-surface-2 px-2 py-1.5 transition-colors focus-within:border-line-strong focus-within:bg-surface">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="size-3.5 shrink-0 text-faint" aria-hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="size-4 shrink-0 text-faint" aria-hidden>
             <path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM16.5 16.5 21 21" />
           </svg>
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="搜索对话"
-            className="w-full bg-transparent text-[12px] text-text placeholder:text-faint focus:outline-none"
+            className="w-full bg-transparent text-[14px] text-text placeholder:text-faint focus:outline-none"
           />
         </div>
       </div>
@@ -238,7 +238,7 @@ export function Sidebar(props: SidebarProps) {
         <Link
           href="/projects"
           title="项目与目录"
-          className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] transition-colors ${
+          className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[14px] transition-colors ${
             isNavActive(pathname, "/projects")
               ? "bg-surface-3 text-text"
               : "text-muted hover:bg-surface-2 hover:text-text"
@@ -251,7 +251,7 @@ export function Sidebar(props: SidebarProps) {
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {props.error && (
-          <p className="mx-1 mt-2 rounded-md border border-danger/25 bg-danger/[0.04] px-2 py-1.5 text-[11px] text-danger">
+          <p className="mx-1 mt-2 rounded-md border border-danger/25 bg-danger/[0.04] px-2 py-1.5 text-[13px] text-danger">
             {props.error}
           </p>
         )}
@@ -265,7 +265,7 @@ export function Sidebar(props: SidebarProps) {
         )}
 
         {props.threads !== null && props.threads.length === 0 && (
-          <p className="px-2 py-6 text-center text-[11.5px] leading-relaxed text-faint">
+          <p className="px-2 py-6 text-center text-[13.5px] leading-relaxed text-faint">
             还没有对话。
             <br />
             说一句就开始。
@@ -274,7 +274,7 @@ export function Sidebar(props: SidebarProps) {
 
         {groups.map((group) => (
           <div key={group.bucket} className="mb-2">
-            <p className="px-2 py-1 font-mono text-[10px] tracking-wide text-faint uppercase">{group.label}</p>
+            <p className="px-2 py-1 font-mono text-[11px] tracking-wide text-faint uppercase">{group.label}</p>
             <div className="space-y-0.5">
               {group.items.map((thread) => {
                 const active = thread.id === props.activeId;
@@ -288,7 +288,7 @@ export function Sidebar(props: SidebarProps) {
                       }`}
                     >
                       <StatusDot status={thread.lastTurnStatus} />
-                      <span className="min-w-0 flex-1 truncate text-[12.5px]">{thread.title}</span>
+                      <span className="min-w-0 flex-1 truncate text-[14px]">{thread.title}</span>
                       {thread.turnCount > 1 && (
                         <span className="shrink-0 font-mono text-[9.5px] text-faint">{thread.turnCount}</span>
                       )}
@@ -316,7 +316,7 @@ export function Sidebar(props: SidebarProps) {
             key={item.id}
             href={item.href}
             title={item.hint}
-            className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] transition-colors ${
+            className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[14px] transition-colors ${
               isNavActive(pathname, item.href)
                 ? "bg-surface-3 text-text"
                 : "text-muted hover:bg-surface-2 hover:text-text"
@@ -329,9 +329,9 @@ export function Sidebar(props: SidebarProps) {
         <div className="my-1 border-t border-line" />
         <Link
           href="/team"
-          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[14px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-3.5 text-faint" aria-hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-4 text-faint" aria-hidden>
             <circle cx="9" cy="8" r="3" />
             <path d="M3.5 19c.6-3 2.8-4.5 5.5-4.5S13.9 16 14.5 19M15.5 5.5a3 3 0 0 1 0 6M17 14.8c2.1.3 3.3 1.7 3.7 4.2" />
           </svg>
@@ -339,9 +339,9 @@ export function Sidebar(props: SidebarProps) {
         </Link>
         <Link
           href="/settings"
-          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[14px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-3.5 text-faint" aria-hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-4 text-faint" aria-hidden>
             <circle cx="12" cy="12" r="3" />
             <path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8" />
           </svg>
@@ -366,7 +366,7 @@ function ThreadMenuItem(props: {
       type="button"
       role="menuitem"
       onClick={props.onPick}
-      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors focus:outline-none ${
+      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[14px] transition-colors focus:outline-none ${
         props.danger
           ? "text-danger hover:bg-danger/10 focus:bg-danger/10"
           : "text-muted hover:bg-surface-2 hover:text-text focus:bg-surface-2 focus:text-text"
@@ -478,7 +478,7 @@ function ThreadMenu(props: {
           open ? "bg-surface-3 text-text opacity-100" : "opacity-55"
         }`}
       >
-        <svg viewBox="0 0 24 24" fill="currentColor" className="size-3.5" aria-hidden>
+        <svg viewBox="0 0 24 24" fill="currentColor" className="size-4" aria-hidden>
           <circle cx="5" cy="12" r="1.6" />
           <circle cx="12" cy="12" r="1.6" />
           <circle cx="19" cy="12" r="1.6" />
@@ -497,7 +497,7 @@ function ThreadMenu(props: {
             <ThreadMenuItem
               onPick={() => pick(props.onRename)}
               icon={
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3.5" aria-hidden>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-4" aria-hidden>
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                   <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                 </svg>
@@ -508,7 +508,7 @@ function ThreadMenu(props: {
             <ThreadMenuItem
               onPick={() => pick(props.onArchive)}
               icon={
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3.5" aria-hidden>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-4" aria-hidden>
                   <path d="M3 8h18v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8Z" />
                   <path d="M2 4h20v4H2zM9.5 12h5" />
                 </svg>
@@ -520,7 +520,7 @@ function ThreadMenu(props: {
               danger
               onPick={() => pick(props.onDelete)}
               icon={
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3.5" aria-hidden>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-4" aria-hidden>
                   <path d="M3 6h18M8 6V4h8v3M6 6l1 14h10l1-14M10 11v6M14 11v6" />
                 </svg>
               }

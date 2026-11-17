@@ -39,26 +39,26 @@ function FlagRow({
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line py-2.5 last:border-b-0">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="font-mono text-[12px] text-text">{flag.name}</span>
+          <span className="font-mono text-[13px] text-text">{flag.name}</span>
           <span
-            className={`rounded border px-1 py-0.5 text-[10px] ${STAGE_STYLES[flag.stage] ?? STAGE_STYLES.stable}`}
+            className={`rounded border px-1 py-0.5 text-[11px] ${STAGE_STYLES[flag.stage] ?? STAGE_STYLES.stable}`}
           >
             {STAGE_LABELS[flag.stage] ?? flag.stage}
           </span>
-          <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
+          <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[11px] text-faint">
             来自{SOURCE_LABELS[flag.source] ?? flag.source}
           </span>
           {locked && (
-            <span className="font-mono text-[10px] text-warn">被环境变量锁定，重启前不可改</span>
+            <span className="font-mono text-[11px] text-warn">被环境变量锁定，重启前不可改</span>
           )}
         </div>
-        <p className="mt-1 text-[11px] leading-relaxed text-faint">{flag.summary}</p>
+        <p className="mt-1 text-[12px] leading-relaxed text-faint">{flag.summary}</p>
       </div>
       <button
         type="button"
         disabled={busy || locked}
         onClick={() => onToggle(!flag.enabled)}
-        className={`shrink-0 rounded-md border px-3 py-1.5 text-[11px] transition disabled:opacity-60 ${
+        className={`shrink-0 rounded-md border px-3 py-1.5 text-[12px] transition disabled:opacity-60 ${
           flag.enabled ? "border-brand/60 bg-brand/10 text-text" : "border-line bg-surface text-muted"
         }`}
       >
@@ -110,7 +110,7 @@ export function FeatureFlagsPanel() {
   if (!data) {
     return (
       <Panel title="特性开关" hint="GET /settings/features">
-        <p className="text-[12px] text-faint">{error || "加载中…"}</p>
+        <p className="text-[13px] text-faint">{error || "加载中…"}</p>
       </Panel>
     );
   }
@@ -129,20 +129,20 @@ export function FeatureFlagsPanel() {
       </div>
 
       {data.unknown.length > 0 && (
-        <p className="mt-2 rounded-md border border-warn/40 bg-warn/10 px-2.5 py-2 text-[11px] leading-relaxed text-warn">
+        <p className="mt-2 rounded-md border border-warn/40 bg-warn/10 px-2.5 py-2 text-[12px] leading-relaxed text-warn">
           设置文件里有认不出的开关名：{data.unknown.join("、")}。拼错的名字不会生效，改对或删掉它。
         </p>
       )}
 
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
-        <span className="text-[11px] text-faint">
+        <span className="text-[12px] text-faint">
           {notice || error || "开关值会写入设置文件；环境变量优先级更高，用来临时压过界面上的选择"}
         </span>
         <button
           type="button"
           disabled={busy}
           onClick={() => setReloadToken((token) => token + 1)}
-          className="rounded-md border border-line bg-surface px-2.5 py-1 text-[11px] text-muted hover:border-line-strong"
+          className="rounded-md border border-line bg-surface px-2.5 py-1 text-[12px] text-muted hover:border-line-strong"
         >
           刷新
         </button>

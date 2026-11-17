@@ -98,7 +98,7 @@ export function FileTree({ projectId, workspaceId, activePath, onOpen }: Props) 
   function renderEntries(paths: string[], depth: number) {
     const entries = paths.flatMap((path) => cache?.nodes[path] ?? []);
     if (entries.length === 0) {
-      return <div className="py-1 pl-6 font-mono text-[10px] text-faint">空目录</div>;
+      return <div className="py-1 pl-6 font-mono text-[11px] text-faint">空目录</div>;
     }
     return (
       <ul className={`flex flex-col gap-px ${depth === 0 ? "" : "ml-3 border-l border-line pl-2"}`}>
@@ -111,7 +111,7 @@ export function FileTree({ projectId, workspaceId, activePath, onOpen }: Props) 
                 type="button"
                 onClick={() => (entry.is_dir ? toggle(entry) : onOpen(entry))}
                 aria-expanded={entry.is_dir ? open : undefined}
-                className={`flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left font-mono text-[11px] transition-colors ${
+                className={`flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left font-mono text-[12px] transition-colors ${
                   active
                     ? "bg-surface-2 text-brand"
                     : entry.is_dir
@@ -126,7 +126,7 @@ export function FileTree({ projectId, workspaceId, activePath, onOpen }: Props) 
                 <span className="min-w-0 flex-1 truncate">{entry.name}</span>
                 {pending === entry.path && <Spinner />}
                 {!entry.is_dir && (
-                  <span className="shrink-0 text-[10px] text-faint">{formatSize(entry.size)}</span>
+                  <span className="shrink-0 text-[11px] text-faint">{formatSize(entry.size)}</span>
                 )}
               </button>
               {open && renderEntries([entry.path], depth + 1)}

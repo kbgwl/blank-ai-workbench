@@ -65,19 +65,19 @@ export function ProviderList({ providers, error, selectedId, tests, onSelect, on
                 <div className="flex items-start gap-2 p-3">
                   <button type="button" onClick={() => onSelect(provider.id)} className="min-w-0 flex-1 text-left">
                     <span className="flex flex-wrap items-center gap-2">
-                      <span className={`truncate text-[13px] font-medium ${selected ? "text-brand" : "text-text"}`}>
+                      <span className={`truncate text-[14px] font-medium ${selected ? "text-brand" : "text-text"}`}>
                         {provider.name}
                       </span>
                       <KindBadge kind={provider.kind} />
                       <ParamBadge total={provider.total_params_b ?? 0} active={provider.active_params_b ?? 0} />
                       {!provider.enabled && (
-                        <span className="rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-faint">
+                        <span className="rounded-md border border-line px-1.5 py-0.5 font-mono text-[11px] text-faint">
                           已停用
                         </span>
                       )}
                     </span>
-                    <span className="mt-1 block truncate font-mono text-[11px] text-muted">{provider.model}</span>
-                    <span className="mt-0.5 block truncate font-mono text-[10px] text-faint">
+                    <span className="mt-1 block truncate font-mono text-[12px] text-muted">{provider.model}</span>
+                    <span className="mt-0.5 block truncate font-mono text-[11px] text-faint">
                       {provider.base_url}
                       {provider.api_key_hint ? ` · Key ${provider.api_key_hint}` : " · 未设置 Key"}
                     </span>
@@ -98,7 +98,7 @@ export function ProviderList({ providers, error, selectedId, tests, onSelect, on
                   <Button
                     onClick={() => onTest(provider)}
                     disabled={state?.status === "running"}
-                    className="h-7 px-2.5 py-1 text-[11px]"
+                    className="h-7 px-2.5 py-1 text-[12px]"
                   >
                     {state?.status === "running" ? (
                       <span className="flex items-center gap-1.5">
@@ -111,19 +111,19 @@ export function ProviderList({ providers, error, selectedId, tests, onSelect, on
                   </Button>
                   {state?.status === "done" && (
                     <span
-                      className={`font-mono text-[10px] ${state.result.ok ? "text-accent" : "text-danger"}`}
+                      className={`font-mono text-[11px] ${state.result.ok ? "text-accent" : "text-danger"}`}
                     >
                       {state.result.ok
                         ? `成功 ${state.result.latency_ms ?? 0}ms`
                         : (state.result.message ?? "连接失败")}
                     </span>
                   )}
-                  {state?.status === "failed" && <span className="font-mono text-[10px] text-danger">{state.message}</span>}
+                  {state?.status === "failed" && <span className="font-mono text-[11px] text-danger">{state.message}</span>}
                 </div>
 
                 {confirmId === provider.id && (
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line bg-danger/[0.04] px-3 py-2">
-                    <span className="text-[12px] text-muted">删除「{provider.name}」及其用量记录？</span>
+                    <span className="text-[13px] text-muted">删除「{provider.name}」及其用量记录？</span>
                     <div className="flex gap-2">
                       <Button onClick={() => setConfirmId(null)}>取消</Button>
                       <Button variant="danger" disabled={deletingId === provider.id} onClick={() => void confirmDelete(provider)}>

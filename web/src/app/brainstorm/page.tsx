@@ -113,39 +113,39 @@ export default function BrainstormPage() {
         <textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={3} placeholder="例如：如何给系统增加插件机制？" className="w-full resize-none bg-transparent text-[14px] leading-relaxed text-text outline-none placeholder:text-faint" />
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-3">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted">
+            <span className="rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-muted">
               技术方案
             </span>
-            <span className="rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted">
+            <span className="rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-muted">
               Debug
             </span>
-            <span className="rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted">
+            <span className="rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-muted">
               产品拆解
             </span>
             <SelectPopover size="compact" ariaLabel="选择模型" value={providerId}
               options={[{ value: "", label: "本地模板" }, ...providers.filter((provider) => provider.enabled).map((provider) => ({ value: provider.id, label: `${provider.name} · ${provider.model}` }))]}
               onChange={setProviderId} menuMinWidth={220} />
           </div>
-          <button type="button" onClick={start} disabled={busy || !question.trim()} className="rounded-md bg-brand px-3 py-1.5 text-[11px] font-medium text-on-brand hover:bg-brand/85 disabled:cursor-not-allowed disabled:opacity-40">{busy ? "处理中…" : "开始发散"}</button>
+          <button type="button" onClick={start} disabled={busy || !question.trim()} className="rounded-md bg-brand px-3 py-1.5 text-[12px] font-medium text-on-brand hover:bg-brand/85 disabled:cursor-not-allowed disabled:opacity-40">{busy ? "处理中…" : "开始发散"}</button>
         </div>
       </section>
-      {notice && <div className="rounded-md border border-line px-3 py-2 text-[11px] text-muted">{notice}</div>}
+      {notice && <div className="rounded-md border border-line px-3 py-2 text-[12px] text-muted">{notice}</div>}
       {ideas.length > 0 && <section className="grid grid-cols-1 gap-2 lg:grid-cols-3">
         {ideas.map((idea) => <article key={idea.name} className={`flex min-h-56 flex-col rounded-lg border p-4 ${selected === idea.name ? "border-brand/70 bg-brand/5" : "border-line bg-surface"}`}>
-          <button type="button" onClick={() => setSelected(idea.name)} className="flex items-center justify-between text-left"><h2 className="text-[13px] font-medium">{idea.name}</h2><span className="font-mono text-[10px] text-faint">{idea.effort}</span></button>
-          <p className="mt-4 text-[12px] leading-relaxed text-text/85">{idea.summary}</p>
-          <dl className="mt-5 space-y-2 text-[11px]"><div><dt className="text-faint">收益</dt><dd className="mt-0.5 text-muted">{idea.upside}</dd></div><div><dt className="text-faint">代价</dt><dd className="mt-0.5 text-muted">{idea.downside}</dd></div></dl>
-          <button type="button" onClick={() => setSelected(idea.name)} className="mt-auto border-t border-line pt-3 text-left text-[11px] text-brand hover:text-text">{selected === idea.name ? "已选择" : "选择方案"}</button>
+          <button type="button" onClick={() => setSelected(idea.name)} className="flex items-center justify-between text-left"><h2 className="text-[14px] font-medium">{idea.name}</h2><span className="font-mono text-[11px] text-faint">{idea.effort}</span></button>
+          <p className="mt-4 text-[13px] leading-relaxed text-text/85">{idea.summary}</p>
+          <dl className="mt-5 space-y-2 text-[12px]"><div><dt className="text-faint">收益</dt><dd className="mt-0.5 text-muted">{idea.upside}</dd></div><div><dt className="text-faint">代价</dt><dd className="mt-0.5 text-muted">{idea.downside}</dd></div></dl>
+          <button type="button" onClick={() => setSelected(idea.name)} className="mt-auto border-t border-line pt-3 text-left text-[12px] text-brand hover:text-text">{selected === idea.name ? "已选择" : "选择方案"}</button>
         </article>)}
       </section>}
       {ideas.length > 0 && <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface p-4">
-        <div className="flex items-center gap-3 text-[11px] text-muted"><span>已选：{selectedIdea?.name ?? "未选择"}</span><SelectPopover size="compact" ariaLabel="选择项目" value={projectId}
+        <div className="flex items-center gap-3 text-[12px] text-muted"><span>已选：{selectedIdea?.name ?? "未选择"}</span><SelectPopover size="compact" ariaLabel="选择项目" value={projectId}
               options={[{ value: "", label: "选择项目" }, ...projects.map((project) => ({ value: project.id, label: project.name }))]}
               onChange={setProjectId} menuMinWidth={200} /></div>
-        <button type="button" onClick={convertToTask} disabled={!selectedIdea || !projectId || busy} className="rounded-md bg-brand px-3 py-1.5 text-[11px] font-medium text-on-brand hover:bg-brand/85 disabled:cursor-not-allowed disabled:opacity-40">转为开发任务 →</button>
+        <button type="button" onClick={convertToTask} disabled={!selectedIdea || !projectId || busy} className="rounded-md bg-brand px-3 py-1.5 text-[12px] font-medium text-on-brand hover:bg-brand/85 disabled:cursor-not-allowed disabled:opacity-40">转为开发任务 →</button>
       </section>}
-      {createdTask && <div className="text-[11px] text-muted">任务已创建：<Link className="text-brand hover:underline" href={`/tasks/detail?id=${createdTask.id}`}>{createdTask.title}</Link></div>}
-      {ideas.length === 0 && <div className="py-16 text-center font-mono text-[11px] text-faint">输入问题后，方案会以卡片形式出现。</div>}
+      {createdTask && <div className="text-[12px] text-muted">任务已创建：<Link className="text-brand hover:underline" href={`/tasks/detail?id=${createdTask.id}`}>{createdTask.title}</Link></div>}
+      {ideas.length === 0 && <div className="py-16 text-center font-mono text-[12px] text-faint">输入问题后，方案会以卡片形式出现。</div>}
     </PageBody>
   );
 }

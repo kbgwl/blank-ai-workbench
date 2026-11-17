@@ -28,7 +28,7 @@ export function RoleModelSettings() {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }
   return <div className="mt-3 grid gap-2 sm:grid-cols-3">
-    {ROLES.map(([role, label]) => <label key={role} className="flex flex-col gap-1 text-[11px] text-muted">
+    {ROLES.map(([role, label]) => <label key={role} className="flex flex-col gap-1 text-[12px] text-muted">
       <span>{label}</span>
       <SelectPopover
         size="compact"

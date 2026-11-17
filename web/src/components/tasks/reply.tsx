@@ -27,7 +27,7 @@ function inline(text: string, key: string): ReactNode[] {
       );
     } else {
       nodes.push(
-        <code key={`${key}-c-${index}`} className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[12px] text-text/90">
+        <code key={`${key}-c-${index}`} className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[13px] text-text/90">
           {token.slice(1, -1)}
         </code>,
       );
@@ -99,7 +99,7 @@ function RichText({ text }: { text: string }) {
           return (
             <pre
               key={key}
-              className="overflow-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap break-words text-text/85"
+              className="overflow-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap break-words text-text/85"
             >
               {piece.text.join("\n")}
             </pre>
@@ -133,7 +133,7 @@ function SectionView({ section }: { section: ReportSection }) {
   return (
     <section className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2">
-        <span className={`rounded border px-1.5 py-0.5 text-[10.5px] font-medium tracking-wide ${style.chip}`}>
+        <span className={`rounded border px-1.5 py-0.5 text-[11.5px] font-medium tracking-wide ${style.chip}`}>
           {section.title}
         </span>
         <span className={`h-px min-w-0 flex-1 ${section.tone === "done" ? "bg-accent/15" : section.tone === "undone" ? "bg-warn/15" : "bg-brand/15"}`} />
@@ -165,13 +165,13 @@ export function ReplyView({ text, className = "" }: { text: string; className?: 
   const { sections, body } = splitReport(text);
   if (sections.length === 0) {
     return (
-      <div className={`text-[13.5px] leading-relaxed text-text/90 ${className}`}>
+      <div className={`text-[14px] leading-relaxed text-text/90 ${className}`}>
         <RichText text={body || text} />
       </div>
     );
   }
   return (
-    <div className={`flex flex-col gap-3 text-[13.5px] leading-relaxed ${className}`}>
+    <div className={`flex flex-col gap-3 text-[14px] leading-relaxed ${className}`}>
       {body && (
         <p className="whitespace-pre-wrap text-text/80">
           {body.split("\n").map((line, index) => (

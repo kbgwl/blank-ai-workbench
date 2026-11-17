@@ -5,7 +5,7 @@ import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react
 type ButtonVariant = "primary" | "ghost" | "danger";
 
 const buttonBase =
-  "inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50";
 
 const buttonVariants: Record<ButtonVariant, string> = {
   primary: "bg-brand text-on-brand hover:bg-brand/85",
@@ -50,7 +50,7 @@ export function IconButton({
 export function Input({ className = "", ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
-      className={`w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13px] text-text placeholder:text-faint focus:border-brand/60 focus:outline-none ${className}`}
+      className={`w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-[14px] text-text placeholder:text-faint focus:border-brand/60 focus:outline-none ${className}`}
       {...props}
     />
   );
@@ -59,7 +59,7 @@ export function Input({ className = "", ...props }: InputHTMLAttributes<HTMLInpu
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="flex min-w-0 flex-1 flex-col gap-1.5">
-      <span className="font-mono text-[10px] tracking-wide text-faint uppercase">{label}</span>
+      <span className="font-mono text-[11px] tracking-wide text-faint uppercase">{label}</span>
       {children}
     </label>
   );
@@ -78,11 +78,11 @@ export function Notice({
       : tone === "warn"
         ? "border-warn/30 bg-warn/[0.06] text-warn"
         : "border-line bg-surface-2 text-muted";
-  return <div className={`rounded-lg border px-3 py-2 text-[12px] leading-relaxed ${toneClass}`}>{children}</div>;
+  return <div className={`rounded-lg border px-3 py-2 text-[13px] leading-relaxed ${toneClass}`}>{children}</div>;
 }
 
 export function StateLine({ children }: { children: ReactNode }) {
-  return <div className="px-1 py-6 text-center font-mono text-[11px] text-faint">{children}</div>;
+  return <div className="px-1 py-6 text-center font-mono text-[12px] text-faint">{children}</div>;
 }
 
 export function ActiveDot({ active }: { active: boolean }) {

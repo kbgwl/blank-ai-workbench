@@ -117,8 +117,8 @@ export function PlanPanel({ task, onChanged }: Props) {
     <section className="rounded-xl border border-line bg-surface-2 px-3.5 py-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-baseline gap-2">
-          <span className="font-mono text-[10px] tracking-wide text-faint uppercase">执行计划</span>
-          <span className="font-mono text-[10px] text-faint">
+          <span className="font-mono text-[11px] tracking-wide text-faint uppercase">执行计划</span>
+          <span className="font-mono text-[11px] text-faint">
             {progress.completed}/{progress.total}
             {revision > 0 ? ` · 第 ${revision} 版` : ""}
           </span>
@@ -127,7 +127,7 @@ export function PlanPanel({ task, onChanged }: Props) {
           type="button"
           disabled={busy !== null || steps.length === 0}
           onClick={saveAsTemplate}
-          className="shrink-0 rounded-md border border-line px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-line-strong hover:text-text disabled:opacity-40"
+          className="shrink-0 rounded-md border border-line px-2 py-0.5 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-text disabled:opacity-40"
         >
           {busy === "template" ? "保存中…" : saved || "存为模板"}
         </button>
@@ -141,17 +141,17 @@ export function PlanPanel({ task, onChanged }: Props) {
               style={{ width: `${progress.percent}%` }}
             />
           </div>
-          <span className="shrink-0 font-mono text-[10px] text-faint">{progress.percent}%</span>
+          <span className="shrink-0 font-mono text-[11px] text-faint">{progress.percent}%</span>
         </div>
       )}
 
       {(objective || doneWhen.length > 0) && (
         <div className="mb-2.5 rounded-lg border border-line bg-surface px-2.5 py-2">
-          {objective && <p className="text-[12px] leading-relaxed text-text/85">{objective}</p>}
+          {objective && <p className="text-[13px] leading-relaxed text-text/85">{objective}</p>}
           {doneWhen.length > 0 && (
             <ul className="mt-1 flex flex-col gap-0.5">
               {doneWhen.map((item, index) => (
-                <li key={`${item}-${index}`} className="flex items-start gap-1.5 text-[11px] text-muted">
+                <li key={`${item}-${index}`} className="flex items-start gap-1.5 text-[12px] text-muted">
                   <span className="mt-1 size-1 shrink-0 rounded-full bg-brand/60" />
                   <span>{item}</span>
                 </li>
@@ -159,10 +159,10 @@ export function PlanPanel({ task, onChanged }: Props) {
             </ul>
           )}
           {constraints.length > 0 && (
-            <p className="mt-1 text-[11px] text-faint">约束：{constraints.join(" · ")}</p>
+            <p className="mt-1 text-[12px] text-faint">约束：{constraints.join(" · ")}</p>
           )}
           {outOfScope.length > 0 && (
-            <p className="mt-0.5 text-[11px] text-faint">不做：{outOfScope.join(" · ")}</p>
+            <p className="mt-0.5 text-[12px] text-faint">不做：{outOfScope.join(" · ")}</p>
           )}
         </div>
       )}
@@ -182,10 +182,10 @@ export function PlanPanel({ task, onChanged }: Props) {
                         : "bg-line-strong",
                   ].join(" ")}
                 />
-                <span className="truncate text-[11px] font-medium text-text/75">
+                <span className="truncate text-[12px] font-medium text-text/75">
                   {group.milestone.title}
                 </span>
-                <span className="shrink-0 font-mono text-[10px] text-faint">
+                <span className="shrink-0 font-mono text-[11px] text-faint">
                   {group.milestone.total > 0
                     ? `${group.milestone.completed}/${group.milestone.total}`
                     : "—"}
@@ -214,7 +214,7 @@ export function PlanPanel({ task, onChanged }: Props) {
                   </button>
                   <span
                     className={[
-                      "min-w-0 text-[12px] leading-relaxed",
+                      "min-w-0 text-[13px] leading-relaxed",
                       step.status === "completed"
                         ? "text-text/50 line-through decoration-line"
                         : "text-text/85",
@@ -229,7 +229,7 @@ export function PlanPanel({ task, onChanged }: Props) {
         ))}
       </div>
 
-      {error && <p className="mt-2 text-[11px] text-danger">{error}</p>}
+      {error && <p className="mt-2 text-[12px] text-danger">{error}</p>}
     </section>
   );
 }

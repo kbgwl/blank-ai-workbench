@@ -57,7 +57,7 @@ export function DiffPanel({ changes, focusPath }: { changes: ChangeItem[]; focus
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between font-mono text-[10px] text-faint">
+      <div className="flex items-center justify-between font-mono text-[11px] text-faint">
         <span>{files.length} 个文件</span>
         <button
           type="button"
@@ -89,15 +89,15 @@ export function DiffPanel({ changes, focusPath }: { changes: ChangeItem[]; focus
               }
               className="flex w-full items-center gap-2 px-2.5 py-2 text-left hover:bg-surface-2"
             >
-              <span className={`min-w-0 flex-1 truncate font-mono text-[11px] ${open ? "text-brand" : "text-text/90"}`} title={file.path}>
+              <span className={`min-w-0 flex-1 truncate font-mono text-[12px] ${open ? "text-brand" : "text-text/90"}`} title={file.path}>
                 {clip(file.path, 46)}
               </span>
               {changeLabel(file.changeType) && (
-                <span className="shrink-0 rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                <span className="shrink-0 rounded-md border border-line px-1.5 py-0.5 font-mono text-[11px] text-muted">
                   {changeLabel(file.changeType)}
                 </span>
               )}
-              <span className="shrink-0 font-mono text-[10px]">
+              <span className="shrink-0 font-mono text-[11px]">
                 <span className="text-accent">+{file.stats.added}</span>
                 <span className="mx-1 text-faint">/</span>
                 <span className="text-danger">−{file.stats.removed}</span>
@@ -109,7 +109,7 @@ export function DiffPanel({ changes, focusPath }: { changes: ChangeItem[]; focus
                   <Notice tone="muted">后端只返回了文件路径，没有 diff 内容</Notice>
                 </div>
               ) : (
-                <div className="max-h-72 overflow-auto border-t border-line bg-surface-2 px-2.5 py-2 font-mono text-[11px] leading-relaxed">
+                <div className="max-h-72 overflow-auto border-t border-line bg-surface-2 px-2.5 py-2 font-mono text-[12px] leading-relaxed">
                   {file.lines.map((line, index) => (
                     <div key={index} className={`whitespace-pre-wrap break-words px-1 ${lineTone[line.tone] ?? "text-muted"}`}>
                       {line.text || " "}

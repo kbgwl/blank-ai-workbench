@@ -156,7 +156,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
               key={key}
               type="button"
               onClick={() => patch(toDraft(key, preset))}
-              className={`rounded-md border px-2 py-1 text-[11px] transition-colors ${
+              className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${
                 active
                   ? "border-brand/50 bg-brand/15 text-brand"
                   : "border-line bg-surface-2 text-muted hover:border-line-strong hover:text-text"
@@ -169,7 +169,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
         <button
           type="button"
           onClick={() => patch({ ...emptyDraft, presetKey: "" })}
-          className={`rounded-md border px-2 py-1 text-[11px] transition-colors ${
+          className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${
             draft.presetKey === ""
               ? "border-brand/50 bg-brand/15 text-brand"
               : "border-line bg-surface-2 text-muted hover:border-line-strong hover:text-text"
@@ -195,7 +195,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
             onChange={(event) => patch({ kind: event.target.value })}
             aria-label="供应商类型"
             spellCheck={false}
-            className="font-mono text-[12px]"
+            className="font-mono text-[13px]"
             maxLength={40}
           />
         </Field>
@@ -209,7 +209,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
           aria-label="接入点"
           spellCheck={false}
           autoComplete="off"
-          className="font-mono text-[12px]"
+          className="font-mono text-[13px]"
           maxLength={500}
         />
       </Field>
@@ -222,7 +222,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
           aria-label="默认模型"
           spellCheck={false}
           autoComplete="off"
-          className="font-mono text-[12px]"
+          className="font-mono text-[13px]"
           maxLength={200}
         />
       </Field>
@@ -236,7 +236,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
           aria-label="API Key"
           autoComplete="new-password"
           spellCheck={false}
-          className="font-mono text-[12px]"
+          className="font-mono text-[13px]"
         />
       </Field>
 
@@ -247,7 +247,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
             onChange={(event) => patch({ temperature: event.target.value })}
             aria-label="温度"
             inputMode="decimal"
-            className="font-mono text-[12px]"
+            className="font-mono text-[13px]"
           />
         </Field>
         <Field label="最大输出 TOKENS">
@@ -256,7 +256,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
             onChange={(event) => patch({ max_tokens: event.target.value })}
             aria-label="最大输出 tokens"
             inputMode="numeric"
-            className="font-mono text-[12px]"
+            className="font-mono text-[13px]"
           />
         </Field>
         <Field label="上下文窗口">
@@ -265,7 +265,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
             onChange={(event) => patch({ context_window: event.target.value })}
             aria-label="上下文窗口"
             inputMode="numeric"
-            className="font-mono text-[12px]"
+            className="font-mono text-[13px]"
           />
         </Field>
       </div>
@@ -306,7 +306,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
             placeholder="671，留空表示未填"
             aria-label="总参数"
             inputMode="decimal"
-            className="font-mono text-[12px]"
+            className="font-mono text-[13px]"
           />
         </Field>
         <Field label="激活参数（十亿 B）">
@@ -316,12 +316,12 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
             placeholder="37，稠密模型留空"
             aria-label="激活参数"
             inputMode="decimal"
-            className="font-mono text-[12px]"
+            className="font-mono text-[13px]"
           />
         </Field>
       </div>
 
-      <p className="-mt-1 text-[11px] leading-relaxed text-faint">
+      <p className="-mt-1 text-[12px] leading-relaxed text-faint">
         总参数决定权重占多少显存（能不能塞进这台机器），激活参数决定每个 token 走多少算力（跑多快、多贵）。
         稀疏模型两者差一个数量级（如 671B / 37B），填对了成本预估才有意义；稠密模型只填总参数即可。
       </p>
@@ -339,7 +339,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
         />
         <Toggle checked={draft.enabled} onChange={(next) => patch({ enabled: next })} label="启用" />
       </div>
-      <p className="text-[11px] leading-relaxed text-faint">
+      <p className="text-[12px] leading-relaxed text-faint">
         模型名本身是多模态的（glm-4.5v、qwen-vl、gpt-4o、claude-3 之后、doubao-vision 这类）
         会自动按「支持看图」处理，不用在这个开关上再勾一次；勾了也不会被模型名推翻。
       </p>

@@ -142,7 +142,7 @@ export function FilePanel({ project }: { project: Project | null }) {
   function renderLevel(paths: string[], depth: number) {
     const entries = paths.flatMap((item) => store?.nodes[item] ?? []);
     if (entries.length === 0) {
-      return <div className="py-1 pl-6 font-mono text-[10px] text-faint">空目录</div>;
+      return <div className="py-1 pl-6 font-mono text-[11px] text-faint">空目录</div>;
     }
     return (
       <ul className={`flex flex-col gap-px ${depth === 0 ? "" : "ml-3 border-l border-line pl-2"}`}>
@@ -155,7 +155,7 @@ export function FilePanel({ project }: { project: Project | null }) {
                 type="button"
                 onClick={() => (entry.is_dir ? toggle(entry) : setOpenFile(entry))}
                 aria-expanded={entry.is_dir ? open : undefined}
-                className={`flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left font-mono text-[11px] transition-colors ${
+                className={`flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left font-mono text-[12px] transition-colors ${
                   active
                     ? "bg-surface-2 text-brand"
                     : entry.is_dir
@@ -167,7 +167,7 @@ export function FilePanel({ project }: { project: Project | null }) {
                 {entry.is_dir ? <FolderIcon /> : <FileIcon />}
                 <span className="min-w-0 flex-1 truncate">{entry.name || clip(entry.path, 24)}</span>
                 {pending === entry.path && <Spinner />}
-                {!entry.is_dir && <span className="shrink-0 text-[10px] text-faint">{formatSize(entry.size)}</span>}
+                {!entry.is_dir && <span className="shrink-0 text-[11px] text-faint">{formatSize(entry.size)}</span>}
               </button>
               {open && renderLevel([entry.path], depth + 1)}
               {!open && store?.errors[entry.path] && (
@@ -187,7 +187,7 @@ export function FilePanel({ project }: { project: Project | null }) {
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-col gap-1.5">
-        <span className="font-mono text-[10px] tracking-wide text-faint uppercase">
+        <span className="font-mono text-[11px] tracking-wide text-faint uppercase">
           文件树 · {project.workspaces.find((item) => item.is_active)?.label || project.workspaces[0]?.label || project.name}
         </span>
         {store?.rootError ? (
@@ -205,11 +205,11 @@ export function FilePanel({ project }: { project: Project | null }) {
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <span className="font-mono text-[10px] tracking-wide text-faint uppercase">文件预览</span>
+        <span className="font-mono text-[11px] tracking-wide text-faint uppercase">文件预览</span>
         {!openFile || !path ? (
           <StateLine>从文件树选择文件</StateLine>
         ) : !settled ? (
-          <div className="flex items-center gap-2 px-1 py-3 font-mono text-[11px] text-faint">
+          <div className="flex items-center gap-2 px-1 py-3 font-mono text-[12px] text-faint">
             <Spinner />
             读取 {clip(path, 34)}
           </div>
@@ -218,10 +218,10 @@ export function FilePanel({ project }: { project: Project | null }) {
         ) : (
           <div className="overflow-hidden rounded-lg border border-line bg-surface-2">
             <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
-              <span className="min-w-0 truncate font-mono text-[11px] text-brand" title={settled.data.path}>
+              <span className="min-w-0 truncate font-mono text-[12px] text-brand" title={settled.data.path}>
                 {clip(settled.data.path, 40)}
               </span>
-              <span className="shrink-0 font-mono text-[10px] text-faint">{formatSize(settled.data.size)}</span>
+              <span className="shrink-0 font-mono text-[11px] text-faint">{formatSize(settled.data.size)}</span>
             </div>
             {settled.data.binary ? (
               <div className="p-3">
@@ -230,11 +230,11 @@ export function FilePanel({ project }: { project: Project | null }) {
             ) : (
               <>
                 {settled.data.truncated && (
-                  <div className="border-b border-warn/20 bg-warn/[0.06] px-3 py-2 text-[11px] text-warn">
+                  <div className="border-b border-warn/20 bg-warn/[0.06] px-3 py-2 text-[12px] text-warn">
                     {settled.data.message || "文件过大，内容已截断"}
                   </div>
                 )}
-                <pre className="max-h-56 overflow-auto px-3 py-2.5 font-mono text-[11px] leading-relaxed whitespace-pre text-muted">
+                <pre className="max-h-56 overflow-auto px-3 py-2.5 font-mono text-[12px] leading-relaxed whitespace-pre text-muted">
                   {settled.data.content || "（空文件）"}
                 </pre>
               </>

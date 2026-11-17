@@ -114,8 +114,8 @@ export function TaskListPane({
   return (
     <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto pr-1">
       <div className="flex items-center justify-between px-1">
-        <span className="text-[12px] font-medium text-text">任务</span>
-        <button type="button" onClick={() => setShowComposer((value) => !value)} className="rounded-md px-2 py-1 text-[11px] text-muted hover:bg-surface-2 hover:text-text">
+        <span className="text-[13px] font-medium text-text">任务</span>
+        <button type="button" onClick={() => setShowComposer((value) => !value)} className="rounded-md px-2 py-1 text-[12px] text-muted hover:bg-surface-2 hover:text-text">
           {showComposer ? "关闭" : "+ 新建"}
         </button>
       </div>
@@ -146,7 +146,7 @@ export function TaskListPane({
 
           <Field label="会话（多轮对话）">
             {threadsError ? (
-              <p className="text-[11px] leading-relaxed text-faint">会话列表不可用（{threadsError}），只能建独立任务。</p>
+              <p className="text-[12px] leading-relaxed text-faint">会话列表不可用（{threadsError}），只能建独立任务。</p>
             ) : (
               <SelectPopover
                 ariaLabel="选择会话"
@@ -166,7 +166,7 @@ export function TaskListPane({
                 menuMinWidth={260}
               />
             )}
-            <p className="mt-1 text-[10px] leading-relaxed text-faint">
+            <p className="mt-1 text-[11px] leading-relaxed text-faint">
               续聊会带上这条会话前几轮的结论，不是全部消息；独立任务的开销与以前完全一样。
             </p>
           </Field>
@@ -188,7 +188,7 @@ export function TaskListPane({
               placeholder="用自然语言描述要让 Agent 做什么，例如：在 src/app/page.tsx 的概览页增加任务成功率卡片，并补充对应测试。"
               aria-label="任务描述"
               rows={4}
-              className="w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13px] leading-relaxed text-text placeholder:text-faint focus:border-brand/60 focus:outline-none"
+              className="w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 text-[14px] leading-relaxed text-text placeholder:text-faint focus:border-brand/60 focus:outline-none"
             />
           </Field>
 
@@ -199,7 +199,7 @@ export function TaskListPane({
               placeholder={"邮箱格式非法时返回 422\n补充 pytest 用例并通过"}
               aria-label="验收条件"
               rows={3}
-              className="w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] leading-relaxed text-text placeholder:text-faint focus:border-brand/60 focus:outline-none"
+              className="w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[13px] leading-relaxed text-text placeholder:text-faint focus:border-brand/60 focus:outline-none"
             />
           </Field>
 
@@ -252,7 +252,7 @@ export function TaskListPane({
         {tasksError ? (
           <div className="flex flex-col gap-2">
             <Notice tone="warn">任务列表读取失败：{tasksError}</Notice>
-            <p className="text-[11px] leading-relaxed text-faint">
+            <p className="text-[12px] leading-relaxed text-faint">
               后端未提供任务接口时这里会保留错误提示，不影响其他页面。
             </p>
           </div>
@@ -278,10 +278,10 @@ export function TaskListPane({
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <span className="min-w-0 flex-1 truncate text-[13px] text-text">{task.title}</span>
+                      <span className="min-w-0 flex-1 truncate text-[14px] text-text">{task.title}</span>
                       <StatusBadge status={task.status} />
                     </div>
-                    <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-faint">
+                    <div className="mt-1 flex items-center gap-2 font-mono text-[11px] text-faint">
                       <span className="truncate">{projectName ?? (task.projectId ? task.projectId.slice(0, 8) : "无项目")}</span>
                       <span className="ml-auto shrink-0">{formatDateTime(task.updatedAt || task.createdAt)}</span>
                     </div>

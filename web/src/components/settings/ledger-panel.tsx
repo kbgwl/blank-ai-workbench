@@ -42,19 +42,19 @@ function percent(value: number): string {
 
 function OffenderRow({ row }: { row: LedgerTaskRow }) {
   return (
-    <li className="flex items-center gap-2 px-3 py-2 text-[12px]">
+    <li className="flex items-center gap-2 px-3 py-2 text-[13px]">
       <span className="min-w-0 flex-1">
         <span className="block truncate text-text">{row.title || "未命名任务"}</span>
-        <span className="block truncate font-mono text-[10px] text-faint">
+        <span className="block truncate font-mono text-[11px] text-faint">
           {STATUS_LABEL[row.status] ?? row.status} · {row.calls} 次调用 · {row.tools} 个工具动作
           {row.failed_tools > 0 && ` · ${row.failed_tools} 失败`}
           {row.blocked_calls > 0 && ` · 拦掉 ${row.blocked_calls} 次重复`}
         </span>
       </span>
       {row.files > 0 && (
-        <span className="shrink-0 font-mono text-[10.5px] text-faint">{row.files} 文件</span>
+        <span className="shrink-0 font-mono text-[11.5px] text-faint">{row.files} 文件</span>
       )}
-      <span className="shrink-0 font-mono text-[12px] text-text">{compact(row.tokens)}</span>
+      <span className="shrink-0 font-mono text-[13px] text-text">{compact(row.tokens)}</span>
     </li>
   );
 }
@@ -89,7 +89,7 @@ export function LedgerPanel({ ledger, error, days, onDays, onRetry }: Props) {
               key={value}
               type="button"
               onClick={() => onDays(value)}
-              className={`rounded-md border px-2 py-1 text-[11px] transition-colors ${
+              className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${
                 days === value
                   ? "border-brand/50 bg-brand/[0.06] text-brand"
                   : "border-line bg-surface text-muted hover:text-text"
@@ -144,7 +144,7 @@ export function LedgerPanel({ ledger, error, days, onDays, onRetry }: Props) {
             key={value}
             type="button"
             onClick={() => onDays(value)}
-            className={`rounded-md border px-2 py-1 text-[11px] transition-colors ${
+            className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${
               days === value
                 ? "border-brand/50 bg-brand/[0.06] text-brand"
                 : "border-line bg-surface text-muted hover:text-text"
@@ -153,13 +153,13 @@ export function LedgerPanel({ ledger, error, days, onDays, onRetry }: Props) {
             近 {value} 天
           </button>
         ))}
-        <span className="ml-auto self-center font-mono text-[10.5px] text-faint">
+        <span className="ml-auto self-center font-mono text-[11.5px] text-faint">
           共 {summary.tasks} 个任务 · {compact(summary.total_tokens)} TOKEN
         </span>
       </div>
 
       <section>
-        <p className="mb-1.5 font-mono text-[10px] tracking-wide text-faint uppercase">这些钱换成了什么</p>
+        <p className="mb-1.5 font-mono text-[11px] tracking-wide text-faint uppercase">这些钱换成了什么</p>
         <div className="flex h-2.5 overflow-hidden rounded-full bg-surface-2">
           {buckets.map((item) => (
             <span
@@ -173,13 +173,13 @@ export function LedgerPanel({ ledger, error, days, onDays, onRetry }: Props) {
         <ul className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
           {buckets.map((item) => (
             <li key={item.key} className="rounded-lg bg-surface px-2.5 py-1.5">
-              <p className="flex items-center gap-1.5 text-[11px] text-muted">
+              <p className="flex items-center gap-1.5 text-[12px] text-muted">
                 <span className={`size-1.5 rounded-full ${item.className}`} />
                 {item.label}
               </p>
-              <p className="font-mono text-[12.5px] text-text">
+              <p className="font-mono text-[13.5px] text-text">
                 {compact(item.tokens)}
-                <span className="ml-1 text-[10.5px] text-faint">{percent(item.share)}</span>
+                <span className="ml-1 text-[11.5px] text-faint">{percent(item.share)}</span>
               </p>
             </li>
           ))}
@@ -188,7 +188,7 @@ export function LedgerPanel({ ledger, error, days, onDays, onRetry }: Props) {
 
       {ledger.offenders.length > 0 && (
         <section>
-          <p className="mb-1.5 font-mono text-[10px] tracking-wide text-faint uppercase">花得最多的几个</p>
+          <p className="mb-1.5 font-mono text-[11px] tracking-wide text-faint uppercase">花得最多的几个</p>
           <div className="overflow-hidden rounded-lg border border-line">
             <ul className="divide-y divide-line">
               {ledger.offenders.map((row) => (
@@ -197,14 +197,14 @@ export function LedgerPanel({ ledger, error, days, onDays, onRetry }: Props) {
             </ul>
           </div>
           {spinBad && (
-            <p className="mt-1.5 text-[11px] leading-relaxed text-warn">
+            <p className="mt-1.5 text-[12px] leading-relaxed text-warn">
               每个工具动作平均伴随着 {summary.calls_per_tool.toFixed(1)} 次模型调用。
               高于 2 通常说明在反复审查或重试——每一步都会把整段上下文重发一遍。
               并行批处理会让这个数偏低，所以只看上限。
             </p>
           )}
           {summary.blocked_calls > 0 && (
-            <p className="mt-1.5 text-[11px] leading-relaxed text-faint">
+            <p className="mt-1.5 text-[12px] leading-relaxed text-faint">
               这一段里有 {summary.blocked_calls} 次调用被拦在重复上：参数与前面失败过的完全相同，
               挂起审批后又重试，或者用到了一条这个环境里没有的命令。它们没有执行，也没有再发一遍上下文。
             </p>

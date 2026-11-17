@@ -43,7 +43,7 @@ export function FileViewer({ projectId, workspaceId, entry }: Props) {
   const settled = result?.key === requestKey ? result : null;
   if (!settled) {
     return (
-      <div className="flex items-center justify-center gap-2 py-6 font-mono text-[11px] text-faint">
+      <div className="flex items-center justify-center gap-2 py-6 font-mono text-[12px] text-faint">
         <Spinner />
         读取 {clipMiddle(path, 32)}
       </div>
@@ -59,10 +59,10 @@ export function FileViewer({ projectId, workspaceId, entry }: Props) {
   return (
     <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-surface-2">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-3 py-2">
-        <span className="min-w-0 truncate font-mono text-[11px] text-brand" title={data.path}>
+        <span className="min-w-0 truncate font-mono text-[12px] text-brand" title={data.path}>
           {clipMiddle(data.path)}
         </span>
-        <span className="shrink-0 font-mono text-[10px] text-faint">
+        <span className="shrink-0 font-mono text-[11px] text-faint">
           {formatSize(data.size)} · {data.encoding}
         </span>
       </div>
@@ -74,13 +74,13 @@ export function FileViewer({ projectId, workspaceId, entry }: Props) {
         ) : (
           <>
             {data.truncated && (
-              <div className="border-b border-warn/20 bg-warn/[0.06] px-3 py-2 text-[11px] text-warn">
+              <div className="border-b border-warn/20 bg-warn/[0.06] px-3 py-2 text-[12px] text-warn">
                 {data.message || "文件过大，内容已截断"}
               </div>
             )}
             <pre
               tabIndex={0}
-              className="max-h-[24rem] overflow-auto px-3 py-2.5 font-mono text-[11px] leading-relaxed whitespace-pre text-muted outline-none focus-visible:ring-1 focus-visible:ring-brand/40"
+              className="max-h-[24rem] overflow-auto px-3 py-2.5 font-mono text-[12px] leading-relaxed whitespace-pre text-muted outline-none focus-visible:ring-1 focus-visible:ring-brand/40"
             >
               {data.content}
             </pre>

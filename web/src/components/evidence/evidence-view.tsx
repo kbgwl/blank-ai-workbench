@@ -116,14 +116,14 @@ export function EvidenceView() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="按任务名筛选"
-            className="w-full bg-transparent text-[12.5px] focus:outline-none"
+            className="w-full bg-transparent text-[13.5px] focus:outline-none"
           />
         </div>
-        <span className="shrink-0 font-mono text-[10.5px] text-faint">{rows.length} 条</span>
+        <span className="shrink-0 font-mono text-[11.5px] text-faint">{rows.length} 条</span>
       </div>
 
       {error && (
-        <p className="mb-4 rounded-lg border border-danger/25 bg-danger/[0.04] px-3 py-2 text-[12px] text-danger">{error}</p>
+        <p className="mb-4 rounded-lg border border-danger/25 bg-danger/[0.04] px-3 py-2 text-[13px] text-danger">{error}</p>
       )}
 
       <Panel title="最近的交付" hint={tasks === null ? "读取中…" : "点开看证据"}>
@@ -136,7 +136,7 @@ export function EvidenceView() {
         )}
 
         {tasks !== null && rows.length === 0 && (
-          <p className="py-6 text-center text-[12px] leading-relaxed text-faint">
+          <p className="py-6 text-center text-[13px] leading-relaxed text-faint">
             {tasks.length === 0 ? "还没有任何交付记录。" : "没有匹配的任务。"}
           </p>
         )}
@@ -154,26 +154,26 @@ export function EvidenceView() {
                   onClick={() => void expand(task)}
                   className="flex w-full items-center gap-2 px-3 py-2 text-left"
                 >
-                  <span className="shrink-0 font-mono text-[10px] text-faint">{expanded ? "▾" : "▸"}</span>
-                  <span className="min-w-0 flex-1 truncate text-[12.5px]">{task.title}</span>
-                  <span className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${STATUS_TONE[status] ?? "border-line bg-surface-2 text-muted"}`}>
+                  <span className="shrink-0 font-mono text-[11px] text-faint">{expanded ? "▾" : "▸"}</span>
+                  <span className="min-w-0 flex-1 truncate text-[13.5px]">{task.title}</span>
+                  <span className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${STATUS_TONE[status] ?? "border-line bg-surface-2 text-muted"}`}>
                     {STATUS_LABEL[status] ?? status}
                   </span>
                   {digest && <DigestChips digest={digest} />}
-                  <span className="hidden shrink-0 font-mono text-[10px] text-faint sm:block">
+                  <span className="hidden shrink-0 font-mono text-[11px] text-faint sm:block">
                     {formatDateTime(task.createdAt)}
                   </span>
                 </button>
 
                 {expanded && (
                   <div className="border-t border-line px-3 py-2.5">
-                    {loadingId === task.id && <p className="font-mono text-[11px] text-faint">读取证据…</p>}
+                    {loadingId === task.id && <p className="font-mono text-[12px] text-faint">读取证据…</p>}
                     {!loadingId && evidence === null && (
-                      <p className="text-[11.5px] text-faint">这条没有可读的证据记录。</p>
+                      <p className="text-[12.5px] text-faint">这条没有可读的证据记录。</p>
                     )}
                     {evidence && (
                       <div className="space-y-3">
-                        <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10.5px] text-faint">
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11.5px] text-faint">
                           <span>项目：{projectName(task.projectId) || task.projectId || "未记录"}</span>
                           <span>对话轮次：{task.threadId ? `第 ${task.turnIndex} 轮` : "独立任务"}</span>
                           {digest && <span>{criteriaText(digest)}</span>}
@@ -183,10 +183,10 @@ export function EvidenceView() {
 
                         {evidence.acceptance.length > 0 && (
                           <div>
-                            <p className="mb-1 text-[11.5px] font-medium text-muted">验收条件</p>
+                            <p className="mb-1 text-[12.5px] font-medium text-muted">验收条件</p>
                             <ul className="space-y-0.5">
                               {evidence.acceptance.map((item, index) => (
-                                <li key={index} className="flex items-start gap-1.5 text-[11.5px] leading-relaxed">
+                                <li key={index} className="flex items-start gap-1.5 text-[12.5px] leading-relaxed">
                                   <span className={item.covered === true ? "text-accent" : item.covered === false ? "text-danger" : "text-faint"}>
                                     {item.covered === true ? "✓" : item.covered === false ? "✗" : "?"}
                                   </span>
@@ -202,8 +202,8 @@ export function EvidenceView() {
 
                         {evidence.changes.length > 0 && (
                           <div>
-                            <p className="mb-1 text-[11.5px] font-medium text-muted">改动文件</p>
-                            <ul className="space-y-0.5 font-mono text-[10.5px] text-muted">
+                            <p className="mb-1 text-[12.5px] font-medium text-muted">改动文件</p>
+                            <ul className="space-y-0.5 font-mono text-[11.5px] text-muted">
                               {uniquePaths(evidence).map((row) => (
                                 <li key={row.path} className="truncate">
                                   {row.changeType === "created" ? "+ " : row.changeType === "deleted" ? "- " : "~ "}
@@ -216,8 +216,8 @@ export function EvidenceView() {
 
                         {evidence.test?.command && (
                           <div>
-                            <p className="mb-1 text-[11.5px] font-medium text-muted">测试</p>
-                            <pre className="max-h-40 overflow-auto rounded-md border border-line bg-surface px-2 py-1.5 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap text-muted">
+                            <p className="mb-1 text-[12.5px] font-medium text-muted">测试</p>
+                            <pre className="max-h-40 overflow-auto rounded-md border border-line bg-surface px-2 py-1.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-muted">
                               {`$ ${evidence.test.command}`}
                               {evidence.test.output ? `\n${evidence.test.output.slice(0, 1200)}` : ""}
                             </pre>
@@ -225,7 +225,7 @@ export function EvidenceView() {
                         )}
 
                         {digest && !hasEvidence(digest) && (
-                          <p className="text-[11.5px] text-faint">这条交付没有留下验收、改动、测试或用量的记录。</p>
+                          <p className="text-[12.5px] text-faint">这条交付没有留下验收、改动、测试或用量的记录。</p>
                         )}
                       </div>
                     )}

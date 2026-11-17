@@ -133,12 +133,12 @@ export function Composer(props: ComposerProps) {
     <div className="bg-bg px-4 pt-3 pb-3.5">
       <div className="mx-auto w-full max-w-3xl">
         {props.error && (
-          <p className="mb-2 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-1.5 text-[11.5px] text-danger">
+          <p className="mb-2 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-1.5 text-[12.5px] text-danger">
             {props.error}
           </p>
         )}
         {props.hint && (
-          <p className="mb-2 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[11.5px] text-muted">
+          <p className="mb-2 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[12.5px] text-muted">
             {props.hint}
           </p>
         )}
@@ -176,7 +176,7 @@ export function Composer(props: ComposerProps) {
           <DraftImageChips images={props.images} onRemove={props.onRemoveImage} disabled={props.disabled} />
 
           {dragging && (
-            <span className="pointer-events-none absolute inset-0 grid place-items-center rounded-xl bg-$1 font-mono text-[11px] text-brand">
+            <span className="pointer-events-none absolute inset-0 grid place-items-center rounded-xl bg-$1 font-mono text-[12px] text-brand">
               松手就加上这张图
             </span>
           )}
@@ -258,7 +258,7 @@ export function Composer(props: ComposerProps) {
               }}
             />
 
-            <span className="hidden shrink-0 font-mono text-[10.5px] text-faint sm:inline">
+            <span className="hidden shrink-0 font-mono text-[11.5px] text-faint sm:inline">
               {referencesIn(props.draft).length > 0
                 ? `已引用 ${referencesIn(props.draft).length} 个文件`
                 : uploading
@@ -321,14 +321,14 @@ export function Composer(props: ComposerProps) {
               // 不能因为"改不了"就冒充"没绑定"——那会把用户赶去项目页白跑一趟。
               <span
                 title="在哪个目录里干活（CLI 场景只读，桌面版可切换）"
-                className="rounded-lg px-2 py-1.5 text-[12.5px] text-muted"
+                className="rounded-lg px-2 py-1.5 text-[13.5px] text-muted"
               >
                 {activeWorkspace.label}
               </span>
             ) : (
               <span
                 title="这个项目还没绑定目录，去「项目」页绑一个"
-                className="rounded-lg px-2 py-1.5 text-[12.5px] text-danger"
+                className="rounded-lg px-2 py-1.5 text-[13.5px] text-danger"
               >
                 未绑定目录
               </span>
@@ -397,7 +397,7 @@ export function Composer(props: ComposerProps) {
                       ? "正在记住你的习惯，点一下改为不记住"
                       : "点一下允许 AI 记住你的偏好（敏感信息不会记）"
                   }
-                  className={`shrink-0 rounded-full border px-2 py-1 text-[11px] whitespace-nowrap transition-colors ${
+                  className={`shrink-0 rounded-full border px-2 py-1 text-[12px] whitespace-nowrap transition-colors ${
                     props.memoryOptIn
                       ? "border-brand/40 bg-brand/10 text-brand"
                       : "border-line text-faint hover:bg-surface-2"
@@ -444,7 +444,7 @@ export function Composer(props: ComposerProps) {
 
         {/* 场景与权限的边界要写在用户看得见的地方（v164 §4.3 / v0.10.1 §4）。
             只在提示词里写"别改代码"等于没说：用户点开发送才发现做不了。 */}
-        <p className="mt-2 text-center text-[11px] text-faint">
+        <p className="mt-2 text-center text-[12px] text-faint">
           {props.permissionMode === "plan"
             ? "计划模式：只读分析和出建议，不改文件、不执行命令。要动手请切回「询问」或「完全访问」。"
             : activeScenario && !activeScenario.allowWrite

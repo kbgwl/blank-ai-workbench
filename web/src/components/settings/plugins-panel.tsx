@@ -38,9 +38,9 @@ function PluginRow({ plugin }: { plugin: ProjectPlugin }) {
   return (
     <div className="border-b border-line py-2.5 last:border-b-0">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="font-mono text-[12px] text-text">{plugin.name}</span>
+        <span className="font-mono text-[13px] text-text">{plugin.name}</span>
         <span
-          className={`rounded border px-1 py-0.5 text-[10px] ${
+          className={`rounded border px-1 py-0.5 text-[11px] ${
             plugin.enabled
               ? "border-brand/40 bg-brand/10 text-brand"
               : "border-line bg-surface-2 text-faint line-through"
@@ -48,41 +48,41 @@ function PluginRow({ plugin }: { plugin: ProjectPlugin }) {
         >
           {plugin.enabled ? "已启用" : "已停用"}
         </span>
-        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
+        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[11px] text-faint">
           {sourceLabel(plugin.source)}层
         </span>
         {plugin.version && (
-          <span className="font-mono text-[10px] text-faint">v{plugin.version}</span>
+          <span className="font-mono text-[11px] text-faint">v{plugin.version}</span>
         )}
         {components.map(([name, count]) => (
           <span
             key={name}
-            className="rounded border border-line bg-surface-2 px-1 py-0.5 font-mono text-[10px] text-muted"
+            className="rounded border border-line bg-surface-2 px-1 py-0.5 font-mono text-[11px] text-muted"
           >
             {COMPONENT_LABELS[name] ?? name} {count}
           </span>
         ))}
       </div>
       {plugin.description && (
-        <p className="mt-1 text-[11px] leading-relaxed text-muted">{plugin.description}</p>
+        <p className="mt-1 text-[12px] leading-relaxed text-muted">{plugin.description}</p>
       )}
       {!plugin.enabled && plugin.defaultEnabled && (
         // 默认启用却被显式关掉：说清楚是被设置关的，不是清单坏了
-        <p className="mt-1 text-[10px] leading-relaxed text-faint">
+        <p className="mt-1 text-[11px] leading-relaxed text-faint">
           清单默认启用，被设置里的 enabledPlugins 关掉了。
         </p>
       )}
       {plugin.ignored?.map((item) => (
-        <p key={item.section} className="mt-1 font-mono text-[10px] leading-relaxed break-words text-faint">
+        <p key={item.section} className="mt-1 font-mono text-[11px] leading-relaxed break-words text-faint">
           未加载 {IGNORED_LABELS[item.section] ?? item.section}：{item.reason}
         </p>
       ))}
       {plugin.warnings?.map((warning) => (
-        <p key={warning} className="mt-1 font-mono text-[11px] leading-relaxed break-words text-warn">
+        <p key={warning} className="mt-1 font-mono text-[12px] leading-relaxed break-words text-warn">
           ⚠ {warning}
         </p>
       ))}
-      <p className="mt-1 font-mono text-[10px] break-all text-faint">{plugin.path}</p>
+      <p className="mt-1 font-mono text-[11px] break-all text-faint">{plugin.path}</p>
     </div>
   );
 }
@@ -157,7 +157,7 @@ export function PluginsPanel() {
       hint={data ? `GET /projects/{id}/plugins · ${data.count} 个插件` : "GET /projects/{id}/plugins"}
     >
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="text-[11px] text-faint">工作区</span>
+        <span className="text-[12px] text-faint">工作区</span>
         <SelectPopover
           value={projectId}
           options={options}
@@ -169,35 +169,35 @@ export function PluginsPanel() {
         />
       </div>
 
-      {error && <p className="mb-2 text-[12px] leading-relaxed text-danger/90">{error}</p>}
+      {error && <p className="mb-2 text-[13px] leading-relaxed text-danger/90">{error}</p>}
 
       {projects !== null && projects.length === 0 && (
-        <p className="text-[12px] leading-relaxed text-muted">
+        <p className="text-[13px] leading-relaxed text-muted">
           还没有项目。插件按工作区发现：先在「项目」页新建项目并绑定工作区，
           再来这里看插件贡献了哪些命令、子代理与技能。
         </p>
       )}
 
       {projectId && !data && !error && (
-        <p className="text-[12px] text-faint">加载中…</p>
+        <p className="text-[13px] text-faint">加载中…</p>
       )}
 
       {data && (
         <>
           {noWorkspace && (
-            <p className="mb-2 text-[11px] leading-relaxed text-warn">
+            <p className="mb-2 text-[12px] leading-relaxed text-warn">
               该项目还没绑定工作区：只扫描了用户层插件，项目层目录不存在。
             </p>
           )}
           {data.count === 0 ? (
             <div className="space-y-2">
-              <p className="text-[12px] leading-relaxed text-muted">
+              <p className="text-[13px] leading-relaxed text-muted">
                 这个工作区还没有插件。每个插件是一个目录，里面放一份清单：
               </p>
-              <p className="rounded-md border border-line bg-surface-2 px-2.5 py-1.5 font-mono text-[11px] break-all text-faint">
+              <p className="rounded-md border border-line bg-surface-2 px-2.5 py-1.5 font-mono text-[12px] break-all text-faint">
                 .claude-plugin/plugin.json
               </p>
-              <pre className="overflow-x-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-muted">
+              <pre className="overflow-x-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[12px] leading-relaxed text-muted">
 {`{
   "name": "deploy-tools",
   "description": "部署相关命令",
@@ -207,7 +207,7 @@ export function PluginsPanel() {
   "skills": "./skills"
 }`}
               </pre>
-              <p className="text-[11px] leading-relaxed text-faint">
+              <p className="text-[12px] leading-relaxed text-faint">
                 组件路径必须从 <span className="font-mono">./</span> 起算；加载后会加
                 <span className="font-mono"> 插件名: </span> 前缀，例如
                 <span className="font-mono"> deploy-tools:reviewer</span>。默认启用；
@@ -216,7 +216,7 @@ export function PluginsPanel() {
             </div>
           ) : (
             <>
-              <p className="mb-1 text-[11px] leading-relaxed text-faint">
+              <p className="mb-1 text-[12px] leading-relaxed text-faint">
                 {data.count} 个插件，{data.enabled.length} 个启用。插件只贡献提示词组件；
                 清单里的 hooks 与 MCP 服务端会被解析但不加载，边界仍由设置页决定。
               </p>
@@ -229,25 +229,25 @@ export function PluginsPanel() {
           )}
 
           {data.errors.map((item) => (
-            <p key={item} className="mt-1 font-mono text-[11px] leading-relaxed break-words text-danger/90">
+            <p key={item} className="mt-1 font-mono text-[12px] leading-relaxed break-words text-danger/90">
               {item}
             </p>
           ))}
           {data.warnings.map((item) => (
-            <p key={item} className="mt-1 font-mono text-[11px] leading-relaxed break-words text-warn">
+            <p key={item} className="mt-1 font-mono text-[12px] leading-relaxed break-words text-warn">
               ⚠ {item}
             </p>
           ))}
 
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
-            <div className="min-w-0 flex-1 space-y-0.5 font-mono text-[10px] break-all text-faint">
+            <div className="min-w-0 flex-1 space-y-0.5 font-mono text-[11px] break-all text-faint">
               <p>用户层：{data.userDir}</p>
               <p>项目层（工作区下）：{data.projectDir || "（项目未绑定工作区）"}</p>
             </div>
             <button
               type="button"
               onClick={() => setReloadToken((token) => token + 1)}
-              className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1 text-[11px] text-muted hover:border-line-strong"
+              className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1 text-[12px] text-muted hover:border-line-strong"
             >
               重新扫描
             </button>

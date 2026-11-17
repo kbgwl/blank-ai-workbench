@@ -102,7 +102,7 @@ export function SideNav() {
           <Link
             key={item.href}
             href={item.href}
-            className={`group flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors ${
+            className={`group flex items-center gap-2.5 rounded-lg px-3 py-2 text-[14px] transition-colors ${
               active
                 ? "bg-surface-2 text-text font-medium"
                 : "text-muted hover:bg-surface-2 hover:text-text"

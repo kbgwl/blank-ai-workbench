@@ -59,12 +59,12 @@ export function AppRail() {
   }, [projects]);
 
   return (
-    <aside className="flex w-[248px] shrink-0 flex-col bg-sidebar">
+    <aside className="flex w-[308px] shrink-0 flex-col bg-sidebar">
       <div className="flex items-center gap-2 px-3 pt-3 pb-2">
         <span className="grid size-6 shrink-0 place-items-center rounded-md bg-logo-bg">
           <span className="size-2 rounded-[2px] bg-logo-accent" />
         </span>
-        <span className="text-[13px] font-semibold tracking-tight">空白格</span>
+        <span className="text-[14px] font-semibold tracking-tight">空白格</span>
         <span className="rounded bg-surface-3 px-1 py-0.5 font-mono text-[9px] tracking-wide text-muted uppercase">
           bot
         </span>
@@ -73,9 +73,9 @@ export function AppRail() {
       <div className="px-2 pb-1">
         <Link
           href="/"
-          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] font-medium text-text transition-colors hover:bg-surface-2"
+          className="flex items-center gap-2 rounded-md px-3 py-2 text-[14px] font-medium text-text transition-colors hover:bg-surface-2"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} className="size-3.5 shrink-0 text-muted" aria-hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} className="size-4 shrink-0 text-muted" aria-hidden>
             <path d="M12 5v14M5 12h14" />
           </svg>
           新的任务
@@ -86,13 +86,13 @@ export function AppRail() {
         <button
           type="button"
           onClick={openPalette}
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-[14px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="size-3.5 shrink-0 text-faint" aria-hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="size-4 shrink-0 text-faint" aria-hidden>
             <path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM16.5 16.5 21 21" />
           </svg>
           搜索
-          <kbd className="ml-auto font-mono text-[10px] text-faint">{shortcutHint(PALETTE_SHORTCUT)}</kbd>
+          <kbd className="ml-auto font-mono text-[11px] text-faint">{shortcutHint(PALETTE_SHORTCUT)}</kbd>
         </button>
       </div>
 
@@ -117,7 +117,7 @@ export function AppRail() {
         {workspaces.length === 0 && (
           <Link
             href="/projects"
-            className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] transition-colors ${
+            className={`flex items-center gap-2 rounded-md px-3 py-2 text-[14px] transition-colors ${
               projectsError
                 ? "text-danger hover:bg-danger/10"
                 : isNavActive(pathname, "/projects")
@@ -134,33 +134,33 @@ export function AppRail() {
             key={workspace.key}
             href="/projects"
             title={workspace.key}
-            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+            className="flex items-center gap-2 rounded-md px-3 py-2 text-[14px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
           >
             <FolderIcon />
             <span className="min-w-0 truncate">{workspace.label}</span>
             {workspace.count > 1 && (
-              <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">{workspace.count}</span>
+              <span className="ml-auto shrink-0 font-mono text-[12px] text-faint">{workspace.count}</span>
             )}
           </Link>
         ))}
         {workspaces.length > 6 && (
-          <Link href="/projects" className="flex items-center gap-2 rounded-md px-2 py-1 text-[11.5px] text-faint hover:text-text">
+          <Link href="/projects" className="flex items-center gap-2 rounded-md px-3 py-1.5 text-[13px] text-faint hover:text-text">
             还有 {workspaces.length - 6} 个工作区…
           </Link>
         )}
 
         <Group>最近任务</Group>
-        {tasks === null && <p className="px-2 py-1 text-[11.5px] text-faint">读取中…</p>}
-        {tasks !== null && tasksError && <p className="px-2 py-1 text-[11.5px] text-danger">任务读取失败</p>}
+        {tasks === null && <p className="px-2 py-1 text-[12.5px] text-faint">读取中…</p>}
+        {tasks !== null && tasksError && <p className="px-2 py-1 text-[12.5px] text-danger">任务读取失败</p>}
         {tasks !== null && !tasksError && tasks.length === 0 && (
-          <p className="px-2 py-1 text-[11.5px] text-faint">还没有任务</p>
+          <p className="px-2 py-1 text-[12.5px] text-faint">还没有任务</p>
         )}
         {(tasks ?? []).map((task) => (
           <Link
             key={task.id}
             href={`/tasks/detail?id=${encodeURIComponent(task.id)}`}
             title={task.title}
-            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+            className="flex items-center gap-2 rounded-md px-3 py-2 text-[14px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
           >
             <span className={`size-1.5 shrink-0 rounded-full ${task.status === "failed" ? "bg-danger" : task.status === "running" ? "bg-brand" : "bg-line-strong"}`} />
             <span className="truncate">{task.title || "未命名任务"}</span>
@@ -189,7 +189,7 @@ export function AppRail() {
 
 function Group({ children, action }: { children: string; action?: ReactNode }) {
   return (
-    <div className="flex items-center px-2 pt-3 pb-1 text-[11px] font-medium text-faint">
+    <div className="flex items-center px-3 pt-3 pb-1 text-[13px] font-medium text-faint">
       <span>{children}</span>
       {action && <span className="ml-auto">{action}</span>}
     </div>
@@ -200,7 +200,7 @@ function NavRow({ href, label, icon, active }: { href: string; label: string; ic
   return (
     <Link
       href={href}
-      className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] transition-colors ${
+      className={`flex items-center gap-2 rounded-md px-3 py-2 text-[14px] transition-colors ${
         active ? "bg-surface-3 font-medium text-text" : "text-muted hover:bg-surface-2 hover:text-text"
       }`}
     >
@@ -210,7 +210,7 @@ function NavRow({ href, label, icon, active }: { href: string; label: string; ic
   );
 }
 
-const ICON = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, className: "size-3.5 shrink-0 text-faint", "aria-hidden": true };
+const ICON = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, className: "size-4 shrink-0 text-faint", "aria-hidden": true };
 
 function FolderIcon() {
   return (

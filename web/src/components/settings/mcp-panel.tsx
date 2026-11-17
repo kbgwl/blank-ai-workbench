@@ -86,16 +86,16 @@ function ServerRow({
   return (
     <div className="border-b border-line py-2.5 last:border-b-0">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="font-mono text-[12px] text-text">{server.name}</span>
-        <span className={`rounded border px-1 py-0.5 text-[10px] ${style}`}>
+        <span className="font-mono text-[13px] text-text">{server.name}</span>
+        <span className={`rounded border px-1 py-0.5 text-[11px] ${style}`}>
           {STATE_LABELS[server.state] ?? server.state}
         </span>
-        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
+        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[11px] text-faint">
           {SCOPE_LABELS[server.scope] ?? server.scope}
         </span>
         {server.approval && server.approval !== "user" && (
           <span
-            className={`rounded border px-1 py-0.5 text-[10px] ${
+            className={`rounded border px-1 py-0.5 text-[11px] ${
               pending
                 ? "border-warn/40 bg-warn/10 text-warn"
                 : "border-brand/40 bg-brand/10 text-brand"
@@ -104,21 +104,21 @@ function ServerRow({
             {APPROVAL_LABELS[server.approval] ?? server.approval}
           </span>
         )}
-        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
+        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[11px] text-faint">
           {server.transport || "未知传输"}
         </span>
         {server.state === "ready" && (
-          <span className="font-mono text-[10px] text-faint">{server.tools} 个工具</span>
+          <span className="font-mono text-[11px] text-faint">{server.tools} 个工具</span>
         )}
         {server.server && (
-          <span className="font-mono text-[10px] text-faint">· {server.server}</span>
+          <span className="font-mono text-[11px] text-faint">· {server.server}</span>
         )}
         {server.approval && server.approval !== "user" && (
           <button
             type="button"
             disabled={busy}
             onClick={() => (pending ? onApprove(server) : onRevoke(server))}
-            className="ml-auto shrink-0 rounded-md border border-line bg-surface px-2 py-0.5 text-[10px] text-muted hover:border-line-strong disabled:opacity-50"
+            className="ml-auto shrink-0 rounded-md border border-line bg-surface px-2 py-0.5 text-[11px] text-muted hover:border-line-strong disabled:opacity-50"
           >
             {busy ? "处理中…" : pending ? "批准" : "撤销批准"}
           </button>
@@ -126,29 +126,29 @@ function ServerRow({
       </div>
       {server.error && (
         // 原因要能一眼读完：用户下一步就是照着这句去改配置或点批准
-        <p className="mt-1 font-mono text-[11px] leading-relaxed break-words text-danger/90">
+        <p className="mt-1 font-mono text-[12px] leading-relaxed break-words text-danger/90">
           {server.error}
         </p>
       )}
       {server.warnings?.map((warning) => (
         // 变量没配时占位符会原样留着：这里不说，用户只会在 401 时才发现
-        <p key={warning} className="mt-1 font-mono text-[11px] leading-relaxed break-words text-warn">
+        <p key={warning} className="mt-1 font-mono text-[12px] leading-relaxed break-words text-warn">
           ⚠ {warning}
         </p>
       ))}
       {server.state === "ready" && server.boundary === "job_object" && (
-        <p className="mt-1 font-mono text-[10px] leading-relaxed break-words text-faint">
+        <p className="mt-1 font-mono text-[11px] leading-relaxed break-words text-faint">
           {jobLimits(server.enforcement)}
         </p>
       )}
       {server.state === "ready" && server.boundary === "host_process_unbounded" && (
         // 连上了不等于进了边界：没挂进 Job 的进程按宿主权限跑，必须红字说清。
-        <p className="mt-1 font-mono text-[11px] leading-relaxed break-words text-danger/90">
+        <p className="mt-1 font-mono text-[12px] leading-relaxed break-words text-danger/90">
           {server.boundary_note || "⚠ 没有 Job 事实：该服务端按宿主权限运行，未由内核强制"}
         </p>
       )}
       {server.state === "ready" && server.boundary === "remote" && (
-        <p className="mt-1 font-mono text-[10px] leading-relaxed break-words text-faint">
+        <p className="mt-1 font-mono text-[11px] leading-relaxed break-words text-faint">
           进程在远端，本机 Job 管不到；出站请求仍走审批与审计
         </p>
       )}
@@ -256,7 +256,7 @@ export function McpPanel() {
       hint={data ? `GET /settings/mcp · ${data.servers.length} 个服务端` : "GET /settings/mcp"}
     >
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="text-[11px] text-faint">工作区</span>
+        <span className="text-[12px] text-faint">工作区</span>
         <SelectPopover
           value={projectId}
           options={options}
@@ -268,27 +268,27 @@ export function McpPanel() {
         />
       </div>
 
-      {error && <p className="mb-2 text-[12px] leading-relaxed text-danger/90">{error}</p>}
+      {error && <p className="mb-2 text-[13px] leading-relaxed text-danger/90">{error}</p>}
       {actionError && (
-        <p className="mb-2 text-[12px] leading-relaxed text-danger/90">{actionError}</p>
+        <p className="mb-2 text-[13px] leading-relaxed text-danger/90">{actionError}</p>
       )}
 
       {projectId && noWorkspace && (
-        <p className="mb-2 text-[11px] leading-relaxed text-warn">
+        <p className="mb-2 text-[12px] leading-relaxed text-warn">
           该项目还没绑定工作区：只读了用户层配置，工作区下没有项目层/本机层可读。
         </p>
       )}
 
-      {!data && !error && <p className="text-[12px] text-faint">加载中…</p>}
+      {!data && !error && <p className="text-[13px] text-faint">加载中…</p>}
 
       {data && (
         <>
           {data.servers.length === 0 ? (
             <div className="space-y-2">
-              <p className="text-[12px] leading-relaxed text-muted">
+              <p className="text-[13px] leading-relaxed text-muted">
                 这里还没有读到外部工具服务端。配置分三层，后面的同名条目整条覆盖前面的：
               </p>
-              <div className="space-y-1 font-mono text-[11px] text-faint">
+              <div className="space-y-1 font-mono text-[12px] text-faint">
                 <p>
                   用户层 <span className="text-muted">{data.config}</span>
                 </p>
@@ -305,10 +305,10 @@ export function McpPanel() {
                   </p>
                 )}
               </div>
-              <pre className="overflow-x-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-muted">
+              <pre className="overflow-x-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[12px] leading-relaxed text-muted">
                 {TEMPLATE}
               </pre>
-              <p className="text-[11px] leading-relaxed text-faint">
+              <p className="text-[12px] leading-relaxed text-faint">
                 外部工具默认按高风险走审批：服务端能做什么我们看不出来，所以不默认放行。
                 要调低某个服务端的风险等级，在它的配置里写{" "}
                 <span className="font-mono">&quot;risk&quot;: &quot;low&quot;</span>。
@@ -317,7 +317,7 @@ export function McpPanel() {
             </div>
           ) : (
             <>
-              <p className="mb-1 text-[11px] leading-relaxed text-faint">
+              <p className="mb-1 text-[12px] leading-relaxed text-faint">
                 {ready} 个已连接，共 {data.tools} 个工具。
                 {pending > 0 && ` ${pending} 个待批准（批准前不会启动进程）。`}
                 这些工具默认不出现在提示词里，模型需要时用工具检索拉回来。
@@ -337,13 +337,13 @@ export function McpPanel() {
           )}
 
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
-            <span className="min-w-0 flex-1 font-mono text-[10px] break-all text-faint">
+            <span className="min-w-0 flex-1 font-mono text-[11px] break-all text-faint">
               {data.config}
             </span>
             <button
               type="button"
               onClick={() => setReloadToken((token) => token + 1)}
-              className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1 text-[11px] text-muted hover:border-line-strong"
+              className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1 text-[12px] text-muted hover:border-line-strong"
             >
               重新连接
             </button>

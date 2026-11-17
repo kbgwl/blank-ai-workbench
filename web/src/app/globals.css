@@ -13,21 +13,22 @@
    ⚠️ --accent 是「在线 / 成功 / 通过」的语义绿（health-pill、succeeded 徽标、
    covered=true 都用它），不是品牌色。别把它改成品牌蓝，也别和 --ok 拆开。 */
 :root {
-  /* 蓝值压到 #4460ec 是为过 AA：#4d6bfe 上 13px 白字只有 4.33。 */
-  --brand-color: #4460ec;
+  /* 近黑主色：参考窗口里没有任何饱和色按钮，实心按钮就是黑底白字。 */
+  --brand-color: #1f1f1f;
 
-  /* 窗口、侧栏、主卡片三层照着 Qoder：灰色窗口 + 同灰侧栏 + 白色圆角卡片。 */
-  --bg: #f3f4f6;
+  /* 窗口、侧栏、主卡片三层按参考图像素取色：
+     窗口 #e6e6e6、侧栏 #f6f6f6、卡片 #ffffff；侧栏比窗口亮一档，卡片再亮。 */
+  --bg: #e6e6e6;
   --canvas: #ffffff;
-  --sidebar: #f3f4f6;
+  --sidebar: #f6f6f6;
   --surface: #ffffff;
-  --surface-2: #ececef;
-  --surface-3: #e4e5e9;
-  --line: #e6e7eb;
-  --line-strong: #d5d7dd;
-  --text: #1b1c1f;
-  --muted: #55575e;
-  --faint: #8f9198;
+  --surface-2: #ededed;
+  --surface-3: #e3e3e3;
+  --line: #e2e2e2;
+  --line-strong: #d3d3d3;
+  --text: #1d1d1f;
+  --muted: #5a5a5d;
+  --faint: #8b8b8f;
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
   --shadow-md: 0 4px 16px -8px rgba(16, 24, 40, 0.14);
   --shadow-lg: 0 18px 48px -20px rgba(16, 24, 40, 0.22);
@@ -133,8 +134,8 @@ body {
   background-color: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 14px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   transition: background-color 0.2s ease, color 0.2s ease;

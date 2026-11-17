@@ -19,7 +19,7 @@ const TONE_CLASS: Record<StatusChip["tone"], string> = {
 
 export function GoalStatusBar({ data }: { data: GoalStatusBarData }) {
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-line px-4 py-1.5 text-[10.5px]">
+    <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-line px-4 py-1.5 text-[11.5px]">
       {statusBarChips(data).map((chip) => (
         <span
           key={chip.key}

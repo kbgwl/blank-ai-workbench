@@ -58,7 +58,7 @@ function CopyButton({ value }: { value: string }) {
           window.setTimeout(() => setCopied(false), 1500);
         });
       }}
-      className="shrink-0 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-[10.5px] text-muted hover:text-text"
+      className="shrink-0 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-[11.5px] text-muted hover:text-text"
     >
       {copied ? "已复制" : "复制"}
     </button>
@@ -86,17 +86,17 @@ function ChannelCard({
   return (
     <div className="rounded-md border border-line bg-surface px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[12.5px] font-medium">{channel.name}</span>
-        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
+        <span className="text-[13.5px] font-medium">{channel.name}</span>
+        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[11px] text-faint">
           {channel.kind_label}
         </span>
-        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
+        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[11px] text-faint">
           {adapter?.modes.find((item) => item.value === channel.mode)?.label ?? channel.mode}
         </span>
-        <span className={`rounded border px-1 py-0.5 text-[10px] ${style}`}>
+        <span className={`rounded border px-1 py-0.5 text-[11px] ${style}`}>
           {STATUS_LABEL[channel.status] ?? channel.status}
         </span>
-        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[10px] text-faint">
+        <span className="rounded border border-line bg-surface-2 px-1 py-0.5 text-[11px] text-faint">
           {RECEIVE_LABEL[channel.receive_mode] ?? channel.receive_mode}
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -104,7 +104,7 @@ function ChannelCard({
             type="button"
             disabled={busy}
             onClick={onVerify}
-            className="rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-[10.5px] text-muted hover:text-text disabled:opacity-50"
+            className="rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-[11.5px] text-muted hover:text-text disabled:opacity-50"
           >
             验证凭据
           </button>
@@ -112,7 +112,7 @@ function ChannelCard({
             type="button"
             disabled={busy}
             onClick={onTest}
-            className="rounded border border-brand/35 bg-brand/[0.06] px-2 py-0.5 text-[10.5px] text-brand hover:bg-brand/10 disabled:opacity-50"
+            className="rounded border border-brand/35 bg-brand/[0.06] px-2 py-0.5 text-[11.5px] text-brand hover:bg-brand/10 disabled:opacity-50"
           >
             发条测试消息
           </button>
@@ -120,7 +120,7 @@ function ChannelCard({
             type="button"
             disabled={busy}
             onClick={onDelete}
-            className="rounded border border-line bg-surface px-2 py-0.5 text-[10.5px] text-faint hover:border-danger/40 hover:text-danger disabled:opacity-50"
+            className="rounded border border-line bg-surface px-2 py-0.5 text-[11.5px] text-faint hover:border-danger/40 hover:text-danger disabled:opacity-50"
           >
             删除
           </button>
@@ -128,7 +128,7 @@ function ChannelCard({
       </div>
       {channel.status_note && (
         <p
-          className={`mt-1.5 text-[11px] leading-relaxed ${
+          className={`mt-1.5 text-[12px] leading-relaxed ${
             channel.status === "failed" ? "text-danger/90" : "text-muted"
           }`}
         >
@@ -137,21 +137,21 @@ function ChannelCard({
       )}
       {channel.receipt.url ? (
         <div className="mt-1.5 flex items-center gap-2 rounded border border-line bg-surface-2 px-2 py-1">
-          <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-faint">{channel.receipt.url}</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-faint">{channel.receipt.url}</span>
           <CopyButton value={channel.receipt.url} />
         </div>
       ) : (
         channel.receipt.note && (
-          <p className="mt-1.5 text-[10.5px] leading-relaxed text-faint">{channel.receipt.note}</p>
+          <p className="mt-1.5 text-[11.5px] leading-relaxed text-faint">{channel.receipt.note}</p>
         )
       )}
-      {channel.receipt.url && <p className="mt-1 text-[10.5px] leading-relaxed text-faint">{channel.receipt.note}</p>}
-      <p className="mt-1 font-mono text-[10px] text-faint">
+      {channel.receipt.url && <p className="mt-1 text-[11.5px] leading-relaxed text-faint">{channel.receipt.note}</p>}
+      <p className="mt-1 font-mono text-[11px] text-faint">
         {channel.last_inbound_at ? `最近收到消息 ${channel.last_inbound_at}` : "还没收到过消息"}
         {channel.last_inbound_error ? ` · 入站错误：${channel.last_inbound_error}` : ""}
       </p>
       {notice && (
-        <p className={`mt-1 text-[11px] leading-relaxed ${notice.ok ? "text-brand" : "text-danger/90"}`}>
+        <p className={`mt-1 text-[12px] leading-relaxed ${notice.ok ? "text-brand" : "text-danger/90"}`}>
           {notice.text}
         </p>
       )}
@@ -194,13 +194,13 @@ function AddForm({
   return (
     <div className="rounded-md border border-brand/25 bg-brand/[0.03] px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[12.5px] font-medium">接入 {adapter.label}</span>
-        <span className="font-mono text-[10px] text-faint">{adapter.vendor}</span>
-        <button type="button" onClick={onCancel} className="ml-auto text-[10.5px] text-faint hover:text-text">
+        <span className="text-[13.5px] font-medium">接入 {adapter.label}</span>
+        <span className="font-mono text-[11px] text-faint">{adapter.vendor}</span>
+        <button type="button" onClick={onCancel} className="ml-auto text-[11.5px] text-faint hover:text-text">
           取消
         </button>
       </div>
-      <p className="mt-1 text-[11px] leading-relaxed text-muted">{adapter.summary}</p>
+      <p className="mt-1 text-[12px] leading-relaxed text-muted">{adapter.summary}</p>
 
       {adapter.modes.length > 1 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
@@ -212,7 +212,7 @@ function AddForm({
                 setMode(item.value);
                 setReceive(item.receive.length > 0);
               }}
-              className={`rounded border px-2 py-1 text-left text-[11px] ${
+              className={`rounded border px-2 py-1 text-left text-[12px] ${
                 mode === item.value
                   ? "border-brand/40 bg-brand/10 text-brand"
                   : "border-line bg-surface text-muted hover:border-line-strong"
@@ -223,33 +223,33 @@ function AddForm({
           ))}
         </div>
       )}
-      {meta?.hint && <p className="mt-1 text-[10.5px] leading-relaxed text-faint">{meta.hint}</p>}
+      {meta?.hint && <p className="mt-1 text-[11.5px] leading-relaxed text-faint">{meta.hint}</p>}
 
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
-        <label className="text-[11px] text-muted">
+        <label className="text-[12px] text-muted">
           名字（自己认得出就行）
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
-            className="mt-1 w-full rounded border border-line bg-surface px-2 py-1 text-[12px] text-text"
+            className="mt-1 w-full rounded border border-line bg-surface px-2 py-1 text-[13px] text-text"
           />
         </label>
         {visible.map((field) => (
-          <label key={field.key} className={`text-[11px] text-muted ${field.key === "template" ? "sm:col-span-2" : ""}`}>
+          <label key={field.key} className={`text-[12px] text-muted ${field.key === "template" ? "sm:col-span-2" : ""}`}>
             {field.label}
             {field.required && <span className="ml-0.5 text-danger/80">*</span>}
             <input
               value={values[field.key] ?? ""}
               placeholder={field.placeholder}
               onChange={(event) => setValues((prev) => ({ ...prev, [field.key]: event.target.value }))}
-              className="mt-1 w-full rounded border border-line bg-surface px-2 py-1 font-mono text-[11.5px] text-text"
+              className="mt-1 w-full rounded border border-line bg-surface px-2 py-1 font-mono text-[12.5px] text-text"
             />
-            {field.help && <span className="mt-0.5 block text-[10px] leading-relaxed text-faint">{field.help}</span>}
+            {field.help && <span className="mt-0.5 block text-[11px] leading-relaxed text-faint">{field.help}</span>}
           </label>
         ))}
       </div>
 
-      <div className="mt-2 flex flex-wrap items-center gap-4 text-[11px] text-muted">
+      <div className="mt-2 flex flex-wrap items-center gap-4 text-[12px] text-muted">
         <label className="flex items-center gap-1.5">
           <input type="checkbox" checked={push} onChange={(event) => setPush(event.target.checked)} />
           任务提醒推到这里（等审批 / 失败 / 完成）
@@ -266,8 +266,8 @@ function AddForm({
       </div>
 
       <details className="mt-2 rounded border border-line bg-surface px-2 py-1.5">
-        <summary className="cursor-pointer text-[11px] text-muted">在厂商后台要点哪几步</summary>
-        <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-[10.5px] leading-relaxed text-faint">
+        <summary className="cursor-pointer text-[12px] text-muted">在厂商后台要点哪几步</summary>
+        <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-[11.5px] leading-relaxed text-faint">
           {adapter.setup.map((step) => (
             <li key={step}>{step}</li>
           ))}
@@ -277,7 +277,7 @@ function AddForm({
             href={adapter.docs}
             target="_blank"
             rel="noreferrer"
-            className="mt-1 inline-block text-[10.5px] text-brand hover:underline"
+            className="mt-1 inline-block text-[11.5px] text-brand hover:underline"
           >
             官方文档
           </a>
@@ -289,11 +289,11 @@ function AddForm({
           type="button"
           disabled={busy}
           onClick={() => onSubmit({ name, mode, config: values, push, receive })}
-          className="rounded-md bg-brand px-3 py-1 text-[11.5px] font-medium text-canvas disabled:opacity-50"
+          className="rounded-md bg-brand px-3 py-1 text-[12.5px] font-medium text-canvas disabled:opacity-50"
         >
           {busy ? "保存中…" : "保存并验证"}
         </button>
-        <span className="text-[10px] leading-relaxed text-faint">
+        <span className="text-[11px] leading-relaxed text-faint">
           保存后会自动打一次厂商接口。密钥加密存在本机，不会回显。
         </span>
       </div>
@@ -404,7 +404,7 @@ export function ChannelsPanel() {
   if (!catalog || !list) {
     return (
       <Panel title="消息通道" hint="GET /channels">
-        <p className="text-[12px] text-faint">{error || "加载中…"}</p>
+        <p className="text-[13px] text-faint">{error || "加载中…"}</p>
       </Panel>
     );
   }
@@ -412,18 +412,18 @@ export function ChannelsPanel() {
   return (
     <div className="flex flex-col gap-4">
       <Panel title="消息通道" hint={`${list.channels.length} 条已配置`}>
-        <p className="text-[11.5px] leading-relaxed text-muted">
+        <p className="text-[12.5px] leading-relaxed text-muted">
           把任务提醒推到客户自己的企业微信 / 钉钉 / 飞书，也可以在那边发一句话让它动手。
           凭据加密存在本机；「已接通」只有在真打过厂商接口之后才会出现。
         </p>
         {!list.triggers_enabled && (
-          <p className="mt-2 rounded border border-line bg-surface-2 px-2 py-1 text-[11px] leading-relaxed text-faint">
+          <p className="mt-2 rounded border border-line bg-surface-2 px-2 py-1 text-[12px] leading-relaxed text-faint">
             通道收发不依赖「后台主动执行」那个开关：消息是你主动发的，定时与盯着也是你交代的。
             那个开关管的是 Agent 自己发起的事（自动修复等）。
           </p>
         )}
         {list.channels.length === 0 ? (
-          <p className="mt-2 rounded border border-line bg-surface-2 px-2 py-2 text-[11.5px] leading-relaxed text-faint">
+          <p className="mt-2 rounded border border-line bg-surface-2 px-2 py-2 text-[12.5px] leading-relaxed text-faint">
             还没有配置。下面选一家填上凭据即可——最快的路径是群机器人（只发提醒）或钉钉 Stream（可收发，不需要公网）。
           </p>
         ) : (
@@ -444,14 +444,14 @@ export function ChannelsPanel() {
         )}
 
         <div className="mt-3 border-t border-line pt-2.5">
-          <p className="text-[11px] text-muted">加一条通道</p>
+          <p className="text-[12px] text-muted">加一条通道</p>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {catalog.adapters.map((adapter) => (
               <button
                 key={adapter.kind}
                 type="button"
                 onClick={() => setAdding(adapter.kind === adding ? "" : adapter.kind)}
-                className={`rounded-md border px-2.5 py-1 text-[11.5px] ${
+                className={`rounded-md border px-2.5 py-1 text-[12.5px] ${
                   adding === adapter.kind
                     ? "border-brand/40 bg-brand/10 text-brand"
                     : "border-line bg-surface text-muted hover:border-line-strong hover:text-text"
@@ -473,19 +473,19 @@ export function ChannelsPanel() {
           )}
         </div>
 
-        {error && <p className="mt-2 text-[11px] leading-relaxed text-danger/90">{error}</p>}
+        {error && <p className="mt-2 text-[12px] leading-relaxed text-danger/90">{error}</p>}
       </Panel>
 
       <Panel title="收消息要什么条件" hint={list.public_base ? `对外地址 ${list.public_base}` : "未配置对外地址"}>
         <div className="flex flex-col gap-1.5">
           {catalog.receive_notes.map((item) => (
             <div key={item.mode} className="rounded border border-line bg-surface px-2 py-1.5">
-              <p className="text-[11.5px] text-text">{item.label}</p>
-              <p className="mt-0.5 text-[10.5px] leading-relaxed text-faint">{item.note}</p>
+              <p className="text-[12.5px] text-text">{item.label}</p>
+              <p className="mt-0.5 text-[11.5px] leading-relaxed text-faint">{item.note}</p>
             </div>
           ))}
         </div>
-        <p className="mt-2 text-[10.5px] leading-relaxed text-faint">
+        <p className="mt-2 text-[11.5px] leading-relaxed text-faint">
           本机形态没有公网地址时，只有「长连接」这一条路能用（目前是钉钉）。要收企业微信/飞书的消息，
           得先把后端挂到一个公网可达的 https 地址上，再把 BLANK_PUBLIC_BASE_URL 指过去，回调地址才会正确生成。
         </p>

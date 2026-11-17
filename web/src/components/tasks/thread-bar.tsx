@@ -55,21 +55,21 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
   return (
     <section className="mb-3 rounded-lg border border-line bg-surface">
       <header className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
-        <span className="shrink-0 font-mono text-[10px] tracking-wide text-faint">会话</span>
-        <span className="min-w-0 flex-1 truncate text-[13px] text-text">{thread.title}</span>
+        <span className="shrink-0 font-mono text-[11px] tracking-wide text-faint">会话</span>
+        <span className="min-w-0 flex-1 truncate text-[14px] text-text">{thread.title}</span>
         {thread.forkedFrom && (
-          <span className="shrink-0 rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-muted" title={thread.forkedFrom}>
+          <span className="shrink-0 rounded border border-line px-1.5 py-0.5 font-mono text-[11px] text-muted" title={thread.forkedFrom}>
             分叉
           </span>
         )}
-        <span className="shrink-0 font-mono text-[10px] text-faint">{thread.turnCount} 轮</span>
-        {archived && <span className="shrink-0 font-mono text-[10px] text-muted">已归档</span>}
+        <span className="shrink-0 font-mono text-[11px] text-faint">{thread.turnCount} 轮</span>
+        {archived && <span className="shrink-0 font-mono text-[11px] text-muted">已归档</span>}
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={onFork}
             disabled={pending}
-            className="rounded-md border border-line px-2 py-1 text-[11px] text-muted transition-colors hover:border-line-strong hover:text-text disabled:opacity-50"
+            className="rounded-md border border-line px-2 py-1 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-text disabled:opacity-50"
             title="带上这条会话的上下文另开一条线，不复制已有轮次"
           >
             {busy === "fork" ? "分叉中" : "分叉"}
@@ -78,7 +78,7 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
             type="button"
             onClick={onArchive}
             disabled={pending || archived}
-            className="rounded-md border border-line px-2 py-1 text-[11px] text-muted transition-colors hover:border-line-strong hover:text-text disabled:opacity-40"
+            className="rounded-md border border-line px-2 py-1 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-text disabled:opacity-40"
             title="归档后不再接受新的一轮，已有轮次全部保留"
           >
             {busy === "archive" ? "归档中" : "归档"}
@@ -87,11 +87,11 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
       </header>
 
       {error && (
-        <p className="border-b border-line px-3 py-1 text-[10px] text-muted">刷新会话失败：{error}</p>
+        <p className="border-b border-line px-3 py-1 text-[11px] text-muted">刷新会话失败：{error}</p>
       )}
 
       {turns.length === 0 ? (
-        <p className="px-3 py-3 text-[11px] leading-relaxed text-faint">
+        <p className="px-3 py-3 text-[12px] leading-relaxed text-faint">
           这条会话还没有轮次。说一句要做什么，它就成为第 1 轮；分叉来的会话会带上来源会话的上下文。
         </p>
       ) : (
@@ -108,17 +108,17 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
                     active ? "bg-brand/[0.08]" : "hover:bg-surface-2"
                   }`}
                 >
-                  <span className={`mt-0.5 w-5 shrink-0 text-right font-mono text-[10px] ${active ? "text-brand" : "text-faint"}`}>
+                  <span className={`mt-0.5 w-5 shrink-0 text-right font-mono text-[11px] ${active ? "text-brand" : "text-faint"}`}>
                     {index + 1}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-baseline gap-2">
-                      <span className="min-w-0 flex-1 truncate text-[12px] text-text">{turn.title}</span>
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-text">{turn.title}</span>
                       <StatusBadge status={turn.status} />
-                      <span className="shrink-0 font-mono text-[10px] text-faint">{relativeTime(turn.createdAt)}</span>
+                      <span className="shrink-0 font-mono text-[11px] text-faint">{relativeTime(turn.createdAt)}</span>
                     </span>
                     {turn.resultSummary && (
-                      <span className="mt-0.5 block truncate text-[11px] text-muted">{clip(turn.resultSummary, 90)}</span>
+                      <span className="mt-0.5 block truncate text-[12px] text-muted">{clip(turn.resultSummary, 90)}</span>
                     )}
                   </span>
                 </button>
@@ -143,18 +143,18 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
             disabled={archived}
             aria-label="继续聊"
             placeholder={archived ? "会话已归档，不能再开新的一轮" : "接着说——例如：把刚才那个接口也补上邮箱校验"}
-            className="min-h-0 w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 text-[12px] leading-relaxed text-text placeholder:text-faint focus:border-brand/60 focus:outline-none disabled:opacity-50"
+            className="min-h-0 w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13px] leading-relaxed text-text placeholder:text-faint focus:border-brand/60 focus:outline-none disabled:opacity-50"
           />
           <button
             type="button"
             onClick={submit}
             disabled={pending || archived || !draft.trim()}
-            className="shrink-0 rounded-lg bg-brand px-3 py-2 text-[12px] font-medium text-on-brand transition-opacity hover:opacity-90 disabled:opacity-40"
+            className="shrink-0 rounded-lg bg-brand px-3 py-2 text-[13px] font-medium text-on-brand transition-opacity hover:opacity-90 disabled:opacity-40"
           >
             {busy === "continue" ? "创建中" : "继续聊"}
           </button>
         </div>
-        <p className="mt-1 text-[10px] leading-relaxed text-faint">
+        <p className="mt-1 text-[11px] leading-relaxed text-faint">
           新的一轮会带上这条会话前面几轮的结论（不是全部消息），并自动开始执行。
         </p>
       </div>

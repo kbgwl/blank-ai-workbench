@@ -41,7 +41,7 @@ function StatusChip({ status, running }: { status: string; running: boolean }) {
   // "进行中"：关掉窗口再打开的人看到的是一个在动的任务，不知道卡在等他点一下。
   if (status === "waiting_approval") {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-warn/[0.12] px-2 py-0.5 text-[10.5px] font-medium text-warn">
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-warn/[0.12] px-2 py-0.5 text-[11.5px] font-medium text-warn">
         <span className="size-1.5 rounded-full bg-warn" />
         等你批准
       </span>
@@ -49,14 +49,14 @@ function StatusChip({ status, running }: { status: string; running: boolean }) {
   }
   if (status === "paused") {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2 py-0.5 text-[10.5px] font-medium text-muted">
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2 py-0.5 text-[11.5px] font-medium text-muted">
         已暂停
       </span>
     );
   }
   if (running) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-brand/[0.08] px-2 py-0.5 text-[10.5px] font-medium text-brand">
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-brand/[0.08] px-2 py-0.5 text-[11.5px] font-medium text-brand">
         <span className="relative flex size-1.5">
           <span className="absolute inline-flex size-full animate-ping rounded-full bg-brand/60" />
           <span className="relative inline-flex size-1.5 rounded-full bg-brand" />
@@ -66,10 +66,10 @@ function StatusChip({ status, running }: { status: string; running: boolean }) {
     );
   }
   if (status === "failed" || status === "error") {
-    return <span className="rounded-full bg-danger/[0.08] px-2 py-0.5 text-[10.5px] font-medium text-danger">失败</span>;
+    return <span className="rounded-full bg-danger/[0.08] px-2 py-0.5 text-[11.5px] font-medium text-danger">失败</span>;
   }
   if (status === "cancelled" || status === "canceled") {
-    return <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10.5px] font-medium text-muted">已停止</span>;
+    return <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[11.5px] font-medium text-muted">已停止</span>;
   }
   return null;
 }
@@ -88,18 +88,18 @@ function ApprovalCard({
   const reviewNote = guardianReviewLabel(approval.guardian);
   return (
     <div className="my-2 rounded-xl border border-warn/35 bg-warn/[0.04] p-3">
-      <p className="text-[12.5px] font-medium text-warn">
+      <p className="text-[13.5px] font-medium text-warn">
         需要你批准：{approval.tool}
         {approval.risk && <span className="ml-1.5 font-normal text-warn/80">（风险 {approval.risk}）</span>}
       </p>
       {command && (
-        <pre className="mt-1.5 overflow-auto rounded-md bg-surface px-2.5 py-1.5 font-mono text-[11.5px] text-text">
+        <pre className="mt-1.5 overflow-auto rounded-md bg-surface px-2.5 py-1.5 font-mono text-[12.5px] text-text">
           {command}
         </pre>
       )}
-      {approval.message && <p className="mt-1 text-[11.5px] text-muted">{approval.message}</p>}
+      {approval.message && <p className="mt-1 text-[12.5px] text-muted">{approval.message}</p>}
       {reviewNote && (
-        <p className="mt-1 text-[11.5px] leading-relaxed text-muted" title="独立审查员先看过了；它放行不等于安全，它说话也不会替你批准">
+        <p className="mt-1 text-[12.5px] leading-relaxed text-muted" title="独立审查员先看过了；它放行不等于安全，它说话也不会替你批准">
           {reviewNote}
         </p>
       )}
@@ -121,7 +121,7 @@ function ApprovalCard({
       {grants
         .filter((option) => option.warning)
         .map((option) => (
-          <p key={option.scope} className="mt-1 text-[11px] leading-relaxed text-muted">
+          <p key={option.scope} className="mt-1 text-[12px] leading-relaxed text-muted">
             {option.scope === "tool" ? "工具档：" : "本会话档："}
             {option.warning}
           </p>
@@ -159,11 +159,11 @@ function QuestionCard({
     .map((option) => option.preview)[0];
   return (
     <div className="my-2 rounded-xl border border-brand/30 bg-brand/[0.03] p-3">
-      <p className="text-[12.5px] font-medium text-brand">它想先问你一句</p>
+      <p className="text-[13.5px] font-medium text-brand">它想先问你一句</p>
       <div className="mt-2 space-y-3">
         {questions.map((question) => (
           <div key={question.id}>
-            <p className="text-[12.5px] text-text">{question.question}</p>
+            <p className="text-[13.5px] text-text">{question.question}</p>
             {question.options.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {question.options.map((option) => (
@@ -185,7 +185,7 @@ function QuestionCard({
                         return { ...current, [question.id]: next };
                       })
                     }
-                    className={`rounded-md border px-2 py-1 text-[11.5px] transition-colors ${
+                    className={`rounded-md border px-2 py-1 text-[12.5px] transition-colors ${
                       isSelected(question.id, option.label)
                         ? "border-brand/60 bg-brand/[0.08] text-brand"
                         : "border-line bg-surface text-muted hover:border-line-strong hover:text-text"
@@ -193,7 +193,7 @@ function QuestionCard({
                   >
                     {option.label}
                     {option.recommended && (
-                      <span className="ml-1 text-[10px] text-brand/70">默认</span>
+                      <span className="ml-1 text-[11px] text-brand/70">默认</span>
                     )}
                   </button>
                 ))}
@@ -204,7 +204,7 @@ function QuestionCard({
                 value={typeof draft[question.id] === "string" ? (draft[question.id] as string) : ""}
                 onChange={(event) => setDraft((current) => ({ ...current, [question.id]: event.target.value }))}
                 placeholder="或者直接写你的答案"
-                className="mt-1.5 w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-[12px] text-text placeholder:text-faint focus:border-brand/60 focus:outline-none"
+                className="mt-1.5 w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-[13px] text-text placeholder:text-faint focus:border-brand/60 focus:outline-none"
               />
             )}
           </div>
@@ -212,7 +212,7 @@ function QuestionCard({
       </div>
       {preview && (
         // 模型给的 HTML 片段一律按纯文本展示：不在 innerHTML 里跑它的标签。
-        <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-line bg-surface px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-text/85">
+        <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-line bg-surface px-2.5 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap text-text/85">
           {preview}
         </pre>
       )}
@@ -281,7 +281,7 @@ export function TurnView(props: TurnViewProps) {
     <div className="group/turn">
       {/* 用户说的话：右侧淡色气泡，与助手的整段正文区分开 */}
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-xl rounded-br-md bg-surface-2 px-3.5 py-2 text-[13.5px] leading-relaxed text-text">
+        <div className="max-w-[85%] rounded-xl rounded-br-md bg-surface-2 px-3.5 py-2 text-[14px] leading-relaxed text-text">
           {props.images.length > 0 && (
             <div className="mb-1.5 flex flex-wrap gap-1.5">
               {props.images.map((item) =>
@@ -306,9 +306,9 @@ export function TurnView(props: TurnViewProps) {
                     target="_blank"
                     rel="noreferrer"
                     title={item.name}
-                    className="flex max-w-[220px] items-center gap-1.5 rounded-lg border border-line px-2 py-1.5 text-[11.5px] text-muted transition-colors hover:bg-surface-3 hover:text-text"
+                    className="flex max-w-[220px] items-center gap-1.5 rounded-lg border border-line px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-3 hover:text-text"
                   >
-                    <span className="shrink-0 font-mono text-[10px] uppercase text-faint">
+                    <span className="shrink-0 font-mono text-[11px] uppercase text-faint">
                       {fileLabel(item)}
                     </span>
                     <span className="truncate">{item.name}</span>
@@ -326,10 +326,10 @@ export function TurnView(props: TurnViewProps) {
           <span className="grid size-5 shrink-0 place-items-center rounded-md bg-logo-bg">
             <span className="size-1.5 rounded-[2px] bg-logo-accent" />
           </span>
-          <span className="text-[12.5px] font-semibold tracking-tight">空白格</span>
+          <span className="text-[13.5px] font-semibold tracking-tight">空白格</span>
           <StatusChip status={props.status} running={running} />
           {props.createdAt && (
-            <span className="ml-auto font-mono text-[10px] text-faint">{timeLabel(props.createdAt)}</span>
+            <span className="ml-auto font-mono text-[11px] text-faint">{timeLabel(props.createdAt)}</span>
           )}
         </div>
 
@@ -341,7 +341,7 @@ export function TurnView(props: TurnViewProps) {
               type="button"
               onClick={() => setOpenSteps(!expanded)}
               title={evidence.commands.length ? `跑过的命令：\n${evidence.commands.join("\n")}` : undefined}
-              className="mb-1 flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] text-faint transition-colors hover:bg-surface-2 hover:text-muted"
+              className="mb-1 flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-[12px] text-faint transition-colors hover:bg-surface-2 hover:text-muted"
             >
               <svg
                 viewBox="0 0 24 24"
@@ -382,7 +382,7 @@ export function TurnView(props: TurnViewProps) {
                           key={key}
                           type="button"
                           onClick={() => setFilter(key)}
-                          className={`rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors ${
+                          className={`rounded px-1.5 py-0.5 font-mono text-[11px] transition-colors ${
                             filter === key ? "bg-surface-3 text-text" : "text-faint hover:bg-surface-2 hover:text-muted"
                           }`}
                         >
@@ -392,7 +392,7 @@ export function TurnView(props: TurnViewProps) {
                   </div>
                 )}
                 <div className="space-y-0.5">
-                  {shown.length === 0 && <p className="px-1.5 py-1 text-[11.5px] text-faint">这一步没有可显示的内容。</p>}
+                  {shown.length === 0 && <p className="px-1.5 py-1 text-[12.5px] text-faint">这一步没有可显示的内容。</p>}
                   {shown.map((step) => (
                     <StepView key={step.key} step={step} />
                   ))}
@@ -415,14 +415,14 @@ export function TurnView(props: TurnViewProps) {
           )}
 
           {!props.streaming && !props.reply && running && props.stepCount === 0 && (
-            <p className="flex items-center gap-2 py-1 text-[12.5px] text-muted">
+            <p className="flex items-center gap-2 py-1 text-[13.5px] text-muted">
               <span className="size-2 animate-pulse rounded-full bg-brand" />
               在想怎么做…
             </p>
           )}
 
           {props.reason && (
-            <p className="mt-1 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-1.5 text-[12px] text-danger">
+            <p className="mt-1 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-1.5 text-[13px] text-danger">
               {props.reason}
             </p>
           )}
@@ -445,14 +445,14 @@ export function TurnView(props: TurnViewProps) {
           )}
 
           {!running && !hasBody && props.stepCount === 0 && (
-            <p className="text-[12px] text-faint">这一轮没有留下可显示的内容。</p>
+            <p className="text-[13px] text-faint">这一轮没有留下可显示的内容。</p>
           )}
 
           {!running && (props.status === "failed" || props.status === "cancelled") && (
             <button
               type="button"
               onClick={props.onRetry}
-              className="mt-2 rounded-md border border-line px-2 py-1 text-[11.5px] text-muted transition-colors hover:border-line-strong hover:text-text"
+              className="mt-2 rounded-md border border-line px-2 py-1 text-[12.5px] text-muted transition-colors hover:border-line-strong hover:text-text"
             >
               用同样的话再试一次
             </button>

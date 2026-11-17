@@ -18,7 +18,7 @@ export function KindBadge({ kind }: { kind: string }) {
   };
   return (
     <span
-      className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${tone[kind] ?? "border-line bg-surface-2 text-muted"}`}
+      className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${tone[kind] ?? "border-line bg-surface-2 text-muted"}`}
     >
       {label[kind] ?? kind}
     </span>
@@ -46,7 +46,7 @@ export function ParamBadge({ total, active }: { total: number; active: number })
           ? `稀疏（MoE）模型：总参数 ${totalText} 决定显存占用，激活 ${activeText} 决定每个 token 的算力与单价`
           : `稠密模型：总参数 ${totalText}`
       }
-      className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${
+      className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${
         sparse ? "border-brand/25 bg-brand/[0.08] text-brand" : "border-line bg-surface-2 text-muted"
       }`}
     >
@@ -58,7 +58,7 @@ export function ParamBadge({ total, active }: { total: number; active: number })
 export function Chip({ active, children }: { active: boolean; children: ReactNode }) {
   return (
     <span
-      className={`rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${
+      className={`rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${
         active ? "border-accent/30 bg-accent/10 text-accent" : "border-line bg-surface-2 text-faint line-through"
       }`}
     >
@@ -96,7 +96,7 @@ export function Toggle({
       aria-checked={checked}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="flex items-center gap-2 text-[12px] text-muted transition-colors hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+      className="flex items-center gap-2 text-[13px] text-muted transition-colors hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
     >
       <span
         className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${
@@ -119,13 +119,13 @@ export function StatusLine({ result }: { result: TestResult }) {
     return (
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-md border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] text-accent">
+          <span className="rounded-md border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[11px] text-accent">
             连接成功
           </span>
-          <span className="font-mono text-[10px] text-muted">{result.model ?? "未知模型"}</span>
-          <span className="font-mono text-[10px] text-faint">{result.latency_ms ?? 0}ms</span>
+          <span className="font-mono text-[11px] text-muted">{result.model ?? "未知模型"}</span>
+          <span className="font-mono text-[11px] text-faint">{result.latency_ms ?? 0}ms</span>
           {result.usage && (
-            <span className="font-mono text-[10px] text-faint">
+            <span className="font-mono text-[11px] text-faint">
               {result.usage.prompt_tokens}↑ / {result.usage.completion_tokens}↓ tokens
             </span>
           )}
@@ -137,12 +137,12 @@ export function StatusLine({ result }: { result: TestResult }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-md border border-danger/30 bg-danger/10 px-1.5 py-0.5 font-mono text-[10px] text-danger">
+        <span className="rounded-md border border-danger/30 bg-danger/10 px-1.5 py-0.5 font-mono text-[11px] text-danger">
           连接失败
         </span>
-        <span className="font-mono text-[10px] text-faint">{result.code ?? "unknown"}</span>
+        <span className="font-mono text-[11px] text-faint">{result.code ?? "unknown"}</span>
       </div>
-      <p className="text-[12px] leading-relaxed text-danger/90">{result.message ?? "模型调用失败"}</p>
+      <p className="text-[13px] leading-relaxed text-danger/90">{result.message ?? "模型调用失败"}</p>
       {result.capabilities && <CapChips caps={result.capabilities} />}
     </div>
   );
@@ -151,7 +151,7 @@ export function StatusLine({ result }: { result: TestResult }) {
 export function StatTile({ label, value, tone = "text" }: { label: string; value: string; tone?: "text" | "warn" }) {
   return (
     <div className="rounded-lg border border-line bg-surface px-3 py-2">
-      <div className="font-mono text-[10px] tracking-wide text-faint uppercase">{label}</div>
+      <div className="font-mono text-[11px] tracking-wide text-faint uppercase">{label}</div>
       <div className={`mt-0.5 text-[15px] font-semibold ${tone === "warn" ? "text-warn" : "text-text"}`}>{value}</div>
     </div>
   );

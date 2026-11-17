@@ -46,52 +46,52 @@ export function RoutingEvidencePanel() {
 
   return (
     <Panel title="转正依据">
-      {error && <p className="text-[12px] text-danger">{error}</p>}
+      {error && <p className="text-[13px] text-danger">{error}</p>}
 
       {!data ? (
-        !error && <p className="text-[12px] text-faint">正在读取最近的运行记录…</p>
+        !error && <p className="text-[13px] text-faint">正在读取最近的运行记录…</p>
       ) : (
         <div className="flex flex-col gap-3">
           <div className="flex items-start justify-between gap-3">
-          <p className="text-[11.5px] leading-relaxed text-faint">
+          <p className="text-[12.5px] leading-relaxed text-faint">
             分母是「每一步都交给池子里最强模型」的成本当量，所以这个比值不依赖任何一家的真实单价。
             省 3% 却多一个可能判错的环节，不值得开；省 20% 以上且失败率没抬头，才值得开成默认。
           </p>
           <button
             type="button"
             onClick={() => setReloadToken((token) => token + 1)}
-            className="shrink-0 rounded-md border border-line px-2 py-1 text-[11px] text-muted transition hover:bg-surface-2"
+            className="shrink-0 rounded-md border border-line px-2 py-1 text-[12px] text-muted transition hover:bg-surface-2"
           >
             刷新
           </button>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded border px-2 py-0.5 text-[11px] ${tone}`}>{data.verdict}</span>
-            <span className="rounded border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-muted">
+            <span className={`rounded border px-2 py-0.5 text-[12px] ${tone}`}>{data.verdict}</span>
+            <span className="rounded border border-line bg-surface-2 px-2 py-0.5 font-mono text-[12px] text-muted">
               省下 {percent(data.saved_ratio)}
             </span>
-            <span className="rounded border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-muted">
+            <span className="rounded border border-line bg-surface-2 px-2 py-0.5 font-mono text-[12px] text-muted">
               切档 {percent(data.switch_ratio)}
             </span>
-            <span className="rounded border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-muted">
+            <span className="rounded border border-line bg-surface-2 px-2 py-0.5 font-mono text-[12px] text-muted">
               {data.calls} 步 / {data.sampled_tasks} 个任务
             </span>
             {data.escalations > 0 && (
-              <span className="rounded border border-warn/40 bg-warn/10 px-2 py-0.5 font-mono text-[11px] text-warn">
+              <span className="rounded border border-warn/40 bg-warn/10 px-2 py-0.5 font-mono text-[12px] text-warn">
                 提档重试 {data.escalations} 次
               </span>
             )}
           </div>
 
           {data.sampled_tasks === 0 ? (
-            <p className="text-[11.5px] leading-relaxed text-faint">
+            <p className="text-[12.5px] leading-relaxed text-faint">
               还没有开着 model_routing 跑过的任务。先去上面的特性开关打开它，跑几个真实任务再回来看——
               这个面板不会替你决定，只把依据摆出来。
             </p>
           ) : (
             <div className="overflow-hidden rounded-lg border border-line">
-              <table className="w-full text-left text-[11.5px]">
+              <table className="w-full text-left text-[12.5px]">
                 <thead className="bg-surface-2 text-faint">
                   <tr>
                     <th className="px-2 py-1.5 font-normal">任务</th>
@@ -104,7 +104,7 @@ export function RoutingEvidencePanel() {
                 <tbody>
                   {data.recent.slice(0, 8).map((row) => (
                     <tr key={row.task_id} className="border-t border-line">
-                      <td className="px-2 py-1.5 font-mono text-[10.5px] text-muted">
+                      <td className="px-2 py-1.5 font-mono text-[11.5px] text-muted">
                         {row.task_id.slice(0, 8)}
                       </td>
                       <td className="px-2 py-1.5 text-muted">{row.status}</td>

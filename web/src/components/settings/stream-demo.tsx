@@ -111,18 +111,18 @@ export function StreamDemo({ providers, onFinished }: Props) {
         aria-label="演示提示词"
         rows={2}
         spellCheck={false}
-        className="w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 text-[12px] leading-relaxed text-text placeholder:text-faint focus:border-brand/60 focus:outline-none"
+        className="w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13px] leading-relaxed text-text placeholder:text-faint focus:border-brand/60 focus:outline-none"
         placeholder="输入一段发给模型的文本"
       />
 
       <div className="min-h-[9rem] rounded-lg border border-line bg-surface-2 p-3">
         {status === "idle" && !text && !notice ? (
-          <div className="flex items-center gap-2 font-mono text-[11px] text-faint">
+          <div className="flex items-center gap-2 font-mono text-[12px] text-faint">
             <span className="text-accent">$</span>
             POST /providers/:id/chat/stream · 等待发送
           </div>
         ) : (
-          <pre className="font-mono text-[11px] leading-relaxed break-words whitespace-pre-wrap text-muted">
+          <pre className="font-mono text-[12px] leading-relaxed break-words whitespace-pre-wrap text-muted">
             {text}
             {status === "running" && <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-brand align-middle" />}
           </pre>
@@ -131,18 +131,18 @@ export function StreamDemo({ providers, onFinished }: Props) {
 
       <div className="flex flex-wrap items-center gap-3">
         {status === "running" && (
-          <span className="flex items-center gap-1.5 font-mono text-[10px] text-brand">
+          <span className="flex items-center gap-1.5 font-mono text-[11px] text-brand">
             <Spinner />
             流式接收中 · {elapsed.toFixed(1)}s
           </span>
         )}
         {status === "done" && (
-          <span className="font-mono text-[10px] text-accent">
+          <span className="font-mono text-[11px] text-accent">
             完成 · {text.length} 字符 · {elapsed.toFixed(1)}s
           </span>
         )}
         {active && (
-          <span className="font-mono text-[10px] text-faint">
+          <span className="font-mono text-[11px] text-faint">
             SSE 帧：event: delta / data: {"{ \"text\": … }"}
           </span>
         )}

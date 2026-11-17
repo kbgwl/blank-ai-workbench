@@ -158,7 +158,7 @@ export function SkillsView() {
       />
 
       {error && (
-        <p className="mb-4 rounded-lg border border-danger/25 bg-danger/[0.04] px-3 py-2 text-[12px] text-danger">
+        <p className="mb-4 rounded-lg border border-danger/25 bg-danger/[0.04] px-3 py-2 text-[13px] text-danger">
           {error}
         </p>
       )}
@@ -166,7 +166,7 @@ export function SkillsView() {
       <div className="flex flex-col gap-4">
         {proposals.length > 0 && (
           <Panel title="待采用的提案" hint={`${proposals.length} 条模型提的建议`}>
-            <p className="mb-2 text-[11.5px] leading-relaxed text-muted">
+            <p className="mb-2 text-[12.5px] leading-relaxed text-muted">
               这些是模型在任务里主动提的技能建议。采用才会落成草案或并入目标技能；
               丢弃后就从列表里消失。
             </p>
@@ -181,15 +181,15 @@ export function SkillsView() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[12.5px] font-medium">{proposal.name}</span>
-                        <span className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${STATE_TONE.proposed}`}>
+                        <span className="truncate text-[13.5px] font-medium">{proposal.name}</span>
+                        <span className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${STATE_TONE.proposed}`}>
                           {kind === "improvement" ? "改进" : "新技能"}
                         </span>
                       </div>
                       {target && (
-                        <p className="mt-0.5 font-mono text-[10px] text-faint">目标：{target}</p>
+                        <p className="mt-0.5 font-mono text-[11px] text-faint">目标：{target}</p>
                       )}
-                      <p className="mt-1 text-[11.5px] leading-relaxed text-muted">
+                      <p className="mt-1 text-[12.5px] leading-relaxed text-muted">
                         {metaText(proposal, "description") || preview(proposal.instructions) || "（没有说明）"}
                       </p>
                     </div>
@@ -198,7 +198,7 @@ export function SkillsView() {
                         type="button"
                         disabled={busy === proposal.id}
                         onClick={() => void adopt(proposal)}
-                        className="rounded-md border border-brand/40 bg-brand/10 px-2 py-1 text-[11.5px] text-brand transition-colors hover:bg-brand/15 disabled:opacity-50"
+                        className="rounded-md border border-brand/40 bg-brand/10 px-2 py-1 text-[12.5px] text-brand transition-colors hover:bg-brand/15 disabled:opacity-50"
                       >
                         采用
                       </button>
@@ -206,7 +206,7 @@ export function SkillsView() {
                         type="button"
                         disabled={busy === proposal.id}
                         onClick={() => void discardProposal(proposal)}
-                        className="rounded-md border border-line-strong bg-surface px-2 py-1 text-[11.5px] text-muted transition-colors hover:text-danger disabled:opacity-50"
+                        className="rounded-md border border-line-strong bg-surface px-2 py-1 text-[12.5px] text-muted transition-colors hover:text-danger disabled:opacity-50"
                       >
                         丢弃
                       </button>
@@ -222,7 +222,7 @@ export function SkillsView() {
           {skills === null && <div className="space-y-2">{[0, 1].map((row) => <div key={row} className="h-10 animate-pulse rounded-md bg-surface-2" />)}</div>}
 
           {skills !== null && confirmed.length === 0 && (
-            <p className="py-4 text-center text-[12px] leading-relaxed text-faint">
+            <p className="py-4 text-center text-[13px] leading-relaxed text-faint">
               还没有技能。
               <br />
               下面的候选记忆被接受之后，会先落成一份草案——草案不启用就不影响任何任务。
@@ -240,20 +240,20 @@ export function SkillsView() {
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
-                      <span className="truncate text-[12.5px] font-medium">{skill.name}</span>
-                      <span className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${STATE_TONE[state]}`}>
+                      <span className="truncate text-[13.5px] font-medium">{skill.name}</span>
+                      <span className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${STATE_TONE[state]}`}>
                         {SKILL_STATE_LABEL[state]}
                       </span>
-                      <span className="shrink-0 font-mono text-[10px] text-faint">v{skill.version}</span>
+                      <span className="shrink-0 font-mono text-[11px] text-faint">v{skill.version}</span>
                     </div>
-                    <p className="mt-1 text-[11.5px] leading-relaxed text-muted">{preview(skill.instructions) || "（没有说明）"}</p>
-                    <p className="mt-1 font-mono text-[10px] text-faint">更新于 {formatDateTime(skill.updated_at)}</p>
+                    <p className="mt-1 text-[12.5px] leading-relaxed text-muted">{preview(skill.instructions) || "（没有说明）"}</p>
+                    <p className="mt-1 font-mono text-[11px] text-faint">更新于 {formatDateTime(skill.updated_at)}</p>
                   </div>
                   <button
                     type="button"
                     disabled={busy === skill.id}
                     onClick={() => void toggle(skill)}
-                    className={`shrink-0 rounded-md border px-2 py-1 text-[11.5px] transition-colors disabled:opacity-50 ${
+                    className={`shrink-0 rounded-md border px-2 py-1 text-[12.5px] transition-colors disabled:opacity-50 ${
                       active
                         ? "border-line-strong bg-surface text-muted hover:text-danger"
                         : "border-brand/40 bg-brand/10 text-brand hover:bg-brand/15"
@@ -266,7 +266,7 @@ export function SkillsView() {
                     disabled={busy === skill.id}
                     onClick={() => void remove(skill)}
                     title="删除这条记忆（不可恢复）"
-                    className="shrink-0 rounded-md border border-transparent px-2 py-1 text-[11.5px] text-faint transition-colors hover:border-danger/30 hover:text-danger disabled:opacity-50"
+                    className="shrink-0 rounded-md border border-transparent px-2 py-1 text-[12.5px] text-faint transition-colors hover:border-danger/30 hover:text-danger disabled:opacity-50"
                   >
                     删除
                   </button>
@@ -281,7 +281,7 @@ export function SkillsView() {
           hint={candidates === null ? "读取中…" : pending.length > 0 ? `${pending.length} 条等你定` : "没有待定的"}
         >
           {candidates !== null && pending.length === 0 && (
-            <p className="py-4 text-center text-[12px] leading-relaxed text-faint">
+            <p className="py-4 text-center text-[13px] leading-relaxed text-faint">
               没有待确认的记忆。
               <br />
               只有你点过确认的做法才会变成技能——它不会自己记。
@@ -295,8 +295,8 @@ export function SkillsView() {
                 className="flex items-start gap-3 rounded-lg border border-line bg-surface px-3 py-2"
               >
                 <div className="min-w-0 flex-1">
-                  <p className="text-[12.5px] leading-relaxed">{candidate.text}</p>
-                  <p className="mt-1 font-mono text-[10px] text-faint">
+                  <p className="text-[13.5px] leading-relaxed">{candidate.text}</p>
+                  <p className="mt-1 font-mono text-[11px] text-faint">
                     {candidate.source || "未标来源"} · {formatDateTime(candidate.created_at)}
                   </p>
                 </div>
@@ -305,7 +305,7 @@ export function SkillsView() {
                     type="button"
                     disabled={busy === candidate.id}
                     onClick={() => void decide(candidate, true)}
-                    className="rounded-md border border-brand/40 bg-brand/10 px-2 py-1 text-[11.5px] text-brand transition-colors hover:bg-brand/15 disabled:opacity-50"
+                    className="rounded-md border border-brand/40 bg-brand/10 px-2 py-1 text-[12.5px] text-brand transition-colors hover:bg-brand/15 disabled:opacity-50"
                   >
                     接受
                   </button>
@@ -313,7 +313,7 @@ export function SkillsView() {
                     type="button"
                     disabled={busy === candidate.id}
                     onClick={() => void decide(candidate, false)}
-                    className="rounded-md border border-line-strong bg-surface px-2 py-1 text-[11.5px] text-muted transition-colors hover:text-danger disabled:opacity-50"
+                    className="rounded-md border border-line-strong bg-surface px-2 py-1 text-[12.5px] text-muted transition-colors hover:text-danger disabled:opacity-50"
                   >
                     拒绝
                   </button>

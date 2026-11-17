@@ -11,7 +11,7 @@ import { turnEvidence } from "./turns";
 function DiffText({ diff }: { diff: string }) {
   const lines = diff.split("\n").slice(0, 400);
   return (
-    <pre className="max-h-80 overflow-auto rounded-md border border-line bg-surface font-mono text-[11px] leading-[1.55]">
+    <pre className="max-h-80 overflow-auto rounded-md border border-line bg-surface font-mono text-[12px] leading-[1.55]">
       {lines.map((line, index) => {
         const tone = line.startsWith("+++") || line.startsWith("---")
           ? "text-faint"
@@ -115,9 +115,9 @@ export function TaskPanel(props: TaskPanelProps) {
   return (
     <aside className="flex w-[320px] shrink-0 flex-col border-l border-line bg-canvas">
       <header className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <span className="text-[12.5px] font-medium">最新一轮</span>
+        <span className="text-[13.5px] font-medium">最新一轮</span>
         <span
-          className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+          className={`rounded-full px-1.5 py-0.5 text-[11px] font-medium ${
             props.status === "waiting_approval"
               ? "bg-warn/[0.12] text-warn"
               : props.running
@@ -163,7 +163,7 @@ export function TaskPanel(props: TaskPanelProps) {
               aria-selected={active}
               role="tab"
               onClick={() => setTab(item.key)}
-              className={`flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] transition-colors ${
+              className={`flex items-center gap-1 rounded-md px-2 py-1 text-[12.5px] transition-colors ${
                 active ? "bg-surface-3 font-medium text-text" : "text-muted hover:bg-surface-2 hover:text-text"
               }`}
             >
@@ -176,33 +176,33 @@ export function TaskPanel(props: TaskPanelProps) {
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
         <section>
-          <p className="mb-1.5 truncate text-[12px] text-muted" title={props.title}>
+          <p className="mb-1.5 truncate text-[13px] text-muted" title={props.title}>
             {props.title || "未命名对话"}
           </p>
           <dl className="grid grid-cols-2 gap-1.5">
             <div className="rounded-lg bg-surface px-2.5 py-1.5">
               <dt className="font-mono text-[9.5px] tracking-wide text-faint uppercase">工具调用</dt>
-              <dd className="font-mono text-[13px] text-text">
+              <dd className="font-mono text-[14px] text-text">
                 {evidence.calls}
-                {evidence.failed > 0 && <span className="ml-1 text-[11px] text-danger">（{evidence.failed} 失败）</span>}
+                {evidence.failed > 0 && <span className="ml-1 text-[12px] text-danger">（{evidence.failed} 失败）</span>}
               </dd>
             </div>
             <div className="rounded-lg bg-surface px-2.5 py-1.5">
               <dt className="font-mono text-[9.5px] tracking-wide text-faint uppercase">改动文件</dt>
-              <dd className="font-mono text-[13px] text-text">
+              <dd className="font-mono text-[14px] text-text">
                 {files.length}
                 {evidence.commandCount > 0 && (
-                  <span className="ml-1 text-[10.5px] text-faint">/ {evidence.commandCount} 条命令</span>
+                  <span className="ml-1 text-[11.5px] text-faint">/ {evidence.commandCount} 条命令</span>
                 )}
               </dd>
             </div>
             <div className="rounded-lg bg-surface px-2.5 py-1.5">
               <dt className="font-mono text-[9.5px] tracking-wide text-faint uppercase">耗时</dt>
-              <dd className="font-mono text-[13px] text-text">{latency > 0 ? formatDuration(latency) : "—"}</dd>
+              <dd className="font-mono text-[14px] text-text">{latency > 0 ? formatDuration(latency) : "—"}</dd>
             </div>
             <div className="rounded-lg bg-surface px-2.5 py-1.5">
               <dt className="font-mono text-[9.5px] tracking-wide text-faint uppercase">Token</dt>
-              <dd className="font-mono text-[13px] text-text">
+              <dd className="font-mono text-[14px] text-text">
                 {props.usage?.totalTokens ? props.usage.totalTokens.toLocaleString() : "—"}
               </dd>
             </div>
@@ -211,8 +211,8 @@ export function TaskPanel(props: TaskPanelProps) {
 
         {tab === "changes" && (
           <section>
-            <p className="mb-1.5 font-mono text-[10px] tracking-wide text-faint uppercase">改动的文件</p>
-            {files.length === 0 && <p className="px-1 py-2 text-[11.5px] text-faint">这一轮没有改文件。</p>}
+            <p className="mb-1.5 font-mono text-[11px] tracking-wide text-faint uppercase">改动的文件</p>
+            {files.length === 0 && <p className="px-1 py-2 text-[12.5px] text-faint">这一轮没有改文件。</p>}
             <div className="space-y-1">
               {files.map((file) => {
                 const open = openPath === file.path;
@@ -228,7 +228,7 @@ export function TaskPanel(props: TaskPanelProps) {
                       title={file.diff ? "展开看改动" : "这一轮没有记录 diff"}
                       className="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
                     >
-                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text" title={file.path}>
+                      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-text" title={file.path}>
                         {file.path}
                       </span>
                       <span className={`shrink-0 font-mono text-[9.5px] ${CHANGE_TONE[file.changeType] ?? "text-muted"}`}>
@@ -240,7 +240,7 @@ export function TaskPanel(props: TaskPanelProps) {
                         {file.diff ? (
                           <DiffText diff={file.diff} />
                         ) : (
-                          <p className="px-1 py-1 text-[11px] text-faint">
+                          <p className="px-1 py-1 text-[12px] text-faint">
                             这一轮只记录了文件路径，没有留下 diff（历史轮次或改动未落盘）。
                           </p>
                         )}
@@ -256,13 +256,13 @@ export function TaskPanel(props: TaskPanelProps) {
         {tab === "evidence" && (
           <section className="space-y-3">
             <div>
-              <p className="mb-1.5 font-mono text-[10px] tracking-wide text-faint uppercase">验收条件</p>
+              <p className="mb-1.5 font-mono text-[11px] tracking-wide text-faint uppercase">验收条件</p>
               {acceptance.length === 0 && (
-                <p className="px-1 py-2 text-[11.5px] text-faint">这一轮没有验收条件。</p>
+                <p className="px-1 py-2 text-[12.5px] text-faint">这一轮没有验收条件。</p>
               )}
               <ul className="space-y-1">
                 {acceptance.map((item, index) => (
-                  <li key={index} className="flex items-start gap-1.5 text-[11.5px] leading-relaxed">
+                  <li key={index} className="flex items-start gap-1.5 text-[12.5px] leading-relaxed">
                     <span
                       className={
                         item.covered === true ? "text-accent" : item.covered === false ? "text-danger" : "text-faint"
@@ -281,13 +281,13 @@ export function TaskPanel(props: TaskPanelProps) {
             </div>
 
             <div>
-              <p className="mb-1.5 font-mono text-[10px] tracking-wide text-faint uppercase">测试</p>
+              <p className="mb-1.5 font-mono text-[11px] tracking-wide text-faint uppercase">测试</p>
               {testRow === "none" ? (
-                <p className="px-1 py-2 text-[11.5px] text-faint">这一轮没有跑测试。</p>
+                <p className="px-1 py-2 text-[12.5px] text-faint">这一轮没有跑测试。</p>
               ) : (
                 <div className="rounded-lg border border-line bg-surface px-2 py-1.5">
                   <p
-                    className={`text-[11.5px] ${
+                    className={`text-[12.5px] ${
                       testRow === "passed"
                         ? "text-accent"
                         : testRow === "failed"
@@ -298,7 +298,7 @@ export function TaskPanel(props: TaskPanelProps) {
                     {testInfo?.skippedReason ? `${TEST_LABEL[testRow]}：${testInfo.skippedReason}` : TEST_LABEL[testRow]}
                   </p>
                   {testInfo?.command && (
-                    <p className="mt-1 truncate font-mono text-[10.5px] text-faint" title={testInfo.command}>
+                    <p className="mt-1 truncate font-mono text-[11.5px] text-faint" title={testInfo.command}>
                       $ {testInfo.command}
                     </p>
                   )}
@@ -310,18 +310,18 @@ export function TaskPanel(props: TaskPanelProps) {
 
         {tab === "activity" && (
           <section>
-            <p className="mb-1.5 font-mono text-[10px] tracking-wide text-faint uppercase">这一轮做了什么</p>
-            {activity.length === 0 && <p className="px-1 py-2 text-[11.5px] text-faint">还没有记录。</p>}
+            <p className="mb-1.5 font-mono text-[11px] tracking-wide text-faint uppercase">这一轮做了什么</p>
+            {activity.length === 0 && <p className="px-1 py-2 text-[12.5px] text-faint">还没有记录。</p>}
             <ol className="space-y-1">
               {activity.map((row) => (
                 <li key={row.key} className="flex items-start gap-2">
                   <span className={`mt-1 size-1.5 shrink-0 rounded-full ${TONE_CLASS[row.tone]}`} />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[11.5px] text-text" title={row.label}>
+                    <span className="block truncate text-[12.5px] text-text" title={row.label}>
                       {row.label}
                     </span>
                     {row.detail && (
-                      <span className="block truncate font-mono text-[10px] text-faint" title={row.detail}>
+                      <span className="block truncate font-mono text-[11px] text-faint" title={row.detail}>
                         {row.detail}
                       </span>
                     )}

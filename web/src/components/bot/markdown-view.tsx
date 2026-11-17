@@ -24,7 +24,7 @@ function InlineView({ spans, files, onFileClick }: { spans: Inline[] } & AnchorP
                 type="button"
                 onClick={() => jump(path)}
                 title={`看 ${path} 这处改动`}
-                className="rounded border border-line bg-surface-2 px-1 py-0.5 font-mono text-[12px] text-brand underline decoration-brand/25 decoration-dotted underline-offset-2 transition-colors hover:border-brand/40 hover:decoration-brand"
+                className="rounded border border-line bg-surface-2 px-1 py-0.5 font-mono text-[13px] text-brand underline decoration-brand/25 decoration-dotted underline-offset-2 transition-colors hover:border-brand/40 hover:decoration-brand"
               >
                 {span.text}
               </button>
@@ -33,7 +33,7 @@ function InlineView({ spans, files, onFileClick }: { spans: Inline[] } & AnchorP
           return (
             <code
               key={index}
-              className="rounded border border-line bg-surface-2 px-1 py-0.5 font-mono text-[12px] text-text"
+              className="rounded border border-line bg-surface-2 px-1 py-0.5 font-mono text-[13px] text-text"
             >
               {span.text}
             </code>
@@ -74,7 +74,7 @@ function CodeBlock({ text, lang }: { text: string; lang: string }) {
   return (
     <div className="my-3 overflow-hidden rounded-lg border border-line">
       <div className="flex items-center justify-between border-b border-line bg-surface-2 px-2.5 py-1">
-        <span className="font-mono text-[10px] tracking-wide text-faint uppercase">{lang || "text"}</span>
+        <span className="font-mono text-[11px] tracking-wide text-faint uppercase">{lang || "text"}</span>
         <button
           type="button"
           onClick={() => {
@@ -83,7 +83,7 @@ function CodeBlock({ text, lang }: { text: string; lang: string }) {
               setTimeout(() => setCopied(false), 1200);
             });
           }}
-          className="rounded px-1.5 py-0.5 font-mono text-[10px] text-faint transition-colors hover:bg-surface-3 hover:text-text"
+          className="rounded px-1.5 py-0.5 font-mono text-[11px] text-faint transition-colors hover:bg-surface-3 hover:text-text"
         >
           {copied ? "已复制" : "复制"}
         </button>
@@ -92,7 +92,7 @@ function CodeBlock({ text, lang }: { text: string; lang: string }) {
         <HighlightedCode text={text} lang={lang} />
       ) : (
         <pre className="max-h-96 overflow-auto bg-surface px-3 py-2.5">
-          <code className="font-mono text-[12px] leading-relaxed text-text">{text}</code>
+          <code className="font-mono text-[13px] leading-relaxed text-text">{text}</code>
         </pre>
       )}
     </div>
@@ -103,11 +103,11 @@ export function MarkdownView({ text, files, onFileClick }: { text: string } & An
   const blocks = parseMarkdown(text);
   if (blocks.length === 0) return null;
   return (
-    <div className="text-[13.5px] leading-[1.75] text-text">
+    <div className="text-[14px] leading-[1.75] text-text">
       {blocks.map((block, index) => {
         if (block.kind === "code") return <CodeBlock key={index} text={block.text} lang={block.lang} />;
         if (block.kind === "heading") {
-          const size = block.level <= 2 ? "text-[15px] font-semibold" : "text-[13.5px] font-semibold";
+          const size = block.level <= 2 ? "text-[15px] font-semibold" : "text-[14px] font-semibold";
           return (
             <p key={index} className={`mt-4 mb-1.5 first:mt-0 ${size}`}>
               <InlineView spans={block.spans} files={files} onFileClick={onFileClick} />

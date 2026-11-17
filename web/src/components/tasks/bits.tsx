@@ -6,7 +6,7 @@ import { statusMeta } from "./status";
 export function Textarea({ className = "", ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
-      className={`w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 font-sans text-[13px] leading-relaxed text-text placeholder:text-faint focus:border-brand/60 focus:outline-none ${className}`}
+      className={`w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 font-sans text-[14px] leading-relaxed text-text placeholder:text-faint focus:border-brand/60 focus:outline-none ${className}`}
       {...props}
     />
   );
@@ -20,7 +20,7 @@ export function StatusBadge({ status, className = "" }: { status: string; classN
   const meta = statusMeta(status);
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] leading-4 font-medium whitespace-nowrap ${meta.chip} ${className}`}
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[12px] leading-4 font-medium whitespace-nowrap ${meta.chip} ${className}`}
     >
       <span className={`size-1.5 rounded-full ${meta.dot}`} />
       {meta.label}
@@ -38,7 +38,7 @@ export function LiveBadge({ mode }: { mode: "off" | "snapshot" | "connecting" | 
   } as const;
   const item = map[mode];
   return (
-    <span className={`inline-flex shrink-0 items-center gap-1 font-mono text-[10px] ${item.tone}`}>
+    <span className={`inline-flex shrink-0 items-center gap-1 font-mono text-[11px] ${item.tone}`}>
       {(mode === "sse" || mode === "polling" || mode === "connecting") && (
         <span className="size-1.5 animate-pulse rounded-full bg-current" />
       )}
@@ -50,8 +50,8 @@ export function LiveBadge({ mode }: { mode: "off" | "snapshot" | "connecting" | 
 export function Meta({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
-      <span className="font-mono text-[10px] tracking-wide text-faint uppercase">{label}</span>
-      <span className="min-w-0 truncate text-[12px] text-muted">{value}</span>
+      <span className="font-mono text-[11px] tracking-wide text-faint uppercase">{label}</span>
+      <span className="min-w-0 truncate text-[13px] text-muted">{value}</span>
     </div>
   );
 }
@@ -60,7 +60,7 @@ export function KeyVal({ k, v, tone }: { k: string; v: string; tone?: "muted" | 
   const valueClass =
     tone === "danger" ? "text-danger" : tone === "accent" ? "text-accent" : "text-muted";
   return (
-    <div className="flex min-w-0 items-baseline gap-2 text-[12px]">
+    <div className="flex min-w-0 items-baseline gap-2 text-[13px]">
       <span className="shrink-0 text-faint">{k}</span>
       <span className={`min-w-0 flex-1 truncate font-mono ${valueClass}`} title={v}>
         {v}

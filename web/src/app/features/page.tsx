@@ -58,14 +58,14 @@ export default function FeaturesPage() {
             <div>
               <div className="flex items-center gap-2">
                 <span className={`size-1.5 rounded-full ${feature.status === "core" || feature.status === "installed" ? "bg-accent" : "bg-faint"}`} />
-                <h2 className="text-[13px] font-medium">{feature.name}</h2>
-                <span className="ml-auto font-mono text-[10px] text-faint">{feature.status === "core" ? "核心" : feature.status === "installed" ? "已启用" : "未安装"}</span>
+                <h2 className="text-[14px] font-medium">{feature.name}</h2>
+                <span className="ml-auto font-mono text-[11px] text-faint">{feature.status === "core" ? "核心" : feature.status === "installed" ? "已启用" : "未安装"}</span>
               </div>
-              <p className="mt-3 text-[12px] leading-relaxed text-muted">{feature.description}</p>
+              <p className="mt-3 text-[13px] leading-relaxed text-muted">{feature.description}</p>
             </div>
             <div className="mt-4 flex items-center justify-between gap-3">
-              <span className="font-mono text-[10px] text-faint">{feature.dependency}</span>
-              {feature.status !== "core" && <button type="button" onClick={() => toggle(feature.id)} className={`rounded-md px-2.5 py-1.5 text-[11px] ${
+              <span className="font-mono text-[11px] text-faint">{feature.dependency}</span>
+              {feature.status !== "core" && <button type="button" onClick={() => toggle(feature.id)} className={`rounded-md px-2.5 py-1.5 text-[12px] ${
                 feature.status === "installed"
                   ? "bg-surface-2 text-muted hover:text-text"
                   : "bg-brand text-on-brand hover:bg-brand/90"
@@ -74,7 +74,7 @@ export default function FeaturesPage() {
           </article>
         ))}
       </div>
-      <p className="font-mono text-[10px] text-faint">重型依赖会在首次使用时询问安装；当前页面保存的是本机功能开关。</p>
+      <p className="font-mono text-[11px] text-faint">重型依赖会在首次使用时询问安装；当前页面保存的是本机功能开关。</p>
     </PageBody>
   );
 }
