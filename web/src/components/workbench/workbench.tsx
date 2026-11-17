@@ -153,8 +153,10 @@ export function Workbench() {
   const pathname = usePathname();
   const inShell = pathname !== "/" && pathname !== "/index" && pathname !== "/index.html";
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsError, setProjectsError] = useState(false);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [tasksError, setTasksError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [task, setTask] = useState<Task | null>(null);
   const [evidence, setEvidence] = useState<Evidence | null>(null);
@@ -176,6 +178,7 @@ export function Workbench() {
     return fetchTasks()
       .then((rows) => {
         setTasks(rows);
+        setTasksError(false);
         setSelectedId((current) => {
           if (current && rows.some((item) => item.id === current)) return current;
           return rows[0]?.id ?? null;
@@ -183,12 +186,21 @@ export function Workbench() {
       })
       .catch((error: unknown) => {
         setTasks((current) => current ?? []);
+        setTasksError(true);
         setNotice(errorMessage(error));
       });
   }, []);
 
   useEffect(() => {
-    fetchProjects().then(setProjects).catch(() => setProjects([]));
+    fetchProjects()
+      .then((rows) => {
+        setProjects(rows);
+        setProjectsError(false);
+      })
+      .catch(() => {
+        setProjects([]);
+        setProjectsError(true);
+      });
     fetchProviders().then(setProviders).catch(() => setProviders([]));
     void loadTasks();
   }, [loadTasks]);
@@ -509,7 +521,11 @@ export function Workbench() {
 
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
           <Group>工作区</Group>
-          {workspaceGroups.length === 0 && <p className="px-2 py-1 text-[11.5px] text-faint">还没有工作区</p>}
+          {workspaceGroups.length === 0 && (
+            <p className={`px-2 py-1 text-[11.5px] ${projectsError ? "text-danger" : "text-faint"}`}>
+              {projectsError ? "工作区读取失败" : "还没有工作区"}
+            </p>
+          )}
           {workspaceGroups.slice(0, 8).map((item) => (
             <Link
               key={item.key}
@@ -531,7 +547,9 @@ export function Workbench() {
           <Group>最近任务</Group>
           {tasks === null && <p className="px-2 py-1 text-[11.5px] text-faint">读取中…</p>}
           {tasks !== null && filteredTasks.length === 0 && (
-            <p className="px-2 py-1 text-[11.5px] text-faint">{query ? "没有匹配的任务" : "还没有任务，说一句就开始"}</p>
+            <p className={`px-2 py-1 text-[11.5px] ${tasksError ? "text-danger" : "text-faint"}`}>
+              {tasksError ? "任务读取失败" : query ? "没有匹配的任务" : "还没有任务，说一句就开始"}
+            </p>
           )}
           {filteredTasks.map((item) => {
             const active = item.id === selectedId;
@@ -657,7 +675,13 @@ export function Workbench() {
                 <p className="mt-2 max-w-md text-[12.5px] leading-relaxed text-muted">
                   直接说目标，Agent 自己判断要不要读代码、改文件；下面输入框按 Enter 会创建并立刻跑起来。
                 </p>
-                {hasNoWorkspace && <p className="mt-3 text-[11.5px] text-faint">还没有工作区，先去「项目」绑定一个目录。</p>}
+                {hasNoWorkspace && (
+                  <p className={`mt-3 text-[11.5px] ${projectsError ? "text-danger" : "text-faint"}`}>
+                    {projectsError
+                      ? "工作区读取失败，请确认后端服务已启动后刷新。"
+                      : "还没有工作区，先去「项目」绑定一个目录。"}
+                  </p>
+                )}
               </div>
             ) : (
               <>

@@ -19,12 +19,25 @@ export function AppRail() {
   const pathname = usePathname();
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [projectsError, setProjectsError] = useState(false);
+  const [tasksError, setTasksError] = useState(false);
 
   useEffect(() => {
-    fetchProjects().then(setProjects).catch(() => setProjects([]));
+    fetchProjects()
+      .then((rows) => {
+        setProjects(rows);
+        setProjectsError(false);
+      })
+      .catch(() => {
+        setProjects([]);
+        setProjectsError(true);
+      });
     fetchTasks()
       .then((rows) => setTasks(rows.slice(0, 8)))
-      .catch(() => setTasks([]));
+      .catch(() => {
+        setTasks([]);
+        setTasksError(true);
+      });
   }, []);
 
   const openPalette = () => {
@@ -89,11 +102,15 @@ export function AppRail() {
           <Link
             href="/projects"
             className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] transition-colors ${
-              isNavActive(pathname, "/projects") ? "bg-surface-3 text-text" : "text-muted hover:bg-surface-2 hover:text-text"
+              projectsError
+                ? "text-danger hover:bg-danger/10"
+                : isNavActive(pathname, "/projects")
+                  ? "bg-surface-3 text-text"
+                  : "text-muted hover:bg-surface-2 hover:text-text"
             }`}
           >
             <FolderIcon />
-            项目与工作区
+            {projectsError ? "工作区读取失败，去项目页重试" : "项目与工作区"}
           </Link>
         )}
         {workspaces.slice(0, 6).map((workspace) => (
@@ -118,7 +135,10 @@ export function AppRail() {
 
         <Group>最近任务</Group>
         {tasks === null && <p className="px-2 py-1 text-[11.5px] text-faint">读取中…</p>}
-        {tasks !== null && tasks.length === 0 && <p className="px-2 py-1 text-[11.5px] text-faint">还没有任务</p>}
+        {tasks !== null && tasksError && <p className="px-2 py-1 text-[11.5px] text-danger">任务读取失败</p>}
+        {tasks !== null && !tasksError && tasks.length === 0 && (
+          <p className="px-2 py-1 text-[11.5px] text-faint">还没有任务</p>
+        )}
         {(tasks ?? []).map((task) => (
           <Link
             key={task.id}
