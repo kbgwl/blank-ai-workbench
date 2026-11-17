@@ -185,7 +185,7 @@ export function Sidebar(props: SidebarProps) {
   }
 
   return (
-    <aside className="flex w-[264px] shrink-0 flex-col border-r border-line bg-sidebar">
+    <aside className="flex w-[248px] shrink-0 flex-col border-r border-line bg-sidebar">
       <div className="flex items-center gap-2 px-3 pt-3 pb-2.5">
         <span className="grid size-6 shrink-0 place-items-center rounded-md bg-logo-bg">
           <span className="size-2 rounded-[2px] bg-logo-accent" />

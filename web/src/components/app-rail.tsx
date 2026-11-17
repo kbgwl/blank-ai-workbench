@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { fetchProjects, fetchTasks, type Project, type Task } from "@/components/tasks/api";
 import { HealthPill } from "@/components/health-pill";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -30,6 +30,20 @@ export function AppRail() {
   const openPalette = () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true, cancelable: true }));
   };
+
+  // 多个项目可能绑定同一个目录，按目录合并，否则左栏会出现一整列同名工作区。
+  const workspaces = useMemo(() => {
+    const groups = new Map<string, { key: string; label: string; count: number }>();
+    for (const project of projects) {
+      const first = project.workspaces[0];
+      const label = first?.label || project.name;
+      const key = first?.path || label;
+      const found = groups.get(key);
+      if (found) found.count += 1;
+      else groups.set(key, { key, label, count: 1 });
+    }
+    return [...groups.values()];
+  }, [projects]);
 
   return (
     <aside className="flex w-[248px] shrink-0 flex-col bg-sidebar">
@@ -71,7 +85,7 @@ export function AppRail() {
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         <Group>工作区</Group>
-        {projects.length === 0 && (
+        {workspaces.length === 0 && (
           <Link
             href="/projects"
             className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] transition-colors ${
@@ -82,20 +96,23 @@ export function AppRail() {
             项目与工作区
           </Link>
         )}
-        {projects.slice(0, 6).map((project) => (
+        {workspaces.slice(0, 6).map((workspace) => (
           <Link
-            key={project.id}
+            key={workspace.key}
             href="/projects"
-            title={project.workspaces[0]?.path || project.name}
+            title={workspace.key}
             className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
           >
             <FolderIcon />
-            <span className="truncate">{project.workspaces[0]?.label || project.name}</span>
+            <span className="min-w-0 truncate">{workspace.label}</span>
+            {workspace.count > 1 && (
+              <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">{workspace.count}</span>
+            )}
           </Link>
         ))}
-        {projects.length > 6 && (
+        {workspaces.length > 6 && (
           <Link href="/projects" className="flex items-center gap-2 rounded-md px-2 py-1 text-[11.5px] text-faint hover:text-text">
-            还有 {projects.length - 6} 个工作区…
+            还有 {workspaces.length - 6} 个工作区…
           </Link>
         )}
 

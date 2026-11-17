@@ -462,8 +462,22 @@ export function Workbench() {
 
   const hasNoWorkspace = projects.length === 0;
 
+  // 同一目录常被多个项目复用，左栏要按目录合并，否则一屏全是同名工作区。
+  const workspaceGroups = (() => {
+    const groups = new Map<string, { key: string; label: string; count: number }>();
+    for (const item of projects) {
+      const first = item.workspaces[0];
+      const label = first?.label || item.name;
+      const key = first?.path || label;
+      const found = groups.get(key);
+      if (found) found.count += 1;
+      else groups.set(key, { key, label, count: 1 });
+    }
+    return [...groups.values()];
+  })();
+
   return (
-    <div className="grid h-full min-h-0 grid-cols-[240px_minmax(0,1fr)_300px] bg-bg text-text">
+    <div className="grid h-full min-h-0 grid-cols-[248px_minmax(0,1fr)_300px] bg-bg text-text">
       {/* ── 左栏 ── */}
       <aside className="flex min-h-0 flex-col border-r border-line bg-sidebar">
         <div className="flex items-center gap-2 px-3 pt-3 pb-2">
@@ -495,20 +509,24 @@ export function Workbench() {
 
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
           <Group>工作区</Group>
-          {projects.length === 0 && <p className="px-2 py-1 text-[11.5px] text-faint">还没有工作区</p>}
-          {projects.map((item) => {
-            const active = project?.id === item.id;
-            return (
-              <Link
-                key={item.id}
-                href="/projects"
-                className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] ${active ? "bg-surface-3 font-semibold text-text" : "text-muted hover:bg-surface-3 hover:text-text"}`}
-              >
-                <Icon d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                <span className="truncate">{item.workspaces[0]?.label || item.name}</span>
-              </Link>
-            );
-          })}
+          {workspaceGroups.length === 0 && <p className="px-2 py-1 text-[11.5px] text-faint">还没有工作区</p>}
+          {workspaceGroups.slice(0, 8).map((item) => (
+            <Link
+              key={item.key}
+              href="/projects"
+              title={item.key}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] text-muted hover:bg-surface-3 hover:text-text"
+            >
+              <Icon d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              <span className="min-w-0 truncate">{item.label}</span>
+              {item.count > 1 && <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">{item.count}</span>}
+            </Link>
+          ))}
+          {workspaceGroups.length > 8 && (
+            <Link href="/projects" className="flex items-center gap-2 rounded-md px-2 py-1 text-[11.5px] text-faint hover:text-text">
+              还有 {workspaceGroups.length - 8} 个工作区…
+            </Link>
+          )}
 
           <Group>最近任务</Group>
           {tasks === null && <p className="px-2 py-1 text-[11.5px] text-faint">读取中…</p>}

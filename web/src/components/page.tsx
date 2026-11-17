@@ -32,12 +32,14 @@ export function PageHeader(props: {
   /** 右侧操作区。放筛选、刷新、计数这类附属信息。 */
   actions?: ReactNode;
 }) {
+  // 页面标题已由外壳顶栏承担；这里只留一句说明和操作区。
+  // h1 仍保留给读屏与文档大纲，但不再和顶栏重复第二遍。
   return (
-    <header className="flex flex-wrap items-start justify-between gap-4">
+    <header className="flex flex-wrap items-center justify-between gap-4">
       <div className="min-w-0">
-        <h1 className="text-[18px] font-semibold tracking-tight">{props.title}</h1>
+        <h1 className="sr-only">{props.title}</h1>
         {props.description && (
-          <p className="mt-1 max-w-2xl text-[12.5px] leading-relaxed text-muted">{props.description}</p>
+          <p className="max-w-2xl text-[12.5px] leading-relaxed text-muted">{props.description}</p>
         )}
       </div>
       {props.actions && <div className="flex shrink-0 items-center gap-2">{props.actions}</div>}

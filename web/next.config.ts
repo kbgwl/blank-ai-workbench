@@ -13,6 +13,8 @@ const distDir = process.env.BLANK_WEB_DIST_DIR ?? ".next";
 
 const nextConfig: NextConfig = {
   distDir,
+  // 桌面式窗口里左下角常驻栏是导航区，开发浮标会盖住「设置」等入口。
+  devIndicators: false,
   // 本机常用 127.0.0.1 打开，不放行会导致 dev 资源被跨源拦截。
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   turbopack: {
