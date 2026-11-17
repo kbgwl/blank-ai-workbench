@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 
@@ -75,3 +76,21 @@ class ToolCallAccumulator:
                 }
             )
         return calls
+
+
+def invalid_tool_arguments(calls: list[dict]) -> list[tuple[str, int]]:
+    """参数不是完整 JSON 的工具调用（流在参数中途被截断时的形状）。
+
+    这类调用绝不能派发，更不能把那条 assistant 消息写回上下文：供应商会在下一次
+    请求里直接拒掉（真机 23f93669：write_file 的参数 31009 字被截成半截字符串，
+    下一次整包请求 400 invalid_prompt）。
+    """
+    bad: list[tuple[str, int]] = []
+    for call in calls:
+        function = call.get("function") or {}
+        raw = str(function.get("arguments") or "{}")
+        try:
+            json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            bad.append((str(function.get("name") or ""), len(raw)))
+    return bad

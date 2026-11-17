@@ -17,7 +17,7 @@ from blank_api.services.models.base import (
     openai_content,
     retry_after_seconds,
 )
-from blank_api.services.models.streaming import ToolCallAccumulator
+from blank_api.services.models.streaming import ToolCallAccumulator, invalid_tool_arguments
 from blank_api.services.effort import rank
 
 # OpenAI 兼容层的 reasoning_effort 词汇表只有 low/medium/high；xhigh/max 没有
@@ -193,16 +193,33 @@ class OpenAICompatibleAdapter(ModelAdapter):
             whole = _whole_completion(plain)
             if whole is not None:
                 response = self._parse_completion(whole, model=model)
+                bad = invalid_tool_arguments(response.tool_calls)
+                if bad:
+                    name, size = bad[0]
+                    raise ModelError(
+                        "model_stream_truncated",
+                        f"流在工具调用 {name} 的参数中途结束：{size} 字不是完整 JSON",
+                        retryable=True,
+                    )
                 # 整包也要推一次，否则界面等到最后才蹦出全文，流式就白开了
                 if on_delta is not None and response.text:
                     await on_delta(response.text)
                 return response
             raise ModelError("model_stream_empty", f"模型 {self.config.model} 的流式响应为空")
+        final_calls = calls.as_list()
+        bad = invalid_tool_arguments(final_calls)
+        if bad:
+            name, size = bad[0]
+            raise ModelError(
+                "model_stream_truncated",
+                f"流在工具调用 {name} 的参数中途结束：{size} 字不是完整 JSON",
+                retryable=True,
+            )
         return ModelResponse(
             text="".join(text),
             usage=usage,
             model=model,
-            tool_calls=calls.as_list(),
+            tool_calls=final_calls,
             finish_reason=finish_reason,
             response_id=response_id or header_id,
         )

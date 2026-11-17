@@ -30,7 +30,7 @@ from blank_api.services.models.base import (
     data_payload,
     retry_after_seconds,
 )
-from blank_api.services.models.streaming import ToolCallAccumulator
+from blank_api.services.models.streaming import ToolCallAccumulator, invalid_tool_arguments
 from blank_api.services.effort import rank
 
 # 只有这两档的模型接受 reasoning 参数；其余模型带上去会 400。
@@ -333,6 +333,14 @@ class OpenAIResponsesAdapter(ModelAdapter):
                         raise ModelError("model_stream_error", str(error.get("message") or error))
 
         if finished is not None:
+            bad = invalid_tool_arguments(finished.tool_calls)
+            if bad:
+                name, size = bad[0]
+                raise ModelError(
+                    "model_stream_truncated",
+                    f"流在工具调用 {name} 的参数中途结束：{size} 字不是完整 JSON",
+                    retryable=True,
+                )
             return finished
         if not text and not len(calls):
             detail = (
@@ -346,12 +354,22 @@ class OpenAIResponsesAdapter(ModelAdapter):
                 reasoning_events=reasoning_events,
                 reasoning_chars=reasoning_chars,
             )
+        final_calls = calls.as_list()
+        bad = invalid_tool_arguments(final_calls)
+        if bad:
+            name, size = bad[0]
+            # 截断的调用不许派发，也不许写回上下文；重试一次流才是对的路
+            raise ModelError(
+                "model_stream_truncated",
+                f"流在工具调用 {name} 的参数中途结束：{size} 字不是完整 JSON",
+                retryable=True,
+            )
         # 没等到 response.completed（连接提前结束）：用累积到的碎片拼一条出来，
         # 但 usage 必然是空的——记账会显示 0，这是真实情况，不要伪造。
         return ModelResponse(
             text="".join(text),
             usage=usage,
             model=model,
-            tool_calls=calls.as_list(),
+            tool_calls=final_calls,
             finish_reason="incomplete",
         )
