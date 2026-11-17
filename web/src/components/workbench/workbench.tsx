@@ -466,14 +466,15 @@ export function Workbench() {
     <div className="grid h-full min-h-0 grid-cols-[240px_minmax(0,1fr)_300px] bg-bg text-text">
       {/* ── 左栏 ── */}
       <aside className="flex min-h-0 flex-col border-r border-line bg-sidebar">
-        {!inShell && (
-          <div className="flex items-center gap-2 px-3 pt-3 pb-2">
-            <span className="grid size-6 place-items-center rounded-[7px] bg-logo-bg">
-              <span className="size-2.5 rounded-[2px] bg-logo-accent" />
-            </span>
-            <span className="text-[13.5px] font-semibold tracking-tight">空白格</span>
-          </div>
-        )}
+        <div className="flex items-center gap-2 px-3 pt-3 pb-2">
+          <span className="grid size-6 place-items-center rounded-[7px] bg-logo-bg">
+            <span className="size-2.5 rounded-[2px] bg-logo-accent" />
+          </span>
+          <span className="text-[13.5px] font-semibold tracking-tight">空白格</span>
+          <Link href="/" className="ml-auto rounded-md px-1.5 py-0.5 text-[11px] text-faint transition-colors hover:bg-surface-2 hover:text-text">
+            工作台
+          </Link>
+        </div>
         <button
           type="button"
           onClick={newTask}
@@ -553,14 +554,10 @@ export function Workbench() {
           <RailLink href="/projects" label="项目与工作区" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
           <div className="my-1.5 h-px bg-line" />
           <RailLink href="/settings" label="设置" d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4 0a1.7 1.7 0 0 0 .3 1.9 2 2 0 1 1-2.8 2.8 1.7 1.7 0 0 0-2.9 1.2 2 2 0 0 1-4 0 1.7 1.7 0 0 0-1.9-1.2 2 2 0 1 1-2.8-2.8A1.7 1.7 0 0 0 4.6 15a2 2 0 0 1 0-4 1.7 1.7 0 0 0 1.2-1.1 1.7 1.7 0 0 0-.3-1.9 2 2 0 1 1 2.8-2.8A1.7 1.7 0 0 0 11 4.6a2 2 0 0 1 4 0 1.7 1.7 0 0 0 2.9 1.2 2 2 0 1 1 2.8 2.8 1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1 2 2 0 0 1 0 4z" />
-          {!inShell && (
-            <>
-              <p className="truncate px-2 pt-1 text-[10.5px] text-faint">{provider?.model || "未配置模型"}</p>
-              <p className="px-2 pt-0.5">
-                <HealthPill compact />
-              </p>
-            </>
-          )}
+          <p className="truncate px-2 pt-1 text-[10.5px] text-faint">{provider?.model || "未配置模型"}</p>
+          <p className="px-2 pt-0.5">
+            <HealthPill compact />
+          </p>
         </div>
       </aside>
 

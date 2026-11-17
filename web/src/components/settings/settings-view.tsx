@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Panel } from "@/components/panel";
-import { PageBody, PageHeader } from "@/components/page";
+import { PageBody } from "@/components/page";
 import { AgentRuntimePanel } from "./agent-runtime-panel";
 import { ChannelsPanel } from "./channels-panel";
 import { FeatureFlagsPanel } from "./feature-flags-panel";
@@ -198,101 +198,42 @@ export function SettingsView() {
 
   return (
     <PageBody>
-      <PageHeader
-        title="设置"
-        description="按分类管理这台机器上的运行方式。改动只保存在本机后端，不会同步到其他设备。"
-        actions={
-          <>
-            <span className="rounded-md border border-line bg-surface px-2.5 py-1 font-mono text-[10px] text-faint">
-              {SECTIONS.length} 个分类
-            </span>
-            <span className="rounded-md border border-brand/25 bg-brand/[0.06] px-2.5 py-1 font-mono text-[10px] text-brand">
-              API Key 加密存储
-            </span>
-          </>
-        }
-      />
-
-      <div className="grid items-start gap-5 lg:grid-cols-[15.5rem_minmax(0,1fr)] xl:gap-8">
-        <div className="min-w-0 lg:sticky lg:top-5">
-          <nav
-            aria-label="设置分类"
-            className="flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:rounded-xl lg:border lg:border-line lg:bg-canvas lg:p-2 lg:pb-2"
-          >
-            {SECTIONS.map((item) => {
-              const selected = item.key === active;
-              return (
-                <a
-                  key={item.key}
-                  href={`#${item.key}`}
-                  aria-current={selected ? "page" : undefined}
-                  onClick={() => select(item.key)}
-                  className={`relative flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors lg:w-full lg:gap-3 lg:py-2.5 ${
-                    selected
-                      ? "bg-surface-2 text-text"
-                      : "text-muted hover:bg-surface-2 hover:text-text"
-                  }`}
-                >
-                  {selected && (
-                    <span className="absolute top-1/2 left-0 hidden h-5 w-0.5 -translate-y-1/2 rounded-full bg-brand lg:block" />
-                  )}
-                  <span
-                    className={`grid size-7 shrink-0 place-items-center rounded-md border transition-colors ${
-                      selected
-                        ? "border-brand/25 bg-brand/[0.08] text-brand"
-                        : "border-line bg-surface text-faint"
-                    }`}
-                  >
-                    {item.icon}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block text-[12.5px] font-medium whitespace-nowrap">{item.label}</span>
-                    <span className="mt-0.5 hidden truncate text-[10.5px] text-faint lg:block">
-                      {item.hint}
-                    </span>
-                  </span>
-                </a>
-              );
-            })}
-          </nav>
-          <div className="mt-3 hidden rounded-xl border border-line bg-surface p-3 lg:block">
-            <div className="flex items-center gap-2 text-[11px] font-medium text-muted">
-              <svg {...iconProps} className="size-3.5">
-                <rect x="5" y="10" width="14" height="10" rx="2" />
-                <path d="M8 10V7a4 4 0 0 1 8 0v3" />
-              </svg>
-              本机保存
-            </div>
-            <p className="mt-1.5 text-[10.5px] leading-relaxed text-faint">
-              密钥不会以明文回显；安全边界由后端强制执行，不依赖界面。
-            </p>
-          </div>
-        </div>
+      <div className="grid items-start gap-6 lg:grid-cols-[13rem_minmax(0,1fr)]">
+        <nav aria-label="设置分类" className="flex min-w-0 gap-1 overflow-x-auto lg:sticky lg:top-0 lg:flex-col lg:overflow-visible">
+          {SECTIONS.map((item) => {
+            const selected = item.key === active;
+            return (
+              <a
+                key={item.key}
+                href={`#${item.key}`}
+                aria-current={selected ? "page" : undefined}
+                onClick={() => select(item.key)}
+                className={`flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] transition-colors lg:w-full ${
+                  selected ? "bg-surface-2 font-medium text-text" : "text-muted hover:bg-surface-2 hover:text-text"
+                }`}
+              >
+                <span className={selected ? "text-text" : "text-faint"}>{item.icon}</span>
+                <span className="whitespace-nowrap">{item.label}</span>
+              </a>
+            );
+          })}
+        </nav>
 
         <section ref={contentRef} aria-labelledby="settings-section-title" className="min-w-0 scroll-mt-4">
-          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-4">
-            <div className="flex min-w-0 items-start gap-3">
-              <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-brand/20 bg-brand/[0.06] text-brand">
-                {section.icon}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 id="settings-section-title" className="text-[13.5px] font-semibold tracking-tight">
+                {section.label}
+              </h2>
+              <span className="rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-faint">
+                {section.status}
               </span>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 id="settings-section-title" className="text-[15px] font-semibold tracking-tight">
-                    {section.label}
-                  </h2>
-                  <span className="rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-[10px] text-faint">
-                    {section.status}
-                  </span>
-                </div>
-                <p className="mt-1 max-w-[700px] text-[12.5px] leading-relaxed text-muted">
-                  {section.description}
-                </p>
-              </div>
             </div>
             <span className="shrink-0 font-mono text-[10px] text-faint">
               {String(index + 1).padStart(2, "0")} / {String(SECTIONS.length).padStart(2, "0")}
             </span>
           </div>
+          <p className="mt-2 text-[12px] leading-relaxed text-muted">{section.description}</p>
 
           <div className="mt-4">
             <SectionBody active={active} />

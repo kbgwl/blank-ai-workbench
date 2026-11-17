@@ -969,7 +969,10 @@ export function BotApp() {
         onDelete={onDelete}
       />
 
-      <main className="flex min-w-0 flex-1 flex-col">
+      {/* 主内容与任务面板共用一块圆角卡片，和 Qoder 的“灰底 + 白卡”一致。 */}
+      <div className="flex min-w-0 flex-1 py-2 pr-2">
+      <div className="flex min-w-0 flex-1 overflow-hidden rounded-xl border border-line bg-canvas shadow-[var(--shadow-sm)]">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-4">
           <h1 className="min-w-0 flex-1 truncate text-[13px] font-medium">
             {conv?.thread.title || "新对话"}
@@ -1197,6 +1200,8 @@ export function BotApp() {
           onClose={() => setPanelOpen(false)}
         />
       )}
+      </div>
+      </div>
     </div>
   );
 }

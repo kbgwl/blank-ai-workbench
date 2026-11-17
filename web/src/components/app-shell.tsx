@@ -3,10 +3,9 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
-import { HealthPill } from "@/components/health-pill";
+import { AppRail } from "@/components/app-rail";
 import { CommandPalette } from "@/components/command-palette";
 import { ModelSwitcher } from "@/components/model";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { isEditableTarget, PALETTE_SHORTCUT, shortcutHint, shouldHandleEscape } from "@/lib/shortcuts";
 
 const TITLES: Record<string, string> = {
@@ -25,26 +24,23 @@ const TITLES: Record<string, string> = {
 };
 
 /**
- * 首页是 bot，它自带会话侧栏和设置入口，所以顶栏上不再挂导航。
- * 其余页面（设置、以及暂时保留但不再露出的旧页）仍然走带返回的顶栏。
+ * 应用外壳，布局对标 Qoder：
+ *   左侧常驻栏（品牌 / 新建 / 搜索 / 工作区 / 最近任务 / 固定入口）
+ *   + 灰色画布上的一块圆角主卡片（页面头 + 滚动内容）。
+ *
+ * 首页自带会话栏、任务工作台自带三栏，这两处由各自页面负责满幅渲染。
  */
-const NAV: { href: string; label: string }[] = [];
-
-/** 首页与任务页是满幅工作台（左栏自带品牌与导航），其余页面共用一条带返回的顶栏。 */
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  // 静态导出后首屏 URL 是 /index.html（或 /index），开发态是 /，都要认成首页。
   const clean = (pathname ?? "").replace(/\.html$/, "").replace(/\/index$/, "");
-  const bare = clean === "" || clean === "/";
+  const bare = clean === "" || clean === "/" || clean === "/tasks";
   const title = TITLES[clean] ?? "";
 
   // Esc 回工作台；在输入框/对话框里按 Esc 不抢事件（那通常是取消编辑）。
   useEffect(() => {
     if (bare) return;
     const onKey = (event: KeyboardEvent) => {
-      // 判定统一收敛到 shouldHandleEscape：非 Esc、已被内层消费、输入态、
-      // 有浮层（dialog[open] 或带 data-overlay-open 的面板）都不跳回工作台。
       if (
         !shouldHandleEscape({
           key: event.key,
@@ -71,60 +67,32 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden">
-      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-canvas px-3">
-        <Link
-          href="/"
-          title="返回工作台（Esc）"
-          className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[12px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-text"
-        >
-          <svg viewBox="0 0 24 24" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-            <path d="m14 6-6 6 6 6" />
-          </svg>
-          返回
-        </Link>
+    <div className="flex h-dvh overflow-hidden bg-bg">
+      <AppRail />
+      <div className="flex min-w-0 flex-1 flex-col py-2 pr-2">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-canvas shadow-[var(--shadow-sm)]">
+          <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3">
+            <Link
+              href="/"
+              title="返回工作台（Esc）"
+              className="grid size-7 shrink-0 place-items-center rounded-md text-muted transition-colors hover:bg-surface-2 hover:text-text"
+            >
+              <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="m14 6-6 6 6 6" />
+              </svg>
+            </Link>
+            <span className="min-w-0 truncate text-[13px] font-medium">{title || "空白格"}</span>
 
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="grid size-5 shrink-0 place-items-center rounded-md bg-logo-bg">
-            <span className="size-1.5 rounded-[2px] bg-logo-accent" />
-          </span>
-          <span className="shrink-0 text-[13px] font-semibold tracking-tight">空白格</span>
-          {title && (
-            <>
-              <span className="shrink-0 text-line-strong">/</span>
-              <span className="min-w-0 truncate text-[13px] text-muted">{title}</span>
-            </>
-          )}
+            <div className="ml-auto flex shrink-0 items-center gap-2.5">
+              <kbd className="hidden items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-faint lg:flex">
+                {shortcutHint(PALETTE_SHORTCUT)}
+              </kbd>
+              <ModelSwitcher />
+            </div>
+          </header>
+          <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</main>
         </div>
-
-        {NAV.length > 0 && (
-          <nav className="ml-3 hidden items-center gap-0.5 md:flex">
-            {NAV.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`rounded-md px-2 py-1 text-[12px] transition-colors ${
-                  clean === item.href.replace(/\/$/, "")
-                    ? "bg-surface-3 font-medium text-text"
-                    : "text-muted hover:bg-surface-2 hover:text-text"
-                }`}
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
-        )}
-
-        <div className="ml-auto flex shrink-0 items-center gap-2.5">
-          <kbd className="hidden items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-faint lg:flex">
-            {shortcutHint(PALETTE_SHORTCUT)} 命令
-          </kbd>
-          <ModelSwitcher />
-          <ThemeToggle compact />
-          <HealthPill />
-        </div>
-      </header>
-      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-canvas">{children}</main>
+      </div>
       <CommandPalette />
     </div>
   );

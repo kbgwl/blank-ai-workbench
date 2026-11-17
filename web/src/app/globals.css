@@ -16,14 +16,15 @@
   /* 蓝值压到 #4460ec 是为过 AA：#4d6bfe 上 13px 白字只有 4.33。 */
   --brand-color: #4460ec;
 
-  --bg: #f7f7f8;
+  /* 窗口、侧栏、主卡片三层照着 Qoder：灰色窗口 + 同灰侧栏 + 白色圆角卡片。 */
+  --bg: #f3f4f6;
   --canvas: #ffffff;
-  --sidebar: #fafafa;
+  --sidebar: #f3f4f6;
   --surface: #ffffff;
-  --surface-2: #f4f4f5;
-  --surface-3: #ebebee;
-  --line: #e7e7ea;
-  --line-strong: #d8d8dd;
+  --surface-2: #ececef;
+  --surface-3: #e4e5e9;
+  --line: #e6e7eb;
+  --line-strong: #d5d7dd;
   --text: #1b1c1f;
   --muted: #55575e;
   --faint: #8f9198;
