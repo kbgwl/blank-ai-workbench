@@ -31,8 +31,11 @@ TERMINAL = {"succeeded", "failed", "cancelled", "blocked"}
 
 
 class Client:
-    def __init__(self, base: str) -> None:
+    def __init__(self, base: str, http_timeout: float = 120.0) -> None:
         self.base = base.rstrip("/")
+        # 单次 HTTP 调用的上限。30 秒对"会思考的模型"太短：一轮推理 + 工具 + 汇总
+        # 很容易超过它，于是脚本自己先超时，把"模型慢"读成"服务挂了"（星火实测）。
+        self.http_timeout = http_timeout
 
     def call(self, method: str, path: str, body: dict | None = None) -> dict | list:
         data = json.dumps(body).encode("utf-8") if body is not None else None
@@ -43,7 +46,7 @@ class Client:
             headers={"content-type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=self.http_timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:400]
@@ -58,10 +61,17 @@ def main() -> int:
     parser.add_argument("--base", default=os.environ.get("BLANK_API_BASE", "http://127.0.0.1:8000/api/v1"))
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--workspace", default=os.environ.get("BLANK_SMOKE_WORKSPACE", ""))
+    # 换模型跑同一套判据：不指定就用项目默认供应商。
+    parser.add_argument("--provider-id", default=os.environ.get("BLANK_SMOKE_PROVIDER", ""))
+    parser.add_argument("--http-timeout", type=float, default=120.0)
     args = parser.parse_args()
 
-    client = Client(args.base)
+    client = Client(args.base, http_timeout=args.http_timeout)
     checks: list[tuple[str, bool | None, str]] = []
+
+    def _provider() -> dict:
+        """这一轮用哪个供应商：空表示沿用项目默认。"""
+        return {"provider_id": args.provider_id} if args.provider_id else {}
 
     def record(name: str, ok: bool | None, detail: str = "") -> None:
         """ok=True 通过 / False 失败 / None 样本不成立（不计入分母，但不隐藏）。
@@ -111,7 +121,7 @@ def main() -> int:
     turn = client.call(
         "POST",
         f"/threads/{thread['id']}/turns",
-        {"title": "冒烟一句话", "goal": "只回一句话：你好。不要调用任何工具。"},
+        {"title": "冒烟一句话", "goal": "只回一句话：你好。不要调用任何工具。", **_provider()},
     )
     task_id = turn["id"]
     record("任务已创建", turn.get("status") == "queued" or True, f"{task_id[:8]} {turn.get('status')}")
@@ -147,7 +157,7 @@ def main() -> int:
     tool_turn = client.call(
         "POST",
         f"/threads/{thread['id']}/turns",
-        {"title": "冒烟：调工具", "goal": "用 list_files 看一下当前目录顶层有哪些文件，把前 5 个列出来。"},
+        {"title": "冒烟：调工具", "goal": "用 list_files 看一下当前目录顶层有哪些文件，把前 5 个列出来。", **_provider()},
     )
     tool_task = tool_turn["id"]
     tool_status = ""
@@ -174,7 +184,9 @@ def main() -> int:
     #   ② 真尝试了：卡必须出现，不出现才是拦截失效。
     # 模型偶尔不肯照做，所以换更硬的措辞重试一次；仍不照做就如实标 SKIP。
     def attempt(goal: str) -> tuple[str, dict | None, bool]:
-        turn_ = client.call("POST", f"/threads/{thread['id']}/turns", {"title": "冒烟：审批", "goal": goal})
+        turn_ = client.call(
+            "POST", f"/threads/{thread['id']}/turns", {"title": "冒烟：审批", "goal": goal, **_provider()}
+        )
         task_ = str(turn_["id"])
         bound = time.monotonic() + args.timeout
         card: dict | None = None

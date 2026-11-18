@@ -2,6 +2,15 @@
 
 ## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）、Claude「Doing tasks」六条与无测试配置时的收尾空跑（#384–#386）、交付改动排除 scratchpad 自测脚本（#388）、空响应与零交付不许算成功（#394–#397）、玻璃题收场清场外移与前四条前端纪律（#401）、事故台题五条前端纪律与 id 引用同步（#402）、Anthropic 式 UI 评测装置与真跑（#403）、Anthropic 式编码评测装置与七处诚实口径（#405–#411）、玻璃题第二轮五条前端纪律与入口引用核对（#420–#423）、Qoder 式全站外壳与设置行式布局（#425–#427）、Qoder 式外壳二次走查（#428）、空流退路的卡死链路与运维控制台六条前端纪律（#429–#430）、流式工具调用截断识别（#431–#432）、按参考图像素重做视觉口径（#433）、大文件分次写（#434）
 
+- **换模型跑同一套判据 + 权限变异电池（卡 2b ②）**：`smoke_flow.py` 支持 `--provider-id`
+  （不指定就沿用项目默认）与 `--http-timeout`（默认 120s）。接入讯飞星火 `spark-x2.6`——用 Qoder 里
+  那套 MaaS 配置，base 截到 `/v2`（我们的适配器自己拼 `/chat/completions`）——三轮全通：
+  **17/17，128s**；审批卡照出、驳回后正文如实写"curl 未实际执行"。顺带修了脚本自己的 30s 超时：
+  它会把"会思考的模型慢"读成"服务挂了"，星火首轮就是这么假红的。
+  新增 `tests/mutation_battery_authorization_v417.py`：六个变异体（摘掉严格复核 / 删掉能力边界 /
+  资源退化成工具名 / 审查否决回到直接拒 / 代批重新忽略风险 / 摘掉交付对账）**6/6 被抓**，
+  每条变异都指名期望变红的那条判据，并校验复原后重新变绿。
+
 - **权限判定收成唯一入口（卡 2b ①）**：一条顺序写死在一处——能力边界（safety）→ 策略
   （permissions）→ 严格复核（strict_review），对外只暴露 `services/authorization.py` 的
   `authorize()`。此前这条顺序在网关与图里各拼了一遍：「要不要问人」有两个答案，`graph` 里还留着
