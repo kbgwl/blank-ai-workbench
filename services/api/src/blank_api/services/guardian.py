@@ -29,10 +29,15 @@ from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelRespo
 
 GUARDIAN_SYSTEM = (
     "你是命令行与文件操作的安全审查员。你会收到一个即将执行的工具调用，"
+    "其中包含工作区根目录、风险等级、是否可回滚与参数。"
     "请判断它是否会不可逆地破坏数据、泄露凭据、推送代码到远端或越出工作区。"
     "只输出 JSON：{\"verdict\": \"allow|deny\", \"reasons\": [\"一句话原因\"]}。"
-    "不确定就选 allow，把决定权交给人；但看到删除、覆盖密钥、force push、"
-    "磁盘格式化这类动作必须选 deny。"
+    "按范围分档，别把正常的开发动作当灾难："
+    "① 删除/覆盖的目标在工作区根目录之内、路径写死（如 ./build、src/x.py、dist/*.map）→ allow："
+    "那是用户交代的活，交给审批卡陪他决定，审查员不该替他拒绝；"
+    "② 目标在工作区之外、家目录、根目录、系统盘，或靠通配符/环境变量展开 → deny；"
+    "③ 覆盖密钥与凭据文件、force push、格式化磁盘、改系统服务/注册表 → deny；"
+    "④ 拿不准就选 allow，把决定权交给人。"
 )
 MAX_ARGUMENT_CHARS = 1_200
 DEFAULT_TIMEOUT = 8.0
@@ -188,20 +193,32 @@ class Guardian:
         return self.adapter is not None and self.mode != "off"
 
     async def review(
-        self, tool: str, arguments: dict, *, risk: str = "", reversible: bool = True
+        self,
+        tool: str,
+        arguments: dict,
+        *,
+        risk: str = "",
+        reversible: bool = True,
+        root: str = "",
     ) -> GuardianVerdict:
         if not self.enabled:
             return GuardianVerdict()
         arguments_preview = json.dumps(arguments, ensure_ascii=False, sort_keys=True)
         if len(arguments_preview) > MAX_ARGUMENT_CHARS:
             arguments_preview = arguments_preview[:MAX_ARGUMENT_CHARS] + "…（参数已截断）"
+        # 工作区根必须给：没有它，审查员分不清 `rm -rf ./build`（用户交代的活）与
+        # `rm -rf ~`（灾难），只能一律拒绝——上一版就是这么把所有删除都按死的，
+        # 结果是模型永远删不掉东西，审批卡也永远不出现（真机 3622e0e7）。
+        scope_line = f"工作区根：{root}\n" if root else ""
         messages = [
             ChatMessage(role="system", content=GUARDIAN_SYSTEM),
             ChatMessage(
                 role="user",
                 content=(
                     f"工具：{tool}\n风险等级：{risk or 'unknown'}\n"
-                    f"可回滚：{'是' if reversible else '否'}\n参数：{arguments_preview}"
+                    f"可回滚：{'是' if reversible else '否'}\n"
+                    f"{scope_line}"
+                    f"参数：{arguments_preview}"
                 ),
             ),
         ]
@@ -238,5 +255,13 @@ class Guardian:
             result.reasons = [*result.reasons, "不可逆操作，审查意见仅作参考，仍需人工确认"]
         return result
 
-    def can_auto_approve(self, verdict: GuardianVerdict) -> bool:
-        return self.mode == "auto" and verdict.allowed
+    def can_auto_approve(self, verdict: GuardianVerdict, risk: str = "") -> bool:
+        """代批只在"低风险但需要询问"这一档生效。
+
+        auto 档的本意是省掉那些"问了也白问"的卡，不是替人按下高危动作的确认键。
+        旧实现只看 mode 与 verdict，风险等级一个字都没看：真机（1f17123a）里
+        `rm -rf ./x` 被判 high，审查员回 allow，于是被静默代批、直接执行——
+        卡没出，用户事后连"它删过东西"都无从看见。高风险是用户唯一想亲眼看见的
+        那一档，这一档必须留在人手里。
+        """
+        return self.mode == "auto" and verdict.allowed and risk not in ("high", "critical")

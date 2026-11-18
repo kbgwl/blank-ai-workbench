@@ -460,3 +460,101 @@ async def test_a_real_reviewed_decision_is_joinable_in_evidence(env, workspace, 
     assert packed["decisions"][0]["outcome"] == "blocked"
     # 这一单没发生压缩：轨迹窗为空，也不许出现"数过但没记"的笔
     assert packed["windows"] == [] and packed["windows_unrecorded"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# 6. 不可逆 / 越界：审查员只能提级，不能替人否决
+# --------------------------------------------------------------------------- #
+def _capture_interrupt(monkeypatch) -> dict:
+    """把 `interrupt` 换成哨兵：只关心"卡到底出没出、卡上带了什么"。"""
+    from blank_api.services.agent import graph as graph_module
+
+    seen: dict = {}
+
+    class _Stop(Exception):
+        pass
+
+    def _stop(payload):
+        seen.update(payload)
+        raise _Stop
+
+    monkeypatch.setattr(graph_module, "interrupt", _stop)
+    return seen
+
+
+async def test_an_irreversible_denial_escalates_to_a_card(seeded, tmp_path, monkeypatch) -> None:
+    """审查员说 deny，但这条命令不可逆：卡必须照出，理由跟着卡一起交给那个人。
+
+    否则人的决定权被模型替代，而事后没有任何一处记着"这张卡被谁取消了"。
+    """
+    from blank_api.services.agent.graph import _approval_gate
+
+    seen = _capture_interrupt(monkeypatch)
+    session = _gate_session(tmp_path, '{"verdict": "deny", "reasons": ["会删掉根目录"]}')
+    with pytest.raises(Exception):
+        await _approval_gate(
+            session, "call_model", [{"id": "call-1", "name": "run_shell", "args": {"command": "rm -rf /"}}]
+        )
+
+    assert seen, "不可逆动作被审查员按住了，卡却没出：人的决定权被模型取代"
+    assert seen["guardian"]["verdict"] == "deny"
+    assert seen["guardian"]["reasons"] == ["会删掉根目录"]
+    # 去向必须是 asked 而不是 blocked：轨迹与证据包读的就是这一个字段
+    events = await _events("guardian.reviewed")
+    assert [payload["outcome"] for _, payload in events] == ["asked"]
+
+
+async def test_a_reversible_denial_still_blocks_without_a_card(seeded, tmp_path, monkeypatch) -> None:
+    """可逆动作照旧：审查员说不行就是不行，不为它打扰人一次（不回归）。"""
+    from blank_api.services.agent.graph import _approval_gate
+
+    seen = _capture_interrupt(monkeypatch)
+    session = _gate_session(tmp_path, '{"verdict": "deny", "reasons": ["未经确认的递归删除"]}')
+    denied, blocked, _ = await _approval_gate(
+        session, "call_model", [{"id": "call-1", "name": "run_shell", "args": {"command": "rm -rf build"}}]
+    )
+
+    assert seen == {}, "可逆动作不该出卡"
+    assert blocked == {"run_shell": "未经确认的递归删除"}
+    events = await _events("guardian.reviewed")
+    assert [payload["outcome"] for _, payload in events] == ["blocked"]
+
+
+# --------------------------------------------------------------------------- #
+# 7. auto 档只省"低风险但需询问"的卡，不能替人按高危动作的确认键
+# --------------------------------------------------------------------------- #
+def test_auto_mode_only_auto_approves_low_risk() -> None:
+    from blank_api.services.guardian import Guardian, GuardianVerdict
+
+    from tests.test_guardian_v12 import FakeAdapter
+
+    auto = Guardian(FakeAdapter("{}"), mode="auto")
+    allowed = GuardianVerdict(verdict="allow")
+    assert auto.can_auto_approve(allowed, "medium") is True
+    assert auto.can_auto_approve(allowed, "high") is False, "高风险要留在人手里"
+    assert auto.can_auto_approve(allowed, "critical") is False
+
+
+async def test_auto_mode_still_asks_before_a_high_risk_command(seeded, tmp_path, monkeypatch) -> None:
+    """真机 1f17123a：`rm -rf ./x` 判 high，审查员回 allow，被 auto 静默代批直接执行。
+
+    卡没出、执行了、事后无从看见——这一条把那个形状钉成可失败的判定。
+    """
+    from blank_api.services.agent.graph import _approval_gate
+    from blank_api.services.guardian import Guardian
+
+    from tests.test_guardian_v12 import FakeAdapter
+
+    seen = _capture_interrupt(monkeypatch)
+    session = _gate_session(tmp_path, '{"verdict": "allow", "reasons": ["工作区内，路径写死"]}')
+    session.guardian = Guardian(
+        FakeAdapter('{"verdict": "allow", "reasons": ["工作区内，路径写死"]}'), mode="auto"
+    )
+    with pytest.raises(Exception):
+        await _approval_gate(
+            session, "call_model", [{"id": "call-1", "name": "run_shell", "args": {"command": "rm -rf build"}}]
+        )
+
+    assert seen, "高风险动作被 auto 档代批了：卡没出，人无从知情"
+    events = await _events("guardian.reviewed")
+    assert [payload["outcome"] for _, payload in events] == ["asked"]

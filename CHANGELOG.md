@@ -2,6 +2,19 @@
 
 ## 未发布 — 命令级策略、边界来源证明、句柄最小化、路径复验、CPU 限速、IO 速率上限、临时区容量卷、环境缺口补救、结构化缺口证据与收尾契约、编程纪律、AppContainer 网络边界、签名接线、受限令牌后端与「跑不了测试」如实跳过、任务级隔离、Claude 式编程工具面、场景模式对齐 Claude 执行与编排语义、子代理默认后台与续聊、fork 子代理（Agent(fork)）、后台 shell、任务级工作树会话、Skill 工具（清单 + 按需加载）、ReportFindings 工具、定时工具（Cron + Wakeup）、Workflow 工具（脚本即编排）、NotebookEdit 工具（按单元格编辑）、Monitor 工具（逐行事件流）、REPL 工具（持久 JavaScript 组合）、任务清单 Task*（依赖图与钩子）、MCP 资源四工具（列举/读取/目录/工具热刷新）、LSP 工具（九操作代码智能）、交互问答 AskUserQuestion（多选/片段预览/答案注解）、会话目标提案 ProposeGoal、技能提案 ProposeSkills、文件型子代理定义（`.blank/agents`）、文件型 Skill 定义（`.blank/skills`）、自定义斜杠命令（`.blank/commands`）、输出样式（`.blank/output-styles`）、设置层级（用户 < 项目 < 本机 < 管理策略）、MCP 配置变量展开（`mcp.json`）、插件包（`.claude-plugin/plugin.json`）、MCP 配置三作用域与项目层批准（`.mcp.json`）、子代理审批档/隔离/后台（permissionMode/isolation/background）、settings.json 权限规则（allow/deny/ask）、Skill 的 `paths` 条件激活（conditionalSkills）、钩子事件面第二批（PermissionRequest/Notification/PostToolBatch/Stop/SubagentStop/PreCompact/SessionStart-End）、settings.json 钩子配置与 matcher 语义（hooks/disableAllHooks）、SubagentStart 钩子与 SessionStart 附加上下文、StopFailure 钩子事件（API 错误终结回合）、UserPromptExpansion 与 TeammateIdle 钩子事件、钩子类型六种（command/prompt/agent/http/mcp_tool/script）、思考强度（effort）五档裁决与三路下发、SessionStart 钩子输出四字段（sessionTitle / initialUserMessage / watchPaths / reloadSkills）、agent_transcript_path 补齐（SubagentStop / StopFailure 载荷）、命令/Skill 的 allowed-tools / disallowed-tools 工具池收窄、命令侧 agent/background 派发子代理、命令/Skill 的 `context: fork` 派发闸门、Skill/命令的 `shell` 字段（`!` 块解释器）、Skill 的 `fallback` 薄指针让位（同名后缀插件技能已加载时丢弃）、子代理定义的 `model` 覆盖（`inherit` / 空串 / fork 回落到父会话模型）、子代理定义的 `hooks` 作用域注册（`Stop` 改写为 `SubagentStop`）、子代理定义的 `memory` 持久记忆（作用域 / 目录 / `MEMORY.md` 注入 / `memory_write`）、子代理默认继承 AGENTS.md 指令与 `omitClaudeMd` 关闭开关、子代理派发的 `model` 入参覆盖、子代理工具循环的 PreToolUse / PostToolUse / PostToolUseFailure / PostToolBatch 钩子、工具钩子载荷字段对齐上游（tool_name / tool_input / tool_response / duration_ms / is_interrupt）、子代理模型强制（`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`）、任务级工作树的基准引用（`worktree.baseRef`）、测试通道解释器解析与「命令不存在」归类、收尾交接判据收窄（#376）、UI 对比四处差距（交付文件与入口 / 自测验证通道 / 临时脚本隔离清场 / OWASP 与输出编码）（#379–#383）、评测器同提示词开关（`--plain-prompt`）（#377）、Claude「Doing tasks」六条与无测试配置时的收尾空跑（#384–#386）、交付改动排除 scratchpad 自测脚本（#388）、空响应与零交付不许算成功（#394–#397）、玻璃题收场清场外移与前四条前端纪律（#401）、事故台题五条前端纪律与 id 引用同步（#402）、Anthropic 式 UI 评测装置与真跑（#403）、Anthropic 式编码评测装置与七处诚实口径（#405–#411）、玻璃题第二轮五条前端纪律与入口引用核对（#420–#423）、Qoder 式全站外壳与设置行式布局（#425–#427）、Qoder 式外壳二次走查（#428）、空流退路的卡死链路与运维控制台六条前端纪律（#429–#430）、流式工具调用截断识别（#431–#432）、按参考图像素重做视觉口径（#433）、大文件分次写（#434）
 
+- **审批口径收口：审查员只能提级，不能替人否决（#435）**：三个真缺陷一起修，都落在 guardian 这一层。
+  1. `can_auto_approve()` 只看模式与审查结论、**完全不看风险等级**，auto 档把 `rm -rf`（high）
+     静默代批并直接执行，卡都不出（真机 1f17123a）——现在 high/critical 一律不许代批，卡留在人手里；
+  2. 审查提示词写着"看到删除必须 deny"，且报文里没有工作区根，工作区内一条普通删除也被按死，
+     人永远看不到卡（真机 3622e0e7）——改为按范围分档并传入工作区根；
+  3. 审查员对不可逆 / 越界动作直接 blocked，决定权被模型替代且事后无一处记账——改为提级出卡，
+     可逆动作上的否决照旧直接拒（不为它打扰人）。
+  正文侧补上第二半对账：这一轮零成功写盘 / 命令，却写「已删除 / 已修改」，在交付正文最前面钉一句
+  客观事实（`_enforce_action_claim`）；纯问答与真动过手的一律不动。冒烟同时修四处自欺：卡只在
+  `approval.required` 事件里（`GET /tasks/{id}` 不返回 approvals）、`approve=False` 被真值过滤导致 422、
+  模型没照做被记成产品缺陷、三轮共用一条超时预算。判据 `tests/test_guardian_trail_v51.py`（+4）与
+  `tests/test_no_false_action_claim_v416.py`（5 例），端到端 `scripts/smoke_flow.py` **17/17 通过 / 26.4s**。
+
 - **大文件分次写进纪律（#434）**：真机 23f93669 的 `write_file` 参数 31009 字被网关在字符串
   中途截断，JSON 不完整，调用被拒后白跑一轮；GLM 这类单次输出上限 8000 token 的模型也一次写不完。
   `CODING_INSTRUCTIONS` 要求单文件正文超过约 8000 字符先写骨架、再用 `edit_file` 按函数分次

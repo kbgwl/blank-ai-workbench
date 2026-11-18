@@ -4037,7 +4037,14 @@ async def _approval_gate(
         reversible = not (command and is_irreversible(command))
         if session.guardian.enabled:
             verdict = await session.guardian.review(
-                name, arguments, risk=decision.risk, reversible=reversible
+                name,
+                arguments,
+                risk=decision.risk,
+                reversible=reversible,
+                # 审查员要知道"边界在哪"，否则它只能靠猜：同一个 `rm -rf build`，
+                # 工作区内的 build 是干活，家目录下的 build 是灾难，报文里没有根目录
+                # 时它只能一律拒绝。
+                root=str(session.context.root),
             )
             await session.record_usage(
                 "guardian_review",
@@ -4058,7 +4065,17 @@ async def _approval_gate(
             # 这个去向写在事件里，轨迹再从事件读——两处不各写一遍，才不会写歪。
             outcome = "asked"
             if verdict.denied:
-                outcome = "blocked"
+                # 不可逆或越过沙箱边界的动作，审查员只能**提级**，不能替人否决。
+                # 这两种情况的决定权本来就写死在 permissions 里（`irreversible` 闸门、
+                # `sandbox:host_bypass` 一律交给人），审查员抢在前面把卡按没，等于
+                # 用模型替代了人的决定；而且卡不存在，事后也没有任何一处记着
+                # "这张卡被谁取消了"。真机形状：`rm -rf ./x` 被判高风险但可逆，
+                # 权限层该出卡，审查员先拒 —— 用户告的是"删掉它"，看到的是"我不干"。
+                #
+                # 反过来，可逆动作上的否决照旧直接拒：那本来就是"模型换个做法"，
+                # 不值得为它打扰人一次。
+                must_ask = (not reversible) or host_bypass_requested(name, arguments)
+                outcome = "asked" if must_ask else "blocked"
             elif (
                 reversible
                 and not hook_ask
@@ -4066,7 +4083,7 @@ async def _approval_gate(
                 # 单次越界宿主执行同理：它绕过的是沙箱能力边界，必须由人当面批准。
                 and name != "exit_plan_mode"
                 and not host_bypass_requested(name, arguments)
-                and session.guardian.can_auto_approve(verdict)
+                and session.guardian.can_auto_approve(verdict, decision.risk)
             ):
                 # 钩子明确要求人工确认时，审查员不能代批：那不是审查员该替人做的决定。
                 outcome = "auto_approved"
@@ -6113,6 +6130,19 @@ def _strip_verify_claims(text: str) -> str:
 
 
 def _enforce_no_false_claim(report: str, state: AgentState) -> str:
+    """交付正文不许说没发生的事：测试没通过、或动作压根没执行。
+
+    两半，都只认事实、不做语义猜测：
+    ① 测试真失败时，不得声称"已验证/测试通过"（返回处理后的正文：剥离声称词，
+       并在没有说明失败时补一句客观披露）；
+    ② 这一轮**没有任何成功的写盘或命令执行**，却写着"已删除/已修改/已执行"——
+       在正文最前面钉一句客观事实。真机 3622e0e7：动作被审查拒了，界面照抄
+       模型那句"已处理"，人看到的和发生的不是一件事。
+    """
+    return _enforce_action_claim(_enforce_validation_claim(report, state), state)
+
+
+def _enforce_validation_claim(report: str, state: AgentState) -> str:
     """测试真失败时，交付正文不得声称"已验证/测试通过"。
 
     返回处理后的正文：剥离声称词，并在没有说明失败时补一句客观披露。
@@ -6137,6 +6167,48 @@ def _enforce_no_false_claim(report: str, state: AgentState) -> str:
     # 否则会被 detectFalseClaim 当成"声称验证过"。这里只陈述事实，不出现那些词。
     disclosure = f"（自动化校验未通过：{command}{ec}；本次交付未声明通过，请以测试结论为准。）"
     return f"{cleaned}\n{disclosure}" if cleaned else disclosure
+
+
+# 「已经做了」的完成式。只认动词层面的确指：将来/意愿的「将删除」「建议删除」
+# 不在其中，省得把一句计划当成假话。
+_ACTION_CLAIM = re.compile(
+    r"(?:已|已经)(?:删除|删掉|移除|清空|创建|新建|生成|修改|改动|写入|覆盖|重命名|移动|"
+    r"执行|运行|提交|安装|卸载)"
+)
+# 只算"动手"的工具：读文件、列目录、搜索成功，不代表用户交代的活干成了。
+_ACTION_TOOLS = frozenset(
+    {"write_file", "edit_file", "apply_patch", "notebook_edit", "run_shell", "monitor"}
+)
+NO_ACTION_FACT = "实际：本轮没有任何成功的写操作或命令执行，下文「已…」的动作并未发生。\n"
+
+
+def _acted_successfully(state: AgentState) -> bool:
+    """这一轮有没有真正成功的"动手"动作（写盘 / 跑命令）。"""
+    for row in state.get("tool_results") or ():
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("tool") or row.get("tool_name") or "") not in _ACTION_TOOLS:
+            continue
+        if str(row.get("status") or "") == "ok" and row.get("ok") is not False:
+            return True
+    return False
+
+
+def _enforce_action_claim(report: str, state: AgentState) -> str:
+    """没动手，就别写成动过手。
+
+    判据是**零成功动作**，不是"模型语气可疑"：只要这一轮有任何一次写盘或命令
+    成功返回，正文细节就交给 Verifier 与审查去判，这里一个字都不改——否则
+    "改了 3 个文件并跑了测试"这种正常交付会被这句护栏误伤。
+    纯问答（没有任何动作声称）同样不动：不是每句话都在报工。
+    """
+    if not report or _acted_successfully(state):
+        return report
+    if not _ACTION_CLAIM.search(report):
+        return report
+    if report.startswith("实际："):
+        return report
+    return NO_ACTION_FACT + report
 
 
 def _validation_prompt_block(state: AgentState) -> str:
