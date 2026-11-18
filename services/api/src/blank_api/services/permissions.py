@@ -580,6 +580,9 @@ class Decision:
     # 卡上「本会话总是允许 X」能不能出现、按下去能不能兑现。ask 规则与单次越界
     # 这类"下一次照样问"的判定要关掉它：按钮按了不留账，比没有按钮更糟。
     tool_scope_allowed: bool = True
+    # 这次动作碰了什么（`path:src/x.py` / `cmd:curl`）。由 authorization.resources_for
+    # 统一生成：规则匹配、审批卡、审计读的是同一份清单，不再各拼各的正则。
+    resources: tuple[str, ...] = ()
 
     @property
     def allowed(self) -> bool:
@@ -595,6 +598,8 @@ class Decision:
 
     def as_dict(self) -> dict:
         body = {"outcome": self.outcome, "risk": self.risk, "rule": self.rule}
+        if self.resources:
+            body["resources"] = list(self.resources)
         if self.prefix:
             body["prefix"] = self.prefix
         if self.memo:

@@ -27,7 +27,6 @@ from blank_api.services.permissions import (
     MODE_PLAN,
     Decision,
     approval_options,
-    ask,
     approve,
     deny,
     tool_grant_too_wide,
@@ -52,32 +51,9 @@ APPROVAL_STATUS = "awaiting_approval"
 SANDBOX_DATA_KEY = "sandbox"
 
 
-# 哪些 allow 属于"没人给过依据"的自动判定。只有这些才被强制复核：
-# 用户点过「总是允许」、settings 里写了 allow、会话内批准记忆、钩子放行，
-# 都属于**人给过的依据**，一律尊重——把用户已经做过的决定再问一遍是骚扰，
-# 也会逼着用户去点"全部允许"（结果更不安全）。
-_AUTOMATIC_ALLOW_RULES = frozenset({"policy:auto", "legacy:auto", ""})
-
-
-def enforce_strict_review(decision: "Decision", risk: str, mode: str) -> "Decision":
-    """高危动作不许被**自动**路径静默放行（对齐 Codex 的 strictReviewRequired）。
-
-    返回值语义：
-    - 原本就 deny/ask 的，原样返回（不改变已有判定）；
-    - allow 但依据是人给的（rule 不在自动清单里），原样返回；
-    - allow 且没有依据，风险又是 high/critical → 升级成 ask。
-
-    bypass 模式是用户显式关掉询问，不算静默放行。
-    """
-    if decision.outcome != ALLOW:
-        return decision
-    if risk not in ("high", "critical"):
-        return decision
-    if mode == "bypass":
-        return decision
-    if decision.rule not in _AUTOMATIC_ALLOW_RULES:
-        return decision
-    return ask(risk, "policy:strict_review")
+# 严格复核搬到 `services.authorization`：它现在和"能力边界 → 策略"排在同一条链上，
+# 三处各拼一遍顺序就是分叉的来源。这里保留同名转发，老调用方与测试的 import 不变。
+from blank_api.services.authorization import authorize, enforce_strict_review  # noqa: E402,F401
 
 
 def _redact(text: str, secrets: Sequence[str], limit: int = MAX_LOGGED_CHARS) -> str:
@@ -630,26 +606,12 @@ class ToolGateway:
         context: ToolContext,
         risk: str | None = None,
     ) -> Decision:
-        """统一的权限判定入口：图里的审批门与网关必须拿到同一个答案。"""
-        risk = tool.resolve_risk(arguments) if risk is None else risk
-        # 先过能力边界。这里拒绝的动作，就算用户在审批卡上点了「允许」也不执行，
-        # 所以必须在生成问句之前拦掉 —— 否则会变成"点了允许还是失败"。
-        mode = context.permissions.mode if context.permissions is not None else "default"
-        if context.safety is not None:
-            verdict = context.safety.gate(tool.name, arguments, context.root, mode=mode)
-            if verdict.denied:
-                return deny(risk, verdict.rule, verdict.reason, verdict.prefix)
-            # 「每条命令都要确认」不单独造一套状态机：抬高风险等级即可，
-            # 审批、会话记忆、前缀白名单全都复用同一套既有逻辑。
-            if verdict.asks and risk not in ("high", "critical"):
-                risk = "high"
-        if context.permissions is not None:
-            return enforce_strict_review(context.permissions.decide(tool, arguments, risk), risk, mode)
-        if context.approval_policy is not None and self._approved(tool, arguments, context):
-            return approve(risk, "legacy:approved")
-        if risk in ("high", "critical"):
-            return ask(risk, "legacy:ask")
-        return approve(risk, "legacy:auto")
+        """统一的权限判定入口：图里的审批门与网关必须拿到同一个答案。
+
+        顺序（能力边界 → 策略 → 严格复核）只写在 `authorization.authorize` 一处。
+        这里只做"挂到网关上"这件事——再在本方法里拼一遍，就是下一次分叉的起点。
+        """
+        return authorize(tool, arguments, context, risk=risk)
 
     async def _finish(
         self,
@@ -728,12 +690,6 @@ class ToolGateway:
             payload["sandbox_bypass_reason"] = str(safe.data.get("bypass_reason") or "")
         _audit(name, arguments, safe, context, node, duration_ms, backend, ran_command)
         return payload
-
-    def _approved(self, tool: ToolDefinition, arguments: dict, context: ToolContext) -> bool:
-        try:
-            return bool(context.approval_policy(tool, arguments))
-        except Exception:
-            return False
 
     def _denied(
         self, tool: ToolDefinition, arguments: dict, decision: Decision

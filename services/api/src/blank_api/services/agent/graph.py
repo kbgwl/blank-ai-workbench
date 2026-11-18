@@ -976,10 +976,6 @@ class AgentSession:
             await self.recorder.add("world.state", node, payload)
         return payload
 
-    def approval_policy(self, tool: ToolDefinition, arguments: dict) -> bool:
-        """旧的布尔口径：批准与否。新代码请直接用 gateway.decide / permissions.decide。"""
-        return self.permissions.decide(tool, arguments).allowed
-
     async def ask(self, state: AgentState, prompt: str, node: str, *, messages: list[dict] | None = None) -> dict:
         messages = list(messages) if messages is not None else list(state.get("messages") or [])
         # 空 prompt 表示"不需要再补一句人话"：工具回执本身就是下一步的输入。
