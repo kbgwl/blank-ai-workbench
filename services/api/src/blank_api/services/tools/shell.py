@@ -37,6 +37,46 @@ _LONG_INLINE_FLAGS = {
 }
 _SEGMENT_SPLIT = re.compile(r"&&|\|\||[;&|]")
 MAX_OUTPUT_CHARS = 8000
+# 单次捕获的字节上限。模型的输出预算只有 8000 字，捕获 2MB 已经绰绰有余；
+# 再往上不是"看得更全"，是把内存交给被执行的命令（`type` 一个 500MB 文件，
+# 旧实现先整段读进内存再剪到 8000 字——峰值内存直接涨 500MB）。
+# 截断必须留字据：返回里带"实际输出了多少字节"，上层据此告诉模型还有多少没看到。
+MAX_CAPTURE_BYTES = 2_000_000
+
+
+def _capture_files():
+    """两条捕获路径共用的临时文件：写盘再按上限读，内存只跟上限有关。"""
+    import tempfile
+
+    return tempfile.TemporaryFile(), tempfile.TemporaryFile()
+
+
+def _decode_capped(raw: bytes, truncated: bool) -> str:
+    """截断点可能正切在一个多字节字符中间：先去掉尾巴上不完整的那截再解。
+
+    顺序很关键：**先把 utf-8 的每一种裁法试完，再考虑回退编码**。反过来的话，
+    半截 utf-8 会被 gbk "成功"解出来（GBK 对多数字节序列都是能解的），
+    半行中文就变成 `涓腑` 这种乱码——这正是 ``_decode`` 注释里那个坑的翻版。
+    """
+    if not truncated:
+        return _decode(raw)
+    for encoding in ("utf-8", *_FALLBACK_ENCODINGS):
+        for cut in range(0, 4):
+            tail = raw[: len(raw) - cut] if cut else raw
+            try:
+                return tail.decode(encoding)
+            except (UnicodeDecodeError, LookupError):
+                continue
+    return _decode(raw)
+
+
+def _read_capture(handle) -> tuple[str, int]:
+    """从临时文件读回 (文本, 原始字节数)。只读到上限，剩下的只报数量不读进来。"""
+    handle.seek(0, 2)
+    total = handle.tell()
+    handle.seek(0)
+    raw = handle.read(MAX_CAPTURE_BYTES)
+    return _decode_capped(raw, total > MAX_CAPTURE_BYTES), total
 
 
 def build_env(policy: str | None = None, *, effort: str = "") -> dict[str, str]:
@@ -121,28 +161,49 @@ def _run_blocking(
     env: dict[str, str] | None = None,
 ) -> dict:
     argv = command if shell else [str(part) for part in command]
+    out, err = _capture_files()
     try:
-        completed = subprocess.run(  # noqa: S603 - 命令来自工具层白名单校验之后
-            argv,
-            cwd=str(root),
-            env=env or build_env(),
-            capture_output=True,
-            timeout=timeout,
-            shell=shell,  # noqa: S602 - shell=True 时 argv 已是完整命令字符串
-        )
-    except subprocess.TimeoutExpired as exc:
+        try:
+            completed = subprocess.run(  # noqa: S603 - 命令来自工具层白名单校验之后
+                argv,
+                cwd=str(root),
+                env=env or build_env(),
+                # 不做管道捕获：管道意味着"命令吐多少，进程里就存多少"。
+                # 写临时文件之后，内存只跟 MAX_CAPTURE_BYTES 有关。
+                stdout=out,
+                stderr=err,
+                timeout=timeout,
+                shell=shell,  # noqa: S602 - shell=True 时 argv 已是完整命令字符串
+            )
+        except subprocess.TimeoutExpired:
+            # 超时也要把已经跑出来的那部分交出去：模型据此判断是卡在哪一步，
+            # 而不是只看到一句"超时了"。
+            stdout, out_total = _read_capture(out)
+            stderr, err_total = _read_capture(err)
+            return {
+                "exit_code": None,
+                "stdout": stdout,
+                "stderr": stderr,
+                "timed_out": True,
+                "stdout_bytes": out_total,
+                "stderr_bytes": err_total,
+                "stdout_truncated": out_total > MAX_CAPTURE_BYTES,
+            }
+        stdout, out_total = _read_capture(out)
+        stderr, err_total = _read_capture(err)
         return {
-            "exit_code": None,
-            "stdout": _decode(exc.stdout or b""),
-            "stderr": _decode(exc.stderr or b""),
-            "timed_out": True,
+            "exit_code": completed.returncode,
+            "stdout": stdout,
+            "stderr": stderr,
+            "timed_out": False,
+            # 原始字节数：上层要说得清"还有多少没看到"，而不是只说"已截断"。
+            "stdout_bytes": out_total,
+            "stderr_bytes": err_total,
+            "stdout_truncated": out_total > MAX_CAPTURE_BYTES,
         }
-    return {
-        "exit_code": completed.returncode,
-        "stdout": _decode(completed.stdout),
-        "stderr": _decode(completed.stderr),
-        "timed_out": False,
-    }
+    finally:
+        out.close()
+        err.close()
 
 
 _DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
