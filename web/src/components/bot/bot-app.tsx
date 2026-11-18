@@ -14,6 +14,7 @@ import {
   fetchScenarios,
   fetchTask,
   fetchThreadGoal,
+  forkThread,
   steerTask,
   type AnswerValues,
   type ApprovalScope,
@@ -28,10 +29,12 @@ import {
   type ThreadGoal,
 } from "../tasks/api";
 import { fetchAgentSettings } from "../settings/api";
+import { fetchSkillLibrary, type SkillLibraryItem } from "../skills/api";
+import { suggestSkill } from "@/lib/skill-suggest";
 import { useTaskEvents } from "../tasks/use-task-events";
 import { NEW_CHAT_EVENT } from "@/lib/commands";
 import { canPickDirectory, pickDirectory } from "@/lib/desktop";
-import { activateWorkspace, bindWorkspace } from "../projects/api";
+import { activateWorkspace, bindWorkspace, updateProject } from "../projects/api";
 import { loadBoot, loadConversation, loadConversations, sendMessage, stopTask, type BotTurn, type Conversation } from "./bot-api";
 import { Composer } from "./composer";
 import { GoalStatusBar } from "./goal-status-bar";
@@ -41,7 +44,7 @@ import { TaskPanel } from "./panel";
 import { Sidebar } from "./sidebar";
 import { backgroundTaskTarget, visibleBackgroundTasks } from "./background";
 import { TurnView } from "./turn";
-import { buildSteps, isTurnRunning, touchedFiles, turnReply } from "./turns";
+import { buildSteps, isTurnRunning, planOf, touchedFiles, turnReply } from "./turns";
 import {
   MAX_ATTACHMENTS_PER_TURN,
   MAX_TOTAL_IMAGE_BYTES,
@@ -137,11 +140,12 @@ export function BotApp() {
   const [threadsNonce, setThreadsNonce] = useState(0);
   /** 后台任务：关窗后仍在跑的、停在审批上等人的、或者失败没处理的（v164 §2.4）。 */
   const [activeTasks, setActiveTasks] = useState<Task[]>([]);
-  /** v165 §9.1 顶部状态：设置页的自动化模式、当前会话的活跃目标、服务是否在线。 */
-  const [automationMode, setAutomationMode] = useState("assist");
+  /** 顶部状态：当前会话的活跃目标、服务是否在线。 */
   // 带上 threadId 存：切会话时读回的值还没到，不能把上一条会话的目标显示到这一条。
   const [threadGoal, setThreadGoal] = useState<{ threadId: string; goal: ThreadGoal | null } | null>(null);
   const [serviceOnline, setServiceOnline] = useState(false);
+  // 技能库：只在会话页用来做"这一轮像不像某条技能的活"的提示，拿不到就不提示。
+  const [skillItems, setSkillItems] = useState<SkillLibraryItem[]>([]);
 
   const [conv, setConv] = useState<Conversation | null>(null);
   const [convError, setConvError] = useState<string | null>(null);
@@ -160,6 +164,8 @@ export function BotApp() {
   const [actionBusy, setActionBusy] = useState(false);
   const [composerHint, setComposerHint] = useState<string | null>(null);
 
+  // 默认展开会话列表，截图里进去就能看见历史任务；侧栏顶部仍可一键收窄成 52px。
+  // 收窄是功能不是默认值——高频的会话不该一进来就把入口藏起来让人找。
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   const [evidence, setEvidence] = useState<Evidence | null>(null);
@@ -251,9 +257,10 @@ export function BotApp() {
 
   // ── 会话列表 ─────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!projectId) return;
+    // 会话列表是全局的，不再依赖 projectId。之前这里有一句 `if (!projectId) return`，
+    // 首帧 projectId 还没就绪就跳过，而依赖里又没有它 → 永远不重跑，左栏一直停在骨架。
     let alive = true;
-    loadConversations(projectId)
+    loadConversations()
       .then((rows) => {
         if (!alive) return;
         setThreads(rows);
@@ -267,7 +274,7 @@ export function BotApp() {
     return () => {
       alive = false;
     };
-  }, [projectId, threadsNonce]);
+  }, [threadsNonce]);
 
   // ── 后台任务：关窗之后还在动的那几条 ───────────────────────────────
   //
@@ -296,18 +303,15 @@ export function BotApp() {
     // 不等那 20 秒的轮询。
   }, [projectId, threadsNonce, activeTaskId]);
 
-  // ── 顶部状态条：自动化模式与服务在线 ──────────────────────────────────
-  // 用户在设置页改了模式再切回来，状态条必须跟着变；用 focus 立刻补一次，
-  // 20 秒轮询兜住「设置页在另一个窗口」的情况。服务在线与否以这次真实请求
-  // 为准，不用 boot 一次的旧结论——后端中途挂掉时状态条不能一直说在线。
+  // ── 顶部状态条：服务是否在线 ─────────────────────────────────────────
+  // 这里只当探针用：能读到设置说明后端活着，读不到就在状态条上如实说断线。
+  // 20 秒轮询兜住「设置页在另一个窗口」的情况，focus 立刻补一次。
   useEffect(() => {
     let alive = true;
     const pull = () =>
       fetchAgentSettings()
-        .then((settings) => {
-          if (!alive) return;
-          setAutomationMode(settings.background?.automation_mode || "assist");
-          setServiceOnline(true);
+        .then(() => {
+          if (alive) setServiceOnline(true);
         })
         .catch(() => {
           if (alive) setServiceOnline(false);
@@ -323,6 +327,35 @@ export function BotApp() {
       window.removeEventListener("focus", pull);
     };
   }, []);
+
+  // 技能库只在会话页做提示用：拉不到就静默不提示，不影响任何主流程。
+  useEffect(() => {
+    let alive = true;
+    fetchSkillLibrary()
+      .then((library) => {
+        if (alive) setSkillItems(library.items);
+      })
+      .catch(() => {
+        // 技能库不可用时本来就不该有提示，无需报错打扰用户。
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // 这一轮已经用过的技能：模型自己加载过的，不再提示"你可以用"。
+  const usedSkillsByTurn = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const turn of conv?.turns ?? []) {
+      const names = (turn.events ?? [])
+        .filter((event) => event.type === "skill.invoked")
+        .map((event) => String(event.payload?.skill ?? ""))
+        .filter(Boolean);
+      map.set(turn.id, [...new Set(names)]);
+    }
+    return map;
+  }, [conv]);
+  const turnSkills = useCallback((id: string) => usedSkillsByTurn.get(id) ?? [], [usedSkillsByTurn]);
 
   // ── 当前轮的事件流 ────────────────────────────────────────────────────
   const activeTurn = conv?.turns.find((turn) => turn.id === activeTaskId) ?? null;
@@ -565,25 +598,59 @@ export function BotApp() {
     [projectId, refreshProjects],
   );
 
+  /**
+   * 绑定一个目录并立刻切过去。
+   *
+   * 单独抽出来是因为有两条入口：桌面版的系统目录框、以及"手动输入路径"
+   * （浏览器里拿不到原生目录框，没有这条入口就等于不能选本地目录）。
+   */
+  const bindAndActivateWorkspace = useCallback(
+    async (path: string) => {
+      if (!projectId) return;
+      const picked = path.trim();
+      if (!picked) return;
+      setActionError(null);
+      try {
+        const bound = await bindWorkspace(projectId, { path: picked });
+        // 刚选的目录就是用户想用的那个：绑完立刻切成活动，否则新绑的在界面上是灰的，
+        // 用户会以为没成功（这也是旧版最难理解的一处）。
+        await activateWorkspace(projectId, bound.id);
+        rememberWorkspace(projectId, bound.id);
+        setRecentVersion((version) => version + 1);
+        await refreshProjects();
+        // 只换目录，不动会话：Codex 也是 `-C` 换工作根，历史会话照旧在。
+        setComposerHint(`已切换目录：${picked}（下一轮在这里执行，会话不变）`);
+      } catch (error: unknown) {
+        setActionError(errorMessage(error));
+      }
+    },
+    [projectId, refreshProjects],
+  );
+
+  /** 分叉会话：带上上下文另开一条线，不复制任务（后端只记 forked_from）。 */
+  const forkThreadById = useCallback(
+    async (thread: Thread) => {
+      setActionError(null);
+      try {
+        const created = await forkThread(thread.id);
+        setThreadsNonce((value) => value + 1);
+        await openThread(created.id);
+        setComposerHint("已分叉，接着这条线继续说。");
+      } catch (error: unknown) {
+        setActionError(errorMessage(error));
+      }
+    },
+    [openThread],
+  );
+
   const pickWorkspace = useCallback(async () => {
     if (!projectId) return;
     setActionError(null);
     // 用户在系统对话框里点了"取消"会拿到空串——那是正常操作，不该报错。
     const picked = await pickDirectory();
     if (!picked) return;
-    try {
-      const bound = await bindWorkspace(projectId, { path: picked });
-      // 刚选的目录就是用户想用的那个：绑完立刻切成活动，否则新绑的在界面上是灰的，
-      // 用户会以为没成功（这也是旧版最难理解的一处）。
-      await activateWorkspace(projectId, bound.id);
-      rememberWorkspace(projectId, bound.id);
-      setRecentVersion((version) => version + 1);
-      await refreshProjects();
-      setComposerHint(`已绑定并切到 ${picked}`);
-    } catch (error: unknown) {
-      setActionError(errorMessage(error));
-    }
-  }, [projectId, refreshProjects]);
+    await bindAndActivateWorkspace(picked);
+  }, [projectId, bindAndActivateWorkspace]);
 
   // ── 图片 ─────────────────────────────────────────────────────────────
   /**
@@ -904,6 +971,7 @@ export function BotApp() {
       const isLive = turn.id === activeTaskId;
       const events = isLive && live.events.length > 0 ? live.events : turn.events;
       const steps = buildSteps(events);
+      const plan = planOf(events);
       const verdict = turnReply(events);
       const status = isLive ? liveStatus || turn.status : turn.status;
       const isRunning = isLive ? running : false;
@@ -912,6 +980,7 @@ export function BotApp() {
         goal: turn.goal,
         images: turn.attachments,
         steps,
+        plan,
         reply: verdict.text || turn.summary,
         reason: verdict.reason,
         status,
@@ -940,13 +1009,11 @@ export function BotApp() {
   const topBackground = backgroundTasks[0] ?? null;
   const backgroundTarget = topBackground ? backgroundTaskTarget(topBackground) : null;
 
-  // v165 §9.1：六项状态全部来自真实读数，不写死、不自己猜。
-  const providerLabel = boot?.providers.find((item) => item.id === providerId)?.model || "";
+  // 顶部状态条只留「这一轮在做什么」：目标进度、后台任务数、服务是否断。
+  // 场景 / 模型 / 权限档都在输入框工具条上，各有可点的选择器，
+  // 顶部再放一份就是三重重复——用户第一反应是「模式 辅助 是什么东西」。
   const activeGoal = threadGoal && threadGoal.threadId === conv?.thread.id ? threadGoal.goal : null;
   const statusBarData: GoalStatusBarData = {
-    scenario: scenarioKey,
-    model: providerLabel,
-    automationMode,
     goal: activeGoal?.title ?? "",
     goalStatus: activeGoal?.status ?? "",
     backgroundCount: activeTasks.length,
@@ -956,6 +1023,28 @@ export function BotApp() {
   return (
     <div className="flex h-dvh overflow-hidden bg-bg">
       <Sidebar
+        projects={(boot?.projects ?? []).map((project) => ({ id: project.id, name: project.name }))}
+        activeProjectId={projectId}
+        onToggleProjectPin={(id, pinned) => {
+          // 置顶是幂等的服务端状态，不做乐观更新：列表顺序由后端排，
+          // 前端先改会出现"星亮了但位置没动"的错觉。
+          void (async () => {
+            try {
+              await updateProject(id, { pinned });
+              await refreshProjects();
+            } catch (error: unknown) {
+              setActionError(errorMessage(error));
+            }
+          })();
+        }}
+        onSelectProject={(id) => {
+          // 切项目 = 换上下文（Codex 的 "What should we build in X?"）。
+          // 与"换目录"是两件事：换目录只改工作根，会话不动。
+          if (id === projectId) return;
+          setProjectId(id);
+          setThreadsNonce((value) => value + 1);
+          startNew();
+        }}
         threads={threads}
         activeId={conv?.thread.id ?? null}
         error={threadsError}
@@ -965,12 +1054,13 @@ export function BotApp() {
         onSelect={openThread}
         onArchive={archive}
         onRename={rename}
+        onFork={(thread) => void forkThreadById(thread)}
         onUnarchive={unarchive}
         onDelete={onDelete}
       />
 
       {/* 主内容与任务面板共用一块圆角卡片，和 Qoder 的“灰底 + 白卡”一致。 */}
-      <div className="flex min-w-0 flex-1 py-2 pr-2">
+      <div className="flex min-w-0 flex-1 p-2">
       <div className="flex min-w-0 flex-1 overflow-hidden rounded-xl border border-line bg-canvas shadow-[var(--shadow-sm)]">
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-4">
@@ -999,7 +1089,7 @@ export function BotApp() {
         {/* 后台任务条：还有别的任务在动、或者在等人点，就在这里说一句。
             关窗不等于结束——没有这条，用户重开只会看到当前会话，以为另一条没了。 */}
         {topBackground && (
-          <div className="flex shrink-0 items-center gap-2 border-b border-line bg-warn/[0.05] px-4 py-1.5 text-[12.5px]">
+          <div className="flex shrink-0 items-center gap-2 border-b border-line bg-warn/[0.05] px-4 py-1.5 text-[12px]">
             <span
               className={`size-1.5 shrink-0 rounded-full ${
                 topBackground.status === "waiting_approval" || topBackground.status === "paused"
@@ -1055,11 +1145,13 @@ export function BotApp() {
               </p>
             )}
             {currentTurnView.length === 0 && !loadingConv && (
-              <div className="flex min-h-[56vh] flex-col items-center justify-center text-center">
+              // 空态不再撑满 56vh：那样它和底部输入框之间会空出一大块。
+              // 收到 36vh 后两者在视觉上成一组，和 Qoder 新会话页的密度一致。
+              <div className="flex min-h-[36vh] flex-col items-center justify-center text-center">
                 <span className="grid size-11 place-items-center rounded-xl bg-logo-bg">
                   <span className="size-3.5 rounded-[3px] bg-logo-accent" />
                 </span>
-                <h2 className="mt-5 text-[22px] font-semibold tracking-tight">今天想做点什么？</h2>
+                <h2 className="mt-5 text-[17px] font-semibold tracking-tight">今天想做点什么？</h2>
                 <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-muted">
                   说清楚要什么，它会先读代码再动手。改了什么、为什么改，都会留在对话里。
                 </p>
@@ -1069,7 +1161,7 @@ export function BotApp() {
                       key={text}
                       type="button"
                       onClick={() => setDraft(text)}
-                      className="rounded-lg border border-line bg-surface px-3.5 py-2.5 text-left text-[13.5px] leading-relaxed text-muted transition-colors hover:border-line-strong hover:bg-surface-2 hover:text-text"
+                      className="rounded-lg border border-line bg-surface px-3.5 py-2.5 text-left text-[13px] leading-relaxed text-muted transition-colors hover:border-line-strong hover:bg-surface-2 hover:text-text"
                     >
                       {text}
                     </button>
@@ -1090,6 +1182,7 @@ export function BotApp() {
                   images={turn.images}
                   projectId={projectId}
                   steps={turn.steps}
+                  plan={turn.plan}
                   reply={turn.reply}
                   reason={turn.reason}
                   status={turn.status}
@@ -1104,12 +1197,20 @@ export function BotApp() {
                   onDecide={decide}
                   onAnswer={answer}
                   onRetry={retry}
+                  // 技能提示只给最后一条：回放历史时每条都挂一个"你可以用…"，
+                  // 等于把对话变成广告位。
+                  skillHint={
+                    turn.id === currentTurnView[currentTurnView.length - 1]?.id && !turn.running
+                      ? suggestSkill(turn.goal, skillItems, { used: turnSkills(turn.id) })
+                      : null
+                  }
+                  onUseSkill={(display) => setDraft(`用「${display}」技能的做法处理这件事：`)}
                 />
               ))}
             </div>
 
             {live.notice && (
-              <p className="mt-4 font-mono text-[11.5px] text-faint">{live.notice}</p>
+              <p className="mt-4 font-mono text-[11px] text-faint">{live.notice}</p>
             )}
           </div>
         </div>
@@ -1127,8 +1228,20 @@ export function BotApp() {
           workspaceReady={workspaceReady}
           canPickWorkspace={canPickWorkspace}
           onActivateWorkspace={(id) => void activateWorkspaceById(id)}
+          onBindWorkspacePath={(path) => void bindAndActivateWorkspace(path)}
+          projectName={boot?.projects.find((project) => project.id === projectId)?.name ?? ""}
           onPickWorkspace={() => void pickWorkspace()}
           providerId={providerId}
+          // 顶部状态条撤掉模型胶囊后，默认模型的名字改从这里显示——
+          // 不然「默认模型」四个字看不出到底在跑哪个。
+          defaultModelLabel={
+            // 只认"有 Key"的供应商：没 Key 的模型名显示出来等于骗人。
+            boot?.providers
+              .filter((item) => item.enabled && (item.api_key_hint ?? "") !== "")
+              .find((item) => item.id === providerId)?.model ||
+            boot?.providers.filter((item) => item.enabled && (item.api_key_hint ?? "") !== "")[0]?.model ||
+            ""
+          }
           onProviderChange={(id) => {
             setProviderId(id);
             try {

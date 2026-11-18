@@ -66,6 +66,9 @@ BUILTIN_AGENT = "general-purpose"
 # 用同一套系统提示、同一个模型，只是换一个新的上下文窗口接着干。它不是文件型
 # 定义——名字留在这里，项目里同名文件会像 general-purpose 一样覆盖内置项。
 BUILTIN_FORK = "fork"
+# Claude 内置的 Plan 子代理：只读架构师。与 general-purpose 的区别不是"更聪明"，
+# 而是工具表被裁成只读 + 输出被要求收口成"要改哪些文件、怎么验证"。
+BUILTIN_PLAN = "plan"
 # Claude skips files that are not regular files or exceed this byte limit.
 MAX_FILE_BYTES = 1_048_576
 # The body becomes part of every child system prompt. Claude uses it verbatim;
@@ -199,6 +202,78 @@ BUILTIN_FORK_AGENT = AgentDefinition(
 )
 
 
+# Claude 的 Plan 内置子代理（源码里是 ``QDe``：``agentType:"Plan"``，
+# ``disallowedTools:[Task, ..., Edit, Write]``，系统提示 ``lOo()``）。
+#
+# 它的存在理由是**分工**：计划阶段要的是"看清代码 + 给方案"，不是"顺手改一行"。
+# 主循环自己在计划模式里也能读，但它同时在管对话、管收尾、管用户提问；派一个
+# 只读架构师出去并行看几块，回来的是带文件路径的方案，而不是又一段叙述。
+#
+# 工具表白名单而不是黑名单：黑名单会随着工具变多而漏（新增一个写工具就漏一个），
+# 白名单只会在新增只读工具时"少给"，那是可接受的退化方向。
+PLAN_AGENT_TOOLS: tuple[str, ...] = (
+    "read_file",
+    "list_files",
+    "glob",
+    "search_code",
+    "git",
+    "web_search",
+    "web_fetch",
+    "tool_search",
+    "skill",
+    "read_notes",
+    "memory_search",
+    "report_findings",
+)
+
+PLAN_AGENT_INSTRUCTIONS = """你是软件架构师，只做一件事：看清代码，然后给出一份能照着做的实现方案。
+
+=== 只读：这是硬约束 ===
+你不能创建文件、不能改文件、不能删、不能移动、不能建临时文件、不能用重定向写文件、
+不能执行任何改变系统状态的命令。你的工具表里没有写类工具——尝试写只会失败。
+把力气全放在"读懂"和"设计"上。
+
+## 工作方式
+
+1. **先确认需求**：把给定的要求读准，抓住"必须做到什么"和"明确不要什么"。
+2. **读透代码**：找现有的同类实现与约定（命名、分层、错误处理、测试写法），
+   沿着调用链把相关路径走一遍。优先复用既有函数与工具，不要另外造一套。
+3. **给方案**：按项目既有风格设计实现路径，说清取舍——为什么是这条路，
+   另一条路贵在哪。有多个可行方案时把它们和适用条件一起列出来。
+4. **排顺序**：步骤要有依赖关系，先做什么后做什么，哪一步做完就能验证。
+
+## 必须的输出形状
+
+结尾固定用这一节收口：
+
+### 实现要点
+- 要改的文件（带路径）与改什么
+- 新增的文件（带路径）与职责
+- 复用的既有能力（函数 / 工具 / 模式，带路径）
+
+### 关键文件
+列出 3-5 个实现这份方案最关键的文件：
+- path/to/file1
+- path/to/file2
+
+### 怎么验证
+跑什么命令、看到什么算过。
+
+不要写"建议进一步调研"这类收尾：你要么给了能执行的方案，要么明确说清缺哪条信息。
+"""
+
+BUILTIN_PLAN_AGENT = AgentDefinition(
+    name=BUILTIN_PLAN,
+    description=(
+        "软件架构师子代理：只读探索并产出实现方案（步骤、要改的文件、验证方式）。"
+        "计划阶段要并行看几块代码时派它。"
+    ),
+    instructions=PLAN_AGENT_INSTRUCTIONS,
+    tools=PLAN_AGENT_TOOLS,
+    source="built-in",
+)
+
+
 @dataclass
 class AgentCatalog:
     """Resolved definitions plus the files that could not be loaded."""
@@ -220,13 +295,11 @@ class AgentCatalog:
         # Built-ins first, default name leading: it is the type the model should
         # reach for when none is stated, and the error list reads better with it
         # up front. fork comes second because it is a tool-shaped choice, not a
-        # general exploration default.
-        ordered = [
-            name for name in (BUILTIN_AGENT, BUILTIN_FORK) if name in self.entries
-        ]
-        ordered.extend(
-            sorted(name for name in self.entries if name not in (BUILTIN_AGENT, BUILTIN_FORK))
-        )
+        # general exploration default. plan 第三：它是"计划阶段"的专用类型，
+        # 排在通用项之后才不会被当默认选项。
+        head = (BUILTIN_AGENT, BUILTIN_FORK, BUILTIN_PLAN)
+        ordered = [name for name in head if name in self.entries]
+        ordered.extend(sorted(name for name in self.entries if name not in head))
         return ordered
 
     def custom(self) -> list[AgentDefinition]:
@@ -650,7 +723,11 @@ def discover_agents(root: str | Path, *, env: dict[str, str] | None = None) -> A
     Plugin agents are addressed as ``<plugin>:<agent>`` (Claude's namespace).
     """
     catalog = AgentCatalog(
-        entries={BUILTIN_AGENT: BUILTIN_GENERAL_PURPOSE, BUILTIN_FORK: BUILTIN_FORK_AGENT}
+        entries={
+            BUILTIN_AGENT: BUILTIN_GENERAL_PURPOSE,
+            BUILTIN_FORK: BUILTIN_FORK_AGENT,
+            BUILTIN_PLAN: BUILTIN_PLAN_AGENT,
+        }
     )
     layers = (
         ("user", user_agents_dir(env)),

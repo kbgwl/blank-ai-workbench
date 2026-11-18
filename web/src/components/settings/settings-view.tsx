@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Panel } from "@/components/panel";
 import { PageBody } from "@/components/page";
+import { UTILITY_LINKS } from "@/components/bot/nav";
 import { AgentRuntimePanel } from "./agent-runtime-panel";
 import { ChannelsPanel } from "./channels-panel";
 import { FeatureFlagsPanel } from "./feature-flags-panel";
@@ -13,7 +15,7 @@ import { RoleModelSettings } from "./role-model-settings";
 import { RoutingEvidencePanel } from "./routing-evidence-panel";
 import { SafetyPanel } from "./safety-panel";
 
-type SectionKey = "models" | "safety" | "runtime" | "channels" | "tools" | "advanced";
+type SectionKey = "models" | "safety" | "runtime" | "channels" | "tools" | "utilities" | "advanced";
 
 type Section = {
   key: SectionKey;
@@ -108,6 +110,20 @@ const SECTIONS: Section[] = [
     ),
   },
   {
+    key: "utilities",
+    label: "查看与效率",
+    hint: "监控 · 证据库 · 技能 · 连接器",
+    description:
+      "监控、交付证据、你确认过的做法、外部工具——这些是低频的查看与配置项，不占常驻侧栏。需要时从这里进去。",
+    status: "随时可达",
+    icon: (
+      <svg {...iconProps}>
+        <path d="M4 5h16v14H4z" />
+        <path d="M4 9h16M9 9v10M13 13h4" />
+      </svg>
+    ),
+  },
+  {
     key: "advanced",
     label: "高级与实验",
     hint: "特性开关与路由证据",
@@ -157,13 +173,33 @@ function SectionBody({ active }: { active: SectionKey }) {
           <McpPanel />
         </div>
       );
+    case "utilities":
+      return (
+        <Panel title="低频入口" hint="从侧栏收进这里，不再占常驻位置">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {UTILITY_LINKS.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="group flex min-w-0 flex-col gap-0.5 rounded-lg border border-line bg-surface-2 px-3 py-2.5 transition-colors hover:border-line-strong hover:bg-surface-3"
+              >
+                <span className="flex items-center justify-between text-[14px] font-medium text-text">
+                  {item.label}
+                  <span className="text-faint transition-transform group-hover:translate-x-0.5">→</span>
+                </span>
+                <span className="text-[12px] text-faint">{item.hint}</span>
+              </Link>
+            ))}
+          </div>
+        </Panel>
+      );
     case "advanced":
       return (
         <div className="flex flex-col gap-4">
           <FeatureFlagsPanel />
           <RoutingEvidencePanel />
           <Panel title="审计与回滚" hint="tool_calls · 文件快照">
-            <p className="text-[13.5px] leading-relaxed text-faint">
+            <p className="text-[13px] leading-relaxed text-faint">
               每次工具调用都落在 tool_calls 与任务事件里，含风险等级、权限判定与耗时；写文件前留备份，
               任务执行前留整树快照，可以按检查点回滚。
             </p>
@@ -197,49 +233,44 @@ export function SettingsView() {
   const section = SECTIONS[index] ?? SECTIONS[0];
 
   return (
-    <PageBody>
-      <div className="grid items-start gap-6 lg:grid-cols-[13rem_minmax(0,1fr)]">
-        <nav aria-label="设置分类" className="flex min-w-0 gap-1 overflow-x-auto lg:sticky lg:top-0 lg:flex-col lg:overflow-visible">
-          {SECTIONS.map((item) => {
-            const selected = item.key === active;
-            return (
-              <a
-                key={item.key}
-                href={`#${item.key}`}
-                aria-current={selected ? "page" : undefined}
-                onClick={() => select(item.key)}
-                className={`flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-[13.5px] transition-colors lg:w-full ${
-                  selected ? "bg-surface-2 font-medium text-text" : "text-muted hover:bg-surface-2 hover:text-text"
-                }`}
-              >
-                <span className={selected ? "text-text" : "text-faint"}>{item.icon}</span>
-                <span className="whitespace-nowrap">{item.label}</span>
-              </a>
-            );
-          })}
-        </nav>
+    <PageBody wide className="gap-4">
+      <section ref={contentRef} aria-label="设置" className="min-w-0 scroll-mt-4">
+        {/* 分类改成顶部横向 tab：去掉第二层 208px 侧栏，内容区铺满。
+             Qoder 的设置就是单栏 + 顶部分类，不再让左栏叠左栏。
+             标题只由外壳顶栏显示一次，这里不再重复写一遍「设置」——
+             同一屏出现两个一样的标题，是之前"看着乱"最直接的一处。 */}
+        <div className="flex flex-col gap-3 border-b border-line pb-3">
+          <nav aria-label="设置分类" className="flex flex-wrap items-center gap-1">
+            {SECTIONS.map((item) => {
+              const selected = item.key === active;
+              return (
+                <a
+                  key={item.key}
+                  href={`#${item.key}`}
+                  aria-current={selected ? "page" : undefined}
+                  onClick={() => select(item.key)}
+                  className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13px] transition-colors ${
+                    selected ? "bg-surface-3 font-medium text-text" : "text-muted hover:bg-surface-2 hover:text-text"
+                  }`}
+                >
+                  <span className={selected ? "text-text" : "text-faint"}>{item.icon}</span>
+                  <span className="whitespace-nowrap">{item.label}</span>
+                </a>
+              );
+            })}
+          </nav>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-faint">
+            {section.status}
+          </span>
+          <p className="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">{section.description}</p>
+        </div>
 
-        <section ref={contentRef} aria-labelledby="settings-section-title" className="min-w-0 scroll-mt-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
-            <div className="flex min-w-0 items-center gap-2">
-              <h2 id="settings-section-title" className="text-[14px] font-semibold tracking-tight">
-                {section.label}
-              </h2>
-              <span className="rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-faint">
-                {section.status}
-              </span>
-            </div>
-            <span className="shrink-0 font-mono text-[11px] text-faint">
-              {String(index + 1).padStart(2, "0")} / {String(SECTIONS.length).padStart(2, "0")}
-            </span>
-          </div>
-          <p className="mt-2 text-[13px] leading-relaxed text-muted">{section.description}</p>
-
-          <div className="mt-4">
-            <SectionBody active={active} />
-          </div>
-        </section>
-      </div>
+        <div className="mt-4">
+          <SectionBody active={active} />
+        </div>
+      </section>
     </PageBody>
   );
 }

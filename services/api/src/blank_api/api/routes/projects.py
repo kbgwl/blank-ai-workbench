@@ -13,6 +13,7 @@ from blank_api.models.model_provider import ModelUsage
 from blank_api.models.project import Project, Workspace
 from blank_api.models.task import AgentEvent, Task, ToolCall
 from blank_api.models.thread import Thread
+from blank_api.services.workspace import git_branch
 from blank_api.schemas.project import (
     ProjectCreate,
     ProjectOut,
@@ -52,6 +53,7 @@ def workspace_out(workspace: Workspace) -> WorkspaceOut:
         label=workspace.label,
         path=mask_path(workspace.path),
         is_active=workspace.is_active,
+        branch=git_branch(workspace.path),
     )
 
 
@@ -60,6 +62,10 @@ def project_out(project: Project) -> ProjectOut:
         id=project.id,
         name=project.name,
         description=project.description,
+        # 手写构造必须逐字段带出来：ProjectOut 里 pinned/position 有默认值，
+        # 漏写不会报错，只会永远显示 False/0（本轮实测踩过）。
+        pinned=project.pinned,
+        position=project.position,
         workspaces=[workspace_out(w) for w in project.workspaces],
     )
 
@@ -68,7 +74,7 @@ def project_out(project: Project) -> ProjectOut:
 async def list_projects(db: DbSession) -> list[ProjectOut]:
     rows = (
         await db.execute(
-            select(Project).options(selectinload(Project.workspaces)).order_by(Project.created_at.desc())
+            select(Project).options(selectinload(Project.workspaces)).order_by(Project.pinned.desc(), Project.position.asc(), Project.created_at.desc())
         )
     ).scalars()
     return [project_out(p) for p in rows]
@@ -168,6 +174,10 @@ async def update_project(project_id: str, payload: ProjectUpdate, db: DbSession)
         project.name = payload.name
     if payload.description is not None:
         project.description = payload.description
+    if payload.pinned is not None:
+        project.pinned = payload.pinned
+    if payload.position is not None:
+        project.position = payload.position
     await db.commit()
     return project_out(project)
 

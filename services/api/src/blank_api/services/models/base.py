@@ -25,11 +25,16 @@ class ModelError(Exception):
         retry_after: float = 0.0,
         reasoning_events: int = 0,
         reasoning_chars: int = 0,
+        finish_reason: str = "",
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.retryable = retryable
+        # 供应商给的结束原因（`length` = 预算用光被切、空串 = 没给）。
+        # 「正文为空」有两种完全不同的原因：网关不认流，和模型把额度花在思考上。
+        # 只有这个字段能区分，光看正文长度分不出来。
+        self.finish_reason = finish_reason
         # 供应商给回的状态码（0 = 这一笔根本没走到有状态码的那一步）。
         # 上层要它才能分清"换个说法再说一遍可能有用"与"再说一遍只是添乱"：
         # 400 常是在拒 `stream` 这个参数，429/5xx 拒的是"现在不许问"，与问法无关。
@@ -42,6 +47,86 @@ class ModelError(Exception):
         # 这种请求退回整包只会把同一段思考再跑一遍（真机 01f1fa83 卡了 90 分钟）。
         self.reasoning_events = reasoning_events
         self.reasoning_chars = reasoning_chars
+
+
+# 供应商 4xx 正文里的特征词。分不清具体原因时，用户只能看到"模型返回 400"，
+# 既不知道是 Key 错了、模型名写错了，还是上下文太长——这三种修法完全不同。
+_CONTEXT_MARKERS = (
+    "context length",
+    "context_length",
+    "maximum context",
+    "too many tokens",
+    "prompt is too long",
+    "reduce the length",
+    "exceeds the maximum number of tokens",
+    "input is too long",
+)
+_MODEL_MARKERS = (
+    "model_not_found",
+    "model not found",
+    "does not exist",
+    "invalid model",
+    "unknown model",
+    "no such model",
+    "not a valid model",
+)
+
+
+def classify_http_failure(status: int, body: str, *, retry_after: float = 0.0) -> ModelError:
+    """把供应商的 HTTP 失败翻成"用户能据此动手"的错误。
+
+    对齐 Claude / Codex 的做法：认证失败、模型名不存在、上下文超限这三类
+    **不能重试**（同样的请求再发一遍只会得到同样的 401/400），而且必须说清是什么问题；
+    429 与 5xx 才是"现在别问"，交给上层退避重试。
+    """
+    text = (body or "")[:2000]
+    lowered = text.lower()
+    snippet = text[:200]
+
+    if status in (401, 403):
+        return ModelError(
+            "authentication_error",
+            f"API Key 无效或没有该模型的权限（HTTP {status}）：{snippet}",
+            retryable=False,
+            status=status,
+        )
+    if any(marker in lowered for marker in _CONTEXT_MARKERS):
+        return ModelError(
+            "context_overflow",
+            f"上下文超出模型窗口（HTTP {status}）：{snippet}",
+            retryable=False,
+            status=status,
+        )
+    if any(marker in lowered for marker in _MODEL_MARKERS):
+        return ModelError(
+            "model_not_found",
+            f"模型名不存在或未开通（HTTP {status}）：{snippet}。检查设置里的 Model ID。",
+            retryable=False,
+            status=status,
+        )
+    if status == 404:
+        return ModelError(
+            "endpoint_not_found",
+            f"接口地址不存在（HTTP 404）：{snippet}。检查设置里的接口地址是否需要 /v1。",
+            retryable=False,
+            status=status,
+        )
+    if status == 429:
+        return ModelError(
+            "rate_limit",
+            f"供应商限流（HTTP 429）：{snippet}",
+            retryable=True,
+            status=status,
+            retry_after=retry_after,
+        )
+    if status >= 500:
+        return ModelError(
+            "model_overloaded",
+            f"供应商暂时不可用（HTTP {status}）：{snippet}",
+            retryable=True,
+            status=status,
+        )
+    return ModelError("model_http_error", f"模型返回 {status}：{snippet}", retryable=False, status=status)
 
 
 def retry_after_seconds(value: str | None, *, now: float | None = None) -> float:
@@ -196,6 +281,10 @@ class ModelResponse:
     model: str = ""
     tool_calls: list[dict] = field(default_factory=list)
     finish_reason: str | None = None
+    # 这一笔收到的思考增量字数（0 = 没收到，或这家不推思考）。
+    # 判「预算被思考吃光」只看这个数与正文是否为空：`finish_reason=length`
+    # 配上非零思考、零正文，就是模型想太久把额度用完了，不是网关不认流。
+    reasoning_chars: int = 0
     # 供应商侧这一笔请求的 id（Codex 的 `token_usage_record.response_id` 就是它）。
     # 空串是事实："这家没给 id"，不是"还没实现"——用户报"这轮答得不对"时，
     # 只有这个 id 能在供应商那边定位到具体那一笔；我们的 trace_id 只到自己家门口。
@@ -227,8 +316,28 @@ class AdapterConfig:
 
 
 class ModelAdapter(ABC):
+    # 恢复动作给的临时输出预算（0 = 用配置值）。由上层在失败之后设置，
+    # 并且**必须用完复位**：它挂在共享的适配器实例上，留着就会影响下一个任务。
+    # 适配器自己从不修改它，只读。
+    max_tokens_override: int = 0
+
     def __init__(self, config: AdapterConfig) -> None:
         self.config = config
+
+    def payload_max_tokens(self, model: str = "") -> int:
+        """这次请求实际下发多少输出预算（已按模型上限夹紧）。
+
+        三个适配器都从这里取，而不是直接用 ``config.max_tokens``：
+        配置是"用户想要多少"，模型上限是"这家给不了更多"，两者取小才是
+        一次能成功的请求。
+        """
+        from blank_api.services.models.budget import clamp_max_tokens
+
+        return clamp_max_tokens(
+            self.config.max_tokens,
+            model or self.config.model,
+            override=self.max_tokens_override,
+        )
 
     # ---- capability surface -------------------------------------------------
     @property

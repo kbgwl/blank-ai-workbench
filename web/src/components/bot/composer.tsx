@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import type { Project, Provider, ScenarioInfo, Workspace } from "../tasks/api";
 import { SelectPopover, type SelectOption } from "../ui/select-popover";
 import { AtPicker } from "./at-picker";
+import { SlashMenu } from "./slash-menu";
+import { matchSlash, type SlashCommand } from "@/lib/slash-commands";
+import { NEW_CHAT_EVENT } from "@/lib/commands";
 import { DraftImageChips } from "./image-chips";
 import { insertReference } from "./picker";
 import { composerAction } from "./turns";
@@ -26,14 +29,25 @@ export type ComposerProps = {
    * 数据回来又改口——用户看到的是自己的目录被否认了一次。
    */
   workspaceReady?: boolean;
-  /** 切到另一个已绑定的目录。 */
+  /** 切到另一个已绑定的目录（不换项目、不换会话）。 */
   onActivateWorkspace: (id: string) => void;
+  /** 手动输入一个本地目录：绑定到当前项目并立刻切过去。 */
+  onBindWorkspacePath: (path: string) => void;
+  /** 当前项目名。Codex 桌面版在输入框上方就这么标：`项目 | Local | 分支`。 */
+  projectName: string;
   /** 弹目录选择框并绑定。桌面壳里才有系统对话框，浏览器里由上层决定怎么降级。 */
   onPickWorkspace: () => void;
   /** 是否具备"挑一个新目录"的能力（桌面壳）。没有就不渲染那个选项。 */
   canPickWorkspace: boolean;
   providerId: string;
   onProviderChange: (id: string) => void;
+  /**
+   * 没手动选模型时，实际会用到的那个型号名。
+   *
+   * 后端按"角色分工"自己挑，前端不知道规则，所以把默认模型的名字显示在选择器上：
+   * 顶部那条状态栏撤掉之后，模型名只能从这里看见，不能再显示成含糊的「默认模型」。
+   */
+  defaultModelLabel?: string;
   /** 场景目录（GET /scenarios）。加载失败时为空数组——选择器隐藏，行为回落开发场景。 */
   scenarios: ScenarioInfo[];
   scenarioKey: string;
@@ -69,6 +83,15 @@ export function Composer(props: ComposerProps) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [picking, setPicking] = useState(false);
+  // 附件菜单：引用文件 / 上传图片都收在「+」里。以前并排摆一个 @ 和一个相框图，
+  // 相框那个是十年前的写法，主流产品早就不用单独的图片按钮了。
+  const [attachOpen, setAttachOpen] = useState(false);
+  const attachRef = useRef<HTMLDivElement>(null);
+  // 手动输入本地目录：浏览器里没有原生目录框，这是唯一能选任意目录的入口。
+  // null = 收起；空串 = 刚打开还没填。
+  const [pathEntry, setPathEntry] = useState<string | null>(null);
+  // 斜杠面板的光标。面板不抢焦点，键盘事件仍由 textarea 收。
+  const [slashIndex, setSlashIndex] = useState(0);
   const [dragging, setDragging] = useState(false);
   // 拖拽进入子元素会再触发一次 dragenter，只用布尔量会让高亮在图片条上闪烁。
   const dragDepth = useRef(0);
@@ -90,6 +113,52 @@ export function Composer(props: ComposerProps) {
     node.style.height = `${Math.min(node.scrollHeight, 9 * 26 + 28)}px`;
   }, [props.draft]);
 
+  // 附件菜单点外面收起。捕获取 mousedown 而不是 click：拖动选择文本时不该触发菜单。
+  useEffect(() => {
+    if (!attachOpen) return;
+    const close = (event: MouseEvent) => {
+      if (attachRef.current && !attachRef.current.contains(event.target as Node)) setAttachOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [attachOpen]);
+
+  // 斜杠命令：只有输入以 / 开头且还没打空格时才出现。
+  const slash = matchSlash(props.draft);
+  const slashItems = slash?.items ?? [];
+  // 面板开着时不能用越界的旧下标（换了关键词命令会变少）。
+  const slashCursor = slashItems.length === 0 ? 0 : Math.min(slashIndex, slashItems.length - 1);
+
+  function runCommand(command: SlashCommand) {
+    if (command.action === "new-chat") {
+      window.dispatchEvent(new CustomEvent(NEW_CHAT_EVENT));
+      props.onDraftChange("");
+    } else if (command.action === "clear") {
+      props.onDraftChange("");
+    } else if (command.action === "plan-mode") {
+      props.onPermissionChange("plan");
+      props.onDraftChange("");
+    } else if (command.href) {
+      window.location.href = command.href;
+      props.onDraftChange("");
+    }
+    setSlashIndex(0);
+    textarea.current?.focus();
+  }
+
+  /**
+   * 真正能用的模型：启用了**并且**填了 Key。
+   *
+   * 之前把 7 家供应商全列出来，而它们默认 enabled 却没 Key——用户看到一长串、
+   * 选完发消息才发现不能用。选择器只该出现"现在就能发出去的"。
+   */
+  const usableProviders = props.providers.filter(
+    (provider) => provider.enabled && (provider.api_key_hint ?? "") !== "",
+  );
+  const unconfigured = props.providers.filter(
+    (provider) => provider.enabled && (provider.api_key_hint ?? "") === "",
+  );
+
   const readyImages = props.images.filter((image) => image.id && !image.uploading && !image.error);
   const uploading = props.images.some((image) => image.uploading);
   // 只有图没有字也能发："照这张图改"里的"这张图"本身就是全部意思。
@@ -100,8 +169,33 @@ export function Composer(props: ComposerProps) {
 
   // 后端在没有 is_active 时会回落到第一个，这里保持一致：显示的那个必须就是真正会用的那个。
   const activeWorkspace = props.workspaces.find((item) => item.is_active) ?? props.workspaces[0] ?? null;
-  /** 没有可挑的目录、也没有已绑目录时，渲染一句话而不是一个点不动的下拉。 */
-  const workspaceSelectable = props.canPickWorkspace || props.workspaces.length > 1;
+  /**
+   * 「在哪儿干活」= 选一个本地目录。
+   *
+   * 逆向 Codex 之后的结论：它**没有"项目"这一层**，只有 `-C/--cd <DIR>` 指定工作根，
+   * 目录是会话的属性（`codex resume` 换的是会话，不是换项目）。我们之前把"选目录"
+   * 做成了"切项目"，结果是换目录连带把会话列表清空了——用户看到的就是"工作区内容没了"。
+   *
+   * 所以这里只列**当前项目**的目录；换目录不换项目、不换会话。
+   */
+  const workspaceOptions: SelectOption[] = [
+    // 桌面版能开系统目录框；浏览器里没有原生框，所以第二条永远存在。
+    ...(props.canPickWorkspace
+      ? [{ value: "__pick__", label: "选择另一个目录…", description: "打开系统目录选择框" }]
+      : []),
+    { value: "__path__", label: "输入本地目录路径…", description: "例如 E:/projects/demo" },
+    ...props.workspaces.map((workspace) => ({
+      value: `ws:${workspace.id}`,
+      label: workspace.label,
+      description: looksLikePath(workspace.path)
+        ? workspace.path
+        : "在这个目录里读写文件、跑命令",
+    })),
+  ];
+
+  /** 永远可点：至少还有「输入本地目录路径…」这条入口，不然浏览器里等于不能换目录。 */
+  const workspaceSelectable = true;
+
   // 场景联动（任务书 §8.2）：换场景时输入框提示词跟着换；记忆开关只在日常场景出现。
   const activeScenario = props.scenarios.find((item) => item.key === props.scenarioKey);
   const placeholderText =
@@ -130,15 +224,15 @@ export function Composer(props: ComposerProps) {
   ];
 
   return (
-    <div className="bg-bg px-4 pt-3 pb-3.5">
+    <div className="bg-canvas px-4 pt-3 pb-3.5">
       <div className="mx-auto w-full max-w-3xl">
         {props.error && (
-          <p className="mb-2 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-1.5 text-[12.5px] text-danger">
+          <p className="mb-2 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-1.5 text-[12px] text-danger">
             {props.error}
           </p>
         )}
         {props.hint && (
-          <p className="mb-2 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[12.5px] text-muted">
+          <p className="mb-2 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[12px] text-muted">
             {props.hint}
           </p>
         )}
@@ -181,11 +275,63 @@ export function Composer(props: ComposerProps) {
             </span>
           )}
 
+          {/* 上下文条：这一轮在哪个项目、哪个目录里干。
+              Codex 桌面版同样是这条（项目 | Local | 分支），分支我们还没取，先不摆假数据。 */}
+          <div className="flex items-center gap-1.5 px-4 pt-2.5 text-[11px] text-faint">
+            <span className="max-w-[40%] truncate rounded bg-surface-2 px-1.5 py-0.5 text-muted">
+              {props.projectName || "未命名项目"}
+            </span>
+            <span className="text-faint">·</span>
+            <span className="min-w-0 truncate">{activeWorkspace?.label ?? "未绑定目录"}</span>
+            {activeWorkspace?.branch && (
+              <>
+                <span className="text-faint">·</span>
+                <span className="shrink-0 font-mono">{activeWorkspace.branch}</span>
+              </>
+            )}
+          </div>
+
           <textarea
             ref={textarea}
             value={props.draft}
-            onChange={(event) => props.onDraftChange(event.target.value)}
+            onChange={(event) => {
+              const next = event.target.value;
+              // 打一个 @ 就直接开引用面板（前面必须是空白或句首）。
+              // Claude Code / Cursor / Qoder 都是这个交互：引用文件不该先去找图标。
+              // 邮箱里的 a@b 不会被误触发——@ 前一个字符不是空白就不管。
+              if (next.length === props.draft.length + 1 && next.endsWith("@")) {
+                const before = next.slice(0, -1);
+                if (!before || /\s$/.test(before)) {
+                  props.onDraftChange(before);
+                  setPicking(true);
+                  return;
+                }
+              }
+              props.onDraftChange(next);
+            }}
             onKeyDown={(event) => {
+              // 斜杠面板优先接管 ↑↓ / Enter / Esc：这时回车是"执行命令"，不是"发送"。
+              if (slash && !event.nativeEvent.isComposing) {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  if (slashItems.length > 0) {
+                    const step = event.key === "ArrowDown" ? 1 : -1;
+                    setSlashIndex((slashCursor + step + slashItems.length) % slashItems.length);
+                  }
+                  return;
+                }
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  const picked = slashItems[slashCursor];
+                  if (picked) runCommand(picked);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  props.onDraftChange("");
+                  return;
+                }
+              }
               if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 if (!canSend) return;
@@ -221,29 +367,99 @@ export function Composer(props: ComposerProps) {
           {/* 工具条：左边是"在哪儿干活、按什么规矩"，右边是"用哪个模型、发不发"。
               以前全部挤在一行且允许收缩，窗口一窄文字类控件就被压成竖排（"不/记/住"）；
               现在整条允许换行，右边整组（开关/模型/发送）作为一块整体换到下一行靠右。 */}
-          <div className="flex flex-wrap items-center gap-x-1 gap-y-1 px-2.5 pt-1 pb-2.5">
-            <button
-              type="button"
-              onClick={() => setPicking((value) => !value)}
-              title="引用工作区里的文件"
-              className="grid size-8 shrink-0 place-items-center rounded-lg text-faint transition-colors hover:bg-surface-2 hover:text-text"
-            >
-              <span className="font-mono text-[14px]">@</span>
-            </button>
+          {pathEntry !== null && (
+            <div className="mb-1 flex flex-wrap items-center gap-1.5 border-t border-line px-2.5 pt-2">
+              <input
+                autoFocus
+                value={pathEntry}
+                onChange={(event) => setPathEntry(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && pathEntry.trim()) {
+                    props.onBindWorkspacePath(pathEntry.trim());
+                    setPathEntry(null);
+                  }
+                  if (event.key === "Escape") setPathEntry(null);
+                }}
+                placeholder="本地目录的完整路径，例如 E:////projects////demo"
+                aria-label="本地目录路径"
+                className="min-w-[14rem] flex-1 rounded-md border border-line bg-surface px-2 py-1.5 font-mono text-[12px] text-text placeholder:text-faint focus:outline-none"
+              />
+              <button
+                type="button"
+                disabled={pathEntry.trim() === ""}
+                onClick={() => {
+                  props.onBindWorkspacePath(pathEntry.trim());
+                  setPathEntry(null);
+                }}
+                className="rounded-md border border-brand/40 bg-brand/10 px-2 py-1 text-[12px] text-brand transition-colors hover:bg-brand/15 disabled:opacity-50"
+              >
+                绑定并切换
+              </button>
+              <button
+                type="button"
+                onClick={() => setPathEntry(null)}
+                className="rounded-md border border-line px-2 py-1 text-[12px] text-muted transition-colors hover:text-text"
+              >
+                取消
+              </button>
+            </div>
+          )}
 
-            <button
-              type="button"
-              onClick={() => fileInput.current?.click()}
-              disabled={props.disabled}
-              title="添加图片（也可以直接拖进来或 Ctrl+V 粘贴）"
-              className="grid size-8 shrink-0 place-items-center rounded-lg text-faint transition-colors hover:bg-surface-2 hover:text-text disabled:opacity-40"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" className="size-[15px]" aria-hidden>
-                <rect x="3" y="4" width="18" height="16" rx="2.5" />
-                <circle cx="8.5" cy="9.5" r="1.5" />
-                <path d="M4 17l4.5-4.5a2 2 0 0 1 2.8 0L20 21" />
-              </svg>
-            </button>
+          <div className="flex flex-wrap items-center gap-x-1 gap-y-1 px-2.5 pt-1 pb-2.5">
+            {/* 附件只剩一个「+」。以前是 @ 和相框两个图标并排：相框是十年前
+                图片上传的写法，现在的 agent 都把附件收进一个入口，输入框更干净。 */}
+            <div ref={attachRef} className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setAttachOpen((value) => !value)}
+                disabled={props.disabled}
+                aria-haspopup="menu"
+                aria-expanded={attachOpen}
+                title="添加附件"
+                className={`grid size-8 place-items-center rounded-lg transition-colors hover:bg-surface-2 hover:text-text disabled:opacity-40 ${
+                  attachOpen ? "bg-surface-2 text-text" : "text-faint"
+                }`}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" className="size-[16px]" aria-hidden>
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+              </button>
+              {attachOpen && (
+                <div
+                  role="menu"
+                  className="absolute bottom-full left-0 z-30 mb-1 w-[212px] overflow-hidden rounded-lg border border-line bg-surface py-1 shadow-[var(--shadow-lg)]"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setAttachOpen(false);
+                      setPicking(true);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+                  >
+                    <span className="w-4 shrink-0 text-center font-mono text-[12px] text-faint">@</span>
+                    引用工作区文件
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setAttachOpen(false);
+                      fileInput.current?.click();
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+                  >
+                    <span className="grid w-4 shrink-0 place-items-center text-faint">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" className="size-[14px]" aria-hidden>
+                        <path d="M20 11.5 12 19.5a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7" />
+                      </svg>
+                    </span>
+                    上传图片或附件
+                  </button>
+                </div>
+              )}
+            </div>
             <input
               ref={fileInput}
               type="file"
@@ -258,7 +474,7 @@ export function Composer(props: ComposerProps) {
               }}
             />
 
-            <span className="hidden shrink-0 font-mono text-[11.5px] text-faint sm:inline">
+            <span className="hidden shrink-0 font-mono text-[11px] text-faint sm:inline">
               {referencesIn(props.draft).length > 0
                 ? `已引用 ${referencesIn(props.draft).length} 个文件`
                 : uploading
@@ -271,64 +487,48 @@ export function Composer(props: ComposerProps) {
             {/* 一条竖线把"操作按钮"和"上下文下拉"分开：之前它们长得一样、挨得也近。 */}
             <span className="mx-0.5 h-4 w-px shrink-0 bg-line" aria-hidden />
 
-            {props.projects.length > 1 && (
-              <SelectPopover
-                size="compact"
-                ariaLabel="项目"
-                value={props.projectId}
-                options={props.projects.map((project) => ({ value: project.id, label: project.name }))}
-                onChange={props.onProjectChange}
-                triggerClassName="max-w-[118px] min-w-[72px]"
-                menuMinWidth={180}
-              />
-            )}
-
-            {/* 工作区：真正决定"在哪个目录里改东西"的就是它，之前只在项目页能改，
-                对话页连看都看不到，于是整个功能像是不存在。 */}
+            {/* 工作目录：菜单里直接列目录（含别的项目），选它就是切项目。 */}
             {workspaceSelectable ? (
               <SelectPopover
                 size="compact"
                 ariaLabel="工作目录"
-                value={activeWorkspace?.id ?? ""}
-                options={[
-                  ...(!activeWorkspace ? [{ value: "", label: "未绑定目录" }] : []),
-                  ...props.workspaces.map((workspace) => ({
-                    value: workspace.id,
-                    label: workspace.label,
-                    description: "在这个目录里读写文件、跑命令",
-                  })),
-                  ...(props.canPickWorkspace
-                    ? [
-                        {
-                          value: "__pick__",
-                          label: props.workspaces.length > 0 ? "选另一个目录…" : "选一个目录…",
-                        },
-                      ]
-                    : []),
-                ]}
+                value={activeWorkspace ? `ws:${activeWorkspace.id}` : ""}
+                options={workspaceOptions}
                 onChange={(next) => {
                   if (next === "__pick__") {
                     props.onPickWorkspace();
                     return;
                   }
-                  if (next) props.onActivateWorkspace(next);
+                  if (next === "__path__") {
+                    setPathEntry("");
+                    return;
+                  }
+                  if (!next.startsWith("ws:")) return;
+                  props.onActivateWorkspace(next.slice(3));
                 }}
-                triggerClassName={`max-w-[132px] min-w-[76px] ${activeWorkspace ? "" : "text-danger"}`}
-                menuMinWidth={200}
+                renderValue={() => (
+                  <span className="flex min-w-0 items-center gap-1">
+                    <FolderIcon />
+                    <span className="truncate">{activeWorkspace?.label ?? "未绑定目录"}</span>
+                  </span>
+                )}
+                triggerClassName={`max-w-[176px] min-w-[88px] ${activeWorkspace ? "" : "text-danger"}`}
+                menuMinWidth={280}
               />
             ) : activeWorkspace ? (
               // 不能选目录的环境（CLI 静态站）里，已绑定的目录要如实显示名字，
               // 不能因为"改不了"就冒充"没绑定"——那会把用户赶去项目页白跑一趟。
               <span
-                title="在哪个目录里干活（CLI 场景只读，桌面版可切换）"
-                className="rounded-lg px-2 py-1.5 text-[13.5px] text-muted"
+                title={activeWorkspace.path || "在哪个目录里干活（桌面版可切换）"}
+                className="flex min-w-0 max-w-[176px] items-center gap-1 rounded-lg px-2 py-1.5 text-[13px] text-muted"
               >
-                {activeWorkspace.label}
+                <FolderIcon />
+                <span className="truncate">{activeWorkspace.label}</span>
               </span>
             ) : (
               <span
                 title="这个项目还没绑定目录，去「项目」页绑一个"
-                className="rounded-lg px-2 py-1.5 text-[13.5px] text-danger"
+                className="rounded-lg px-2 py-1.5 text-[13px] text-danger"
               >
                 未绑定目录
               </span>
@@ -361,15 +561,44 @@ export function Composer(props: ComposerProps) {
                 size="compact"
                 ariaLabel="用哪个模型"
                 value={props.providerId}
-                options={[
-                  { value: "", label: "默认模型", description: "按设置页的角色分工自动挑" },
-                  ...props.providers.map((provider) => ({
-                    value: provider.id,
-                    label: provider.model ? `${provider.name} · ${provider.model}` : provider.name,
-                  })),
-                ]}
+                options={
+                  usableProviders.length === 0
+                    ? [
+                        {
+                          value: "",
+                          label: "还没有配置模型",
+                          description: "去「设置 → 模型与供应商」填一个 API Key，这里就能选",
+                          disabled: true,
+                        },
+                      ]
+                    : [
+                        { value: "", label: "默认模型", description: "按设置页的角色分工自动挑" },
+                        ...usableProviders.map((provider) => ({
+                          value: provider.id,
+                          label: provider.model ? `${provider.name} · ${provider.model}` : provider.name,
+                        })),
+                        // 没配 Key 的不当作可选项，但列出来说明"为什么它不在上面"。
+                        ...unconfigured.map((provider) => ({
+                          value: provider.id,
+                          label: provider.name,
+                          description: "未配置 API Key——去设置里填了才可用",
+                          disabled: true,
+                        })),
+                      ]
+                }
                 onChange={props.onProviderChange}
                 disabled={props.providers.length === 0}
+                renderValue={(option) => (
+                  // 颜色写在里层：触发器自己带 text-muted，同优先级下谁在 CSS 后面
+                  // 谁生效——挂在 triggerClassName 上不一定红得起来。
+                  <span className={`truncate ${usableProviders.length === 0 ? "text-danger" : ""}`}>
+                    {usableProviders.length === 0
+                      ? "未配置模型"
+                      : props.providerId
+                        ? (option?.label ?? "")
+                        : props.defaultModelLabel || "默认模型"}
+                  </span>
+                )}
                 triggerClassName="max-w-[168px] min-w-[72px]"
                 menuMinWidth={240}
               />
@@ -429,17 +658,35 @@ export function Composer(props: ComposerProps) {
             </div>
           </div>
 
-          {picking && props.projectId && (
-            <AtPicker
-              projectId={props.projectId}
-              onClose={() => setPicking(false)}
-              onPick={(path) => {
-                props.onDraftChange(insertReference(props.draft, path));
-                setPicking(false);
-                textarea.current?.focus();
-              }}
-            />
-          )}
+          {slash && <SlashMenu items={slashItems} index={slashCursor} onPick={runCommand} />}
+
+          {picking &&
+            (props.projectId ? (
+              <AtPicker
+                projectId={props.projectId}
+                onClose={() => setPicking(false)}
+                onPick={(path) => {
+                  props.onDraftChange(insertReference(props.draft, path));
+                  setPicking(false);
+                  textarea.current?.focus();
+                }}
+              />
+            ) : (
+              // 没绑工作区时以前是"点了什么都不发生"，用户只会以为按钮坏了。
+              <div className="absolute bottom-full left-2 right-2 z-30 mb-1 flex items-start gap-2 rounded-xl border border-warn/30 bg-warn/[0.05] px-3 py-2 shadow-[var(--shadow-lg)]">
+                <span className="mt-[1px] shrink-0 text-[12px] text-warn">@</span>
+                <span className="min-w-0 flex-1 text-[12px] leading-relaxed text-muted">
+                  还没有绑定工作区，引用不了文件。先在下面的「未绑定目录」里选一个目录。
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPicking(false)}
+                  className="shrink-0 text-[12px] text-faint hover:text-text"
+                >
+                  知道了
+                </button>
+              </div>
+            ))}
         </div>
 
         {/* 场景与权限的边界要写在用户看得见的地方（v164 §4.3 / v0.10.1 §4）。
@@ -460,4 +707,32 @@ export function Composer(props: ComposerProps) {
       </div>
     </div>
   );
+}
+
+/** 目录图标：工作区选择器上唯一需要说明「这是一块磁盘上的位置」的线索。 */
+function FolderIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinejoin="round"
+      className="size-[13px] shrink-0 opacity-70"
+      aria-hidden
+    >
+      <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l1.5 2h9A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-10Z" />
+    </svg>
+  );
+}
+
+/**
+ * 是不是一个真实路径。
+ *
+ * 库里有些工作区存的是占位串（`<workspace>name`），把它当"路径说明"展示，
+ * 用户会以为目录坏了；这种值退回成一句人话更稳。
+ */
+function looksLikePath(value: string | undefined): boolean {
+  if (!value) return false;
+  return /^([a-zA-Z]:[\\/]|\/|\\\\)/.test(value);
 }

@@ -25,6 +25,7 @@ from blank_api.services.tools.review import review_tools
 from blank_api.services.tools.search import search_tools
 from blank_api.services.tools.shell import shell_tools
 from blank_api.services.tools.skill_proposals import skill_proposal_tools
+from blank_api.services.tools.skill_market_tools import skill_market_tools
 from blank_api.services.tools.skills import SkillCatalog, skill_tools
 from blank_api.services.tools.tasks import task_tools
 from blank_api.services.tools.team_admin import TEAM_ADMIN_TOOL_NAMES, team_admin_tools
@@ -55,6 +56,7 @@ def build_default_tools() -> list[ToolDefinition]:
         *web_tools(),
         *skill_tools(),
         *skill_proposal_tools(),
+        *skill_market_tools(),
         *review_tools(),
         *cron_tools(),
         *workflow_tools(),

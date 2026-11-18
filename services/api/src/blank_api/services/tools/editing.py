@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 
 from blank_api.models.task import FileChange
 from blank_api.services.log_safety import contains_secret, redact
@@ -71,19 +72,53 @@ def _read_existing(root, relative: str) -> bytes:
         return handle.read()
 
 
+def _edit_pairs(arguments: dict) -> list[tuple[str, str, bool]]:
+    """把 ``edits[]`` 与 ``old_string/new_string`` 两种写法归一成替换表。
+
+    Claude 的 Edit 允许一次调用带多段替换（``edits: [{old_string, new_string}]``），
+    按给出顺序依次应用。我们原来只有单段写法，模型想改三处就得发三次调用——
+    每次都要一次完整往返，实测同一处文件连发三次是最常见的浪费。两种写法
+    统一收在这里，handler、磁盘实现、broker 三处都不用各自认一遍。
+    """
+    edits = arguments.get("edits")
+    # 只要传了 edits 就以它为唯一来源：传了空数组是「什么都没给」，
+    # 不该悄悄回落到 old_string——那会把一次写错的调用变成一次成功的单段替换。
+    if isinstance(edits, list):
+        pairs: list[tuple[str, str, bool]] = []
+        for item in edits:
+            if not isinstance(item, Mapping):
+                continue
+            pairs.append(
+                (
+                    str(item.get("old_string") or ""),
+                    str(item.get("new_string") or ""),
+                    bool(item.get("replace_all")),
+                )
+            )
+        return pairs
+    return [
+        (
+            str(arguments.get("old_string") or ""),
+            str(arguments.get("new_string") or ""),
+            bool(arguments.get("replace_all")),
+        )
+    ]
+
+
 def _edit_on_disk(root, task_id: str, arguments: dict, guard: dict | None = None) -> dict:
     """Edit 的磁盘侧全部动作。返回结构化结果，供宿主与 broker 原样带回。"""
     relative = str(arguments.get("path") or "").strip()
     if not relative:
         return {"missing_path": True}
-    old_string = str(arguments.get("old_string") or "")
-    new_string = str(arguments.get("new_string") or "")
-    replace_all = bool(arguments.get("replace_all"))
-    if not old_string:
-        return {"empty_old_string": True, "path": relative}
-    if old_string == new_string:
-        # Claude 原文：No changes to make: old_string and new_string are exactly the same.
-        return {"no_op": True, "path": relative}
+    pairs = _edit_pairs(arguments)
+    if not pairs:
+        return {"missing_edits": True, "path": relative}
+    for index, (old_string, new_string, _) in enumerate(pairs):
+        if not old_string:
+            return {"empty_old_string": True, "path": relative, "index": index}
+        if old_string == new_string:
+            # Claude 原文：No changes to make: old_string and new_string are exactly the same.
+            return {"no_op": True, "path": relative, "index": index}
     target = resolve_for_write(root, relative)
     if not target.exists():
         # Edit 只改已有文件。新建走 write_file，这条边界让两条工具的分工可判定。
@@ -101,22 +136,35 @@ def _edit_on_disk(root, task_id: str, arguments: dict, guard: dict | None = None
         return {"not_text": True, "path": relative}
     # 模型给出的字符串通常用 \n；先把两边都归一，再按原文件的换行风格写回。
     crlf = "\r\n" in original
-    text = original.replace("\r\n", "\n")
-    needle = old_string.replace("\r\n", "\n")
-    replacement = new_string.replace("\r\n", "\n")
-    if not needle:
-        return {"empty_old_string": True, "path": relative}
-    count = text.count(needle)
-    if count == 0:
-        return {"not_found": True, "path": relative, "near": _near_missing(text, needle)}
-    if count > 1 and not replace_all:
-        return {
-            "ambiguous": True,
-            "path": relative,
-            "occurrences": count,
-            "lines": _occurrence_lines(text, needle),
-        }
-    updated = text.replace(needle, replacement) if replace_all else text.replace(needle, replacement, 1)
+    updated = original.replace("\r\n", "\n")
+    total = 0
+    multi = len(pairs) > 1
+    # 依次应用：后一段看得到前一段的结果，所以「先加一行、再改那行」这种写法成立。
+    # 这是 Claude 的原语义，也是模型写多段替换时的默认预期。
+    for index, (needle_raw, replacement_raw, replace_all) in enumerate(pairs):
+        needle = needle_raw.replace("\r\n", "\n")
+        replacement = replacement_raw.replace("\r\n", "\n")
+        if not needle:
+            return {"empty_old_string": True, "path": relative, "total_edits": len(pairs)}
+        count = updated.count(needle)
+        if count == 0:
+            return {
+                "not_found": True,
+                "path": relative,
+                "near": _near_missing(updated, needle),
+                **({"index": index, "total_edits": len(pairs)} if multi else {}),
+            }
+        if count > 1 and not replace_all:
+            return {
+                "ambiguous": True,
+                "path": relative,
+                "occurrences": count,
+                "lines": _occurrence_lines(updated, needle),
+                **({"index": index, "total_edits": len(pairs)} if multi else {}),
+            }
+        updated = updated.replace(needle, replacement) if replace_all else updated.replace(needle, replacement, 1)
+        total += count if replace_all else 1
+    count = total
     if crlf:
         updated = updated.replace("\n", "\r\n")
     backup_rel = write_backup(root, task_id, relative, raw)
@@ -133,7 +181,7 @@ def _edit_on_disk(root, task_id: str, arguments: dict, guard: dict | None = None
         "backup_path": backup_rel,
         "diff": diff,
         "changed_lines": _changed_lines(diff),
-        "replacements": count if replace_all else 1,
+        "replacements": count,
     }
 
 
@@ -214,10 +262,20 @@ def _guard_for(context: ToolContext, relative: str) -> dict | None:
 def _error_outcome(result: dict, marker: dict) -> ToolOutcome:
     path = str(result.get("path") or "")
     data = {"path": path, **marker}
+    # 多段替换要说清是第几处没对上：只说"找不到"会让模型把整份 edits 重发一遍，
+    # 而实际只需要修那一段。单段调用不显示这个后缀。
+    where = ""
+    if int(result.get("total_edits") or 0) > 1 and isinstance(result.get("index"), int):
+        where = f"（edits 第 {result['index'] + 1} 处，共 {result['total_edits']} 处）"
     if result.get("missing_path"):
         return ToolOutcome(
             ok=False, status="error",
             message="没有文件路径：请传工作区相对路径。", data=data,
+        )
+    if result.get("missing_edits"):
+        return ToolOutcome(
+            ok=False, status="error",
+            message="edits 是空的：请给出至少一段 old_string/new_string。", data=data,
         )
     if result.get("missing_content"):
         return ToolOutcome(
@@ -225,12 +283,12 @@ def _error_outcome(result: dict, marker: dict) -> ToolOutcome:
         )
     if result.get("empty_old_string"):
         return ToolOutcome(
-            ok=False, status="error", message="old_string 不能为空：请给出要替换的确切内容。", data=data,
+            ok=False, status="error", message=f"old_string 不能为空{where}：请给出要替换的确切内容。", data=data,
         )
     if result.get("no_op"):
         return ToolOutcome(
             ok=False, status="error",
-            message="old_string 与 new_string 完全相同，没有可做的修改。", data=data,
+            message=f"old_string 与 new_string 完全相同{where}，没有可做的修改。", data=data,
         )
     if result.get("file_missing"):
         return ToolOutcome(
@@ -247,7 +305,7 @@ def _error_outcome(result: dict, marker: dict) -> ToolOutcome:
         return ToolOutcome(
             ok=False, status="error",
             message=(
-                "old_string 在文件里找不到。先把 read_file 的结果原样复制一段（包括缩进与空行），"
+                f"old_string 在文件里找不到{where}。先把 read_file 的结果原样复制一段（包括缩进与空行），"
                 "不要自己重排。"
                 + (f"\n最接近的位置：\n{near}" if near else "")
             ),
@@ -256,11 +314,11 @@ def _error_outcome(result: dict, marker: dict) -> ToolOutcome:
         )
     if result.get("ambiguous"):
         lines = result.get("lines") or []
-        where = "、".join(str(item) for item in lines) if lines else "多处"
+        positions = "、".join(str(item) for item in lines) if lines else "多处"
         return ToolOutcome(
             ok=False, status="error",
             message=(
-                f"old_string 在文件里出现了 {result.get('occurrences')} 次（{where}），不唯一。"
+                f"old_string 在文件里出现了 {result.get('occurrences')} 次（{positions}），不唯一{where}。"
                 "补上前后几行让它唯一，或设 replace_all=true 全部替换。"
             ),
             data={**data, "occurrences": result.get("occurrences"), "lines": lines},
@@ -311,7 +369,7 @@ async def _edit_file(context: ToolContext, arguments: dict) -> ToolOutcome:
     else:
         result = _edit_on_disk(context.root, context.task_id, arguments, guard=guard)
     if any(key in result for key in (
-        "missing_path", "empty_old_string", "no_op", "file_missing", "not_text",
+        "missing_path", "missing_edits", "empty_old_string", "no_op", "file_missing", "not_text",
         "not_found", "ambiguous", "guard_error",
     )):
         return _error_outcome(result, marker)
@@ -363,8 +421,13 @@ async def _write_file(context: ToolContext, arguments: dict) -> ToolOutcome:
     )
     if context.file_state is not None:
         context.file_state.record_write(context.root, relative)
+    # 覆盖一份已有文件、实际只动了几行——这一次的生成成本已经花掉了，提醒是为下一次：
+    # 整份重写要模型把整个文件重新想一遍，而 edit_file 只发改动的那段。
+    hint = ""
+    if existed and int(result["changed_lines"]) <= 30:
+        hint = "\n（这次是整份覆盖；下次只改局部用 edit_file，不必把整份重新生成一遍。）"
     return ok(
-        f"已写入文件：{relative}（{'覆盖' if existed else '新建'}，{result['changed_lines']} 行变更）",
+        f"已写入文件：{relative}（{'覆盖' if existed else '新建'}，{result['changed_lines']} 行变更）{hint}",
         path=relative,
         change_type=change_type,
         change_id=change_id,
@@ -384,11 +447,13 @@ def editing_tools() -> list[ToolDefinition]:
                 "对工作区内的文件做精确字符串替换。修改前必须先用 read_file 读过该文件，否则调用会失败。"
                 "old_string 必须与文件内容完全一致（包括缩进与空行），并且在文件中唯一，否则调用失败；"
                 "确需替换所有出现时把 replace_all 设为 true。old_string 与 new_string 相同时不会产生任何修改，"
-                "调用会失败。只改一处小内容时优先用它，不要整文件重写。写前会自动保存可回滚备份。"
+                "调用会失败。只改一处小内容时优先用它，不要整文件重写。"
+                "同一个文件要改多段时，用 edits 数组一次发出（按顺序应用），不要拆成多次调用。"
+                "写前会自动保存可回滚备份。"
             ),
             input_schema={
                 "type": "object",
-                "required": ["path", "old_string", "new_string"],
+                "required": ["path"],
                 "properties": {
                     "path": {"type": "string", "description": "工作区相对文件路径"},
                     "old_string": {"type": "string", "description": "要被替换的确切原文"},
@@ -396,6 +461,25 @@ def editing_tools() -> list[ToolDefinition]:
                     "replace_all": {
                         "type": "boolean",
                         "description": "为 true 时替换所有出现；默认只允许唯一匹配",
+                    },
+                    "edits": {
+                        "type": "array",
+                        "description": (
+                            "一次改多处时用：每项是一段 old_string/new_string，按数组顺序依次应用。"
+                            "传了 edits 就不要再传 old_string/new_string。"
+                        ),
+                        "items": {
+                            "type": "object",
+                            "required": ["old_string", "new_string"],
+                            "properties": {
+                                "old_string": {"type": "string", "description": "要被替换的确切原文"},
+                                "new_string": {"type": "string", "description": "替换后的内容"},
+                                "replace_all": {
+                                    "type": "boolean",
+                                    "description": "为 true 时替换所有出现；默认只允许唯一匹配",
+                                },
+                            },
+                        },
                     },
                 },
             },
@@ -410,9 +494,11 @@ def editing_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="write_file",
             description=(
-                "把整个文件写成给定内容（新建或整体覆盖）。覆盖已有文件前必须先用 read_file 读过它，"
+                "把整个文件写成给定内容（新建或整体覆盖）。只在两种情况下用它：新建文件，"
+                "或者整篇内容都要重写。改已有文件里的局部，用 edit_file——它只发改动的那一段，"
+                "不必把整份文件重新生成一遍。覆盖已有文件前必须先用 read_file 读过它，"
                 "文件在读过之后又被改过时会失败，需要重新读。新建文件不需要先读。"
-                "只改已有文件里的几处内容时用 edit_file，不要整文件重写。写前会自动保存可回滚备份。"
+                "写前会自动保存可回滚备份。"
             ),
             input_schema={
                 "type": "object",

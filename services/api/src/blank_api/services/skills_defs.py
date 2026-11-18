@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -267,6 +268,24 @@ def user_skills_dir(env: dict[str, str] | None = None) -> Path:
     if base:
         return Path(base).expanduser() / "skills"
     return Path.home() / ".blank" / "skills"
+
+
+def builtin_skills_dir(env: dict[str, str] | None = None) -> Path:
+    """随包发布的内置技能目录（对齐 Codex 的 core skills）。
+
+    Claude Code 与 Codex 都随包带一套技能（review-agent / skill-creator /
+    plugin-creator / imagegen …）：装好就能用，不需要用户先自己写一份。
+    我们此前只发现用户级与项目级两层，所以"技能"页长期只有记忆提案攒出来的
+    几条——机制在、内容空。这一层补的就是内容。
+
+    ``BLANK_BUILTIN_SKILLS_DIR`` 只给测试与定制发行版用；正常路径就是
+    ``blank_api/skills``（与包一起安装）。
+    """
+    env = env if env is not None else os.environ
+    override = str(env.get("BLANK_BUILTIN_SKILLS_DIR") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path(__file__).resolve().parent.parent / "skills"
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str, str]:
@@ -849,27 +868,66 @@ def _skill_dirs(root: Path) -> list[Path]:
         return []
 
 
+def _merge_skill_dir(
+    discovery: SkillDiscovery,
+    directory: Path,
+    source: str,
+    *,
+    project_root: Path | None = None,
+) -> None:
+    """把一个目录下的所有 ``<name>/SKILL.md`` 收进 discovery。
+
+    单独抽出来是因为"内置 / 用户 / 项目"三层只差一个目录与来源标签；
+    技能页还要对多个工作区各扫一次项目层，不能只给单根的那一条路径用。
+    """
+    for skill_dir in _skill_dirs(directory):
+        definition, errors, warnings = _definition_from_dir(
+            skill_dir, source, project_root=project_root
+        )
+        discovery.errors.extend(errors)
+        discovery.warnings.extend(warnings)
+        if definition is not None:
+            discovery.entries[definition.name] = definition
+
+
+def discover_library(
+    roots: Sequence[str | Path] = (),
+    *,
+    env: dict[str, str] | None = None,
+) -> SkillDiscovery:
+    """技能页用的目录：内置 + 用户 + 每个工作区的项目级技能。
+
+    与 ``discover_skills`` 的区别是**不带插件**：插件发现要读用户配置、创建
+    data 目录（副作用），对一个只读的列表接口不合适；插件技能在任务运行时会
+    正常进入目录，这里少列几条不影响模型能用什么。
+    """
+    discovery = SkillDiscovery()
+    fallback_root = Path(roots[0]) if roots else None
+    _merge_skill_dir(discovery, builtin_skills_dir(env), "builtin", project_root=fallback_root)
+    _merge_skill_dir(discovery, user_skills_dir(env), "user", project_root=fallback_root)
+    for root in roots:
+        path = Path(root)
+        _merge_skill_dir(discovery, path / PROJECT_SKILLS_DIR, "project", project_root=path)
+    return discovery
+
+
 def discover_skills(root: str | Path, *, env: dict[str, str] | None = None) -> SkillDiscovery:
-    """Load the user layer, the project layer, then enabled plugins.
+    """Load the builtin layer, the user layer, the project layer, then plugins.
+
+    层级从低到高：内置 → 用户 → 项目 → 插件。同名时后面的盖住前面的——
+    项目里自己写的 ``code-review`` 应该盖掉随包那份，这与 Claude 一致。
 
     Plugin Skills are addressed as ``<plugin>:<skill>`` (Claude's namespace);
     the directory name stays the invocation name inside the plugin.
     """
     discovery = SkillDiscovery()
-    layers = (
-        ("user", user_skills_dir(env)),
-        ("project", Path(root) / PROJECT_SKILLS_DIR),
-    )
+    # 内置层：随包发布，装好即用。放在最前面所以能被用户与项目覆盖。
+    # 三层都带当前工作区当 ``${CLAUDE_PROJECT_DIR}``：用户级技能里写的
+    # `${CLAUDE_PROJECT_DIR}/lint.py` 指的是"正在干活的那个仓库"，不是用户目录。
+    _merge_skill_dir(discovery, builtin_skills_dir(env), "builtin", project_root=Path(root))
+    _merge_skill_dir(discovery, user_skills_dir(env), "user", project_root=Path(root))
+    _merge_skill_dir(discovery, Path(root) / PROJECT_SKILLS_DIR, "project", project_root=Path(root))
     project_root = Path(root)
-    for source, directory in layers:
-        for skill_dir in _skill_dirs(directory):
-            definition, errors, warnings = _definition_from_dir(
-                skill_dir, source, project_root=project_root
-            )
-            discovery.errors.extend(errors)
-            discovery.warnings.extend(warnings)
-            if definition is not None:
-                discovery.entries[definition.name] = definition
 
     catalog = discover_plugins(root, env=env)
     discovery.errors.extend(catalog.errors)

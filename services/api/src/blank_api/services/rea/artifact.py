@@ -282,6 +282,20 @@ def _asar_meta(target: str, raw: bytes) -> dict[str, Any]:
             continue
         size = item.get("size")
         offset = item.get("offset")
+        # asar 规范：unpacked 条目的正文不在归档数据区，而在同目录的
+        # <name>.asar.unpacked/ 旁车目录里，所以它们**没有** offset。
+        # 把这类条目当成"缺 offset 的坏条目"会让任何一个带原生模块的真实
+        # Electron 应用（Qoder / VS Code fork 都带）在解析阶段直接失败——
+        # 一家主流产品的 asar 打不开，是解析器的错，不是产物的错。
+        if item.get("unpacked") and offset is None:
+            if not isinstance(size, int) or size < 0:
+                _fail(
+                    f"{target}→{path}",
+                    "asar",
+                    4,
+                    f"unpacked 条目仍须带非负整数 size（指明旁车文件大小），实际 size={size!r}",
+                )
+            continue
         if not isinstance(size, int) or not isinstance(offset, str):
             _fail(
                 f"{target}→{path}",
@@ -307,7 +321,12 @@ def _asar_meta(target: str, raw: bytes) -> dict[str, Any]:
 def _read_asar_file(info: dict[str, Any], raw: bytes, wanted: str) -> bytes | None:
     for path, item in info["entries"]:
         if path == wanted or path.endswith("/" + wanted):
-            start = info["data_start"] + int(item["offset"])
+            offset = item.get("offset")
+            # unpacked 条目的正文在旁车目录，不在本归档的数据区里——读不到
+            # 不等于"表里没有这个条目"。返回 None 让调用方区分这两种情况。
+            if offset is None:
+                return None
+            start = info["data_start"] + int(offset)
             return raw[start : start + int(item["size"])]
     return None
 
@@ -317,10 +336,14 @@ def _parse_asar(target: str, raw: bytes, findings: list[Finding]) -> dict[str, A
     meta = info["meta"]
     files = [path for path, item in info["entries"] if "files" not in item]
     dirs = len({path.rsplit("/", 1)[0] for path in files if "/" in path})
+    unpacked = sum(
+        1 for path, item in info["entries"] if "files" not in item and item.get("offset") is None
+    )
     findings.append(
         Finding(
             "容器结构",
-            f"{len(files)} 个文件 / {dirs} 个子目录",
+            f"{len(files)} 个文件 / {dirs} 个子目录"
+            + (f"（其中 {unpacked} 个 unpacked，正文在旁车目录）" if unpacked else ""),
             f"asar 数据区起点 {info['data_start']:,} 字节，元数据 {len(raw[16:16 + _u32(raw, 12)]):,} 字节",
         )
     )

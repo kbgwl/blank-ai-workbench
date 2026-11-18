@@ -130,7 +130,7 @@ export function CommandPalette() {
                 event.preventDefault();
                 run(index);
               }}
-              className={`flex cursor-pointer items-center justify-between rounded-md px-3 py-2 text-[13.5px] ${
+              className={`flex cursor-pointer items-center justify-between rounded-md px-3 py-2 text-[13px] ${
                 index === highlighted ? "bg-surface-2 text-text" : "text-muted"
               }`}
             >

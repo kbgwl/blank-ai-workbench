@@ -11,49 +11,157 @@ PROVIDER_KINDS = ("openai_compatible", "openai_responses", "anthropic", "ollama"
 # 共用这一个说法，界面上才不会出现"None"或者干脆凭空少一笔钱。
 PROVIDER_GONE = "供应商已删除"
 
+# 默认就摆出来的主流厂商：新库起来就这几家，用户填个 Key 直接能用。
+#
+# 不做「一键导入」——那是个多余的动作。Qoder 的 BYOK 就是列一排主流供应商，
+# 点进去填 Key 即可；用户要的是"开箱就在"，不是"先点一下导入再填"。
+# 其余预设仍然保留在 PROVIDER_PRESETS 里，供手动新建/兼容旧配置，但不进默认列表。
+CORE_PRESET_KEYS: tuple[str, ...] = (
+    "deepseek",     # 国产性价比首选
+    "qwen",         # 通义千问
+    "zhipu",        # 智谱 GLM
+    "moonshot",     # Kimi
+    "anthropic",    # Claude
+    "openai",       # OpenAI
+    "ollama",       # 本地
+)
+
 PROVIDER_PRESETS: dict[str, dict] = {
-    # ----- 海外 ------------------------------------------------------------------
-    "openai": {"kind": "openai_compatible", "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini", "supports_tools": True, "supports_vision": True},
-    # Responses 与 chat/completions 是两套协议：新模型走这条才能用上推理档位与提示词缓存
-    "openai_responses": {"kind": "openai_responses", "base_url": "https://api.openai.com/v1", "model": "gpt-4.1", "supports_tools": True, "supports_vision": True},
-    "anthropic": {"kind": "anthropic", "base_url": "https://api.anthropic.com", "model": "claude-3-5-sonnet-latest", "supports_tools": True, "supports_vision": True},
-    # ----- 国产（deepseek-compat）----------------------------------------------
-    "deepseek": {"kind": "openai_compatible", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat", "supports_tools": True, "supports_vision": False},
-    "deepseek_reasoner": {"kind": "openai_compatible", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-reasoner", "supports_tools": False, "supports_vision": False},
-    # 阿里云百炼 - 通义千问系列
-    "qwen": {"kind": "openai_compatible", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus", "supports_tools": True, "supports_vision": False},
-    "qwen_turbo": {"kind": "openai_compatible", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-turbo", "supports_tools": True, "supports_vision": False},
-    "qwen_max": {"kind": "openai_compatible", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-max", "supports_tools": True, "supports_vision": False},
-    "qwen_long": {"kind": "openai_compatible", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-long", "supports_tools": False, "supports_vision": False, "context_window": 10_000_000},
-    "qwen_vl": {"kind": "openai_compatible", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-vl-plus", "supports_tools": False, "supports_vision": True},
-    "qwen_coder": {"kind": "openai_compatible", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-coder-plus", "supports_tools": True, "supports_vision": False},
-    # 智谱 AI - GLM 系列
-    "zhipu": {"kind": "openai_compatible", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4-flash", "supports_tools": True, "supports_vision": False},
-    "zhipu_plus": {"kind": "openai_compatible", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4-plus", "supports_tools": True, "supports_vision": False},
-    "zhipu_long": {"kind": "openai_compatible", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4-long", "supports_tools": False, "supports_vision": False, "context_window": 1_000_000},
-    "zhipu_vision": {"kind": "openai_compatible", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4v-plus", "supports_tools": False, "supports_vision": True},
-    # 月之暗面 - Moonshot / Kimi
-    "moonshot": {"kind": "openai_compatible", "base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k", "supports_tools": True, "supports_vision": False},
-    "moonshot_128k": {"kind": "openai_compatible", "base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-128k", "supports_tools": True, "supports_vision": False, "context_window": 128_000},
-    "kimi_k2": {"kind": "openai_compatible", "base_url": "https://api.moonshot.cn/v1", "model": "kimi-k2-0711-preview", "supports_tools": True, "supports_vision": False, "context_window": 128_000},
-    # 字节豆包 / 火山引擎
-    "doubao": {"kind": "openai_compatible", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-pro-32k", "supports_tools": True, "supports_vision": False},
-    "doubao_lite": {"kind": "openai_compatible", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-lite-32k", "supports_tools": True, "supports_vision": False},
-    "doubao_vision": {"kind": "openai_compatible", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-vision-pro-32k", "supports_tools": False, "supports_vision": True},
-    # 阶跃星辰 - Step
-    "step": {"kind": "openai_compatible", "base_url": "https://api.stepfun.com/v1", "model": "step-2-16k", "supports_tools": True, "supports_vision": False},
-    "step_vision": {"kind": "openai_compatible", "base_url": "https://api.stepfun.com/v1", "model": "step-1v-8k", "supports_tools": False, "supports_vision": True},
-    # 零一万物 - Yi
-    "yi": {"kind": "openai_compatible", "base_url": "https://api.lingyiwanwu.com/v1", "model": "yi-large", "supports_tools": True, "supports_vision": False},
-    "yi_vision": {"kind": "openai_compatible", "base_url": "https://api.lingyiwanwu.com/v1", "model": "yi-vision", "supports_tools": False, "supports_vision": True},
-    # 百川智能
-    "baichuan": {"kind": "openai_compatible", "base_url": "https://api.baichuan-ai.com/v1", "model": "Baichuan4", "supports_tools": True, "supports_vision": False},
-    # MiniMax
-    "minimax": {"kind": "openai_compatible", "base_url": "https://api.minimax.chat/v1", "model": "abab6.5s-chat", "supports_tools": True, "supports_vision": False},
-    # 腾讯混元（通过 LKEAP 或公有云；多数用户走公有云 open-api 兼容入口）
-    "hunyuan": {"kind": "openai_compatible", "base_url": "https://api.hunyuan.cloud.tencent.com/v1", "model": "hunyuan-lite", "supports_tools": True, "supports_vision": False},
-    # ----- 本地 ------------------------------------------------------------------
-    "ollama": {"kind": "ollama", "base_url": "http://localhost:11434", "model": "qwen2.5-coder:7b", "supports_tools": True, "supports_vision": False},
+    # 型号核对日期：2026-11-18，以各家控制台为准。型号改名/退役很频繁
+    # （deepseek-chat 已于 2026-07-24 退役，gpt-5.x 系列 2026-12-11 停用），
+    # 所以这里只给"开箱能用"的当前默认值，界面上 Model ID 始终可改——
+    # Qoder 的 BYOK 干脆不写死，全靠用户填；我们折中：预填当前值 + 允许覆盖。
+    # ----- 国产 ---------------------------------------------------------------
+    "deepseek": {
+        "kind": "openai_compatible",
+        "base_url": "https://api.deepseek.com/v1",
+        "model": "deepseek-flash",
+        "supports_tools": True,
+        "supports_vision": True,
+        "context_window": 1_000_000,
+    },
+    "deepseek_pro": {
+        "kind": "openai_compatible",
+        "base_url": "https://api.deepseek.com/v1",
+        "model": "deepseek-v4-pro",
+        "supports_tools": True,
+        "supports_vision": False,
+        "context_window": 1_000_000,
+    },
+    "qwen": {
+        "kind": "openai_compatible",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen3.8-max",
+        "supports_tools": True,
+        "supports_vision": True,
+        "context_window": 1_000_000,
+    },
+    "qwen_plus": {
+        "kind": "openai_compatible",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen3.8-plus",
+        "supports_tools": True,
+        "supports_vision": True,
+        "context_window": 1_000_000,
+    },
+    "qwen_flash": {
+        "kind": "openai_compatible",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen3.8-flash",
+        "supports_tools": True,
+        "supports_vision": False,
+        "context_window": 1_000_000,
+    },
+    "zhipu": {
+        "kind": "openai_compatible",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "model": "glm-5.3",
+        "supports_tools": True,
+        "supports_vision": False,
+        "context_window": 1_000_000,
+    },
+    "zhipu_flash": {
+        "kind": "openai_compatible",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "model": "glm-5.3-flash",
+        "supports_tools": True,
+        "supports_vision": False,
+        "context_window": 1_000_000,
+    },
+    "moonshot": {
+        "kind": "openai_compatible",
+        "base_url": "https://api.moonshot.cn/v1",
+        "model": "kimi-k3.1-pro",
+        "supports_tools": True,
+        "supports_vision": True,
+        "context_window": 1_050_000,
+    },
+    "kimi_k3": {
+        "kind": "openai_compatible",
+        "base_url": "https://api.moonshot.cn/v1",
+        "model": "kimi-k3",
+        "supports_tools": True,
+        "supports_vision": True,
+        "context_window": 1_050_000,
+    },
+    # ----- 海外 ---------------------------------------------------------------
+    "anthropic": {
+        "kind": "anthropic",
+        "base_url": "https://api.anthropic.com",
+        "model": "claude-sonnet-5-5",
+        "supports_tools": True,
+        "supports_vision": True,
+        "context_window": 1_000_000,
+    },
+    "claude_opus": {
+        "kind": "anthropic",
+        "base_url": "https://api.anthropic.com",
+        "model": "claude-opus-5-5",
+        "supports_tools": True,
+        "supports_vision": True,
+        "context_window": 1_000_000,
+    },
+    "claude_fable": {
+        "kind": "anthropic",
+        "base_url": "https://api.anthropic.com",
+        "model": "claude-fable-5-2",
+        "supports_tools": True,
+        "supports_vision": True,
+        "context_window": 1_000_000,
+    },
+    "openai": {
+        "kind": "openai_compatible",
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-6.1-terra",
+        "supports_tools": True,
+        "supports_vision": True,
+        "context_window": 1_050_000,
+    },
+    "openai_astra": {
+        "kind": "openai_compatible",
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-6-astra",
+        "supports_tools": True,
+        "supports_vision": True,
+        "context_window": 1_050_000,
+    },
+    "openai_luna": {
+        "kind": "openai_compatible",
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-6-luna",
+        "supports_tools": True,
+        "supports_vision": True,
+        "context_window": 1_050_000,
+    },
+    # ----- 本地 ---------------------------------------------------------------
+    "ollama": {
+        "kind": "ollama",
+        "base_url": "http://localhost:11434",
+        "model": "qwen3.8:8b",
+        "supports_tools": True,
+        "supports_vision": False,
+        "context_window": 128_000,
+    },
 }
 
 

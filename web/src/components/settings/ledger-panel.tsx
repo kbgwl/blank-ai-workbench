@@ -52,7 +52,7 @@ function OffenderRow({ row }: { row: LedgerTaskRow }) {
         </span>
       </span>
       {row.files > 0 && (
-        <span className="shrink-0 font-mono text-[11.5px] text-faint">{row.files} 文件</span>
+        <span className="shrink-0 font-mono text-[11px] text-faint">{row.files} 文件</span>
       )}
       <span className="shrink-0 font-mono text-[13px] text-text">{compact(row.tokens)}</span>
     </li>
@@ -153,7 +153,7 @@ export function LedgerPanel({ ledger, error, days, onDays, onRetry }: Props) {
             近 {value} 天
           </button>
         ))}
-        <span className="ml-auto self-center font-mono text-[11.5px] text-faint">
+        <span className="ml-auto self-center font-mono text-[11px] text-faint">
           共 {summary.tasks} 个任务 · {compact(summary.total_tokens)} TOKEN
         </span>
       </div>
@@ -177,9 +177,9 @@ export function LedgerPanel({ ledger, error, days, onDays, onRetry }: Props) {
                 <span className={`size-1.5 rounded-full ${item.className}`} />
                 {item.label}
               </p>
-              <p className="font-mono text-[13.5px] text-text">
+              <p className="font-mono text-[13px] text-text">
                 {compact(item.tokens)}
-                <span className="ml-1 text-[11.5px] text-faint">{percent(item.share)}</span>
+                <span className="ml-1 text-[11px] text-faint">{percent(item.share)}</span>
               </p>
             </li>
           ))}

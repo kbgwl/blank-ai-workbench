@@ -118,10 +118,20 @@ READ_ONLY_TOOLS = frozenset(
         # 退出仍需人工批准，由 decide() 里的 mode:switch 特例负责。
         "enter_plan_mode",
         "exit_plan_mode",
+        # 派子代理本身不写工作区：子代理按**父会话档位**建自己的策略
+        # （subagent._child_permission_mode），父在计划模式，孩子拿到的就是计划模式，
+        # 写类工具在那边一样被拒。计划模式最需要的正是"并行派几个只读的架构师
+        # 分头摸代码"——不开这个口子，阶段 1/2 只能一个串行看。
+        "spawn_agents",
     }
 )
 # "接受编辑"模式自动放行的工具：只含工作区内的文件写入（可回滚）。
 EDIT_TOOLS = frozenset({"apply_patch", "edit_file", "write_file", "notebook_edit"})
+
+# 计划模式下唯一可能被放行的写类工具。放行条件还要求目标路径恰好是计划文件
+# （`PermissionPolicy.plan_file`），所以这张表本身不构成任何松动：没有计划文件
+# 的会话里它一条都不生效。notebook_edit 故意不在表里——计划不该藏在 .ipynb 里。
+PLAN_WRITE_TOOLS = frozenset({"write_file", "edit_file", "apply_patch"})
 
 # 不可逆操作：不能靠工作区快照回滚，任何模式与任何前缀规则都不放行。
 IRREVERSIBLE = re.compile(
@@ -879,6 +889,13 @@ class PermissionPolicy:
     # 人手写的 allow/deny 规则（permissions.rules）。与 approvals.json 分开：
     # 前者只读、可写注释；后者由程序原子替换。文件写坏时整份停用。
     ruleset: "PermissionRuleset" = field(default_factory=empty_ruleset)
+    # 进入计划模式之前的模式（对标 Claude 的 `prePlanMode`）。退出计划模式时要回到
+    # 它，而不是一律回 default——用户从 acceptEdits 进来的，退出去却发现写文件又要
+    # 一张张点，那是我们在偷偷改他设的档位。
+    pre_plan_mode: str = ""
+    # 计划模式下**唯一**允许写的那条路径（工作区相对、posix 分隔符）。
+    # 空串表示这个会话没有计划文件，计划模式维持"全部只读"的老口径。
+    plan_file: str = ""
 
     @classmethod
     def build(
@@ -1041,9 +1058,15 @@ class PermissionPolicy:
             return ask(risk, "mode:switch")
 
         # 计划模式：只读取证，其余一律拒绝（不是询问——计划模式下不该有写动作的机会）。
+        # 唯一例外是计划文件本身（对标 Claude「this is the only file you are allowed
+        # to edit」）：计划必须能落盘，否则它活不过压缩与审批中断，也给不了用户一张
+        # 可编辑的计划卡。例外按"路径完全相等"判定，不按目录——否则整个
+        # `.blank/plans/` 都成了计划模式下的可写区，能顺手写别的任务的文件。
         if self.mode == MODE_PLAN:
             if name in READ_ONLY_TOOLS and not is_irreversible(command):
                 return approve(risk, "mode:plan")
+            if name in PLAN_WRITE_TOOLS and self.plan_file and path_scope(arguments) == self.plan_file:
+                return approve(risk, "mode:plan_file")
             return deny(
                 risk,
                 "mode:plan",
@@ -1195,6 +1218,7 @@ __all__ = [
     "MODE_PLAN",
     "MODES",
     "PermissionPolicy",
+    "PLAN_WRITE_TOOLS",
     "SCOPES",
     "SCOPE_ONCE",
     "SCOPE_PREFIX",

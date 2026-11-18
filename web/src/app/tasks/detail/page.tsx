@@ -22,7 +22,7 @@ function BackLink() {
   return (
     <Link
       href="/tasks"
-      className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1 text-[12.5px] text-muted transition-colors hover:border-line-strong hover:text-text"
+      className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-text"
     >
       返回任务列表
     </Link>

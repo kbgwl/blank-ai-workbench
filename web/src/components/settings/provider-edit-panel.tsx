@@ -144,187 +144,105 @@ export function ProviderEditPanel({ provider, kinds, onSaved }: Props) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-[14px] font-medium text-text">{provider.name}</span>
-          <KindBadge kind={provider.kind} />
+          {provider.name.toLowerCase() !== provider.kind.toLowerCase() && <KindBadge kind={provider.kind} />}
         </div>
-        <span className="font-mono text-[11px] text-faint">PATCH /providers/{provider.id.slice(0, 8)}</span>
+        <span className="font-mono text-[11px] text-faint">ID {provider.id.slice(0, 8)}</span>
       </div>
       <p className="-mt-1 text-[12px] leading-relaxed text-faint">
-        名称由后端唯一约束，当前版本不支持修改；API Key 只写不读，保存后仅返回掩码提示。
+        名称由后端唯一约束，暂不支持修改；API Key 只写不读，保存后仅返回掩码提示。
+        模型名以厂商控制台当前文档为准，改名或升级时直接在这里改。
       </p>
 
       <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
-        <Field label="类型">
-          <SelectPopover
-            ariaLabel="供应商类型"
-            value={kinds.includes(draft.kind) ? draft.kind : "__custom"}
-            disabled={!kinds.includes(draft.kind)}
-            options={[
-              ...kinds.map((kind) => ({ value: kind, label: kind })),
-              ...(!kinds.includes(draft.kind) ? [{ value: "__custom", label: draft.kind }] : []),
-            ]}
-            onChange={(value) => {
-              if (value !== "__custom") patch({ kind: value });
-            }}
-            menuMinWidth={180}
-          />
-        </Field>
         <Field label="默认模型">
-          <Input
-            value={draft.model}
-            onChange={(event) => patch({ model: event.target.value })}
-            aria-label="默认模型"
-            spellCheck={false}
-            autoComplete="off"
-            className="font-mono text-[13px]"
-            maxLength={200}
-          />
+          <Input value={draft.model} onChange={(event) => patch({ model: event.target.value })}
+            aria-label="默认模型" spellCheck={false} autoComplete="off"
+            className="font-mono text-[13px]" maxLength={200} />
+        </Field>
+        <Field label="接口地址">
+          <Input value={draft.base_url} onChange={(event) => patch({ base_url: event.target.value })}
+            aria-label="接入点" spellCheck={false} autoComplete="off"
+            className="font-mono text-[13px]" maxLength={500} />
         </Field>
       </div>
 
-      <Field label="接入点 BASE_URL">
-        <Input
-          value={draft.base_url}
-          onChange={(event) => patch({ base_url: event.target.value })}
-          aria-label="接入点"
-          spellCheck={false}
-          autoComplete="off"
-          className="font-mono text-[13px]"
-          maxLength={500}
-        />
-      </Field>
-
-      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-        <Field label="温度 0-2">
-          <Input
-            value={draft.temperature}
-            onChange={(event) => patch({ temperature: event.target.value })}
-            aria-label="温度"
-            inputMode="decimal"
-            className="font-mono text-[13px]"
-          />
-        </Field>
-        <Field label="最大输出 TOKENS">
-          <Input
-            value={draft.max_tokens}
-            onChange={(event) => patch({ max_tokens: event.target.value })}
-            aria-label="最大输出 tokens"
-            inputMode="numeric"
-            className="font-mono text-[13px]"
-          />
-        </Field>
-        <Field label="上下文窗口">
-          <Input
-            value={draft.context_window}
-            onChange={(event) => patch({ context_window: event.target.value })}
-            aria-label="上下文窗口"
-            inputMode="numeric"
-            className="font-mono text-[13px]"
-          />
-        </Field>
-      </div>
-
-      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-        <Field label="推理档位 reasoning_effort">
-          <SelectPopover
-            ariaLabel="推理档位"
-            value={draft.reasoning_effort}
-            options={effortOptions.map((value) => ({ value, label: value || "不启用" }))}
-            onChange={(value) => patch({ reasoning_effort: value })}
-            menuMinWidth={180}
-          />
-        </Field>
-        <Field label="输出详略 verbosity">
-          <SelectPopover
-            ariaLabel="输出详略"
-            value={draft.verbosity}
-            options={verbosityOptions.map((value) => ({ value, label: value || "不启用" }))}
-            onChange={(value) => patch({ verbosity: value })}
-            menuMinWidth={180}
-          />
-        </Field>
-      </div>
-
-      {draft.reasoning_effort !== "" && (
-        <Notice tone="muted">启用推理档位后温度不再下发，请求带上 temperature 会被推理模型直接拒绝。</Notice>
-      )}
-
-      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-        <Field label="总参数（十亿 B）">
-          <Input
-            value={draft.total_params_b}
-            onChange={(event) => patch({ total_params_b: event.target.value })}
-            placeholder="671，留空表示未填"
-            aria-label="总参数"
-            inputMode="decimal"
-            className="font-mono text-[13px]"
-          />
-        </Field>
-        <Field label="激活参数（十亿 B）">
-          <Input
-            value={draft.active_params_b}
-            onChange={(event) => patch({ active_params_b: event.target.value })}
-            placeholder="37，稠密模型留空"
-            aria-label="激活参数"
-            inputMode="decimal"
-            className="font-mono text-[13px]"
-          />
-        </Field>
-      </div>
-
-      <Field label={provider.api_key_hint ? `API KEY（当前 ${provider.api_key_hint}，留空则不修改）` : "API KEY（未设置）"}>
-        <Input
-          type="password"
-          value={draft.api_key}
-          onChange={(event) => patch({ api_key: event.target.value })}
+      <Field label={provider.api_key_hint ? `API Key（当前 ${provider.api_key_hint}，留空则不修改）` : "API Key（未设置）"}>
+        <Input type="password" value={draft.api_key} onChange={(event) => patch({ api_key: event.target.value })}
           placeholder={provider.api_key_hint ? `替换为新的 Key · 现有 ${provider.api_key_hint}` : "sk-…"}
-          aria-label="API Key"
-          autoComplete="new-password"
-          spellCheck={false}
-          className="font-mono text-[13px]"
-        />
+          aria-label="API Key" autoComplete="new-password" spellCheck={false}
+          className="font-mono text-[13px]" />
       </Field>
 
       <div className="flex flex-wrap items-center gap-4 border-t border-line pt-3">
-        <Toggle
-          checked={draft.supports_tools}
-          onChange={(next) => patch({ supports_tools: next })}
-          label="支持工具调用"
-        />
-        <Toggle
-          checked={draft.supports_vision}
-          onChange={(next) => patch({ supports_vision: next })}
-          label="支持视觉输入"
-        />
+        <Toggle checked={draft.supports_tools} onChange={(next) => patch({ supports_tools: next })} label="支持工具调用" />
+        <Toggle checked={draft.supports_vision} onChange={(next) => patch({ supports_vision: next })} label="支持视觉输入" />
         <Toggle checked={draft.enabled} onChange={(next) => patch({ enabled: next })} label="启用" />
       </div>
+
+      <details className="rounded-lg border border-line bg-surface-2/40">
+        <summary className="cursor-pointer px-3 py-2 text-[13px] text-muted hover:text-text">高级参数（温度 / 输出 / 上下文 / 推理 / 参数量 / 类型）</summary>
+        <div className="flex flex-col gap-2.5 border-t border-line px-3 py-3">
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+            <Field label="温度（0–2）">
+              <Input value={draft.temperature} onChange={(event) => patch({ temperature: event.target.value })}
+                aria-label="温度" inputMode="decimal" className="font-mono text-[13px]" />
+            </Field>
+            <Field label="最大输出（Token）">
+              <Input value={draft.max_tokens} onChange={(event) => patch({ max_tokens: event.target.value })}
+                aria-label="最大输出 tokens" inputMode="numeric" className="font-mono text-[13px]" />
+            </Field>
+            <Field label="上下文窗口">
+              <Input value={draft.context_window} onChange={(event) => patch({ context_window: event.target.value })}
+                aria-label="上下文窗口" inputMode="numeric" className="font-mono text-[13px]" />
+            </Field>
+          </div>
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+            <Field label="推理强度">
+              <SelectPopover ariaLabel="推理档位" value={draft.reasoning_effort}
+                options={effortOptions.map((value) => ({ value, label: value || "不启用" }))}
+                onChange={(value) => patch({ reasoning_effort: value })} menuMinWidth={180} />
+            </Field>
+            <Field label="输出详略">
+              <SelectPopover ariaLabel="输出详略" value={draft.verbosity}
+                options={verbosityOptions.map((value) => ({ value, label: value || "不启用" }))}
+                onChange={(value) => patch({ verbosity: value })} menuMinWidth={180} />
+            </Field>
+            <Field label="总参数（十亿）">
+              <Input value={draft.total_params_b} onChange={(event) => patch({ total_params_b: event.target.value })}
+                placeholder="671，留空表示未填" aria-label="总参数" inputMode="decimal" className="font-mono text-[13px]" />
+            </Field>
+            <Field label="激活参数（十亿）">
+              <Input value={draft.active_params_b} onChange={(event) => patch({ active_params_b: event.target.value })}
+                placeholder="37，稠密模型留空" aria-label="激活参数" inputMode="decimal" className="font-mono text-[13px]" />
+            </Field>
+          </div>
+          <Field label="类型">
+            <SelectPopover ariaLabel="供应商类型" value={kinds.includes(draft.kind) ? draft.kind : "__custom"}
+              disabled={!kinds.includes(draft.kind)}
+              options={[
+                ...kinds.map((kind) => ({ value: kind, label: kind })),
+                ...(!kinds.includes(draft.kind) ? [{ value: "__custom", label: draft.kind }] : []),
+              ]}
+              onChange={(value) => { if (value !== "__custom") patch({ kind: value }); }} menuMinWidth={180} />
+          </Field>
+          {draft.reasoning_effort !== "" && (
+            <Notice tone="muted">启用推理档位后温度不再下发，请求带上 temperature 会被推理模型直接拒绝。</Notice>
+          )}
+        </div>
+      </details>
 
       {invalidNumber && <Notice tone="warn">温度需为 0-2 的数字，tokens 与上下文窗口需为正整数。</Notice>}
       {invalidParams && <Notice tone="warn">参数量需为非负数字，且激活参数不能大于总参数。</Notice>}
       {error && <Notice>{error}</Notice>}
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
         <Button type="submit" variant="primary" disabled={!dirty || busy || invalidNumber || invalidParams}>
           {busy ? (
-            <span className="flex items-center gap-1.5">
-              <Spinner />
-              保存中
-            </span>
-          ) : dirty ? (
-            `保存变更（${Object.keys(changes).length}）`
-          ) : (
-            "已保存"
-          )}
+            <span className="flex items-center gap-1.5"><Spinner />保存中</span>
+          ) : dirty ? `保存变更（${Object.keys(changes).length}）` : "已保存"}
         </Button>
         {dirty && (
-          <Button
-            type="button"
-            onClick={() => {
-              setDraft(draftOf(provider));
-              setError(null);
-            }}
-          >
-            撤销修改
-          </Button>
+          <Button type="button" onClick={() => { setDraft(draftOf(provider)); setError(null); }}>撤销修改</Button>
         )}
         {savedAt && <span className="font-mono text-[11px] text-accent">已于 {savedAt} 保存</span>}
       </div>

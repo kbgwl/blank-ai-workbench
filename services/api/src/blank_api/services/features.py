@@ -102,6 +102,15 @@ _REGISTRY: tuple[FeatureFlag, ...] = (
         summary="只读工具并行执行：同一轮里多个无副作用的工具并发跑，写操作与审批仍严格串行。",
     ),
     FeatureFlag(
+        name="adaptive_effort",
+        stage=STABLE,
+        default=True,
+        summary=(
+            "按阶段收紧思考档位：规划用 high、执行用 medium、收尾用 low，轮次档位仍是上限且只降不升。"
+            "用户用 ultrathink/ultracode 显式升档时整轮不降。关掉后全程沿用轮次档位。"
+        ),
+    ),
+    FeatureFlag(
         name="model_routing",
         stage=BETA,
         default=False,

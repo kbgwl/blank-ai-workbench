@@ -331,6 +331,18 @@ export function normalizeThreadDetail(source: unknown): ThreadDetail | null {
   return { ...base, turns };
 }
 
+/**
+ * 全部项目的会话，按最近活动排序。
+ *
+ * 侧栏要跨页面保持同一份清单：首页如果只按当前项目查，而设置页左栏查的是全部任务，
+ * 两个数字就对不上，用户看到的是"对话记录不同步"。首页与全站左栏都读这一个接口。
+ */
+export function fetchAllThreads(limit = 50): Promise<Thread[]> {
+  return request<unknown[]>(`${api}/threads?limit=${limit}`, { cache: "no-store" }).then((rows) =>
+    (Array.isArray(rows) ? rows : []).map((row) => normalizeThread(row)).filter((thread): thread is Thread => thread !== null),
+  );
+}
+
 export function fetchThreads(projectId: string): Promise<Thread[]> {
   return request<unknown[]>(`${api}/projects/${projectId}/threads`, { cache: "no-store" }).then((rows) =>
     (Array.isArray(rows) ? rows : []).map((row) => normalizeThread(row)).filter((thread): thread is Thread => thread !== null),
@@ -1745,9 +1757,37 @@ export const emptyEvidence = (): Evidence => ({
 // 项目 / 工作区 / 文件树 / 供应商
 // ---------------------------------------------------------------------------
 
-export type Workspace = { id: string; label: string; path: string; is_active: boolean };
-export type Project = { id: string; name: string; description: string; workspaces: Workspace[] };
-export type Provider = { id: string; name: string; model: string; kind: string; enabled: boolean };
+export type Workspace = {
+  id: string;
+  label: string;
+  path: string;
+  is_active: boolean;
+  /** 当前 git 分支；不是仓库时为空串（Codex 的 Thread.gitInfo 同义）。 */
+  branch?: string;
+};
+export type Project = {
+  id: string;
+  name: string;
+  description: string;
+  /** 置顶与人工顺序（对齐 Codex 的 Project.pinned / position）。 */
+  pinned?: boolean;
+  position?: number;
+  workspaces: Workspace[];
+};
+export type Provider = {
+  id: string;
+  name: string;
+  model: string;
+  kind: string;
+  enabled: boolean;
+  /**
+   * 已配置 Key 的掩码提示（`sk-…abcd`）；空串表示**还没填 Key**。
+   *
+   * 模型选择器必须看这个字段：库里 7 家供应商默认都是 enabled 但没 Key，
+   * 全列出来会让用户以为配好了，选完发消息才发现不能用。
+   */
+  api_key_hint?: string;
+};
 
 /** 供应商列表拿不到时，模型选择器退化为「跟随默认供应商」。 */
 export const DEFAULT_PROVIDER = "";

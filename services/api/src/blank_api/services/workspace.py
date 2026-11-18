@@ -364,3 +364,37 @@ def read_text_file(
         "total_lines": total_lines,
         "message": message,
     }
+
+
+# 分支缓存：项目列表一次要问 N 个目录，每次都起 git 进程会明显拖慢首屏。
+# 30 秒足够——分支不会在一秒内变两次，而切分支后用户会重进页面。
+_BRANCH_CACHE: dict[str, tuple[float, str]] = {}
+_BRANCH_TTL = 30.0
+
+
+def git_branch(path: str | Path) -> str:
+    """读目录当前的 git 分支；不是仓库 / 读不到时返回空串。
+
+    用 ``symbolic-ref`` 而不是 ``rev-parse --abbrev-ref``：后者在空仓库上会报错，
+    而"刚 init、还没提交"是本产品的常见状态（新建项目就是空目录）。
+    """
+    import subprocess
+    import time
+
+    key = str(path)
+    now = time.monotonic()
+    hit = _BRANCH_CACHE.get(key)
+    if hit and now - hit[0] < _BRANCH_TTL:
+        return hit[1]
+    try:
+        out = subprocess.run(
+            ["git", "-C", key, "symbolic-ref", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        value = out.stdout.strip() if out.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        value = ""
+    _BRANCH_CACHE[key] = (now, value)
+    return value

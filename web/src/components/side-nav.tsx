@@ -36,46 +36,12 @@ const items: NavItem[] = [
     ),
   },
   {
-    href: "/brainstorm",
-    label: "头脑风暴",
-    match: (p) => p.startsWith("/brainstorm"),
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-4">
-        <path d="M9 18h6M10 21h4M8.5 14.5a6 6 0 1 1 7 0c-.9.65-1.5 1.4-1.5 2.5h-4c0-1.1-.6-1.85-1.5-2.5Z" />
-        <path d="M12 3v1M4.9 5.9l.7.7M19.1 5.9l-.7.7" />
-      </svg>
-    ),
-  },
-  {
     href: "/daily",
     label: "日常",
     match: (p) => p.startsWith("/daily"),
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-4">
         <path d="M5 5h14v11H8l-3 3z" /><path d="M8 9h8M8 12h5" />
-      </svg>
-    ),
-  },
-  {
-    href: "/reverse-lab",
-    label: "逆向实验室",
-    match: (p) => p.startsWith("/reverse-lab"),
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-4">
-        <path d="M7 4h10v16H7zM10 8h4M10 12h4M10 16h2" />
-      </svg>
-    ),
-  },
-  {
-    href: "/features",
-    label: "功能",
-    match: (p) => p.startsWith("/features"),
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-4">
-        <rect x="4" y="4" width="6" height="6" rx="1" />
-        <rect x="14" y="4" width="6" height="6" rx="1" />
-        <rect x="4" y="14" width="6" height="6" rx="1" />
-        <rect x="14" y="14" width="6" height="6" rx="1" />
       </svg>
     ),
   },

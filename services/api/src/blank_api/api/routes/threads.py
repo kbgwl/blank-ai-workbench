@@ -147,6 +147,32 @@ async def create_thread(project_id: str, payload: ThreadCreate, db: DbSession) -
     return ThreadOut.model_validate(thread)
 
 
+@router.get("/threads", response_model=list[ThreadOut])
+async def list_all_threads(
+    db: DbSession,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[ThreadOut]:
+    """全部项目的会话，按最近活动排序。
+
+    侧栏必须在所有页面显示同一份清单：首页过去只查"当前项目"的会话，而设置页左栏查的是
+    全部任务，两个数字对不上，用户看到的就是"对话记录不同步"。这里给一个全局入口，
+    两侧都读它，切页不再变数据。
+    """
+    rows = (
+        await db.execute(
+            select(Thread)
+            .where(Thread.kind == "chat")
+            .order_by(Thread.updated_at.desc(), Thread.created_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    latest = await _latest_turn_status(db, [row.id for row in rows])
+    return [
+        ThreadOut.model_validate(row).model_copy(update={"last_turn_status": latest.get(row.id, "")})
+        for row in rows
+    ]
+
+
 @router.get("/projects/{project_id}/threads", response_model=list[ThreadOut])
 async def list_threads(
     project_id: str,

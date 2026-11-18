@@ -10,6 +10,7 @@ from blank_api.services.models.base import (
     ChatMessage,
     ModelAdapter,
     ModelError,
+    classify_http_failure,
     ModelResponse,
     ToolSpecLite,
     Usage,
@@ -58,7 +59,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
             "model": model or self.config.model,
             "messages": [self._message_payload(m) for m in messages],
             "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
+            "max_tokens": self.payload_max_tokens(model),
             "stream": stream,
         }
         reasoning = self._reasoning_effort(effort)
@@ -105,9 +106,11 @@ class OpenAICompatibleAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
-                                     status=resp.status_code,
-                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
+                    raise classify_http_failure(
+                        resp.status_code,
+                        body,
+                        retry_after=retry_after_seconds(resp.headers.get("Retry-After")),
+                    )
                 async for raw in resp.aiter_lines():
                     payload = data_payload(raw)
                     if not payload:
@@ -145,6 +148,11 @@ class OpenAICompatibleAdapter(ModelAdapter):
         response_id = ""
         # 不是 SSE 帧的行先收着：不认 stream 的网关会把整包 JSON 塞在这里
         plain: list[str] = []
+        # 思考增量单独计数。这条通道上它与正文是同一个 `delta` 里的两个键，
+        # 不数就分不清「网关没认流」与「模型只想不说」——后者退整包只会把
+        # 同一段思考再跑一遍（对方在整个思考期一个字节都不发）。
+        reasoning_events = 0
+        reasoning_chars = 0
 
         async with self._client() as client:
             async with client.stream(
@@ -155,9 +163,11 @@ class OpenAICompatibleAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
-                                     status=resp.status_code,
-                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
+                    raise classify_http_failure(
+                        resp.status_code,
+                        body,
+                        retry_after=retry_after_seconds(resp.headers.get("Retry-After")),
+                    )
                 header_id = str(resp.headers.get("x-request-id") or resp.headers.get("x-dashscope-request-id") or "")
                 async for raw in resp.aiter_lines():
                     piece = data_payload(raw)
@@ -176,6 +186,13 @@ class OpenAICompatibleAdapter(ModelAdapter):
                         usage = _usage_from(chunk["usage"])
                     for choice in chunk.get("choices") or []:
                         delta = choice.get("delta") or {}
+                        # 思考增量：DeepSeek/vLLM/讯飞推 `reasoning_content`，
+                        # 少数网关推 `reasoning`。两个都认，但只计数不展示——
+                        # 它不是回答，混进正文会让用户看到一大段自问自答。
+                        thought = delta.get("reasoning_content") or delta.get("reasoning")
+                        if isinstance(thought, str) and thought:
+                            reasoning_events += 1
+                            reasoning_chars += len(thought)
                         if content := delta.get("content"):
                             text.append(content)
                             if on_delta is not None:
@@ -204,8 +221,20 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 # 整包也要推一次，否则界面等到最后才蹦出全文，流式就白开了
                 if on_delta is not None and response.text:
                     await on_delta(response.text)
+                # 整包形态下思考在 `message.reasoning_content` 里，不在 delta 里；
+                # 不补这一段，上层会把"只想不说"误判成"网关不认流"。
+                if not response.reasoning_chars:
+                    message = ((whole.get("choices") or [{}])[0] or {}).get("message") or {}
+                    thinking = message.get("reasoning_content") or message.get("reasoning") or ""
+                    response.reasoning_chars = len(thinking) if isinstance(thinking, str) else 0
                 return response
-            raise ModelError("model_stream_empty", f"模型 {self.config.model} 的流式响应为空")
+            raise ModelError(
+                "model_stream_empty",
+                f"模型 {self.config.model} 的流式响应为空{_empty_detail(reasoning_events, reasoning_chars, finish_reason)}",
+                reasoning_events=reasoning_events,
+                reasoning_chars=reasoning_chars,
+                finish_reason=str(finish_reason or ""),
+            )
         final_calls = calls.as_list()
         bad = invalid_tool_arguments(final_calls)
         if bad:
@@ -221,8 +250,22 @@ class OpenAICompatibleAdapter(ModelAdapter):
             model=model,
             tool_calls=final_calls,
             finish_reason=finish_reason,
+            reasoning_chars=reasoning_chars,
             response_id=response_id or header_id,
         )
+
+
+def _empty_detail(events: int, chars: int, finish_reason: str | None) -> str:
+    """空正文时补一句"为什么空"。
+
+    没收到思考增量就不补——那时空流的原因在网关，写一堆 0 只是噪音。
+    """
+    if not events:
+        return ""
+    return (
+        f"（期间收到 {events} 个思考增量、{chars} 字，没有正文与工具调用；"
+        f"finish_reason={finish_reason or '未给'}）"
+    )
 
 
 def _whole_completion(lines: list[str]) -> dict | None:

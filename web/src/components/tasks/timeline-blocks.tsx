@@ -362,7 +362,7 @@ function ToolCard({ block }: { block: Extract<Block, { kind: "tool" }> }) {
         className="flex w-full items-start gap-2 text-left"
       >
         <span className="min-w-0 flex-1">
-          <span className="block break-words text-[13.5px] leading-relaxed text-text/85">
+          <span className="block break-words text-[13px] leading-relaxed text-text/85">
             {view.target || "无参数"}
           </span>
           {view.result && (
@@ -617,7 +617,7 @@ function ApprovalCard({
       {block.message && <p className="text-[13px] leading-relaxed text-text/80">{block.message}</p>}
       {reviewNote && (
         <p
-          className="text-[12.5px] leading-relaxed text-muted"
+          className="text-[12px] leading-relaxed text-muted"
           title="独立审查员先看过了；它放行不等于安全，它说话也不会替你批准"
         >
           {reviewNote}

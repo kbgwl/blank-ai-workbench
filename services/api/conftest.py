@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import sys
 
+import pytest
+
 
 def _teach_host_shim_about_extended_length_temp_paths() -> bool:
     shim = sys.modules.get("sitecustomize")
@@ -56,3 +58,24 @@ try:
     _teach_host_shim_about_extended_length_temp_paths()
 except Exception:  # 钩子换实现也不能让测试起不来
     pass
+
+
+# ---------------------------------------------------------------------------
+# 随包内置技能：单元测试默认不加载它们
+# ---------------------------------------------------------------------------
+# 内置技能（blank_api/skills）是**产品内容**，会随版本增删。断言"某个目录里没有
+# 技能""清单只有 N 条"的用例不该被这层内容影响，否则每加一份技能就误报一堆与
+# 改动无关的失败。需要验证内置内容本身的用例（test_builtin_skills_v406）在自己
+# 的模块里把这个函数换回真实实现。
+#
+# 这里换函数而不是设环境变量：很多用例显式传 `env={}` 来隔离用户配置，
+# 环境变量进不去，只有替换取值函数才对所有入口都成立。
+
+
+@pytest.fixture(autouse=True)
+def _no_builtin_skills(monkeypatch, tmp_path_factory):
+    from blank_api.services import skills_defs
+
+    empty = tmp_path_factory.mktemp("no-builtin-skills")
+    monkeypatch.setattr(skills_defs, "builtin_skills_dir", lambda env=None: empty)
+    yield empty

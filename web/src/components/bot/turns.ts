@@ -107,20 +107,58 @@ function planItems(payload: Record<string, unknown>): string[] {
   }
 }
 
+export type PlanItem = { text: string; status: string };
+export type PlanView = { items: PlanItem[]; completed: number; total: number };
+
+/**
+ * 这一轮的计划：初始计划 + 后续每次 `update_plan` 的修订。
+ *
+ * 计划不放进步骤流，因为它不是"过程"，而是"打算做什么 / 做到哪了"——那是用户在
+ * 对话里最想先看到的东西。之前它被塞进默认折叠的过程明细里，等于没显示；
+ * 而 `plan.updated` 更是完全没人消费，进度永远停在 0。
+ */
+export function planOf(events: readonly RawEvent[]): PlanView | null {
+  let items: PlanItem[] = [];
+
+  for (const event of events) {
+    const type = event.type.toLowerCase();
+    if (type === "plan.created") {
+      const created = planItems(event.payload);
+      if (created.length) items = created.map((text) => ({ text, status: "pending" }));
+      continue;
+    }
+    if (type === "plan.updated") {
+      const next = list(event.payload, "steps", "plan")
+        .map((item) =>
+          typeof item === "string"
+            ? { text: item, status: "pending" }
+            : { text: str(item, "step", "title", "text"), status: str(item, "status") || "pending" },
+        )
+        .filter((item) => item.text.trim());
+      if (next.length) items = next;
+    }
+  }
+
+  if (!items.length) return null;
+  const completed = items.filter((item) => item.status === "completed").length;
+  return { items, completed, total: items.length };
+}
+
 /** 折叠后的步骤序列。顺序就是发生顺序——不要按 kind 重排，那会让读者以为计划在最后才出现。 */
 export function buildSteps(events: readonly RawEvent[]): BotStep[] {
   const steps: BotStep[] = [];
   const running = new Map<string, number[]>();
+  // 已排队但还没生效的插话：`steer.queued` 先占一个位置，`steer.applied` 到了
+  // 再把那条改写成"已生效"。按下标而不是按文本配对，同一句话连说两遍也不会串。
+  const pendingSteer: { index: number; text: string }[] = [];
 
   for (const event of events) {
     const type = event.type.toLowerCase();
     if (INTERNAL.test(type)) continue;
 
-    if (type === "plan.created") {
-      const items = planItems(event.payload);
-      if (items.length > 0) steps.push({ kind: "plan", key: `plan-${event.seq}`, items });
-      continue;
-    }
+    // 计划由 `planOf` 单独提到正文上方渲染，这里不再往步骤流里塞一份：
+    // 两处都画，用户会以为计划执行了两次。
+    if (type === "plan.created" || type === "plan.updated") continue;
 
     if (type === "tool.requested" || type === "tool.started") {
       const name = toolNameOf(event);
@@ -211,7 +249,41 @@ export function buildSteps(events: readonly RawEvent[]): BotStep[] {
 
     if (type === "steer.queued") {
       const text = str(event.payload, "message", "text");
-      if (text) steps.push({ kind: "note", key: `note-${event.seq}`, text, tone: "muted" });
+      if (text) {
+        // 先按"已排队"记一条，等 `steer.applied` 到了再把同一条改写成"已生效"。
+        // 只显示排队不显示生效，用户没法判断"我说的话到底进没进上下文"——
+        // 那他就只能再发一遍，于是同一句话在下一轮又生效一次。
+        pendingSteer.push({ index: steps.length, text });
+        steps.push({
+          kind: "note",
+          key: `note-${event.seq}`,
+          text: `插话已排队，等它下一次想事情时生效：${text}`,
+          tone: "muted",
+        });
+      }
+      continue;
+    }
+
+    if (type === "steer.applied") {
+      // 后端在真正注入上下文时写这条，`step` 是注入发生在第几步、`delay_ms` 是
+      // 从用户敲下到生效等了多久。等待时长对长任务是关键信息：等 3 秒是正常节奏，
+      // 等 4 分钟说明它正卡在一条命令里，用户据此才知道下次该不该等。
+      const step = num(event.payload, "step");
+      const delay = num(event.payload, "delay_ms");
+      const where = step !== null ? `第 ${step} 步` : "下一步";
+      const waited = delay !== null && delay >= 1500 ? `，等了 ${Math.round(delay / 1000)} 秒` : "";
+      const label = `插话已生效（从${where}起${waited}）`;
+      const pending = pendingSteer.shift();
+      const slot = pending?.index ?? -1;
+      const existing = slot >= 0 ? steps[slot] : undefined;
+      if (pending && existing?.kind === "note") {
+        steps[slot] = { ...existing, text: `${label}：${pending.text}` };
+      } else {
+        // 找不到对应的排队记录（事件被裁剪过、或这句来自更早的一轮）也不能丢：
+        // 悄悄不显示等于让用户以为插话没生效。
+        steps.push({ kind: "note", key: `note-${event.seq}`, text: label, tone: "muted" });
+      }
+      continue;
     }
   }
 

@@ -639,6 +639,32 @@ def test_parser_failure_carries_step_and_object(target, format_name, step, step_
     assert failure["target"] in object_name
 
 
+def test_asar_unpacked_entries_are_not_bad_entries():
+    """红于：带原生模块的真实 Electron 包（Qoder / VS Code fork）打不开。
+
+    asar 规范里 unpacked 条目的正文在 <name>.asar.unpacked/ 旁车目录，
+    没有 offset 是**正常**的。旧版把它当"缺 offset 的坏条目"直接判解析失败，
+    于是任何一个带 sqlite-vec / sharp 这类原生模块的产物都读不出来。
+    """
+    meta = {
+        "files": {
+            "package.json": {"size": 0, "offset": None, "unpacked": True},
+            "index.cjs": {"size": len(b"console.log(1)"), "offset": "0", "unpacked": False},
+            "native/vec0.dll": {"size": 4096, "offset": None, "unpacked": True},
+        }
+    }
+    packed = pack_asar(json.dumps(meta, separators=(",", ":")).encode("utf-8"), b"console.log(1)")
+
+    report = artifact.inspect_bytes("native-app.asar", packed)
+
+    assert report["format"] == "asar"
+    values = {item["kind"]: item["value"] for item in report["findings"]}
+    # 两个 unpacked 被如实计入，而不是让整个解析失败
+    assert "其中 2 个 unpacked" in values["容器结构"]
+    # unpacked 的 package.json 读不出来，只能给"文件表里有但正文不在归档内"的线索
+    assert values["入口线索"] == "未找到 package.json"
+
+
 def test_load_target_refuses_directories_and_escapes(rea_root: Path):
     """红于：目标是目录时也去读字节；越出授权根时不报错。"""
     from blank_api.services.rea.artifact import TargetUnavailable

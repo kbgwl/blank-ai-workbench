@@ -6,6 +6,14 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, field_seriali
 from blank_api.limits import DEFAULT_MAX_STEPS, HARD_MAX_STEPS
 from blank_api.services.plan import plan_progress
 
+# 产品只做两个场景：编程（dev）与日常（daily）。
+#
+# 旧的 docs / brainstorm / reverse 仍留在 ``scenarios.py`` 的 SCENARIOS 里，
+# 只为了让**已经建成**的那些任务按原场景跑完——它们的历史事件、工具白名单与
+# 记忆权限都挂在那三个 key 上，改 key 等于改写事实。但新建与重新运行一律不收：
+# 入口只有两个，界面才不会退化成一张功能菜单。
+ScenarioKey = Literal["", "dev", "daily"]
+
 
 class AttachmentIn(BaseModel):
     """一条附件引用。文件本体已经通过 /projects/{id}/uploads 上传过了。"""
@@ -29,7 +37,7 @@ class TaskCreate(BaseModel):
     provider_id: str | None = None
     # 场景（scenarios.py 五选一）。决定系统提示附加段、工具白名单与记忆权限；
     # 不向用户 prompt 拼前缀。空/缺省 = 开发场景。
-    scenario: Literal["", "dev", "docs", "daily", "brainstorm", "reverse"] = ""
+    scenario: ScenarioKey = ""
     max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=HARD_MAX_STEPS)
     # 这一轮贴进来的图片。上限 8 张：再多模型侧也塞不下，而且每张都要按图计费。
     attachments: list[AttachmentIn] = Field(default_factory=list, max_length=8)
@@ -95,7 +103,7 @@ class TaskOut(BaseModel):
 class TaskRunIn(BaseModel):
     provider_id: str | None = None
     # 场景与记忆开关：空串 = 沿用任务创建时的存档（审批恢复不重发也不能被改掉）。
-    scenario: Literal["", "dev", "docs", "daily", "brainstorm", "reverse"] = ""
+    scenario: ScenarioKey = ""
     # 仅日常场景有效：True=记住习惯（开放 memory_write），False=不记住。
     # 非日常场景无论取值都不开放记忆——日常习惯不污染其他场景。
     memory_opt_in: bool = False

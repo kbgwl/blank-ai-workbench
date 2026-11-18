@@ -16,10 +16,7 @@ const TITLES: Record<string, string> = {
   "/skills": "技能",
   "/tasks": "任务",
   "/tasks/detail": "任务详情",
-  "/brainstorm": "头脑风暴",
   "/daily": "日常",
-  "/features": "能力",
-  "/reverse-lab": "逆向实验室",
   "/team": "Bot 团队",
 };
 
@@ -69,9 +66,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-dvh overflow-hidden bg-bg">
       <AppRail />
-      <div className="flex min-w-0 flex-1 flex-col py-2 pr-2 pl-4">
+      <div className="flex min-w-0 flex-1 flex-col p-2">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-canvas shadow-[var(--shadow-sm)]">
-          <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3">
+          <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-6">
             <Link
               href="/"
               title="返回工作台（Esc）"

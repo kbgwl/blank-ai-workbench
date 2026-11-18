@@ -12,7 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from blank_api.api.auth import require_token
 from blank_api.api.errors import ApiError
 from blank_api.deps import DbSession
-from blank_api.models.model_provider import PROVIDER_PRESETS, PROVIDER_GONE, ModelProvider, ModelUsage
+from blank_api.models.model_provider import (
+    CORE_PRESET_KEYS,
+    PROVIDER_PRESETS,
+    PROVIDER_GONE,
+    ModelProvider,
+    ModelUsage,
+)
 from blank_api.schemas.model import ChatIn, ProviderCreate, ProviderOut, ProviderUpdate
 from blank_api.services.crypto import decrypt_secret, encrypt_secret, key_hint
 from blank_api.services.models.base import ChatMessage, ModelError
@@ -296,11 +302,15 @@ async def usage_summary(db: DbSession) -> dict:
 
 @router.post("/providers/defaults")
 async def seed_default_providers(db: DbSession) -> dict:
-    """一键写入所有国产默认平台配置（API key 留空，用户后续填入即可）。"""
+    """补齐默认的主流厂商（API key 留空，用户填上即可用）。
+
+    只写 CORE_PRESET_KEYS 那几家：默认列表要短，一排主流就够了。
+    """
     existing = {row[0] for row in (await db.execute(select(ModelProvider.name))).all()}
     created: list[str] = []
     skipped: list[str] = []
-    for key, preset in PROVIDER_PRESETS.items():
+    for key in CORE_PRESET_KEYS:
+        preset = PROVIDER_PRESETS[key]
         name = preset.get("label", key)
         if name in existing:
             skipped.append(name)
@@ -339,7 +349,9 @@ async def seed_empty_providers() -> int:
             return 0
         existing_names = {row[0] for row in (await session.execute(select(ModelProvider.name))).all()}
         created = 0
-        for key, preset in PROVIDER_PRESETS.items():
+        # 只初始化主流那几家；27 个预设全铺进列表只会让用户不知道从哪下手。
+        for key in CORE_PRESET_KEYS:
+            preset = PROVIDER_PRESETS[key]
             name = preset.get("label", key)
             if name in existing_names:
                 continue

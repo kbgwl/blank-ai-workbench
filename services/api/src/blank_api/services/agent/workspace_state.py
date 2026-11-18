@@ -26,6 +26,11 @@ DEFAULT_STATE_ROOT = Path("data/workspace-state")
 BACKUP_DIRNAME = ".blank_backups"
 
 # 只收「本工具链自己创建」的暂存目录；用户级的 .blank 配置不在名单里。
+#
+# `.blank/plans`（计划模式的计划文件）**故意不在这里**：它是跨轮次的上下文，
+# 不是一次性暂存。一个线程的第二轮如果发现计划文件没了，只能从零重想一遍，
+# 计划模式就退化成"每轮写一次计划"。留着不打紧——它不算改动、不算交付，
+# 也不进"这次改了哪几个文件"的统计（见 graph._in_scratchpad）。
 SCRATCH_DIRS = (".blank/scratchpad", ".blank/context/scratchpad")
 
 

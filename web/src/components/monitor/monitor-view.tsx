@@ -42,14 +42,14 @@ const STATUS_CLASS: Record<ReturnType<typeof statusTone>, string> = {
 
 const REFRESH_MS = 5000;
 const CONTROL_BUTTON =
-  "shrink-0 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-[11.5px] text-muted transition-colors hover:text-text disabled:opacity-50";
+  "shrink-0 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-[11px] text-muted transition-colors hover:text-text disabled:opacity-50";
 
 function Stat({ label, value, hint, tone }: { label: string; value: number; hint?: string; tone?: "warn" }) {
   return (
     <div className="rounded-lg border border-line bg-surface px-3 py-2.5">
       <p className="font-mono text-[11px] uppercase tracking-wide text-faint">{label}</p>
-      <p className={`mt-1 text-[19px] font-semibold leading-none ${tone === "warn" ? "text-warn" : ""}`}>{value}</p>
-      {hint && <p className="mt-1 text-[11.5px] leading-relaxed text-faint">{hint}</p>}
+      <p className={`mt-1 text-[17px] font-semibold leading-none ${tone === "warn" ? "text-warn" : ""}`}>{value}</p>
+      {hint && <p className="mt-1 text-[11px] leading-relaxed text-faint">{hint}</p>}
     </div>
   );
 }
@@ -147,13 +147,13 @@ export function MonitorView() {
         description="它现在在盯什么。监督者每收到一条消息都会判一次——要不要动手、要不要问、要不要接着上一轮。这里不做美化：等不到事件的待触发项、没接通的聊天软件，都照实写。"
         actions={
           <>
-            <span className="font-mono text-[11.5px] text-faint">
+            <span className="font-mono text-[11px] text-faint">
               {data.now ? `读数 ${clockTime(data.now)}` : "读取中…"}
             </span>
             <button
               type="button"
               onClick={() => void load()}
-              className="rounded-md border border-line bg-surface px-2.5 py-1 text-[12.5px] text-muted transition-colors hover:border-line-strong hover:text-text"
+              className="rounded-md border border-line bg-surface px-2.5 py-1 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-text"
             >
               刷新
             </button>
@@ -200,8 +200,8 @@ export function MonitorView() {
                   {intentLabel(item.intent)}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13.5px]">{item.goal || item.title || "（空目标）"}</p>
-                  <p className="mt-0.5 truncate text-[11.5px] text-faint">
+                  <p className="truncate text-[13px]">{item.goal || item.title || "（空目标）"}</p>
+                  <p className="mt-0.5 truncate text-[11px] text-faint">
                     {judgementOutcome(item)}
                     {item.reason ? ` · ${item.reason}` : ""}
                     {item.permission_mode ? ` · 权限 ${item.permission_mode}` : ""}
@@ -232,16 +232,16 @@ export function MonitorView() {
                 >
                   {statusLabel(item.status)}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-[13.5px]">
+                <span className="min-w-0 flex-1 truncate text-[13px]">
                   {item.goal || item.title}
-                  {item.status === "draft" ? <span className="ml-1 text-[11.5px] text-faint">· 建了但没启动</span> : null}
+                  {item.status === "draft" ? <span className="ml-1 text-[11px] text-faint">· 建了但没启动</span> : null}
                 </span>
                 <span className="hidden shrink-0 font-mono text-[11px] text-faint sm:block">
                   {relativeTime(item.updated_at)}
                 </span>
                 <a
                   href={`/tasks/detail?id=${encodeURIComponent(item.task_id)}`}
-                  className="shrink-0 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-[11.5px] text-muted transition-colors hover:text-text"
+                  className="shrink-0 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-[11px] text-muted transition-colors hover:text-text"
                 >
                   详情
                 </a>
@@ -264,8 +264,8 @@ export function MonitorView() {
               <div key={item.trigger_id} className="rounded-md border border-line bg-surface px-2.5 py-2">
                 <div className="flex items-start gap-2">
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13.5px]">{item.goal || "（没有写要盯什么）"}</p>
-                    <p className={`mt-0.5 text-[11.5px] leading-relaxed ${item.never_fires ? "text-warn" : "text-faint"}`}>
+                    <p className="truncate text-[13px]">{item.goal || "（没有写要盯什么）"}</p>
+                    <p className={`mt-0.5 text-[11px] leading-relaxed ${item.never_fires ? "text-warn" : "text-faint"}`}>
                       {item.status === "paused" ? "已暂停 · " : ""}
                       {pendingLine(item)}
                     </p>
@@ -328,7 +328,7 @@ export function MonitorView() {
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="text-[13px]">{item.label}</p>
-                  <p className="mt-0.5 text-[11.5px] leading-relaxed text-faint">{item.note}</p>
+                  <p className="mt-0.5 text-[11px] leading-relaxed text-faint">{item.note}</p>
                 </div>
               </div>
             ))}
@@ -348,19 +348,19 @@ export function MonitorView() {
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="text-[13px]">{item.label}</p>
-                  <p className="mt-0.5 text-[11.5px] leading-relaxed text-faint">{item.note}</p>
+                  <p className="mt-0.5 text-[11px] leading-relaxed text-faint">{item.note}</p>
                 </div>
               </div>
             ))}
           </div>
           {imOff > 0 && (
             <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-1.5">
-              <p className="min-w-0 flex-1 text-[11.5px] leading-relaxed text-muted">
+              <p className="min-w-0 flex-1 text-[11px] leading-relaxed text-muted">
                 {`${imOff} 个还没接通。企业微信/钉钉/飞书都在设置里配，不需要改代码：填凭据 → 验证 → 选收消息的方式。`}
               </p>
               <a
                 href="/settings#channels"
-                className="shrink-0 rounded border border-line-strong bg-surface px-2 py-0.5 text-[11.5px] text-muted transition-colors hover:text-text"
+                className="shrink-0 rounded border border-line-strong bg-surface px-2 py-0.5 text-[11px] text-muted transition-colors hover:text-text"
               >
                 去配置
               </a>

@@ -24,6 +24,8 @@ from blank_api.services.agents_defs import (
     BUILTIN_FORK,
     BUILTIN_FORK_AGENT,
     BUILTIN_GENERAL_PURPOSE,
+    BUILTIN_PLAN,
+    BUILTIN_PLAN_AGENT,
 )
 from blank_api.services.subagent import (
     DEFAULT_CONCURRENCY,
@@ -80,7 +82,11 @@ def _resolve_agent(context: ToolContext, raw) -> tuple:
         return BUILTIN_GENERAL_PURPOSE, ""
     if name == BUILTIN_FORK:
         return BUILTIN_FORK_AGENT, ""
-    return None, f"未知子代理类型 '{name}'。可用类型：{BUILTIN_AGENT}, {BUILTIN_FORK}"
+    if name == BUILTIN_PLAN:
+        return BUILTIN_PLAN_AGENT, ""
+    return None, (
+        f"未知子代理类型 '{name}'。可用类型：{BUILTIN_AGENT}, {BUILTIN_FORK}, {BUILTIN_PLAN}"
+    )
 
 
 def _apply_definition(request: SubAgentRequest, definition) -> SubAgentRequest:
@@ -724,6 +730,9 @@ def delegate_tools() -> list[ToolDefinition]:
                 "subagent_type=\"fork\" 是内置分身类型：它继承你到此为止的完整对话、系统提示与工具权限，"
                 "适合「接着我刚才查到的线索继续，但别占我的上下文」这类工作；fork 只能前台运行，"
                 "不能放进 spawn_agents 的多任务批次。"
+                "subagent_type=\"plan\" 是内置只读架构师：工具表裁到只读，输出被要求收口成"
+                "「实现要点 / 关键文件 / 怎么验证」。计划阶段要分头摸几块代码时用它，"
+                "比通用代理更少跑偏去写东西。"
             ),
             input_schema={
                 "type": "object",
@@ -735,7 +744,8 @@ def delegate_tools() -> list[ToolDefinition]:
                         "description": (
                             "子代理类型，默认 general-purpose；"
                             "工作区 .blank/agents 里定义的名称也可以直接用；"
-                            "fork 是内置分身（继承当前对话，只能前台）"
+                            "fork 是内置分身（继承当前对话，只能前台）；"
+                            "plan 是内置只读架构师（只给方案，不写文件）"
                         ),
                     },
                     # 上游 4302142：FORCE 置位时 schema 直接把 model 剃掉。

@@ -6,7 +6,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Thread } from "../tasks/api";
 import { ThemeToggle } from "../theme-toggle";
-import { isNavActive, NAV_ITEMS, TURN_TONE_LABEL, turnTone, type NavId } from "./nav";
+import { isNavActive, NAV_ITEMS, type NavId } from "./nav";
+import { StatusDot } from "./status-dot";
 import { dayBucket } from "./turns";
 
 const ICON = {
@@ -19,7 +20,7 @@ const ICON = {
   className: "size-3.5 shrink-0 text-faint",
 };
 
-/** 每个入口一个图标：光有文字时，收起的侧栏就什么都认不出来了。 */
+/** 每个入口一个图标：常驻只剩工作区，其余入口收进设置页。 */
 function NavIcon({ id }: { id: NavId }) {
   switch (id) {
     case "workspace":
@@ -28,56 +29,7 @@ function NavIcon({ id }: { id: NavId }) {
           <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l1.5 2h9A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-10Z" />
         </svg>
       );
-    case "monitor":
-      return (
-        <svg {...ICON} aria-hidden>
-          <path d="M3 12h4l2.5-6 4 12 2.5-6H21" />
-        </svg>
-      );
-    case "evidence":
-      return (
-        <svg {...ICON} aria-hidden>
-          <path d="M12 3 5 6v5c0 4.2 2.8 7.4 7 9 4.2-1.6 7-4.8 7-9V6l-7-3Z" />
-          <path d="m9 12 2 2 4-4" />
-        </svg>
-      );
-    case "skills":
-      return (
-        <svg {...ICON} aria-hidden>
-          <path d="M12 3v3M12 18v3M4.2 7.5l2.6 1.5M17.2 15l2.6 1.5M4.2 16.5l2.6-1.5M17.2 9l2.6-1.5" />
-          <circle cx="12" cy="12" r="3.2" />
-        </svg>
-      );
-    case "connectors":
-      return (
-        <svg {...ICON} aria-hidden>
-          <path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 0 1-10 0V8ZM12 16v5" />
-        </svg>
-      );
   }
-}
-
-/**
- * 会话行的状态点。
- *
- * 用 title/aria-label 把颜色翻成字：只给颜色的话，色觉差异的用户读不出"跑失败了"。
- */
-function StatusDot({ status }: { status: string }) {
-  const tone = turnTone(status);
-  if (tone === "idle") return null;
-  const toneClass =
-    tone === "running"
-      ? "bg-brand animate-pulse"
-      : tone === "failed"
-        ? "bg-danger"
-        : "bg-accent";
-  return (
-    <span
-      title={TURN_TONE_LABEL[tone]}
-      aria-label={TURN_TONE_LABEL[tone]}
-      className={`size-1.5 shrink-0 rounded-full ${toneClass}`}
-    />
-  );
 }
 
 const GROUP_LABEL: Record<ReturnType<typeof dayBucket>, string> = {
@@ -91,11 +43,18 @@ const GROUP_ORDER: ReturnType<typeof dayBucket>[] = ["today", "yesterday", "week
 
 export type SidebarProps = {
   threads: Thread[] | null;
+  /** 项目分组：Codex 桌面版左栏就是「New chat / Projects / Recents」三段。 */
+  projects: { id: string; name: string; pinned?: boolean }[];
+  activeProjectId: string;
+  onSelectProject: (id: string) => void;
+  onToggleProjectPin: (id: string, pinned: boolean) => void;
   activeId: string | null;
   error: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
   onArchive: (thread: Thread) => void;
+  /** 分叉：带着上下文另开一条线（Codex 的 thread/fork）。 */
+  onFork: (thread: Thread) => void;
   onRename: (thread: Thread) => void;
   onUnarchive: (thread: Thread) => void;
   onDelete: (thread: Thread) => void;
@@ -185,12 +144,12 @@ export function Sidebar(props: SidebarProps) {
   }
 
   return (
-    <aside className="flex w-[308px] shrink-0 flex-col border-r border-line bg-sidebar">
+    <aside className="flex w-[240px] shrink-0 flex-col border-r border-line bg-sidebar">
       <div className="flex items-center gap-2 px-3 pt-3 pb-2.5">
         <span className="grid size-6 shrink-0 place-items-center rounded-md bg-logo-bg">
           <span className="size-2 rounded-[2px] bg-logo-accent" />
         </span>
-        <span className="text-[14px] font-semibold tracking-tight">空白格</span>
+        <span className="text-[13px] font-semibold tracking-tight">空白格</span>
         <span className="rounded bg-surface-3 px-1 py-0.5 font-mono text-[9px] tracking-wide text-muted uppercase">
           bot
         </span>
@@ -210,7 +169,7 @@ export function Sidebar(props: SidebarProps) {
         <button
           type="button"
           onClick={props.onNew}
-          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-[14px] font-medium text-text transition-colors hover:bg-surface-2"
+          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-[13px] font-medium text-text transition-colors hover:bg-surface-2"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} className="size-4" aria-hidden>
             <path d="M12 5v14M5 12h14" />
@@ -228,25 +187,71 @@ export function Sidebar(props: SidebarProps) {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="搜索对话"
-            className="w-full bg-transparent text-[14px] text-text placeholder:text-faint focus:outline-none"
+            className="w-full bg-transparent text-[13px] text-text placeholder:text-faint focus:outline-none"
           />
         </div>
       </div>
 
-      {/* 工作区紧挨着搜索：它决定"这次在哪个目录里干"，是开口之前的事。 */}
-      <div className="px-2 pb-2">
-        <Link
-          href="/projects"
-          title="项目与目录"
-          className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[14px] transition-colors ${
-            isNavActive(pathname, "/projects")
-              ? "bg-surface-3 text-text"
-              : "text-muted hover:bg-surface-2 hover:text-text"
-          }`}
-        >
-          <NavIcon id="workspace" />
-          工作区
-        </Link>
+      {/* 项目分组：与 Codex 桌面版同构——New chat / Projects / Recents。
+          点项目 = 切到这个项目并开一条新对话（对应它的 "What should we build in X?"）；
+          会话列表在下面「最近」里跨项目显示，所以切项目不会让历史"消失"。 */}
+      <div className="px-2 pb-1">
+        <div className="flex items-center justify-between px-2 pb-1">
+          <span className="text-[11px] font-medium tracking-wide text-faint">项目</span>
+          <Link
+            href="/projects"
+            title="项目与目录管理"
+            className="text-[11px] text-faint transition-colors hover:text-text"
+          >
+            管理
+          </Link>
+        </div>
+        <div className="space-y-0.5">
+          {props.projects.length === 0 && (
+            <p className="px-2 py-1 text-[12px] text-faint">还没有项目</p>
+          )}
+          {props.projects.map((project) => {
+            const active = project.id === props.activeProjectId;
+            return (
+              <button
+                key={project.id}
+                type="button"
+                onClick={() => {
+                  if (!active) props.onSelectProject(project.id);
+                }}
+                title={active ? "当前项目" : `切到「${project.name}」并开新对话`}
+                className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors ${
+                  active ? "bg-surface-3 text-text" : "text-muted hover:bg-surface-2 hover:text-text"
+                }`}
+              >
+                <NavIcon id="workspace" />
+                <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                {active && <span className="shrink-0 text-[11px] text-faint">当前</span>}
+                <span
+                  role="button"
+                  tabIndex={0}
+                  title={project.pinned ? "取消置顶" : "置顶这个项目"}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    props.onToggleProjectPin(project.id, !project.pinned);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      props.onToggleProjectPin(project.id, !project.pinned);
+                    }
+                  }}
+                  className={`shrink-0 rounded px-1 text-[11px] transition-colors ${
+                    project.pinned ? "text-brand" : "text-faint hover:text-text"
+                  }`}
+                >
+                  {project.pinned ? "★" : "☆"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -255,6 +260,8 @@ export function Sidebar(props: SidebarProps) {
             {props.error}
           </p>
         )}
+
+        <div className="px-2 pb-1 pt-2 text-[11px] font-medium tracking-wide text-faint">最近</div>
 
         {props.threads === null && !props.error && (
           <div className="space-y-1.5 px-1 pt-2">
@@ -265,7 +272,7 @@ export function Sidebar(props: SidebarProps) {
         )}
 
         {props.threads !== null && props.threads.length === 0 && (
-          <p className="px-2 py-6 text-center text-[13.5px] leading-relaxed text-faint">
+          <p className="px-2 py-6 text-center text-[13px] leading-relaxed text-faint">
             还没有对话。
             <br />
             说一句就开始。
@@ -274,7 +281,7 @@ export function Sidebar(props: SidebarProps) {
 
         {groups.map((group) => (
           <div key={group.bucket} className="mb-2">
-            <p className="px-2 py-1 font-mono text-[11px] tracking-wide text-faint uppercase">{group.label}</p>
+            <p className="px-2 py-1 text-[11px] font-medium text-faint">{group.label}</p>
             <div className="space-y-0.5">
               {group.items.map((thread) => {
                 const active = thread.id === props.activeId;
@@ -288,9 +295,9 @@ export function Sidebar(props: SidebarProps) {
                       }`}
                     >
                       <StatusDot status={thread.lastTurnStatus} />
-                      <span className="min-w-0 flex-1 truncate text-[14px]">{thread.title}</span>
+                      <span className="min-w-0 flex-1 truncate text-[13px]">{thread.title}</span>
                       {thread.turnCount > 1 && (
-                        <span className="shrink-0 font-mono text-[9.5px] text-faint">{thread.turnCount}</span>
+                        <span className="shrink-0 font-mono text-[9px] text-faint">{thread.turnCount}</span>
                       )}
                     </button>
                     {/* 操作收进一个「⋯」：三个图标并排会吃掉窄侧栏一截标题，而且它们
@@ -301,6 +308,7 @@ export function Sidebar(props: SidebarProps) {
                       onRename={props.onRename}
                       onArchive={props.onArchive}
                       onDelete={props.onDelete}
+                      onFork={props.onFork}
                     />
                   </div>
                 );
@@ -311,25 +319,10 @@ export function Sidebar(props: SidebarProps) {
       </div>
 
       <div className="border-t border-line p-2">
-        {NAV_ITEMS.filter((item) => item.id !== "workspace").map((item) => (
-          <Link
-            key={item.id}
-            href={item.href}
-            title={item.hint}
-            className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[14px] transition-colors ${
-              isNavActive(pathname, item.href)
-                ? "bg-surface-3 text-text"
-                : "text-muted hover:bg-surface-2 hover:text-text"
-            }`}
-          >
-            <NavIcon id={item.id} />
-            {item.label}
-          </Link>
-        ))}
-        <div className="my-1 border-t border-line" />
+        {/* 监控/证据库/技能/连接器已收进设置页，侧栏底部只留团队与设置。 */}
         <Link
           href="/team"
-          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[14px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-4 text-faint" aria-hidden>
             <circle cx="9" cy="8" r="3" />
@@ -339,7 +332,7 @@ export function Sidebar(props: SidebarProps) {
         </Link>
         <Link
           href="/settings"
-          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[14px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="size-4 text-faint" aria-hidden>
             <circle cx="12" cy="12" r="3" />
@@ -348,7 +341,7 @@ export function Sidebar(props: SidebarProps) {
           设置
         </Link>
         <ThemeToggle />
-        <p className="px-2 pt-1 font-mono text-[9.5px] text-faint">空白格 bot</p>
+        <p className="px-2 pt-1 font-mono text-[9px] text-faint">空白格 bot</p>
       </div>
     </aside>
   );
@@ -366,7 +359,7 @@ function ThreadMenuItem(props: {
       type="button"
       role="menuitem"
       onClick={props.onPick}
-      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[14px] transition-colors focus:outline-none ${
+      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors focus:outline-none ${
         props.danger
           ? "text-danger hover:bg-danger/10 focus:bg-danger/10"
           : "text-muted hover:bg-surface-2 hover:text-text focus:bg-surface-2 focus:text-text"
@@ -393,6 +386,7 @@ function ThreadMenu(props: {
   onRename: (thread: Thread) => void;
   onArchive: (thread: Thread) => void;
   onDelete: (thread: Thread) => void;
+  onFork: (thread: Thread) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [at, setAt] = useState({ left: 0, top: 0 });
@@ -494,6 +488,19 @@ function ThreadMenu(props: {
             style={{ left: at.left, top: at.top, width: MENU_W }}
             className="fixed z-50 rounded-lg border border-line bg-surface p-1 shadow-[0_10px_28px_-12px_rgba(16,24,40,0.35)]"
           >
+            <ThreadMenuItem
+              onPick={() => pick(props.onFork)}
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-4" aria-hidden>
+                  <circle cx="6" cy="5" r="2.2" />
+                  <circle cx="6" cy="19" r="2.2" />
+                  <circle cx="18" cy="12" r="2.2" />
+                  <path d="M6 7.2v9.6M8.2 5h4.3a3 3 0 0 1 3 3v1.8M8.2 19h4.3a3 3 0 0 0 3-3v-1.8" />
+                </svg>
+              }
+            >
+              分叉到新对话
+            </ThreadMenuItem>
             <ThreadMenuItem
               onPick={() => pick(props.onRename)}
               icon={

@@ -399,8 +399,8 @@ async def test_gateway_ask_inside_repl_is_denied():
 # --------------------------------------------------------------------------- #
 def test_scenario_registration_is_consistent():
     assert "repl" in SCENARIO_WRITE_TOOLS
-    # 只读场景连入口都没有
-    assert "repl" in excluded_tools(DAILY)
+    # daily 放开为 Codex 全能 agent：repl 入口可用。
+    assert "repl" not in excluded_tools(DAILY)
     # 文档/逆向不禁：内层 run_shell 已被排除，留下的读/算正是这两个场景需要的
     assert "repl" not in excluded_tools(DOCS)
     assert "repl" not in excluded_tools(REVERSE)

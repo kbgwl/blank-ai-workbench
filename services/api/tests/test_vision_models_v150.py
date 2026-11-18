@@ -77,15 +77,20 @@ def test_swapping_in_a_vision_model_turns_the_capability_on() -> None:
 
 
 def test_shipped_presets_declare_vision_for_their_default_model() -> None:
-    """预设的默认模型本身是多模态的，就必须标 true——否则开箱即用读不了图。"""
-    for key in ("openai", "openai_responses", "anthropic", "qwen_vl", "zhipu_vision", "doubao_vision"):
+    """默认模型本身是多模态的，就必须标 true——否则开箱即用读不了图。
+
+    2026-11 的型号事实：deepseek-flash / qwen3.8-max / kimi-k3.1-pro /
+    claude-sonnet-5-5 / gpt-6.1-terra 都支持图像输入；glm-5.3 是纯文本。
+    """
+    for key in ("deepseek", "qwen", "moonshot", "anthropic", "openai"):
         preset = PROVIDER_PRESETS[key]
         assert preset["supports_vision"] is True, key
         assert model_looks_vision(preset["model"]) or preset["supports_vision"], key
 
 
 def test_text_presets_do_not_claim_vision() -> None:
-    for key in ("deepseek", "qwen", "zhipu", "moonshot"):
+    # glm-5.3 明确是纯文本；ollama 本地模型按 7-8B 文本模型处理
+    for key in ("zhipu", "zhipu_flash", "ollama"):
         assert PROVIDER_PRESETS[key]["supports_vision"] is False, key
 
 

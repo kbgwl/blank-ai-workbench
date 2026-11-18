@@ -99,7 +99,7 @@ function RichText({ text }: { text: string }) {
           return (
             <pre
               key={key}
-              className="overflow-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap break-words text-text/85"
+              className="overflow-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-words text-text/85"
             >
               {piece.text.join("\n")}
             </pre>
@@ -133,7 +133,7 @@ function SectionView({ section }: { section: ReportSection }) {
   return (
     <section className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2">
-        <span className={`rounded border px-1.5 py-0.5 text-[11.5px] font-medium tracking-wide ${style.chip}`}>
+        <span className={`rounded border px-1.5 py-0.5 text-[11px] font-medium tracking-wide ${style.chip}`}>
           {section.title}
         </span>
         <span className={`h-px min-w-0 flex-1 ${section.tone === "done" ? "bg-accent/15" : section.tone === "undone" ? "bg-warn/15" : "bg-brand/15"}`} />

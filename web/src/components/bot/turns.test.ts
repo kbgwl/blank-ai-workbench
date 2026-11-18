@@ -8,6 +8,7 @@ import {
   dispatchAutoStart,
   filterSteps,
   isTurnRunning,
+  planOf,
   resolveTouchedPath,
   shouldAutoRunTurn,
   threadTitleFrom,
@@ -76,17 +77,46 @@ test("内部观测事件不进对话", () => {
 });
 
 test("计划优先取数组，取不到时再从 text 里的 JSON 解", () => {
-  const fromArray = buildSteps([ev(1, "plan.created", { plan: ["读代码", "改 bug"] })]);
-  assert.deepEqual(fromArray[0].kind === "plan" ? fromArray[0].items : [], ["读代码", "改 bug"]);
+  const fromArray = planOf([ev(1, "plan.created", { plan: ["读代码", "改 bug"] })]);
+  assert.deepEqual(fromArray?.items.map((item) => item.text), ["读代码", "改 bug"]);
 
-  const fromText = buildSteps([
+  const fromText = planOf([
     ev(1, "plan.created", { text: JSON.stringify({ steps: ["确认范围", "执行改动"] }) }),
   ]);
-  assert.deepEqual(fromText[0].kind === "plan" ? fromText[0].items : [], ["确认范围", "执行改动"]);
+  assert.deepEqual(fromText?.items.map((item) => item.text), ["确认范围", "执行改动"]);
 
   // 既不是数组也不是 JSON：不生成空计划块，避免界面上出现一行没有内容的"计划"
-  const broken = buildSteps([ev(1, "plan.created", { text: "我在想想" })]);
-  assert.equal(broken.length, 0);
+  assert.equal(planOf([ev(1, "plan.created", { text: "我在想想" })]), null);
+});
+
+test("计划不混进步骤流：两处都画会让人以为执行了两遍", () => {
+  const steps = buildSteps([ev(1, "plan.created", { plan: ["读代码", "改 bug"] })]);
+  assert.equal(steps.length, 0);
+});
+
+test("plan.updated 覆盖步骤并带上完成进度", () => {
+  const plan = planOf([
+    ev(1, "plan.created", { plan: ["查依赖", "改实现", "跑测试"] }),
+    ev(2, "plan.updated", {
+      steps: [
+        { step: "查依赖", status: "completed" },
+        { step: "改实现", status: "in_progress" },
+        { step: "跑测试", status: "pending" },
+      ],
+    }),
+  ]);
+  assert.equal(plan?.total, 3);
+  assert.equal(plan?.completed, 1);
+  assert.deepEqual(
+    plan?.items.map((item) => item.status),
+    ["completed", "in_progress", "pending"],
+  );
+});
+
+test("只有 update 没有 created 也能显示计划", () => {
+  const plan = planOf([ev(1, "plan.updated", { steps: [{ step: "只做一件事", status: "completed" }] })]);
+  assert.equal(plan?.completed, 1);
+  assert.equal(plan?.items[0].text, "只做一件事");
 });
 
 test("文件变更去重保序，同一文件多次改动只算一次", () => {
@@ -311,4 +341,41 @@ test("后端下发判定为不自动跑时，draft 也不许替用户点运行",
   assert.equal(dispatchAutoStart({}), null);
   assert.equal(dispatchAutoStart(undefined), null);
   assert.equal(dispatchAutoStart({ dispatch: "bad" }), null);
+});
+
+test("插话从排队改写成已生效，不重复占两行", () => {
+  const steps = buildSteps([
+    ev(1, "steer.queued", { message: "改成用 Postgres", queued_at: 1000 }),
+    ev(2, "steer.applied", { step: 4, chars: 8, delay_ms: 4200 }),
+  ]);
+
+  assert.equal(steps.length, 1);
+  const note = steps[0];
+  assert.equal(note.kind, "note");
+  // 三件事都要在：这句话是什么、从第几步生效、等了多久。
+  // 只写"已生效"用户不知道生效的是哪一句；不写等待时长，长任务里他会以为没生效。
+  assert.match((note as Extract<BotStep, { kind: "note" }>).text, /Postgres/);
+  assert.match((note as Extract<BotStep, { kind: "note" }>).text, /第 4 步/);
+  assert.match((note as Extract<BotStep, { kind: "note" }>).text, /4 秒/);
+});
+
+test("找不到排队记录的生效事件也要显示出来", () => {
+  // 事件被裁剪、或这句来自更早的一轮时，只看到 applied。悄悄吞掉等于
+  // 让用户以为插话没进上下文，于是他会再发一遍。
+  const steps = buildSteps([ev(1, "steer.applied", { step: 2, chars: 6, delay_ms: 0 })]);
+  assert.equal(steps.length, 1);
+  assert.match((steps[0] as Extract<BotStep, { kind: "note" }>).text, /第 2 步/);
+});
+
+test("两条插话按先后各自配对", () => {
+  const steps = buildSteps([
+    ev(1, "steer.queued", { message: "第一句" }),
+    ev(2, "steer.queued", { message: "第二句" }),
+    ev(3, "steer.applied", { step: 3, delay_ms: 0 }),
+    ev(4, "steer.applied", { step: 5, delay_ms: 0 }),
+  ]);
+
+  assert.equal(steps.length, 2);
+  assert.match((steps[0] as Extract<BotStep, { kind: "note" }>).text, /第一句/);
+  assert.match((steps[1] as Extract<BotStep, { kind: "note" }>).text, /第二句/);
 });

@@ -131,7 +131,7 @@ export function TaskConsole({
         <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="truncate text-[15px] font-semibold tracking-tight">{task.title}</span>
+              <span className="truncate text-[14px] font-semibold tracking-tight">{task.title}</span>
               <StatusBadge status={task.status} />
               <LiveBadge mode={mode} />
             </div>
@@ -249,11 +249,11 @@ export function TaskConsole({
             任务结束后由真正的总结块取代。 */}
         {streaming && (
           <div className="mt-2.5 rounded-lg border border-dashed border-line bg-surface-2 p-3">
-            <div className="mb-1.5 flex items-center gap-1.5 text-[11.5px] text-faint">
+            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-faint">
               <span className="inline-block size-1.5 animate-pulse rounded-full bg-brand" />
               模型正在输出
             </div>
-            <p className="max-h-56 overflow-y-auto text-[13.5px] leading-relaxed whitespace-pre-wrap text-text">
+            <p className="max-h-56 overflow-y-auto text-[13px] leading-relaxed whitespace-pre-wrap text-text">
               {streaming}
             </p>
           </div>

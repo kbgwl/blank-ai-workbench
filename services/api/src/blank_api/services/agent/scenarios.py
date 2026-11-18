@@ -1,11 +1,18 @@
 # -*- coding: utf-8 -*-
-"""场景系统：五场景决定模型看到的额外规则、可用工具与记忆权限。
+"""场景系统：产品只开两个场景——编程（dev）与日常（daily）。
+
+``SCENARIOS`` 里另外三个（docs / brainstorm / reverse）是历史遗留，只为让按旧场景
+建成的任务按原样跑完；它们不在选择器里，新建与重跑都不接受。
+
+两个场景都是**全能 agent**：dev 按 Claude 的编程纪律跑，daily 按 Codex 的通用
+agent 方法论跑。差别在提示词风格与默认定位，不在能力——两者都能读写文件、
+跑命令、跑测试。历史遗留的 docs / brainstorm / reverse 仍是只读，按原样跑完。
 
 设计红线（2026-10-21 的教训）：**用户的每一句话必须原样进意图判定与模型**。
 场景绝不向用户 prompt 拼任何前缀——它的全部影响都落在三个地方：
 
 1. 系统提示末尾追加一段场景规则（在安全规则之后，声明不得覆盖安全与审批规则）；
-2. 工具注册表 ``registry.exclude()``：只读场景把写类工具彻底禁掉（检索也捞不回）；
+2. 工具注册表 ``registry.exclude()``：只读场景（历史三场景）把写类工具彻底禁掉；
 3. 记忆权限：只有日常场景且用户选择"记住"时才开放 ``memory_write``。
 
 因此闲聊被判成什么，只取决于用户那句话本身，与所选场景无关。
@@ -73,15 +80,19 @@ DOCS = Scenario(
 DAILY = Scenario(
     key="daily",
     label="日常",
-    summary="问答与生活事务；只有这里提供记忆开关",
+    summary="Codex 式通用 agent：读写文件、跑命令、把事情做到完；只有这里提供记忆开关",
+    # 日常场景按 Codex 通用 agent 的口径跑：能读写、能跑命令、做事做到完，
+    # 与编程场景（Claude 编程纪律）的差别在方法论与措辞，不在能力。
+    # "先问再干"的授权边界仍由权限层管，场景段不碰它。
     system_prompt=(
-        "当前场景：日常。只回答与建议，不修改任何文件、不执行命令。\n"
+        "当前场景：日常。你是通用 agent：先判断用户的意图，能自己查到的自己查、"
+        "能自己定的自己定，把事情做到真正完成再收尾——不要停在「接下来我会……」。\n"
         "· 用户允许记忆时，只记跨会话仍有用的偏好（称呼、格式、常用位置），"
         "电话、住址、证件号这类敏感事实一律不记。\n"
     ),
-    allow_write=False,
+    allow_write=True,
     memory_allowed=True,
-    input_hint="问点什么，或让 AI 帮你想想…",
+    input_hint="说点什么，或让 AI 帮你把一件事做完…",
 )
 
 BRAINSTORM = Scenario(
@@ -183,7 +194,11 @@ def system_prompt(scenario: Scenario, *, memory_opt_in: bool = False) -> str:
 
 
 def list_scenarios() -> list[dict]:
-    """给前端选择器的清单（保持固定顺序）。"""
+    """给前端选择器的清单（保持固定顺序）。
+
+    只列编程与日常两个。``SCENARIOS`` 里另外三个（文档 / 头脑风暴 / 逆向）留给
+    已有任务按原场景跑完——它们不出现在选择器里，也就不会再被新建出来。
+    """
     return [
         {
             "key": item.key,
@@ -196,7 +211,7 @@ def list_scenarios() -> list[dict]:
             # 文档场景按扩展名授权：写 README.md 是本职，改 .py 不是。
             "write_extensions": sorted(item.write_extensions),
         }
-        for item in (DEV, DOCS, DAILY, BRAINSTORM, REVERSE)
+        for item in (DEV, DAILY)
     ]
 
 
@@ -216,7 +231,7 @@ _WRITE_INTENT = re.compile(
 # "我没权限"，而是顺着上文把上一轮的结果又讲一遍——用户看到的是答非所问，
 # 还以为是模型坏了。与其让它自由发挥，不如在这里直接说清楚限制和出路。
 REFUSAL_TEXT = {
-    "daily": "日常场景不会直接修改文件，也不会执行命令。\n请切换到开发场景后再执行这个操作。",
+    # daily 放开为 Codex 全能 agent 后不再拒任何动作：读写、命令、测试都可做。
     "brainstorm": "头脑风暴场景只做发散，不改动工作区。\n要动手请切换到开发场景。",
 }
 

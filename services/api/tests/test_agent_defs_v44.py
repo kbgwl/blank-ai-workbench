@@ -43,6 +43,7 @@ from blank_api.services.agents_defs import (
     BUILTIN_AGENT,
     BUILTIN_FORK,
     BUILTIN_GENERAL_PURPOSE,
+    BUILTIN_PLAN,
     MAX_FILE_BYTES,
     MAX_INSTRUCTIONS_CHARS,
     UNSUPPORTED_FIELDS,
@@ -214,7 +215,7 @@ def test_user_layer_loads_when_project_has_no_definition(tmp_path: Path) -> None
     catalog = _discover(root, user)
 
     assert catalog.get("helper").source == "user"
-    assert catalog.names() == [BUILTIN_AGENT, BUILTIN_FORK, "helper"]
+    assert catalog.names() == [BUILTIN_AGENT, BUILTIN_FORK, BUILTIN_PLAN, "helper"]
     assert [item.name for item in catalog.custom()] == ["helper"]
 
 
@@ -606,7 +607,8 @@ async def test_without_catalog_only_builtins_are_known(tmp_path: Path) -> None:
 
     assert outcome.ok is False
     assert outcome.message == (
-        "未知子代理类型 'reviewer'。可用类型：" + f"{BUILTIN_AGENT}, {BUILTIN_FORK}"
+        "未知子代理类型 'reviewer'。可用类型："
+        + f"{BUILTIN_AGENT}, {BUILTIN_FORK}, {BUILTIN_PLAN}"
     )
 
     default = await tool.handler(
@@ -949,9 +951,9 @@ async def test_runtime_discovers_agents_lists_them_and_spawns_by_type(
 
     loaded = [item for item in evidence["timeline"] if item["type"] == "agents.loaded"]
     assert loaded, [item["type"] for item in evidence["timeline"]]
-    assert loaded[0]["payload"]["count"] == 3
+    assert loaded[0]["payload"]["count"] == 4
     names = {item["name"] for item in loaded[0]["payload"]["agents"]}
-    assert {"reviewer", BUILTIN_AGENT, BUILTIN_FORK} <= names
+    assert {"reviewer", BUILTIN_AGENT, BUILTIN_FORK, BUILTIN_PLAN} <= names
 
     # 主代理第一问的系统提示里必须有清单；没有它，模型不知道能按名字派。
     parent_prompt = _messages_text(env.mock.requests[0]["messages"])

@@ -82,6 +82,7 @@ from blank_api.services.agent.unknowns import (
 from blank_api.services.agent.usage import account_call, accumulate_usage, merge_usage
 from blank_api.services import approval_rules
 from blank_api.services import metrics
+from blank_api.services import plan_mode
 from blank_api.services import shell_tasks
 from blank_api.services.features import is_enabled as feature_enabled
 from blank_api.services.guardian import Guardian
@@ -92,12 +93,14 @@ from blank_api.services.hooks import (
     run_expansion_hooks,
     stop_hook_block_cap,
 )
-from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, Usage
+from blank_api.services.models.base import ChatMessage, ModelAdapter, ModelError, ModelResponse, Usage
+from blank_api.services.models.budget import grown_max_tokens, output_ceiling
 from blank_api.services.effort import (
     EffortPolicy,
     ThinkingConfig,
     resolve_turn_effort,
     thinking_budget_ceiling,
+    tighten_for_step,
 )
 from blank_api.services.plan import normalize_goal, normalize_steps, plan_progress
 from blank_api.services.agent.planner import (
@@ -154,6 +157,26 @@ MAX_REPAIR_ROUNDS = 3
 # 审查最多跑几轮。审查不通过会回到执行，而执行不一定有新东西可改；没有这个上限，
 # 一次"审查没给出结论"就能把 审查→执行 的回路跑到预算耗尽。
 MAX_REVIEW_ROUNDS = 2
+# 单步思考超过这个量就算"想太久"：实测正常步是 7-1200 token，动手前那几步是
+# 2863-16851。取 2000 是为了卡在两者之间——高过正常步，又低于最小的一次长考。
+DEEP_THINK_TOKENS = 2000
+# 同一轮最多催几次。催多了它会开始为"少想"而少想，比想多了更糟。
+MAX_THINK_NUDGES = 2
+
+
+def think_overrun_note(deep_tokens: int) -> str:
+    """这一次想太久就该说一句什么；没超阈值返回空串。
+
+    判定与文案放在一处：分开写迟早会出现"事件里记了超支、提醒里却说没事"。
+    """
+    if deep_tokens < DEEP_THINK_TOKENS:
+        return ""
+    return (
+        f"你上一次思考用了约 {deep_tokens:,} token 才动手。"
+        "下一步只做一件具体的事：改一处、跑一次验证，或者读一个还没读过的文件。"
+        "不要在一次思考里把整个改造方案想完——想到一半就动手，"
+        "剩下的等看到结果再决定。"
+    )
 # 环境缺口推回执行的次数上限。缺一条命令却拿「需要你装」收尾时，执行节点会把它
 # 推回一轮并给出补齐顺序；第二次之后仍没有动作就允许如实收尾——断网、没权限这类
 # 真装不上也是一种结论，但必须带着试过什么、报错是什么（见 remediation.py）。
@@ -252,6 +275,15 @@ _SYSTEM_HEAD = (
     "· 只问「要什么」，不问「怎么做」：技术方案、目录结构、命名、实现细节自己定，"
     "读一遍工作区就能查到的也自己查。问一句显而易见的事，和猜错一样费时间。\n"
     "· 已经问过的不要再问。用户答了什么就按什么做，剩下的自己定。\n"
+    # Codex 的授权持久：批准是会话级事实，不是一次性事件。服务端已经把它记在
+    # approved_actions / approved_prefixes 里，模型不必、也不该为同一动作再问一次。
+    "· 批准过的不再问：本会话里用户批准过的动作（同一个工具、同一类命令前缀），"
+    "服务端已经记住并会直接放行，你不要因为「保险起见」再确认一遍；"
+    "用户说过「你看着办 / 不用问我 / 一路做完」之后，剩下的同类动作直接做。\n"
+    # Codex 的审批点后置：能做完的先做完，让用户批准一个**成品**而不是一个计划。
+    "· 需要确认的事放在最后：先把不依赖这个答案的部分全做完，把要确认的那一步留到"
+    "交付前——用户该批准的是看得见的结果，不是一句「我准备这样做」。"
+    "只有「做了就撤不回」的动作（删除、覆盖、对外发送）才必须在动手前问。\n"
     "· 环境里缺东西（命令不存在、依赖没装、工具链没有）不是结论，是要做的工作："
     "先自己补——在磁盘上找现成安装、用包管理器装、下载官方 portable 包解压，"
     "然后用绝对路径或把它加进 PATH，用 run_tests 重跑刚才失败的测试。"
@@ -307,6 +339,12 @@ CODING_INSTRUCTIONS = (
     "（真机：write_file 参数 31009 字断在字符串中间），截断的调用会被拒绝重来，白花一轮。\n"
     "· 验证从最小范围开始：先跑受影响的那一条测试或那个文件，通过后再扩大范围；"
     "项目本来没有测试，就不要硬加测试框架或格式化器。\n"
+    # Codex 原文：Once those pass, broaden or repeat testing only when new changes,
+    # failures, or unresolved concerns justify it. 通过之后再跑一遍是最常见的空转。
+    "· 通过之后不要再跑：同一份代码、同一条命令，第二次跑只会拿到同一个结果。"
+    "只有又改了代码、上一次是失败、或者对某处仍有具体疑问时，才值得重跑或扩大范围。\n"
+    "· 不要写只为复述实现的测试：把刚写的逻辑用另一种句子再说一遍，跑通了也不能证明什么。"
+    "要测就测会出错的边界、没被覆盖的分支、以及这次改动真正可能弄坏的地方。\n"
     "· 静态检查、类型检查报错要查到底：先看它指向哪个文件哪一行，证明得了无关才说无关，"
     "不能只丢一句「与本次改动无关」。\n"
     "· 能跑起来验证的就真跑一遍看行为，不能只凭单测和类型检查下结论；真跑不了，"
@@ -404,8 +442,11 @@ CODING_INSTRUCTIONS = (
 _SYSTEM_TAIL = (
     "做事规则：\n"
     "1. 只能通过工具读写工作区，路径一律使用工作区相对路径，禁止绝对路径与 ..。\n"
-    "2. 按已确认的步骤调用工具执行，每次拿到结果再决定下一步。\n"
-    "3. 修改文件用 edit_file / write_file / apply_patch（notebook 用 notebook_edit），验证用 run_tests。\n"
+    "2. 按已确认的步骤执行：互不依赖的调用放进同一批发出去，拿到这一批的结果再决定下一步。"
+    "有先后依赖的才分开走——不要把一个能一次问清的问题拆成几次问。\n"
+    "3. 改已有文件里的局部用 edit_file（只发改动的那一段，多段用 edits 一次发）；"
+    "新建文件或整篇都要重写才用 write_file；notebook 用 notebook_edit，跨文件补同一处用 apply_patch。"
+    "验证用 run_tests。\n"
     "4. 工具按需加载：git、联网、记忆检索、子代理不在默认列表里，"
     "需要时先用 tool_search 检索（例如「提交」「查资料」「并行」），命中后本轮即可直接调用。"
     "列表里看不到某个工具（例如 run_tests）时同理，先检索再调用，不要因此跳过验证。\n"
@@ -480,12 +521,81 @@ STYLE_PROMPT = (
     "· 不确定就说不确定，并说清是缺证据还是缺能力——这两件事用户能做的事完全不同。\n"
     "· 需要用户动手时用祈使句：「重跑一次」「把 key 填上」。不要用「您可以考虑」。\n"
     "· 中文里不塞空格，句末用句号。代码、命令、路径放进反引号。\n"
-    "· 不写「首先/其次/最后」这类结构词，段落之间的逻辑靠内容接住，不靠序号。"
+    "· 不写「首先/其次/最后」这类结构词，段落之间的逻辑靠内容接住，不靠序号。\n"
+    # 以下四条逐条对齐 Codex 主提示词的写作约束。它是被反复调过的成品：
+    # 英文那边点名封杀的词，中文这边都有对应的一批。
+    "· 不用套话：值得注意的是、需要指出的是、总的来说、总而言之、不仅…而且、"
+    "赋能、抓手、闭环、深入探讨、助力、一站式。这些词删掉之后句子照样成立，"
+    "那就说明它们只是噪音。\n"
+    "· 不写对比句：「不是 X，而是 Y」「与其说 X，不如说 Y」——用户没问 X，"
+    "你也没必要为了显得深刻先立一个靶子再打掉。直接说 Y 是什么。\n"
+    "· 不另起总结段：最后一段重复前面说过的话等于让用户读两遍。"
+    "要收尾就用一句「下一步是什么」，没有下一步就停。\n"
+    "· 不加没被问到的免责与风险清单：可能存在的风险在具体决策点上说一句就够，"
+    "不要为了周全在结尾堆一段「请注意这可能有风险」。\n"
+    "· 不写「我不会做什么」：只说你做了什么、要做什么。"
+    "把没做的事逐条声明一遍，读的人只会以为你在推责任。"
 )
 
 
-def compose_system_prompt(output_style: dict | None = None) -> str:
-    """Claude 的输出样式语义：样式正文替换默认编程纪律。
+# 日常场景的提示词。产品只做两个场景：编程与日常。
+#
+# 日常（闲聊、问概念、要解释、要判断）用这一套，不带编程纪律那一大段——
+# 让"帮我解释一下闭包"背着工作区路径规则、写盘闸门、测试验证流程去回答，
+# 既花钱又会把闲聊答成交付报告。这套措辞按 Codex 通用 agent 的口径写：
+# 直接答、有判断、篇幅跟着问题走。
+#
+# 需要动手时仍然有约束：先读后改、改完验证——只保留这两条，多一条都是噪音。
+# Codex 通用 agent 方法论落地。措辞层的五条铁律在 STYLE_PROMPT 里（逐条对应
+# Codex 写作风格），这里补的是方法论：授权、自主、进展沟通、技术表达、工具纪律。
+# 日常场景与编程场景能力相同（都能读写跑命令），差别是这套通用口径 vs Claude 编程纪律。
+DAILY_PROMPT = (
+    "你是空白格 AI 操作台的通用 agent。你和用户共享一个工作区，"
+    "目标是把他想做的事真正做完——回答问题、改文件、跑命令、验证结果都在你的能力里。\n"
+    # Autonomy and persistence（Codex 原文 L15-23）：推断意图、做到完成、
+    # 不把「要不要继续」抛回用户、不用「好的我来帮你」充当回答。
+    "· 从用户的话和上下文里推断意图与范围，主动把事做到完成。"
+    "能自己查到的自己查、能自己定的自己定；不要把「还需要我继续吗」这类确认抛回用户，"
+    "也不要停在「接下来我会……」——下一步定了就这一步做掉。\n"
+    # When to ask for permission（L3-13）：会话内已授权的跨轮不再问；
+    # 可逆的、只读的、任务隐含授权的直接做；审批被自动策略挡下要说清来源。
+    "· 会话里已经授权过的动作不要再问第二遍；可逆操作、只读查看、以及任务本身隐含的"
+    "动作直接做。确实要用户拍板的（密钥、对外发布、删除难以撤销的东西）才问，"
+    "并说清为什么要问；被自动审批策略挡下时也要说明是哪条规则挡的。\n"
+    # Intermediate commentary（L73-81）：长任务要更新进展，但不发问题、
+    # 不放最终答案、不用「我会做 X 而不是 Y」自夸；最终答案必须自包含。
+    "· 长任务中途给简短进展：查到了什么、还不确定什么、下一步要解决什么。"
+    "进展里不要问用户问题、也不要放最终结论；最终答复要自包含，"
+    "用户不用回头翻过程也能看懂。\n"
+    # Technical communication（L45-51）：先结论后论证；报告改动讲清
+    # what/why/how tested/risks；按便于判断的顺序给证据，不按时间流水账。
+    "· 讲技术的事先给结论和理由，再给支撑它的证据。报告改动时说清改了什么、"
+    "为什么、怎么验证的、有什么实际限制；验证过和推断的分开说。\n"
+    # Final answer（L83-110）：正文只写最重要的信息，路径写成可点的链接，
+    # 列表前留空行；图能帮助理解时才用（流程/因果/对比/随时间变化）。
+    "· 最终答复只写用户需要知道的关键信息，不复述过程。"
+    "引用真实文件写成 [名字](绝对路径:行号)；清单前留空行。"
+    "流程、因果、对比、变化这类关系用图或表比大段文字清楚时就画图或表。\n"
+    # Rules for getting work done（L112-126）：搜文件/内容优先 rg；
+    # 独立调用并行；shell 当代码看、注意转义；不为低风险改动写镜像实现的测试；
+    # 该跑的验证跑一遍就够，通过后再扩范围要有新理由。
+    "· 搜文件和搜内容优先用 rg / rg --files；独立的查找和读取并行发出。"
+    "shell 参数当代码对待，注意引号与转义，别用 $HOME 这类系统变量当中转。"
+    "不为一眼能看出对错的改动写测试，要测就测会出错的边界；"
+    "该跑的验证跑一遍，通过后再扩要有新改动或新疑问。\n"
+    # Skills / Apps（L128-170）：用户点名的 skill 或 app 优先用其能力。
+    "· 用户点名的 Skill、连接器或插件，优先用它们提供的能力完成这件事。\n"
+    "· 篇幅跟着问题走。一句话能说清就一句话，需要展开才展开。"
+)
+
+
+def compose_system_prompt(output_style: dict | None = None, *, scene: str = "coding") -> str:
+    """按场景拼系统提示。
+
+    ``scene="daily"`` 只用于**首轮就判明是日常问答**的请求（见 runtime 里的
+    ``guess_intent`` 预判）：这类请求一次模型调用就结束，不需要编程纪律那一段。
+    判不准的一律走 ``coding``，宁可多花 token 也不要让"以为在闲聊、其实要改代码"
+    的请求丢掉执行约束。
 
     ``keep-coding-instructions: true`` 时两者都留；没有选中样式（``None``）
     时与从前的 ``SYSTEM_PROMPT + "\\n" + STYLE_PROMPT`` 逐字节一致。
@@ -497,7 +607,10 @@ def compose_system_prompt(output_style: dict | None = None) -> str:
     if isinstance(output_style, dict):
         prompt = str(output_style.get("prompt") or "").strip()
         keep = bool(output_style.get("keep_coding_instructions"))
-    body = _SYSTEM_HEAD + (CODING_INSTRUCTIONS if (not prompt or keep) else "") + _SYSTEM_TAIL
+    if scene == "daily":
+        body = DAILY_PROMPT
+    else:
+        body = _SYSTEM_HEAD + (CODING_INSTRUCTIONS if (not prompt or keep) else "") + _SYSTEM_TAIL
     system = body + "\n" + STYLE_PROMPT
     if prompt:
         system += (
@@ -515,6 +628,8 @@ class AgentState(TypedDict, total=False):
     repair_rounds: int
     shell_commands: list[str]
     remediation_rounds: int
+    # 这一轮催过几次"别想太久，动手"。上限在 MAX_THINK_NUDGES。
+    think_nudges: int
     gap_continue: bool
     tool_results: list[dict]
     pending: list[dict]
@@ -577,8 +692,21 @@ class AgentSession:
     # 本轮思考强度（effort）的裁决结果：关键词升档、模型封顶、thinking 关断回落
     # 在这里一次算清并缓存，call_model 每步复用，不每步重算、也不每步重发提醒。
     turn_effort: str = ""
+    # 这一轮模型能不能看图（供应商声明 or 模型名像视觉模型）。
+    # read_file 读到图片时按它决定是附图还是只回一句"看不到"，见 _append_tool_response。
+    supports_vision: bool = False
+    # 这一档是"有人明确要的"（用户说了 ultrathink/ultracode，或供应商配置里手填了
+    # reasoning_effort），不是"没人指定于是兜底出来的"。
+    # 分阶段收紧只处理兜底档：用户明确要深想的时候，不该被我们的效率优化说服。
+    effort_pinned: bool = False
     effort_reminder: str = ""
     effort_warning: str = ""
+    # 计划模式已经提醒了几轮（1 起数）。完整版在第 1/6/11… 轮给，其余给精简版：
+    # 逐字重复完整版会白烧上下文，完全不提又会让模型几轮之后忘掉只读约束。
+    plan_reminder_turns: int = 0
+    # 上一次催待办时，"距上次 update_plan 已经过了几轮"。用它做间隔判定，
+    # 比另设一个倒计时计数器可靠：中间真的更新过待办，这个数会自己回到 0。
+    todo_nagged_at: int = 0
     trace_id: str = ""
     # 回合归属（对标 Codex 的 turn_attribution：root_turn_id / parent_turn_id）。
     # 主代理这两项为空是**有意的**：根线程按"没有父的就是自己"在 root_thread_id() 里现算，
@@ -1156,12 +1284,33 @@ class AgentSession:
             keyword_text=_effort_keyword_text(messages),
         )
         self.turn_effort = result.level
+        # 关键词升档，或供应商配置里手填了 reasoning_effort——两种都是"有人明确要的"。
+        # 只有"没人指定、兜底出来的"那一档才允许按阶段往下收。
+        self.effort_pinned = bool(result.from_keyword) or bool(requested.strip())
         # 工具层展开 Skill/命令正文里的 ${CLAUDE_EFFORT} 时读的是上下文上这份：
         # 占位符要的是本轮**实际生效**的档位，不是展开方手头能凑出来的默认档。
         self.context.turn_state["effort"] = self.turn_effort
         self.effort_reminder = result.reminder or ""
         self.effort_warning = result.warning or ""
         return True
+
+    def _step_effort(self, node: str) -> str:
+        """这一步实际发出去的档位。
+
+        轮次裁决给出的是**上限**（用户设的、或兜底出来的），这里按阶段往下收：
+        规划要想清楚、执行要动手、收尾只是把做完的事说一遍。实测同一轮里
+        收尾与规划加起来不到 1k 推理 token，而执行里一次整文件重写就能吃掉 8k——
+        按阶段收紧省的正是"每一小步都按最重的那步在思考"。
+
+        用户显式要的档位（ultrathink / ultracode / 供应商配置里的 reasoning_effort）
+        时整轮不降：他要的是深想，不是被我们的效率优化说服。
+        关掉 adaptive_effort 就完全回到轮次档位。
+        """
+        if self.effort_pinned:
+            return self.turn_effort
+        if not feature_enabled("adaptive_effort"):
+            return self.turn_effort
+        return tighten_for_step(self.turn_effort, node)
 
     def _thinking_payload(self, adapter: ModelAdapter) -> dict | None:
         """把 ThinkingConfig 转成 Anthropic 的 ``thinking`` 参数。
@@ -1174,10 +1323,41 @@ class AgentSession:
         if thinking.mode == "off":
             return {"type": "disabled"}
         if thinking.mode == "extended":
-            max_tokens = int(getattr(adapter.config, "max_tokens", 0) or 0)
+            # 用「这次真的会下发」的输出预算，而不是配置值：预算放大之后
+            # 思考上限必须跟着重算，否则 budget 会顶到 max_tokens 之上被供应商 400。
+            max_tokens = adapter.payload_max_tokens()
             budget = thinking.budget_tokens or thinking_budget_ceiling(max_tokens)
             return {"type": "enabled", "budget_tokens": budget}
         return None
+
+    async def _grow_budget(
+        self, adapter: ModelAdapter, error: ModelError, node: str, role: str, attempt: int
+    ) -> bool:
+        """把这次请求的输出预算放大一档。返回"真的放大了"。
+
+        顶到模型上限就返回 False——调用方据此直接失败，而不是重发一次注定一样的
+        请求。这也是 Claude Code 那边的口径：放大要有个头，头就是模型自己给的上限。
+        """
+        current = adapter.payload_max_tokens()
+        grown = grown_max_tokens(current, adapter.config.model, steps=attempt)
+        if grown <= current:
+            return False
+        adapter.max_tokens_override = grown
+        await self.recorder.add(
+            "model.budget_raised",
+            node,
+            {
+                "attempt": attempt,
+                "from": current,
+                "to": grown,
+                "ceiling": output_ceiling(adapter.config.model),
+                "reasoning_events": error.reasoning_events,
+                "reasoning_chars": error.reasoning_chars,
+                "finish_reason": error.finish_reason,
+                "role": role,
+            },
+        )
+        return True
 
     async def call_model(self, messages: list[dict], node: str, *, step: int = 0) -> tuple[Any, dict]:
         role = role_for_node(node)
@@ -1422,12 +1602,42 @@ class AgentSession:
                 *compacted,
                 authored({"role": "system", "content": self.effort_reminder}, self.run_id),
             ]
+        # 压缩刚发生：把计划文件的内容重新贴回来。摘要是"记得住结论、记不住路径"的
+        # 形状——第 3 步要改哪个文件，压缩前在上下文里，压缩后只剩一句"按计划推进"。
+        # 计划文件存在的意义之一就是这个：它比摘要更记得住细节。
+        if report.folded or self.compactor.covered > covered_before:
+            plan_text = plan_mode.read_plan(self.context.root, self.context.task_id)
+            if plan_text:
+                policy = getattr(self.context, "permissions", None)
+                relpath = str(getattr(policy, "plan_file", "") or "") or plan_mode.plan_relpath(
+                    self.context.task_id
+                )
+                compacted = [
+                    *compacted,
+                    authored(
+                        {
+                            "role": "system",
+                            "content": plan_mode.plan_reference(relpath, plan_text),
+                        },
+                        self.run_id,
+                    ),
+                ]
+        # 计划模式 / 刚退出计划 / 待办久未更新：对话侧提醒。位置必须在压缩与真正
+        # 发请求之间——它说的是"这一刻的约束"，被折进摘要就等于没说过。
+        for note in turn_reminders(self, compacted):
+            compacted = [
+                *compacted,
+                authored({"role": "system", "content": note}, self.run_id),
+            ]
         chat = [
             ChatMessage(
                 role=item["role"],
                 content=item.get("content", ""),
                 tool_call_id=item.get("tool_call_id"),
                 tool_calls=item.get("tool_calls") or [],
+                # read_file 读到图片时，那条附图消息就靠这里过河。四家供应商的
+                # 差异在各自 payload 里消化（见 models/base.openai_content）。
+                images=[img for img in (item.get("images") or ()) if isinstance(img, dict)],
             )
             for item in compacted
         ]
@@ -1440,18 +1650,133 @@ class AgentSession:
         specs = filter_specs_by_turn_state(
             self.gateway.specs(), getattr(self.context, "turn_state", {}) or {}
         )
+        # 两条恢复共用这一个循环，因为它们改的是同一件事的两侧：预算给多少、
+        # 写不完怎么办。放在这里而不是适配器内部，是因为它要发**新的一次请求**，
+        # 必须复用同一套 429/瞬时/退路闸门与台账，而不是在底层另开一条路。
+        budget_recoveries = 0
+        nudges = 0
+        # 供应商先于我们的水位判定拒了"上下文太长"时，只给一次补救机会。
+        # 再拒就说明单条消息本身就超窗，裁历史也没用。
+        context_recoveries = 0
+        carried: list[str] = []
+        # 续写要基于「原始对话」重建，而不是在上一次续写的对话上再叠：
+        # 叠下去每接一段就多一对 assistant/user，几段之后模型看到的是
+        # 一串碎片，而且上下文白白变长。这里只保留一条 assistant（到目前为止
+        # 的全部正文）加一条续写指令。
+        base_chat = chat
         try:
-            response = await self._call_adapter(
-                adapter, specs, chat, node, role,
-                effort=self.turn_effort, thinking=self._thinking_payload(adapter),
-                model=str(getattr(self.context, "turn_state", {}).get("skill_model", "") or ""),
-            )
-        except ModelError:
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            # 失败的调用也要进账：一次任务里"发了多少次请求、有多少次根本没花 token"
-            # 只能从这条记录看出来，省略它就把故障也一起省略了。
-            await self._record_usage(node, "", Usage(), latency_ms, "error", role=role)
-            raise
+            while True:
+                try:
+                    response = await self._call_adapter(
+                        adapter, specs, chat, node, role,
+                        effort=self._step_effort(node), thinking=self._thinking_payload(adapter),
+                        model=str(getattr(self.context, "turn_state", {}).get("skill_model", "") or ""),
+                    )
+                except ModelError as error:
+                    latency_ms = int((time.perf_counter() - started) * 1000)
+                    # 失败的调用也要进账：一次任务里"发了多少次请求、有多少次根本没花 token"
+                    # 只能从这条记录看出来，省略它就把故障也一起省略了。
+                    await self._record_usage(node, "", Usage(), latency_ms, "error", role=role)
+                    if _output_budget_exhausted(error):
+                        if budget_recoveries < MAX_BUDGET_RECOVERIES:
+                            budget_recoveries += 1
+                            if await self._grow_budget(adapter, error, node, role, budget_recoveries):
+                                # 预算变了，思考上限必须跟着重算（budget ≤ max_tokens-1）。
+                                continue
+                        # 放大到头还是空：把根因换成可行动的说明，别让用户去查网络。
+                        raise _budget_exhausted_error(error, adapter) from error
+                    # 不是预算问题、而是这一轮压根没开口：催一句比重发同一句有效。
+                    # 重发同一句等于让模型把同一段思考再走一遍，结果还是空。
+                    if _blank_stream_without_reasoning(error) and nudges < MAX_THINKING_NUDGES:
+                        nudges += 1
+                        chat = _with_thinking_nudge(base_chat)
+                        await self.recorder.add(
+                            "model.thinking_only",
+                            node,
+                            {
+                                "attempt": nudges,
+                                "max_attempts": MAX_THINKING_NUDGES,
+                                "finish_reason": error.finish_reason,
+                                "reasoning_events": error.reasoning_events,
+                                "role": role,
+                            },
+                        )
+                        continue
+                    # 上下文硬超限：我们的水位判定还没到，供应商先拒了（400 context_length）。
+                    # 换模型、换说法都没用，只能把历史裁短再问一次。这里**不**再走
+                    # "摘要压缩"——摘要本身也是一次模型请求，同一份超长上下文发过去
+                    # 大概率还是 400，等于把一次失败变成两次。直接裁掉前半段非 system
+                    # 消息，保证这一轮还能继续；裁了什么记进事件，事后再看得到。
+                    if getattr(error, "code", "") == "context_overflow" and context_recoveries < 1:
+                        context_recoveries += 1
+                        systems = [item for item in chat if getattr(item, "role", "") == "system"]
+                        body = [item for item in chat if getattr(item, "role", "") != "system"]
+                        dropped = len(body) // 2 if len(body) > 2 else 0
+                        if dropped:
+                            chat = systems + body[dropped:]
+                            base_chat = chat
+                            await self.recorder.add(
+                                "context.overflow_trimmed",
+                                node,
+                                {
+                                    "dropped_messages": dropped,
+                                    "kept_messages": len(chat),
+                                    "reason": "供应商拒绝：上下文超出模型窗口",
+                                },
+                            )
+                            continue
+                        # 只有 1-2 条还能超窗：这是单条消息本身太长，裁历史救不了。
+                        raise
+                    raise
+                # 这一段是这次新写的，carried 里存的就是它；拼接口径在 _join_continuation。
+                segment = response.text
+                if carried:
+                    response = _join_continuation(carried, response)
+                if len(carried) < MAX_CONTINUATIONS and _continuation_wanted(response):
+                    carried.append(segment)
+                    chat = _with_continuation(base_chat, response.text)
+                    await self.recorder.add(
+                        "model.continuation",
+                        node,
+                        {
+                            "attempt": len(carried),
+                            "chars_so_far": len(response.text),
+                            "finish_reason": response.finish_reason,
+                            "role": role,
+                            "max_attempts": MAX_CONTINUATIONS,
+                        },
+                    )
+                    continue
+                if carried and _continuation_wanted(response):
+                    # 接到上限还是被切：正文给用户，但必须留下"它是残缺的"这个事实，
+                    # 否则下游会把半截话当成完整交付。
+                    await self.recorder.add(
+                        "model.continuation_exhausted",
+                        node,
+                        {"attempts": len(carried), "chars": len(response.text), "role": role},
+                    )
+                # 有些通道（Responses / Anthropic）在「只想了、没说」时返回的是
+                # 正常收尾的空响应，不抛错。这一支就是为它们准备的。
+                if not carried and nudges < MAX_THINKING_NUDGES and _thinking_nudge_wanted(response):
+                    nudges += 1
+                    chat = _with_thinking_nudge(base_chat)
+                    await self.recorder.add(
+                        "model.thinking_only",
+                        node,
+                        {
+                            "attempt": nudges,
+                            "max_attempts": MAX_THINKING_NUDGES,
+                            "finish_reason": response.finish_reason,
+                            "reasoning_chars": response.reasoning_chars,
+                            "role": role,
+                        },
+                    )
+                    continue
+                break
+        finally:
+            # 临时预算挂在共享的适配器实例上，漏出去会让下一个任务用着上一轮的值，
+            # 而且台账里看不出是它。必须无条件复位。
+            adapter.max_tokens_override = 0
         usage = response.usage
         # 用真实 prompt_tokens 校准估算器：水位要按模型的说法算，不能只信字符启发式
         self.compactor.observe(usage.prompt_tokens, report.tokens_after)
@@ -1889,7 +2214,164 @@ def _fallback_can_help(error: ModelError) -> bool:
         return False
     if error.code in {"model_stream_empty", "model_unreachable"}:
         return True
+    # 供应商拿 400 拒问法（常见是拒 `stream` 参数）时可以退回整包。
+    # 注意：`classify_http_failure` 已经把「上下文超限」「模型名不存在」从 400 里分出去，
+    # 它们不会命中这一条——那两种换形状也没用，不该多打一次请求。
     return error.code == "model_http_error" and error.status == 400
+
+
+# 输出预算被思考吃光之后，最多再给它几次空间。一次是常态（推理模型第一次
+# 容易估少），两次是上限；三次起基本可以断定不是预算问题，继续加只是把
+# 同一段思考再跑一遍。
+MAX_BUDGET_RECOVERIES = 2
+
+# 被 max_tokens 切开之后最多接几次。Claude Code 的 `OKe=3` 就是
+# 「首启一次 + 恢复三次」——这里承接同一口径：接到第三次还在被切，
+# 说明该拆任务，不是该继续接。
+MAX_CONTINUATIONS = 3
+
+# 一次「正文为空」的响应最多戳几次。戳不回来就说明不是措辞问题。
+MAX_THINKING_NUDGES = 2
+
+# 下面三条文案逐字取自 Claude Code 2.1.271 的 `npt` / `ept` / `rpt` 常量
+# （`chunk-mt3j1sch.js`）。措辞是有讲究的：不写「不许道歉、不许复述」，
+# 模型会先道歉再把已经推给用户的正文重发一遍。
+RESUME_PROMPT = (
+    "Output token limit hit. Resume directly — no apology, no recap of what you were doing. "
+    "Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces."
+)
+# 只在「一个字的正文都没有、也没有工具调用」时发。它要的是可见输出，
+# 不是「继续」——「继续」会被理解成接着想，于是再想一轮还是空的。
+THINKING_ONLY_PROMPT = (
+    "[Your previous response had no visible output. Please continue and produce a user-visible response.]"
+)
+# 流在半路断掉（有正文但被切断，或整段没活下来）时发。
+TRUNCATED_PROMPT = (
+    "Your response above was cut off mid-stream. Resume directly from where it stops — "
+    "no apology, no recap. If none of it survived, answer the request from the start."
+)
+
+
+def _output_budget_exhausted(error: ModelError) -> bool:
+    """这次失败是"输出预算不够"，而不是"网关不认流"吗？
+
+    两种证据，任一成立即可：
+    * 流里收到过思考增量，但正文与工具调用都是空的——模型把额度想掉了；
+    * 供应商明确说 ``finish_reason=length``。
+
+    两者都没有就返回 False：那才是真的空流，该走整包退路，放大预算救不了它。
+    """
+    if error.code != "model_stream_empty":
+        return False
+    return bool(error.reasoning_events) or str(error.finish_reason or "").lower() == "length"
+
+
+def _budget_exhausted_error(error: ModelError, adapter: ModelAdapter) -> ModelError:
+    """把"空流"翻译成用户能据以行动的失败。
+
+    原来的文案是「流式响应为空」，它把预算问题说成了网络问题：用户会去换网络、
+    去查网关，而真正该做的是换模型或提高输出上限。这里把三件事写出来——
+    思考收到了多少、上限是多少、下一步该改什么。
+    """
+    ceiling = output_ceiling(adapter.config.model)
+    thinking = (
+        f"收到 {error.reasoning_events} 个思考增量、{error.reasoning_chars} 字"
+        if error.reasoning_events
+        else "没有任何正文"
+    )
+    return ModelError(
+        "model_reasoning_exhausted",
+        f"模型把输出预算全用在思考上了：{thinking}，正文与工具调用都是空的；"
+        f"{adapter.config.model} 的输出上限 {ceiling} 已用尽。"
+        "换一个非推理模型，或把这个供应商的最大输出 token 调大。",
+        reasoning_events=error.reasoning_events,
+        reasoning_chars=error.reasoning_chars,
+        finish_reason=error.finish_reason,
+    )
+
+
+def _continuation_wanted(response: ModelResponse) -> bool:
+    """这一笔要不要接着写。
+
+    只有「有正文、没有工具调用、结束原因是长度」才接：
+    * 没有正文：那是预算问题，走放大预算，接也没东西可接；
+    * 有工具调用：参数被切是另一条路（``model_stream_truncated``），接一句
+      「继续」只会让模型重写一遍调用；
+    * ``stop`` / ``tool_calls``：本来就写完了。
+    """
+    if response.tool_calls or not response.text.strip():
+        return False
+    return str(response.finish_reason or "").lower() in {"length", "max_tokens"}
+
+
+def _with_continuation(chat: list[ChatMessage], text: str) -> list[ChatMessage]:
+    """把「已经说出去的那一段」补进对话，再要它接着写。
+
+    历史里必须有这段 assistant 正文：不带上，模型看不到自己写到哪，
+    下一句会从第一句重新开始。
+    """
+    return [
+        *chat,
+        ChatMessage(role="assistant", content=text),
+        ChatMessage(role="user", content=RESUME_PROMPT),
+    ]
+
+
+def _thinking_nudge_wanted(response: ModelResponse) -> bool:
+    """这一笔是「只想不说」，而不是「什么都没说」。
+
+    判据要求**确实想过**（``reasoning_chars > 0``）：那种"思考了一堆、正文一个字
+    没有"的响应，催一句它就接着说；而连思考都没有的纯空白，催它等于再问一遍同样
+    没话说的人——那种归 ``ask`` 的 ``model_empty_response`` 那道闸管（记一条可读
+    事实、重试一次、仍空就判失败），两条路径分工不同，不能叠在一起。
+
+    叠加的后果是真机上量到的：一次空白响应被这里连续催两次、再被 ``ask`` 催一次，
+    四次调用全部落空，界面上看到的是"任务卡了两分钟然后失败"，而失败原因还写着
+    空响应——多花的钱与多等的时间都没有对应的信息量。
+    """
+    if response.tool_calls or response.text.strip():
+        return False
+    return int(response.reasoning_chars or 0) > 0
+
+
+def _with_thinking_nudge(chat: list[ChatMessage]) -> list[ChatMessage]:
+    """在原对话后追加一条 meta 级别的催促，再发一次。
+
+    故意不放进历史里的 assistant 空回复：空回复会强化「保持安静」，
+    模型更容易接着什么都不说。
+    """
+    return [*chat, ChatMessage(role="user", content=THINKING_ONLY_PROMPT)]
+
+
+def _blank_stream_without_reasoning(error: ModelError) -> bool:
+    """空流，但一个思考增量都没收到。
+
+    这不是预算被吃光（那种 ``reasoning_events > 0``），而是模型这一轮什么都没说：
+    常见于网关在 ``end_turn`` 上给了个空 body。判断依据是结束原因是正常收尾，
+    而不是长度截断——长度截断要放大预算，正常收尾要催一句。
+    """
+    if error.code != "model_stream_empty":
+        return False
+    if error.reasoning_events:
+        return False
+    return str(error.finish_reason or "").lower() in {"", "stop", "end_turn", "stop_sequence"}
+
+
+def _join_continuation(carried: list[str], response: ModelResponse) -> ModelResponse:
+    """把前几段与最后一段接成一份完整响应。
+
+    只改正文。用量、结束原因、供应商 id 都用最后一段的：那才是这次真正
+    收尾的一笔，前面几段的用量在各自那次调用里已经单独记过账了。
+    """
+    return ModelResponse(
+        text="".join(carried) + response.text,
+        usage=response.usage,
+        model=response.model,
+        tool_calls=response.tool_calls,
+        finish_reason=response.finish_reason,
+        reasoning_chars=response.reasoning_chars,
+        response_id=response.response_id,
+    )
 
 
 def role_for_node(node: str) -> str:
@@ -1968,6 +2450,76 @@ def clock_note() -> str:
     )
 
 
+# 待办提醒的两个阈值（对标 Claude 的 `h8e = {TURNS_SINCE_WRITE:10,
+# TURNS_BETWEEN_REMINDERS:10}`）：连续 10 轮没更新待办才提，提过一次之后
+# 再空转 10 轮才会提第二次。两道闸缺一不可——只留第一道，模型偶尔回一句
+# "还在做"就又沉默十轮；只留第二道，第一轮就会先被催一次。
+TODO_TURNS_SINCE_WRITE = 10
+TODO_TURNS_BETWEEN_REMINDERS = 10
+
+
+def _turns_since_tool(messages: list[dict], names: tuple[str, ...]) -> int:
+    """从末尾往回数：最后一次调用 ``names`` 之后过了几个助手回合。
+
+    只数助手消息，不数工具回执与附件：一个回合里可能有五六条工具结果，
+    按消息条数算会把"刚更新过待办"的数成"已经过了很久"。
+    """
+    count = 0
+    for item in reversed(messages or []):
+        if not isinstance(item, dict) or item.get("role") != "assistant":
+            continue
+        calls = item.get("tool_calls") or []
+        if any(tool_call_name(call) in names for call in calls if isinstance(call, dict)):
+            return count
+        count += 1
+    return count
+
+
+def turn_reminders(session: "AgentSession", messages: list[dict]) -> list[str]:
+    """本轮要追加的对话侧提醒（对标 Claude 的 attachment 组装）。
+
+    三条来源，全部**追加在末尾**、不写回 state：
+
+    1. 计划模式：第一轮与之后每 5 轮给完整版（阶段 1-5 + 收尾铁律），其余给一行
+       精简版。计划模式的约束必须**每轮**都在场——只靠系统提示写一次，模型几轮
+       之后就会开始"顺手改一下"。
+    2. 刚退出计划模式：给一条"可以动手了 + 先把计划落成待办"的提醒。少了这条，
+       模型经常继续按只读那套自我约束，白白多绕一轮。
+    3. 待办久未更新：催一次。提醒里带上当前清单，模型不用回翻历史。
+    """
+    root = session.context.root
+    task_id = session.context.task_id
+    policy = getattr(session.context, "permissions", None)
+    relpath = str(getattr(policy, "plan_file", "") or "") or plan_mode.plan_relpath(task_id)
+    turn_state = getattr(session.context, "turn_state", {}) or {}
+    out: list[str] = []
+
+    if session.permission_mode == MODE_PLAN:
+        session.plan_reminder_turns += 1
+        exists = plan_mode.plan_exists(root, task_id)
+        if turn_state.pop("plan_reentry", False):
+            out.append(plan_mode.reentry_reminder(relpath))
+        if plan_mode.reminder_is_full(session.plan_reminder_turns):
+            out.append(plan_mode.full_reminder(relpath, exists))
+        else:
+            out.append(plan_mode.sparse_reminder(relpath))
+        # 计划阶段不催待办：那时候该产出的是计划，不是勾选进度。
+        return out
+
+    session.plan_reminder_turns = 0
+    exited = turn_state.pop("plan_exited", "")
+    if exited:
+        exists = plan_mode.plan_exists(root, task_id)
+        out.append(plan_mode.exit_reminder(str(exited), exists))
+
+    idle = _turns_since_tool(messages, ("update_plan",))
+    if idle >= TODO_TURNS_SINCE_WRITE and idle - session.todo_nagged_at >= TODO_TURNS_BETWEEN_REMINDERS:
+        steps = (getattr(session.context, "plan_state", {}) or {}).get("steps") or []
+        out.append(plan_mode.todo_nag(list(steps)))
+        session.todo_nagged_at = idle
+    return out
+
+
 def initial_messages(
     goal: str,
     criteria: list[str],
@@ -1983,6 +2535,7 @@ def initial_messages(
     system_instructions: Sequence[str] | None = None,
     scenario_prompt: str = "",
     output_style: dict | None = None,
+    scene: str = "coding",
     run_id: str = "",
     goal_spec: dict | None = None,
     session_goal: str = "",
@@ -1991,7 +2544,7 @@ def initial_messages(
 ) -> list[dict]:
     from blank_api.services.instructions import compose
 
-    system = compose_system_prompt(output_style)
+    system = compose_system_prompt(output_style, scene=scene)
     if scenario_prompt:
         # 场景段放在安全规则之后、Skill 之前，并明确它不得覆盖安全与审批规则。
         # 这就是场景影响模型的唯一通道——用户正文一个字都不动。
@@ -2488,21 +3041,61 @@ def _append_tool_response(
     """
     name = tool_call_name(call)
     seen = session.output_seen if session is not None else None
+    # read_file 读到图片：结果里的 image 不是文本，要走单独一条用户消息附给模型。
+    # 模型不支持视觉时把它摘掉，换成一句实话——塞 image part 进去会直接 400，
+    # 而"假装没收到图"会让模型对着一个空文件地址瞎猜。
+    image = payload.get("data", {}).get("image") if isinstance(payload.get("data"), dict) else None
+    if isinstance(image, dict) and not str(image.get("data") or ""):
+        image = None
+    if image is not None and not (session is not None and getattr(session, "supports_vision", False)):
+        body = dict(payload)
+        body["output"] = (
+            "图片已读取，但当前模型不支持看图，图片内容你看不到。"
+            "不要猜测图里是什么，也不要说你看到了；在结论里说明需要切换到支持视觉的模型。"
+        )
+        for key in ("image",):
+            if isinstance(body.get("data"), dict):
+                body["data"] = {k: v for k, v in body["data"].items() if k != key}
+        payload = body
+        image = None
     content, stats = render(name, payload, seen, step)
     if stats.get("saved") and session is not None:
         # 省了多少要进事件流：不然"减 token"只是说法，不是数据。
         session.trimmed_chars += int(stats["saved"])
         session.trim_events.append({"tool": name, **stats})
-    return messages + [
+    run_id = session.run_id if session is not None else ""
+    extra = [
         authored(
             {
                 "role": "tool",
                 "content": content,
                 "tool_call_id": call.get("id") or name,
             },
-            session.run_id if session is not None else "",
+            run_id,
         )
     ]
+    if image is not None:
+        # 单独一条用户消息带图：tool 消息只吃字符串，image part 只能挂在这里。
+        # 文案点明"这是刚读的那张图"，否则模型会把它当成用户新上传的附件。
+        extra.append(
+            authored(
+                {
+                    "role": "user",
+                    "content": (
+                        f"上面 read_file 读到的图片（{image.get('path') or ''}）如下，"
+                        "请看图回答。"
+                    ),
+                    "images": [
+                        {
+                            "media_type": image.get("media_type", "image/png"),
+                            "data": image.get("data", ""),
+                        }
+                    ],
+                },
+                run_id,
+            )
+        )
+    return messages + extra
 
 
 def _last_user_text(state: AgentState) -> str:
@@ -4351,6 +4944,15 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     )
     live_planned = [item for item in planned if item.mode != "replay"]
     live_payloads = await _execute_all(session, node, live_planned)
+    # 用户在执行期间按了停止：这条命令是被中途杀掉的，不是自己跑完的。
+    # 必须在这里就把整轮判成 cancelled 并交出去——继续往下走的后果是模型看到一段
+    # 被截断的输出，然后开始"修复"一条本来没错的命令，而界面上已经是"已取消"。
+    for payload in live_payloads:
+        if str(payload.get("status") or "") == "cancelled":
+            await session.recorder.add(
+                "task.cancelled", node, {"reason": "用户在执行中中断了命令"}
+            )
+            return {"status": "cancelled", "pending": []}
     payloads: list[dict] = []
     live_iter = iter(live_payloads)
     for item in planned:
@@ -4738,6 +5340,31 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         messages=messages,
     )
     usage = merge_usage(usage, result["usage"])
+    # 单步思考超预算：这一次几乎全在"想"，没动手。实测一条 20 分钟的改造题里，
+    # 16851 / 9793 / 9384 三次长考各花三四分钟，产出的是一个方案而不是一次改动；
+    # 档位压到 medium 也没用（照样 16.8k）。所以不再靠降档，改成把"想太久"
+    # 这件事变成下一轮能看见的一句话——和 Claude 的 turn token budget nudge 一个路子。
+    step_usage = result.get("usage")
+    deep_tokens = int(getattr(step_usage, "reasoning_tokens", 0) or 0)
+    if not deep_tokens and isinstance(step_usage, dict):
+        deep_tokens = int(step_usage.get("reasoning_tokens") or 0)
+    nudges = int(state.get("think_nudges") or 0)
+    overrun = think_overrun_note(deep_tokens)
+    if overrun:
+        nudges += 1
+        hook_notes = getattr(session, "hook_context", None)
+        if nudges <= MAX_THINK_NUDGES and isinstance(hook_notes, list):
+            hook_notes.append({"event": "think.overrun", "tool": "", "text": overrun})
+        await session.recorder.add(
+            "think.overrun",
+            node,
+            {
+                "reasoning_tokens": deep_tokens,
+                "threshold": DEEP_THINK_TOKENS,
+                "round": nudges,
+                "nudged": nudges <= MAX_THINK_NUDGES,
+            },
+        )
     # 只有预算真正耗尽时才丢弃工具调用；收尾区仍允许模型完成最后一个动作。
     pending_calls = [] if exhausted else result["tool_calls"]
     # 环境缺口闸门：模型不再调工具、答复却是「需要你装/装不了」，而本任务确实有
@@ -4787,6 +5414,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         "budget_exhausted": exhausted,
         "shell_commands": shell_commands,
         "remediation_rounds": remediation_rounds,
+        "think_nudges": nudges,
         "gap_continue": gap_continue,
         **({"file_reads": file_state.export()} if file_state is not None else {}),
         **plan_patch,
@@ -5563,10 +6191,17 @@ def _report_sections(report: str) -> tuple[str, str]:
 
 
 def _in_scratchpad(path: str) -> bool:
-    """路径是否落在 harness 自己的临时区：提示词已说明那片目录不属于交付物。"""
+    """路径是否落在 harness 自己的暂存区：提示词已说明那片目录不属于交付物。
+
+    计划文件（``.blank/plans/``）也算在内：它是计划模式的中间产物，不是用户要的
+    交付件。算进"改动：N 个文件"会让每份计划凭空多出一个文件，而后收拾时它反正
+    会被移出工作区。
+    """
     rel = str(path).replace("\\", "/")
     while rel.startswith("./"):
         rel = rel[2:]
+    if rel == plan_mode.PLAN_DIR or rel.startswith(plan_mode.PLAN_DIR + "/"):
+        return True
     return rel == ".blank/scratchpad" or rel.startswith(".blank/scratchpad/")
 
 

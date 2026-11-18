@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import fnmatch
 import os
 import re
@@ -23,6 +24,21 @@ from blank_api.services.workspace import list_tree, read_text_file
 MAX_MATCHES_DEFAULT = 50
 MAX_GLOB_RESULTS = 200
 _INVALID_REGEX_TEMPLATE = "正则表达式无效：{exc}"
+
+# read_file 能直接交给多模态模型的图片类型。Claude 的 Read 就是这种形状：
+# 图片不进"文本内容"那条路，而是作为图像随结果一起给模型看。
+# 只收通用位图：SVG 是文本（按文本读更有用），ICO/TIFF 各家供应商支持不一致。
+IMAGE_SUFFIXES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+}
+# base64 会把体积撑大 4/3。4MB 原图约 5.3MB 文本，已经贴着多数网关的单条消息上限；
+# 再大就只报尺寸并让调用方自己决定（缩图、裁切），而不是发出去被上游 400。
+MAX_IMAGE_BYTES = 4 * 1024 * 1024
 
 # rg --type 的常用映射。只收编程场景真正会用的类型；未知类型直接报错并列出可用项，
 # 静默返回空列表会让模型以为"项目里没有这个文件"。
@@ -100,9 +116,48 @@ async def _list_files(context: ToolContext, arguments: dict) -> ToolOutcome:
     return ok("\n".join(lines) or "目录为空", files=entries, count=len(entries), **marker)
 
 
+def _read_image(context: ToolContext, relative: str, suffix: str) -> ToolOutcome:
+    """把图片读成模型能看的形式。
+
+    走的是「工具结果 + 一条附图的用户消息」这条路，不是把 base64 塞进文本：
+    four 家供应商的 tool 消息都只吃字符串，只有用户消息能带 image part。
+    ``data["image"]`` 由 ``_append_tool_response`` 取走并挂到那条消息上。
+    """
+    try:
+        target = resolve_existing(Path(context.root), relative)
+    except Exception as exc:  # 越界、非法路径都由 paths 层抛 ApiError
+        return fail("error", f"无法读取图片：{exc}")
+    if not target.is_file():
+        return fail("not_found", f"图片不存在：{relative}")
+    size = target.stat().st_size
+    if size > MAX_IMAGE_BYTES:
+        return fail(
+            "error",
+            f"图片过大：{relative} 有 {size / 1024 / 1024:.1f} MB，"
+            f"超过 {MAX_IMAGE_BYTES // 1024 // 1024} MB 上限。"
+            "先缩小或裁切到需要看的部分，再读一次。",
+            output="",
+        )
+    media = IMAGE_SUFFIXES[suffix]
+    encoded = base64.b64encode(target.read_bytes()).decode("ascii")
+    return ok(
+        f"已读取图片：{relative}（{media}，{size / 1024:.0f} KB）。"
+        "图片本身随这条结果一起给你了，直接看图回答；不要再尝试用文本方式读它，"
+        "也不要根据文件名猜内容。",
+        path=relative,
+        size=size,
+        image={"media_type": media, "data": encoded, "path": relative, "bytes": size},
+    )
+
+
 async def _read_file(context: ToolContext, arguments: dict) -> ToolOutcome:
     broker = _broker()
     marker: dict = {}
+    # 图片走单独一条路：它不是"文本内容"，而是随结果附给模型看的图像。
+    # 放在最前，是因为后面的 read_text_file 会把图片判成二进制直接报错。
+    suffix = Path(str(arguments.get("path") or "")).suffix.lower()
+    if suffix in IMAGE_SUFFIXES and not _routed(context):
+        return _read_image(context, str(arguments["path"]), suffix)
     # offset/limit 只在显式传了才放进去：老调用方（含 broker 协议）看到的参数形状不变。
     window = {
         key: int(arguments[key])

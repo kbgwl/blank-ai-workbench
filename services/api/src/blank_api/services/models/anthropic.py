@@ -9,6 +9,7 @@ from blank_api.services.models.base import (
     AdapterConfig,
     ModelAdapter,
     ModelError,
+    classify_http_failure,
     ModelResponse,
     Usage,
     data_payload,
@@ -79,7 +80,7 @@ class AnthropicAdapter(ModelAdapter):
             "system": self._system_blocks(messages),
             "messages": self._message_payload(messages, cache_last=bool(self.config.prompt_cache)),
             "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
+            "max_tokens": self.payload_max_tokens(model),
             "stream": stream,
         }
         if tools:
@@ -142,9 +143,11 @@ class AnthropicAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
-                                     status=resp.status_code,
-                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
+                    raise classify_http_failure(
+                        resp.status_code,
+                        body,
+                        retry_after=retry_after_seconds(resp.headers.get("Retry-After")),
+                    )
                 async for raw in resp.aiter_lines():
                     payload = data_payload(raw)
                     if not payload:
@@ -179,9 +182,11 @@ class AnthropicAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
-                                     status=resp.status_code,
-                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
+                    raise classify_http_failure(
+                        resp.status_code,
+                        body,
+                        retry_after=retry_after_seconds(resp.headers.get("Retry-After")),
+                    )
                 async for raw in resp.aiter_lines():
                     piece = data_payload(raw)
                     if not piece:

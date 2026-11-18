@@ -96,7 +96,7 @@ export function SelectPopover(props: SelectPopoverProps) {
   const listId = useId();
 
   const selected = options.find((item) => item.value === value);
-  const pad = size === "compact" ? "px-2 py-1.5 text-[13.5px]" : "px-2.5 py-2 text-[14px]";
+  const pad = size === "compact" ? "px-2 py-1.5 text-[13px]" : "px-2.5 py-2 text-[14px]";
 
   // 打开时定位：锚点矩形 → 竖直方向翻面。用 layoutEffect 避免闪一帧错位。
   useLayoutEffect(() => {
@@ -260,7 +260,7 @@ export function SelectPopover(props: SelectPopoverProps) {
             className="z-50 overflow-y-auto rounded-lg border border-line bg-surface py-1 shadow-lg"
           >
             {options.length === 0 && (
-              <p className="px-3 py-3 text-center text-[12.5px] text-faint">没有可选项</p>
+              <p className="px-3 py-3 text-center text-[12px] text-faint">没有可选项</p>
             )}
             {options.map((option, row) => {
               const isSelected = option.value === value;
@@ -291,7 +291,7 @@ export function SelectPopover(props: SelectPopoverProps) {
                       ))}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className={`block truncate text-[13.5px] ${isSelected ? "text-text" : "text-text/90"}`}>
+                    <span className={`block truncate text-[13px] ${isSelected ? "text-text" : "text-text/90"}`}>
                       {option.label}
                     </span>
                     {option.description && (

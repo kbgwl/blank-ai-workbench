@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "maintainer": "blank-team",
+  "notes": "我们自己的技能市场清单。external 里的每一条都必须带 stars 与 checked_at（核对日期），因为推荐的理由要能被复查：半年后 star 掉了、仓库搬了，看得出来当初凭什么推荐。用 scripts/capture_registry.py 采集，不要手写 star 数。",
+  "external": []
+}

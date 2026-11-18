@@ -19,6 +19,7 @@ Two rules keep it safe:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import time
@@ -35,6 +36,24 @@ GUARDIAN_SYSTEM = (
 )
 MAX_ARGUMENT_CHARS = 1_200
 DEFAULT_TIMEOUT = 8.0
+# 审查用的思考档位。审查的输出只是 allow / deny / abstain 加一句理由，
+# 与编程任务里"想清楚再动手"不是一件事；用默认的 high 档在这里换不到任何判断力。
+GUARDIAN_EFFORT = "low"
+
+
+def _accepts_effort(adapter: ModelAdapter | None) -> bool:
+    """这个适配器的 invoke 收不收 ``effort``。
+
+    不看适配器类型、看签名：以后新增的适配器只要加了形参就自动用上，没加的
+    也不会因为多传一个 kwarg 而抛 TypeError（async 函数的 TypeError 要到 await
+    时才出，捕获点会离出错处很远）。
+    """
+    if adapter is None:
+        return False
+    try:
+        return "effort" in inspect.signature(adapter.invoke).parameters
+    except (TypeError, ValueError):
+        return False
 MODES = ("off", "veto", "auto")
 
 
@@ -109,10 +128,16 @@ class Guardian:
         *,
         mode: str = "veto",
         timeout: float = DEFAULT_TIMEOUT,
+        effort: str = GUARDIAN_EFFORT,
     ) -> None:
         self.adapter = adapter
         self.mode = mode if mode in MODES else "veto"
         self.timeout = timeout
+        # 审查是一次二分类，不是推理题。以前这里不传档位，适配器就按本轮的默认档
+        # （high）发出去：实测一条 run_shell 的审查稳定花 5-8 秒，还有一半直接顶到
+        # 8 秒超时、退化成「问人」。档位压到 low 之后同样的判定一两秒就回来。
+        self.effort = effort
+        self._sends_effort = _accepts_effort(adapter)
 
     @classmethod
     def from_env(cls, adapter: ModelAdapter | None = None, raw: str | None = None) -> "Guardian":
@@ -181,9 +206,10 @@ class Guardian:
             ),
         ]
         started = time.perf_counter()
+        call_kwargs: dict = {"effort": self.effort} if self._sends_effort else {}
         try:
             response: ModelResponse = await asyncio.wait_for(
-                self.adapter.invoke(messages), timeout=self.timeout
+                self.adapter.invoke(messages, **call_kwargs), timeout=self.timeout
             )
         except asyncio.TimeoutError:
             return GuardianVerdict(

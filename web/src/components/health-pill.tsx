@@ -57,7 +57,7 @@ export function HealthPill({ compact = false }: { compact?: boolean }) {
 
   if (compact) {
     return (
-      <span className="inline-flex items-center gap-1.5 text-[11.5px] text-faint">
+      <span className="inline-flex items-center gap-1.5 text-[11px] text-faint">
         <span className={`size-1.5 rounded-full ${dot}`} />
         {state === "up" ? "服务正常" : label}
       </span>
@@ -65,7 +65,7 @@ export function HealthPill({ compact = false }: { compact?: boolean }) {
   }
 
   return (
-    <div className="flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-muted">
+    <div className="flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] text-muted">
       <span className="relative flex size-1.5">
         <span className={`absolute inline-flex size-full rounded-full ${dot} opacity-70`} />
         {state === "up" && (

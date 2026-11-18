@@ -43,6 +43,10 @@ class ToolContext:
     # 事件记录器：少数工具会写自己的领域事件（worktree.entered 等），
     # 拿不到时为空，工具本身照常工作——事件是事实的旁路，不是执行前提。
     recorder: Any = None
+    # 运行中取消信号（asyncio.Event）：由 runtime 轮询任务状态置位。只有前台命令
+    # 会与它竞速——读写文件都是毫秒级，等它们跑完再停并不影响体感，而一条跑了
+    # 五分钟的构建不打断，用户按的那个"停止"就等于没按。
+    cancel_event: Any = None
     # PermissionPolicy（延迟注解，避免与 permissions 模块循环导入）
     permissions: "PermissionPolicy | None" = None
     # 能力边界（能不能做），与 permissions（要不要问）是两回事，判定时先过后者

@@ -81,9 +81,9 @@ function ToolStepRow({ step }: { step: Extract<BotStep, { kind: "tool" }> }) {
         <span className={step.status === "failed" ? "text-danger" : "text-faint"}>
           <ToolIcon name={step.name} />
         </span>
-        <span className="shrink-0 font-mono text-[12.5px] text-muted">{step.name}</span>
+        <span className="shrink-0 font-mono text-[12px] text-muted">{step.name}</span>
         {hint && (
-          <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-faint" title={hint}>
+          <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-faint" title={hint}>
             {hint}
           </span>
         )}
@@ -150,7 +150,7 @@ function PlanStep({ items }: { items: string[] }) {
         </svg>
       </button>
       {open && (
-        <ol className="space-y-1 px-3 pb-2.5 pl-8 text-[13.5px] text-muted">
+        <ol className="space-y-1 px-3 pb-2.5 pl-8 text-[13px] text-muted">
           {items.map((item, index) => (
             <li key={index} className="list-decimal marker:text-faint">
               {item}
@@ -180,7 +180,7 @@ function ChangeStep({ path, changeType }: { path: string; changeType: string }) 
       <span className="text-faint">
         <ToolIcon name="write" />
       </span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-text" title={path}>
+      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-text" title={path}>
         {path}
       </span>
       <span className={`shrink-0 font-mono text-[11px] ${CHANGE_TONE[changeType] ?? "text-muted"}`}>
@@ -198,7 +198,7 @@ export function StepView({ step }: { step: BotStep }) {
     return (
       <div className="my-1.5 rounded-lg border border-warn/30 bg-warn/[0.05] px-3 py-2">
         <p className="text-[13px] font-medium text-warn">问了你一句</p>
-        <p className="mt-0.5 text-[13.5px] text-text">{step.text}</p>
+        <p className="mt-0.5 text-[13px] text-text">{step.text}</p>
         {step.answered && <p className="mt-1 font-mono text-[12px] text-muted">→ {step.answered}</p>}
       </div>
     );

@@ -8,9 +8,10 @@ import { approvalGrantOptions } from "../tasks/api";
 import type { AnswerValues, AttachmentRef, PendingApproval, PendingQuestion } from "../tasks/api";
 import { MarkdownView } from "./markdown-view";
 import { StepView } from "./steps";
-import type { BotStep, StepFilter } from "./turns";
+import type { BotStep, PlanView, StepFilter } from "./turns";
 import { filterSteps, turnEvidence } from "./turns";
 import { uploadUrl } from "./uploads";
+import type { SkillSuggestion } from "@/lib/skill-suggest";
 
 
 /** 附件是不是图片。老数据没有 mime 就没有 kind，按图片处理（那时只支持图片）。 */
@@ -41,7 +42,7 @@ function StatusChip({ status, running }: { status: string; running: boolean }) {
   // "进行中"：关掉窗口再打开的人看到的是一个在动的任务，不知道卡在等他点一下。
   if (status === "waiting_approval") {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-warn/[0.12] px-2 py-0.5 text-[11.5px] font-medium text-warn">
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-warn/[0.12] px-2 py-0.5 text-[11px] font-medium text-warn">
         <span className="size-1.5 rounded-full bg-warn" />
         等你批准
       </span>
@@ -49,14 +50,14 @@ function StatusChip({ status, running }: { status: string; running: boolean }) {
   }
   if (status === "paused") {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2 py-0.5 text-[11.5px] font-medium text-muted">
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-muted">
         已暂停
       </span>
     );
   }
   if (running) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-brand/[0.08] px-2 py-0.5 text-[11.5px] font-medium text-brand">
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-brand/[0.08] px-2 py-0.5 text-[11px] font-medium text-brand">
         <span className="relative flex size-1.5">
           <span className="absolute inline-flex size-full animate-ping rounded-full bg-brand/60" />
           <span className="relative inline-flex size-1.5 rounded-full bg-brand" />
@@ -66,10 +67,10 @@ function StatusChip({ status, running }: { status: string; running: boolean }) {
     );
   }
   if (status === "failed" || status === "error") {
-    return <span className="rounded-full bg-danger/[0.08] px-2 py-0.5 text-[11.5px] font-medium text-danger">失败</span>;
+    return <span className="rounded-full bg-danger/[0.08] px-2 py-0.5 text-[11px] font-medium text-danger">失败</span>;
   }
   if (status === "cancelled" || status === "canceled") {
-    return <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[11.5px] font-medium text-muted">已停止</span>;
+    return <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-muted">已停止</span>;
   }
   return null;
 }
@@ -88,18 +89,18 @@ function ApprovalCard({
   const reviewNote = guardianReviewLabel(approval.guardian);
   return (
     <div className="my-2 rounded-xl border border-warn/35 bg-warn/[0.04] p-3">
-      <p className="text-[13.5px] font-medium text-warn">
+      <p className="text-[13px] font-medium text-warn">
         需要你批准：{approval.tool}
         {approval.risk && <span className="ml-1.5 font-normal text-warn/80">（风险 {approval.risk}）</span>}
       </p>
       {command && (
-        <pre className="mt-1.5 overflow-auto rounded-md bg-surface px-2.5 py-1.5 font-mono text-[12.5px] text-text">
+        <pre className="mt-1.5 overflow-auto rounded-md bg-surface px-2.5 py-1.5 font-mono text-[12px] text-text">
           {command}
         </pre>
       )}
-      {approval.message && <p className="mt-1 text-[12.5px] text-muted">{approval.message}</p>}
+      {approval.message && <p className="mt-1 text-[12px] text-muted">{approval.message}</p>}
       {reviewNote && (
-        <p className="mt-1 text-[12.5px] leading-relaxed text-muted" title="独立审查员先看过了；它放行不等于安全，它说话也不会替你批准">
+        <p className="mt-1 text-[12px] leading-relaxed text-muted" title="独立审查员先看过了；它放行不等于安全，它说话也不会替你批准">
           {reviewNote}
         </p>
       )}
@@ -159,11 +160,11 @@ function QuestionCard({
     .map((option) => option.preview)[0];
   return (
     <div className="my-2 rounded-xl border border-brand/30 bg-brand/[0.03] p-3">
-      <p className="text-[13.5px] font-medium text-brand">它想先问你一句</p>
+      <p className="text-[13px] font-medium text-brand">它想先问你一句</p>
       <div className="mt-2 space-y-3">
         {questions.map((question) => (
           <div key={question.id}>
-            <p className="text-[13.5px] text-text">{question.question}</p>
+            <p className="text-[13px] text-text">{question.question}</p>
             {question.options.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {question.options.map((option) => (
@@ -185,7 +186,7 @@ function QuestionCard({
                         return { ...current, [question.id]: next };
                       })
                     }
-                    className={`rounded-md border px-2 py-1 text-[12.5px] transition-colors ${
+                    className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${
                       isSelected(question.id, option.label)
                         ? "border-brand/60 bg-brand/[0.08] text-brand"
                         : "border-line bg-surface text-muted hover:border-line-strong hover:text-text"
@@ -241,6 +242,8 @@ export type TurnViewProps = {
   /** 拼图片读取地址用。会话属于当前项目，所以直接用当前项目 id。 */
   projectId: string;
   steps: BotStep[];
+  /** 这一轮的计划与进度。放在正文上方，不塞进折叠的过程明细。 */
+  plan: PlanView | null;
   reply: string;
   reason: string;
   status: string;
@@ -257,6 +260,9 @@ export type TurnViewProps = {
   onDecide: (approval: PendingApproval, decision: "approve" | "deny", scope: "once" | "prefix" | "tool") => void;
   onAnswer: (questions: PendingQuestion[], answers: AnswerValues) => void;
   onRetry: () => void;
+  /** 这一轮的活像不像某条技能的覆盖面（纯前端判断，见 lib/skill-suggest）。 */
+  skillHint?: SkillSuggestion | null;
+  onUseSkill?: (display: string) => void;
 };
 
 export function TurnView(props: TurnViewProps) {
@@ -306,7 +312,7 @@ export function TurnView(props: TurnViewProps) {
                     target="_blank"
                     rel="noreferrer"
                     title={item.name}
-                    className="flex max-w-[220px] items-center gap-1.5 rounded-lg border border-line px-2 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-surface-3 hover:text-text"
+                    className="flex max-w-[220px] items-center gap-1.5 rounded-lg border border-line px-2 py-1.5 text-[12px] text-muted transition-colors hover:bg-surface-3 hover:text-text"
                   >
                     <span className="shrink-0 font-mono text-[11px] uppercase text-faint">
                       {fileLabel(item)}
@@ -326,12 +332,16 @@ export function TurnView(props: TurnViewProps) {
           <span className="grid size-5 shrink-0 place-items-center rounded-md bg-logo-bg">
             <span className="size-1.5 rounded-[2px] bg-logo-accent" />
           </span>
-          <span className="text-[13.5px] font-semibold tracking-tight">空白格</span>
+          <span className="text-[13px] font-semibold tracking-tight">空白格</span>
           <StatusChip status={props.status} running={running} />
           {props.createdAt && (
             <span className="ml-auto font-mono text-[11px] text-faint">{timeLabel(props.createdAt)}</span>
           )}
         </div>
+
+        {/* 计划：用户最想先知道"它打算做什么、做到哪了"，所以放在正文之上，
+            且不折叠。之前它在折叠的过程明细里，等于没显示。 */}
+        {props.plan && <PlanCard plan={props.plan} />}
 
         {/* 依据条：一行数字回答"它到底做了什么"，正文因此不必再复述过程。
             每个数字都能点开落到具体的行，这就是"回复短但不丢溯源"的地方。 */}
@@ -392,7 +402,7 @@ export function TurnView(props: TurnViewProps) {
                   </div>
                 )}
                 <div className="space-y-0.5">
-                  {shown.length === 0 && <p className="px-1.5 py-1 text-[12.5px] text-faint">这一步没有可显示的内容。</p>}
+                  {shown.length === 0 && <p className="px-1.5 py-1 text-[12px] text-faint">这一步没有可显示的内容。</p>}
                   {shown.map((step) => (
                     <StepView key={step.key} step={step} />
                   ))}
@@ -415,7 +425,7 @@ export function TurnView(props: TurnViewProps) {
           )}
 
           {!props.streaming && !props.reply && running && props.stepCount === 0 && (
-            <p className="flex items-center gap-2 py-1 text-[13.5px] text-muted">
+            <p className="flex items-center gap-2 py-1 text-[13px] text-muted">
               <span className="size-2 animate-pulse rounded-full bg-brand" />
               在想怎么做…
             </p>
@@ -425,6 +435,22 @@ export function TurnView(props: TurnViewProps) {
             <p className="mt-1 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-1.5 text-[13px] text-danger">
               {props.reason}
             </p>
+          )}
+
+          {/* 技能提示：只在这一轮的活明显属于某条技能、而模型没用它时出现。
+              一行、可点，不当广告位；点一下把话填进输入框，由用户决定发不发。 */}
+          {props.skillHint && props.onUseSkill && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-faint">
+              <span>这次可能适合</span>
+              <button
+                type="button"
+                onClick={() => props.onUseSkill?.(props.skillHint!.display)}
+                title={`命中：${props.skillHint.reason}`}
+                className="rounded-md border border-line bg-surface-2 px-1.5 py-0.5 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-text"
+              >
+                {props.skillHint.display}
+              </button>
+            </div>
           )}
 
           {props.approvals.map((approval) => (
@@ -452,13 +478,53 @@ export function TurnView(props: TurnViewProps) {
             <button
               type="button"
               onClick={props.onRetry}
-              className="mt-2 rounded-md border border-line px-2 py-1 text-[12.5px] text-muted transition-colors hover:border-line-strong hover:text-text"
+              className="mt-2 rounded-md border border-line px-2 py-1 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-text"
             >
               用同样的话再试一次
             </button>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 计划卡片。三态用字符而不是彩色圆点：字符在色觉差异下也能读，
+ * 且和正文的字重/字号同一档，不抢正文。
+ */
+function PlanCard({ plan }: { plan: PlanView }) {
+  const percent = plan.total > 0 ? Math.round((plan.completed / plan.total) * 100) : 0;
+  return (
+    <div className="ml-7 mb-2 rounded-lg border border-line bg-surface px-3 py-2">
+      <div className="flex items-center gap-2">
+        <span className="text-[12px] font-medium text-text">计划</span>
+        <span className="font-mono text-[11px] text-faint">
+          {plan.completed} / {plan.total}
+        </span>
+        <div className="ml-auto h-1 w-20 overflow-hidden rounded-full bg-surface-3" aria-hidden>
+          <div className="h-full rounded-full bg-brand transition-[width] duration-300" style={{ width: `${percent}%` }} />
+        </div>
+      </div>
+      <ol className="mt-1.5 flex flex-col gap-1">
+        {plan.items.map((item, index) => {
+          const done = item.status === "completed";
+          const active = item.status === "in_progress" || item.status === "running";
+          return (
+            <li key={`${index}-${item.text}`} className="flex items-start gap-1.5 text-[13px] leading-relaxed">
+              <span
+                className={`mt-[1px] shrink-0 font-mono text-[11px] ${done ? "text-accent" : active ? "text-brand" : "text-faint"}`}
+                aria-hidden
+              >
+                {done ? "✓" : active ? "▸" : "○"}
+              </span>
+              <span className={done ? "text-faint line-through decoration-line-strong" : active ? "text-text" : "text-muted"}>
+                {item.text}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }

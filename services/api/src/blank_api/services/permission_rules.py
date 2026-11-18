@@ -109,6 +109,8 @@ LOCAL_TOOL_NAMES: frozenset[str] = frozenset(
         "task_stop", "task_update", "team_add_member", "team_assign_task",
         "team_create_bot", "team_remove_member", "team_status", "team_update_bot",
         "tool_search", "update_plan", "web_fetch", "web_search", "workflow",
+        # 市场相关（find_skills 只读，另外两个会写盘 / 从网络取内容）
+        "find_skills", "install_market_skill", "list_curated_skills",
         "write_file", "write_notes",
     }
 )

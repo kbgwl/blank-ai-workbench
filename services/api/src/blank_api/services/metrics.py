@@ -93,4 +93,7 @@ SSE_POLL = "sse.db_polls"
 SSE_WAKE = "sse.wakes"
 ARTIFACT_WRITTEN = "artifact.written"
 ARTIFACT_TRUNCATED = "artifact.truncated"
+# 回给模型的工具结果被截断了（gateway._finish）。与 artifact.truncated 分开数：
+# 前者说明"模型没看到全部"，后者说明"证据也没存全"，两种事故的修法完全不同。
+TOOL_RESULT_TRUNCATED = "tool.result_truncated"
 ARTIFACT_PURGED = "artifact.purged"

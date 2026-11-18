@@ -4,10 +4,19 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# 探针与文档不进限流窗口。
+#
+# 桌面版的全部窗口都从 127.0.0.1 进来，共用同一个 per-IP 配额；健康探针每几秒
+# 一次、前端每开一页又是十来个请求，120/min 的窗口会被正常使用打满，表现出来
+# 就是「连 health 都 429、页面全是读取失败」——用户只会觉得软件坏了。限流的
+# 目的是挡暴力脚本，不是罚正常前端，所以把探针、预检和文档放行。
+EXEMPT_PATHS = frozenset({"/api/v1/health", "/health", "/docs", "/redoc", "/openapi.json"})
+
+
 class RateLimitMiddleware:
     """Simple per-client rate limiter using in-memory sliding window."""
 
-    def __init__(self, app, rpm=120):
+    def __init__(self, app, rpm=600):
         self.app = app
         self.rpm = rpm
         self.counters: dict[str, list[float]] = {}
@@ -15,6 +24,11 @@ class RateLimitMiddleware:
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path in EXEMPT_PATHS or scope.get("method") == "OPTIONS":
             await self.app(scope, receive, send)
             return
 

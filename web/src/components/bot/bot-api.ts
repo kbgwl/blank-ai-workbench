@@ -15,7 +15,7 @@ import {
   fetchProjects,
   fetchProviders,
   fetchThread,
-  fetchThreads,
+  fetchAllThreads,
   runTask,
   type AgentEvent,
   type AttachmentRef,
@@ -66,9 +66,15 @@ export async function loadBoot(): Promise<Boot> {
 }
 
 /** 会话按最近活动排。后端顺序不保证，这里再排一次——列表第一项必须是"刚才那条"。 */
-export async function loadConversations(projectId: string): Promise<Thread[]> {
-  if (!projectId) return [];
-  const rows = await fetchThreads(projectId);
+/**
+ * 全部项目的会话，不按当前工作区过滤。
+ *
+ * 工作区决定"在哪个目录里干活"，不决定"有哪些历史对话"。之前按 projectId 查，
+ * 一换工作区左侧就换一批、和设置页的任务数也对不上；现在统一成全局清单，
+ * 切页面、切工作区都不变。
+ */
+export async function loadConversations(): Promise<Thread[]> {
+  const rows = await fetchAllThreads();
   return [...rows].sort((a, b) => {
     const left = Date.parse(b.updatedAt || b.createdAt);
     const right = Date.parse(a.updatedAt || a.createdAt);

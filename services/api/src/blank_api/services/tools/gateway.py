@@ -20,6 +20,7 @@ from blank_api.services.agent.scenarios import resolve as resolve_scenario
 from blank_api.services.agent.scenarios import write_allowed
 from blank_api.services.mcp.protocol import qualify_prefix
 from blank_api.services.permissions import (
+    ALLOW,
     ASK,
     DENY,
     MODE_DEFAULT,
@@ -37,11 +38,46 @@ from blank_api.services.tools.registry import ToolRegistry
 log = logging.getLogger(__name__)
 
 MAX_LOGGED_CHARS = 4000
-MAX_RESULT_CHARS = 8000
+# 回给模型的单次工具结果上限。Claude Code 的同名字段是 1e5（`maxResultSizeChars`），
+# 我们原来 8000 —— 差别不在"界面上少几行"，而在 `git diff`、测试输出、构建日志这类
+# 恰好是编程主战场的结果，8000 字符就是两三百行：模型看到的永远是前两百行，
+# 后面的改动它不知道存在，于是反复重跑同一条命令。上限放到 4 万（约 1.2 万 token），
+# 更长的仍然要截，但**必须说出来**（见 `_truncation_note`）——静默截断比截断本身更坏。
+MAX_RESULT_CHARS = 40_000
+# 截断提示要留的预算：它自己不能把结果挤掉。
+TRUNCATION_NOTE_CHARS = 600
 APPROVAL_STATUS = "awaiting_approval"
 # 命令类工具（run_shell / run_tests）在结果里写这个键；只读工具不写。
 # 于是「键在不在」本身就是「这次调用起没起进程」的判据，见 _sandbox_backend。
 SANDBOX_DATA_KEY = "sandbox"
+
+
+# 哪些 allow 属于"没人给过依据"的自动判定。只有这些才被强制复核：
+# 用户点过「总是允许」、settings 里写了 allow、会话内批准记忆、钩子放行，
+# 都属于**人给过的依据**，一律尊重——把用户已经做过的决定再问一遍是骚扰，
+# 也会逼着用户去点"全部允许"（结果更不安全）。
+_AUTOMATIC_ALLOW_RULES = frozenset({"policy:auto", "legacy:auto", ""})
+
+
+def enforce_strict_review(decision: "Decision", risk: str, mode: str) -> "Decision":
+    """高危动作不许被**自动**路径静默放行（对齐 Codex 的 strictReviewRequired）。
+
+    返回值语义：
+    - 原本就 deny/ask 的，原样返回（不改变已有判定）；
+    - allow 但依据是人给的（rule 不在自动清单里），原样返回；
+    - allow 且没有依据，风险又是 high/critical → 升级成 ask。
+
+    bypass 模式是用户显式关掉询问，不算静默放行。
+    """
+    if decision.outcome != ALLOW:
+        return decision
+    if risk not in ("high", "critical"):
+        return decision
+    if mode == "bypass":
+        return decision
+    if decision.rule not in _AUTOMATIC_ALLOW_RULES:
+        return decision
+    return ask(risk, "policy:strict_review")
 
 
 def _redact(text: str, secrets: Sequence[str], limit: int = MAX_LOGGED_CHARS) -> str:
@@ -56,6 +92,24 @@ def _redact_value(value, secrets: Sequence[str], limit: int = MAX_RESULT_CHARS):
     if isinstance(value, list):
         return [_redact_value(item, secrets, limit) for item in value]
     return value
+
+
+def _truncation_note(tool: str, kept: int, total: int) -> str:
+    """截断必须写在结果里，而且要写成模型能据以行动的样子。
+
+    只写"已截断"没有用：模型手里没有拿到全部，却不知道缺的是第几行、缺多少、
+    该怎么补。所以三件事都得给——留下多少、总共多少、下一步怎么拿到剩下的。
+    路径不给：完整输出在产物目录（gzip JSON，工作区外），read_file 读不到它，
+    写上去只会让模型去试一个注定失败的路径。
+    """
+    dropped = total - kept
+    hint = "缩小范围重跑（加 head / tail / -m / --stat / 指定路径）"
+    if tool in ("run_shell", "run_tests"):
+        hint = "把输出重定向到工作区内的文件（如 `> out.log 2>&1`）再用 read_file 分批读"
+    return (
+        f"\n\n[结果已截断：共 {total} 字符，上面只显示前 {kept}，还有 {dropped} 未显示。"
+        f"要看到剩下的就{hint}；不要因为没看到就重复执行同一条命令。]"
+    )
 
 
 def _sandbox_backend(outcome: ToolOutcome) -> tuple[str | None, bool]:
@@ -590,7 +644,7 @@ class ToolGateway:
             if verdict.asks and risk not in ("high", "critical"):
                 risk = "high"
         if context.permissions is not None:
-            return context.permissions.decide(tool, arguments, risk)
+            return enforce_strict_review(context.permissions.decide(tool, arguments, risk), risk, mode)
         if context.approval_policy is not None and self._approved(tool, arguments, context):
             return approve(risk, "legacy:approved")
         if risk in ("high", "critical"):
@@ -609,17 +663,39 @@ class ToolGateway:
         decision: Decision | None = None,
     ) -> dict:
         duration_ms = int((time.perf_counter() - started) * 1000)
+        # 先算出"洗干净但没削"的长度：削不削得由它决定，削多少也要靠它写进提示。
+        clean_output = _redact(outcome.output, context.extra_secrets, 10_000_000)
+        oversize = len(clean_output) > MAX_RESULT_CHARS
         safe = ToolOutcome(
             ok=outcome.ok,
             status=outcome.status,
-            output=_redact(outcome.output, context.extra_secrets, MAX_RESULT_CHARS),
+            output=clean_output[:MAX_RESULT_CHARS],
             message=_redact(outcome.message, context.extra_secrets, MAX_RESULT_CHARS),
             data=_redact_value(outcome.data, context.extra_secrets),
         )
+        # 产物拿全文、模型拿削过的：这两者以前是同一份，结果一改上限，产物也跟着短了——
+        # 而产物正是"模型到底有没有读到完整输出"唯一的反证材料，不能被同一把剪刀剪。
+        recorded = ToolOutcome(
+            ok=outcome.ok,
+            status=outcome.status,
+            output=clean_output,
+            message=_redact(outcome.message, context.extra_secrets, 10_000_000),
+            data=safe.data,
+        )
         tool_call_id, artifact_path = await self._record(
-            name, arguments, safe, context, node, risk, duration_ms
+            name, arguments, recorded, context, node, risk, duration_ms
         )
         payload = safe.as_dict()
+        if oversize:
+            # 静默截断是这里最坏的选项：模型会以为自己读到了全部，然后据此下结论。
+            metrics.inc(metrics.TOOL_RESULT_TRUNCATED)
+            payload["output"] = safe.output + _truncation_note(
+                name, MAX_RESULT_CHARS, len(clean_output)
+            )
+            payload["result_truncated"] = {
+                "kept_chars": MAX_RESULT_CHARS,
+                "total_chars": len(clean_output),
+            }
         payload.update(
             {
                 "tool": name,
@@ -864,7 +940,7 @@ class ToolGateway:
         summary = _redact(
             "\n".join(part for part in (outcome.output, outcome.message) if part),
             context.extra_secrets,
-        )
+        )[:MAX_LOGGED_CHARS]
         full_payload = {
             "tool": name,
             "status": outcome.status,

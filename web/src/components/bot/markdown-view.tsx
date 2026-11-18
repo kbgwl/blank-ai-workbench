@@ -107,7 +107,7 @@ export function MarkdownView({ text, files, onFileClick }: { text: string } & An
       {blocks.map((block, index) => {
         if (block.kind === "code") return <CodeBlock key={index} text={block.text} lang={block.lang} />;
         if (block.kind === "heading") {
-          const size = block.level <= 2 ? "text-[15px] font-semibold" : "text-[14px] font-semibold";
+          const size = block.level <= 2 ? "text-[14px] font-semibold" : "text-[14px] font-semibold";
           return (
             <p key={index} className={`mt-4 mb-1.5 first:mt-0 ${size}`}>
               <InlineView spans={block.spans} files={files} onFileClick={onFileClick} />

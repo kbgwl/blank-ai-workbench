@@ -56,6 +56,48 @@ export type PresetsResponse = {
   kinds: string[];
 };
 
+/**
+ * 后端预设键 → 中文名。后端有 20+ 个国产预设，前端只翻了 6 个会让剩下的一串下划线直接
+ * 戳到用户脸上。国内项排在前面，和 Qoder 的 BYOK 列表一样先给能用的。
+ */
+export const PRESET_LABELS: Record<string, string> = {
+  // 国产 · 默认型号按 2026-11-18 各家控制台核对，型号可改
+  deepseek: "DeepSeek Flash",
+  deepseek_pro: "DeepSeek V4 Pro",
+  qwen: "通义千问 Max",
+  qwen_plus: "通义千问 Plus",
+  qwen_flash: "通义千问 Flash",
+  zhipu: "智谱 GLM-5.3",
+  zhipu_flash: "智谱 GLM-5.3 Flash",
+  moonshot: "Kimi K3.1 Pro",
+  kimi_k3: "Kimi K3",
+  // 海外
+  anthropic: "Claude Sonnet 5.5",
+  claude_opus: "Claude Opus 5.5",
+  claude_fable: "Claude Fable 5.2",
+  openai: "GPT-6.1 Terra",
+  openai_astra: "GPT-6 Astra",
+  openai_luna: "GPT-6 Luna",
+  // 本地
+  ollama: "Ollama 本地",
+};
+
+/**
+ * 默认只摆这几家主流厂商，顺序固定：国产三家在前，海外两家，本地收尾。
+ * 后端 `PROVIDER_PRESETS` 里还有二十多个型号变体，那是兼容旧配置用的，
+ * 不进选择列表——一排主流、填 Key 即用，才像 Qoder 的 BYOK。
+ */
+export const CORE_PRESETS = ["deepseek", "qwen", "zhipu", "moonshot", "anthropic", "openai", "ollama"] as const;
+
+/** 只返回存在的核心预设，顺序按 CORE_PRESETS，不跟后端字典顺序漂。 */
+export function sortedPresetKeys(presets: Record<string, Preset>): string[] {
+  return CORE_PRESETS.filter((key) => key in presets);
+}
+
+export function presetLabel(key: string): string {
+  return PRESET_LABELS[key] ?? key;
+}
+
 export type Capabilities = {
   provider?: string;
   kind?: string;

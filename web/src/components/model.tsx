@@ -52,13 +52,12 @@ export function useModel() {
 
 export function ModelSwitcher() {
   const { providers, modelId, setModelId } = useModel();
-  const selected = providers.find((provider) => provider.id === modelId);
   return <label className="flex items-center gap-2 rounded-md border border-line bg-surface px-2 py-1 text-[12px] text-muted">
     <span className="text-faint">模型</span>
     <SelectPopover size="compact" ariaLabel="选择模型" value={modelId}
       disabled={providers.length === 0}
-      options={providers.length === 0 ? [{ value: "", label: "未配置模型" }] : providers.map((provider) => ({ value: provider.id, label: `${provider.name} · ${provider.model}` }))}
+      placeholder="未配置模型"
+      options={providers.length === 0 ? [] : providers.map((provider) => ({ value: provider.id, label: `${provider.name} · ${provider.model}` }))}
       onChange={setModelId} menuMinWidth={220} />
-    {selected && <span className="hidden text-faint lg:inline">{selected.kind}</span>}
   </label>;
 }

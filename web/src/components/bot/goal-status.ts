@@ -1,14 +1,16 @@
 /**
- * v165 §9.1 顶部状态条的纯数据层。
+ * 对话顶部状态条的纯数据层。
+ *
+ * 这里只回答一个问题：**这一轮现在在做什么**（目标进度、后台还有几个任务、
+ * 后端是不是断了）。场景、模型、权限档不在这里出现——它们本来就在输入框
+ * 工具条上各有一个可点的选择器，再在顶部重复一遍，用户只会问
+ * 「模式 辅助 是什么东西」。
  *
  * 与渲染分开是为了能被 node:test 直接钉住口径：状态条最怕「各处各拉一份」
  * 导致同一时刻显示互相矛盾的值，这里定义唯一的取值与文案规则。
  */
 
 export type GoalStatusBarData = {
-  scenario: string;
-  model: string;
-  automationMode: string;
   goal: string;
   goalStatus: string;
   backgroundCount: number;
@@ -20,20 +22,6 @@ export type StatusChip = {
   label: string;
   value: string;
   tone: "plain" | "brand" | "warn" | "danger" | "muted";
-};
-
-const SCENARIO_LABELS: Record<string, string> = {
-  dev: "开发",
-  docs: "文档",
-  daily: "日常",
-  brainstorm: "头脑风暴",
-  reverse: "逆向分析",
-};
-
-const AUTOMATION_LABELS: Record<string, string> = {
-  manual: "手动",
-  assist: "辅助",
-  autonomous: "自动驾驶",
 };
 
 const GOAL_STATUS_LABELS: Record<string, string> = {
@@ -52,30 +40,13 @@ const GOAL_STATUS_LABELS: Record<string, string> = {
   archived: "已归档",
 };
 
-export function scenarioLabel(key: string): string {
-  return SCENARIO_LABELS[key] || "开发";
-}
-
-export function automationModeLabel(mode: string): string {
-  return AUTOMATION_LABELS[mode] || "辅助";
-}
-
 export function goalStatusLabel(status: string): string {
   return GOAL_STATUS_LABELS[status] || "";
 }
 
 /** 把状态条要显示的几格算成数组：纯函数，node:test 能直接钉住口径。 */
 export function statusBarChips(data: GoalStatusBarData): StatusChip[] {
-  const chips: StatusChip[] = [
-    { key: "scenario", label: "场景", value: scenarioLabel(data.scenario), tone: "plain" },
-    { key: "model", label: "模型", value: data.model || "未选择", tone: "plain" },
-    {
-      key: "automation",
-      label: "模式",
-      value: automationModeLabel(data.automationMode),
-      tone: data.automationMode === "autonomous" ? "brand" : "plain",
-    },
-  ];
+  const chips: StatusChip[] = [];
   if (data.goal) {
     const status = goalStatusLabel(data.goalStatus);
     chips.push({
@@ -96,4 +67,14 @@ export function statusBarChips(data: GoalStatusBarData): StatusChip[] {
     chips.push({ key: "background", label: "后台", value: `${data.backgroundCount} 个任务`, tone: "plain" });
   }
   return chips;
+}
+
+/**
+ * 整条要不要渲染。
+ *
+ * 新对话、没有目标、后端也正常时，顶部那条除了占一行高度什么也不说。
+ * 主流 agent 的新会话页都是干净的，所以这里宁可整条不出现。
+ */
+export function statusBarVisible(data: GoalStatusBarData): boolean {
+  return Boolean(data.goal) || data.backgroundCount > 0 || !data.serviceOnline;
 }

@@ -1,11 +1,12 @@
 /**
  * 左栏导航与状态点：把"有哪些入口"和"这条会话现在是什么状态"变成可测的纯函数。
  *
- * 导航项按 `docs/APP-DESIGN.md` §6 的顺序排：新的任务 / 搜索 · 工作区 · 最近任务 ·
- * 证据库 / 技能 / 连接器 · 设置。顺序就是信息架构，乱序等于让用户每次重新找。
+ * 常驻导航只留「工作区」一项。监控、证据库、技能、连接器都是低频的查看/配置项，
+ * 统一收进设置页（设置 → 查看与效率 / 外部工具与插件），不再在侧栏和图标栏摆一排。
+ * Qoder、Claude 的常驻栏同样只有「对话 + 搜索 + 工作区 + 设置」这条骨架。
  */
 
-export type NavId = "workspace" | "monitor" | "evidence" | "skills" | "connectors";
+export type NavId = "workspace";
 
 export type NavItem = {
   id: NavId;
@@ -16,12 +17,16 @@ export type NavItem = {
 
 export const NAV_ITEMS: NavItem[] = [
   { id: "workspace", href: "/projects", label: "工作区", hint: "项目与目录" },
-  // 监控放在「现在发生什么」的位置：工作区是"在哪做"，监控是"它现在在盯什么"，
-  // 证据库是"过去做成了什么"。三者的时态从当下往回退，顺序不能乱。
-  { id: "monitor", href: "/monitor", label: "监控", hint: "它现在在盯什么" },
-  { id: "evidence", href: "/evidence", label: "证据库", hint: "每次交付的验收、改动与用量" },
-  { id: "skills", href: "/skills", label: "技能", hint: "你确认过的做法" },
-  { id: "connectors", href: "/settings#tools", label: "连接器", hint: "外部工具与数据源" },
+];
+
+/** 低频入口从侧栏撤下后仍要可达：统一从设置页进入。命令面板也保留这些跳转。 */
+export type UtilityLink = { href: string; label: string; hint: string };
+
+export const UTILITY_LINKS: UtilityLink[] = [
+  { href: "/monitor", label: "监控", hint: "它现在在盯什么" },
+  { href: "/evidence", label: "证据库", hint: "每次交付的验收、改动与用量" },
+  { href: "/skills", label: "技能", hint: "你确认过的做法" },
+  { href: "/settings#tools", label: "连接器", hint: "外部工具与数据源" },
 ];
 
 /**

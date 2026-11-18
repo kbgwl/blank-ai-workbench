@@ -117,15 +117,15 @@ export function LivePanels() {
           <div className="grid grid-cols-3 gap-2 text-center">
             <div className="rounded-lg border border-line bg-surface px-2 py-2">
               <div className="font-mono text-[11px] text-faint uppercase">调用</div>
-              <div className="text-[15px] font-semibold">{usage.total_calls}</div>
+              <div className="text-[14px] font-semibold">{usage.total_calls}</div>
             </div>
             <div className="rounded-lg border border-line bg-surface px-2 py-2">
               <div className="font-mono text-[11px] text-faint uppercase">失败</div>
-              <div className={`text-[15px] font-semibold ${failed > 0 ? "text-warn" : "text-text"}`}>{failed}</div>
+              <div className={`text-[14px] font-semibold ${failed > 0 ? "text-warn" : "text-text"}`}>{failed}</div>
             </div>
             <div className="rounded-lg border border-line bg-surface px-2 py-2">
               <div className="font-mono text-[11px] text-faint uppercase">TOKENS</div>
-              <div className="text-[15px] font-semibold">{tokens.toLocaleString("en-US")}</div>
+              <div className="text-[14px] font-semibold">{tokens.toLocaleString("en-US")}</div>
             </div>
           </div>
         )}

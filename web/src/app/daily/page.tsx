@@ -51,10 +51,10 @@ export default function DailyPage() {
               记住这个习惯
             </button>
           </div>
-          {notice && <p className="mt-4 text-[12.5px] text-muted">{notice}</p>}
+          {notice && <p className="mt-4 text-[12px] text-muted">{notice}</p>}
           <div className="mt-8 border-t border-line pt-4">
             <h3 className="text-[13px] font-medium">学习规则</h3>
-            <p className="mt-1.5 text-[12.5px] leading-relaxed text-muted">
+            <p className="mt-1.5 text-[12px] leading-relaxed text-muted">
               Agent 只学习你明确确认的内容；学习记录保存在当前浏览器本地，不上传服务器。未来生成 Skill
               草案时仍需你审核后启用。
             </p>
@@ -62,7 +62,7 @@ export default function DailyPage() {
         </section>
         <aside className="rounded-lg border border-line bg-surface p-4">
           <h2 className="text-[14px] font-medium">已确认的习惯</h2>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-muted">这些偏好会作为后续任务的可见上下文。</p>
+          <p className="mt-1 text-[12px] leading-relaxed text-muted">这些偏好会作为后续任务的可见上下文。</p>
           <div className="mt-4">
             <HabitList habits={habits} onForget={forget} />
           </div>

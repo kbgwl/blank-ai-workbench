@@ -53,7 +53,7 @@ export function RoutingEvidencePanel() {
       ) : (
         <div className="flex flex-col gap-3">
           <div className="flex items-start justify-between gap-3">
-          <p className="text-[12.5px] leading-relaxed text-faint">
+          <p className="text-[12px] leading-relaxed text-faint">
             分母是「每一步都交给池子里最强模型」的成本当量，所以这个比值不依赖任何一家的真实单价。
             省 3% 却多一个可能判错的环节，不值得开；省 20% 以上且失败率没抬头，才值得开成默认。
           </p>
@@ -85,13 +85,13 @@ export function RoutingEvidencePanel() {
           </div>
 
           {data.sampled_tasks === 0 ? (
-            <p className="text-[12.5px] leading-relaxed text-faint">
+            <p className="text-[12px] leading-relaxed text-faint">
               还没有开着 model_routing 跑过的任务。先去上面的特性开关打开它，跑几个真实任务再回来看——
               这个面板不会替你决定，只把依据摆出来。
             </p>
           ) : (
             <div className="overflow-hidden rounded-lg border border-line">
-              <table className="w-full text-left text-[12.5px]">
+              <table className="w-full text-left text-[12px]">
                 <thead className="bg-surface-2 text-faint">
                   <tr>
                     <th className="px-2 py-1.5 font-normal">任务</th>
@@ -104,7 +104,7 @@ export function RoutingEvidencePanel() {
                 <tbody>
                   {data.recent.slice(0, 8).map((row) => (
                     <tr key={row.task_id} className="border-t border-line">
-                      <td className="px-2 py-1.5 font-mono text-[11.5px] text-muted">
+                      <td className="px-2 py-1.5 font-mono text-[11px] text-muted">
                         {row.task_id.slice(0, 8)}
                       </td>
                       <td className="px-2 py-1.5 text-muted">{row.status}</td>

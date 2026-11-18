@@ -281,6 +281,53 @@ async def _stream_process(
     return b"".join(out), b"".join(err), timed_out
 
 
+async def _communicate_or_cancel(
+    process: asyncio.subprocess.Process,
+    timeout: float,
+    cancel_event: asyncio.Event,
+) -> tuple[bytes, bytes, bool, bool]:
+    """等命令结束；用户按了停止就立刻杀掉整棵进程树。
+
+    只有前台 `run_shell` 会把 ``cancel_event`` 传进来：读文件、写补丁都是毫秒级，
+    为它们各加一条竞速路径只会让取消逻辑更难推理。真正会长时间占住一条协程的
+    只有命令。
+
+    返回 ``(stdout, stderr, timed_out, cancelled)``。取消与超时必须分开报：
+    超时是"这条命令有问题"，取消是"用户改主意了"——把前者写成后者，模型会以为
+    用户否掉了这个方案，于是换一个更保守的做法。
+    """
+    comm = asyncio.ensure_future(process.communicate())
+    stopper = asyncio.ensure_future(cancel_event.wait())
+    try:
+        done, _pending = await asyncio.wait(
+            {comm, stopper}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+        )
+    except asyncio.CancelledError:
+        # 外层把这条协程掐了（任务收尾、请求断开）：进程得跟着走，不能留在那儿写文件。
+        await _end_process(process)
+        comm.cancel()
+        stopper.cancel()
+        raise
+    timed_out = False
+    cancelled = False
+    if comm in done:
+        stopper.cancel()
+        try:
+            return (*comm.result(), False, False)
+        except Exception:  # noqa: BLE001 - 收进程残留输出失败不该把结果变成异常
+            return b"", b"", False, False
+    if stopper in done:
+        cancelled = True
+    else:
+        timed_out = True
+    await _end_process(process)
+    try:
+        out, err = await asyncio.wait_for(comm, 5)
+    except Exception:  # noqa: BLE001 - 已经杀掉了，拿不到输出就是空
+        out, err = b"", b""
+    return out, err, timed_out, cancelled
+
+
 async def run_process(
     command: str | list[str],
     root: Path,
@@ -288,6 +335,7 @@ async def run_process(
     shell: bool = False,
     env: dict[str, str] | None = None,
     on_chunk: Callable[[str, bytes], None] | None = None,
+    cancel_event: asyncio.Event | None = None,
 ) -> dict:
     # 命令首段是工作区里的相对可执行文件时要先补成绝对路径（见函数注释）。
     # 放在这里而不是各个工具里：run_shell 与 run_tests、宿主直连与沙箱执行都经过它。
@@ -313,8 +361,23 @@ async def run_process(
             "stdout": _decode(stdout),
             "stderr": _decode(stderr),
             "timed_out": timed_out,
+            # 后台命令不参与取消竞速（它由 task_stop 管），但键要在：
+            # 调用方只该问"是不是被中断了"，不该先问"这个字段有没有"。
+            "cancelled": False,
         }
     timed_out = False
+    cancelled = False
+    if cancel_event is not None and on_chunk is None:
+        stdout, stderr, timed_out, cancelled = await _communicate_or_cancel(
+            process, timeout, cancel_event
+        )
+        return {
+            "exit_code": process.returncode,
+            "stdout": _decode(stdout),
+            "stderr": _decode(stderr),
+            "timed_out": timed_out,
+            "cancelled": cancelled,
+        }
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
     except asyncio.TimeoutError:
@@ -333,6 +396,7 @@ async def run_process(
         "stdout": _decode(stdout),
         "stderr": _decode(stderr),
         "timed_out": timed_out,
+        "cancelled": False,
     }
 
 
@@ -428,6 +492,7 @@ async def execute_command(
     host_bypass: bool = False,
     isolation_profile: str = "",
     on_chunk: Callable[[str, bytes], None] | None = None,
+    cancel_event: asyncio.Event | None = None,
 ) -> dict:
     """按任务档位执行命令：沙箱 / 宿主直连 / 拒绝，三种结果都带同一本账。
 
@@ -471,7 +536,8 @@ async def execute_command(
         else:
             reason = "当前没有生效的沙箱（档位 off 或部署关闭），命令本就在宿主上执行"
         result = await run_process(
-            command, root, budget, shell=shell, env=env, on_chunk=on_chunk
+            command, root, budget, shell=shell, env=env, on_chunk=on_chunk,
+            cancel_event=cancel_event,
         )
         result["sandbox"] = None
         result["tier"] = facts
@@ -542,7 +608,8 @@ async def execute_command(
             "timeout_budget": budget,
         }
     result = await run_process(
-        command, root, budget, shell=shell, env=env, on_chunk=on_chunk
+        command, root, budget, shell=shell, env=env, on_chunk=on_chunk,
+        cancel_event=cancel_event,
     )
     result["sandbox"] = None
     result["tier"] = facts
@@ -775,6 +842,7 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
         tier=getattr(context, "sandbox_tier", "") or "",
         host_bypass=approved,
         isolation_profile=str(getattr(context, "isolation_profile", "") or ""),
+        cancel_event=getattr(context, "cancel_event", None),
     )
     timeout = result.get("timeout_budget", timeout)
     stdout = truncate(mask_output(result["stdout"], context.root))[0]
@@ -803,6 +871,27 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
                 "tier": result.get("tier", {}),
                 "tier_blocked": True,
                 "enforcement": result["enforcement"],
+                **_bypass_data(result),
+            },
+        )
+    if result.get("cancelled"):
+        # 用户按了停止。这条必须与"超时"和"失败"分开写：把它报成超时，模型会以为
+        # 命令本身有问题去重试/改写法；报成失败，它会开始修一条根本没错的命令。
+        # 真实原因是"人改主意了"，下一步该做的是停下来等新指示。
+        return ToolOutcome(
+            ok=False,
+            status="cancelled",
+            output=stdout,
+            message=(
+                f"命令被用户中断（{command[:120]}）。进程树已终止；"
+                "不要重跑这条命令，等用户下一步指示。"
+            ),
+            data={
+                "exit_code": result["exit_code"],
+                "stdout": stdout,
+                "stderr": stderr,
+                "cancelled": True,
+                "interrupted": True,
                 **_bypass_data(result),
             },
         )
@@ -963,12 +1052,45 @@ def shell_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="run_shell",
             description=(
-                f"在工作区根目录执行 Shell 命令，支持超时并回收进程，返回退出码与标准输出/错误。{syntax}"
-                "长构建、起服务这类「下一步不马上需要结果」的命令传 run_in_background=true："
-                "立刻返回 shell_id，结束时你会收到系统通知，不必轮询、也不要为此 sleep；"
-                "进度与输出用 task_output(shell_id=...)，不要了用 task_stop(shell_id=...) 终止。"
+                f"在工作区根目录执行 Shell 命令，返回退出码与标准输出/错误。{syntax}"
+                "\n\n"
+                "不要用它做已经有专用工具的事。专用工具带权限、可审计、结果更好审：\n"
+                "- 找文件用 glob（不是 find / ls）\n"
+                "- 搜内容用 search_code（不是 grep / rg）\n"
+                "- 读文件用 read_file（不是 cat / head / tail）\n"
+                "- 改文件用 edit_file / apply_patch（不是 sed / awk）\n"
+                "- 写文件用 write_file（不是 echo > / cat <<EOF）\n"
+                "- 要跟用户说话就直接说（不是 echo / printf）\n"
+                "只有专用工具确实做不到时才回到 shell。\n"
+                "\n"
+                "工作目录在多次调用之间保留，shell 状态（变量、函数、别名）不保留。\n"
+                "\n"
+                "命令写法：\n"
+                "- 含空格的路径一律用双引号包起来。\n"
+                "- 尽量用绝对路径，少 cd；用户明确要求时才 cd。\n"
+                "- 建目录/建文件之前先 ls 确认父目录存在且位置对。\n"
+                "- 多条命令：互不依赖就并行发多个调用；有先后依赖用 && 串起来；"
+                "只有「前一条失败也无所谓」时才用 ;。不要用换行分隔命令（引号内的换行可以）。\n"
+                "- 输出很长时把结果重定向到工作区内的文件（> out.log 2>&1），再 read_file 分批读；"
+                "不要让一条命令把几万行打到结果里。\n"
+                "\n"
+                "git：\n"
+                "- 优先新建提交，不要 --amend。\n"
+                "- 破坏性操作（reset --hard、push --force、checkout --）先想更安全的替代。\n"
+                "- 不要跳过钩子（--no-verify）或绕过签名，除非用户明确要求；钩子失败要修根因。\n"
+                "- 不要用交互式命令（rebase -i、add -i、git commit 不带 -m）。\n"
+                "\n"
+                "等待：\n"
+                "- 能立刻跑的就立刻跑，不要在命令之间 sleep。\n"
+                "- 长任务传 run_in_background=true：立刻返回 shell_id，结束时你会收到系统通知；"
+                "进度与输出用 task_output(shell_id=...)，不要了用 task_stop(shell_id=...) 终止。\n"
+                "- 不要在 sleep 循环里重试失败的命令——去查根因。\n"
+                "\n"
                 "只有当沙箱导致命令无法完成、且确有必要时才传 sandbox=\"host\" 请求单次越界："
                 "该请求默认被拒绝，开启后也必须逐条人工批准，仅在宿主上执行这一次。"
+                "\n\n"
+                "工具结果可能被截断：截断时会明确告诉你保留了多少、总共多少。"
+                "看到截断就缩小范围重跑或改走文件，不要原样再执行一次。"
             ),
             input_schema={
                 "type": "object",

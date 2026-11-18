@@ -14,7 +14,8 @@
 
 from __future__ import annotations
 
-from blank_api.services.permissions import MODE_DEFAULT, MODE_PLAN
+from blank_api.services.permissions import MODE_ACCEPT_EDITS, MODE_DEFAULT, MODE_PLAN
+from blank_api.services import plan_mode
 from blank_api.services.plan import (
     MAX_STEPS,
     MILESTONE_STATUSES,
@@ -109,37 +110,74 @@ def _mode_policy(context: ToolContext):
     return getattr(context, "permissions", None)
 
 
-async def _enter_plan_mode(context: ToolContext, arguments: dict) -> ToolOutcome:
-    """进入计划模式：只读调研，写操作与命令一律拒绝。
+def _plan_file(context: ToolContext) -> str:
+    """本任务的计划文件（工作区相对路径）。拿不到根就退化成空串，工具照常工作。"""
+    root = getattr(context, "root", None)
+    task_id = getattr(context, "task_id", "")
+    if root is None:
+        return ""
+    return plan_mode.plan_relpath(task_id)
 
-    这是**收紧**方向，所以策略层直接放行；工具只负责把状态改到位。
+
+async def _enter_plan_mode(context: ToolContext, arguments: dict) -> ToolOutcome:
+    """进入计划模式：只读调研 + 一个可写的计划文件。
+
+    这是**收紧**方向，所以策略层直接放行；工具负责把两件事都改到位：
+    模式，以及"计划模式下唯一允许写的路径"。少做第二件，模型就会在计划模式里
+    被自己的写操作挡住，然后把整段计划塞进对话正文——下一轮压缩就没了。
     """
     policy = _mode_policy(context)
     if policy is None:
         return fail("error", "当前运行时没有权限策略，无法切换计划模式")
     previous = policy.mode
+    plan_file = _plan_file(context)
     if previous == MODE_PLAN:
+        # 已经在计划模式（直接以 plan 档启动、或审批恢复回来）：只补路径，不动模式。
+        # 路径必须补——少了它，模型在计划模式里连计划文件都写不了，只能把计划
+        # 塞进对话正文，下一轮压缩就没了。
+        if plan_file and not getattr(policy, "plan_file", ""):
+            policy.plan_file = plan_file
         return ok(
-            "已经在计划模式：只读取证，写文件与执行命令都会被拒绝。",
+            "已经在计划模式：只读取证，写文件与执行命令都会被拒绝"
+            + (f"（计划文件 `{plan_file}` 除外）。" if plan_file else "。"),
             mode=MODE_PLAN,
             previous=previous,
             changed=False,
+            plan_path=plan_file,
         )
+    # 记下从哪个模式进来的：退出时要回到它，而不是一律回 default。
+    policy.pre_plan_mode = previous
+    policy.plan_file = plan_file
     policy.mode = MODE_PLAN
+    turn_state = getattr(context, "turn_state", None)
+    if isinstance(turn_state, dict):
+        # 本会话里退出过计划模式、现在又进来：提醒先读旧计划，别从零重想。
+        turn_state["plan_reentry"] = bool(turn_state.pop("plan_ever_exited", False))
+    exists = bool(plan_file) and plan_mode.plan_exists(context.root, context.task_id)
+    head = plan_mode.file_section(plan_file, exists) if plan_file else ""
     return ok(
-        "已进入计划模式：接下来只做只读取证，写文件与执行命令都会被拒绝。"
-        "调研完成后调用 exit_plan_mode 附上计划，交用户确认后再开始修改。",
+        "已进入计划模式：接下来只做只读取证，写文件与执行命令都会被拒绝"
+        + (f"，唯一可写的是计划文件 `{plan_file}`。" if plan_file else "。")
+        + "\n\n"
+        + head
+        + "调研完成后调用 exit_plan_mode 交计划：不传 plan 时它会直接读这个文件。"
+        "这一轮只能用 request_user_input（澄清）或 exit_plan_mode（交计划）结束。",
         mode=MODE_PLAN,
         previous=previous,
         changed=True,
+        plan_path=plan_file,
     )
 
 
 async def _exit_plan_mode(context: ToolContext, arguments: dict) -> ToolOutcome:
-    """退出计划模式：把计划交出去、恢复默认权限。
+    """退出计划模式：把计划交出去、回到进入之前的权限模式。
 
     放宽方向，策略层在计划模式下会为此弹审批卡（`mode:switch`）；工具本身不判断
     用户批没批——走到这里就说明审批门已经过了。
+
+    计划来源有两处，按可靠程度取：卡片上带来的 ``plan`` 参数优先（用户可能改过它），
+    其次是计划文件（模型边调研边写的那一份）。两处都空说明它根本没写计划，
+    此时**不退出**：让一张空计划过审，用户看到的就是一张没有内容的批准卡。
     """
     policy = _mode_policy(context)
     if policy is None:
@@ -151,16 +189,40 @@ async def _exit_plan_mode(context: ToolContext, arguments: dict) -> ToolOutcome:
             previous=policy.mode,
             changed=False,
         )
-    plan = str(arguments.get("plan") or "").strip()[:4000]
+    plan_file = str(getattr(policy, "plan_file", "") or "") or _plan_file(context)
+    plan = str(arguments.get("plan") or "").strip()[: plan_mode.MAX_PLAN_CHARS]
+    from_file = False
+    if not plan and plan_file:
+        plan = plan_mode.read_plan(context.root, context.task_id)
+        from_file = bool(plan)
+    if not plan:
+        return fail(
+            "error",
+            "计划是空的：先把计划写进计划文件"
+            + (f" `{plan_file}`" if plan_file else "")
+            + "（步骤、要改的文件、怎么验证），再调用 exit_plan_mode。"
+            "不传 plan 参数时工具会自动读这个文件。",
+        )
     previous = policy.mode
-    policy.mode = MODE_DEFAULT
-    head = f"计划已提交：\n{plan}\n\n" if plan else ""
+    restore = str(getattr(policy, "pre_plan_mode", "") or "")
+    policy.mode = restore if restore in (MODE_DEFAULT, MODE_ACCEPT_EDITS, MODE_PLAN) else MODE_DEFAULT
+    policy.pre_plan_mode = ""
+    # 退出提醒靠 turn_state 传递：工具拿不到运行时会话，而"刚退出"这个事实必须
+    # 在这一轮的下一次模型调用里被说出来，否则模型会继续按只读那套自我约束。
+    turn_state = getattr(context, "turn_state", None)
+    if isinstance(turn_state, dict):
+        turn_state["plan_exited"] = plan_file
+        turn_state["plan_ever_exited"] = True
     return ok(
-        head + "已退出计划模式，恢复默认权限；接下来的写操作按默认规则逐条确认。",
-        mode=MODE_DEFAULT,
+        "计划已提交：\n" + plan + "\n\n"
+        + f"已退出计划模式，恢复到 `{policy.mode}`；接下来的写操作按该模式的规则判定。"
+        + "第一步先把这份计划落成待办（update_plan），之后每完成一步立刻勾掉。",
+        mode=policy.mode,
         previous=previous,
         changed=True,
         plan=plan,
+        plan_path=plan_file,
+        plan_from_file=from_file,
     )
 
 
@@ -269,9 +331,22 @@ def plan_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="enter_plan_mode",
             description=(
-                "进入计划模式：只做只读调研（读文件、搜索、看 git 状态），"
-                "不写文件、不改配置、不执行命令。这是收紧操作，不需要审批。"
-                "调研完成后调用 exit_plan_mode 附上计划，等用户确认后再动手。"
+                "进入计划模式：先只读调研、把方案写成计划交用户批准，再动手实现。"
+                "非平凡的实现任务优先用它——先对齐方案比写完再返工便宜。\n"
+                "**什么时候用**（命中任意一条就该用）：\n"
+                "1. 加新功能（按钮放哪、点击后做什么、错误怎么提示都可能要定）；\n"
+                "2. 存在多种可行方案（加缓存可以是 Redis / 内存 / 文件）；\n"
+                "3. 要改现有行为（登录流程、重构某个组件）；\n"
+                "4. 需要做架构选择（WebSocket vs SSE vs 轮询）；\n"
+                "5. 预计要动 3 个以上文件；\n"
+                "6. 需求不清楚，得先看清代码才能定范围；\n"
+                "7. 实现方式取决于用户偏好——本来想用 request_user_input 问方案，"
+                "改用这个：计划模式能先看代码再带着上下文给选项。\n"
+                "**什么时候不用**：单行/几行的明确修改、加一个需求写死的函数、"
+                "用户已经给了非常具体的要求、纯调研（只看不改，直接答）。\n"
+                "拿不准就进计划模式：对齐一次比返工一次便宜。\n"
+                "进入后只允许只读动作，唯一可写的是计划文件；这一轮只能用 "
+                "request_user_input（澄清）或 exit_plan_mode（交计划）结束。"
             ),
             input_schema={"type": "object", "properties": {}},
             risk_level="low",
@@ -280,16 +355,24 @@ def plan_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="exit_plan_mode",
             description=(
-                "退出计划模式并把计划交给用户确认。参数 plan 写完整计划（步骤、"
-                "将要改哪些文件、验收方式）。计划模式下调用会弹审批卡；"
-                "用户批准后恢复默认权限，本步骤里不再执行其他写操作，下一步再开始。"
+                "退出计划模式，把计划交给用户批准后开始实现。仅在计划模式里可用。\n"
+                "**用法**：把计划写进计划文件后调用它；不传 plan 参数时它会读计划文件。"
+                "计划里要有：步骤、将要改哪些文件、怎么验证（跑什么命令、看到什么算过）。\n"
+                "**不要用它做别的事**：只是读代码回答问题、没有要实现的东西时不要调用；"
+                "纯调研任务不要调用。\n"
+                "**不要用 request_user_input 问「这个计划行不行」**——那正是这个工具做的事，"
+                "而且它会给出可编辑、可批准的卡片。用户批准后按计划开始实现，"
+                "第一步先用 update_plan 把计划落成待办。"
             ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "plan": {
                         "type": "string",
-                        "description": "完整计划：步骤、涉及的文件、验收方式",
+                        "description": (
+                            "完整计划：步骤、涉及的文件、验收方式。"
+                            "省略时读取计划文件的内容。"
+                        ),
                     }
                 },
             },

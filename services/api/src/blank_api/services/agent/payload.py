@@ -22,23 +22,36 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 # 每个工具在上下文里允许占的字符数：(头部, 尾部)。尾部为 0 表示只要头部。
 # 数值不是拍脑袋：读文件平均 2.7k 字符、shell 平均 0.7k，预算设在均值之上、
 # 灾难值之下——正常输出完整进入，异常巨大的输出才被切。
 TOOL_BUDGETS: dict[str, tuple[int, int]] = {
-    "run_shell": (1_000, 2_500),
-    "run_tests": (600, 2_000),
+    # shell 与测试的输出是"编程现场"：失败的断言在中段、结论在末尾、diff 在整段。
+    # 原来 1000+2500 只够 85 行——改三个文件的 diff 就看不全，模型只能再跑一次
+    # （同样的命令、同样的输出、同样的钱）。放宽到 3000+6000 之后，当前这一步看得全；
+    # 长跑的代价由微压缩兜住：超过 8 轮的结果一律回落到 2000 字符（context.py），
+    # 也就是说放的是"眼前这一步"，不是"整个任务"。
+    "run_shell": (6_000, 8_000),
+    "run_tests": (3_000, 7_000),
     "read_file": (6_000, 0),
     "list_files": (2_500, 0),
     "glob": (2_500, 0),
     "search_code": (2_500, 0),
     "read_notes": (1_500, 0),
-    "git": (1_000, 1_000),
+    # git 的 diff 是模型自检的主要材料，2000 字符只够看一个文件的开头。
+    "git": (8_000, 2_000),
 }
 DEFAULT_BUDGET = (8_000, 0)
+# 日志噪音档：行形态高度重复的输出（`pytest: 12 passed` 跑两千行）只给一点点。
+# 一刀切的预算是错的：diff 要看全（每个文件的改动都不同），日志要看少（两千行说同一件事）。
+# 按"去数字后的行形态重复度"分流，比按工具名分流更贴近事实。
+NOISY_BUDGET = (600, 1_200)
+NOISE_SHAPE_RATIO = 0.5
+NOISE_SAMPLE_LINES = 400
 # 整个 payload 的硬上限（JSON 里还有 data 字段，不只是 output）
-MAX_PAYLOAD_CHARS = 9_000
+MAX_PAYLOAD_CHARS = 20_000
 # 结果里允许内联携带 diff 的工具：补丁的 diff 是冗余的，直接丢
 DROP_DIFF_TOOLS = frozenset({"apply_patch", "edit_file", "write_file", "notebook_edit", "create_file"})
 
@@ -61,14 +74,18 @@ def _clip(text: str, head: int, tail: int) -> tuple[str, int]:
         return text, 0
     head_part = _head(text, head)
     if tail <= 0:
-        kept = f"{head_part}\n…（此处省略 {len(text) - len(head_part)} 字符，需要细节请用 search_code 或带 offset 重读）"
+        kept = (
+            f"{head_part}\n…（此处省略 {len(text) - len(head_part)} 字符："
+            f"需要后面的内容请缩小范围重跑，或把输出写到工作区内的文件再分批读）"
+        )
     else:
         tail_part = text[-tail:]
         cut = tail_part.find("\n")
         if 0 <= cut < len(tail_part) * 0.4:
             tail_part = tail_part[cut + 1 :]
         kept = (
-            f"{head_part}\n…（省略 {len(text) - len(head_part) - len(tail_part)} 字符）…\n{tail_part}"
+            f"{head_part}\n…（中段省略 {len(text) - len(head_part) - len(tail_part)} 字符，"
+            f"以下是结尾）…\n{tail_part}"
         )
     return kept, len(text) - len(kept)
 
@@ -96,6 +113,45 @@ def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+_NUMBER_RUN = re.compile(r"\d+")
+
+
+def _shape_ratio(text: str) -> float:
+    """去数字后的行形态有多分散。1.0=每行都不同，接近 0=两千行在说同一件事。
+
+    只看前 400 行：判断"这是日志还是 diff"用不着读全文，而全文可能有几万行。
+    """
+    lines = text.splitlines()[:NOISE_SAMPLE_LINES]
+    if len(lines) < 20:
+        return 1.0
+    shapes = {_NUMBER_RUN.sub("#", line.strip()) for line in lines}
+    return len(shapes) / len(lines)
+
+
+def _looks_like_patch(text: str) -> bool:
+    """是不是补丁/差异。
+
+    必须先判这个再判噪音：一个改了 150 处的 diff，去数字之后每一条 hunk 长得一模一样，
+    光看形态会被当成"重复日志"砍掉——而那恰恰是模型最需要逐行看全的东西。
+    """
+    lines = [line for line in text.splitlines()[:NOISE_SAMPLE_LINES] if line.strip()]
+    if len(lines) < 10:
+        return False
+    hits = sum(1 for line in lines if line.startswith(("@@", "+++", "---", "diff ", "Index: ", "+", "-")))
+    return hits / len(lines) >= 0.3
+
+
+def _budget_for(tool_name: str, output: str) -> tuple[int, int]:
+    head, tail = TOOL_BUDGETS.get(tool_name, DEFAULT_BUDGET)
+    # 只对命令类结果做噪音判定：read_file 有行号、search_code 有路径，形态本来就该分散，
+    # 真被误判成噪音也只是少看几行，而 read_file 的 note 会把 offset 给出来。
+    if tail <= 0 or _looks_like_patch(output):
+        return head, tail
+    if _shape_ratio(output) < NOISE_SHAPE_RATIO:
+        return NOISY_BUDGET
+    return head, tail
+
+
 def render(
     tool_name: str, payload: dict, seen: dict[str, int] | None = None, step: int = 0
 ) -> tuple[str, dict]:
@@ -112,7 +168,7 @@ def render(
         stats["original"] += len(output)
         if tool_name in DROP_DIFF_TOOLS:
             pass
-        head, tail = TOOL_BUDGETS.get(tool_name, DEFAULT_BUDGET)
+        head, tail = _budget_for(tool_name, output)
         data_for_note = body.get("data")
         # 读文件被裁剪时，泛泛的「用 search_code 或带 offset 重读」要换成有数的一句话：
         # 共几行、现在给到第几行、下一步 offset 是几。三样缺一样，模型就只能再摸一遍。

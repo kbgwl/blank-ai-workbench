@@ -46,6 +46,7 @@ from blank_api.services.agent.automation import resolve_mode as resolve_automati
 from blank_api.services.agent.loadstats import recent_load
 from blank_api.services.agent import repl as repl_module
 from blank_api.services.agent import workflow as workflow_module
+from blank_api.services import plan_mode
 from blank_api.services import shell_tasks, worktree_session
 from blank_api.services.agent.router import Candidate, Router
 from blank_api.services.agents_defs import discover_agents
@@ -93,7 +94,7 @@ from blank_api.services.shell_env import capture as capture_shell
 from blank_api.services.subagent import DEFAULT_STEPS, SubAgentRequest, SubAgentRunner
 from blank_api.services.threads import history_for, session_goal_for, summarize_history
 from blank_api.services.models.base import ModelAdapter, ModelError
-from blank_api.services.permissions import MODE_DEFAULT, PermissionPolicy
+from blank_api.services.permissions import MODE_ACCEPT_EDITS, MODE_DEFAULT, MODE_PLAN, PermissionPolicy
 from blank_api.services.tools import TEAM_ADMIN_TOOL_NAMES, SkillCatalog, build_default_tools
 from blank_api.services.tools.base import ToolContext
 from blank_api.services.tools.file_state import FileStateCache
@@ -123,6 +124,32 @@ class _CancelledLookup:
                 await session.execute(select(Task.status).where(Task.id == self.task_id))
             ).scalar_one_or_none()
         return status == "cancelled"
+
+
+# 轮询取消信号的间隔。太密没意义（人从看到界面到按下停止至少几百毫秒），
+# 太疏会让"停止"看起来没反应。0.4 秒是这两个约束之间的取值。
+CANCEL_POLL_SECONDS = 0.4
+
+
+async def _watch_cancellation(
+    store, task_id: str, event: asyncio.Event
+) -> None:
+    """任务被取消时置位执行侧的取消事件。
+
+    单独起一个协程，而不是在图里查：图只在节点边界醒过来，一条跑了五分钟的命令
+    期间没有任何节点在跑。只有旁边的轮询能在那一刻叫停那条命令。
+    """
+    lookup = _CancelledLookup(store, task_id)
+    while not event.is_set():
+        try:
+            if await lookup():
+                event.set()
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - 读库失败不该让整轮挂掉
+            pass
+        await asyncio.sleep(CANCEL_POLL_SECONDS)
 
 
 class _StatusLookup:
@@ -299,6 +326,9 @@ class _RunScope:
     # user_prompt_expansion。与 goal 分开带：goal 是展开后的正文，这里记的是
     # 展开本身的事实（钩子载荷要读的那几个键）。
     expansion: dict | None = None
+    # 轮询取消信号的协程句柄。收尾时必须取消它：这个协程的生命周期比这一轮长，
+    # 没人收就会一直读库，任务结束后每 0.4 秒查一次。
+    cancel_watch: Any = None
 
 
 @dataclass
@@ -448,6 +478,38 @@ class AgentRuntime:
             if mode and tier:
                 break
         return {"mode": mode, "tier": tier}
+
+    async def _stored_pre_plan_mode(self, task_id: str) -> str:
+        """进计划模式之前是什么模式（对标 Claude 的 `prePlanMode`）。
+
+        审批中断会换一个新会话，内存里的 `pre_plan_mode` 就没了；不把它从事件里
+        捡回来，用户从「接受编辑」进的计划模式，退出来会掉到「默认」——写文件
+        突然又要一张张点，而他没改过任何设置。
+
+        只认"进入计划模式"那一条事件的 `from`：`permission.mode_changed` 的 `from`
+        就是进入前的模式，这条事实在库里，不用另存一份。
+        """
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(AgentEvent.payload)
+                    .where(
+                        AgentEvent.task_id == task_id,
+                        AgentEvent.type == "permission.mode_changed",
+                    )
+                    .order_by(AgentEvent.seq.desc())
+                    .limit(20)
+                )
+            ).scalars().all()
+        for payload in rows:
+            data = payload if isinstance(payload, dict) else {}
+            if str(data.get("to") or "") != MODE_PLAN:
+                continue
+            previous = str(data.get("from") or "")
+            if previous in (MODE_DEFAULT, MODE_ACCEPT_EDITS):
+                return previous
+            return ""
+        return ""
 
     async def _guard_tier_change(self, request: RunRequest) -> None:
         """同一个任务不许换到更宽的档位继续跑。
@@ -659,6 +721,14 @@ class AgentRuntime:
         # 落盘的前缀规则：重启/换任务后仍认得用户以前批准过的命令签名。
         # 读不出来（文件缺失/损坏）就是空集——fail-closed，多问一次而不是少问一次。
         permissions.persistent_prefixes = load_prefix_rules()
+        # 计划文件路径随任务固定：计划模式里它是唯一的可写目标，退出后又是"计划在
+        # 哪儿"的答案。审批恢复起的新会话必须重新拿到它，否则继承下来的 plan 模式
+        # 会变成"连计划都写不了"的死锁。
+        permissions.plan_file = plan_mode.plan_relpath(request.task_id)
+        if permissions.mode == MODE_PLAN:
+            # 从审批中断/上一轮恢复进计划模式：把"从哪个模式进来的"捡回来，
+            # 退出时才回得去（否则一律掉回 default，等于偷偷改了用户的档位）。
+            permissions.pre_plan_mode = await self._stored_pre_plan_mode(request.task_id)
         # 人手写的 allow/deny 规则。文件写坏时整份停用并把错误记进事件：
         # 静默失效会让用户以为"我明明写了 deny"。
         ruleset = load_ruleset()
@@ -720,6 +790,10 @@ class AgentRuntime:
         )
         if hooks.enabled or hooks.warnings or hooks.disabled:
             await recorder.add("hooks.loaded", "receive_task", hooks.describe())
+        # 取消信号：`/cancel` 只把任务行改成 cancelled，正在跑的那条命令收不到任何
+        # 通知——用户按了停止，进程还在烧 CPU、还在往工作区写文件，界面却已经显示
+        # "已取消"。这个事件是执行侧唯一能收到那个信号的通道，由下面的 watcher 置位。
+        cancel_event = asyncio.Event()
         context = ToolContext(
             hooks=hooks,
             mcp=mcp_bundle,
@@ -727,6 +801,7 @@ class AgentRuntime:
             root=run_root,
             task_id=request.task_id,
             recorder=recorder,
+            cancel_event=cancel_event,
             session_factory=store,
             # 审批回调保留给外部集成；运行时的唯一真源是 permissions（模式 + 前缀 + 会话记忆）。
             approval_policy=permissions.decide,
@@ -774,6 +849,9 @@ class AgentRuntime:
             # 模型看不懂图时一张都不挂：挂了就是 400，用户看到的是"传了图就发不出去"。
             # 降级的说法已经写进 initial_messages 的提示里了。
             vision_images=list(request.images) if request.supports_vision else [],
+            # 这一轮模型能不能看图。read_file 读到图片时按它决定「附图」还是「只说一句
+            # 看不到」：给不支持视觉的模型塞 image block 会直接 400。
+            supports_vision=bool(request.supports_vision),
             token_budget=_token_budget(),
             permissions=permissions,
             # 快照判成只读时，这一整回合就不许写：闸门在这里，不在提示词里。
@@ -816,6 +894,9 @@ class AgentRuntime:
             graph=graph,
             config=config,
             thread_id=thread_id,
+            cancel_watch=asyncio.create_task(
+                _watch_cancellation(store, request.task_id, cancel_event)
+            ),
             mcp=mcp_bundle.as_dict(),
             sandbox=sandbox.as_dict(),
             subagents=subagents,
@@ -1429,6 +1510,11 @@ class AgentRuntime:
                     memory_opt_in=request.memory_opt_in,
                 ),
                 output_style=scope.output_style,
+                # 两个场景各有自己的方法论：dev 用 Claude 编程纪律（coding），
+                # daily 用 Codex 通用 agent 口径（daily）。两者能力相同（都能读写跑命令），
+                # 差别在提示词风格，所以按**所选场景**分发，不再按首轮意图切提示词。
+                # 这样日常场景里"帮我改个脚本"也走 Codex 口径，不会突然换成 Claude 纪律。
+                scene="daily" if request.scenario == "daily" else "coding",
                 run_id=recorder.run_id,
                 hook_context=session_hook_notes,
                 initial_user_message=initial_user_message,
@@ -1762,6 +1848,12 @@ class AgentRuntime:
         goal_spec: dict | None = None,
         extra: dict | None = None,
     ) -> None:
+        # 取消轮询先收：它比这一轮活得久，不收就会在任务结束后继续读库。
+        # 审批中断也收——恢复时会按新的 scope 重新起一个，旧的那个已经没有
+        # 正在跑的命令需要叫停了。
+        watch = getattr(scope, "cancel_watch", None)
+        if watch is not None and not watch.done():
+            watch.cancel()
         # 任务走到终点时仍在跑的后台子代理必须收走：否则任务已经显示"完成"，
         # 它们还在调用模型、写事件，账目与界面从此对不上。等待审批不是一个终点——
         # 恢复后还要用同一个句柄取结论，所以那一档不收。

@@ -66,10 +66,11 @@ def test_opinion_request_is_read_only_even_though_it_runs():
     assert snapshot.tool_policy == TOOL_READ_ONLY
 
 
-def test_daily_scenario_never_writes_workspace():
+def test_daily_scenario_can_write_workspace():
+    # daily 放开为 Codex 全能 agent：动手请求的工具策略是可写工作区。
     snapshot = route("帮我改一下这句话的措辞", scenario="daily")
-    assert snapshot.tool_policy == TOOL_READ_ONLY
-    # 日常场景允许读记忆，但没选「记住」就不能写。
+    assert snapshot.tool_policy == TOOL_WORKSPACE_EDIT
+    # 记忆仍要用户显式选「记住」才写——放开工作区不等于放开记忆。
     assert snapshot.memory_policy == MEMORY_READ_ONLY
 
 
@@ -171,9 +172,10 @@ def test_garbage_values_are_clamped_not_trusted():
 
 
 def test_readonly_scenario_cannot_be_widened_by_data():
-    # 一份声称「日常场景、可写工作区」的快照，读回来必须是只读。
+    # 一份声称「只读场景、可写工作区」的快照，读回来必须是只读。
+    # daily 放开后，只读不变量由 brainstorm 承担。
     snapshot = ExecutionSnapshot.from_dict(
-        {"intent": "execute", "scenario": "daily", "tool_policy": TOOL_WORKSPACE_EDIT}
+        {"intent": "execute", "scenario": "brainstorm", "tool_policy": TOOL_WORKSPACE_EDIT}
     )
     assert snapshot.tool_policy == TOOL_READ_ONLY
     assert any("收紧为只读" in note for note in snapshot.notes)
@@ -242,9 +244,11 @@ def test_guard_rejects_handcrafted_unsafe_snapshot():
     unsafe = route("改一下配置")
     with pytest.raises(UnsafeSnapshot):
         ExecutionSnapshot(**{**unsafe.__dict__, "approval_required": False}).guard()
+    # 只有日常场景能写记忆；dev 场景手塞一个记忆写入必须被 guard 拒绝。
+    # （daily 放开工作区权限后仍保留记忆开关，所以改用 dev 来构造这条非法快照。）
     with pytest.raises(UnsafeSnapshot):
         ExecutionSnapshot(
-            **{**unsafe.__dict__, "scenario": "daily", "memory_policy": MEMORY_OPT_IN_WRITE}
+            **{**unsafe.__dict__, "scenario": "dev", "memory_policy": MEMORY_OPT_IN_WRITE}
         ).guard()
 
 

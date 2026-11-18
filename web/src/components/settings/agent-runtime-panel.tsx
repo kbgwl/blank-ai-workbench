@@ -65,7 +65,7 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 py-2">
       <div className="min-w-0">
-        <div className="text-[13.5px] text-text">{label}</div>
+        <div className="text-[13px] text-text">{label}</div>
         {hint && <div className="mt-0.5 text-[12px] leading-relaxed text-faint">{hint}</div>}
       </div>
       <div className="shrink-0">{children}</div>
@@ -211,7 +211,7 @@ export function AgentRuntimePanel() {
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-[13.5px] text-text">{mode.label}</span>
+                  <span className="text-[13px] text-text">{mode.label}</span>
                   {active && <span className="font-mono text-[11px] text-brand">当前</span>}
                 </div>
                 <p className="mt-1 text-[12px] leading-relaxed text-muted">{mode.detail}</p>

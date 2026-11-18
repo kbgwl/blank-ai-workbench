@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { Button, Field, Input, Notice } from "@/components/projects/ui";
-import { createProvider, errorMessage, type Preset, type Provider } from "./api";
+import { createProvider, errorMessage, presetLabel, sortedPresetKeys, type Preset, type Provider } from "./api";
 import { Toggle } from "./bits";
 import { SelectPopover } from "../ui/select-popover";
 
@@ -30,15 +30,6 @@ type Draft = {
   supports_tools: boolean;
   supports_vision: boolean;
   enabled: boolean;
-};
-
-const presetLabels: Record<string, string> = {
-  openai: "OpenAI",
-  openai_responses: "OpenAI Responses",
-  deepseek: "DeepSeek",
-  qwen: "通义千问",
-  anthropic: "Claude",
-  ollama: "Ollama",
 };
 
 /** 推理档位：空串表示不下发 reasoning 字段，按普通模型走 temperature。 */
@@ -69,7 +60,7 @@ function toDraft(key: string, preset: Preset): Draft {
   return {
     ...emptyDraft,
     presetKey: key,
-    name: presetLabels[key] ?? key,
+    name: presetLabel(key),
     kind: preset.kind,
     base_url: preset.base_url,
     model: preset.model,
@@ -112,6 +103,9 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
     !Number.isFinite(params.active) ||
     params.active < 0 ||
     (params.total > 0 && params.active > params.total);
+  // 只列「库里还没有的核心预设」。默认那几家本来就在列表里，
+  // 再让用户在这里"加一遍"只会撞重名——这里的用途是补一家缺的，或者手填其他厂商。
+  const remaining = sortedPresetKeys(presets).filter((key) => !existingNames.includes(key));
   const nameTaken = Boolean(draft.name.trim()) && existingNames.includes(draft.name.trim());
   const canSubmit = !busy && draft.name.trim().length > 0 && draft.base_url.trim().length > 0 && draft.model.trim().length > 0 && !invalidNumber && !invalidParams && !nameTaken;
 
@@ -148,201 +142,121 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-3 border-b border-line pb-4">
-      <div className="flex flex-wrap gap-1.5">
-        {Object.entries(presets).map(([key, preset]) => {
-          const active = draft.presetKey === key;
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => patch(toDraft(key, preset))}
-              className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${
-                active
-                  ? "border-brand/50 bg-brand/15 text-brand"
-                  : "border-line bg-surface-2 text-muted hover:border-line-strong hover:text-text"
-              }`}
-            >
-              {presetLabels[key] ?? key}
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          onClick={() => patch({ ...emptyDraft, presetKey: "" })}
-          className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${
-            draft.presetKey === ""
-              ? "border-brand/50 bg-brand/15 text-brand"
-              : "border-line bg-surface-2 text-muted hover:border-line-strong hover:text-text"
-          }`}
-        >
-          自定义
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-        <Field label="名称">
-          <Input
-            value={draft.name}
-            onChange={(event) => patch({ name: event.target.value })}
-            placeholder="例如 DeepSeek 主账号"
-            aria-label="供应商名称"
-            maxLength={100}
-          />
-        </Field>
-        <Field label="类型">
-          <Input
-            value={draft.kind}
-            onChange={(event) => patch({ kind: event.target.value })}
-            aria-label="供应商类型"
-            spellCheck={false}
-            className="font-mono text-[13px]"
-            maxLength={40}
-          />
-        </Field>
-      </div>
-
-      <Field label="接入点 BASE_URL">
-        <Input
-          value={draft.base_url}
-          onChange={(event) => patch({ base_url: event.target.value })}
-          placeholder="https://api.deepseek.com/v1"
-          aria-label="接入点"
-          spellCheck={false}
-          autoComplete="off"
-          className="font-mono text-[13px]"
-          maxLength={500}
-        />
-      </Field>
-
-      <Field label="默认模型">
-        <Input
-          value={draft.model}
-          onChange={(event) => patch({ model: event.target.value })}
-          placeholder="deepseek-chat"
-          aria-label="默认模型"
-          spellCheck={false}
-          autoComplete="off"
-          className="font-mono text-[13px]"
-          maxLength={200}
-        />
-      </Field>
-
-      <Field label="API KEY（仅写入，不会回显）">
-        <Input
-          type="password"
-          value={draft.api_key}
-          onChange={(event) => patch({ api_key: event.target.value })}
-          placeholder="留空表示稍后再填"
-          aria-label="API Key"
-          autoComplete="new-password"
-          spellCheck={false}
-          className="font-mono text-[13px]"
-        />
-      </Field>
-
-      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-        <Field label="温度 0-2">
-          <Input
-            value={draft.temperature}
-            onChange={(event) => patch({ temperature: event.target.value })}
-            aria-label="温度"
-            inputMode="decimal"
-            className="font-mono text-[13px]"
-          />
-        </Field>
-        <Field label="最大输出 TOKENS">
-          <Input
-            value={draft.max_tokens}
-            onChange={(event) => patch({ max_tokens: event.target.value })}
-            aria-label="最大输出 tokens"
-            inputMode="numeric"
-            className="font-mono text-[13px]"
-          />
-        </Field>
-        <Field label="上下文窗口">
-          <Input
-            value={draft.context_window}
-            onChange={(event) => patch({ context_window: event.target.value })}
-            aria-label="上下文窗口"
-            inputMode="numeric"
-            className="font-mono text-[13px]"
-          />
-        </Field>
-      </div>
-
-      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-        <Field label="推理档位 reasoning_effort">
+      {/* 主流厂商已经在列表里，这里只在「缺一家」时给回填；否则就是纯手填。
+          再摆一遍 27 个预设按钮，等于把用户已经有的东西又列一次。 */}
+      {remaining.length > 0 ? (
+        <Field label="补一家预设（可选）">
           <SelectPopover
-            ariaLabel="推理档位"
-            value={draft.reasoning_effort}
-            options={effortOptions.map((value) => ({ value, label: value || "不启用" }))}
-            onChange={(value) => patch({ reasoning_effort: value })}
-            menuMinWidth={180}
+            ariaLabel="选择预设模型"
+            value={draft.presetKey || "__custom__"}
+            placeholder="选一个厂商，自动填好接入点、型号与能力"
+            options={[
+              ...remaining.map((key) => ({
+                value: key,
+                label: presetLabel(key),
+                description: presets[key].model,
+              })),
+              { value: "__custom__", label: "自定义", description: "手动填写下面全部字段" },
+            ]}
+            onChange={(value) => {
+              if (value === "__custom__") patch({ ...emptyDraft, presetKey: "" });
+              else patch(toDraft(value, presets[value]));
+            }}
+            menuMinWidth={280}
           />
         </Field>
-        <Field label="输出详略 verbosity">
-          <SelectPopover
-            ariaLabel="输出详略"
-            value={draft.verbosity}
-            options={verbosityOptions.map((value) => ({ value, label: value || "不启用" }))}
-            onChange={(value) => patch({ verbosity: value })}
-            menuMinWidth={180}
-          />
-        </Field>
-      </div>
-
-      {draft.reasoning_effort !== "" && (
-        <Notice tone="muted">
-          已启用推理档位：请求不再下发 temperature（推理模型带温度会直接 400），改为回传推理内容供多轮续推。
-          verbosity 仅 OpenAI Responses 端点生效，其他接入点会忽略。
-        </Notice>
+      ) : (
+        <p className="text-[12px] leading-relaxed text-faint">
+          主流厂商都已经在列表里了。这里用于添加其他厂商：填名称、接口地址、模型名和 Key 即可。
+        </p>
       )}
 
       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-        <Field label="总参数（十亿 B）">
-          <Input
-            value={draft.total_params_b}
-            onChange={(event) => patch({ total_params_b: event.target.value })}
-            placeholder="671，留空表示未填"
-            aria-label="总参数"
-            inputMode="decimal"
-            className="font-mono text-[13px]"
-          />
+        <Field label="名称">
+          <Input value={draft.name} onChange={(event) => patch({ name: event.target.value })}
+            placeholder="例如 DeepSeek 主账号" aria-label="供应商名称" maxLength={100} />
         </Field>
-        <Field label="激活参数（十亿 B）">
-          <Input
-            value={draft.active_params_b}
-            onChange={(event) => patch({ active_params_b: event.target.value })}
-            placeholder="37，稠密模型留空"
-            aria-label="激活参数"
-            inputMode="decimal"
-            className="font-mono text-[13px]"
-          />
+        <Field label="默认模型">
+          <Input value={draft.model} onChange={(event) => patch({ model: event.target.value })}
+            placeholder="deepseek-chat" aria-label="默认模型" spellCheck={false}
+            autoComplete="off" className="font-mono text-[13px]" maxLength={200} />
         </Field>
       </div>
 
-      <p className="-mt-1 text-[12px] leading-relaxed text-faint">
-        总参数决定权重占多少显存（能不能塞进这台机器），激活参数决定每个 token 走多少算力（跑多快、多贵）。
-        稀疏模型两者差一个数量级（如 671B / 37B），填对了成本预估才有意义；稠密模型只填总参数即可。
-      </p>
+      <Field label="接口地址">
+        <Input value={draft.base_url} onChange={(event) => patch({ base_url: event.target.value })}
+          placeholder="https://api.deepseek.com/v1" aria-label="接入点" spellCheck={false}
+          autoComplete="off" className="font-mono text-[13px]" maxLength={500} />
+      </Field>
 
+      <Field label="API Key（仅写入，不会回显）">
+        <Input type="password" value={draft.api_key} onChange={(event) => patch({ api_key: event.target.value })}
+          placeholder="留空表示稍后再填" aria-label="API Key" autoComplete="new-password"
+          spellCheck={false} className="font-mono text-[13px]" />
+      </Field>
+
+      {/* 能力开关决定工具/看图能不能用，属常用项，留在主视野。 */}
       <div className="flex flex-wrap items-center gap-4">
-        <Toggle
-          checked={draft.supports_tools}
-          onChange={(next) => patch({ supports_tools: next })}
-          label="支持工具调用"
-        />
-        <Toggle
-          checked={draft.supports_vision}
-          onChange={(next) => patch({ supports_vision: next })}
-          label="支持视觉输入"
-        />
+        <Toggle checked={draft.supports_tools} onChange={(next) => patch({ supports_tools: next })} label="支持工具调用" />
+        <Toggle checked={draft.supports_vision} onChange={(next) => patch({ supports_vision: next })} label="支持视觉输入" />
         <Toggle checked={draft.enabled} onChange={(next) => patch({ enabled: next })} label="启用" />
       </div>
-      <p className="text-[12px] leading-relaxed text-faint">
-        模型名本身是多模态的（glm-4.5v、qwen-vl、gpt-4o、claude-3 之后、doubao-vision 这类）
-        会自动按「支持看图」处理，不用在这个开关上再勾一次；勾了也不会被模型名推翻。
+      <p className="-mt-1 text-[12px] leading-relaxed text-faint">
+        模型名本身是多模态的（glm-4.5v、qwen-vl、gpt-4o 这类）会自动按支持看图处理，不用再勾一次。
       </p>
+
+      {/* 底层调参不是新建的必经步骤，折叠起来；默认值对绝大多数模型都合适。 */}
+      <details className="rounded-lg border border-line bg-surface-2/40">
+        <summary className="cursor-pointer px-3 py-2 text-[13px] text-muted hover:text-text">高级参数（温度 / 上下文 / 推理档位 / 参数量）</summary>
+        <div className="flex flex-col gap-2.5 border-t border-line px-3 py-3">
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+            <Field label="温度（0–2）">
+              <Input value={draft.temperature} onChange={(event) => patch({ temperature: event.target.value })}
+                aria-label="温度" inputMode="decimal" className="font-mono text-[13px]" />
+            </Field>
+            <Field label="最大输出（Token）">
+              <Input value={draft.max_tokens} onChange={(event) => patch({ max_tokens: event.target.value })}
+                aria-label="最大输出 tokens" inputMode="numeric" className="font-mono text-[13px]" />
+            </Field>
+            <Field label="上下文窗口">
+              <Input value={draft.context_window} onChange={(event) => patch({ context_window: event.target.value })}
+                aria-label="上下文窗口" inputMode="numeric" className="font-mono text-[13px]" />
+            </Field>
+          </div>
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+            <Field label="类型">
+              <Input value={draft.kind} onChange={(event) => patch({ kind: event.target.value })}
+                aria-label="供应商类型" spellCheck={false} className="font-mono text-[13px]" maxLength={40} />
+            </Field>
+            <Field label="推理档位">
+              <SelectPopover ariaLabel="推理档位" value={draft.reasoning_effort}
+                options={effortOptions.map((value) => ({ value, label: value || "不启用" }))}
+                onChange={(value) => patch({ reasoning_effort: value })} menuMinWidth={180} />
+            </Field>
+            <Field label="输出详略">
+              <SelectPopover ariaLabel="输出详略" value={draft.verbosity}
+                options={verbosityOptions.map((value) => ({ value, label: value || "不启用" }))}
+                onChange={(value) => patch({ verbosity: value })} menuMinWidth={180} />
+            </Field>
+            <div className="grid grid-cols-2 gap-2.5">
+              <Field label="总参数（十亿）">
+                <Input value={draft.total_params_b} onChange={(event) => patch({ total_params_b: event.target.value })}
+                  placeholder="671" aria-label="总参数" inputMode="decimal" className="font-mono text-[13px]" />
+              </Field>
+              <Field label="激活参数（十亿）">
+                <Input value={draft.active_params_b} onChange={(event) => patch({ active_params_b: event.target.value })}
+                  placeholder="37" aria-label="激活参数" inputMode="decimal" className="font-mono text-[13px]" />
+              </Field>
+            </div>
+          </div>
+          {draft.reasoning_effort !== "" && (
+            <Notice tone="muted">启用推理档位后温度不再下发；推理模型带 temperature 会被直接拒绝。</Notice>
+          )}
+          <p className="text-[12px] leading-relaxed text-faint">
+            总参数决定权重占多少显存，激活参数决定每个 token 走多少算力；填对了成本预估才有意义。留空表示未填。
+          </p>
+        </div>
+      </details>
 
       {invalidNumber && <Notice tone="warn">温度需为 0-2 的数字，tokens 与上下文窗口需为正整数。</Notice>}
       {invalidParams && <Notice tone="warn">参数量需为非负数字，且激活参数不能大于总参数。</Notice>}
@@ -353,9 +267,7 @@ export function ProviderCreateForm({ presets, existingNames, onCreated, onCancel
         <Button type="submit" variant="primary" disabled={!canSubmit}>
           {busy ? "创建中" : "创建供应商"}
         </Button>
-        <Button type="button" onClick={onCancel}>
-          取消
-        </Button>
+        <Button type="button" onClick={onCancel}>取消</Button>
       </div>
     </form>
   );

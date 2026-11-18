@@ -152,7 +152,7 @@ export function StatTile({ label, value, tone = "text" }: { label: string; value
   return (
     <div className="rounded-lg border border-line bg-surface px-3 py-2">
       <div className="font-mono text-[11px] tracking-wide text-faint uppercase">{label}</div>
-      <div className={`mt-0.5 text-[15px] font-semibold ${tone === "warn" ? "text-warn" : "text-text"}`}>{value}</div>
+      <div className={`mt-0.5 text-[14px] font-semibold ${tone === "warn" ? "text-warn" : "text-text"}`}>{value}</div>
     </div>
   );
 }

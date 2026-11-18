@@ -25,6 +25,7 @@ from blank_api.services.models.base import (
     AdapterConfig,
     ModelAdapter,
     ModelError,
+    classify_http_failure,
     ModelResponse,
     Usage,
     data_payload,
@@ -134,7 +135,7 @@ class OpenAIResponsesAdapter(ModelAdapter):
         payload: dict = {
             "model": model or self.config.model,
             "input": [*extras, *self._input_items(messages)],
-            "max_output_tokens": self.config.max_tokens,
+            "max_output_tokens": self.payload_max_tokens(model),
             "stream": stream,
             # 服务端不落库：客户的任务内容不该停在供应商的存储里
             "store": False,
@@ -236,9 +237,11 @@ class OpenAIResponsesAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
-                                     status=resp.status_code,
-                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
+                    raise classify_http_failure(
+                        resp.status_code,
+                        body,
+                        retry_after=retry_after_seconds(resp.headers.get("Retry-After")),
+                    )
                 async for raw in resp.aiter_lines():
                     payload = data_payload(raw)
                     if not payload:
@@ -282,9 +285,11 @@ class OpenAIResponsesAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
-                                     status=resp.status_code,
-                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
+                    raise classify_http_failure(
+                        resp.status_code,
+                        body,
+                        retry_after=retry_after_seconds(resp.headers.get("Retry-After")),
+                    )
                 async for raw in resp.aiter_lines():
                     piece = data_payload(raw)
                     if not piece:

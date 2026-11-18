@@ -85,17 +85,18 @@ def test_only_daily_can_opt_into_memory():
 
 
 def test_readonly_scenarios_deny_write_tools():
-    for key in ("daily", "brainstorm"):
-        scenario = resolve(key)
-        denied = excluded_tools(scenario)
-        assert {"apply_patch", "run_shell", "run_tests", "git"} <= denied, key
+    # daily 已放开为 Codex 全能 agent（能读写跑命令），不再是只读场景。
+    # 历史遗留的 brainstorm 仍是只读。
+    scenario = resolve("brainstorm")
+    denied = excluded_tools(scenario)
+    assert {"apply_patch", "run_shell", "run_tests", "git"} <= denied
 
 
 def test_scenario_catalog_is_stable():
     items = list_scenarios()
-    assert [item["key"] for item in items] == [
-        "dev", "docs", "daily", "brainstorm", "reverse",
-    ]
+    # 产品只开两个场景：编程与日常。文档 / 头脑风暴 / 逆向仍留在 SCENARIOS 里
+    # 供老任务跑完，但不再出现在选择器里，也不接受新建。
+    assert [item["key"] for item in items] == ["dev", "daily"]
     # 只有日常场景带记忆开关——前端按这个字段决定显示与否。
     assert [item["key"] for item in items if item["memory_allowed"]] == ["daily"]
 
@@ -110,16 +111,15 @@ async def test_scenarios_endpoint_lists_catalog(env):  # noqa: F811
     assert keys[0] == "dev" and "daily" in keys
 
 
-async def test_daily_scenario_hides_and_blocks_write_tools(env, workspace):  # noqa: F811
-    """只读场景：写类工具从下发列表消失；模型硬调也会被网关拒绝。"""
+async def test_daily_scenario_allows_and_runs_write_tools(env, workspace):  # noqa: F811
+    """日常场景放开为 Codex 全能 agent：写类工具可见，模型调用真的执行。"""
     await create_provider(env)
     project_id = await create_project(env, workspace)
     resp = await env.client.post(
         f"{API}/projects/{project_id}/tasks",
         json={
-            "title": "日常问答",
-            # 带动作词，确保意图被判成 act 进工具循环；daily 场景要在循环里拦住写工具。
-            "goal": "整理一下这个项目的介绍",
+            "title": "日常改文件",
+            "goal": "把 README 的 x 改成 y",
             "acceptance_criteria": [],
             "max_steps": 6,
             "scenario": "daily",
@@ -129,7 +129,6 @@ async def test_daily_scenario_hides_and_blocks_write_tools(env, workspace):  # n
     task_id = resp.json()["id"]
     assert (await _task_row(task_id)).scenario == "daily"
 
-    # 模型无视场景，直接试图改文件——网关必须拒绝而不是照做。
     env.mock.reset(
         [
             {"content": "计划：\n1. 改文件"},
@@ -147,15 +146,16 @@ async def test_daily_scenario_hides_and_blocks_write_tools(env, workspace):  # n
 
     started = await _started(task_id)
     assert started["scenario"] == "daily"
-    # 写类工具不进下发列表，模型从一开始就不该看见它。
-    assert "apply_patch" not in started["tools"]
-    # v164：日常场景收到"动手"的请求时不再进工具循环赌模型不乱调，
-    # 而是在判完意图那一刻就给一句确定的回答，所以连一次 apply_patch 都不会有。
+    # 放开的核心可判定事实：写类工具进下发列表（模型看得见），且调用真的发生、
+    # 没有在意图判定时被拒。mock 工具只记账不写盘，所以断言到"调用成功"为止。
+    assert "apply_patch" in started["tools"]
     calls = await env.tool_calls(task_id)
-    assert [row for row in calls if row.name == "apply_patch"] == []
+    patch_calls = [row for row in calls if row.name == "apply_patch"]
+    assert patch_calls
     row = await _task_row(task_id)
     assert row.status == "succeeded"
-    assert "日常场景不会直接修改文件" in (row.result_summary or "")
+    # 老版本这里会是一句"日常场景不会直接修改文件"的拒绝，现在不该再出现。
+    assert "日常场景不会直接修改文件" not in (row.result_summary or "")
 
 
 async def test_memory_write_only_visible_in_daily_with_opt_in(env, workspace):  # noqa: F811
@@ -207,11 +207,11 @@ async def test_run_scenario_overrides_stored_one(env, workspace):  # noqa: F811
     task_id = resp.json()["id"]
     _plan_then_done(env)
     run = await env.client.post(
-        f"{API}/tasks/{task_id}/run", json={"scenario": "brainstorm"}
+        f"{API}/tasks/{task_id}/run", json={"scenario": "daily"}
     )
     assert run.status_code == 200, run.text
-    assert (await _started(task_id))["scenario"] == "brainstorm"
-    assert (await _task_row(task_id)).scenario == "brainstorm"
+    assert (await _started(task_id))["scenario"] == "daily"
+    assert (await _task_row(task_id)).scenario == "daily"
 
 async def test_memory_lifecycle_accept_then_delete(env):  # noqa: F811
     """§7.2 验收的闭环：候选可以查看、接受成记忆、再物理删除。"""
@@ -257,8 +257,14 @@ def test_scenario_acceptance_matrix_followup153():
     assert "提纲" in DOCS.system_prompt
     assert "不做无关重构" in DOCS.system_prompt
 
-    # 日常与头脑风暴：写类工具（改文件/命令/测试/git）全部禁用——不自动执行高风险操作。
-    for readonly in (DAILY, BRAINSTORM):
+    # 日常已放开为 Codex 全能 agent：读写、命令、测试、git 全开，只禁记忆写入
+    # （记忆写入仍要用户显式选"记住"）。头脑风暴保持只读。
+    assert excluded_tools(DAILY) == frozenset({"memory_write"})
+    assert write_allowed(DAILY, "README.md")
+    assert write_allowed(DAILY, "src/main.py")
+    assert "通用 agent" in DAILY.system_prompt
+
+    for readonly in (BRAINSTORM,):
         denied = excluded_tools(readonly)
         assert WRITE_TOOLS <= denied, readonly.key
         assert "memory_write" in denied

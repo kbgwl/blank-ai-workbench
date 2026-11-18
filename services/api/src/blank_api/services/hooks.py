@@ -183,6 +183,7 @@ _STOP_FAILURE_CODE_CATEGORY = {
     "model_unreachable": "server_error",
     "model_stream_error": "server_error",
     "model_stream_empty": "server_error",
+    "model_reasoning_exhausted": "server_error",
     "model_http_error": "server_error",
     "model_output_not_json": "invalid_request",
     "model_tools_unsupported": "invalid_request",

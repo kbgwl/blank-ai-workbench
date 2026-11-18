@@ -58,7 +58,10 @@ export function createProject(input: { name: string; description: string }): Pro
   });
 }
 
-export function updateProject(id: string, input: { name?: string; description?: string }): Promise<Project> {
+export function updateProject(
+  id: string,
+  input: { name?: string; description?: string; pinned?: boolean; position?: number },
+): Promise<Project> {
   return request<Project>(`${api}/projects/${id}`, {
     method: "PATCH",
     ...jsonInit,

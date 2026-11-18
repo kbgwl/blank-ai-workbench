@@ -267,40 +267,108 @@ async def _web_fetch(context: ToolContext, arguments: dict) -> ToolOutcome:
     )
 
 
+def _clean_domains(value: object) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [str(item).strip().lower().strip(".") for item in value if str(item).strip()]
+
+
+def domain_matches(host: str, domain: str) -> bool:
+    """``docs.python.org`` 命中 ``python.org``，但 ``notpython.org`` 不算。"""
+    host = (host or "").lower().strip(".")
+    domain = (domain or "").lower().strip(".")
+    if not host or not domain:
+        return False
+    return host == domain or host.endswith("." + domain)
+
+
+def keep_domain(url: str, allowed: list[str], blocked: list[str]) -> bool:
+    host = urlparse(str(url or "")).hostname or ""
+    if any(domain_matches(host, item) for item in blocked):
+        return False
+    if allowed and not any(domain_matches(host, item) for item in allowed):
+        return False
+    return True
+
+
 async def _web_search(context: ToolContext, arguments: dict) -> ToolOutcome:
     query = str(arguments.get("query") or "").strip()
     if not query:
         return fail("error", "缺少 query 参数")
     limit = int(arguments.get("max_results") or 5)
     limit = max(1, min(MAX_SEARCH_RESULTS, limit))
+    allowed = _clean_domains(arguments.get("allowed_domains"))
+    blocked = _clean_domains(arguments.get("blocked_domains"))
+
+    # 带域名过滤时先多取一些：过滤掉不合规的以后还要够 limit 条。
+    # 否则"只允许某站"经常被过滤成 1-2 条，模型会以为没资料。
+    raw_limit = limit if not (allowed or blocked) else min(MAX_SEARCH_RESULTS * 3, max(limit * 4, limit))
     try:
-        results = await search(query, limit=limit)
+        results = await search(query, limit=raw_limit)
     except httpx.HTTPError as exc:
         return fail("error", f"搜索失败：{exc.__class__.__name__}")
     except ValueError as exc:
         return fail("error", str(exc))
-    if not results:
+
+    filtered = results
+    if allowed or blocked:
+        filtered = [item for item in results if keep_domain(item.get("url", ""), allowed, blocked)]
+        filtered = filtered[:limit]
+
+    if not filtered:
+        if results and (allowed or blocked):
+            scope = "、".join(allowed) if allowed else "全部"
+            excluded = "、".join(blocked) if blocked else "无"
+            return ok(
+                f"在限定范围内没有结果（允许：{scope}；排除：{excluded}）。"
+                f"原始搜索有 {len(results)} 条，但域名都不符合。放宽域名条件或换个检索词再试。",
+                query=query,
+                results=[],
+                filtered_out=len(results),
+            )
         return ok(f"没有找到与「{query}」相关的结果。", query=query, results=[])
+
     lines = [f"搜索：{query}", ""]
-    for index, item in enumerate(results, start=1):
+    for index, item in enumerate(filtered, start=1):
         lines.append(f"{index}. {item['title']}")
         lines.append(f"   {item['url']}")
         if item.get("snippet"):
             lines.append(f"   {item['snippet']}")
-    return ok("\n".join(lines), query=query, results=results, count=len(results))
+    if allowed or blocked:
+        lines.insert(1, f"（已按域名过滤：允许 {', '.join(allowed) or '不限'}；排除 {', '.join(blocked) or '无'}）")
+    return ok(
+        "\n".join(lines),
+        query=query,
+        results=filtered,
+        count=len(filtered),
+        filtered_out=len(results) - len(filtered),
+    )
 
 
 def web_tools() -> list[ToolDefinition]:
     return [
         ToolDefinition(
             name="web_search",
-            description="联网搜索，返回标题、链接与摘要。需要最新信息或工作区之外的资料时使用。",
+            description=(
+                "联网搜索，返回标题、链接与摘要。需要最新信息或工作区之外的资料时使用。"
+                "可以限定域名：只信官方文档时传 allowed_domains，要避开某些站就传 blocked_domains。"
+            ),
             input_schema={
                 "type": "object",
                 "required": ["query"],
                 "properties": {
                     "query": {"type": "string", "description": "搜索词"},
                     "max_results": {"type": "integer", "description": "返回条数，默认 5，上限 8"},
+                    "allowed_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "只保留这些域名及其子域，例如 [\"python.org\"]。留空表示不限",
+                    },
+                    "blocked_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "排除这些域名及其子域，例如 [\"csdn.net\"]",
+                    },
                 },
             },
             risk_level="medium",

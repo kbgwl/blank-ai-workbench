@@ -139,7 +139,8 @@ def test_monitor_is_registered_as_deferred_and_argument_scoped() -> None:
 def test_scenarios_without_shell_also_exclude_monitor() -> None:
     assert "monitor" in scenarios.excluded_tools(scenarios.DOCS)
     assert "monitor" in scenarios.excluded_tools(scenarios.REVERSE)
-    assert "monitor" in scenarios.excluded_tools(scenarios.DAILY)
+    # daily 放开为 Codex 全能 agent 后也能跑命令，monitor 不再排除。
+    assert "monitor" not in scenarios.excluded_tools(scenarios.DAILY)
     assert "monitor" not in scenarios.excluded_tools(scenarios.DEV)
 
 

@@ -90,11 +90,10 @@ async def _events(task_id: str, kind: str) -> list[dict]:
 # ── §3 日常场景：动手的请求要明确说不，而不是接着上文乱说 ──────────────────
 
 
-async def test_daily_write_request_gets_explicit_refusal(env, workspace):  # noqa: F811
-    """日常 + 改文件：给一句确定的拒绝，不进工具循环，不产生任何工具调用。"""
+async def test_daily_write_request_runs_tools(env, workspace):  # noqa: F811
+    """日常放开为 Codex 全能 agent：改文件的请求进工具循环、写工具真的跑。"""
     await create_provider(env)
     project_id = await create_project(env, workspace)
-    # 模型脚本里塞一个「改文件」的回合：如果执行层漏进来，这里会留下 apply_patch 行。
     env.mock.reset(
         [
             {"content": "计划：\n1. 修改 config.py"},
@@ -108,24 +107,21 @@ async def test_daily_write_request_gets_explicit_refusal(env, workspace):  # noq
     task_id = await _run_task(env, project_id, "把 config.py 里的 MAX_RETRY 改成 5", "daily")
     row = await _row(task_id)
     assert row.status == "succeeded"
-    assert "日常场景不会直接修改文件" in (row.result_summary or "")
-    assert "请切换到开发场景" in (row.result_summary or "")
-    # 一个写工具都没跑。
-    assert await _tool_rows(task_id) == []
-    # 拒绝是显式记录的，不是"悄悄跳过"。
-    refused = await _events(task_id, "scenario.refused")
-    assert refused and refused[-1]["scenario"] == "daily"
+    # 写工具真的被调用，不再有"日常场景拒绝"的记录。
+    tools = await _tool_rows(task_id)
+    assert [t.name for t in tools if t.name == "apply_patch"]
+    assert await _events(task_id, "scenario.refused") == []
 
 
-async def test_daily_delete_request_is_refused(env, workspace):  # noqa: F811
+async def test_daily_delete_request_runs_tools(env, workspace):  # noqa: F811
+    # 删除类动作在日常场景也会进工具循环（是否批准由权限层/审批卡决定，不是场景层拒绝）。
     await create_provider(env)
     project_id = await create_project(env, workspace)
     env.mock.reset([{"content": "计划：\n1. 删除文件"}, {"content": "删了"}, {"content": "完成"}])
     task_id = await _run_task(env, project_id, "把 temp 目录下的旧文件删掉", "daily")
     row = await _row(task_id)
     assert row.status == "succeeded"
-    assert "日常场景不会直接修改文件" in (row.result_summary or "")
-    assert await _tool_rows(task_id) == []
+    assert await _events(task_id, "scenario.refused") == []
 
 
 async def test_daily_answer_uses_current_turn_only(env, workspace):  # noqa: F811
@@ -214,56 +210,16 @@ async def test_active_tasks_and_status_expose_conversation(env, workspace):  # n
 # ── §4 文档场景：按文件类型授权，而不是"能写/不能写" ───────────────────────
 
 
-async def test_docs_scenario_writes_markdown_but_not_code(env, workspace):  # noqa: F811
-    """文档场景：README.md 能改，main.py 被网关拒掉，磁盘上的源码一个字节没动。"""
-    await create_provider(env)
-    project_id = await create_project(env, workspace)
-    readme = workspace / "README.md"
-    readme.write_text("旧说明\n", encoding="utf-8")
-    code = workspace / "main.py"
-    code.write_text("MAX_RETRY = 3\n", encoding="utf-8")
-
-    env.mock.reset(
-        [
-            {"content": '{"intent": "act", "steps": ["读取 README", "写入说明"]}'},
-            {"content": "读 README", "tool_calls": [call("read_file", {"path": "README.md"})]},
-            {
-                "content": "写入",
-                "tool_calls": [
-                    call("apply_patch", {"path": "README.md", "patch": "+++ b/README.md\n@@ -1,1 +1,1 @@\n-旧说明\n+新说明\n"})
-                ],
-            },
-            {"content": "完成"},
-        ]
-    )
-    ok_task = await _run_task(env, project_id, "更新 README.md 的说明文字", "docs")
-    assert "新说明" in readme.read_text(encoding="utf-8")
-    ok_rows = await _tool_rows(ok_task)
-    assert not [row for row in ok_rows if row.name == "apply_patch" and row.status == "denied"]
-
-    env.mock.reset(
-        [
-            {"content": '{"intent": "act", "steps": ["读取 main.py", "修改常量"]}'},
-            {
-                "content": "改常量",
-                "tool_calls": [
-                    call("apply_patch", {"path": "main.py", "patch": "+++ b/main.py\n@@ -1,1 +1,1 @@\n-MAX_RETRY = 3\n+MAX_RETRY = 5\n"})
-                ],
-            },
-            {"content": "完成"},
-        ]
-    )
-    blocked_task = await _run_task(env, project_id, "把 main.py 里的 MAX_RETRY 改成 5", "docs")
-    # 源码没被改：拒绝发生在写之前。
-    assert code.read_text(encoding="utf-8") == "MAX_RETRY = 3\n"
-    denied = [
-        row
-        for row in await _tool_rows(blocked_task)
-        if row.name == "apply_patch" and row.status == "denied"
-    ]
-    assert denied, "文档场景没有拦住对 .py 的写入"
-    assert "只能写入" in (denied[0].result_summary or "")
-    assert "开发场景" in (denied[0].result_summary or "")
+def test_docs_scenario_writes_markdown_but_not_code():  # noqa: F811
+    """文档场景：.md 能写、.py 被网关拒。docs 已不在新任务可选场景里（两场景收敛），
+    但历史任务仍按原场景跑完，所以按扩展名授权的能力要在网关层继续成立——
+    直接问网关，不经 API 建任务（docs 已被 schemas 收窄，不再接受新建）。
+    """
+    gateway = ToolGateway([], defer=False, scenario="docs")
+    assert gateway._path_allowed("apply_patch", {"path": "README.md", "patch": ""})
+    assert gateway._path_allowed("apply_patch", {"path": "docs/guide.txt", "patch": ""})
+    assert not gateway._path_allowed("apply_patch", {"path": "main.py", "patch": ""})
+    assert not gateway._path_allowed("apply_patch", {"path": "package.json", "patch": ""})
 
 
 async def test_reverse_scenario_rejects_binary_and_code_writes(env):  # noqa: F811
@@ -274,40 +230,25 @@ async def test_reverse_scenario_rejects_binary_and_code_writes(env):  # noqa: F8
     assert gateway._path_allowed("apply_patch", {"path": "analysis/report.md", "patch": ""})
 
 
-async def test_reverse_writes_go_to_analysis_workspace(env, workspace, tmp_path, monkeypatch):  # noqa: F811
-    """逆向：笔记落到独立分析区，原始样本一个字节没动，工作区里没有新增产物。"""
+def test_reverse_writes_go_to_analysis_workspace(workspace, tmp_path, monkeypatch):  # noqa: F811
+    """逆向：写根切到独立分析区，不在被分析的工作区里。
+
+    reverse 已不在新任务可选场景里（两场景收敛），走不了 API 建任务，
+    所以直接验它依赖的写根解析函数：analysis_root 必须落在工作区之外、按 task 隔离。
+    """
+    from blank_api.services.agent.analysis import analysis_root
+
     analysis_dir = tmp_path / "analysis"
     monkeypatch.setenv("BLANK_ANALYSIS_DIR", str(analysis_dir))
-    await create_provider(env)
-    project_id = await create_project(env, workspace)
-    sample = workspace / "sample.py"
-    sample.write_text("print('hi')\n", encoding="utf-8")
-    before = hashlib.md5(sample.read_bytes()).hexdigest()
+    root_a = analysis_root("task-aaa")
+    root_b = analysis_root("task-bbb")
 
-    env.mock.reset(
-        [
-            {"content": '{"intent": "act", "steps": ["读取 sample.py", "写分析笔记"]}'},
-            {"content": "先读", "tool_calls": [call("read_file", {"path": "sample.py"})]},
-            {
-                "content": "写笔记",
-                "tool_calls": [
-                    call(
-                        "apply_patch",
-                        {"path": "note.md", "patch": "+++ b/note.md\n@@ -0,0 +1,1 @@\n+# 分析笔记\n"},
-                    )
-                ],
-            },
-            {"content": "完成"},
-        ]
-    )
-    task_id = await _run_task(env, project_id, "分析 sample.py 的行为并写分析笔记", "reverse")
-
-    produced = analysis_dir / task_id / "note.md"
-    assert produced.exists(), f"分析笔记没有落到独立分析区：{produced}"
-    assert "# 分析笔记" in produced.read_text(encoding="utf-8")
-    # 原始样本与工作区：没有新增 note.md，样本 md5 不变。
-    assert not (workspace / "note.md").exists()
-    assert hashlib.md5(sample.read_bytes()).hexdigest() == before
+    assert root_a.is_dir()
+    # 按 task 隔离：两次不同任务不共用目录。
+    assert root_a != root_b
+    # 落在工作区之外——一份 git status 不会把分析笔记当成被分析仓库的改动。
+    assert workspace not in root_a.parents
+    assert analysis_dir in root_a.parents
 
 
 def test_dispatch_snapshot_pins_sandbox_tier():

@@ -84,6 +84,32 @@ export function statusMeta(status: string | null | undefined): StatusMeta {
   return { ...FALLBACK, label: key };
 }
 
+/**
+ * 任务列表的状态筛选分组。学 Qoder 的「筛选与排序 / 按状态看 Issue」：
+ * 任务一多，只按标题搜不够——用户更常问"哪些还在跑""哪些失败了"。
+ * 分组用真实的终态/非终态语义，不按状态字符串硬凑。
+ */
+export type TaskStatusFilter = "all" | "active" | "done" | "failed";
+
+export const TASK_STATUS_FILTERS: { key: TaskStatusFilter; label: string }[] = [
+  { key: "all", label: "全部" },
+  { key: "active", label: "进行中" },
+  { key: "done", label: "已完成" },
+  { key: "failed", label: "未成功" },
+];
+
+/** 这条任务是否落在某个筛选组里。未知状态只在"全部"里可见，不猜它是哪一类。 */
+export function taskMatchesFilter(status: string | null | undefined, filter: TaskStatusFilter): boolean {
+  if (filter === "all") return true;
+  const key = (status ?? "").toLowerCase();
+  if (filter === "active") {
+    return key === "queued" || key === "running" || key === "waiting_approval" || key === "draft";
+  }
+  if (filter === "done") return key === "succeeded";
+  if (filter === "failed") return key === "failed" || key === "cancelled";
+  return false;
+}
+
 /** 工具调用状态（ok / error / denied / timeout / awaiting_approval / blocked）。 */
 export function toolStatusClass(status: string): { label: string; className: string } {
   switch (status) {

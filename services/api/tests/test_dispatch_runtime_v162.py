@@ -119,11 +119,12 @@ async def test_chitchat_snapshot_is_single_step(env, workspace, monkeypatch):
     assert snapshot["notify_policy"] == "silent"
 
 
-async def test_daily_task_snapshot_is_read_only(env, workspace, monkeypatch):
+async def test_daily_task_snapshot_is_workspace_edit(env, workspace, monkeypatch):
+    # daily 已放开为 Codex 全能 agent：动手请求的工具策略是可写工作区。
     monkeypatch.setenv(FLAG, "1")
     project_id = await create_project(env, workspace)
     task = await _create(env, project_id, scenario="daily", goal="帮我改一下这句话")
-    assert task["dispatch_snapshot"]["tool_policy"] == "read_only"
+    assert task["dispatch_snapshot"]["tool_policy"] == "workspace_edit"
 
 
 # ── 执行侧效力 ──────────────────────────────────────────────────────────────
@@ -216,25 +217,20 @@ async def test_run_max_steps_comes_from_snapshot_budget(env, workspace, monkeypa
     assert started["max_steps"] == 1
 
 
-async def test_stored_snapshot_cannot_widen_scenario_permission(env, workspace, monkeypatch):
-    """库里被改成「日常场景 + 可写工作区」的快照，执行时必须还是只读。"""
-    monkeypatch.setenv(FLAG, "1")
-    project_id = await create_project(env, workspace)
-    provider_id = await create_provider(env)
-    task = await _create(env, project_id, scenario="daily", goal="帮我改一下这句话")
-    dirty = dict(task["dispatch_snapshot"])
-    dirty["tool_policy"] = "workspace_edit"
-    async with get_session_factory()() as session:
-        row = await session.get(Task, task["id"])
-        row.dispatch_snapshot = dirty
-        await session.commit()
-    env.mock.reset([{"content": "这句话可以更短一些。"}])
-    resp = await env.client.post(
-        f"{API}/tasks/{task['id']}/run", json={"provider_id": provider_id}
+def test_stored_snapshot_cannot_widen_scenario_permission():
+    """脏快照不能把只读场景放成可写——场景权限是下限，不是建议。
+
+    daily 放开后，只读不变量由 brainstorm（历史只读场景）承担。
+    这条守的是 from_dict 恢复链路：库里的数据被改成 workspace_edit，
+    恢复时必须按场景收紧回 read_only。
+    """
+    from blank_api.services.agent.dispatch import ExecutionSnapshot, TOOL_READ_ONLY
+
+    restored = ExecutionSnapshot.from_dict(
+        {"scenario": "brainstorm", "intent": "execute", "tool_policy": "workspace_edit"}
     )
-    assert resp.status_code == 200, resp.text
-    started = (await _events(task["id"], "task.started"))[-1]
-    assert started["readonly"] is True
+    assert restored.tool_policy == TOOL_READ_ONLY
+    assert any("收紧为只读" in note for note in restored.notes)
 
 
 async def test_snapshot_survives_refresh_and_keeps_its_id(env, workspace, monkeypatch):

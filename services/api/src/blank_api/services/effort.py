@@ -340,6 +340,32 @@ def thinking_budget_ceiling(max_output_tokens: int) -> int:
     return max(0, int(max_output_tokens) - 1)
 
 
+# 各阶段默认收紧到的档位。轮次档位是**上限**，这里只降不升。
+#
+# 为什么按阶段而不是按步：执行节点里既有「读三个文件」也有「重写一个模块」，
+# 事前分不出来；但阶段分得出——规划要想清楚，收尾只是把已完成的事说一遍。
+# 实测同一条 20 分钟的任务里 44 次模型调用、40k 推理 token 里 76% 花在
+# 5 次超长思考上，而那 5 次都落在执行节点的「整文件重写」上，收尾与规划
+# 加起来不到 1k。收尾继续用 high 档，换来的是几十秒空转和一段更啰嗦的总结。
+STEP_EFFORT: dict[str, str] = {
+    "create_plan": "high",
+    "execute_action": "medium",
+    "complete": "low",
+}
+
+
+def tighten_for_step(base: str, node: str) -> str:
+    """一步一判：在不高于轮次档位的前提下，按所处阶段收紧。
+
+    只降不升是有意的。「用户说了 ultrathink」这类显式升档由调用方先判掉，
+    不交给这里；这里只处理「没人指定，于是兜底成了 high/max」的那一档。
+    """
+    wanted = STEP_EFFORT.get(node, "")
+    if not wanted or not is_level(base) or not is_level(wanted):
+        return base
+    return wanted if rank(wanted) < rank(base) else base
+
+
 def resolve_turn_effort(
     requested: object,
     *,

@@ -9,6 +9,7 @@ from blank_api.services.models.base import (
     AdapterConfig,
     ModelAdapter,
     ModelError,
+    classify_http_failure,
     ModelResponse,
     Usage,
     retry_after_seconds,
@@ -73,9 +74,11 @@ class OllamaAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
-                                     status=resp.status_code,
-                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
+                    raise classify_http_failure(
+                        resp.status_code,
+                        body,
+                        retry_after=retry_after_seconds(resp.headers.get("Retry-After")),
+                    )
                 async for raw in resp.aiter_lines():
                     if not raw.strip():
                         continue
@@ -104,9 +107,11 @@ class OllamaAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
-                    raise ModelError("model_http_error", f"模型返回 {resp.status_code}：{body[:200]}",
-                                     status=resp.status_code,
-                                     retry_after=retry_after_seconds(resp.headers.get("Retry-After")))
+                    raise classify_http_failure(
+                        resp.status_code,
+                        body,
+                        retry_after=retry_after_seconds(resp.headers.get("Retry-After")),
+                    )
                 async for raw in resp.aiter_lines():
                     if not raw.strip():
                         continue

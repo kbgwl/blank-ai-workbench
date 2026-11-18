@@ -141,6 +141,23 @@ body {
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 
+/*
+ * 表单控件必须显式继承字体。
+ *
+ * `<input> / <textarea> / <button> / <select>` 在浏览器里**不继承** body 的 font-family，
+ * 它们各自有一套系统 UI 字体。只给 body 设字体时，同一页会出现"正文是一个字体、
+ * 输入框是另一个字体"——这就是"字体又不一样了"的来源。
+ * 用 `font: inherit` 拉平；组件上的 text-[13px] 等 Tailwind 类优先级更高，仍能覆盖字号。
+ */
+button,
+input,
+textarea,
+select,
+optgroup {
+  font: inherit;
+  letter-spacing: inherit;
+}
+
 ::selection { background: color-mix(in srgb, var(--brand-color) 22%, transparent); }
 
 /* 键盘焦点统一成品牌色细环；鼠标点击不出现。 */
