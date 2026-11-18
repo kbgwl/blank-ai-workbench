@@ -390,10 +390,10 @@ def test_card_text_equals_ledger_rule(command: str, flipped: str, card: str) -> 
 
     assert approval_rules.add_rule("run_shell", memo_rule(command), source_task="t101") is True
     raw = json.loads(approval_rules.path().read_text(encoding="utf-8"))["rules"]
-    assert raw[0]["tokens"] == list(memo_rule(command)), raw
+    # 磁盘上只留资源串（v2）；卡面那一串必须一字不差地从它读回来
+    assert raw[0]["resources"] == ["cmd:" + card], raw
     assert raw[0]["source_task"] == "t101"
-    # 落盘的 token 数组重新渲染出来，必须还是卡面那一串
-    assert render_rule(tuple(raw[0]["tokens"])) == card
+    assert approval_rules._decode("run_shell", raw[0]["resources"])[1] == memo_rule(command)
 
     durable = _policy()
     durable.persistent_prefixes = approval_rules.load_prefix_rules()
@@ -586,8 +586,10 @@ async def test_card_prefix_survives_the_whole_ledger_chain(env, workspace: Path)
     assert persisted[0]["payload"]["persisted"] is True
 
     raw = json.loads(approval_rules.path().read_text(encoding="utf-8"))["rules"]
-    assert raw[0]["tokens"] == ["python", "-c", "print(1)", "https://a.example"], raw
-    assert render_rule(tuple(raw[0]["tokens"])) == PY_CARD
+    assert raw[0]["resources"] == ["cmd:" + PY_CARD], raw
+    assert approval_rules._decode("run_shell", raw[0]["resources"])[1] == (
+        "python", "-c", "print(1)", "https://a.example"
+    )
 
     # 会话档命中（同一任务里的换引号写法）：归因串 == 卡面串，前缀是 ``prefix:``
     session_hits = [

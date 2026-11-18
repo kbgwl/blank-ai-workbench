@@ -1,15 +1,17 @@
-"""权限口径的变异电池（卡 2b ①）。
+"""权限口径的变异电池（卡 2b）。
 
 电池测的不是代码，是**判据**：把实现故意改坏，对应那条测试必须红；改回来必须绿。
 一条变异后测试仍然全绿，说明那条判据是摆设——比没有测试更危险。
 
-覆盖六个变异体：
+覆盖八个变异体：
 1. 严格复核被摘掉（高危自动放行不再升级成问人）
 2. 能力边界块被删（边界退化成"策略说了算"）
 3. 资源清单退化成 `tool:`（路径/命令不再进审批卡与审计）
 4. 审查员的否决回到"直接拒"（不可逆动作不再提级出卡）
 5. 代批重新忽略风险等级（auto 档又能替人按高危确认键）
 6. 交付对账被摘掉（零动作却照抄"已删除"）
+7. 资源串用朴素空格切分来解码（规则会变宽：带空白的 token 被切散）
+8. 落盘不再校验往返（切残的规则被认下来，覆盖范围比原来大）
 
 用法：`python tests/mutation_battery_authorization_v417.py`，退出码 0 = 全部变异都被抓住。
 """
@@ -31,7 +33,10 @@ TESTS = [
     "tests/test_authorize_single_entry_v417.py",
     "tests/test_guardian_trail_v51.py",
     "tests/test_no_false_action_claim_v416.py",
+    "tests/test_rules_resources_diff_v418.py",
 ]
+
+RULES = API / "src" / "blank_api" / "services" / "approval_rules.py"
 
 # (标签, 文件, 原文片段, 替换成, 必须变红的测试名)
 MUTATIONS = [
@@ -80,6 +85,20 @@ MUTATIONS = [
         "    if not report or True:\n        return report",
         "test_a_denied_action_is_not_reported_as_done",
     ),
+    (
+        "资源串用朴素切分解码（会变宽）",
+        RULES,
+        '        parsed = prefix_rule(text[len(CMD) :])',
+        '        parsed = tuple(text[len(CMD) :].split())',
+        "test_a_v2_roundtrip_is_lossless",
+    ),
+    (
+        "落盘不再校验往返",
+        RULES,
+        "    if not text or prefix_rule(text) != normalized[1]:\n        return None",
+        "    if not text:\n        return None",
+        "test_a_v1_rule_that_cannot_roundtrip_is_dropped_not_widened",
+    ),
 ]
 
 
@@ -101,7 +120,7 @@ def run_tests() -> tuple[int, list[str]]:
 
 
 def main() -> int:
-    originals = {path: path.read_bytes() for path in {AUTHZ, GUARDIAN, GRAPH}}
+    originals = {path: path.read_bytes() for path in {AUTHZ, GUARDIAN, GRAPH, RULES}}
     digests = {path: hashlib.sha256(raw).hexdigest() for path, raw in originals.items()}
     texts = {path: raw.decode("utf-8") for path, raw in originals.items()}
 

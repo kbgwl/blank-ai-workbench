@@ -81,7 +81,11 @@ def test_rule_file_roundtrip(approvals_file: Path) -> None:
 
     raw = json.loads(approvals_file.read_text(encoding="utf-8"))
     assert raw["version"] == approval_rules.VERSION
-    assert [item["tokens"] for item in raw["rules"]] == [["git", "push"], list(RULE_INLINE)]
+    # 磁盘上只有一份事实：资源串（v2 形状）。token 数组是读侧派生的，不落盘。
+    assert [item["resources"] for item in raw["rules"]] == [
+        ["cmd:git push"],
+        ["cmd:" + render_rule(RULE_INLINE)],
+    ]
 
     rules = approval_rules.load_rules()
     assert rules[0]["source_task"] == ""
@@ -97,7 +101,10 @@ def test_duplicate_rule_moves_to_front_without_duplicating(approvals_file: Path)
 
     # 读侧会去重，所以这里直接看文件本身：同一串只该有一行，且最新在前。
     raw = json.loads(approvals_file.read_text(encoding="utf-8"))["rules"]
-    assert [item["tokens"] for item in raw] == [list(RULE_INLINE), ["git", "push"]]
+    assert [item["resources"] for item in raw] == [
+        ["cmd:" + render_rule(RULE_INLINE)],
+        ["cmd:git push"],
+    ]
     assert raw[0]["source_task"] == "again"
 
     rules = approval_rules.load_rules()
