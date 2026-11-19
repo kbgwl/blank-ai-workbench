@@ -329,3 +329,52 @@ def test_being_injected_does_not_extend_the_life():
 
     assert block == ""
     assert is_expired(store.load(ws)[0]) is True
+
+
+# ── 当面说的：一次就够 ────────────────────────────────────────────────────
+def test_what_he_tells_you_directly_counts_once():
+    """"出现两次"那个门槛是给**自动推断**用的：从行为里猜他要什么，猜错代价高。
+    他当面说明白话是另一回事——那是最强的证据本身。"""
+    store, ws = _store()
+
+    touched = store.record_assertion(ws, "做事要严谨")
+
+    assert touched and touched[0].status == "active"
+    assert "严谨" in store.persona_block(str(ws))
+
+
+def test_a_direct_statement_does_not_claim_certainty():
+    store, ws = _store()
+
+    touched = store.record_assertion(ws, "做事要严谨")
+
+    assert touched[0].confidence == 0.8, "连他本人都可能是这次这么想"
+
+
+def test_a_vague_statement_extracts_nothing():
+    """听不出要求就返回空，不要硬凑一条——那正是"替他发明主张"。"""
+    store, ws = _store()
+
+    assert store.record_assertion(ws, "嗯") == []
+    assert store.load(ws) == []
+
+
+def test_a_direct_rule_actually_reaches_the_prompt():
+    """置成 active 但 occurrences 还是 1 时，injectable 会按门槛把它滤掉——
+    状态看着生效、提示里一条没有。这是今天第四次遇到"字段设了没人用"的形状。"""
+    store, ws = _store()
+
+    store.record_assertion(ws, "做数据库改动必须先问我")
+
+    assert "做数据库改动必须先问我" in store.persona_block(str(ws))
+
+
+def test_a_standard_is_expanded_not_listed_as_a_flat_rule():
+    """标准要展开成工序；再并列一条"做事要严谨"只是重复。"""
+    store, ws = _store()
+
+    store.record_assertion(ws, "做事要严谨")
+    block = store.persona_block(str(ws))
+
+    assert "工序应该是" in block
+    assert block.count("做事要严谨") == 0

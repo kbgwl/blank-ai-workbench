@@ -66,8 +66,19 @@ MAX_INJECTED = 4
 # 不是同一件事。自由文本聚类要么靠模型（引入不确定性，且模型会编），要么靠词面
 # 相似度（"先写测试"和"不要先写测试"词面极像，结论相反）。固定维度是能用规则判的。
 #
+# 标准类的说法。它们不描述某一步做什么，而是规定"整件事按什么标准做"。
+# 这类话最值钱也最难落地：写成一句提示，模型会看起来严谨地汇报；
+# 要真按他的方式做，得展开成工序并且**能被核对**（见 conformance）。
+STANDARD_TRIGGERS = (
+    "严谨", "细致", "认真", "扎实", "别糊弄", "不要糊弄", "踏踏实实",
+    "简洁", "别啰嗦", "不要啰嗦", "精简", "简短", "别废话",
+)
+
 # 维度名 → (给模型看的标签, 判定关键词)
 DIMENSIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    # 标准排最前：一句"做事要严谨"不是某一步的要求，是**整台工序**的要求。
+    # 认成 boundary 也行，但那样它就只是一条并列的规则，不会被展开成工序。
+    "standard": ("做事标准", STANDARD_TRIGGERS),
     "order": ("工序", ("先", "再", "然后", "之后", "最后", "接着")),
     "granularity": ("粒度", ("一次", "单个", "一个文件", "小步", "分批", "全量", "整个仓库")),
     "verify": ("验证", ("测试", "跑一遍", "回归", "判据", "验证", "自检", "断言")),
@@ -180,7 +191,7 @@ def dimension_of(text: str) -> str:
     边界比工序更硬，认错了代价更大。
     """
     body = str(text or "")
-    for name in ("boundary", "order", "verify", "granularity", "style", "tooling", "delivery"):
+    for name in ("standard", "boundary", "order", "verify", "granularity", "style", "tooling", "delivery"):
         for keyword in DIMENSIONS[name][1]:
             if keyword in body:
                 return name
@@ -267,9 +278,12 @@ def extract_instructions(text: str, *, task_specific: bool = False) -> list[str]
         clause = raw.strip().strip("「」“”\"'*`-").strip("，,、；;：: ").strip()
         if not (4 <= len(clause) <= 120):
             continue
-        if not _IMPERATIVE.search(clause):
+        # 标准类的说法（"做事要严谨"）里没有任何祈使词——它是**语气**不是命令。
+        # 只按祈使词筛会把这一类全丢掉，而它们恰恰最影响"像不像他"。
+        is_standard = any(trigger in clause for trigger in STANDARD_TRIGGERS)
+        if not (_IMPERATIVE.search(clause) or is_standard):
             continue
-        if task_specific and not _RULE_MARKER.search(clause):
+        if task_specific and not (_RULE_MARKER.search(clause) or is_standard):
             # 从任务描述里抽时，没有要求标记的分句一律不算——那是在描述这一步做什么。
             continue
         if task_specific and _looks_task_specific(clause):
@@ -415,6 +429,7 @@ def injectable(entries: Iterable[Preference], *, scope_ref: str = "") -> list[Pr
         item
         for item in entries
         if item.status == "active"
+        and item.dimension != "standard"  # 标准由 render_standards 展开成工序，不并列成规则
         and item.occurrences >= MIN_OCCURRENCES
         and not is_expired(item, moment)
     ]
@@ -455,6 +470,168 @@ def render(entries: Iterable[Preference]) -> str:
         "也不要为了迎合而变通安全规则或跳过验证。"
     )
     return "\n".join(lines)
+
+
+
+# --------------------------------------------------------------------------- #
+# 标准 → 工序 → 可核对
+# --------------------------------------------------------------------------- #
+#
+# "做事要严谨"不是一条规则，是**整台工序**的标准。它也是最影响"像不像他"的东西：
+# 同一个任务，严谨的人要的是"改之前先读、改完必须验、没验的明说未验"；
+# 换个人可能只要"跑通就行"。
+#
+# 但把它当提示词里的一句话不管用——模型会**看起来严谨地汇报**：结论里全是
+# "已完成""应该没问题"，一行证据没有。所以要展开成工序，而且每条**能被核对**，
+# 收尾时按事实判 passed / failed / unverifiable。
+#
+# 一条界线：**展开的条款是我们的理解，不是他的原话。** 措辞里必须写明，
+# 判出来的结果只报告、不拦——理解偏了要能被他一眼看出来并纠正。
+
+STANDARDS: dict[str, dict] = {
+    "rigor": {
+        "label": "严谨",
+        "triggers": ("严谨", "细致", "认真", "扎实", "别糊弄", "不要糊弄", "踏踏实实"),
+        "clauses": (
+            ("change_is_verified", "改完必须验证：把跑过的命令和退出码写出来"),
+            ("no_bare_claims", '没有验证过的部分明说"未验证"，不要用"应该能跑"盖过去'),
+            ("report_is_traceable", "结论里带具体路径或命令，让人能照着复现"),
+            ("failures_are_admitted", "有失败或跳过就如实写，不要只说\"全部通过\""),
+        ),
+    },
+    "concise": {
+        "label": "简洁",
+        "triggers": ("简洁", "别啰嗦", "不要啰嗦", "精简", "简短", "别废话"),
+        "clauses": (
+            ("report_is_short", "结论压到必要信息，不复述过程"),
+            ("no_padding", '不写"已完成如下工作""综上所述"这类填充句'),
+        ),
+    },
+}
+
+# 没证据的判断：出现了就说明结论在猜。
+_HEDGE = re.compile(r"(应该(能|可以|会|没问题)?|大概|可能|估计|貌似|看起来|似乎|理论上|不出意外)")
+# 承认不确定 / 承认失败的说法。有它就不算"裸猜"。
+_ADMITS = re.compile(r"(未验证|没验证|没有验证|尚未|跳过|没跑|没通过|失败|不确定|待确认|fail|error)", re.I)
+_PATHY = re.compile(r"[\w./-]+\.(py|ts|tsx|js|jsx|html?|css|json|md|sql|ya?ml)\b")
+_COMMANDY = re.compile(r"`[^`]+`|\b(pytest|npm|python|node|curl|git|uvicorn)\b")
+_PADDING = re.compile(r"(已完成如下工作|综上所述|总的来说|希望对你有帮助|以上就是全部)")
+
+
+def standards_of(entries: Iterable[Preference]) -> list[str]:
+    """已生效的做事标准（从 active 的偏好里认）。"""
+    found: list[str] = []
+    for item in entries:
+        if item.status != "active" or item.dimension != "standard":
+            continue
+        for key, spec in STANDARDS.items():
+            if key in found:
+                continue
+            if any(trigger in item.rule for trigger in spec["triggers"]):
+                found.append(key)
+    return found
+
+
+def clauses_of(keys: Iterable[str]) -> list[tuple[str, str, str]]:
+    out: list[tuple[str, str, str]] = []
+    for key in keys:
+        spec = STANDARDS.get(key)
+        if not spec:
+            continue
+        for clause_key, text in spec["clauses"]:
+            out.append((key, clause_key, text))
+    return out
+
+
+def render_standards(keys: Iterable[str]) -> str:
+    wanted = list(keys)
+    if not wanted:
+        return ""
+    labels = "、".join(f"「{STANDARDS[key]['label']}」" for key in wanted if key in STANDARDS)
+    lines = [f"他要求做事{labels}。按这个标准，工序应该是："]
+    index = 0
+    for _key, _clause, text in clauses_of(wanted):
+        index += 1
+        lines.append(f"{index}) {text}")
+    lines.append(
+        "（这些是**从他自己的要求里展开的工序**，不是他的原话。哪条理解偏了直接说。"
+        "做到几条，收尾时会被逐条核对。）"
+    )
+    return "\n".join(lines)
+
+
+def conformance(keys: Iterable[str], facts: dict) -> list[dict]:
+    """按标准逐条核对这次交付。`unknown ≠ failed` 的纪律与 done_when 一致。"""
+    out: list[dict] = []
+    for standard_key, clause_key, text in clauses_of(keys):
+        status, note = _check_clause(clause_key, facts)
+        out.append(
+            {
+                "standard": standard_key,
+                "clause": clause_key,
+                "text": text,
+                "status": status,
+                "note": note,
+            }
+        )
+    return out
+
+
+def _check_clause(key: str, facts: dict) -> tuple[str, str]:
+    changed = [str(path) for path in (facts.get("changed_paths") or []) if str(path)]
+    report = str(facts.get("report") or "")
+    validation = facts.get("validation") or {}
+    failures = int(facts.get("failures") or 0)
+
+    if key == "change_is_verified":
+        if not changed:
+            return "unverifiable", "本轮没有改动文件"
+        passed = validation.get("exit_code") == 0 or str(validation.get("status") or "") in (
+            "ok",
+            "passed",
+        )
+        if passed:
+            return "passed", f"{len(changed)} 个文件有验证记录"
+        return "failed", "改了文件但没跑验证"
+
+    if key == "no_bare_claims":
+        if not report:
+            return "unverifiable", "没有交付文本"
+        if _HEDGE.search(report) and not _ADMITS.search(report):
+            hit = _HEDGE.search(report)
+            return "failed", f'结论里有没证据的判断："{(hit.group(0) if hit else "")}"'
+        return "passed", "结论里没有裸猜"
+
+    if key == "report_is_traceable":
+        if not changed:
+            return "unverifiable", "本轮没有改动文件"
+        if _PATHY.search(report) or _COMMANDY.search(report):
+            return "passed", "结论里带了路径或命令"
+        return "failed", "结论看不出改了哪个文件、跑了什么"
+
+    if key == "failures_are_admitted":
+        if failures == 0:
+            return "unverifiable", "本轮没有失败可报"
+        if _ADMITS.search(report):
+            return "passed", "失败/跳过写进了结论"
+        return "failed", f"本轮有 {failures} 次失败或跳过，结论里没提"
+
+    if key == "report_is_short":
+        if not report:
+            return "unverifiable", "没有交付文本"
+        if len(report) <= 900:
+            return "passed", f"{len(report)} 字"
+        return "failed", f"{len(report)} 字，超过 900"
+
+    if key == "no_padding":
+        if not report:
+            return "unverifiable", "没有交付文本"
+        hit = _PADDING.search(report)
+        if hit:
+            return "failed", f'有填充句："{hit.group(0)}"'
+        return "passed", "没有填充句"
+
+    return "unverifiable", "没实现的检查"
 
 
 # --------------------------------------------------------------------------- #
@@ -535,10 +712,45 @@ class PersonaStore:
                 out.append(self.record(workspace, pref))
         return out
 
+    def record_assertion(self, workspace: str | Path, text: str) -> list[Preference]:
+        """他当面提的要求：记下来，**一次就生效**。
+
+        为什么这一次不用"出现两次"：那个门槛是给**自动推断**用的——从行为里猜他
+        想要什么，猜错代价高，所以要攒证据。他当面说明白话是另一回事，那是最强的
+        证据本身。（消费级调研里的同一条：钉钉只认"帮我记住……"这类触发指令。）
+
+        置信度给 0.8 但不给 1.0：连他本人都可能是这次这么想。
+        """
+        learned = self.learn_from_text(
+            workspace, text, task_id="", source="tell", scope_ref=str(workspace)
+        )
+        if not learned:
+            return []
+        entries = self.load(workspace)
+        touched: list[Preference] = []
+        stamps = {pref.fingerprint for _action, pref in learned}
+        for item in entries:
+            if item.fingerprint not in stamps:
+                continue
+            item.status = "active"
+            # 他说一次就等于满足门槛。不补这一步会**静默失效**：状态是 active，
+            # 但 injectable 按 occurrences >= 2 过滤，条目看着生效了、其实一条都进不了提示。
+            item.occurrences = max(int(item.occurrences), MIN_OCCURRENCES)
+            item.confidence = max(float(item.confidence), 0.8)
+            item.last_confirmed = _TIMESTAMP()
+            touched.append(item)
+        self.save(workspace, entries)
+        return touched
+
     def persona_block(self, workspace: str | Path) -> str:
         """给提示用的那一块。取不到就返回空串，绝不挡任务。"""
         try:
-            return render(injectable(self.load(workspace), scope_ref=str(workspace)))
+            entries = self.load(workspace)
+            parts = [
+                render(injectable(entries, scope_ref=str(workspace))),
+                render_standards(standards_of(entries)),
+            ]
+            return "\n\n".join(item for item in parts if item.strip())
         except Exception:  # noqa: BLE001 - 学人失败不该让任务起不来
             return ""
 

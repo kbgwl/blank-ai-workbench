@@ -53,6 +53,8 @@ from blank_api.services.agent.persona import (  # noqa: E402
     lint,
     preference_from_quote,
     render_lint,
+    render_standards,
+    standards_of,
 )
 
 STATUS_MARK = {"active": "生效", "candidate": "待确认", "conflict": "冲突", "retired": "已退役"}
@@ -126,6 +128,11 @@ def main() -> int:
         help="扫历史任务描述，摘出候选（**只出候选，不自动生效**）",
     )
     parser.add_argument("--dry-run", action="store_true", help="和 --harvest 一起用：只看不写")
+    parser.add_argument(
+        "--tell",
+        default="",
+        help="他当面提的要求，记下来并立刻生效（如 --tell \"做事要严谨\"）",
+    )
     parser.add_argument("--promote", default="", help="确认这一条，立刻生效（指纹前缀）")
     parser.add_argument("--keep", default="", help="冲突里留这一条（指纹前缀）")
     parser.add_argument("--retire", default="", help="退役这一条（指纹前缀）")
@@ -143,6 +150,9 @@ def main() -> int:
 
     if args.report:
         return report(args.db)
+
+    if args.tell:
+        return tell(store, args.workspace, args.tell)
 
     if args.keep:
         keep(store, args.workspace, args.keep)
@@ -185,6 +195,33 @@ def main() -> int:
         return 0
 
     show(store, args.workspace)
+    return 0
+
+
+def tell(store: PersonaStore, workspace: str, text: str) -> int:
+    """他当面提的要求：记下来，**一次就生效**。
+
+    为什么这一次不用"出现两次"：那个门槛是给**自动推断**用的——从行为里猜他想要什么，
+    猜错代价高，所以要攒证据。他当面说明白话是另一回事，那是最强的证据本身。
+    （消费级调研里的同一条：钉钉只认"帮我记住……"这类触发指令，且上限 10 条。）
+
+    代价是：他会看到一条自己刚说过的话立刻生效。这正是想要的——他能马上看见
+    "它记住了"，也能马上撤。
+    """
+    touched = store.record_assertion(workspace, text)
+    if not touched:
+        print("没从这句话里听出可执行的要求——换一种说法，比如「做数据库改动必须先问我」。")
+        return 1
+    print(f"记住了 {len(touched)} 条，从现在起生效：")
+    for item in touched:
+        print(f"  [{item.label}] {item.rule}")
+    entries = store.load(workspace)
+    standards = standards_of(entries)
+    if standards:
+        print()
+        print(render_standards(standards))
+        print()
+        print("（这几条工序会在每次任务收尾时逐条核对，结果写进 standard.conformance 事件。）")
     return 0
 
 
@@ -287,15 +324,54 @@ def report(db_path: str) -> int:
         tasks = conn.execute(
             "select count(*) from tasks where status in ('succeeded','failed')"
         ).fetchone()[0]
+
+        # 符合度：他一贯的标准，我们做到了几条。这才是"像不像他"的直接读数。
+        conformance_runs = 0
+        clause_hits: dict[str, dict] = {}
+        for (raw,) in conn.execute(
+            "select payload from agent_events where type='standard.conformance'"
+        ):
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                continue
+            conformance_runs += 1
+            for item in payload.get("results") or []:
+                slot = clause_hits.setdefault(
+                    str(item.get("clause") or ""),
+                    {"text": str(item.get("text") or "")[:60], "passed": 0, "failed": 0},
+                )
+                if item.get("status") == "passed":
+                    slot["passed"] += 1
+                elif item.get("status") == "failed":
+                    slot["failed"] += 1
     finally:
         conn.close()
 
-    print("像不像他（越低越好）：")
+    checked = sum(slot["passed"] + slot["failed"] for slot in clause_hits.values())
+    met = sum(slot["passed"] for slot in clause_hits.values())
+    fit = round(met / checked, 3) if checked else 0.0
+
+    print("像不像他：")
+    print(f"  符合度          {fit:>6}   ({met} 条做到 / {checked} 条核对，{conformance_runs} 个任务)")
+    if clause_hits:
+        worst = sorted(
+            (slot for slot in clause_hits.values() if slot["failed"]),
+            key=lambda slot: -slot["failed"],
+        )[:3]
+        if worst:
+            print("  最常没做到的：")
+            for slot in worst:
+                print(f"      {slot['failed']} 次  {slot['text']}")
+    print()
     print(f"  驳回率          {denial_rate:>6}   ({denied} 驳回 / {total} 次审批)")
     print(f"  需要解释的驳回  {explain_rate:>6}   ({explained} 次他打了字 / {denied} 次驳回)")
     print(f"  有结论的任务    {tasks:>6}")
     print()
-    print("读法：驳回率低说明我给的方向对；**解释率高说明我不懂他**——")
+    print("读法：**符合度是最主的那一个**——它量的是\"这次是不是按他的方式做的\"，")
+    print("跟任务成不成功是两件事：一个任务可以成功，但没验证、结论靠猜，那就不算像他。")
+    print()
+    print("驳回率低说明我给的方向对；**解释率高说明我不懂他**——")
     print("如果我知道他要什么，他点一下\"不允许\"就够了，不用打字讲原因。")
     print("这两个数要一起看：驳回率降到 0 不一定好，可能是他懒得管了。")
     print()

@@ -1915,6 +1915,40 @@ class AgentRuntime:
             {"count": len(learned), "actions": actions, "statements": [e.statement[:160] for e in learned]},
         )
 
+        # 交付**是否符合他一贯的标准**——这是"像不像他"的直接判据，和"任务成不成功"
+        # 是两件事：一个任务可以成功，但用的不是他要的做法（跑通了、但没验证、结论靠猜）。
+        # 只记事实，不拦：展开的条款是我们对他要求的理解，理解偏了要能被他看见。
+        try:
+            from blank_api.services.agent.persona import PersonaStore, conformance, standards_of
+
+            persona = PersonaStore()
+            standards = standards_of(persona.load(session.context.root))
+            if standards:
+                results = conformance(
+                    standards,
+                    {
+                        "changed_paths": [path for path in changed if path],
+                        "validation": result.get("validation") or {},
+                        "report": str(result.get("summary") or ""),
+                        "failures": len(failures),
+                    },
+                )
+                await scope.recorder.add(
+                    "standard.conformance",
+                    "complete",
+                    {
+                        "standards": standards,
+                        "results": results,
+                        "passed": sum(1 for item in results if item["status"] == "passed"),
+                        "failed": sum(1 for item in results if item["status"] == "failed"),
+                        "unverifiable": sum(
+                            1 for item in results if item["status"] == "unverifiable"
+                        ),
+                    },
+                )
+        except Exception:  # noqa: BLE001 - 核对失败不该让任务结论变掉
+            pass
+
     async def _set_status(self, scope: _RunScope, status: str) -> None:
         async with scope.store() as session:
             task = await session.get(Task, scope.task_id)
