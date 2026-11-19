@@ -234,7 +234,10 @@ export function SettingsView() {
 
   return (
     <PageBody wide className="gap-4">
-      <section ref={contentRef} aria-label="设置" className="min-w-0 scroll-mt-4">
+      {/* 设置页不是宽表：内容铺到 1600px 时，说明文字一行能跑七八十个字，
+          左侧标签与右侧取值之间隔半屏，扫读时眼睛要来回跳。收到 1080 并左对齐——
+          居中会在导航与内容之间再插一段空白，看着像两个不相干的区域。 */}
+      <section ref={contentRef} aria-label="设置" className="min-w-0 max-w-[1080px] scroll-mt-4">
         {/* 分类改成顶部横向 tab：去掉第二层 208px 侧栏，内容区铺满。
              Qoder 的设置就是单栏 + 顶部分类，不再让左栏叠左栏。
              标题只由外壳顶栏显示一次，这里不再重复写一遍「设置」——
@@ -271,7 +274,7 @@ export function SettingsView() {
         </div>
         {/* 描述降到辅助层：状态不再是带边框的等宽 chip，只作为句首一个小注脚，
             和正文同一行读下来，不与 tab 抢注意力。 */}
-        <p className="mt-2.5 text-[12px] leading-relaxed text-muted">
+        <p className="mt-2.5 max-w-[72ch] text-[12px] leading-relaxed text-muted">
           <span className="font-medium text-muted">{section.status}</span>
           <span className="mx-1.5 text-line-strong">·</span>
           {section.description}
