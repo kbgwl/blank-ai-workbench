@@ -6300,14 +6300,58 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
     return update
 
 
+def _review_scope(state: AgentState) -> tuple[str, list[str]]:
+    """审查的输入边界：这一轮到底改了哪些文件、各变了几行。
+
+    原来审查的 prompt 只说"请审查工具结果、测试结论和验收条件"——边界全靠审查模型
+    自己从对话里翻。翻漏了就是"审了一遍什么也没看到"，翻多了就去挑无关文件的刺。
+    DeepSeek Harness 的做法是先产出一个**确定性范围**（change-scope：只输出路径，
+    不做语义判断），语义审查再交给 reviewer。这里抄同一层：范围由写类工具的回执算，
+    审查模型只在这份清单内说话。
+
+    返回 (给模型看的清单, 路径列表)。
+    """
+    rows = [item for item in (state.get("tool_results") or []) if isinstance(item, dict)]
+    files: dict[str, dict] = {}
+    for row in rows:
+        if not row.get("ok"):
+            continue
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        path = str(data.get("path") or "")
+        if not path or _in_scratchpad(path):
+            continue
+        kind = str(data.get("change_type") or "")
+        diff = str(data.get("diff") or "")
+        if not kind and not diff:
+            continue
+        added = sum(1 for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
+        removed = sum(1 for line in diff.splitlines() if line.startswith("-") and not line.startswith("---"))
+        entry = files.setdefault(path, {"kind": kind, "added": 0, "removed": 0})
+        entry["added"] += added
+        entry["removed"] += removed
+        if kind:
+            entry["kind"] = kind
+    if not files:
+        return "本轮没有改动任何文件。", []
+    lines = [
+        f"- {path}（{info['kind'] or '修改'}，+{info['added']}/-{info['removed']} 行）"
+        for path, info in files.items()
+    ]
+    return "本轮改动的文件（这是审查的范围，范围外的不要评）：\n" + "\n".join(lines), list(files)
+
+
 async def review_result_node(state: AgentState, session: AgentSession) -> AgentState:
     """Review the produced change and validation evidence before delivery."""
     node = "review_result"
     await session.recorder.add("node.started", node, {})
+    scope_text, scope_paths = _review_scope(state)
     prompt = (
         "你是交付审查 Agent。请审查当前任务的工具结果、测试结论和验收条件，"
         "只输出 JSON：{\"approved\": true, \"findings\": [\"...\"], \"summary\": \"...\"}。"
-        "如果发现实现缺陷、测试不足或验收条件未覆盖，approved 必须为 false，并给出可执行修复意见。"
+        "如果发现实现缺陷、测试不足或验收条件未覆盖，approved 必须为 false，并给出可执行修复意见。\n\n"
+        f"{scope_text}\n\n"
+        "审查时以这份清单为准：只评清单里的文件，不要对没改过的文件提意见。"
+        "清单为空时，检查重点放在「结论是否与工具结果一致」上，而不是找代码问题。"
     )
     try:
         result = await session.ask(state, prompt, node)
@@ -6334,7 +6378,16 @@ async def review_result_node(state: AgentState, session: AgentSession) -> AgentS
                 *review["findings"],
             ][:12]
         await session.recorder.add(
-            "review.completed", node, {**review, "round": rounds, "repair_rounds": total_repairs}
+            "review.completed",
+            node,
+            {
+                **review,
+                "round": rounds,
+                "repair_rounds": total_repairs,
+                # 审查范围进事件：事后能回答"这次到底审了什么"，
+                # 而不是只有一句 approved。
+                "scope": scope_paths,
+            },
         )
         return {
             "messages": result["messages"],
