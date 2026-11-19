@@ -465,7 +465,8 @@ def compact_messages(messages: Sequence[dict], max_chars: int = DEFAULT_CONTEXT_
     omitted = max(0, len(history) - len(tail))
     marker = {
         "role": "system",
-        "content": f"上下文已压缩：省略 {omitted} 条较早执行消息；以最近状态和任务证据为准。",
+        "content": f"上下文已压缩：省略 {omitted} 条较早执行消息；以最近状态和任务证据为准。"
+        + COMPACT_CONTINUE_NOTE,
     }
     return [*prefix, marker, *tail]
 
@@ -756,7 +757,8 @@ class ContextCompactor:
         else:
             head = {
                 "role": "system",
-                "content": f"上下文已压缩：省略 {cut} 条较早执行消息；以最近状态和任务证据为准。",
+                "content": f"上下文已压缩：省略 {cut} 条较早执行消息；以最近状态和任务证据为准。"
+                + COMPACT_CONTINUE_NOTE,
                 "run_id": author_run_id,
             }
         result = [*prefix, head, *tail]
@@ -772,6 +774,14 @@ class ContextCompactor:
         )
         return result
 
+
+
+# 压缩之后的续写指令。少这一句，模型下一个回复会礼貌地把摘要再总结一遍——
+# 纯浪费一轮上下文（社区里的一致经验："Don't recap — just keep going"）。
+COMPACT_CONTINUE_NOTE = (
+    "\n\n这是压缩后的续写点：不要复述上面这段摘要，也不要重新总结任务，"
+    "直接从下一个动作接着做；需要细节时按上面提到的文件名/路径去读。"
+)
 
 
 def breakdown(messages: Sequence[dict], specs: Sequence[object] = ()) -> dict:
