@@ -62,8 +62,16 @@ def test_deferred_families_are_still_reachable():
 
 
 def test_a_normal_coding_turn_does_not_carry_scheduled_task_tools():
-    """定时任务/团队/台账这三类只在特定场景出现，普通编程的第一个回合不该背着它们。"""
+    """定时任务与团队两族只在特定场景出现，普通编程的第一个回合不该背着它们。
+
+    notebook / repl / report_findings / 任务台账**不在这条里**：它们各有测试钉着
+    「常驻但不算核心」，那是有意的产品判断（report_findings 藏进 tool_search 之后，
+    模型交付时就不会用它）。预算不够不能从这几样身上省。
+    """
     visible = set(_registry().visible_names())
 
-    for name in ("cron_create", "team_create_bot", "task_create", "repl", "notebook_edit"):
+    for name in ("cron_create", "cron_list", "schedule_wakeup", "team_create_bot", "team_status"):
         assert name not in visible, f"{name} 又回到常驻了：它每步都要花一次 schema 钱"
+
+    for name in ("notebook_edit", "repl", "report_findings", "task_create"):
+        assert name in visible, f"{name} 被收起来了——这条是有测试守着的产品决定，别顺手改"

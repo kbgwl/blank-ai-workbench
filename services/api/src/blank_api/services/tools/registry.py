@@ -115,15 +115,10 @@ DEFERRED_TOOLS = frozenset(
         "team_add_member",
         "team_remove_member",
         "team_assign_task",
-        # 任务台账的增删改查：绝大多数任务是一问一答，不需要自己建任务行。
-        "task_create",
-        "task_get",
-        "task_list",
-        "task_update",
-        # 其他偶发能力：改 notebook、跑 REPL、写交付发现。
-        "notebook_edit",
-        "repl",
-        "report_findings",
+        # 任务台账 / notebook / REPL / report_findings 刻意**不**收进来：
+        # 它们各自有测试钉着「常驻但不算核心」（不在 CORE、但在 full 视图里可见）。
+        # 那是有意的产品判断——report_findings 藏在 tool_search 后面，模型就不会
+        # 在交付时用上它；notebook_edit 同理。预算不够就別从这几样身上省。
     }
 )
 
@@ -133,9 +128,13 @@ DEFERRED_TOOLS = frozenset(
 # 任务内容 1,000 字符——说明书占了 59%，而它每一步都要重发一遍。把四类"只在特定场景
 # 才用"的家族改成按需加载之后降到 16,382 字符（首调 prompt 19,631 → 16,156 token）。
 #
-# 留 17,000 的余量：新增工具要能被看见，但每加一个都得先想清楚"它配不配常驻"。
+# 预算按实测重设过一次：17,000 那版是靠把 notebook / repl / report_findings / 任务台账
+# 也收起来才达到的，而那四类各有测试钉着「常驻但不算核心」——那是有意的产品判断
+# （report_findings 藏在 tool_search 后面，模型交付时就不会用它）。
+# 现在只收 cron 与团队两族（1,735 + 1,685 字符）：可见 44→34、25,355→21,935 字符。
+# 留 22,500 的余量：新增工具要能被看见，但每加一个都得先想清楚它配不配常驻。
 # 判据见 `tests/test_tool_budget_v427.py`，超了会红。
-SCHEMA_BUDGET_CHARS = 17_000
+SCHEMA_BUDGET_CHARS = 22_500
 
 # 外部工具的命名空间前缀（MCP）。它们数量不固定、schema 由别人的服务端决定，
 # 一律先收着，靠 tool_search 拉——否则接三个服务端就能把每轮的提示词撑爆，

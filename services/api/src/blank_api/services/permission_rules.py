@@ -97,6 +97,9 @@ _COMMAND_TOOLS = ("run_shell", "monitor")
 # settings 里直接写本地名字也认——用户会照着文档里的工具名写。
 LOCAL_TOOL_NAMES: frozenset[str] = frozenset(
     {
+        # browser_check：只读页面（工作区内文件 / 本机回环），但它会起一个浏览器进程，
+        # 所以在 settings 里要能被显式 allow/deny —— 名字表漏了它，用户就写不出规则。
+        "browser_check",
         "apply_patch", "cron_create", "cron_delete", "cron_list", "edit_file",
         "enter_plan_mode", "enter_worktree", "exit_plan_mode", "exit_worktree",
         "git", "glob", "list_agents", "list_files", "list_mcp_resources", "lsp",
