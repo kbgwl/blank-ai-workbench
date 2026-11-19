@@ -1,4 +1,5 @@
 from blank_api.services.tools.ask import ask_tools
+from blank_api.services.tools.browser import browser_tools
 from blank_api.services.tools.base import (
     ApprovalPolicy,
     ToolContext,
@@ -53,6 +54,7 @@ def build_default_tools() -> list[ToolDefinition]:
         *repl_tools(),
         *git_tools(),
         *test_tools(),
+        *browser_tools(),
         *web_tools(),
         *skill_tools(),
         *skill_proposal_tools(),

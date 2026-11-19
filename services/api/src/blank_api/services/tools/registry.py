@@ -61,6 +61,9 @@ CORE_TOOLS = frozenset(
         "write_file",
         "run_shell",
         "run_tests",
+        # 写完前端必须能自己看一眼：这条不在核心面里，模型就只能靠猜、
+        # 或者去起 electron 硬跑（真机轨迹里连崩五次）。眼睛属于"看"这半边的基本件。
+        "browser_check",
         # Skill 加载入口属于核心面：清单在系统提示里（见 graph.initial_messages），
         # 没有这条工具模型就只能看见名字、拿不到正文。lean 视图只从核心集合裁剪，
         # 所以它必须在这张表里，否则"弱模型也能照流程做"就只写在注释里。
@@ -108,6 +111,7 @@ DEFERRED_PREFIXES = ("mcp__",)
 ALIASES: dict[str, tuple[str, ...]] = {
     "git": ("git", "提交", "版本", "分支", "commit", "diff", "log", "stash"),
     "run_tests": ("测试", "用例", "test", "pytest", "验证"),
+    "browser_check": ("浏览器", "打开页面", "截图", "页面报错", "控制台", "browser", "screenshot", "render"),
     "web_search": ("联网", "上网", "搜索", "查资料", "资料", "网页", "search", "web", "internet"),
     "web_fetch": ("抓取", "上网", "网页", "链接", "抓", "fetch", "url", "http"),
     "memory_search": ("记忆", "历史", "上次", "以前", "memory", "recall"),

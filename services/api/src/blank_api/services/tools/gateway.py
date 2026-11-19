@@ -628,12 +628,24 @@ class ToolGateway:
         # 先算出"洗干净但没削"的长度：削不削得由它决定，削多少也要靠它写进提示。
         clean_output = _redact(outcome.output, context.extra_secrets, 10_000_000)
         oversize = len(clean_output) > MAX_RESULT_CHARS
+        # 附图不能走文本那把剪刀。踩过的真 bug：一张 59KB 的截图 base64 有 79,620 个
+        # 字符，被 _redact_value 的 40,000 上限砍成半截——模型收到一段断掉的 data URI，
+        # 网关直接回「unsupported image」，整轮 400，而报错里只字不提"是被我们自己剪的"。
+        # 图片是二进制不是文本：脱敏对它没有意义（base64 里也识别不出密钥），
+        # 截断对它只有破坏。所以整块拎出来，原样带过去。
+        raw_image = outcome.data.get("image") if isinstance(outcome.data, dict) else None
+        text_data = outcome.data
+        if isinstance(raw_image, dict):
+            text_data = {key: value for key, value in outcome.data.items() if key != "image"}
+        safe_data = _redact_value(text_data, context.extra_secrets)
+        if isinstance(safe_data, dict) and isinstance(raw_image, dict):
+            safe_data["image"] = raw_image
         safe = ToolOutcome(
             ok=outcome.ok,
             status=outcome.status,
             output=clean_output[:MAX_RESULT_CHARS],
             message=_redact(outcome.message, context.extra_secrets, MAX_RESULT_CHARS),
-            data=_redact_value(outcome.data, context.extra_secrets),
+            data=safe_data,
         )
         # 产物拿全文、模型拿削过的：这两者以前是同一份，结果一改上限，产物也跟着短了——
         # 而产物正是"模型到底有没有读到完整输出"唯一的反证材料，不能被同一把剪刀剪。

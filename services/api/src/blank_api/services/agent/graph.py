@@ -3076,23 +3076,28 @@ def _append_tool_response(
     """
     name = tool_call_name(call)
     seen = session.output_seen if session is not None else None
-    # read_file 读到图片：结果里的 image 不是文本，要走单独一条用户消息附给模型。
-    # 模型不支持视觉时把它摘掉，换成一句实话——塞 image part 进去会直接 400，
-    # 而"假装没收到图"会让模型对着一个空文件地址瞎猜。
+    # 图片（read_file 读到的图、browser_check 的截图）不走文本：它单独挂在一条用户消息上。
+    #
+    # ⚠️ 必须**先摘出来再 render**，这与"模型能不能看图"无关。踩过的真 bug：
+    # 只有"不支持视觉"那一支才摘掉，于是支持视觉时 base64 原样进了 render——
+    # 60KB 截图变成 20,025 字符的 JSON，正好撞上 MAX_PAYLOAD_CHARS 被截断。
+    # 后果两层：① 每一步都要重发这一坨残废的 base64（7k token × 步数）；
+    # ② 模型读到的是一段断掉的 data URI，部分网关直接判「unsupported image」整轮 400。
     image = payload.get("data", {}).get("image") if isinstance(payload.get("data"), dict) else None
     if isinstance(image, dict) and not str(image.get("data") or ""):
         image = None
-    if image is not None and not (session is not None and getattr(session, "supports_vision", False)):
+    if image is not None:
         body = dict(payload)
-        body["output"] = (
-            "图片已读取，但当前模型不支持看图，图片内容你看不到。"
-            "不要猜测图里是什么，也不要说你看到了；在结论里说明需要切换到支持视觉的模型。"
-        )
-        for key in ("image",):
-            if isinstance(body.get("data"), dict):
-                body["data"] = {k: v for k, v in body["data"].items() if k != key}
+        if isinstance(body.get("data"), dict):
+            body["data"] = {k: v for k, v in body["data"].items() if k != "image"}
+        if not (session is not None and getattr(session, "supports_vision", False)):
+            # 不支持视觉时说清楚，别让模型对着一个空文件地址瞎猜。
+            body["output"] = (
+                "图片已读取，但当前模型不支持看图，图片内容你看不到。"
+                "不要猜测图里是什么，也不要说你看到了；在结论里说明需要切换到支持视觉的模型。"
+            )
+            image = None
         payload = body
-        image = None
     content, stats = render(name, payload, seen, step)
     if stats.get("saved") and session is not None:
         # 省了多少要进事件流：不然"减 token"只是说法，不是数据。

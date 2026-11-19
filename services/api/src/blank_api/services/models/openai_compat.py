@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 
 from blank_api.services.models.base import (
     AdapterConfig,
@@ -24,6 +26,59 @@ from blank_api.services.effort import rank
 # OpenAI 兼容层的 reasoning_effort 词汇表只有 low/medium/high；xhigh/max 没有
 # 对应档，收口到 high——塞一个网关不认识的值会被拒，比悄悄降级更糟。
 _OPENAI_EFFORTS = ("low", "medium", "high")
+
+
+def _image_fingerprint(data: str) -> dict:
+    """把一张附图的 base64 压成可核对的元数据。
+
+    400 说「unsupported image」时，光看报错什么都定不了：可能是格式、可能是长度、
+    可能是我们自己在路上把它截断了。这里只留能定案的东西——长度、首尾、能否解码、
+    解出来的前 8 个字节。**不落全文**：一张截图 80KB，转储文件会变成垃圾场。
+    """
+    import base64 as _b64
+
+    text = str(data or "")
+    info: dict = {"chars": len(text), "head": text[:32], "tail": text[-32:]}
+    try:
+        raw = _b64.b64decode(text, validate=True)
+    except Exception as exc:  # 解不开说明 base64 本身就坏了（截断/混入别的字符）
+        info["decode"] = f"failed: {type(exc).__name__}"
+        return info
+    info["bytes"] = len(raw)
+    info["magic"] = raw[:8].hex()
+    info["decode"] = "ok"
+    return info
+
+
+def dump_failed_request(payload: dict, error_body: str) -> None:
+    """把一次 4xx 的请求体写下来（图只留指纹），用 ``BLANK_DUMP_REQUEST=1`` 打开。
+
+    为什么常驻这个开关：模型层报 400 的时候，报错里只有一句网关的原话，
+    我们这边却看不到自己到底发了什么。没有它就只能靠猜——而"猜"在这条链路上
+    已经害过我们一次（图片被裁到 2 万字符，模型收到半截 data URI）。
+    """
+    if os.environ.get("BLANK_DUMP_REQUEST") != "1":
+        return
+    try:
+        slim = json.loads(json.dumps(payload))
+        for message in slim.get("messages") or []:
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict) or part.get("type") != "image_url":
+                    continue
+                url = str((part.get("image_url") or {}).get("url") or "")
+                prefix, _, b64 = url.partition(";base64,")
+                part["image_url"] = {"url": f"{prefix};base64,<{json.dumps(_image_fingerprint(b64), ensure_ascii=False)}>"}
+        target = Path(os.environ.get("BLANK_DUMP_PATH") or "data/last-request-failure.json")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps({"error": str(error_body)[:2000], "payload": slim}, ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
+    except Exception:  # 取证失败绝不能影响原本的错误路径
+        pass
 
 
 class OpenAICompatibleAdapter(ModelAdapter):
@@ -106,6 +161,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
+                    dump_failed_request(payload, body)
                     raise classify_http_failure(
                         resp.status_code,
                         body,
@@ -163,6 +219,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
             ) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
+                    dump_failed_request(payload, body)
                     raise classify_http_failure(
                         resp.status_code,
                         body,

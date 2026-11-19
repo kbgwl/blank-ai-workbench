@@ -100,3 +100,6 @@ deliverables/
 
 # 运行时上下文产物（watch.json、transcript 快照），每次运行都会生成
 services/api/.blank/
+
+# 浏览器自检的截图与临时产物：属于运行时证据，不进仓库
+.blank/
