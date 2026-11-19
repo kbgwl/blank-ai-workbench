@@ -407,6 +407,18 @@ async def _workflow_stop(context: ToolContext, workflow_id: str) -> ToolOutcome:
     )
 
 
+def _after_offset(arguments: dict) -> int | None:
+    """增量读游标。给了 after 就只取那个 offset 之后的新内容，不给就整段尾部。"""
+    raw = arguments.get("after")
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return max(0, value)
+
+
 async def _shell_output(context: ToolContext, shell_id: str, arguments: dict) -> ToolOutcome:
     from blank_api.services import shell_tasks
     from blank_api.services.tools.shell import MAX_OUTPUT_CHARS, mask_output
@@ -420,6 +432,7 @@ async def _shell_output(context: ToolContext, shell_id: str, arguments: dict) ->
         shell_id,
         block=bool(arguments.get("block", True)),
         timeout=timeout,
+        after=_after_offset(arguments),
     )
     status = str(snapshot.get("status") or "")
     if status == "not_found":
@@ -429,7 +442,19 @@ async def _shell_output(context: ToolContext, shell_id: str, arguments: dict) ->
         body = body[:MAX_OUTPUT_CHARS] + "\n…（输出已截断）"
     data = {
         key: snapshot[key]
-        for key in ("shell_id", "command", "description", "status", "exit_code", "timed_out", "elapsed_seconds", "truncated")
+        for key in (
+            "shell_id",
+            "command",
+            "description",
+            "status",
+            "exit_code",
+            "timed_out",
+            "elapsed_seconds",
+            "truncated",
+            "offset",
+            "omitted_bytes",
+            "dropped",
+        )
         if key in snapshot
     }
     message = str(snapshot.get("message") or "")
@@ -472,6 +497,7 @@ async def _monitor_output(context: ToolContext, monitor_id: str, arguments: dict
         monitor_id,
         block=bool(arguments.get("block", True)),
         timeout=timeout,
+        after=_after_offset(arguments),
     )
     status = str(snapshot.get("status") or "")
     if status == "not_found":
@@ -491,6 +517,9 @@ async def _monitor_output(context: ToolContext, monitor_id: str, arguments: dict
             "timed_out",
             "elapsed_seconds",
             "truncated",
+            "offset",
+            "omitted_bytes",
+            "dropped",
         )
         if key in snapshot
     }
@@ -854,6 +883,14 @@ def delegate_tools() -> list[ToolDefinition]:
                     "shell_id": {"type": "string", "description": "task_id 的旧名，只适用于后台命令"},
                     "block": {"type": "boolean", "description": "是否等待结束，默认 true"},
                     "timeout": {"type": "number", "description": "最多等几秒，默认 60，上限 600"},
+                    "after": {
+                        "type": "number",
+                        "description": (
+                            "增量读的游标：填上一次返回的 offset，就只拿那之后的新内容"
+                            "（长跑的服务一直刷日志时用它，别每轮重读最后 64KB）。"
+                            "留空则返回日志尾部整段。返回里 dropped=true 表示中间有一段已被丢弃。"
+                        ),
+                    },
                 },
             },
             risk_level="low",

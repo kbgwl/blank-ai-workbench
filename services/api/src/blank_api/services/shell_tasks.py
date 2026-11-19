@@ -31,9 +31,21 @@ from typing import Any, Awaitable, Callable
 from blank_api.services.log_safety import redact
 
 # 日志上限：后台跑的可能是一直不退出的服务，不能让它把磁盘写满。
-MAX_LOG_BYTES = 2_000_000
+#
+# 分两段，因为「只留开头 2MB」会把最有用的部分丢掉：服务类命令跑十分钟才报错，
+# 前 2MB 全是启动日志，真正的报错一个字都没落盘（旧实现超限后直接停止写入）。
+#   头段：主文件，写满 HEAD_LOG_BYTES 就封笔，留启动上下文；
+#   尾段：`*.tail.log`，一直追加最新输出，到 TAIL_LOG_BYTES 时压缩成最后 TAIL_KEEP_BYTES。
+# 磁盘占用上界 = HEAD_LOG_BYTES + TAIL_LOG_BYTES，和原来同一数量级。
+HEAD_LOG_BYTES = 1_000_000
+TAIL_LOG_BYTES = 1_000_000
+TAIL_KEEP_BYTES = 500_000
+# 总预算 = 头段 + 尾段。对外仍叫这个名字：磁盘占用上界看它，不按单个文件算。
+MAX_LOG_BYTES = HEAD_LOG_BYTES + TAIL_LOG_BYTES
 # 读回时只取尾部：结论/报错通常在最后，前面的进度不适合整段塞进上下文。
 TAIL_BYTES = 64_000
+# 溢出后读回时，头部只留这么多（够看出「它在干什么」，不必给整段启动日志）。
+HEAD_KEEP_BYTES = 4_000
 # 通知里带的输出尾巴，够判断"成了没有"，完整文本仍走 task_output。
 NOTIFICATION_TAIL_CHARS = 1_200
 # 与 Claude 的 Bash 上限对齐（600s）；未显式给 timeout 时后台命令用这个，而不是 30s。
@@ -50,6 +62,8 @@ MONITOR_MAX_PENDING_EVENTS = 200
 MONITOR_EVENTS_PER_DRAIN = 25
 
 _TRUNCATED_MARK = "\n[blank] 输出超过上限，后续内容未写入\n".encode("utf-8")
+# 溢出后的读回提示：说明「中间少了一段」，而不是让人以为日志就这么短。
+_OMIT_MARK = "\n[blank] 中间省略了 {n} 字节（只保留最早一段和最新一段）\n"
 
 _STDOUT = "stdout"
 _STDERR = "stderr"
@@ -65,6 +79,8 @@ class ShellTask:
     description: str
     timeout_seconds: float
     log_path: Path
+    # 尾段文件。头段（log_path）写满之后，后续输出落在这里。
+    tail_path: Path | None = None
     status: str = "running"
     exit_code: int | None = None
     timed_out: bool = False
@@ -72,7 +88,13 @@ class ShellTask:
     notified: bool = False
     started_at: float = 0.0
     finished_at: float | None = None
+    # 已落盘字节（头段 + 尾段）。沙箱那条"只在结束时给整段输出"的分支靠它判断
+    # 有没有流过式输出，所以语义必须是「真的写进文件了」，不是「收到了多少」。
     written: int = 0
+    # 收到的总字节（含溢出后被丢掉的部分）。增量读取的 offset 用它，单调递增。
+    produced: int = 0
+    # 被压缩掉的字节数（尾段滚动时丢的中段）。读回时如实告诉调用方「少了一段」。
+    omitted: int = 0
     truncated: bool = False
     data: dict = field(default_factory=dict)
     task: asyncio.Task | None = None
@@ -90,48 +112,128 @@ class ShellTask:
 
 
 class _Sink:
-    """把子进程输出边到边写进日志文件；tag 切换时加一行分隔。"""
+    """把子进程输出边到边写进日志文件；tag 切换时加一行分隔。
+
+    写盘分两段（原因见 ``MAX_LOG_BYTES`` 那段注释）：
+    先填头段主文件，写满 ``HEAD_LOG_BYTES`` 后转写尾段 ``*.tail.log``；
+    尾段到 ``TAIL_LOG_BYTES`` 时压成最后 ``TAIL_KEEP_BYTES``，
+    所以「最新输出」永远在，磁盘占用仍有上界。
+    """
 
     def __init__(self, record: ShellTask) -> None:
         self.record = record
         self._last_tag = ""
-        self._handle = None
+        self._head = None
+        self._tail = None
+        self.head_bytes = 0
+        self.tail_bytes = 0
         try:
             record.log_path.parent.mkdir(parents=True, exist_ok=True)
-            self._handle = open(record.log_path, "ab", buffering=0)
+            if record.tail_path is None:
+                record.tail_path = _tail_path(record.log_path)
+            self._head = open(record.log_path, "ab", buffering=0)
+            # 重建 sink 时（stop 里补「已取消」）要接着头段的真实长度算，
+            # 否则会以为头段还是空的，把尾巴继续塞进已经封笔的主文件。
+            self.head_bytes = min(_file_size(record.log_path), HEAD_LOG_BYTES)
+            self.tail_bytes = _file_size(record.tail_path)
         except OSError as exc:
             record.error = f"后台命令的日志文件打不开：{exc}"
-            self._handle = None
+            self._head = None
 
     def write(self, tag: str, chunk: bytes) -> None:
         record = self.record
-        if self._handle is None or record.truncated or not chunk:
+        if self._head is None or not chunk:
             return
         header = b""
         if self._last_tag and tag != self._last_tag:
             header = f"\n[{tag}]\n".encode("utf-8")
         self._last_tag = tag
-        room = MAX_LOG_BYTES - record.written
-        data = header + chunk
-        if len(data) >= room:
-            data = data[: max(0, room)]
-            record.truncated = True
-        try:
-            self._handle.write(data)
-            record.written += len(data)
-        except OSError as exc:
-            record.error = f"日志写入失败：{exc}"
-            self._handle = None
+        self._emit(header + chunk)
+
+    def _emit(self, data: bytes) -> None:
+        """先填头段，满了转尾段。切点对齐到字符边界，文件不会以半个汉字结尾。"""
+        if not data:
             return
-        if record.truncated:
-            self._append(_TRUNCATED_MARK)
+        # produced 跟着「真正落进日志的字节」走（含分段标记行），
+        # 这样它才能当增量读取的 offset 用；两个口径混着算，offset 会漂。
+        self.record.produced += len(data)
+        if self.head_bytes < HEAD_LOG_BYTES:
+            room = HEAD_LOG_BYTES - self.head_bytes
+            if len(data) <= room:
+                self._write_head(data)
+                return
+            head_part = _cut_utf8(data, room)
+            self._write_head(head_part)
+            data = data[len(head_part) :]
+        self._write_tail(data)
+
+    def _write_head(self, data: bytes) -> None:
+        if not data or self._head is None:
+            return
+        try:
+            self._head.write(data)
+            self.head_bytes += len(data)
+            self.record.written += len(data)
+        except OSError as exc:
+            self.record.error = f"日志写入失败：{exc}"
+            self._head = None
+
+    def _write_tail(self, data: bytes) -> None:
+        if not data or self.record.tail_path is None:
+            return
+        if self._tail is None:
+            try:
+                self._tail = open(self.record.tail_path, "ab", buffering=0)
+            except OSError as exc:
+                self.record.error = f"日志写入失败：{exc}"
+                self._head = None
+                return
+        try:
+            self._tail.write(data)
+            self.tail_bytes += len(data)
+            self.record.written += len(data)
+        except OSError as exc:
+            self.record.error = f"日志写入失败：{exc}"
+            self._tail = None
+            self._head = None
+            return
+        if self.tail_bytes >= TAIL_LOG_BYTES:
+            self._compact_tail()
+
+    def _compact_tail(self) -> None:
+        """尾段到上限：只留最后一段。丢掉的字节数记在 record 上，读回时如实写出来。"""
+        path = self.record.tail_path
+        if path is None:
+            return
+        try:
+            if self._tail is not None:
+                self._tail.close()
+                self._tail = None
+            size = path.stat().st_size
+            keep = min(TAIL_KEEP_BYTES, size)
+            with open(path, "rb") as handle:
+                handle.seek(size - keep)
+                raw = handle.read()
+            raw = _drop_partial_prefix(raw)
+            omitted = size - len(raw)
+            if omitted > 0:
+                self.record.omitted += omitted
+                self.record.truncated = True
+                raw = _TRUNCATED_MARK + raw
+            with open(path, "wb") as handle:
+                handle.write(raw)
+            self.tail_bytes = len(raw)
+            self.record.written = self.head_bytes + self.tail_bytes
+            self._tail = open(path, "ab", buffering=0)
+        except OSError as exc:
+            self.record.error = f"日志压缩失败：{exc}"
+            self._tail = None
 
     def _append(self, data: bytes) -> None:
-        if self._handle is None:
+        if self._head is None or not data:
             return
         try:
-            self._handle.write(data)
-            self.record.written += len(data)
+            self._emit(data)
         except OSError:
             pass
 
@@ -140,12 +242,14 @@ class _Sink:
             self._append(text.encode("utf-8"))
 
     def close(self) -> None:
-        if self._handle is not None:
-            try:
-                self._handle.close()
-            except OSError:
-                pass
-            self._handle = None
+        for handle_name in ("_head", "_tail"):
+            handle = getattr(self, handle_name)
+            if handle is not None:
+                try:
+                    handle.close()
+                except OSError:
+                    pass
+                setattr(self, handle_name, None)
 
 
 class _LineSplitter:
@@ -208,6 +312,40 @@ def new_monitor_id() -> str:
 def _task_dir(task_id: str) -> Path:
     safe = re.sub(r"[^0-9A-Za-z_.-]+", "_", str(task_id or ""))[:60] or "task"
     return Path(tempfile.gettempdir()) / "blank-shell" / safe
+
+
+def _tail_path(log_path: Path) -> Path:
+    """尾段文件名：``shell-xxx.log`` → ``shell-xxx.tail.log``。"""
+    return log_path.with_name(log_path.stem + ".tail.log")
+
+
+def _cut_utf8(data: bytes, limit: int) -> bytes:
+    """取前 ``limit`` 字节，但不切在一个多字节字符中间。
+
+    切坏了会怎样：文件末尾留下半个汉字，读回时解出替换符，看起来像日志损坏。
+    回退范围只往回收 3 字节；若 decode 在更早的位置就失败，说明原始字节本身
+    不是 UTF-8（例如 gbk 输出），那就不该继续往回找，直接按原切点交出去。
+    """
+    if limit >= len(data):
+        return data
+    end = max(0, limit)
+    while end > 0:
+        try:
+            data[:end].decode("utf-8")
+            return data[:end]
+        except UnicodeDecodeError as exc:
+            if exc.start < end - 4:
+                return data[:end]
+            end = exc.start
+    return b""
+
+
+def _drop_partial_prefix(raw: bytes) -> bytes:
+    """去掉开头不完整的续字节（0b10xxxxxx），最多三个。"""
+    index = 0
+    while index < len(raw) and index < 4 and (raw[index] & 0b1100_0000) == 0b1000_0000:
+        index += 1
+    return raw[index:]
 
 
 def start(
@@ -350,17 +488,93 @@ def _decode(raw: bytes) -> str:
     return decode(raw)
 
 
-def tail(record: ShellTask, limit: int = TAIL_BYTES) -> str:
+def _file_size(path: Path | None) -> int:
+    if path is None:
+        return 0
     try:
-        size = record.log_path.stat().st_size
-        with open(record.log_path, "rb") as handle:
-            if size > limit:
-                handle.seek(size - limit)
-                raw = handle.read()
-                return "…（只显示最后 %d 字节）\n%s" % (limit, _decode(raw))
-            return _decode(handle.read())
+        return path.stat().st_size
     except OSError:
-        return ""
+        return 0
+
+
+def _read_span(path: Path | None, limit: int, *, from_start: bool = False) -> bytes:
+    """读文件的一段：``from_start`` 取开头，否则取结尾。"""
+    if path is None or limit <= 0:
+        return b""
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as handle:
+            if size <= limit:
+                return handle.read()
+            if from_start:
+                return handle.read(limit)
+            handle.seek(size - limit)
+            return handle.read()
+    except OSError:
+        return b""
+
+
+def _ensure_tail(record: ShellTask) -> int:
+    """尾段存在就返回它的字节数（0 表示还没溢出过头段）。"""
+    if record.tail_path is None:
+        record.tail_path = _tail_path(record.log_path)
+    return _file_size(record.tail_path)
+
+
+def read_log(record: ShellTask, limit: int = TAIL_BYTES, *, with_head: bool = True) -> str:
+    """读回日志正文。
+
+    没溢出 → 和以前一样只取尾部 ``limit`` 字节（结论与报错在最后）。
+    溢出过头段 → 头一小段（它在干什么）+ 一行省略提示 + 尾段最后一段（最新输出）。
+    只给尾部看不到启动参数，只给头部看不到报错，两段都给才读得出因果。
+
+    ``with_head=False`` 用于「结束通知」这种只想看最后一句的场景：那里带不带启动日志
+    都无所谓，但它会实打实占掉通知的字符额度，把真正的报错挤出去。
+    """
+    tail_size = _ensure_tail(record)
+    if tail_size <= 0:
+        size = _file_size(record.log_path)
+        raw = _read_span(record.log_path, limit)
+        if size > limit:
+            # 从中间截的起点可能是半个汉字，先丢掉开头那几个续字节。
+            return "…（只显示最后 %d 字节）\n%s" % (limit, _decode(_drop_partial_prefix(raw)))
+        return _decode(raw)
+    if not with_head:
+        return _decode(_drop_partial_prefix(_read_span(record.tail_path, limit)))
+    head_raw = _read_span(record.log_path, HEAD_KEEP_BYTES, from_start=True)
+    room = max(1_000, limit - len(head_raw))
+    tail_raw = _read_span(record.tail_path, room)
+    omitted = record.omitted + max(0, _file_size(record.log_path) - len(head_raw))
+    parts = []
+    if head_raw:
+        parts.append(_decode(head_raw))
+    parts.append(_OMIT_MARK.format(n=omitted))
+    if tail_raw:
+        parts.append(_decode(tail_raw))
+    return "".join(parts)
+
+
+def read_since(record: ShellTask, after: int) -> tuple[str, int, bool]:
+    """增量读：返回 ``(新增正文, 新 offset, 是否丢了中间一段)``。
+
+    ``after`` 用的是上一轮拿到的 offset（== ``record.produced``），
+    不是文件偏移——日志被压缩过之后文件偏移会往回跳，拿它当游标会出现重复内容。
+    """
+    offset = record.produced
+    start = max(0, int(after))
+    if start >= offset:
+        return "", offset, False
+    window = offset - start
+    tail_size = _ensure_tail(record)
+    # 能往回追溯多少：溢出后只有尾段可回溯（压缩过的尾段更少），否则是头段全文。
+    can_go_back = tail_size if tail_size > 0 else _file_size(record.log_path)
+    dropped = window > can_go_back
+    read_bytes = min(window, can_go_back) if dropped else window
+    source = record.tail_path if tail_size > 0 else record.log_path
+    raw = _read_span(source, read_bytes)
+    if dropped:
+        raw = _drop_partial_prefix(raw)
+    return _decode(raw), offset, dropped
 
 
 def find(task_id: str, shell_id: str) -> ShellTask | None:
@@ -379,6 +593,9 @@ def snapshot(record: ShellTask) -> dict:
         "timed_out": record.timed_out,
         "elapsed_seconds": record.elapsed,
         "truncated": record.truncated,
+        # 增量读取的游标：下一次拿它当 after 传回来，就只拿到新增的部分。
+        "offset": record.produced,
+        "omitted_bytes": record.omitted,
         "error": record.error,
         **record.data,
     }
@@ -390,11 +607,15 @@ async def output(
     *,
     block: bool = True,
     timeout: float = 60.0,
+    after: int | None = None,
 ) -> dict:
     """取后台命令的现状与已产生的输出；``block`` 时最多等 ``timeout`` 秒。
 
     等待用 ``asyncio.wait`` 而不是 ``wait_for``：后者超时会取消被等的 Task，
     把「等一会儿没等到」变成「把命令杀了」——那是 task_stop 的语义。
+
+    ``after`` 给了就按增量读：只返回那个 offset 之后的新内容，并带回新的 offset。
+    长跑的服务一直刷日志时，每轮都重发最后 64KB 既费上下文又看不出「这轮多了什么」。
     """
     record = find(task_id, shell_id)
     if record is None:
@@ -407,10 +628,16 @@ async def output(
     if block and record.task is not None and not record.task.done():
         wait_seconds = max(0.0, min(600.0, float(60 if timeout is None else timeout)))
         await asyncio.wait({record.task}, timeout=wait_seconds)
-    body = tail(record)
+    if after is None:
+        body = read_log(record)
+        extra: dict = {}
+    else:
+        body, next_offset, dropped = read_since(record, after)
+        extra = {"offset": next_offset, "dropped": dropped}
     return {
         "ok": record.status == "completed",
         **snapshot(record),
+        **extra,
         "text": body,
         "message": _status_message(record),
     }
@@ -452,13 +679,15 @@ async def stop(task_id: str, shell_id: str) -> dict:
             pass
     if record.status == "running":
         # 协程还没跑起来就被取消：不会走到 _execute 的取消分支，这里补状态与日志。
+        # 走 sink 而不是直接 open 主文件：头段可能已经写满，直接 open 会把标记
+        # 追加到已封笔的头段末尾，读回时它出现在「最早一段」后面，位置就错了。
         record.status = "cancelled"
         record.finished_at = time.perf_counter()
+        marker = _Sink(record)
         try:
-            with open(record.log_path, "ab") as handle:
-                handle.write("\n[blank] 后台命令已取消\n".encode("utf-8"))
-        except OSError:
-            pass
+            marker.text("\n[blank] 后台命令已取消\n")
+        finally:
+            marker.close()
     return {**snapshot(record), "message": _status_message(record)}
 
 
@@ -485,7 +714,7 @@ def drain_notifications(task_id: str) -> list[dict]:
                 "exit_code": record.exit_code,
                 "timed_out": record.timed_out,
                 "elapsed_seconds": record.elapsed,
-                "tail": tail(record, limit=NOTIFICATION_TAIL_CHARS * 4)[-NOTIFICATION_TAIL_CHARS:],
+                "tail": read_log(record, limit=NOTIFICATION_TAIL_CHARS * 4, with_head=False)[-NOTIFICATION_TAIL_CHARS:],
             }
         )
     return notes
@@ -567,10 +796,13 @@ async def aclose(task_id: str = "", *, reason: str = "task_finished") -> list[st
         except (asyncio.CancelledError, Exception):
             pass
     for record in bucket.values():
-        try:
-            record.log_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        for path in (record.log_path, record.tail_path):
+            if path is None:
+                continue
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
         try:
             os.rmdir(record.log_path.parent)
         except OSError:
