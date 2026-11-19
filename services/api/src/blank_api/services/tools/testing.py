@@ -22,6 +22,69 @@ from blank_api.services.tools.shell import (
 
 SUMMARY = re.compile(r"(\d+)\s+(passed|failed|errors?|skipped|xfailed|xpassed|error)")
 PYTEST_MARKERS = ("pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py")
+
+# ── 跑不完的命令要记住 ─────────────────────────────────────────────────────
+#
+# 真机一天撞了三次同一个形状：模型改了 deliverables/ 下的一个静态页面，然后调
+# `run_tests {}`；自动识别到的是**仓库根的 `npm test`**——全量后端单测，约 25 分钟，
+# 单次上限 120–180 秒，必然超时。于是它白等 3 分钟、烧掉一轮上下文，再被判失败。
+#
+# 不去猜"这次该跑哪个"（`src/` 改动 + 根 `tests/` 的结构会让任何猜测都误伤），
+# 只记一个确定的事实：**这条命令在这台机器上跑不完**。记住之后，下次无参调用直接
+# 跳过并说明；要跑就用 command 显式指定——把决定权留给模型，但别让它每次都重新踩。
+HISTORY_FILE = "test-command-history.json"
+HISTORY_LIMIT = 20
+
+
+def _history_path():
+    from pathlib import Path
+
+    try:
+        from blank_api.services.settings import SettingsStore
+
+        return SettingsStore().path.parent / HISTORY_FILE
+    except Exception:  # noqa: BLE001 - 拿不到设置目录就退到 cwd/data，别让记忆功能挡住测试
+        return Path("data") / HISTORY_FILE
+
+
+def load_command_history() -> dict:
+    """读"跑不完的命令"记录。文件坏了就当没记过——一份经验不该让测试起不来。"""
+    path = _history_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def remember_timeout(command: str, seconds: float) -> None:
+    """记下"这条命令跑了多久没跑完"。只记超时，不记失败——失败是有结论的。"""
+    text = str(command or "").strip()
+    if not text:
+        return
+    import datetime
+
+    history = load_command_history()
+    history[text] = {
+        "timeout_seconds": round(float(seconds), 1),
+        "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    # 只留最近若干条：这是经验，不是账本。
+    if len(history) > HISTORY_LIMIT:
+        ordered = sorted(history.items(), key=lambda kv: str((kv[1] or {}).get("at") or ""))
+        history = dict(ordered[-HISTORY_LIMIT:])
+    path = _history_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(history, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass  # 记不住不影响这次执行
+
+
+def skippable_command(command: str) -> dict | None:
+    """这条命令是不是"上次就没跑完"的那条。"""
+    entry = load_command_history().get(str(command or "").strip())
+    return entry if isinstance(entry, dict) else None
 CONTAINER_PYTHON = "python3"
 GO_MARKERS = ("go.mod", "go.sum")
 
@@ -238,6 +301,30 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
         if runs_in_docker(tier) and argv and argv[0] in (sys.executable, project_python(context.root)):
             # 宿主虚拟环境不在容器里，测试要改用镜像自带的解释器
             argv = [CONTAINER_PYTHON, *argv[1:]]
+        planned = " ".join(argv)
+        remembered = skippable_command(planned)
+        if remembered:
+            seconds = remembered.get("timeout_seconds")
+            when = str(remembered.get("at") or "")
+            return ToolOutcome(
+                ok=False,
+                status="skipped",
+                # 跳过不是失败：我们**没有拿到任何结论**，也不该再白等一次。
+                # 今天三次超时都是这条：改的是 deliverables/ 下的静态页面，
+                # 识别到的却是仓库根的全量后端单测（约 25 分钟 vs 单次 180 秒上限）。
+                message=(
+                    f"这条测试命令在这台机器上次就没跑完（{seconds}s 上限，记录于 {when}）：{planned}。"
+                    "已跳过，不会再白等一次。要跑就二选一："
+                    "① 用 command 显式指定一条能在单次调用内跑完的范围（具体测试文件/目录）；"
+                    "② 用 run_shell 起后台跑、再用 task_output 取结果。"
+                    "如果你改的是页面或脚本，browser_check 往往比全量测试更贴题。"
+                ),
+                data={
+                    "command": planned,
+                    "skipped_reason": "此前超时未跑完",
+                    "remembered": remembered,
+                },
+            )
         absent = missing_test_runner(argv, tier)
         if absent:
             # 识别出了测试命令、但本机根本没装这个运行器（典型：Go 项目没有 go）。
@@ -298,6 +385,8 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
                   "enforcement": result["enforcement"]},
         )
     if result["timed_out"]:
+        # 记住这条命令跑不完：下次无参调用直接跳过，别让每个新任务都重新踩一遍。
+        remember_timeout(command_text, timeout)
         return ToolOutcome(
             ok=False,
             status="timeout",
