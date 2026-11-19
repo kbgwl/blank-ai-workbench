@@ -152,5 +152,42 @@ DSH 把它做成显式配置，这个设计比"偷偷选一个"好——值得�
 | `docs/opencode-reference.md` | 336 | 7 类逐条对照表（loop / 上下文 / 工具 / 权限 / 子代理 / 会话 / provider），39 个源码文件引用，agent loop 文字时序图，明确列出"不该抄的部分" |
 | `docs/deepseek-harness-reference.md` | 505 | DSH 架构、四种运行模式、turn/step 阶段、三级上下文治理的公开默认值、**明确标出"抄不到的部分"**（无预算闸、无 SWE-bench runner、部分数值未公开） |
 | `docs/ui-reference.md` | 427 | 18 张实拍截图（含来源 URL）、三形态信息架构、双密度具体数值、可直接照搬的 5 条 |
+| `docs/plan-and-review-reference.md` | 819 | 计划/目标/审查三条线：DSH 的 `change-scope`（审查前先产出确定性范围）、`exit_plan_mode` 三结局、opencode 的 goal judge（"模型自称完成不是证据"）、**把 `done_when` 编译成可执行检查的三层方案** |
+| `docs/code-view-reference.md` | 526 | shiki 4.6 选型、流式增量高亮、diff 三种形态对比、**产物预览的四种实现路径与安全边界** |
 
-三份都区分了【事实】/【推测】，查不到的明确写"未找到"，没有编。
+五份都区分了【事实】/【推测】，查不到的明确写"未找到"，没有编。
+
+---
+
+## 6. 追加两条（第二批调研）
+
+**6.1 审查前先产出确定性范围**（DSH `change-scope`）
+
+`scripts/change-scope.ts` 只输出 `baseSha / headSha / mergeBaseSha` 和
+`committed / staged / unstaged / untracked` 四组路径，**不做任何语义判断**；语义审查交给
+`dsh-code-review` 技能。我们的 `review_result_node` 是"把消息流丢给同一个模型再审一遍"——
+没有固定输入，也没有"这次到底改了哪些文件"的硬事实。抄这一层，审查才有稳定的输入边界。
+
+**6.2 `done_when` 现在是口号，不是判据**
+
+`set_goal` 收了 `done_when: string[]`，但 `verifier` 只用它判"有没有交付文本"（`verifier.py:293-310`），
+**没有逐条核对**。这是我们最该补的一处：产品已经在卖"拦零改动伪成功"，而完成判据仍是自然语言。
+
+三层方案（详报 §4.3）：
+
+```
+第 1 层 可执行 checks（主判据）
+  done_when: [{ text, check: { type, ... } }]
+  四种类型：command（从 tool_results 核对本条命令的退出码）、path_exists、
+           file_contains（需给 verifier 传 root）、git_diff
+第 2 层 可选语义 judge（借 opencode judge.txt：模型自称完成不算证据）
+  只能把 done 降级为 continue，不能把 blocking 改成 passed
+第 3 层 自然语言 text 原样展示，不参与判定
+```
+
+两条铁律：`unknown ≠ failed`（没跑成是 INCOMPLETE，与"验证没跑成≠验证失败"一致）；
+**`check` 字段模型不能改**（改 `text` 可以），否则它可以先把判据改松再宣布完成。
+
+**为什么没在这轮做**：`command` 类要从工具结果核对（verifier 是纯函数，不能自己跑命令），
+`path_exists` / `file_contains` 要读磁盘、得先给 `verify_facts` 传 root，会扩散到调用点与
+既有判据。这改的是"什么算完成"的定义，值得单独一轮，不该在收尾时赶。

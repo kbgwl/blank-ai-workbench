@@ -28,7 +28,7 @@ opencode 用独立 judge 补语义，DSH 干脆让执行模型自己 `update_goa
 
 ---
 
-## 1. 两张仓库的基线
+## 1. 两个仓库的基线
 
 ### 1.1 opencode 的目录位置
 
@@ -112,7 +112,7 @@ DSH 是 Cordis 插件内核，“everything is a plugin”。本次相关的包�
 #### A5. 计划与工具集：规划期是否禁用写工具
 
 - 只 deny `edit` 动作；`edit` 在 `~/.opencode/plan/*` 下 allow；`question` allow `[OC-P1]`。
-- **shell 没有被 deny**。也就是说，计划模式不是硬只读边界：模型仍可运行会写文件的 shell 命令，只是提示词要求“不要修改其他文件、不要叫子代理改”。
+- **shell 没有被 deny**（默认 agent 规则是 `*:* allow`，见 `packages/schema/src/agent.ts:46`）。也就是说，计划模式不是硬只读边界：模型仍可运行会写文件的 shell 命令，只是提示词要求“不要修改其他文件、不要叫子代理改”。
 - 结论（判断）：opencode 的 plan 是“agent + 权限 + 提醒”的软约束，不是安全沙箱。
 
 ### 2.2 DSH：计划 = 一个 log-only 模式 + 一次 markdown 提交
@@ -121,6 +121,7 @@ DSH 是 Cordis 插件内核，“everything is a plugin”。本次相关的包�
 
 - **模式状态**：`plan/mode` 是 log-only、whole-value-replace 的 session event，payload 只有 `{ active: boolean }`；最后一个事件胜出，没有事件则 fold 成 inactive `[DSH-P1]`。
 - **计划正文不在状态里**：模型在 `exit_plan_mode` 的 `plan` 参数里交一整段 markdown，要求以 `#` 标题开头 `[DSH-P3]`。
+- `exit_plan_mode` 是渐进披露的：从第一次进入 plan mode 起加入工具声明，并在整个 Session 保持 admitted；之后切换只改 guidance，不反复改工具列表 `[DSH-P3]`。
 - **投影**：`plan` unit 从日志 fold 出 `{active, pending}`；`pending` 只表示“用户选了一个还未 append 的状态” `[DSH-P2]`。
 - **todo 是另一层**：`todo_write` 每次提交完整列表，`TodoItem` 只有 `content` + `status`（`pending / in_progress / completed`），刻意没有 id、priority、activeForm `[DSH-P4]`。
 
@@ -292,7 +293,8 @@ DSH 是 Cordis 插件内核，“everything is a plugin”。本次相关的包�
   - complete / pause / block → 停止续跑；
   - turn 以 max tokens 结束、durability write 失败、agent 被取消、插件卸载 → driver 自己停；
   - 取消不会自动重启；goal 的 round 被取消 → 下一个 idle 点 pause；无关取消 → 只 disarm；
-  - 进程优雅关闭/插件 reload → abort round，只 disarm，goal 保持 active `[DSH-G7]`。
+  - 进程优雅关闭/插件 reload → abort round，只 disarm，goal 保持 active `[DSH-G7]`；
+  - 异常失败不自动重试：transient provider/persistence failure 需要之后人工 `resume`，driver 不会隐式重试 `[DSH-G7]`。
 - 明确没有资源预算：
   > `Round-count budget only — maxGoalRounds does not meter tokens, currency, wall time, or provider quotas.`
   > `[DSH-G1]`
@@ -746,6 +748,7 @@ verifier 汇总
 - `/review` 提示词：https://github.com/anomalyco/opencode/blob/dev/packages/core/src/plugin/command/review.txt
 - 目标 UI：https://github.com/anomalyco/opencode/blob/dev/packages/tui/src/feature-plugins/prompt/goal.tsx
 - 目标 UI 文案：https://github.com/anomalyco/opencode/blob/dev/packages/gui-plugins/src/goal/i18n/en.ts
+- agent 默认权限：https://github.com/anomalyco/opencode/blob/dev/packages/schema/src/agent.ts
 
 ### 8.2 DeepSeek Harness（`deepseek-ai/deepseek-harness@2e39e704`）
 
@@ -754,6 +757,8 @@ verifier 汇总
 - 计划子系统：https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/plan.md
 - 目标服务：https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/goal/goal/README.md
 - 目标类型：https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/goal/goal/src/types.ts
+- 目标 fold：https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/goal/goal/src/fold.ts
+- 目标子系统：https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/goal.md
 - 目标工具：https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/goal/tool-goal/README.md
 - 目标续跑：https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/goal/goal-round-driver/README.md
 - 目标续跑提示词：https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/goal/goal-round-driver/src/prompt.ts
