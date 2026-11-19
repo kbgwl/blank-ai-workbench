@@ -237,3 +237,44 @@ def test_the_step_sizes_are_asymmetric_on_purpose():
 
     assert after_hit < 0.6, "一次失败 + 一次成功不该回到原点"
     assert after_hit > after_miss
+
+
+# ── 体检：只报告，不自动修 ─────────────────────────────────────────────────
+def test_lint_flags_two_entries_pointing_opposite_ways():
+    """同一片路径上有人说"要"、有人说"不要"，检索到哪条都可能错。"""
+    from blank_api.services.agent.experience import lint
+
+    yes = Experience(statement="改分页时要同步更新 schema", trigger_paths=["src/api/"], status="active")
+    no = Experience(statement="不要改分页的 schema", trigger_paths=["src/api/"], status="active")
+
+    kinds = {item["kind"] for item in lint([yes, no])}
+
+    assert "contradiction" in kinds
+
+
+def test_lint_flags_a_crowded_area():
+    """检索只能取 1 条，同路径堆了 4 条 active 等于随机挑一条。"""
+    from blank_api.services.agent.experience import lint
+
+    group = [
+        Experience(statement=f"做法 {i}", trigger_paths=["src/api/"], status="active")
+        for i in range(4)
+    ]
+
+    findings = lint(group)
+
+    assert any(item["kind"] == "crowded" for item in findings)
+
+
+def test_lint_reports_but_never_removes():
+    """一条错记忆被自动删掉，用户不会知道；留在库里至少能被看见。
+    （2610.04083：拿掉记忆工具后 agent 会改用文件系统，靠"删"挡不住。）"""
+    from blank_api.services.agent.experience import lint
+
+    entries = [Experience(statement="要不要改 schema", trigger_paths=["src/"], status="active"),
+               Experience(statement="不要改 schema", trigger_paths=["src/"], status="active")]
+
+    before = [item.status for item in entries]
+    lint(entries)
+
+    assert [item.status for item in entries] == before, "lint 不该改动任何条目"

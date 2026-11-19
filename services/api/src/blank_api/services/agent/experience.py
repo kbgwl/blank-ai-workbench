@@ -582,3 +582,95 @@ def _from_dict(data: dict) -> Experience:
         except (TypeError, ValueError):
             clean[key] = 0
     return Experience(**clean)
+
+
+# --------------------------------------------------------------------------- #
+# 体检：只报告，不自动修
+# --------------------------------------------------------------------------- #
+
+# 同一片路径下 active 条目超过这个数，就认为"这片区域的经验太多，可能互相干扰"。
+CROWDED_TRIGGER_LIMIT = 3
+
+# 粗判"肯定 / 否定"的矛盾：中文里最直接的两种说法。
+_NEGATIVE_MARK = re.compile(r"(不要|别|禁止|避免|不能|不可|勿)")
+_POSITIVE_MARK = re.compile(r"(要|应该|需要|必须|记得)")
+
+
+def lint(entries: Iterable[Experience]) -> list[dict]:
+    """体检经验库：过载、矛盾、低质、过期。**只报告，不自动修。**
+
+    为什么不自动删：一条错记忆被自动删掉，用户不会知道；而一条错记忆留在库里，
+    至少还能被 lint 报出来、被人看见。自动修在这件事上比不修更危险
+    （2610.04083：拿掉记忆工具后 agent 会改用文件系统，靠"删"是挡不住的）。
+
+    这一层对标 OpenClaw 的 contradiction clusters + lint——它有，我们没有。
+    但这里**只做能解释的判定**：同路径多条、肯定/否定对、长期没被复验。
+    真正的语义矛盾需要模型判断，那会引入新的不确定性，先不做。
+    """
+    items = [item for item in entries if item.status != "retired"]
+    findings: list[dict] = []
+
+    by_path: dict[str, list[Experience]] = {}
+    for entry in items:
+        for path in entry.trigger_paths:
+            by_path.setdefault(path.rstrip("*").rstrip("/").lower(), []).append(entry)
+
+    for path, group in by_path.items():
+        active = [item for item in group if item.status == "active"]
+        if len(active) > CROWDED_TRIGGER_LIMIT:
+            findings.append(
+                {
+                    "kind": "crowded",
+                    "path": path,
+                    "count": len(active),
+                    "message": f"{path} 下有 {len(active)} 条已生效经验，可能互相干扰；"
+                    "检索只能取 1 条，多了等于随机挑一条",
+                    "evidence": [item.statement[:80] for item in active[:4]],
+                }
+            )
+        # 肯定 / 否定对：同一片路径上有人说"要"、有人说"不要"
+        yes = [item for item in group if _POSITIVE_MARK.search(item.statement)]
+        no = [item for item in group if _NEGATIVE_MARK.search(item.statement)]
+        for a in yes[:3]:
+            for b in no[:3]:
+                if a.fingerprint == b.fingerprint:
+                    continue
+                findings.append(
+                    {
+                        "kind": "contradiction",
+                        "path": path,
+                        "message": "这两条说法方向相反，可能互相打架；需要人看一眼留哪条",
+                        "evidence": [a.statement[:80], b.statement[:80]],
+                    }
+                )
+
+    for entry in items:
+        if entry.hits == 0 and float(entry.confidence) < MIN_INJECT_CONFIDENCE:
+            findings.append(
+                {
+                    "kind": "low_value",
+                    "message": "从没被用过、置信度又低，几乎一定是噪音",
+                    "evidence": [entry.statement[:80]],
+                }
+            )
+        if entry.status == "candidate" and int(entry.hits) >= 2:
+            # 用成功过却还停在 candidate：说明 feedback 回写没接上，或者晋级条件没跑到。
+            findings.append(
+                {
+                    "kind": "stuck",
+                    "message": "已经用过 2 次以上却没晋级，检查回写链路",
+                    "evidence": [entry.statement[:80]],
+                }
+            )
+    return findings
+
+
+def render_lint(findings: list[dict]) -> str:
+    if not findings:
+        return "经验库体检通过：没有过载、矛盾、低质或卡住的条目。"
+    lines = [f"经验库体检发现 {len(findings)} 处问题："]
+    for item in findings:
+        lines.append(f"- [{item['kind']}] {item['message']}")
+        for evidence in item.get("evidence") or []:
+            lines.append(f"    · {evidence}")
+    return "\n".join(lines)
