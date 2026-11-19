@@ -5,8 +5,12 @@
 * **Edit**：精确字符串替换。``old_string`` 必须与文件内容完全一致且唯一，否则失败；
   ``replace_all`` 才允许替换全部；``old_string == new_string`` 直接判无变更。
   失败时把失配位置附近的真实内容带回去，模型下一次能自己改对。
+  精确匹配失败后还有两档"看起来一样"的容错：弯引号 ↔ 直引号、``\\uXXXX`` 转义
+  字面量。命中的是**文件里的原文片段**，并把命中方式回传——不放宽到空白，
+  也不假装成功：内容真的不同时仍然失败。
 * **Write**：整文件写入。覆盖已有文件前必须先读过；读过之后文件被改过要先重读。
-  新建文件不需要先读。
+  新建文件不需要先读。写回时保留原文件的换行风格与 BOM：模型给的内容几乎总是
+  LF、无 BOM，照原样写下去，改两行会报成整文件重写。
 
 两者都过 ``file_state`` 的读后写闸门，写前自动备份，成功后落 FileChange。
 磁盘侧函数（``_edit_on_disk`` / ``_write_on_disk``）由宿主与 fs-broker 共用——
@@ -15,6 +19,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Mapping
 
@@ -65,6 +70,87 @@ def _occurrence_lines(text: str, needle: str, limit: int = 5) -> list[int]:
         lines.append(text.count("\n", 0, found) + 1)
         start = found + max(len(needle), 1)
     return lines
+
+
+# 弯引号与直引号的对照。模型从 read_file 里抄一段中文注释时，常常把原文的
+# “ ” 写成 " "（或反过来）——两边视觉上几乎一样，字节却不同，精确匹配必失败。
+# 折叠成直引号再找，是 Claude 的 Edit 做同一件事的方式（它的 `z_e`）。
+_QUOTE_FOLD = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"'})
+_UNICODE_ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def _unescape_unicode(text: str) -> str:
+    """把 needle 里的 ``\\u4e2d`` 字面量还原成字符。模型有时把转义当原文发过来。"""
+    return _UNICODE_ESCAPE.sub(lambda match: chr(int(match.group(1), 16)), text)
+
+
+def _match_once(text: str, needle: str) -> tuple[str, str] | None:
+    """在 text 里找 needle 命中的**原文片段**，并说明是靠哪种形态命中的。
+
+    返回原文片段而不只是布尔值：调用方要拿它去做替换，替换的必须是文件里真实
+    存在的那几个字符，而不是模型发来的那一串——否则写回去的是"模型以为的原文"。
+    """
+    if needle in text:
+        return needle, ""
+    # 两边都折叠再找：错的方向可能是文件用了弯引号、模型发直引号，也可能反过来。
+    # 只在 needle 自带引号时折叠是错的——最常见的那一版正是"文件弯、模型直"。
+    folded_text = text.translate(_QUOTE_FOLD)
+    folded = needle.translate(_QUOTE_FOLD)
+    if folded_text != text or folded != needle:
+        # 折叠是逐字符 1:1 的（BMP 单字符 → 单字符），索引可以直接回指原文，
+        # 命中的片段长度与 needle 相同——替换时必须用它，而不是模型发来的那一串。
+        at = folded_text.find(folded)
+        if at >= 0:
+            return text[at : at + len(folded)], "引号形态"
+    if "\\u" in needle:
+        decoded = _unescape_unicode(needle)
+        if decoded != needle and decoded in text:
+            return decoded, "转义还原"
+    return None
+
+
+def _resolve_needle(text: str, needle: str, replacement: str) -> tuple[str, str] | None:
+    """这次替换该动哪一段原文。
+
+    删除时优先连行尾换行一起删：``old_string`` 不带换行、文件里是 ``old_string\\n``，
+    只删前半段就会留下一行空白——用户看到的是"删了一行，却多了一行空行"。
+    Claude 的 Edit 同样先把 needle 补上那个换行再替换。
+
+    但"整行"要真的整行：匹配落在行中间（``keep two`` 里的 ``two``）时不能吞换行，
+    否则 ``keep two\\nthree`` 会被粘成 ``keep three``——那是删一个词，不是删一行。
+    """
+    if replacement == "" and not needle.endswith("\n"):
+        found = _match_once(text, needle)
+        if found is not None:
+            at = text.find(found[0])
+            starts_line = at == 0 or text[at - 1] == "\n"
+            ends_line = text[at + len(found[0]) :].startswith("\n")
+            if starts_line and ends_line:
+                return found[0] + "\n", "整行删除"
+        return found
+    return _match_once(text, needle)
+
+
+def _conform_written(text: str, original: str) -> str:
+    """把要写的内容调成原文件的形态：换行风格与 BOM。
+
+    模型给的 content 几乎总是 LF、无 BOM；Windows 上的原文件常常是 CRLF，
+    有的还带 BOM。照原样写下去，用户只是改了一行，diff 却报整文件重写——
+    这条路上的噪声会直接把"这次改了什么"埋掉（实测两行改动报出 6 行变更）。
+    Claude 的 Write 也是先取原文件的 lineEndings 与 BOM，再写回。
+    """
+    bom = "\ufeff"
+    if original.startswith(bom) and not text.startswith(bom):
+        text = bom + text
+    elif text.startswith(bom) and not original.startswith(bom):
+        text = text[len(bom) :]
+    crlf = original.count("\r\n")
+    lf_only = original.count("\n") - crlf
+    normalized = text.replace("\r\n", "\n")
+    # 以多数为准：混合换行的文件不该被一处 CRLF 全部改成 CRLF。
+    if crlf > lf_only:
+        return normalized.replace("\n", "\r\n")
+    return normalized
 
 
 def _read_existing(root, relative: str) -> bytes:
@@ -138,6 +224,9 @@ def _edit_on_disk(root, task_id: str, arguments: dict, guard: dict | None = None
     crlf = "\r\n" in original
     updated = original.replace("\r\n", "\n")
     total = 0
+    # 哪些段是靠容错匹配上的：要回给模型，否则它永远不知道自己发的原文是错的，
+    # 下一处还会照同一个错法再发一遍。
+    matched: list[str] = []
     multi = len(pairs) > 1
     # 依次应用：后一段看得到前一段的结果，所以「先加一行、再改那行」这种写法成立。
     # 这是 Claude 的原语义，也是模型写多段替换时的默认预期。
@@ -146,24 +235,28 @@ def _edit_on_disk(root, task_id: str, arguments: dict, guard: dict | None = None
         replacement = replacement_raw.replace("\r\n", "\n")
         if not needle:
             return {"empty_old_string": True, "path": relative, "total_edits": len(pairs)}
-        count = updated.count(needle)
-        if count == 0:
+        resolved = _resolve_needle(updated, needle, replacement)
+        if resolved is None:
             return {
                 "not_found": True,
                 "path": relative,
                 "near": _near_missing(updated, needle),
                 **({"index": index, "total_edits": len(pairs)} if multi else {}),
             }
+        hit, how = resolved
+        count = updated.count(hit)
         if count > 1 and not replace_all:
             return {
                 "ambiguous": True,
                 "path": relative,
                 "occurrences": count,
-                "lines": _occurrence_lines(updated, needle),
+                "lines": _occurrence_lines(updated, hit),
                 **({"index": index, "total_edits": len(pairs)} if multi else {}),
             }
-        updated = updated.replace(needle, replacement) if replace_all else updated.replace(needle, replacement, 1)
+        updated = updated.replace(hit, replacement) if replace_all else updated.replace(hit, replacement, 1)
         total += count if replace_all else 1
+        if how:
+            matched.append(how)
     count = total
     if crlf:
         updated = updated.replace("\n", "\r\n")
@@ -182,6 +275,7 @@ def _edit_on_disk(root, task_id: str, arguments: dict, guard: dict | None = None
         "diff": diff,
         "changed_lines": _changed_lines(diff),
         "replacements": count,
+        "matched": matched,
     }
 
 
@@ -213,8 +307,12 @@ def _write_on_disk(root, task_id: str, arguments: dict, guard: dict | None = Non
                 original = raw.decode("utf-8")
             except UnicodeDecodeError:
                 binary = True
-            if not binary and original == text:
-                return {"unchanged": True, "path": relative, "existed": True}
+            if not binary:
+                # 先按原文件形态归一再比：模型发的是 LF 内容、文件是 CRLF 时，
+                # 不归一就会把「没改」判成「全改」，白写一次还留一份备份。
+                text = _conform_written(text, original)
+                if original == text:
+                    return {"unchanged": True, "path": relative, "existed": True}
             backup_rel = write_backup(root, task_id, relative, raw)
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = text.encode("utf-8")
@@ -379,8 +477,11 @@ async def _edit_file(context: ToolContext, arguments: dict) -> ToolOutcome:
     )
     if context.file_state is not None:
         context.file_state.record_write(context.root, relative)
+    matched = [item for item in (result.get("matched") or []) if item]
+    # 容错匹配必须说出来：不说，模型就以为自己的 old_string 是对的，下一处照旧发错的。
+    how = f"；{'、'.join(dict.fromkeys(matched))}匹配" if matched else ""
     return ok(
-        f"已修改文件：{relative}（{result['replacements']} 处替换，{result['changed_lines']} 行变更）",
+        f"已修改文件：{relative}（{result['replacements']} 处替换，{result['changed_lines']} 行变更{how}）",
         path=relative,
         change_type="modified",
         change_id=change_id,
@@ -388,6 +489,7 @@ async def _edit_file(context: ToolContext, arguments: dict) -> ToolOutcome:
         reversible=True,
         replacements=result["replacements"],
         diff=str(result["diff"]),
+        matched=matched,
         **marker,
     )
 
