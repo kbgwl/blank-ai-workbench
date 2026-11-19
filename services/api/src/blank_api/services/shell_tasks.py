@@ -493,20 +493,18 @@ async def _execute(
         stderr = str(result.get("stderr") or "")
         if mask is not None:
             stdout, stderr = mask(stdout), mask(stderr)
-        # 补写进日志的这段也有字节位置：按写盘前的 produced 记起点，
-        # 否则沙箱里跑的监控只有事件、没有 offset，前面那条增量读接口就白给了。
-        stdout_start = record.produced
-        sink.text(stdout)
-        stderr_start = record.produced
-        if stderr:
-            sink.text(("[stderr]\n" if stdout else "") + stderr)
+        # 补写也走 ``write``，不要手工拼分隔行：``write`` 在 tag 切换时插的是
+        # ``\n[tag]\n``（带前导换行），这里手写 ``[stderr]\n`` 少了那个换行，
+        # stdout 不以换行结尾时日志会连成 ``end[stderr]``——那 9 个字符看起来
+        # 就是命令输出的一部分。同一件事只有一处实现，格式才对得上流式路径。
+        # 起点也由写盘侧给出，事件 offset 与 task_output(after=...) 同一个口径。
+        stdout_bytes = stdout.encode("utf-8")
+        stderr_bytes = stderr.encode("utf-8")
+        stdout_start = sink.write(_STDOUT, stdout_bytes) if stdout_bytes else None
+        stderr_start = sink.write(_STDERR, stderr_bytes) if stderr_bytes else None
         if splitter is not None:
-            splitter.feed(_STDOUT, stdout.encode("utf-8"), stdout_start)
-            splitter.feed(
-                _STDERR,
-                stderr.encode("utf-8"),
-                stderr_start + (len("[stderr]\n") if stdout else 0),
-            )
+            splitter.feed(_STDOUT, stdout_bytes, stdout_start)
+            splitter.feed(_STDERR, stderr_bytes, stderr_start)
     if splitter is not None:
         splitter.flush()
     if record.status == "timeout":
