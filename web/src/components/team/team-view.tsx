@@ -589,7 +589,7 @@ export function TeamView() {
                     }}
                     aria-label="搜索聊天与结论"
                     placeholder="搜索所有群与结论"
-                    className="w-full rounded-lg border border-line bg-surface-2 py-1.5 pr-7 pl-7 text-[13px] text-text placeholder:text-faint focus:border-brand/60 focus:outline-none"
+                    className="field w-full rounded-lg py-1.5 pr-7 pl-7 text-[13px]"
                   />
                   {searchQuery && (
                     <button
@@ -627,9 +627,9 @@ export function TeamView() {
                   </div>
                   {groups.length === 0 && boot && (
                     <p className="px-2 py-6 text-center text-[12px] leading-relaxed text-faint">
-                      还没有群。
+                      还没有群
                       <br />
-                      建一个群，把 Bot 拉进来。
+                      点上方「新建群」开始
                     </p>
                   )}
                   <div className="space-y-0.5">
@@ -675,6 +675,13 @@ export function TeamView() {
                 </button>
               </div>
               <div className="space-y-0.5">
+                {(boot?.bots ?? []).length === 0 && boot && (
+                  <p className="px-2 py-6 text-center text-[12px] leading-relaxed text-faint">
+                    还没有 Bot
+                    <br />
+                    点上方「新建 Bot」添加
+                  </p>
+                )}
                 {(boot?.bots ?? []).map((bot) => (
                   <button
                     key={bot.id}
@@ -698,13 +705,18 @@ export function TeamView() {
           )}
         </div>
 
-        <div className="border-t border-line px-3 py-2.5">
-          <p className="text-[11px] leading-relaxed text-faint">
-            主理人固定为<b className="text-muted"> 小白管家 </b>，先接住你的话，再按 @ 安排成员；成员可用
-            <code className="mx-0.5 rounded bg-surface-2 px-1 font-mono text-[11px]">[PASS]</code>
-            保持安静。
-          </p>
-        </div>
+        {/* 规则说明只在真有内容时贴底。空列表时它会被推到页脚，与上方的空态
+            隔着大半屏空白，读起来像漏排的注释；而右侧大空态已经把"怎么开始"
+            说过一遍了，两处说同一件事只会互相稀释。 */}
+        {(tab === "chat" ? groups.length > 0 : (boot?.bots ?? []).length > 0) && (
+          <div className="border-t border-line px-3 py-2.5">
+            <p className="text-[11px] leading-relaxed text-faint">
+              主理人固定为<b className="text-muted"> 小白管家 </b>，先接住你的话，再按 @ 安排成员；成员可用
+              <code className="mx-0.5 rounded bg-surface-2 px-1 font-mono text-[11px]">[PASS]</code>
+              保持安静。
+            </p>
+          </div>
+        )}
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col">
