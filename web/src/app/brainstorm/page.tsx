@@ -15,6 +15,10 @@ const starterIdeas: Idea[] = [
   { name: "平台化能力", summary: "建立通用协议和插件接口，支持更多场景。", upside: "复用性和长期上限最高。", downside: "容易过度设计。", effort: "1–2 周" },
 ];
 
+/** 发散角度。这三个原来只是三个死标签——长得像筛选按钮，点了没反应。 */
+const ANGLES = ["技术方案", "Debug", "产品拆解"] as const;
+type Angle = (typeof ANGLES)[number];
+
 function parseIdeas(text: string): Idea[] {
   const json = text.match(/\{[\s\S]*\}/)?.[0];
   if (!json) return [];
@@ -45,6 +49,7 @@ export default function BrainstormPage() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [projectId, setProjectId] = useState("");
   const [providerId, setProviderId] = useState("");
+  const [angle, setAngle] = useState<Angle>(ANGLES[0]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [createdTask, setCreatedTask] = useState<Task | null>(null);
@@ -68,7 +73,7 @@ export default function BrainstormPage() {
     setCreatedTask(null);
     try {
       if (!providerId) throw new Error("没有可用模型");
-      const response = await chatProvider(providerId, `围绕以下问题提出最多 5 个可执行方案：${prompt}\n只返回 JSON，不要 Markdown，格式必须是 {"ideas":[{"name":"方案名","summary":"方案概述","upside":"主要收益","downside":"主要代价或风险","effort":"预计工作量"}]}`);
+      const response = await chatProvider(providerId, `围绕以下问题，从「${angle}」的角度提出最多 5 个可执行方案：${prompt}\n只返回 JSON，不要 Markdown，格式必须是 {"ideas":[{"name":"方案名","summary":"方案概述","upside":"主要收益","downside":"主要代价或风险","effort":"预计工作量"}]}`);
       const parsed = parseIdeas(response.text);
       if (!parsed.length) throw new Error("模型没有返回可解析方案");
       setIdeas(parsed);
@@ -109,19 +114,29 @@ export default function BrainstormPage() {
         title="头脑风暴"
         description="模型只负责给出可比较的方案；确认后直接生成带约束和验收条件的开发任务。"
       />
-      <section className="rounded-lg border border-line bg-surface p-4">
+      <section className="rounded-lg border border-line-strong bg-surface p-4">
         <textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={3} placeholder="例如：如何给系统增加插件机制？" className="w-full resize-none bg-transparent text-[14px] leading-relaxed text-text outline-none placeholder:text-faint" />
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-3">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-muted">
-              技术方案
-            </span>
-            <span className="rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-muted">
-              Debug
-            </span>
-            <span className="rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-muted">
-              产品拆解
-            </span>
+            <span className="text-[11px] text-faint">角度</span>
+            {ANGLES.map((item) => {
+              const active = item === angle;
+              return (
+                <button
+                  key={item}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setAngle(item)}
+                  className={`rounded-md border px-2 py-0.5 font-mono text-[11px] transition-colors ${
+                    active
+                      ? "border-brand bg-brand text-on-brand"
+                      : "border-line bg-surface-2 text-muted hover:text-text"
+                  }`}
+                >
+                  {item}
+                </button>
+              );
+            })}
             <SelectPopover size="compact" ariaLabel="选择模型" value={providerId}
               options={[{ value: "", label: "本地模板" }, ...providers.filter((provider) => provider.enabled).map((provider) => ({ value: provider.id, label: `${provider.name} · ${provider.model}` }))]}
               onChange={setProviderId} menuMinWidth={220} />
@@ -145,7 +160,19 @@ export default function BrainstormPage() {
         <button type="button" onClick={convertToTask} disabled={!selectedIdea || !projectId || busy} className="rounded-md bg-brand px-3 py-1.5 text-[12px] font-medium text-on-brand hover:bg-brand/85 disabled:cursor-not-allowed disabled:opacity-40">转为开发任务 →</button>
       </section>}
       {createdTask && <div className="text-[12px] text-muted">任务已创建：<Link className="text-brand hover:underline" href={`/tasks/detail?id=${createdTask.id}`}>{createdTask.title}</Link></div>}
-      {ideas.length === 0 && <div className="py-16 text-center font-mono text-[12px] text-faint">输入问题后，方案会以卡片形式出现。</div>}
+      {ideas.length === 0 && (
+        <div className="flex flex-col items-center py-20 text-center">
+          <span className="grid size-10 place-items-center rounded-lg border border-line bg-surface text-muted">
+            <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth={1.6}>
+              <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8V15h7.2v-1.2A6 6 0 0 0 12 3z" />
+            </svg>
+          </span>
+          <p className="mt-3 text-[13px] font-medium text-text">先写一个问题</p>
+          <p className="mt-1 max-w-[340px] text-[12px] leading-relaxed text-muted">
+            写一个问题，选一个角度，点「开始发散」。方案会排成卡片比较收益与代价，再转成开发任务。
+          </p>
+        </div>
+      )}
     </PageBody>
   );
 }
