@@ -136,7 +136,34 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
-* { border-color: var(--line); }
+/*
+ * 默认边框色。两件事必须同时成立，缺一个就静默失效：
+ *
+ * 1. **放进 `@layer utilities`**。未分层的规则优先级高于任何 `@layer`，
+ *    写在外面的 `* { border-color }` 会把 `border-brand` / `border-danger`
+ *    / `border-ok` 这些颜色工具类整片盖掉——类名还在 DOM 上，浏览器算出来
+ *    永远是灰的，元素面板里看着也是"匹配上了"，极难查。
+ *    ⚠️ 写成 `@layer base { ... }` 没有用：Turbopack 侧会把 base 层的**外壳剥掉**，
+ *    把内容提成未分层规则（实测编译产物里就是裸的 `* { border-color: ... }`）。
+ *    utilities 层才会被保留。
+ *
+ * 2. **选择器用 `:where()` 压到 specificity 0**。同一层内靠特异性决胜，
+ *    工具类是 (0,1,0)，`*` 是 (0,0,0) 本来也输——但 `*` 自带一层"宽匹配"，
+ *    用 `:where()` 把口径写死更稳，也不会和 `border-line` 这类显式类打架。
+ *
+ * 伪元素写成 `:where(*)::before` 而不是 `:where(::before)`：后者在
+ * lightningcss 压缩时会被判成无效选择器、直接输出成 `:where()`（等于没了）。
+ *
+ * 判据：`web/src/lib/border-tokens.test.ts` 直接读编译后的 CSS 文本核对这三条，
+ * 改坏了会红。
+ */
+@layer utilities {
+  :where(*),
+  :where(*)::before,
+  :where(*)::after {
+    border-color: var(--line);
+  }
+}
 
 html { color-scheme: light; }
 html[data-theme="dark"] { color-scheme: dark; }
