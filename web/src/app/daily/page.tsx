@@ -33,7 +33,7 @@ export default function DailyPage() {
             onChange={(event) => setMessage(event.target.value)}
             rows={9}
             placeholder="例如：我喜欢先看结论，再看细节；每次改代码都要先跑最相关的测试。"
-            className="mt-3 w-full resize-y rounded-md border border-line bg-canvas p-3 text-[14px] leading-relaxed outline-none placeholder:text-faint focus:border-brand"
+            className="field mt-3 w-full resize-y rounded-md p-3 text-[14px] leading-relaxed outline-none"
           />
           <div className="mt-4 flex flex-wrap gap-2">
             <button
@@ -60,7 +60,9 @@ export default function DailyPage() {
             </p>
           </div>
         </section>
-        <aside className="rounded-lg border border-line bg-surface p-4">
+        {/* h-fit：不跟着左边那张卡片等高。等高时下面会挂一大片空白，
+            看起来像「这里本来还有内容但没加载出来」。 */}
+        <aside className="h-fit rounded-lg border border-line bg-surface p-4">
           <h2 className="text-[14px] font-medium">已确认的习惯</h2>
           <p className="mt-1 text-[12px] leading-relaxed text-muted">这些偏好会作为后续任务的可见上下文。</p>
           <div className="mt-4">

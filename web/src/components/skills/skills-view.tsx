@@ -341,10 +341,16 @@ export function SkillsView() {
                         <p className="mt-1 text-[11px] leading-relaxed text-faint">何时用：{item.when_to_use}</p>
                       )}
                       <p className="mt-1 font-mono text-[11px] text-faint">
-                        {used
-                          ? `近 ${library.usage_days} 天：${used.calls} 次 · ${used.tasks} 个任务 · ${used.tokens} tokens`
-                          : "近 7 天未调用"}
-                        {item.installed_from ? ` · 来自 ${shortSource(item.installed_from)}` : ""}
+                        {(() => {
+                          // 「近 7 天未调用」在没用过技能的新装环境里会出现十几遍，
+                          // 每一行都在说同一件没有信息量的话，把真正要看的使用数据挤没了。
+                          // 没有调用记录就不写这一句，只在末尾留来源（有的话）。
+                          const usage = used
+                            ? `近 ${library.usage_days} 天：${used.calls} 次 · ${used.tasks} 个任务 · ${used.tokens} tokens`
+                            : "";
+                          const from = item.installed_from ? `来自 ${shortSource(item.installed_from)}` : "";
+                          return [usage, from].filter(Boolean).join(" · ");
+                        })()}
                       </p>
                     </div>
                   );

@@ -131,6 +131,14 @@ export function CandidateList({
 }
 
 export function HabitList({ habits, onForget }: { habits: Habit[]; onForget: (id: string) => void }) {
-  if (!habits.length) return <p className="text-[12px] text-faint">还没有确认过的长期习惯。Agent 不会自动保存日常内容。</p>;
+  if (!habits.length)
+    return (
+      <div className="rounded-lg border border-dashed border-line-strong px-3 py-6 text-center">
+        <p className="text-[13px] text-muted">还没有确认过的习惯</p>
+        <p className="mt-1 text-[12px] leading-relaxed text-faint">
+          在左边写一句「每次改代码先跑最相关的测试」，点「记住这个习惯」，就会出现在这里。
+        </p>
+      </div>
+    );
   return <div className="space-y-2">{habits.map((habit) => <div key={habit.id} className="flex items-start gap-2 rounded border border-line px-2.5 py-2"><div className="min-w-0 flex-1"><div className="text-[13px] text-text">{habit.text}</div><div className="mt-1 font-mono text-[11px] text-faint">{habit.source}</div></div><button type="button" onClick={() => onForget(habit.id)} className="text-[11px] text-faint hover:text-danger">忘记</button></div>)}</div>;
 }

@@ -24,6 +24,7 @@ export function ProjectListPane({ projects, error, selectedId, onSelect, onCreat
   const [draftDescription, setDraftDescription] = useState("");
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
 
   async function submitCreate(event: FormEvent) {
@@ -36,6 +37,7 @@ export function ProjectListPane({ projects, error, selectedId, onSelect, onCreat
       const created = await createProject({ name: trimmed, description: description.trim() });
       setName("");
       setDescription("");
+      setFormOpen(false);
       onCreated(created);
       await onChanged();
     } catch (e) {
@@ -77,33 +79,15 @@ export function ProjectListPane({ projects, error, selectedId, onSelect, onCreat
   }
 
   const count = projects?.length ?? 0;
+  // 有项目时新建表单默认收起：这一栏最常做的是「选一个项目」，
+  // 两个常驻空输入框会占掉三分之一高度，列表反而被挤到底部。
+  // 一个项目都没有时不收起——那时唯一该做的就是建一个。
+  const showForm = formOpen || (projects !== null && count === 0);
 
   return (
     <Panel title="项目" hint={projects === null ? "载入中" : `共 ${count} 个 · /api/v1/projects`}>
-      <form onSubmit={submitCreate} className="flex flex-col gap-2 border-b border-line pb-4">
-        <div className="flex flex-col gap-2">
-          <Input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="项目名称"
-            aria-label="项目名称"
-            maxLength={200}
-          />
-          <Input
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            placeholder="项目描述（可选）"
-            aria-label="项目描述"
-          />
-        </div>
-        <Button type="submit" variant="primary" disabled={creating || !name.trim()} className="self-start">
-          {creating ? "创建中" : "新建项目"}
-        </Button>
-        {createError && <Notice>{createError}</Notice>}
-      </form>
-
       {error && (
-        <div className="mt-4 flex flex-col gap-2">
+        <div className="mb-3 flex flex-col gap-2">
           <Notice>项目列表加载失败：{error}</Notice>
           <Button className="self-start" onClick={() => void onChanged()}>
             重试
@@ -111,13 +95,12 @@ export function ProjectListPane({ projects, error, selectedId, onSelect, onCreat
         </div>
       )}
 
-      <div className="mt-4">
-        {projects === null ? (
-          <StateLine>载入项目…</StateLine>
-        ) : count === 0 && !error ? (
-          <StateLine>暂无项目</StateLine>
-        ) : (
-          <ul className="flex flex-col gap-2">
+      {projects === null ? (
+        <StateLine>载入项目…</StateLine>
+      ) : count === 0 && !error ? (
+        <StateLine>还没有项目。下面填个名字就能建第一个。</StateLine>
+      ) : (
+        <ul className="flex flex-col gap-2">
             {projects?.map((project) => {
               const workspace = activeWorkspace(project);
               const extra = project.workspaces.length - 1;
@@ -250,8 +233,56 @@ export function ProjectListPane({ projects, error, selectedId, onSelect, onCreat
               );
             })}
           </ul>
-        )}
-      </div>
+      )}
+
+      {count > 0 && !showForm && (
+        <button
+          type="button"
+          onClick={() => setFormOpen(true)}
+          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-line-strong px-3 py-2 text-[13px] text-muted transition-colors hover:border-brand/40 hover:text-text"
+        >
+          <span className="text-[15px] leading-none">+</span> 新建项目
+        </button>
+      )}
+
+      {showForm && (
+        <form
+          onSubmit={submitCreate}
+          className={`flex flex-col gap-2 ${count > 0 ? "mt-3 border-t border-line pt-3" : ""}`}
+        >
+          <div className="flex flex-col gap-2">
+            <Input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="项目名称"
+              aria-label="项目名称"
+              maxLength={200}
+            />
+            <Input
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder="项目描述（可选）"
+              aria-label="项目描述"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Button type="submit" variant="primary" disabled={creating || !name.trim()}>
+              {creating ? "创建中" : "新建项目"}
+            </Button>
+            {count > 0 && (
+              <Button
+                onClick={() => {
+                  setFormOpen(false);
+                  setCreateError(null);
+                }}
+              >
+                取消
+              </Button>
+            )}
+          </div>
+          {createError && <Notice>{createError}</Notice>}
+        </form>
+      )}
     </Panel>
   );
 }
