@@ -136,3 +136,4 @@ async def test_the_description_is_capped(seeded, monkeypatch):
 
     text, _ = await vision_proxy.describe({"media_type": "image/jpeg", "data": "AAAA"}, exclude_provider="")
     assert text and len(text) <= 2000, "代看的产出会原样进主模型上下文，不能没有上限"
+
