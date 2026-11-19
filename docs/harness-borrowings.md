@@ -1,8 +1,16 @@
 # 别人家的 harness：可以抄的七件事
 
-> 来源分一手与二手，下面逐条标了。二手博客里常有一个"1.6% 是 AI 逻辑"的说法，
-> 出处被反复引用为某篇逆向 Claude Code 的论文——我没读到原文，只当**方向性**结论用，
-> 具体数字不采信。
+> 来源分一手与二手，下面逐条标了。
+>
+> 关于流传最广的「1.6% 是 AI 逻辑」——**出处已坐实**：Jiacheng Liu / Xiaohan Zhao /
+> Xinyi Shang / Zhiqiang Shen，*Dive into Claude Code: The Design Space of Today's and
+> Future AI Agent Systems*，arXiv 2604.14228（v3，2026-10-10），VILA Lab（MBZUAI，UCL 合作），
+> 代码在 `github.com/VILA-Lab/Dive-into-Claude-Code`。分析对象 Claude Code v2.1.88：
+> 1,884 文件、约 51.2 万行 TypeScript。
+>
+> 但**这个数要打折看**：它比的是「AI 决策逻辑」与「确定性基础设施」两类代码，怎么划线是
+> 作者的判断，不是量出来的。仓库自己还有一句更该记住的：跨 harness 的差异
+> **可能不超过同配置重复运行的方差**。所以别拿 1.6% 去推「换个 harness 就强几十倍」。
 
 ## 一、先看一句最相关的话
 
@@ -38,6 +46,25 @@
 - **我们**：压缩头写的是「上下文已压缩：省略 N 条较早执行消息；以最近状态和任务证据为准。」
   ——说了"以什么为准"，没说"别复述"。
 - **抄什么**：一句话而已，改 `context.py` 两处字符串。**这是今天性价比最高的一行改动。**
+
+### 2.5 空闲压缩：绝对量 + 空闲时长 + 卡在缓存过期前（一手，数字明确）
+
+- **他们**：Claude Code 在 **200K+ token** 的会话**空闲约 54 分钟**后压缩，赶在
+  **1 小时 prompt cache 过期**之前动手（README 明确给出的少数数字之一）。
+- **我们**：阈值是 `0.82 × context_window(1M) = 820K`，**永远不触发**；26 步跑到 83k
+  还在硬扛，最后靠"跑完了"结束。
+- **抄什么**：触发条件改成三条任一命中——① 绝对量到 X；② 空闲 N 分钟；
+  ③ 距上次压缩已跑 M 步。百分比阈值在 1M 窗口上等于没有阈值。
+- **为什么重要**：这直接决定"长任务会不会烂在上下文里"，是我们剩下那个最大窟窿的入口。
+
+### 2.6 给新模型删掉 80% 的 system prompt（一手，最反直觉）
+
+- **他们**：Anthropic 为新一代模型砍掉 Claude Code **80% 以上**的 system prompt，
+  编码评测**无可测损失**。仓库结论："a harness should be reviewed and pruned as models
+  change, rather than only accumulating instructions."
+- **我们**：系统提示 1 万字符、工具说明 2.3 万字符，只加过、没删过。
+- **抄什么**：把"删提示"当成常规动作而不是事故。每次换模型/换版本，先做一次
+  「删一半，看评测掉不掉」；掉不了就永久删掉。判据：同一批任务，删前删后的交付成功率与步数。
 
 ### 3. 大工具结果落盘，只回摘要（tool-call offloading）
 
@@ -81,13 +108,14 @@
   差别是我们**续写**（新请求接上去）而不是**升级重发**。续写更省，但会多一次请求。
 - **结论**：这条不用改，属于我们已经做对的。
 
-## 三、三件立刻能做的（按性价比）
+## 三、立刻能做的（按性价比）
 
 | 动作 | 改动面 | 预期 |
 |---|---|---|
-| ① 压缩续写加「不要复述，接着干」 | 两处字符串 | 每次压缩省一段复述 |
+| ① 压缩续写加「不要复述，接着干」 | 两处字符串 | **已做**（`1f24c6f`） |
 | ② 大结果落盘，回执给路径 + 头尾 | `payload.py` + 新增 `.blank/tool-results/` | `git diff`/测试日志不再被砍中段 |
-| ③ 默认校验钩子（改了就跑 typecheck/单测子集） | `hooks` 默认策略 | 模型不必"想起来"验证 |
+| ③ 空闲压缩（绝对量 + 空闲时长 + 每 M 步） | `context.py` 的 water 判定 | 长任务不再"永远不压缩" |
+| ④ 默认校验钩子（改了就跑 typecheck/单测子集） | `hooks` 默认策略 | 模型不必"想起来"验证 |
 
 再往后才是：**主动重启（交接文件）**——它最大，也最需要判据先立起来。
 
@@ -98,3 +126,9 @@
 - mingz.dev，8 patterns from reverse-engineering Claude Code（二手，逐条具体）：https://mingz.dev/blog/agent-harness-patterns
 - claude-code-from-source，第 17 章性能（二手，slot reservation 与缓存边界讲得最细）：https://github.com/eramax/claude-code-from-source/blob/main/book/ch17-performance.md
 - agentpatterns.ai，Loop Strategy Spectrum（积累 / 压缩 / 全新上下文三种策略怎么选）：https://agentpatterns.ai/loop-engineering/loop-strategy-spectrum
+- **一手**：Liu / Zhao / Shang / Shen，*Dive into Claude Code*，arXiv 2604.14228（v3）：
+  https://arxiv.org/abs/2604.14228
+- **一手**：论文官方仓库（含架构图、设计指南、跨系统对比）：
+  https://github.com/VILA-Lab/Dive-into-Claude-Code
+- **二手解读**（用户贴的那篇，转述准确但请以上面的原文为准）：
+  https://agenticup.dev/posts/claude-code-harness-architecture-98-percent/
