@@ -153,6 +153,12 @@ async def _monitor(context: ToolContext, arguments: dict) -> ToolOutcome:
         "命令退出、被 task_stop 或超时都会结束监控，结束时你会收到通知。"
         f'最近日志用 task_output(task_id="{record.shell_id}") 取。'
     )
+    body += (
+        "\n每条事件都带 offset/end（它在日志字节流里的起止位置），通知里还会给出"
+        "本轮覆盖的字节区间；要补看被丢弃的那段或更早的上下文，"
+        f"用 task_output(task_id=\"{record.shell_id}\", after=<offset>) 增量读，"
+        "不必整段重读。"
+    )
     if notes:
         body = f"{body}\n" + "\n".join(notes)
     return ok(

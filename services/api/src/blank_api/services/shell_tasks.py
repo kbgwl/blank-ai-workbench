@@ -102,6 +102,9 @@ class ShellTask:
     kind: str = "shell"
     events: deque = field(default_factory=deque)
     dropped_events: int = 0
+    # 本轮丢弃的最旧事件从哪个字节开始（没丢就是 None）。drain 时用它算出
+    # 「这次投递覆盖的区间」的左界：区间要包含被丢掉的那段，模型才知道去哪补看。
+    dropped_events_from: int | None = None
     ended_notified: bool = False
 
     @property
@@ -140,15 +143,24 @@ class _Sink:
             record.error = f"后台命令的日志文件打不开：{exc}"
             self._head = None
 
-    def write(self, tag: str, chunk: bytes) -> None:
+    def write(self, tag: str, chunk: bytes) -> int | None:
+        """写一段输出，返回这段内容在 ``produced`` 字节流里的起始位置。
+
+        逐行事件要带 offset 才能和日志文件对账，而 offset 的唯一口径就是
+        ``produced``（含分段标记、含 tag 切换时插的分隔行）。所以位置必须由
+        写盘这一层给出：切行那一层自己数字节，会漏掉它看不到的分隔行。
+        没写进去（句柄坏了 / 空块）就返回 None，切行侧退回按 ``produced`` 估算。
+        """
         record = self.record
         if self._head is None or not chunk:
-            return
+            return None
         header = b""
         if self._last_tag and tag != self._last_tag:
             header = f"\n[{tag}]\n".encode("utf-8")
         self._last_tag = tag
+        start = record.produced + len(header)
         self._emit(header + chunk)
+        return start
 
     def _emit(self, data: bytes) -> None:
         """先填头段，满了转尾段。切点对齐到字符边界，文件不会以半个汉字结尾。"""
@@ -263,42 +275,79 @@ class _LineSplitter:
     def __init__(self, record: ShellTask) -> None:
         self.record = record
         self._buffers = {_STDOUT: b"", _STDERR: b""}
+        # 每条缓冲区第一个字节在 ``produced`` 流里的绝对位置。跨块拼起来的一行
+        # 要能说出它从哪个字节开始，所以缓冲内容必须和它的起点一起存。
+        self._starts = {_STDOUT: 0, _STDERR: 0}
+        # 日志写不进去时（句柄坏了）没有权威位置，用自己数过的字节兜底：
+        # offset 仍然单调递增，只是无法与一个不存在的文件对齐。这比每块都报 0
+        # 诚实——模型至少能看出「这几条是新来的」。
+        self._cursor = 0
 
-    def feed(self, tag: str, chunk: bytes) -> None:
+    def feed(self, tag: str, chunk: bytes, start: int | None = None) -> None:
+        """喂一段输出；``start`` 是这段字节在日志字节流里的起点（由 ``_Sink`` 给）。
+
+        不给就退回自己数过的游标——写盘失败时的兜底，见 ``_cursor`` 的注释。
+        """
         if not chunk:
             return
-        text = self._buffers.get(tag, b"") + chunk
-        parts = text.split(b"\n")
-        self._buffers[tag] = parts.pop()
+        if start is None:
+            start = self._cursor
+        self._cursor = max(self._cursor, start + len(chunk))
+        buffered = self._buffers.get(tag, b"")
+        pos = self._starts.get(tag, start) if buffered else int(start)
+        parts = (buffered + chunk).split(b"\n")
+        tail = parts.pop()
         for raw in parts:
-            self._push(tag, raw)
+            # 这一行占 [pos, pos+len(raw)+1)：+1 是那个被 split 吃掉的换行符。
+            self._push(tag, raw, pos, len(raw) + 1)
+            pos += len(raw) + 1
         # 一直没有换行的输出（进度条、二进制流）不能无限攒在内存里：
         # 到上限就先切出去，剩下的继续等换行。
         limit = MONITOR_MAX_EVENT_CHARS * 4
-        pending = self._buffers[tag]
-        while len(pending) > limit:
-            self._push(tag, pending[:limit])
-            pending = pending[limit:]
-        self._buffers[tag] = pending
+        while len(tail) > limit:
+            self._push(tag, tail[:limit], pos, limit)
+            tail = tail[limit:]
+            pos += limit
+        self._buffers[tag] = tail
+        self._starts[tag] = pos
 
     def flush(self) -> None:
         for tag, raw in list(self._buffers.items()):
             if raw.strip():
-                self._push(tag, raw)
+                # 结尾没有换行，这一行只占它自己的字节数，别再 +1。
+                self._push(tag, raw, self._starts.get(tag, 0), len(raw))
             self._buffers[tag] = b""
+            self._starts[tag] = self.record.produced
 
-    def _push(self, tag: str, raw: bytes) -> None:
+    def _push(self, tag: str, raw: bytes, start: int, size: int) -> None:
+        """把一行放进事件队列；``start``/``size`` 描述它在日志字节流里占的区间。
+
+        ``size`` 必须用**原始整行**（含换行符）的长度：文本超过
+        ``MONITOR_MAX_EVENT_CHARS`` 时只会截断投递的内容，不会截断它在日志里
+        占的字节。若拿截断后的长度算 ``end``，模型用 ``end`` 当 offset 增量读，
+        会把被截掉的那截尾巴再读一遍。
+        """
         line = _decode(raw).rstrip("\r")
         # 空行不占一次注入：日志里的空白分隔不携带信息，投递它只会挤掉真正的行。
+        # 但它占的字节由调用方的游标记着，后面每一行的 offset 才不会偏。
         if not line.strip():
             return
+        end = start + max(0, size)
         if len(line) > MONITOR_MAX_EVENT_CHARS:
             line = line[:MONITOR_MAX_EVENT_CHARS] + "…"
         events = self.record.events
-        events.append({"tag": tag, "text": line})
+        events.append({"tag": tag, "text": line, "offset": start, "end": end})
         while len(events) > MONITOR_MAX_PENDING_EVENTS:
-            events.popleft()
+            oldest = events.popleft()
             self.record.dropped_events += 1
+            # 记住被丢掉那段从哪个字节开始：drain 时要把「去哪补看」说清楚，
+            # 只说「丢了 37 行」等于让模型重读整段。
+            offset = oldest.get("offset") if isinstance(oldest, dict) else None
+            if isinstance(offset, int) and (
+                self.record.dropped_events_from is None
+                or offset < self.record.dropped_events_from
+            ):
+                self.record.dropped_events_from = offset
 
 
 def new_id() -> str:
@@ -392,9 +441,13 @@ async def _execute(
     splitter = _LineSplitter(record) if record.kind == "monitor" else None
 
     def emit(tag: str, chunk: bytes) -> None:
-        sink.write(tag, chunk)
+        # 位置由写盘侧给出：事件里的 offset 必须和 task_output(after=...) 同一个口径。
+        start = sink.write(tag, chunk)
         if splitter is not None:
-            splitter.feed(tag, chunk)
+            # 写盘失败（句柄打不开 / 磁盘满）时 start 是 None，但事件仍要投递：
+            # 日志落不了盘是「存档缺了一份」，不能连带把模型的眼睛也关上。
+            # 这条路径下 offset 只能按 produced 估算，事件照样带上它。
+            splitter.feed(tag, chunk, start)
 
     try:
         result = await runner(emit)
@@ -440,12 +493,20 @@ async def _execute(
         stderr = str(result.get("stderr") or "")
         if mask is not None:
             stdout, stderr = mask(stdout), mask(stderr)
+        # 补写进日志的这段也有字节位置：按写盘前的 produced 记起点，
+        # 否则沙箱里跑的监控只有事件、没有 offset，前面那条增量读接口就白给了。
+        stdout_start = record.produced
         sink.text(stdout)
+        stderr_start = record.produced
         if stderr:
             sink.text(("[stderr]\n" if stdout else "") + stderr)
         if splitter is not None:
-            splitter.feed(_STDOUT, stdout.encode("utf-8"))
-            splitter.feed(_STDERR, stderr.encode("utf-8"))
+            splitter.feed(_STDOUT, stdout.encode("utf-8"), stdout_start)
+            splitter.feed(
+                _STDERR,
+                stderr.encode("utf-8"),
+                stderr_start + (len("[stderr]\n") if stdout else 0),
+            )
     if splitter is not None:
         splitter.flush()
     if record.status == "timeout":
@@ -633,7 +694,13 @@ async def output(
         extra: dict = {}
     else:
         body, next_offset, dropped = read_since(record, after)
-        extra = {"offset": next_offset, "dropped": dropped}
+        extra = {
+            "offset": next_offset,
+            "dropped": dropped,
+            # 这次正文覆盖的字节区间：下一轮要接着读，就把 to_offset 当 after 传回来。
+            "from_offset": max(0, int(after)),
+            "to_offset": next_offset,
+        }
     return {
         "ok": record.status == "completed",
         **snapshot(record),
@@ -720,12 +787,26 @@ def drain_notifications(task_id: str) -> list[dict]:
     return notes
 
 
+def _first_event_offset(events: list[dict]) -> int | None:
+    """这批事件里最早的那条的起点；没有就返回 None。"""
+    for event in events:
+        offset = event.get("offset") if isinstance(event, dict) else None
+        if isinstance(offset, int):
+            return offset
+    return None
+
+
 def drain_monitor_events(task_id: str) -> list[dict]:
     """取走监控待投递的行事件；``ended`` 每个监控只出现一次。
 
     与后台命令的完成通知是同一套「系统事件」语义，但粒度不同：这里是边跑边投递，
     结束只是最后一条事件。一次最多投 ``MONITOR_EVENTS_PER_DRAIN`` 行，剩下的留在
     队列里下一轮继续投；积压超过队列上限时只丢最旧的行，并把丢弃条数如实带上。
+
+    每条 note 还带 ``from_offset``/``to_offset``：这次投递覆盖的日志字节区间。
+    左界取「最早一条还没给模型看过的字节」——有丢弃时就是被丢掉那段的起点；
+    右界是最后一条事件的 ``end``。模型据此可以对被丢掉的区间或想补看的上下文
+    调 ``task_output(after=...)``，而不是整段重读最后 64KB。
     """
     bucket = _TASKS.get(str(task_id or ""), {})
     notes: list[dict] = []
@@ -736,7 +817,9 @@ def drain_monitor_events(task_id: str) -> list[dict]:
         while record.events and len(events) < MONITOR_EVENTS_PER_DRAIN:
             events.append(record.events.popleft())
         dropped = record.dropped_events
+        dropped_from = record.dropped_events_from
         record.dropped_events = 0
+        record.dropped_events_from = None
         # 结束必须是「最后一条事件」：先把还在队列里的行投完，再在同一条通知里
         # 说"监控已结束"。提前报结束会让剩下的行看起来像结束后的鬼影。
         ended = (
@@ -748,22 +831,31 @@ def drain_monitor_events(task_id: str) -> list[dict]:
             continue
         if ended:
             record.ended_notified = True
-        notes.append(
-            {
-                "monitor_id": record.shell_id,
-                "command": record.command[:300],
-                "description": record.description[:200],
-                "status": record.status,
-                "exit_code": record.exit_code,
-                "timed_out": record.timed_out,
-                "elapsed_seconds": record.elapsed,
-                "events": events,
-                "dropped": dropped,
-                "pending": len(record.events),
-                "ended": ended,
-                "message": _status_message(record) if ended else "",
-            }
-        )
+        note = {
+            "monitor_id": record.shell_id,
+            "command": record.command[:300],
+            "description": record.description[:200],
+            "status": record.status,
+            "exit_code": record.exit_code,
+            "timed_out": record.timed_out,
+            "elapsed_seconds": record.elapsed,
+            "events": events,
+            "dropped": dropped,
+            # 与 dropped 同值的新名字：这一刀之后事件通道对齐了字节区间，
+            # 名字里带 events 才说得清「丢的是行、不是字节」。
+            "dropped_events": dropped,
+            "pending": len(record.events),
+            "ended": ended,
+            "message": _status_message(record) if ended else "",
+        }
+        if events or dropped:
+            first = dropped_from if dropped_from is not None else _first_event_offset(events)
+            if first is None:
+                first = record.produced
+            last = events[-1].get("end") if events else None
+            note["from_offset"] = int(first)
+            note["to_offset"] = int(last if isinstance(last, int) else record.produced)
+        notes.append(note)
     return notes
 
 

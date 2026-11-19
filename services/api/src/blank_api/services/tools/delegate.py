@@ -419,6 +419,23 @@ def _after_offset(arguments: dict) -> int | None:
     return max(0, value)
 
 
+def _with_byte_span(body: str, snapshot: dict) -> str:
+    """给增量读的正文标一句「这段是日志的哪几个字节」。
+
+    只给正文不给区间，模型下一轮还是要猜 offset；给了区间，它就知道该接着传
+    什么，也能对被丢弃的那段单独补读（而不是整段重读最后 64KB）。
+    """
+    from_offset = snapshot.get("from_offset")
+    to_offset = snapshot.get("to_offset")
+    if not isinstance(from_offset, int) or not isinstance(to_offset, int):
+        return body
+    hint = f"[本次返回日志字节 {from_offset}–{to_offset}"
+    if snapshot.get("dropped"):
+        hint += "，更早的一段已被丢弃"
+    hint += f"；接着读用 after={to_offset}]"
+    return f"{hint}\n{body}" if body else hint
+
+
 async def _shell_output(context: ToolContext, shell_id: str, arguments: dict) -> ToolOutcome:
     from blank_api.services import shell_tasks
     from blank_api.services.tools.shell import MAX_OUTPUT_CHARS, mask_output
@@ -440,6 +457,7 @@ async def _shell_output(context: ToolContext, shell_id: str, arguments: dict) ->
     body = mask_output(str(snapshot.get("text") or ""), context.root)
     if len(body) > MAX_OUTPUT_CHARS:
         body = body[:MAX_OUTPUT_CHARS] + "\n…（输出已截断）"
+    body = _with_byte_span(body, snapshot)
     data = {
         key: snapshot[key]
         for key in (
@@ -452,6 +470,8 @@ async def _shell_output(context: ToolContext, shell_id: str, arguments: dict) ->
             "elapsed_seconds",
             "truncated",
             "offset",
+            "from_offset",
+            "to_offset",
             "omitted_bytes",
             "dropped",
         )
@@ -505,6 +525,7 @@ async def _monitor_output(context: ToolContext, monitor_id: str, arguments: dict
     body = mask_output(str(snapshot.get("text") or ""), context.root)
     if len(body) > MAX_OUTPUT_CHARS:
         body = body[:MAX_OUTPUT_CHARS] + "\n…（输出已截断）"
+    body = _with_byte_span(body, snapshot)
     data = {
         key: snapshot[key]
         for key in (
@@ -518,6 +539,8 @@ async def _monitor_output(context: ToolContext, monitor_id: str, arguments: dict
             "elapsed_seconds",
             "truncated",
             "offset",
+            "from_offset",
+            "to_offset",
             "omitted_bytes",
             "dropped",
         )

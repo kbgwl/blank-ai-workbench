@@ -1509,6 +1509,8 @@ class AgentSession:
                             "status": item.get("status") or "",
                             "events": len(item.get("events") or []),
                             "dropped": item.get("dropped") or 0,
+                            "from_offset": item.get("from_offset"),
+                            "to_offset": item.get("to_offset"),
                             "pending": item.get("pending") or 0,
                             "ended": bool(item.get("ended")),
                         }
@@ -2773,6 +2775,44 @@ def render_shell_notifications(items: list[dict]) -> str:
     return "\n".join(lines)[:8000]
 
 
+def _monitor_span_hint(item: dict) -> list[str]:
+    """说清「本轮事件覆盖哪几个字节」「被丢掉的那段在哪」。
+
+    只说「丢了 37 行」不够用：模型知道了有东西没了，却不知道去日志的哪儿找，
+    只能整段重读最后 64KB。带上字节区间，它就能 task_output(after=...) 精确补读。
+    """
+    monitor_id = str(item.get("monitor_id") or "")
+    from_offset = item.get("from_offset")
+    to_offset = item.get("to_offset")
+    offsets = [
+        event.get("offset")
+        for event in (item.get("events") or [])
+        if isinstance(event.get("offset"), int)
+    ]
+    lines: list[str] = []
+    if isinstance(from_offset, int) and isinstance(to_offset, int):
+        lines.append(f"  本轮覆盖日志字节 [{from_offset}, {to_offset})。")
+    dropped = int(item.get("dropped") or 0)
+    if not dropped:
+        return lines
+    start = from_offset if isinstance(from_offset, int) else (offsets[0] if offsets else None)
+    end = offsets[0] if offsets else None
+    if isinstance(start, int) and isinstance(end, int) and end > start:
+        lines.append(
+            f"  其中字节 [{start}, {end}) 这一段（{dropped} 行）已被丢弃："
+            f'要补看就调 task_output(task_id="{monitor_id}", after={start})，'
+            f"读到 {end} 为止，再往后就是本轮已投递的事件。"
+        )
+    elif isinstance(start, int):
+        lines.append(
+            f"  另有 {dropped} 行已丢弃，从字节 {start} 开始："
+            f'task_output(task_id="{monitor_id}", after={start})。'
+        )
+    else:
+        lines.append(f"  另有 {dropped} 行已丢弃，完整输出见 task_output。")
+    return lines
+
+
 def render_monitor_notifications(items: list[dict]) -> str:
     """把 monitor 待投递的行事件拼成一条系统通知（对齐 Claude 的 Monitor 语义）。
 
@@ -2791,14 +2831,12 @@ def render_monitor_notifications(items: list[dict]) -> str:
         if description:
             label = f"{label} {description}"
         lines.append(f"- {label}")
+        lines.extend(_monitor_span_hint(item))
         for event in item.get("events") or []:
             text = str(event.get("text") or "")
             tag = str(event.get("tag") or "")
             lines.append(f"  {f'[{tag}] ' if tag == 'stderr' else ''}{text}")
-        dropped = int(item.get("dropped") or 0)
         pending = int(item.get("pending") or 0)
-        if dropped:
-            lines.append(f"  另有 {dropped} 行积压未投递，完整输出见 task_output。")
         if pending:
             lines.append(f"  还有 {pending} 行待投递，下一轮通知会继续给出。")
         if item.get("ended"):
