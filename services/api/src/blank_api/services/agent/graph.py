@@ -65,6 +65,7 @@ from blank_api.services.agent.context import (
     replacement_record,
 )
 from blank_api.services.agent.router import LIGHT, TIER_LABELS, Router
+from blank_api.services.agent.notices import SYSTEM_EVENT_HEADER
 from blank_api.services.agent.payload import render
 from blank_api.services.agent.delivery import DeliveryFacts, as_dict as delivery_dict, render as render_delivery
 from blank_api.services.agent.placeholders import (
@@ -2731,7 +2732,7 @@ def render_subagent_notifications(items: list[dict]) -> str:
     不该让模型靠轮询或猜测去发现。
     """
     lines = [
-        "以下后台子代理已有结论。请在给用户的答复里转述这些结论；",
+        f"{SYSTEM_EVENT_HEADER}以下后台子代理已有结论。请在给用户的答复里转述这些结论；",
         "未在此列出的子代理仍在运行，不要替它们编造结果——需要结论就调用 task_output。",
     ]
     for item in items:
@@ -2755,7 +2756,7 @@ def render_shell_notifications(items: list[dict]) -> str:
     并用输出尾巴让它能立刻判断成败；完整输出仍走 task_output，不在提示里堆整段日志。
     """
     lines = [
-        "以下后台命令已经结束（这是系统事件，不是用户发言）。",
+        f"{SYSTEM_EVENT_HEADER}以下后台命令已经结束。",
         "不要重复执行它们已经做完的活；结论由你转述，未列出的后台命令仍在运行，不要替它们编造结果。",
     ]
     for item in items:
@@ -2821,7 +2822,7 @@ def render_monitor_notifications(items: list[dict]) -> str:
     用户的新指令，或者反过来停下来等下一批事件。
     """
     lines = [
-        "以下是 monitor 监控命令的新输出（这是系统事件，不是用户发言）。",
+        f"{SYSTEM_EVENT_HEADER}以下是 monitor 监控命令的新输出。",
         "照常继续手上的事：不要轮询、不要为等更多输出而 sleep；需要更早的日志用 task_output。",
     ]
     for item in items:
@@ -2853,7 +2854,7 @@ def render_workflow_notifications(items: list[dict]) -> str:
     以及结论该去哪儿取。未列出的运行仍在跑，不许替它们编造结论。
     """
     lines = [
-        "以下工作流已经结束（这是系统事件，不是用户发言）。",
+        f"{SYSTEM_EVENT_HEADER}以下工作流已经结束。",
         "请在答复里转述这些结果；未列出的工作流仍在运行，不要替它们编造结论——需要进度就用 task_output。",
     ]
     for item in items:

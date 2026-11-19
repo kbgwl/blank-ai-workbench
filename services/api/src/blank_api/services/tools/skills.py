@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 
+from blank_api.services.agent.untrusted import neutralize
 from blank_api.services.effort import effort_for_prompt
 from blank_api.services.prompt_args import render_prompt
 from blank_api.services.skills_defs import match_skill_paths
@@ -92,8 +93,8 @@ def skill_loading_header(name: str) -> str:
     ``isSkillLoadingMetadata`` 扫历史消息的做法。
     """
     return (
-        f"<command-message>{name}</command-message>\n"
-        f"<command-name>{name}</command-name>\n"
+        f"<command-message>{neutralize(name, one_line=True, limit=80)}</command-message>\n"
+        f"<command-name>{neutralize(name, one_line=True, limit=80)}</command-name>\n"
         "<skill-format>true</skill-format>"
     )
 
@@ -331,17 +332,23 @@ def activate_from_tool_results(catalog, tool_results) -> list[dict]:
 
 
 def render_skill_activation(activated) -> str:
-    """激活后的系统提醒：模型要知道"清单里多了一条、名字怎么拼"。"""
+    """激活后的系统提醒：模型要知道"清单里多了一条、名字怎么拼"。
+
+    这三格全部来自**外部文本**（SKILL.md 的 frontmatter、磁盘上的文件名），
+    必须先过 ``neutralize``：一个名字里带 ``</system-reminder>`` 就能在这条提醒
+    后面接一段"系统指令"，而那正是这条提醒最容易被利用的地方——它本身就在
+    告诉模型"照这个名字去调用"。
+    """
     lines = [
         "<system-reminder>",
         "刚才触碰的文件命中了以下条件 Skill 的 paths，它们现在可以调用：",
     ]
     for item in activated or ():
-        name = str(item.get("name") or "").strip()
+        name = neutralize(item.get("name"), one_line=True, limit=80)
         if not name:
             continue
-        description = str(item.get("description") or "").strip()
-        matched = str(item.get("path") or "").strip()
+        description = neutralize(item.get("description"), one_line=True, limit=200)
+        matched = neutralize(item.get("path"), one_line=True, limit=200)
         suffix = f"（匹配 {matched}）" if matched else ""
         lines.append(
             f"- {name}：{description}{suffix}" if description else f"- {name}{suffix}"

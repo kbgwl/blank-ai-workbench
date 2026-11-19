@@ -44,6 +44,14 @@ TOOL_BUDGETS: dict[str, tuple[int, int]] = {
     "git": (8_000, 2_000),
 }
 DEFAULT_BUDGET = (8_000, 0)
+# read_file 的头部预算按"这次读到的文件有多大"伸缩，而不是一个常数。
+# 固定 6,000 的代价是可算的：800 行源码约 24k 字符，模型要连读四次；而每次续读
+# 都要把整段上下文重发一遍——省下的 18k 上下文，换来三倍输入 token。
+# 上限取 12,000（窗口 48k 字符的四分之一）：一条结果就吃掉半个窗口的话，
+# 下一步必定触发压缩，而压缩一次的开销远大于多给这 6k 字符。
+READ_SMALL_FILE = 12_000   # 整份装得下的文件：一次给全
+READ_MEDIUM_FILE = 120_000  # 到这个体量前都给上限，再大就只给引子
+READ_HEAD_CAP = 12_000
 # 日志噪音档：行形态高度重复的输出（`pytest: 12 passed` 跑两千行）只给一点点。
 # 一刀切的预算是错的：diff 要看全（每个文件的改动都不同），日志要看少（两千行说同一件事）。
 # 按"去数字后的行形态重复度"分流，比按工具名分流更贴近事实。
@@ -100,10 +108,13 @@ def _read_file_note(kept: str, data: dict) -> str:
     start = data.get("start_line") or 1
     if not isinstance(total, int) or total <= 0 or not isinstance(start, int):
         return ""
-    shown = kept.count("\n")
-    if shown <= 0:
+    # 行数用 splitlines 数，不要数换行符：正文末尾带不带换行取决于调用方有没有
+    # rstrip，数换行就会在这两种情况下差一行。差的那一行正是这条提示要消灭的东西——
+    # 少说一行，模型会把最后一行再读一遍；多说一行，它会跳过一行真没看的内容。
+    lines = kept.splitlines()
+    if not lines:
         return ""
-    end = start + shown - 1
+    end = start + len(lines) - 1
     if end >= total:
         return ""
     return f"…（本文件共 {total} 行，此处显示第 {start}–{end} 行，继续请用 offset={end + 1} 重读）"
@@ -141,6 +152,24 @@ def _looks_like_patch(text: str) -> bool:
     return hits / len(lines) >= 0.3
 
 
+def _read_head(data, output_len: int, base: int) -> int:
+    """给 read_file 选头部预算：小文件给全、中等文件给上限、巨物只给引子。
+
+    第三档要单独说清：一个 2MB 的日志，多给 6k 字符只是多 6k 行前奏，
+    真正该做的是用 search_code 定位或用 offset 跳读——给多了既没用，又白占窗口。
+    """
+    size = data.get("size") if isinstance(data, dict) else None
+    if not isinstance(size, int) or size <= 0:
+        # 没有 size（老的回执、外部调用方）：只按"这次到底读进来多少"判断，
+        # 读进来就不超上限的，不必裁。
+        return max(base, output_len) if output_len <= READ_SMALL_FILE else base
+    if size <= READ_SMALL_FILE:
+        return READ_SMALL_FILE
+    if size <= READ_MEDIUM_FILE:
+        return READ_HEAD_CAP
+    return base
+
+
 def _budget_for(tool_name: str, output: str) -> tuple[int, int]:
     head, tail = TOOL_BUDGETS.get(tool_name, DEFAULT_BUDGET)
     # 只对命令类结果做噪音判定：read_file 有行号、search_code 有路径，形态本来就该分散，
@@ -170,6 +199,10 @@ def render(
             pass
         head, tail = _budget_for(tool_name, output)
         data_for_note = body.get("data")
+        if tool_name == "read_file" and tail <= 0:
+            # 预算按文件大小伸缩：这一步多读 6k，后面就少跑两三轮。
+            head = _read_head(data_for_note, len(output), head)
+            stats["read_head"] = head
         # 读文件被裁剪时，泛泛的「用 search_code 或带 offset 重读」要换成有数的一句话：
         # 共几行、现在给到第几行、下一步 offset 是几。三样缺一样，模型就只能再摸一遍。
         note = ""
