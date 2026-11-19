@@ -29,6 +29,7 @@ from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutco
 from blank_api.services.tools.file_state import check_write_guard
 from blank_api.services.tools.patch import (
     _nearby,
+    conform_written as _conform_written,
     risky_patch_path,
     unified_diff,
     write_backup,
@@ -129,28 +130,6 @@ def _resolve_needle(text: str, needle: str, replacement: str) -> tuple[str, str]
                 return found[0] + "\n", "整行删除"
         return found
     return _match_once(text, needle)
-
-
-def _conform_written(text: str, original: str) -> str:
-    """把要写的内容调成原文件的形态：换行风格与 BOM。
-
-    模型给的 content 几乎总是 LF、无 BOM；Windows 上的原文件常常是 CRLF，
-    有的还带 BOM。照原样写下去，用户只是改了一行，diff 却报整文件重写——
-    这条路上的噪声会直接把"这次改了什么"埋掉（实测两行改动报出 6 行变更）。
-    Claude 的 Write 也是先取原文件的 lineEndings 与 BOM，再写回。
-    """
-    bom = "\ufeff"
-    if original.startswith(bom) and not text.startswith(bom):
-        text = bom + text
-    elif text.startswith(bom) and not original.startswith(bom):
-        text = text[len(bom) :]
-    crlf = original.count("\r\n")
-    lf_only = original.count("\n") - crlf
-    normalized = text.replace("\r\n", "\n")
-    # 以多数为准：混合换行的文件不该被一处 CRLF 全部改成 CRLF。
-    if crlf > lf_only:
-        return normalized.replace("\n", "\r\n")
-    return normalized
 
 
 def _read_existing(root, relative: str) -> bytes:

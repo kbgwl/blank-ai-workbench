@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import difflib
-import io
 import re
 import uuid
 from pathlib import Path
@@ -243,6 +242,31 @@ def restore_backup(root: Path, backup_rel: str) -> None:
     write_verified(root, relative, content)
 
 
+def conform_written(text: str, original: str) -> str:
+    """把要写的内容调成原文件的形态：换行风格与 BOM。
+
+    模型/补丁给的文本几乎总是 LF、无 BOM；Windows 上的原文件常常是 CRLF，
+    有的还带 BOM。照原样写下去，用户只是改了一行，diff 却报整文件重写——
+    这条路上的噪声会直接把"这次改了什么"埋掉（实测两行改动报出 6 行变更）。
+
+    更狠的一种写法是"按本机换行写"（``io.TextIOWrapper(newline=None)``）：
+    在 Windows 上它把**每个** LF 文件改写成 CRLF，连 ``.sh`` 都不放过。
+    写盘形态只有这一份实现，Edit / Write / Patch 三条路都用它。
+    """
+    bom = "\ufeff"
+    if original.startswith(bom) and not text.startswith(bom):
+        text = bom + text
+    elif text.startswith(bom) and not original.startswith(bom):
+        text = text[len(bom) :]
+    crlf = original.count("\r\n")
+    lf_only = original.count("\n") - crlf
+    normalized = text.replace("\r\n", "\n")
+    # 以多数为准：混合换行的文件不该被一处 CRLF 全部改成 CRLF。
+    if crlf > lf_only:
+        return normalized.replace("\n", "\r\n")
+    return normalized
+
+
 def risky_patch_path(relative: str) -> bool:
     parts = {p.lower() for p in Path(relative).parts}
     return ".git" in parts or BACKUP_DIRNAME in parts or "env" in parts or ".env" in parts
@@ -269,7 +293,7 @@ def _patch_on_disk(root: Path, task_id: str, arguments: dict, guard: dict | None
     target = resolve_for_write(root, relative)
     existed = target.exists()
     handle = None
-    text = None
+    raw = b""
     try:
         if existed:
             try:
@@ -277,44 +301,44 @@ def _patch_on_disk(root: Path, task_id: str, arguments: dict, guard: dict | None
             except FileNotFoundError:
                 existed = False
             else:
-                # 先拿原始字节过闸门（sha256 比的是磁盘上的字节，不是换行归一后的文本），
-                # 再回到起点按文本读。stat 与内容都过一遍，才谈得上"读的是这一份"。
+                # 先拿原始字节过闸门（sha256 比的是磁盘上的字节，不是换行归一后的文本）。
                 raw = handle.read()
                 guard_error = check_write_guard(target, guard, raw)
                 if guard_error is not None:
                     return {"guard_error": guard_error, "path": relative}
-                handle.seek(0)
-                # 与原先 read_text/write_text 同口径：读时 CRLF→LF，写时再把 \n 换回本机换行。
-                text = io.TextIOWrapper(handle, encoding="utf-8", newline=None)
-        original = text.read() if text is not None else ""
+        # 读原文：保留字节原貌（backup 要一模一样），补丁本身在 LF 文本上算。
+        original = raw.decode("utf-8") if existed else ""
+        # BOM 不能进补丁的匹配文本：它挂在第 1 行行首，会让"第 1 行"永远对不上，
+        # 而工具最后报的是"未变更"——一次真的修改被静默吞掉，比报错难查得多。
+        bom = original.startswith("\ufeff")
+        working = (original[1:] if bom else original).replace("\r\n", "\n")
         try:
-            patched = apply_patch_text(original, normalize_codex_patch(patch_text))
+            patched = apply_patch_text(working, normalize_codex_patch(patch_text))
         except PatchError as error:
             # 失败里带上真实上下文，模型下一次就能改对。只给"不匹配"三个字，
             # 它只能重读整个文件再盲猜一遍——那一步既是延迟也是成本。
             return {"patch_error": str(error), "near": error.near, "path": relative}
-        if existed and patched == original:
+        if existed and patched == working:
             return {"unchanged": True}
+        # 写回的形态跟着原文件走。原来用 TextIOWrapper(newline=None)，在 Windows 上
+        # 等于"一律写成 CRLF"：一个 LF 文件被整体改写，.sh 也会变成跑不了的样子。
+        payload_text = conform_written(patched, original)
         backup_rel = ""
         if existed:
-            backup_rel = write_backup(root, task_id, relative, original.encode("utf-8"))
+            backup_rel = write_backup(root, task_id, relative, raw)
         target.parent.mkdir(parents=True, exist_ok=True)
-        if text is None:
-            with open_verified(root, relative, mode="wb", create=True) as raw:
-                writer = io.TextIOWrapper(raw, encoding="utf-8", newline=None)
-                writer.write(patched)
-                writer.flush()
+        if handle is None:
+            with open_verified(root, relative, mode="wb", create=True) as fresh:
+                fresh.write(payload_text.encode("utf-8"))
         else:
             # 复验过的同一个句柄写回：读到的对象与写入的对象是同一个，中间没有路径可换。
-            text.seek(0)
-            text.truncate()
-            text.write(patched)
+            handle.seek(0)
+            handle.truncate()
+            handle.write(payload_text.encode("utf-8"))
     finally:
-        if text is not None:
-            text.close()
-        elif handle is not None:
+        if handle is not None:
             handle.close()
-    diff = unified_diff(original, patched, relative)
+    diff = unified_diff(working, patched, relative)
     if contains_secret(diff):
         # 明文密钥只留在用户批准的文件里，入库的 diff 与事件负载必须脱敏。
         diff = redact(diff)
