@@ -8,6 +8,8 @@
 >
 > 我们的基线：`E:/projects/kbgai/kbgai`，FastAPI + LangGraph + Python，关键路径 `services/api/src/blank_api/`。
 
+**目录**：0 结论 · 1 基线 · 2 计划 · 3 目标 · 4 完成判据 · 5 代码审查 · 6 落地清单 · 7 查不到 · 8 来源
+
 ---
 
 ## 0. 一句话结论：最值得抄的三件（以及一件只能自建的）
@@ -15,7 +17,7 @@
 按“改了就能见效”排序：
 
 1. **DSH 的 `change-scope`：审查前先产出确定性范围。**
-   `scripts/change-scope.ts` 只输出 `baseSha / headSha / mergeBaseSha` 和 `committed / staged / unstaged / untracked` 四组路径，不做任何语义判断；语义审查交给 `dsh-code-review` 技能 `[DSH-R1][DSH-R2]`。我们的 `review_result_node` 现在是“把消息流丢给同一个模型再审一遍”，没有固定输入，也没有“这次到底改了哪些文件”的硬事实。抄这一层，审查才有稳定的输入边界。
+   `scripts/change-scope.ts` 只输出 `baseSha / headSha / mergeBaseSha` 和 `committed / staged / unstaged / untracked` 四组路径，不做任何语义判断；语义审查交给 `dsh-code-review` 技能 `[DSH-R1][DSH-R2]`。我们的 `review_result_node` 现在是“把消息流丢给同一个模型再审一遍”，没有固定的 diff/scope 输入，也没有“这次到底改了哪些文件”的硬事实。抄这一层，审查才有稳定的输入边界。
 
 2. **DSH 的 `exit_plan_mode` 三结局：Approve / Keep planning / Dismiss。**
    `Approve` 返回 `{approved:true}` 并在下一个 pre-step 静默退出计划模式；`Keep planning` 是一个**失败的工具调用**（`PLAN_REVISION_REQUESTED`），用户反馈作为工具结果回到模型；`Dismiss` 返回 `{approved:false}` 并结束当前轮 `[DSH-P3]`。我们已有 `exit_plan_mode`，但“继续规划”目前只是权限拒绝，用户反馈没有作为结构化工具结果回到模型——这是小改但体验差别很大的一处。
@@ -130,11 +132,14 @@ DSH 是 Cordis 插件内核，“everything is a plugin”。本次相关的包�
 - 计划正文：没有增量步骤；用户选 `Keep planning` 后，模型**重写整段计划**再交一次 `[DSH-P3]`。
 - todo：整表替换；`turn/start` 时投影清空成 `null`，也就是说 **todo 只活一轮**，不是跨轮的持久计划 `[DSH-P5]`。
 - 模式：`set(agent, active)` 在 turn 内是 `queued`，在 turn 外是 `committed`；只在下一个被接受的 in-turn pre-step append `[DSH-P2]`。
+- 限制：`pending` 是进程内的；在 turn 最后一次 accepted pre-step 之后做的选择，如果进程退出就丢，UI 必须重新应用 `[DSH-P2]`。
 
 #### A3. 怎么呈现给用户
 
 - 计划：`exit_plan_mode` 通过 user-questions seam 弹一张 `plan-review` 卡，正文是完整 markdown，两个选项 `Approve` / `Keep planning`；关闭卡片等于“用户要自己说”，本轮结束 `[DSH-P3]`。
+- `plan-review` 只是 presentation intent：只有 Web 有专用 renderer，其他交互 provider 走通用问题卡 `[DSH-P2]`。
 - 限制：subagent 不能打开 plan review；`exit_plan_mode` 会失败，并让它把未决决策写进最终结果 `[DSH-P2]`。
+- `/plan off` 可以直接退出；没有交互审查通道时 `exit_plan_mode` fail closed，`/plan off` 是手动逃生口 `[DSH-P2]`。
 - 没有步骤级进度、没有里程碑；计划是一整块可读文本。
 - todo：行式清单，有 `counts`（pending/inProgress/completed），没有层级 `[DSH-P5]`。
 
@@ -197,7 +202,7 @@ DSH 是 Cordis 插件内核，“everything is a plugin”。本次相关的包�
 | `boot` | string | 设置 goal 的服务进程 id；进程重启后不会自己续跑 |
 | `updatedAt` | number | 最后更新时间 |
 
-- 存储：插件自己的 storage，key 是 `session:<sessionID>`；不是 session message `[OC-G1]`。
+- 存储：插件自己的 storage，key 是 `session:<sessionID>`；不是 session message `[OC-G1]`。一个 session 一个 goal；children/forks 默认没有（plugin storage 是插件自己的）`[OC-G2]`。
 - 读写通过 RPC：`get` + `changed` 事件 `[OC-G1]`。
 - **没有 `done_when`、没有 `constraints`、没有 `out_of_scope`**。完成判据只有自然语言 `objective`。
 
@@ -210,7 +215,7 @@ DSH 是 Cordis 插件内核，“everything is a plugin”。本次相关的包�
   > `Decide whether the goal below has been met, using only evidence in the conversation above: tool results, command output and file contents. The assistant claiming the goal is met is not evidence.`
   > `"done" only when the evidence shows the whole goal is met. When in doubt, answer "continue".`
   > `[OC-G2]`
-- 输出是严格一行 JSON：`done / continue / blocked / paused / wait`，其中 `continue` 可带 `next_step` `[OC-G2]`。
+- 输出是严格一行 JSON：`done / continue / blocked / paused / wait`，其中 `continue` 可带 `next_step` `[OC-G2]`。代码用 `parseVerdict` 从第一个 `{` 截到最后一个 `}`，容忍 reviewer 包代码围栏或加一句话 `[OC-G2]`。
 - judge 的输入包括 objective、当前仍在运行的后台 shell（如果有），以及会话上文；`wait` 只在有后台 shell 时允许，避免“没有东西会唤醒却一直等” `[OC-G2]`。
 - 代码形态：`session.generate` 是一次生成调用，没有新建 agent/session，也没有换模型路由的代码（判断：**角色分离，不保证模型分离**）；代码只读取 `result.text`，没有看到把 judge 文本作为消息 append 的分支；会话里能看到的是 `continue` 产生的 `synthetic` continuation（判断：judge 的裁决文本本身不进对话）`[OC-G2]`。
 
@@ -225,6 +230,7 @@ DSH 是 Cordis 插件内核，“everything is a plugin”。本次相关的包�
 #### B4. 轮次 / 回合上限与“目标未达成就停”
 
 - `MAX_ROUNDS = 50`；`MAX_STALLS = 3`；`WAIT_LIMIT = 30 分钟` `[OC-G6]`。
+- 只有轮次/停顿/等待上限，没有 token/金额预算；成本闸在我们这边独立。
 - 停止语义：
   - `done` → `status = "complete"`；
   - `blocked` / `paused` / 无法解析 verdict → `status = "paused"`，reason 写清楚；
@@ -259,6 +265,7 @@ DSH 是 Cordis 插件内核，“everything is a plugin”。本次相关的包�
 | `activation` | `armed \| disarmed` | **进程内**，永不持久化 |
 
 - 存储：session log 里的 `goal/change` 事件，version 1，payload 是**完整快照**或 clear 墓碑；`goal` projection 严格重放 `[DSH-G2]`。
+- 分层：`GoalSnapshot` 含 id/revision/objective/phase/blockedReason/maxGoalRounds；`GoalView` 再加 `roundsStarted/createdAt/updatedAt` 和进程内 `activation` `[DSH-G1]`。
 - 约束：一个 session 只有一个 current goal；未完成的 goal 必须先 edit/pause/resume/block/clear 才能换；completed 可以直接替换 `[DSH-G1]`。
 - 重放会拒绝：非正轮次、轮次跳号、过期 revision、stopped phase 上继续记轮次、超过 cap `[DSH-G2]`。
 
@@ -273,6 +280,7 @@ DSH 是 Cordis 插件内核，“everything is a plugin”。本次相关的包�
   > `No independent evaluator — the caller that records completion or blocking is authoritative; evaluator-backed certification is deferred to a separate policy layer.`
   > `[DSH-G1]`
 - `blocked` 的机制：`tool-goal` 默认 `blockedAfterConsecutiveRounds = 3`；运行时只保证“已经过了 3 个不同的 goal round”，**不判断这 3 轮是不是同一个阻塞条件**——那仍是模型判断，必须在 `blocked_reason` 里写具体条件 `[DSH-G3]`。
+- `blockedReason.code` 的来源：模型自报 block 固定 `model-reported`；driver 到轮次上限用 `round-limit` `[DSH-G3][DSH-G7]`。
 - 人类可以 `pause / resume / clear`；`resume` durable paused 状态必须走用户命令/Web，模型工具 `update_goal(resume)` 会拒绝 `GOAL_TOOL_RESUME_PAUSED` `[DSH-G3]`。
 
 #### B3. 有没有“目标偏移检测”
@@ -454,6 +462,7 @@ DSH 是 Cordis 插件内核，“everything is a plugin”。本次相关的包�
 - 有 `.agents/skills/dsh-code-review/SKILL.md`，但它的定位是：
   > `Use when reviewing a pull request in the deepseek-harness repo — orients the reviewer to this codebase's standards ...`
   > `[DSH-R1]`
+- 技能自己开头就写：`This skill is guidance, not a complete checklist.` `[DSH-R1]`——它不追求把审查变成可执行规则。
 - 这是**给在本仓库里干活的 agent（或人）用的仓库级技能**，不是 `dsh` 产品对用户代码的通用 review 功能。
 - 在 master 全树里没有找到 `/review` 命令、`code_review` 工具或 review 节点（负向证据：22,247 个路径中，`review` 相关只有这个 skill、`auto-review` 权限审查、Forge PR UI 和治理脚本）。
 - 从技能形态看，它不是子代理；技能加载后由当前 agent 按步骤执行。
@@ -545,6 +554,8 @@ interface ChangeScopeReport {
 | R7 | **DSH 审批区分作者/他人**：作者自审不算分，reviewer 按 blame ownership 加权 `[DSH-R3]` | 我们单 agent，默认不区分；多 agent 场景没有 author 标记 | 部分（未来） | 如果做多 agent/团队审查，给 `report_findings` 加 `author_agent_id`，并在汇总时排除“作者自审”；不需要抄整套 weighted approval（2 分、delegate、blame 加权），那是 GitHub 治理，不是 harness。落点：`services/tools/review.py` 的 finding schema + 汇总逻辑。 |
 | R8 | **DSH `auto-review` 构造完整输入**：所有 user/direct-parent 消息、项目指令、历史调用、tool schema，待执行调用放最后 `[DSH-R4]` | 我们的 `guardian` 只看“即将执行的工具调用 + 工作区根 + 风险等级”，输入很短（`services/guardian.py:GUARDIAN_SYSTEM`） | 部分 | 不要把它当代码审查；但可以借“输入要完整且按 surface 排序”的思路：如果以后做“权限审查升级”，把相关用户指令、历史拒绝、当前调用按顺序拼；现在不必改。 |
 | R9 | **opencode 审查明确“be certain / 不确定就说不确定”** `[OC-R2]` | `skills/code-review` 有“不为凑数编问题”，但没有“不确定要明说”的硬规则 | 能 | 在技能输出节加一条：`不确定的写成“未验证/不确定”，不要冒充确定 bug`；与 `report_findings` 的 `verdict=PLAUSIBLE` 对齐。落点：`skills/code-review/SKILL.md` 第三节。 |
+
+**审查输出这块，我们其实比两家都强：** `report_findings` 已经有 `file / line / summary / failure_scenario / verdict / outcome / max 32` 的结构，缺的是 `severity` 字段和“独立触发”。不要为了抄 DSH 退回纯 prose，也不要为了抄 opencode 退回“只有一个 `/review` 提示词”。
 
 ### 5.5 review 流程的完整时序（文字图）
 
@@ -666,9 +677,9 @@ verifier 汇总
 ### P0（直接对应“没有独立审查 / 完成判据不可执行”）
 
 1. **`done_when` 编译成可执行 checks。**
-   - `services/tools/plan.py:298`：`done_when` 的 JSON schema 从 `string[]` 改成 `(string | {text, check})[]`。
+   - `services/tools/plan.py:298-325`：`done_when` 的 JSON schema 从 `string[]` 改成 `(string | {text, check})[]`。
    - `services/plan.py:normalize_goal`：兼容旧 string，统一成 `{text, check}`。
-   - `services/agent/verifier.py:293`：逐条执行 `check`，输出 `done_when: [{text, status, evidence}]`；`unknown` 不阻断。
+   - `services/agent/verifier.py:293-310`：逐条执行 `check`，输出 `done_when: [{text, status, evidence}]`；`unknown` 不阻断。
    - `services/agent/verifier.py:18` 的 `CHECKS` 加 `done_when_checks` 或复用 `goal_met`。
 
 2. **`exit_plan_mode` 三结局。**
@@ -744,6 +755,9 @@ verifier 汇总
 - todo 工具：https://github.com/anomalyco/opencode/blob/dev/packages/core/src/tool/plugin/todo.ts
 - todo 描述：https://github.com/anomalyco/opencode/blob/dev/packages/core/src/tool/todowrite.txt
 - todo 读取：https://github.com/anomalyco/opencode/blob/dev/packages/tui/src/util/todo.ts
+- todo 客户端读取：https://github.com/anomalyco/opencode/blob/dev/packages/app/src/session/composer/todos.ts
+- todo 侧边栏：https://github.com/anomalyco/opencode/blob/dev/packages/tui/src/feature-plugins/sidebar/todo.tsx
+- agent 定义（Build / Plan）：https://github.com/anomalyco/opencode/blob/dev/packages/core/src/plugin/agent.ts
 - `/review` 命令注册：https://github.com/anomalyco/opencode/blob/dev/packages/core/src/plugin/command.ts
 - `/review` 提示词：https://github.com/anomalyco/opencode/blob/dev/packages/core/src/plugin/command/review.txt
 - 目标 UI：https://github.com/anomalyco/opencode/blob/dev/packages/tui/src/feature-plugins/prompt/goal.tsx

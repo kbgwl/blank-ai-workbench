@@ -125,6 +125,20 @@ DSH 把它做成显式配置，这个设计比"偷偷选一个"好——值得�
 - **子代理编排 / swarm**：两家都在收着用，我们单会话的打转还没治完。
 - **把 agent loop 做成插件**（DSH 的 "everything is a plugin"）：架构级重构，不是升级。
 
+### 不要为了"对齐"把自己改弱的四处（详报 §2.1/§2.2 标了"不能（降级）"）
+
+| 我们已有的 | 两家的样子 | 结论 |
+|---|---|---|
+| `update_plan`：步骤带 `id/step/status/milestone_id/evidence`，可归到里程碑，同一时刻只允许一个 `in_progress` | opencode **没有计划对象**，plan 是 primary agent，计划就在对话里 | 不要改成"纯聊天计划"。可抄的是它"压缩后重新注入计划提醒" |
+| 里程碑 + 步骤 + `progress` | opencode todo 是 4 状态平铺清单，从最近一次工具调用派生，无服务端状态 | 不要去掉里程碑。可抄 `cancelled` 状态（计划没做完但不是失败） |
+| `goal_spec` 有 `objective/done_when/constraints/out_of_scope` | opencode goal 只有 `objective/status/rounds`，**没有 done_when** | 不要去掉这三个字段。可抄它 `stalls` 的"同一 reason 连续 N 次"思想 |
+| `verifier` 只读事实 | opencode 用 LLM judge；DSH 让执行模型自证并自认 "No independent evaluator" | 我们的底座更强，judge 只能当第二层，不能替代 |
+
+另外三处容易混淆的（报告已澄清）：
+- DSH 的 `dsh-code-review` 是**仓库级 PR 审查技能**，不是运行时通用 code review；
+- `experimental/auto-review` 是**工具调用权限审查**，不是代码审查；
+- **两家都没有真正的目标漂移检测**，只有"每轮重述 objective + 压缩后提醒"——这块我们也一样，不是落后。
+
 ---
 
 ## 4. 建议的升级顺序
