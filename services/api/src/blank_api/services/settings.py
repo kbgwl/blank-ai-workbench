@@ -95,6 +95,15 @@ DEFAULTS: dict[str, Any] = {
         # 工具超过一定数量后按需检索加载（tool_search）
         "search": True,
     },
+    "budget": {
+        # 单个任务的金额上限。**0 = 不限**（默认）：没有价目表就凭空算钱，等于编一个数
+        # 去吓人。配了价目之后把这里设成任意正数，任务花到那个数就进收尾区。
+        "cost_limit": 0.0,
+        # 价目表：每百万 token 的单价。键可以是 model 名或 provider 名（小写），
+        # 匹配不上用 "default"；连 default 都没有就不估价、闸门不生效。
+        # 例：{"default": {"input": 2, "cached_input": 0.5, "output": 8}}
+        "pricing": {},
+    },
     "model": {
         # 默认供应商 id。为空时按历史行为挑「有 key 的第一个」。
         #
@@ -316,6 +325,7 @@ def normalize(raw: Any) -> dict[str, Any]:
     permissions = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
     tools = data.get("tools") if isinstance(data.get("tools"), dict) else {}
     model = data.get("model") if isinstance(data.get("model"), dict) else {}
+    budget = data.get("budget") if isinstance(data.get("budget"), dict) else {}
     worktree = data.get("worktree") if isinstance(data.get("worktree"), dict) else {}
     sandbox = data.get("sandbox") if isinstance(data.get("sandbox"), dict) else {}
     safety = data.get("safety") if isinstance(data.get("safety"), dict) else {}
@@ -371,6 +381,26 @@ def normalize(raw: Any) -> dict[str, Any]:
     vision_provider = str(model.get("vision_provider") or "").strip()
     if len(vision_provider) > 64:
         vision_provider = ""
+    # 金额上限：负数当 0（不限），超大的数夹到 1e6——写错一位数不该变成"永不超限"。
+    try:
+        cost_limit = float(budget.get("cost_limit") or 0)
+    except (TypeError, ValueError):
+        cost_limit = 0.0
+    cost_limit = max(0.0, min(cost_limit, 1_000_000.0))
+    # 价目表原样透传，只做一层形状清洗：非对象的条目丢掉，单价转成非负浮点。
+    raw_pricing = budget.get("pricing") if isinstance(budget.get("pricing"), dict) else {}
+    pricing: dict[str, dict[str, float]] = {}
+    for key, value in list(raw_pricing.items())[:40]:
+        if not isinstance(value, dict):
+            continue
+        cleaned: dict[str, float] = {}
+        for field in ("input", "cached_input", "output"):
+            try:
+                amount = float(value.get(field) or 0)
+            except (TypeError, ValueError):
+                amount = 0.0
+            cleaned[field] = max(0.0, min(amount, 10_000.0))
+        pricing[str(key)[:80].lower()] = cleaned
     # Claude 用驼峰 baseRef；两种写法都收，下划线写法优先。认不出的值回落 fresh
     # ——工作树从哪条线起，不能由一个拼错的词随机决定。
     base_ref = str(worktree.get("base_ref") or worktree.get("baseRef") or "").strip().lower()
@@ -421,6 +451,7 @@ def normalize(raw: Any) -> dict[str, Any]:
         },
         "tools": {"search": _as_bool(tools.get("search"), DEFAULTS["tools"]["search"])},
         "model": {"default_provider": default_provider, "vision_provider": vision_provider},
+        "budget": {"cost_limit": round(cost_limit, 4), "pricing": pricing},
         "worktree": {"base_ref": base_ref},
         "output_style": output_style,
         # 只收认得出布尔语义的值：手改文件时写成字符串 "on" 也认，写成一坨

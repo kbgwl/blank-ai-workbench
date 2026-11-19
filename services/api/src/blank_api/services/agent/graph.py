@@ -42,6 +42,7 @@ from blank_api.services.agent import remediation
 from blank_api.services.agent import workflow as workflow_module
 from blank_api.services.agent.live import OutputRelay
 from blank_api.services.agent.progress import ProgressSentinel
+from blank_api.services.agent.cost import cost_limit, current_pricing, estimate_cost
 from blank_api.services.agent.vision_proxy import describe_for_session
 from blank_api.services.agent.restart import build_restart_messages, should_restart, summarize_changed
 from blank_api.services.agent.verify_hook import (
@@ -5585,9 +5586,18 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     spent_delegated = _tokens_spent(delegated)
     spent = spent_self + spent_delegated
     token_limit = max(1, int(session.token_budget or DEFAULT_TOKEN_BUDGET))
+    # 金额闸：token 数用户没法直觉判断（"1.5M token"是 3 毛还是 300 块取决于模型），
+    # 钱可以。两家外网 harness 都没有这个闸，这块是我们自建的。
+    # 没配价目表时 priced=False、amount=0，闸门不生效——不凭空算钱去吓人。
+    pricing = current_pricing()
+    cost_self = estimate_cost(usage, pricing)
+    cost_delegated = estimate_cost(delegated, pricing) if spent_delegated else {"amount": 0.0, "priced": False}
+    cost_amount = float(cost_self["amount"]) + float(cost_delegated["amount"])
+    cost_cap = cost_limit()
     steps_out = remaining <= 0
     tokens_out = spent >= token_limit
-    exhausted = steps_out or tokens_out
+    cost_out = cost_cap > 0 and cost_amount >= cost_cap
+    exhausted = steps_out or tokens_out or cost_out
     if exhausted:
         await session.recorder.add(
             "budget.exceeded",
@@ -5599,9 +5609,17 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 "tokens_self": spent_self,
                 "tokens_delegated": spent_delegated,
                 "token_budget": token_limit,
+                # 估价而不是账单：价目表是用户填的，可能过期。字段名带 estimated 是为了
+                # 让读事件的人不去拿它对账。
+                "estimated_cost": round(cost_amount, 6),
+                "cost_limit": cost_cap,
+                "cost_priced": bool(cost_self["priced"] or cost_delegated.get("priced")),
+                "cost_breakdown": cost_self.get("breakdown") or {},
                 "reason": (
                     "步数用完"
                     if steps_out
+                    else "金额超限"
+                    if cost_out
                     else ("token 用完" if spent_self >= token_limit else "派给子代理的 token 用完")
                 ),
             },
@@ -5617,7 +5635,11 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 "请基于已经完成的动作和已有的工具结果，直接输出一段中文总结："
                 "做了什么、结果如何、还有哪些没做完。"
             )
-    elif remaining <= WRAP_UP_STEPS or spent >= token_limit * TOKEN_WRAP_UP_RATIO:
+    elif (
+        remaining <= WRAP_UP_STEPS
+        or spent >= token_limit * TOKEN_WRAP_UP_RATIO
+        or (cost_cap > 0 and cost_amount >= cost_cap * TOKEN_WRAP_UP_RATIO)
+    ):
         await session.recorder.add(
             "budget.warning",
             node,
