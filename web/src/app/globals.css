@@ -202,10 +202,26 @@ optgroup {
 
 ::selection { background: color-mix(in srgb, var(--brand-color) 22%, transparent); }
 
-/* 键盘焦点统一成品牌色细环；鼠标点击不出现。 */
-:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--brand-color) 50%, transparent);
-  outline-offset: 1px;
+/*
+ * 键盘焦点统一成品牌色细环；鼠标点击不出现。
+ *
+ * 这里踩的是和上面 `* { border-color }` 完全同一个坑，只是没人想到焦点环也算：
+ * **未分层的规则优先级高于任何 `@layer`**，裸写一条 `:focus-visible { outline: … }`
+ * 会把组件上的 `focus:outline-none` / `focus-visible:outline-none` 全部盖掉。
+ *
+ * 症状很具体：输入框外面是一张圆角卡片，用键盘聚焦到输入框时，卡片**里面**
+ * 画出一个方角矩形——看起来像"输入框里又套了一个输入框"。实测像素色 (143,143,143)，
+ * 正是品牌色 #1f1f1f 取 50% 叠在白底上的值，所以那不是边框，是这条焦点环。
+ *
+ * 两道保险一起上：放进 utilities 层（同层才轮得到比优先级）+ `:where()` 压到
+ * specificity 0，于是任何 `outline-none` 工具类都能把它关掉；没写这个类的元素
+ * 照样有焦点环，键盘可达性不受影响。
+ */
+@layer utilities {
+  :where(:focus-visible) {
+    outline: 2px solid color-mix(in srgb, var(--brand-color) 50%, transparent);
+    outline-offset: 1px;
+  }
 }
 
 /*
