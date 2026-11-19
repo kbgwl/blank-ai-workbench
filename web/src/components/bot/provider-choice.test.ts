@@ -59,3 +59,22 @@ test("供应商还没读回来：说「读取中」，不许先把「未配置�
   assert.deepEqual(providerLabel("", [], false), { text: "读取中", warn: false });
   assert.deepEqual(providerLabel("p-glm", [], false), { text: "读取中", warn: false });
 });
+
+test("选中了一家没配 key 的：照样显示它，但要报警", () => {
+  // 界面写着"anthropic · sonnet"、发出去 401，用户会去猜是哪一环坏了。
+  const { text, warn } = providerLabel(
+    "a1",
+    [{ id: "a1", name: "anthropic", model: "claude-sonnet", enabled: true, api_key_hint: "" } as never],
+  );
+  assert.equal(text, "anthropic · claude-sonnet");
+  assert.equal(warn, true);
+});
+
+test("选中了一家已停用的：文案里说出来，也要报警", () => {
+  const { text, warn } = providerLabel(
+    "a1",
+    [{ id: "a1", name: "anthropic", model: "sonnet", enabled: false, api_key_hint: "k" } as never],
+  );
+  assert.match(text, /已停用/);
+  assert.equal(warn, true);
+});

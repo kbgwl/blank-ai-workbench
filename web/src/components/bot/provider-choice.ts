@@ -33,7 +33,13 @@ export function providerLabel(
   if (!ready) return { text: "读取中", warn: false };
   const chosen = providerId ? providers.find((provider) => provider.id === providerId) : undefined;
   if (chosen) {
-    return { text: chosen.model ? `${chosen.name} · ${chosen.model}` : chosen.name, warn: false };
+    const text = chosen.model ? `${chosen.name} · ${chosen.model}` : chosen.name;
+    // 选中了一家没配 key 的：显示照旧（用户确实选了它），但要报警。
+    // 不报的话，界面上写着"anthropic · sonnet"、发出去 401，用户会去猜是哪一环坏了；
+    // 而这条消息点名的正是那一环。
+    const hasKey = (chosen.api_key_hint ?? "") !== "";
+    if (!chosen.enabled) return { text: `${text}（已停用）`, warn: true };
+    return { text, warn: !hasKey };
   }
   // 悬空 id 与空 id 同义：都交给后端按默认挑，不该拿红色去吓人。
   const usable = providers.some((provider) => provider.enabled && (provider.api_key_hint ?? "") !== "");
