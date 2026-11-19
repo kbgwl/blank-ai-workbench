@@ -2707,6 +2707,10 @@ def initial_messages(
     session_goal: str = "",
     hook_context: Sequence[str] = (),
     initial_user_message: str = "",
+    # 从项目经验库里想起的一条（已经渲染好）。放在这里而不是 system：实测要求
+    # "任务描述之后、第一次定位/编辑之前"，而且措辞是"可能不适用"——它是上下文，
+    # 不是规则。真正的硬约束走 hook / lint / 审批，不走记忆。
+    recalled_experience: str = "",
 ) -> list[dict]:
     from blank_api.services.instructions import compose
 
@@ -2791,6 +2795,8 @@ def initial_messages(
     # 表现为任务跑到后半程模型反而不知道今天几号了。
     system += "\n" + clock_note()
     prompt = f"任务目标：{goal}"
+    if recalled_experience.strip():
+        prompt += "\n\n" + recalled_experience.strip()
     if criteria:
         prompt += "\n验收条件：\n" + "\n".join(f"- {item}" for item in criteria)
     # 结构化约束进提示：创建任务时声明的 constraints / out_of_scope 只存库不进提示，

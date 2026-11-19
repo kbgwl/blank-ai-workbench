@@ -8,6 +8,7 @@ import logging
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace as dc_replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1488,6 +1489,30 @@ class AgentRuntime:
         # 会话目标每一轮都从库里读，不信内存：上一轮刚被用户清除、或另一条进程
         # 改过它，内存副本都会让模型继续按一个不存在的目标办事。空串＝没设置。
         session.session_goal = await session_goal_for(scope.store, request.thread_ref)
+        # 自学习闭环的"读"这一半：按本次目标从项目经验库里最多想起 1 条。
+        # 剂量上限是 1（SWE-Exp 消融：1 条 42.0 / 2 条 39.8 / 4 条 39.0），
+        # 多给只会互相干扰。读不到（没库、文件坏、权限）就当没有，绝不挡任务。
+        recalled_experience = ""
+        try:
+            from blank_api.services.agent.experience import ExperienceStore, render
+
+            # 只用目标检索：任务开始时还不知道要改哪些文件，硬猜路径会让
+            # 「按路径匹配」这一维变成噪音。路径维度留给"任务中途再想一次"（后续再说）。
+            hits = ExperienceStore().recall(session.context.root, goal=session.goal, limit=1)
+            if hits:
+                recalled_experience = render(hits[0])
+                await recorder.add(
+                    "experience.recalled",
+                    "initial",
+                    {
+                        "statement": hits[0].statement,
+                        "kind": hits[0].kind,
+                        "confidence": hits[0].confidence,
+                        "task_id": hits[0].task_id,
+                    },
+                )
+        except Exception:  # noqa: BLE001 - 想起一条经验失败，不该让任务起不来
+            recalled_experience = ""
         state: dict[str, Any] = {
             "task_id": request.task_id,
             "messages": initial_messages(
@@ -1518,6 +1543,7 @@ class AgentRuntime:
                 run_id=recorder.run_id,
                 hook_context=session_hook_notes,
                 initial_user_message=initial_user_message,
+                recalled_experience=recalled_experience,
             ),
             "plan": [],
             "steps": 0,
@@ -1789,53 +1815,52 @@ class AgentRuntime:
     async def _consolidate(
         self, scope: _RunScope, result: dict, *, title: str, source: str = ""
     ) -> None:
-        """任务成功后把结论与笔记蒸馏进项目长期记忆（确定性规则，不调模型）。"""
+        """任务收尾时抽 0–2 条可复用经验，写进项目经验库。
+
+        **不再写"整任务总结"**。原来的实现把 summary / 验收 / 验证命令拼成一段
+        散文追加进 `MemoryStore`，实测后果是：57 条里 45 条是冒烟流水账，同一条事实
+        重复 13 次，还有两条互相矛盾的结论并存。而 2604.27003 / 2608.20274 的结论是
+        更坏的——**整任务总结会负迁移，低于"完全没有记忆"的基线**。
+
+        现在走 `experience.extract()`：确定性规则、0–2 条、必须带证据指针。
+        "这次学到 0 条"是正常结果——冒烟测试、纯问答本来就没什么可学的。
+        """
         session = scope.session
-        if session.memory is None:
-            return
-        facts: list[str] = []
-        for item in result.get("acceptance_results") or []:
-            if not isinstance(item, dict):
-                continue
-            text = str(item.get("criterion") or item.get("name") or item.get("text") or "").strip()
-            covered = item.get("covered")
-            if covered is True:
-                state = "覆盖"
-            elif covered is False:
-                state = "未覆盖"
-            else:
-                state = str(item.get("status") or "未知")
-            if text:
-                # 验收覆盖度是模型自报的，不是独立核对结果；记忆里如实标注，
-                # 免得下一轮把它当成已验证的事实引用。
-                facts.append(f"自报验收「{text}」：{state}")
-        validation = result.get("validation") or {}
-        if validation.get("command"):
-            facts.append(
-                f"验证命令 {validation.get('command')} → {validation.get('status') or '未知'}"
-            )
-        notes = ""
-        if session.notes is not None:
-            try:
-                notes = session.notes.read(scope.task_id).content
-            except Exception:
-                notes = ""
         try:
-            outcome = session.memory.consolidate(
-                session.context.root,
+            from blank_api.services.agent.experience import ExperienceStore, extract
+
+            rows = [item for item in (result.get("tool_results") or []) if isinstance(item, dict)]
+            changed = [
+                str((row.get("data") or {}).get("path") or "")
+                for row in rows
+                if row.get("ok") and str((row.get("data") or {}).get("change_type") or "")
+            ]
+            failures = [
+                row
+                for row in rows
+                if row.get("ok") is False
+                or str(row.get("status") or "") in ("failed", "error", "timeout")
+            ]
+            learned = extract(
                 task_id=scope.task_id,
-                title=title or session.goal,
-                summary=str(result.get("summary") or ""),
-                notes=notes,
-                facts=facts,
-                source=source,
+                goal=session.goal,
+                changed_paths=[path for path in changed if path],
+                validation=result.get("validation") or {},
+                failures=failures,
+                at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
             )
-        except Exception as exc:  # 固化失败不该让已经成功的任务变成失败
+            store = ExperienceStore()
+            actions = [store.record(session.context.root, entry)[0] for entry in learned]
+        except Exception as exc:  # noqa: BLE001 - 学到东西失败，不该让已经成功的任务变成失败
             await scope.recorder.add(
-                "memory.consolidation_failed", "complete", {"error": str(exc)[:300]}
+                "experience.failed", "complete", {"error": str(exc)[:300]}
             )
             return
-        await scope.recorder.add("memory.consolidated", "complete", outcome.as_dict())
+        await scope.recorder.add(
+            "experience.learned",
+            "complete",
+            {"count": len(learned), "actions": actions, "statements": [e.statement[:160] for e in learned]},
+        )
 
     async def _set_status(self, scope: _RunScope, status: str) -> None:
         async with scope.store() as session:

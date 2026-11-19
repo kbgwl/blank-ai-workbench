@@ -117,22 +117,30 @@ async def test_notes_survive_into_the_next_run(env: Env, workspace: Path) -> Non
     assert "main.py 第 3 行还在改" in resumed_text
 
 
-async def test_successful_run_is_consolidated_into_memory(env: Env, workspace: Path) -> None:  # noqa: F811
+async def test_successful_run_teaches_the_experience_store(env: Env, workspace: Path) -> None:  # noqa: F811
+    """任务成功且验证过 → 抽出一条带证据的经验。
+
+    这里原来是断言"整任务总结被追加进 MemoryStore"。那个做法已经停掉了：
+    57 条记忆里 45 条是冒烟流水账、同一条事实重复 13 次、还有互相矛盾的结论并存，
+    而实测结论是"整任务总结会负迁移，低于完全没有记忆的基线"（2604.27003 / 2608.20274）。
+    现在改成抽"一条带证据的子任务级经验"。
+    """
     task_id, _provider, resp = await _successful_run(env, workspace)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["task"]["status"] == "succeeded", body["task"]
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
-    consolidated = [event for event in events if event["type"] == "memory.consolidated"]
-    assert consolidated, [event["type"] for event in events]
-    assert consolidated[0]["payload"]["added"] >= 1
+    learned = [event for event in events if event["type"] == "experience.learned"]
+    assert learned, [event["type"] for event in events]
 
-    text = MemoryStore().load(workspace)
-    # 结论、验收、验证命令三类事实都要落进长期记忆；验收状态如实记录（本轮是未覆盖）
-    assert "验收「测试通过」" in text
-    assert "验证命令" in text and "pytest" in text
-    assert MemoryStore().search(workspace, "测试")
+    from blank_api.services.agent.experience import ExperienceStore
+
+    # 这个任务只跑了测试、没改任何文件。**它不该学到东西**——这正是修掉
+    # "57 条记忆里 45 条是冒烟流水账"的那个口子：没有改动就没有可复用的东西。
+    assert learned[0]["payload"]["count"] == 0
+    assert ExperienceStore().load(workspace) == []
+    assert MemoryStore().load(workspace) == "", "整任务总结的散文固化已经停掉了"
 
 
 async def test_fork_copies_state_and_records_lineage(env: Env, workspace: Path) -> None:  # noqa: F811
@@ -290,12 +298,11 @@ async def test_daily_without_opt_in_does_not_consolidate(env: Env, workspace: Pa
     assert MemoryStore().load(workspace) == ""
 
 
-async def test_daily_with_opt_in_still_consolidates(env: Env, workspace: Path) -> None:  # noqa: F811
-    """日常「记住」：与从前一致，任务结论照常固化，开关不是把记忆整体关死。"""
+async def test_daily_with_opt_in_still_learns(env: Env, workspace: Path) -> None:  # noqa: F811
+    """日常「记住」：开关打开时照常学，开关管的是"要不要学"，不是"学什么形状"。"""
     task_id = await _daily_answer_run(env, workspace, memory_opt_in=True)
     body = (await env.client.get(f"{API}/tasks/{task_id}")).json()
     assert body["status"] == "succeeded", body
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
-    assert [e for e in events if e["type"] == "memory.consolidated"]
-    assert MemoryStore().load(workspace) != ""
+    assert [e for e in events if e["type"] == "experience.learned"]
