@@ -24,7 +24,10 @@ import hashlib
 import re
 from typing import Any, Iterable
 
-PLAN_STATUSES = ("pending", "in_progress", "completed")
+# "cancelled" 是给「这一步不再做了」准备的：用户中途改主意，或者模型发现这条路走不通。
+# 没有它，模型只有两条烂路——留成 pending（永远显示"还没做完"，像卡住了），
+# 或者标 completed（把没做的事写成做完了）。两者都会让进度条说谎。
+PLAN_STATUSES = ("pending", "in_progress", "completed", "cancelled")
 MILESTONE_STATUSES = ("pending", "in_progress", "completed")
 MAX_STEPS = 12
 MAX_MILESTONES = 6
@@ -32,7 +35,7 @@ MAX_STEP_CHARS = 200
 MAX_TITLE_CHARS = 120
 MAX_EVIDENCE_CHARS = 400
 
-_MARKS = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]"}
+_MARKS = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]", "cancelled": "[-]"}
 _MILESTONE_MARKS = {"completed": "●", "in_progress": "◐", "pending": "○"}
 _WS = re.compile(r"\s+")
 
@@ -354,7 +357,9 @@ def plan_progress(steps: list[dict], milestones: list[dict]) -> dict:
     total = len(steps)
     completed = sum(1 for step in steps if step["status"] == "completed")
     in_progress = sum(1 for step in steps if step["status"] == "in_progress")
-    pending = total - completed - in_progress
+    cancelled = sum(1 for step in steps if step["status"] == "cancelled")
+    # 已取消的不算待办，也不算完成：它只是"不做了"。混进 pending 会让进度条永远差一截。
+    pending = total - completed - in_progress - cancelled
 
     by_id = {step["id"]: step for step in steps}
     milestone_views = []
@@ -377,6 +382,8 @@ def plan_progress(steps: list[dict], milestones: list[dict]) -> dict:
         "completed": completed,
         "in_progress": in_progress,
         "pending": pending,
+        # 单独一档给前端画"3 步已取消"，而不是让它去减 total - 其它字段。
+        "cancelled": cancelled,
         "percent": round(completed / total * 100) if total else 0,
         "milestones": milestone_views,
     }

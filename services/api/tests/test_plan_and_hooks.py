@@ -200,3 +200,25 @@ async def test_results_are_recorded_for_audit(tmp_path):
     await runner.run("session_start", "", {})
     assert len(runner.results) == 1
     assert runner.results[0].event == "session_start"
+
+
+def test_a_cancelled_step_is_not_counted_as_pending_or_done():
+    """「这一步不做了」必须能表达出来。
+
+    没有 cancelled 时模型只有两条烂路：留成 pending（永远显示"还没做完"，像卡住了），
+    或者标 completed（把没做的事写成做完了）。两者都会让进度条说谎。
+    """
+    from blank_api.services.plan import plan_progress, render_plan
+
+    steps = [
+        {"id": "s1", "step": "甲", "status": "completed"},
+        {"id": "s2", "step": "乙", "status": "cancelled"},
+        {"id": "s3", "step": "丙", "status": "pending"},
+    ]
+    progress = plan_progress(steps, [])
+
+    assert progress["cancelled"] == 1
+    assert progress["pending"] == 1, "已取消的步骤不该混进待办"
+    assert progress["completed"] == 1
+    assert progress["percent"] == 33, "取消不算完成，进度只按 completed 算"
+    assert "[-]" in render_plan(steps, [])

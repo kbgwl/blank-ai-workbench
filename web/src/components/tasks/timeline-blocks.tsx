@@ -190,7 +190,9 @@ function PlanCard({ block }: { block: Extract<Block, { kind: "plan" }> }) {
                           ? "border-brand/60 bg-brand text-on-brand"
                           : step.status === "in_progress"
                             ? "border-brand/60 bg-brand/15 text-brand"
-                            : "border-line bg-surface-3 text-faint",
+                            : step.status === "cancelled"
+                              ? "border-dashed border-line bg-transparent text-faint"
+                              : "border-line bg-surface-3 text-faint",
                       ].join(" ")}
                       title={statusLabel(step.status)}
                     >
@@ -199,7 +201,11 @@ function PlanCard({ block }: { block: Extract<Block, { kind: "plan" }> }) {
                     <span
                       className={[
                         "min-w-0",
-                        step.status === "completed" ? "text-text/55 line-through decoration-line" : "text-text/90",
+                        step.status === "completed"
+                          ? "text-text/55 line-through decoration-line"
+                          : step.status === "cancelled"
+                            ? "text-faint line-through decoration-line"
+                            : "text-text/90",
                       ].join(" ")}
                     >
                       {step.text}

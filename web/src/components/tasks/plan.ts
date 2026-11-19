@@ -9,7 +9,9 @@
  * 三个读字段的小工具在本文件内自带一份，比在任何一处加 `// eslint-disable` 都干净。
  */
 
-export type PlanStatus = "pending" | "in_progress" | "completed";
+// "cancelled" = 这一步不做了。没有它，前端会把"不做了"渲染成"待开始"——
+// 看上去像卡住，用户会以为 Agent 还有活没干完。
+export type PlanStatus = "pending" | "in_progress" | "completed" | "cancelled";
 
 function readText(source: unknown, ...keys: string[]): string {
   if (!source || typeof source !== "object") return "";
@@ -185,11 +187,13 @@ export function groupByMilestone(
 export function statusMark(status: PlanStatus): string {
   if (status === "completed") return "✓";
   if (status === "in_progress") return "·";
+  if (status === "cancelled") return "–";
   return "";
 }
 
 export function statusLabel(status: PlanStatus): string {
   if (status === "completed") return "已完成";
   if (status === "in_progress") return "进行中";
+  if (status === "cancelled") return "已取消";
   return "待开始";
 }
