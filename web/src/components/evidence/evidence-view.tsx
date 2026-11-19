@@ -107,8 +107,10 @@ export function EvidenceView() {
         description="每一次交付留下的验收条件、改动文件、测试结论与用量。点开一条看它当时凭什么说做完了——这里不做汇总美化，只把记录原样摆出来。"
       />
 
+      {/* 搜索框限宽、计数紧跟：原来搜索框 flex-1 撑满，「58 条」被推到内容区最右侧，
+          两样东西隔着 1200px 看着像各说各话。 */}
       <div className="mb-4 flex items-center gap-2">
-        <div className="field flex flex-1 items-center gap-1.5 rounded-lg px-2 py-1.5">
+        <div className="field flex w-full max-w-[420px] items-center gap-1.5 rounded-lg px-2 py-1.5">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="size-3.5 shrink-0 text-faint" aria-hidden>
             <path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM16.5 16.5 21 21" />
           </svg>
