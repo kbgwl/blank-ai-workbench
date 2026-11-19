@@ -99,8 +99,43 @@ DEFERRED_TOOLS = frozenset(
         "refresh_mcp_tools",
         # LSP 与 Claude 一样 shouldDefer：代码智能不是每轮都要用，且要本机先配好语言服务器。
         "lsp",
+        # ── 以下四类是"只在特定场景才用"的家族，每轮都发一遍 schema 是纯底噪 ──
+        # 实测：一个普通编程任务的首屏上下文里，工具说明 23,670 字符、任务内容 1,000 字符，
+        # 说明书占了 59%。这四类合计约 9,000 字符（工具说明的 25%），而在日常编程里
+        # 一次都未必用得上；它们都还在 tool_search 里，一句话就能拉回来。
+        # 定时任务：只有用户明说"每天/每周/稍后提醒"才会用。
+        "cron_create",
+        "cron_delete",
+        "cron_list",
+        "schedule_wakeup",
+        # 团队（多机器人协作）：只有建了团队之后才用得上。
+        "team_status",
+        "team_create_bot",
+        "team_update_bot",
+        "team_add_member",
+        "team_remove_member",
+        "team_assign_task",
+        # 任务台账的增删改查：绝大多数任务是一问一答，不需要自己建任务行。
+        "task_create",
+        "task_get",
+        "task_list",
+        "task_update",
+        # 其他偶发能力：改 notebook、跑 REPL、写交付发现。
+        "notebook_edit",
+        "repl",
+        "report_findings",
     }
 )
+
+# 工具说明（description + input_schema）的字符预算。
+#
+# 这个数是量出来的，不是拍的：一个普通编程任务的**首屏**上下文里，工具说明 23,670 字符、
+# 任务内容 1,000 字符——说明书占了 59%，而它每一步都要重发一遍。把四类"只在特定场景
+# 才用"的家族改成按需加载之后降到 16,382 字符（首调 prompt 19,631 → 16,156 token）。
+#
+# 留 17,000 的余量：新增工具要能被看见，但每加一个都得先想清楚"它配不配常驻"。
+# 判据见 `tests/test_tool_budget_v427.py`，超了会红。
+SCHEMA_BUDGET_CHARS = 17_000
 
 # 外部工具的命名空间前缀（MCP）。它们数量不固定、schema 由别人的服务端决定，
 # 一律先收着，靠 tool_search 拉——否则接三个服务端就能把每轮的提示词撑爆，

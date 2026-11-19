@@ -58,6 +58,7 @@ from blank_api.services.agent.intent import (
     unwrap_goal,
 )
 from blank_api.services.agent.context import (
+    breakdown,
     ContextCompactor,
     build_summary_prompt,
     guardian_trail,
@@ -1657,6 +1658,13 @@ class AgentSession:
         specs = filter_specs_by_turn_state(
             self.gateway.specs(), getattr(self.context, "turn_state", {}) or {}
         )
+        # 上下文账单：首步与每五步记一次（每步都记只是把同一份数字刷屏）。
+        # 它回答的是"这次调用里，工具说明 / 历史 / 当前结果各占多少"——
+        # 三者的省法完全不同，混成一个 token 总数就只能得出"太大了"。
+        if step == 0 or step % 5 == 0:
+            await self.recorder.add(
+                "context.breakdown", node, breakdown(chat, specs)
+            )
         # 两条恢复共用这一个循环，因为它们改的是同一件事的两侧：预算给多少、
         # 写不完怎么办。放在这里而不是适配器内部，是因为它要发**新的一次请求**，
         # 必须复用同一套 429/瞬时/退路闸门与台账，而不是在底层另开一条路。

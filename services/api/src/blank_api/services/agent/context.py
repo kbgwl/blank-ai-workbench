@@ -772,3 +772,49 @@ class ContextCompactor:
         )
         return result
 
+
+
+def breakdown(messages: Sequence[dict], specs: Sequence[object] = ()) -> dict:
+    """这一次要发出去的上下文，按「谁占的」拆开。
+
+    为什么要有这个数：一次 26 步的任务累计 1.79M token，可"钱花在哪儿"一直是猜的。
+    实际拆开之后才看得见三类完全不同的东西混在一起——
+    **工具说明**（每步都发一遍，与任务内容无关）、**历史**（模型自己写过的东西）、
+    **当前这一步的结果**。三者的省法完全不同：说明要精简，历史要折叠，
+    结果要按预算裁剪。混在一个 token 总数里，只能得出"上下文太大了"这种没用的结论。
+
+    只算字符，不算 token：字符是可核对的，token 依赖分词器；换算留给调用方按
+    实测系数（`observed_tokens / chars`）去做，别在这里虚构一个精确的 token 数。
+    """
+    def field_of(message: object, key: str, default=None):
+        """既是 dict 也可能是 ChatMessage 数据类：调用点两种都给过，别在这里二选一。"""
+        if isinstance(message, dict):
+            return message.get(key, default)
+        return getattr(message, key, default)
+
+    by_role: dict[str, int] = {}
+    images = 0
+    for message in messages or ():
+        role = str(field_of(message, "role") or "?")
+        content = field_of(message, "content")
+        size = len(content) if isinstance(content, str) else len(json.dumps(content, ensure_ascii=False, default=str))
+        size += len(json.dumps(field_of(message, "tool_calls") or [], ensure_ascii=False, default=str))
+        for image in field_of(message, "images") or ():
+            images += len(str(field_of(image, "data") or ""))
+        by_role[role] = by_role.get(role, 0) + size
+    tools = 0
+    for spec in specs or ():
+        description = getattr(spec, "description", "") or ""
+        schema = getattr(spec, "input_schema", None) or {}
+        tools += len(str(description)) + len(json.dumps(schema, ensure_ascii=False, default=str))
+    return {
+        "chars": {
+            "tools": tools,
+            "images": images,
+            "messages": sum(by_role.values()),
+            "total": tools + images + sum(by_role.values()),
+        },
+        "by_role": by_role,
+        "message_count": len(messages or ()),
+        "tool_count": len(specs or ()),
+    }
