@@ -43,6 +43,33 @@ MAX_LOGGED_CHARS = 4000
 # 后面的改动它不知道存在，于是反复重跑同一条命令。上限放到 4 万（约 1.2 万 token），
 # 更长的仍然要截，但**必须说出来**（见 `_truncation_note`）——静默截断比截断本身更坏。
 MAX_RESULT_CHARS = 40_000
+# 行数上限，与字符上限取**更早**的切点。
+#
+# 只有字符上限时，两头的切法都不对：一行 10 万字符的压缩 JSON 切得太晚（模型收到
+# 一段断在字符串中间的 JSON，解析不了也看不出该去哪取）；2000 行正常日志切得太早
+# （4 万字符够 1500 行，于是它以为读完了，其实后面还有一半）。
+# opencode 用的是"2000 行 / 50 KiB 双上限，取二者更早的切点"，这里照抄。
+MAX_RESULT_LINES = 2_000
+
+
+def _dual_clip(text: str) -> tuple[str, int, str]:
+    """按字符与行数双上限切一刀，返回 (切后文本, 保留字符数, 先撞上的那道线)。"""
+    total = len(text)
+    keep = total
+    reason = ""
+    if total > MAX_RESULT_CHARS:
+        keep = MAX_RESULT_CHARS
+        reason = "chars"
+    if text.count("\n") + 1 > MAX_RESULT_LINES:
+        # 用 split 的 maxsplit 截，比逐字符遍历快得多（大输出里这个函数在热路径上）
+        parts = text.split("\n", MAX_RESULT_LINES)
+        by_lines = len("\n".join(parts[:MAX_RESULT_LINES]))
+        if by_lines < keep:
+            keep = by_lines
+            reason = "lines"
+    return text[:keep], keep, reason
+
+
 # 截断提示要留的预算：它自己不能把结果挤掉。
 TRUNCATION_NOTE_CHARS = 600
 APPROVAL_STATUS = "awaiting_approval"
@@ -70,7 +97,7 @@ def _redact_value(value, secrets: Sequence[str], limit: int = MAX_RESULT_CHARS):
     return value
 
 
-def _truncation_note(tool: str, kept: int, total: int) -> str:
+def _truncation_note(tool: str, kept: int, total: int, reason: str = "chars") -> str:
     """截断必须写在结果里，而且要写成模型能据以行动的样子。
 
     只写"已截断"没有用：模型手里没有拿到全部，却不知道缺的是第几行、缺多少、
@@ -82,8 +109,9 @@ def _truncation_note(tool: str, kept: int, total: int) -> str:
     hint = "缩小范围重跑（加 head / tail / -m / --stat / 指定路径）"
     if tool in ("run_shell", "run_tests"):
         hint = "把输出重定向到工作区内的文件（如 `> out.log 2>&1`）再用 read_file 分批读"
+    why = "行数太多" if reason == "lines" else "太长"
     return (
-        f"\n\n[结果已截断：共 {total} 字符，上面只显示前 {kept}，还有 {dropped} 未显示。"
+        f"\n\n[结果已截断（{why}）：共 {total} 字符，上面只显示前 {kept}，还有 {dropped} 未显示。"
         f"要看到剩下的就{hint}；不要因为没看到就重复执行同一条命令。]"
     )
 
@@ -627,7 +655,8 @@ class ToolGateway:
         duration_ms = int((time.perf_counter() - started) * 1000)
         # 先算出"洗干净但没削"的长度：削不削得由它决定，削多少也要靠它写进提示。
         clean_output = _redact(outcome.output, context.extra_secrets, 10_000_000)
-        oversize = len(clean_output) > MAX_RESULT_CHARS
+        clipped, kept_chars, clip_reason = _dual_clip(clean_output)
+        oversize = bool(clip_reason)
         # 附图不能走文本那把剪刀。踩过的真 bug：一张 59KB 的截图 base64 有 79,620 个
         # 字符，被 _redact_value 的 40,000 上限砍成半截——模型收到一段断掉的 data URI，
         # 网关直接回「unsupported image」，整轮 400，而报错里只字不提"是被我们自己剪的"。
@@ -643,7 +672,7 @@ class ToolGateway:
         safe = ToolOutcome(
             ok=outcome.ok,
             status=outcome.status,
-            output=clean_output[:MAX_RESULT_CHARS],
+            output=clipped,
             message=_redact(outcome.message, context.extra_secrets, MAX_RESULT_CHARS),
             data=safe_data,
         )
@@ -664,11 +693,12 @@ class ToolGateway:
             # 静默截断是这里最坏的选项：模型会以为自己读到了全部，然后据此下结论。
             metrics.inc(metrics.TOOL_RESULT_TRUNCATED)
             payload["output"] = safe.output + _truncation_note(
-                name, MAX_RESULT_CHARS, len(clean_output)
+                name, kept_chars, len(clean_output), reason=clip_reason
             )
             payload["result_truncated"] = {
-                "kept_chars": MAX_RESULT_CHARS,
+                "kept_chars": kept_chars,
                 "total_chars": len(clean_output),
+                "first_limit": clip_reason,
             }
         payload.update(
             {

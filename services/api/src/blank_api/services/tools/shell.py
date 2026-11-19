@@ -782,6 +782,66 @@ def _event_recorder(context: ToolContext):
     return EventRecorder(factory, task_id, trace_id=str(getattr(context, "trace_id", "") or ""))
 
 
+def hand_off_to_background(
+    context: ToolContext, command: str, *, reason: str, timeout: float | None = None
+) -> str:
+    """把一条已经超时的命令挪到后台继续跑，返回 shell_id（起不来返回空串）。
+
+    两家外网 harness 都这么做，而我们的做法原来是"到点杀掉"：
+    - DeepSeek Harness：`timeoutMs` 到期转 background job，模型用 `job_output` 继续收；
+    - opencode：超时不杀，转后台并通知，工具结果里明令"不要 poll"。
+
+    杀掉的问题不是"白等了两分钟"，而是模型此后**没有别的路**——要么再撞一次超时，
+    要么干脆不验证（真机里它选了后者，然后把"未验证"写进交付）。
+
+    注意这是**重跑**：已经过去的那段时间找不回来。回执要如实说明这一点，
+    不然模型会以为能接着跑。
+    """
+    text = str(command or "").strip()
+    if not text:
+        return ""
+    # 没有会话工厂（单测、外部集成、重放）就不起后台：那种环境里没人在收尾时清理
+    # 子进程，一个跑 25 分钟的命令会拖住整个进程退出。真机里这条守卫也顺带挡住了
+    # "页面预览被后台命令撑住"这类问题。
+    if getattr(context, "session_factory", None) is None:
+        return ""
+    try:
+        from blank_api.services import shell_tasks
+
+        limit = float(timeout or shell_tasks.DEFAULT_BACKGROUND_TIMEOUT)
+        turn_effort = str(getattr(context, "turn_state", {}).get("effort", "") or "")
+        env = None
+        if turn_effort:
+            from blank_api.services.shell_env import build_env
+
+            env = build_env(effort=turn_effort)
+
+        def runner(sink):
+            return execute_command(
+                text,
+                context.root,
+                limit,
+                env=env,
+                safety=getattr(context, "safety", None),
+                tier=getattr(context, "sandbox_tier", "") or "",
+                isolation_profile=str(getattr(context, "isolation_profile", "") or ""),
+                on_chunk=sink,
+            )
+
+        record = shell_tasks.start(
+            task_id=str(getattr(context, "task_id", "") or ""),
+            command=text,
+            description=reason,
+            timeout_seconds=limit,
+            runner=runner,
+            recorder=_event_recorder(context),
+            mask=lambda body: mask_output(body, context.root),
+        )
+        return record.shell_id
+    except Exception:  # noqa: BLE001 - 转后台是加法：失败也要让"超时"这条事实说出口
+        return ""
+
+
 async def _record_shell_started(context: ToolContext, record, command: str) -> None:
     recorder = _event_recorder(context)
     if recorder is None:
@@ -971,14 +1031,25 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
             },
         )
     if result["timed_out"]:
+        # 到点不丢：把同一条命令挪到后台继续跑。模型没主动选 run_in_background
+        # 不代表这条命令短——真机里最常见的就是"它以为是快的，其实是 25 分钟"。
+        shell_id = hand_off_to_background(context, command, reason="超时后转后台重跑", timeout=timeout)
+        moved = (
+            f"已把同一条命令转到后台重跑（{shell_id}）：它不占用这一次调用，"
+            f"稍后用 task_output(shell_id=\"{shell_id}\") 取结果，不必轮询、也不要为此 sleep。"
+            "注意：后台是从头跑的，刚才那段时间白花了。"
+            if shell_id
+            else "后台重跑没起来；这条命令不适合在一次调用里跑完，换小范围或拆开。"
+        )
         return ToolOutcome(
             ok=False,
             status="timeout",
             output=stdout,
-            message=f"命令超时（{timeout:.0f}s），进程已终止：{command}",
+            message=f"命令超时（{timeout:.0f}s），进程已终止：{command}。" + moved,
             data={
                 "exit_code": result["exit_code"],
                 "timed_out": True,
+                "background_shell_id": shell_id or "",
                 "sandbox": result["sandbox"],
                 "isolation": result["sandbox"] or "local",
                 "tier": result.get("tier", {}),

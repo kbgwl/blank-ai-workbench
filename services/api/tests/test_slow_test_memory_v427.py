@@ -27,7 +27,13 @@ def history(tmp_path, monkeypatch):
 
 
 def _context(tmp_path) -> ToolContext:
+    """没有会话工厂的上下文：凡是需要"有人收尾"的动作（起后台）都会被跳过。"""
     return ToolContext(root=tmp_path, task_id="t", session_factory=None)
+
+
+def _live_context(tmp_path) -> ToolContext:
+    """带会话工厂的上下文——只有这种才会真的去起后台任务。"""
+    return ToolContext(root=tmp_path, task_id="t", session_factory=lambda: None)
 
 
 def _result(**over) -> dict:
@@ -139,7 +145,7 @@ def test_a_timed_out_test_is_moved_to_the_background(tmp_path, monkeypatch, hist
     monkeypatch.setattr(shell_tasks, "start", fake_start)
     import asyncio
 
-    outcome = asyncio.run(testing._run_tests(_context(tmp_path), {}))
+    outcome = asyncio.run(testing._run_tests(_live_context(tmp_path), {}))
     assert outcome.status == "timeout"
     assert outcome.data["background_shell_id"] == "sh-test-1"
     assert "转到后台" in outcome.message and "sh-test-1" in outcome.message
@@ -162,7 +168,29 @@ def test_a_failed_handover_still_reports_the_timeout(tmp_path, monkeypatch, hist
     monkeypatch.setattr(shell_tasks, "start", boom)
     import asyncio
 
-    outcome = asyncio.run(testing._run_tests(_context(tmp_path), {}))
+    outcome = asyncio.run(testing._run_tests(_live_context(tmp_path), {}))
     assert outcome.status == "timeout"
     assert outcome.data["background_shell_id"] == ""
     assert "没起来" in outcome.message
+
+
+def test_no_session_means_no_background_process(tmp_path, monkeypatch, history):
+    """没有会话工厂时不起来后台：单测/外部集成里没人在收尾时清理子进程，
+    一条 25 分钟的命令会把整个进程拖到超时被杀。"""
+    from blank_api.services import shell_tasks
+
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": "npm test"}}), encoding="utf-8")
+
+    async def slow(*args, **kwargs):
+        return _result(timed_out=True, timeout_budget=120)
+
+    def must_not_run(**kwargs):
+        raise AssertionError("没有会话工厂却起了后台任务")
+
+    monkeypatch.setattr(testing, "execute_command", slow)
+    monkeypatch.setattr(shell_tasks, "start", must_not_run)
+    import asyncio
+
+    outcome = asyncio.run(testing._run_tests(_context(tmp_path), {}))
+    assert outcome.status == "timeout"
+    assert outcome.data["background_shell_id"] == ""
