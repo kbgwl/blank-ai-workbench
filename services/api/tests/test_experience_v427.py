@@ -340,3 +340,71 @@ def test_retired_entries_are_kept_not_deleted():
     all_items = store.load(ws)
     assert len(all_items) == 4
     assert sum(1 for item in all_items if item.status == "retired") == 2
+
+
+# ── 失效：字段存在不等于生效 ───────────────────────────────────────────────
+def test_an_old_entry_stops_being_injected():
+    """`expires_after_days` 原来只写在 dataclass 里，**没有任何代码读它**——
+    条目实际永不过期。这和 hits/misses 那个洞是同一个形状。"""
+    from datetime import datetime, timedelta, timezone
+
+    from blank_api.services.agent.experience import is_expired, rank
+
+    stale = _entry(
+        confidence=0.9,
+        last_confirmed=(datetime.now(timezone.utc) - timedelta(days=120)).isoformat(),
+        expires_after_days=90,
+    )
+    assert is_expired(stale) is True
+    assert rank([stale], goal="改分页", paths=["src/api/x.py"]) == []
+
+
+def test_a_fresh_entry_keeps_working():
+    from datetime import datetime, timezone
+
+    fresh = _entry(confidence=0.8, last_confirmed=datetime.now(timezone.utc).isoformat())
+    assert is_expired_ok(fresh)
+
+
+def is_expired_ok(entry) -> bool:
+    from blank_api.services.agent.experience import is_expired
+
+    return is_expired(entry) is False
+
+
+def test_an_entry_without_a_timestamp_is_not_killed():
+    """缺一个时间戳不该把有用的经验判死——宁可留，不要误杀。"""
+    from blank_api.services.agent.experience import is_expired
+
+    assert is_expired(_entry(last_confirmed="")) is False
+    assert is_expired(_entry(last_confirmed="不是时间")) is False
+
+
+def test_success_refreshes_the_clock_but_being_recalled_does_not():
+    """Copilot 的规则：只有 upvote 重置寿命，**单纯被检索不重置**。
+    否则一条老经验只要还挂在触发条件里就能无限活下去。"""
+    import tempfile
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+
+    from blank_api.services.agent.experience import ExperienceStore, is_expired
+
+    root = Path(tempfile.mkdtemp())
+    store = ExperienceStore(root)
+    ws = root / "ws"
+    store.record(
+        ws,
+        _entry(
+            confidence=0.6,
+            last_confirmed=(datetime.now(timezone.utc) - timedelta(days=120)).isoformat(),
+        ),
+    )
+    fp = store.load(ws)[0].fingerprint
+
+    # 检索一次：不该续命
+    store.recall(ws, goal="改分页", paths=["src/api/x.py"])
+    assert is_expired(store.load(ws)[0]) is True
+
+    # 用成功一次：续命
+    store.record_outcome(ws, fp, success=True)
+    assert is_expired(store.load(ws)[0]) is False

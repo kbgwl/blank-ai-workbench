@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 import os
 import re
 import threading
@@ -101,6 +102,36 @@ class Experience:
         if not blob:
             blob = str(self.error_signature or "").strip().lower()[:200]
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _parse_time(text: str) -> datetime | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def is_expired(entry: "Experience", now: datetime | None = None) -> bool:
+    """这条经验是不是该重新怀疑了。
+
+    对标 Copilot Memory 的规则：默认 90 天失效，**只有 upvote 会重置，单纯被检索不重置**。
+    最后那句是关键——我们原来的 `expires_after_days` 字段存在但**没有任何代码在读**，
+    等于条目永不过期；而如果改成"被检索到就续命"，一条老经验只要还在触发条件里
+    就能无限活下去，哪怕它早就过时了。
+
+    没有 `last_confirmed` 的条目按"建的时候"算？不——不知道就算不过期。
+    宁可多留一条，也不要因为缺一个时间戳就把有用的经验判死。
+    """
+    days = int(entry.expires_after_days or 0)
+    confirmed = _parse_time(entry.last_confirmed)
+    if days <= 0 or confirmed is None:
+        return False
+    moment = now or datetime.now(timezone.utc)
+    return moment - confirmed > timedelta(days=days)
 
 
 def _squash(text: str) -> str:
@@ -248,11 +279,16 @@ def rank(
     """
     goal_text = _squash(goal)
     wanted = _norm_paths(paths)
+    moment = datetime.now(timezone.utc)
     scored: list[tuple[float, Experience]] = []
     for entry in entries:
         if entry.status == "retired":
             continue
         if float(entry.confidence) < MIN_INJECT_CONFIDENCE:
+            continue
+        # 过期的不注入：它可能早就对不上了，而模型会把它当"历史经验"照做。
+        # 只报告不删——lint 里能看到它，人判断要不要恢复。
+        if is_expired(entry, moment):
             continue
         score = 0.0
         hard = False  # 路径或报错签名命中才叫"想起了这件事"，关键词只是加权
@@ -547,6 +583,8 @@ class ExperienceStore:
                 if success:
                     item.hits += 1
                     item.confidence = round(min(0.9, float(item.confidence) + 0.05), 2)
+                    # 成功 = 一次 upvote，续命。检索本身不续命（见 is_expired 的注释）。
+                    item.last_confirmed = datetime.now(timezone.utc).isoformat(timespec="seconds")
                     if item.hits >= 2 and item.status == "candidate":
                         item.status = "active"
                 else:
@@ -701,6 +739,15 @@ def lint(entries: Iterable[Experience]) -> list[dict]:
                 {
                     "kind": "low_value",
                     "message": "从没被用过、置信度又低，几乎一定是噪音",
+                    "evidence": [entry.statement[:80]],
+                }
+            )
+        if is_expired(entry):
+            findings.append(
+                {
+                    "kind": "expired",
+                    "message": f"超过 {entry.expires_after_days} 天没被确认过，已停止注入；"
+                    "确认还成立就改 last_confirmed",
                     "evidence": [entry.statement[:80]],
                 }
             )
