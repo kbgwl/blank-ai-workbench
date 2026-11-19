@@ -428,6 +428,11 @@ def _round_trips(rule: tuple[str, ...]) -> bool:
 def _starts_with(argv: list[str], rule: tuple[str, ...]) -> bool:
     if len(argv) < len(rule):
         return False
+    if any(token in _REDIRECT_TOKENS for token in argv):
+        # 带重定向/管道的一律不免问：规则只盖到前 N 个 token，后面的目标（写哪个文件）
+        # 和管道后半段跑什么完全不在规则里。写入侧已经不产出这种规则了，这里再拦一道
+        # 是为了兜住 approvals.json 里手写的、以及旧版本存下来的条目。
+        return False
     if _payload_terminated(rule) and len(argv) != len(rule):
         # 规则已经带到载荷（正文 / 模块 / 脚本）的解释器命令，免问范围只能等于那条命令，
         # 不能是「以它开头」：`python -c "…sys.argv[1]…"` 批准过一次，不该免问换参数的下一条。
@@ -691,8 +696,27 @@ MEMOIZABLE_EXES = frozenset(
     }
 )
 
-# 名单里这几个是"能给什么代码就跑什么代码"的入口：它们和 pytest / tsc 不是一类。
-# 记住一个裸名等于把整个会话的任意代码执行交给模型自选载荷，所以这类命令必须
+# 只读命令：列目录、看文件、查版本。它们不改工作区，却因为"裸 exe 前缀太宽"
+# 被 memo_rule 一律拒记 —— 结果是模型每 `dir` 一次就弹一张卡。
+#
+# 真机里的形状：一个 7 步的任务弹了 6 次审批，其中两次是 `dir` 和 `dir ... && python --version`。
+# 论文里的数字很扎人：人工审批通过率 93%，沙箱化后权限提示减少 84% —— 多问不等于更安全，
+# 它只是让人开始瞎点。只读命令给一条「本会话总是允许 dir」不扩大危险面：它读得了目录，
+# 改不了任何文件。
+#
+# 三条限制写在 read_only_prefix() 里：必须单段（无 && / ; / |）、不带重定向（> / >>）、
+# 且 exe 在这张表里。`echo x > f` 会写文件，pipe 出去的内容去了哪也不知道，都不算只读。
+READ_ONLY_EXES = frozenset(
+    {
+        "ls", "dir", "cat", "type", "head", "tail", "find", "findstr", "grep",
+        "where", "whereis", "which", "pwd", "cd", "echo", "wc", "sort", "uniq",
+        "tree", "stat", "file", "du", "df", "env", "printenv", "set",
+        "get-childitem", "get-content", "select-string", "test-path",
+        "resolve-path", "measure-object", "get-location", "get-command",
+    }
+)
+
+# 名单里这几个是"能给什么代码就跑什么代码"的入口：它们和 pytest / tsc 不是一类。# 记住一个裸名等于把整个会话的任意代码执行交给模型自选载荷，所以这类命令必须
 # 带到真正被执行的那一段（`-c` 的正文、`-m` 的模块名、脚本路径），只准收紧到
 # "这一条命令"，不准放宽到"这个解释器"。对照实物：Codex 落在
 # ~/.codex/rules/default.rules 的那条规则，正文 `-Command` 整段都在 pattern 里。
@@ -713,6 +737,37 @@ _OPAQUE_CODE_FLAGS = frozenset({"-encodedcommand", "-enc", "/enc"})
 # 一层之外的引号形状：PowerShell 用 `""` 表示引号本身，posix / cmd 转义用 `\"`。
 _LOSSY_QUOTES = re.compile(r'""|\'\'|\\"')
 
+# tokenize() 会把重定向/管道拆成独立 token。前缀规则盖不到它们之后的东西，
+# 所以带这些符号的命令一律不记免问（见 memo_rule）。
+_REDIRECT_TOKENS = frozenset({">", ">>", "|", "<", "<<", "&>", "2>", "2>>", "1>", "1>>"})
+
+
+def read_only_prefix(command: str) -> tuple[str, ...]:
+    """只读命令的免问前缀；不是只读就返回空元组。
+
+    为什么单独一条路：memo_rule 只肯记"带子命令"的前缀（`git status`），裸可执行名
+    一律拒绝，因为 `rm` / `bash` 的裸名前缀等于全放行。但 `dir` / `ls` / `cat` 的裸名
+    前缀只放行"看"，不放行"改"——它们被那条规则一起误伤了，代价是每看一次弹一张卡。
+    """
+    segments = split_segments(command)
+    if len(segments) != 1:
+        # 组合命令（&& / ; / |）中间可以藏任何东西，不按只读处理。
+        return ()
+    text = segments[0]
+    if re.search(r"[>|]", text):
+        # 重定向会写文件，管道把内容交给下一段。两种都不再是"只看一眼"。
+        return ()
+    tokens = tokenize(text)
+    if not tokens:
+        return ()
+    exe = _basename(tokens[0]).lower()
+    if exe not in READ_ONLY_EXES:
+        return ()
+    # 取裸可执行名，而不是 `dir 某个目录`：只读命令放行的是"看"这个动作，
+    # 按目录切规则只会让用户每换一个目录再点一次。
+    rule = (exe,)
+    return rule if _round_trips(rule) else ()
+
 
 def memo_rule(command: str) -> tuple[str, ...]:
     """这次批准该记成什么规则；空元组＝不值得记（下次照样挂卡）。
@@ -730,6 +785,12 @@ def memo_rule(command: str) -> tuple[str, ...]:
         # 记下来连正常推送也一起放行；`Remove-Item -Recurse` 更不可能靠快照回滚。
         # 闸门锁在这一层（而不是只排在 decide 的匹配之前）：任何一个调用点直接问
         # :func:`memoizable_prefix` 都不会给不可逆命令发出前缀档位。
+        return ()
+    # 重定向 / 管道不记：前缀规则只盖到前 N 个 token，`echo hi > out.txt` 的规则是
+    # `echo hi`，它会一并免问 `echo hi > secrets.txt` —— 内容一样、目标随便换，
+    # 等于把"批准往这个文件写"悄悄放大成"批准往任何地方写"。管道同理（后半段跑什么
+    # 完全不在规则里）。真机里这条是可触发的：模型常用 `echo ... > file` 落小文件。
+    if any(token in _REDIRECT_TOKENS for segment in segments for token in tokenize(segment)):
         return ()
     tokens = tokenize(segments[0])
     if not tokens:
@@ -768,7 +829,8 @@ def memo_rule(command: str) -> tuple[str, ...]:
     else:
         rule = prefix_rule(command_prefix(command))
         if rule and len(rule) < 2 and rule[0].lower() not in MEMOIZABLE_EXES:
-            rule = ()
+            # 裸可执行名一般不给：`rm` / `bash` 的裸前缀等于全放行。只读命令例外。
+            rule = read_only_prefix(command)
     if rule and contains_secret(render_rule(rule)):
         return ()
     if rule and not _round_trips(rule):
