@@ -255,26 +255,57 @@ def rank(
         if float(entry.confidence) < MIN_INJECT_CONFIDENCE:
             continue
         score = 0.0
+        hard = False  # 路径或报错签名命中才叫"想起了这件事"，关键词只是加权
         for pattern in entry.trigger_paths:
             base = pattern.rstrip("*").rstrip("/").lower()
             if base and any(path.lower().startswith(base) for path in wanted):
                 score += 2.0
+                hard = True
                 break
+        # 关键词只加分，不单独构成命中：路径完全不同的任务也曾靠
+        # `deliverables` / `html` 这类词想起了同一条经验，那是误命中。
+        # 硬条件只有两个——路径前缀命中，或报错签名命中。
         terms = [t.lower() for t in entry.task_terms if t.strip()]
         if terms and goal_text:
             hit = sum(1 for term in terms if term in goal_text)
             if hit:
-                score += 1.0 + min(1.0, hit / max(1, len(terms)))
+                score += min(1.0, hit / max(1, len(terms)))
         if entry.error_signature:
             signature = entry.error_signature.lower()[:60]
             if signature and signature in goal_text:
                 score += 2.5
-        if score <= 0:
+                hard = True
+        # 关键词命中只加权，不构成命中理由：`deliverables` / `html` 这种词几乎每个
+        # 任务里都有，让它单独触发就是"永远命中"。
+        if not hard or score <= 0:
             continue
         # 置信度只做微调：一条很准但触发条件不匹配的经验仍然不该被想起。
         scored.append((score + float(entry.confidence), entry))
     scored.sort(key=lambda item: item[0], reverse=True)
     return [entry for _, entry in scored[: max(1, limit)]]
+
+
+_GOAL_PATH = re.compile(r"[A-Za-z0-9_\-./\\]+\.[A-Za-z0-9]{1,6}")
+
+
+def paths_from_goal(goal: str) -> list[str]:
+    """从任务描述里认出它要动哪些文件。
+
+    任务刚开始时还没有 `changed_paths`，而"路径前缀命中"是检索最硬的信号。
+    好在用户写目标时常常把路径直接写出来（"在 deliverables/x.html 写…"），
+    从目标里认一遍就能让第一轮就命中。
+
+    只认"带扩展名的像路径的东西"，不做模糊猜测——认错一个路径会让检索带偏。
+    """
+    out: list[str] = []
+    for match in _GOAL_PATH.findall(str(goal or "")):
+        text = match.replace("\\", "/").strip().lstrip("./")
+        if not text or "/" not in text and "." not in text:
+            continue
+        if text.lower() in out:
+            continue
+        out.append(text[:200])
+    return out[:8]
 
 
 def render(entry: Experience) -> str:
@@ -351,7 +382,7 @@ def extract(
                     kind="pitfall",
                     status="candidate",
                     trigger_paths=paths[:3],
-                    task_terms=_terms(goal),
+                    task_terms=_terms(goal, paths),
                     error_signature=signal[:120],
                     why=f"任务 {task_id[:8]} 里实际踩到",
                     evidence=[
@@ -377,7 +408,7 @@ def extract(
                     kind="procedure",
                     status="candidate",
                     trigger_paths=paths[:3],
-                    task_terms=_terms(goal),
+                    task_terms=_terms(goal, paths),
                     why=f"任务 {task_id[:8]} 里实测通过",
                     evidence=[
                         {
@@ -405,18 +436,35 @@ def _signal_text(item: dict) -> str:
     return ""
 
 
-def _terms(goal: str) -> list[str]:
+# 关键词里不该出现的词：它们在几乎每个任务里都会出现，命中它们等于没筛。
+# `deliverables` / `html` / `index` 这类是路径与文件类型碎片，不是任务语义。
+_TERM_STOPWORDS = frozenset(
+    {
+        "deliverables", "probe", "index", "html", "css", "js", "the", "and", "for",
+        "with", "that", "this", "then", "from", "run", "file", "page",
+    }
+)
+
+
+def _terms(goal: str, paths: Iterable[Any] = ()) -> list[str]:
     """从目标里取几个词做触发条件。
 
-    只取 ASCII 词与数字：中文没有分词，粗切会产生一堆两字垃圾词，
-    反而让"关键词匹配"这一维变成噪音。
+    两条过滤：
+    - 只取 ASCII 词与数字：中文没有分词，粗切会产生一堆两字垃圾词；
+    - 去掉停用词与**路径片段**：`deliverables` / `html` 在几乎每个任务里都有，
+      留着它们会让"关键词命中"变成永远命中（实测：路径完全不同的任务也想起了同一条）。
     """
+    path_blob = " ".join(_norm_paths(paths)).lower()
     words = re.findall(r"[A-Za-z][A-Za-z0-9_\-]{2,}", str(goal or ""))
     seen: list[str] = []
     for word in words:
         lowered = word.lower()
-        if lowered not in seen:
-            seen.append(lowered)
+        if lowered in seen or lowered in _TERM_STOPWORDS:
+            continue
+        if lowered in path_blob:
+            # 出现在路径里的词是"这次改哪儿"，不是"这件事是什么"。
+            continue
+        seen.append(lowered)
     return seen[:6]
 
 

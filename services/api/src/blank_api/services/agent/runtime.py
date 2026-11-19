@@ -1496,9 +1496,17 @@ class AgentRuntime:
         try:
             from blank_api.services.agent.experience import ExperienceStore, render
 
-            # 只用目标检索：任务开始时还不知道要改哪些文件，硬猜路径会让
-            # 「按路径匹配」这一维变成噪音。路径维度留给"任务中途再想一次"（后续再说）。
-            hits = ExperienceStore().recall(session.context.root, goal=session.goal, limit=1)
+            # 任务开始时还没有 changed_paths，但目标里常常直接写着路径
+            # （"在 deliverables/x.html 写…"）。从目标里认一遍，让"路径前缀命中"
+            # 这个最硬的信号第一轮就能用上；认不出就只靠关键词与报错签名。
+            from blank_api.services.agent.experience import paths_from_goal
+
+            hits = ExperienceStore().recall(
+                session.context.root,
+                goal=session.goal,
+                paths=paths_from_goal(session.goal),
+                limit=1,
+            )
             if hits:
                 recalled_experience = render(hits[0])
                 await recorder.add(

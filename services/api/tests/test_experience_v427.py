@@ -151,3 +151,34 @@ def test_the_wording_does_not_demand_obedience():
     assert "请自行验证" in text
     assert "必须" not in text
     assert "src/api/schemas.py#L88" in text, "要给得出证据指针，模型才能自己核对"
+
+
+# ── 匹配的宽严 ────────────────────────────────────────────────────────────
+def test_keywords_alone_are_not_enough_to_recall():
+    """实测：路径完全不同的任务也曾想起同一条经验——靠的是 `deliverables`/`html`
+    这类出现在几乎每个任务里的词。关键词只加分，硬条件只有路径或报错签名。"""
+    entry = _entry(trigger_paths=["deliverables/_probe/a/index.html"], task_terms=["html"])
+
+    assert rank([entry], goal="在 deliverables/other.html 写页面", paths=[]) == []
+
+
+def test_a_path_from_the_goal_can_trigger_recall_on_the_first_turn():
+    """任务刚开始还没有 changed_paths，但目标里常直接写着路径。"""
+    from blank_api.services.agent.experience import paths_from_goal
+
+    goal = "在 deliverables/_probe/learn-test/index.html 写一个页面，然后跑 run_tests"
+    assert "_probe/learn-test/index.html" in " ".join(paths_from_goal(goal))
+
+    entry = _entry(trigger_paths=["deliverables/_probe/learn-test/index.html"])
+    assert rank([entry], goal=goal, paths=paths_from_goal(goal))
+
+
+def test_path_fragments_are_not_used_as_keywords():
+    """`deliverables` / `html` 这类路径碎片进了关键词，等于永远命中。"""
+    from blank_api.services.agent.experience import _terms
+
+    terms = _terms("在 deliverables/_probe/x/index.html 写页面并跑 run_tests", ["deliverables/_probe/x/index.html"])
+
+    assert "deliverables" not in terms
+    assert "html" not in terms
+    assert "run_tests" in terms
