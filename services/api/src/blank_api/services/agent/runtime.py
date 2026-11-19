@@ -1509,6 +1509,12 @@ class AgentRuntime:
             )
             if hits:
                 recalled_experience = render(hits[0])
+                # 记下这条的指纹：收尾时要按本次任务的成败回写结果。
+                # 没有这一步，hits/misses 就永远是 0，条目永远停在 candidate——
+                # 那正是开源实现里普遍的样子（写了、读了，但从不回溯）。
+                turn_state = getattr(session.context, "turn_state", None)
+                if isinstance(turn_state, dict):
+                    turn_state["recalled_experience"] = hits[0].fingerprint
                 await recorder.add(
                     "experience.recalled",
                     "initial",
@@ -1792,6 +1798,26 @@ class AgentRuntime:
                 "steer": scope.session.steer_metrics,
             },
         )
+        # 回写"这次用到的经验结果如何"——成功失败都算，因为失败才是需要降权的信号。
+        recalled_id = str(
+            (getattr(scope.session.context, "turn_state", {}) or {}).get("recalled_experience") or ""
+        )
+        if recalled_id:
+            try:
+                from blank_api.services.agent.experience import ExperienceStore
+
+                new_status = ExperienceStore().record_outcome(
+                    scope.session.context.root, recalled_id, success=(status == "succeeded")
+                )
+                if new_status:
+                    await scope.recorder.add(
+                        "experience.outcome",
+                        "complete",
+                        {"status": new_status, "success": status == "succeeded"},
+                    )
+            except Exception:  # noqa: BLE001 - 回写失败不影响任务结论
+                pass
+
         if status == "succeeded":
             if request.index_summary:
                 await self._index_summary(scope, request)

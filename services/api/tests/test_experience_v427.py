@@ -182,3 +182,58 @@ def test_path_fragments_are_not_used_as_keywords():
     assert "deliverables" not in terms
     assert "html" not in terms
     assert "run_tests" in terms
+
+
+# ── 读后反馈：hits/misses 要真的驱动晋级与退役 ────────────────────────────
+def test_using_it_twice_well_promotes_it():
+    """没有这一步，条目永远停在 candidate——写了、读了，但从不回溯。"""
+    import tempfile
+    from pathlib import Path
+
+    from blank_api.services.agent.experience import ExperienceStore
+
+    root = Path(tempfile.mkdtemp())
+    store = ExperienceStore(root)
+    store.record(root / "ws", _entry(confidence=0.5))
+    fp = store.load(root / "ws")[0].fingerprint
+
+    assert store.record_outcome(root / "ws", fp, success=True) == "candidate"
+    assert store.record_outcome(root / "ws", fp, success=True) == "active"
+
+
+def test_failing_twice_retires_it():
+    """两次都没帮上忙就退役。留着只会继续被检索到、继续干扰。"""
+    import tempfile
+    from pathlib import Path
+
+    from blank_api.services.agent.experience import ExperienceStore
+
+    root = Path(tempfile.mkdtemp())
+    store = ExperienceStore(root)
+    store.record(root / "ws", _entry(confidence=0.6))
+    fp = store.load(root / "ws")[0].fingerprint
+
+    store.record_outcome(root / "ws", fp, success=False)
+    assert store.record_outcome(root / "ws", fp, success=False) == "retired"
+    assert store.recall(root / "ws", goal="改分页", paths=["src/api/x.py"]) == []
+
+
+def test_the_step_sizes_are_asymmetric_on_purpose():
+    """成功 +0.05、失败 −0.12：归因不对称，代价更该被记住。"""
+    import tempfile
+    from pathlib import Path
+
+    from blank_api.services.agent.experience import ExperienceStore
+
+    root = Path(tempfile.mkdtemp())
+    store = ExperienceStore(root)
+    store.record(root / "ws", _entry(confidence=0.6))
+    fp = store.load(root / "ws")[0].fingerprint
+
+    store.record_outcome(root / "ws", fp, success=False)
+    after_miss = store.load(root / "ws")[0].confidence
+    store.record_outcome(root / "ws", fp, success=True)
+    after_hit = store.load(root / "ws")[0].confidence
+
+    assert after_hit < 0.6, "一次失败 + 一次成功不该回到原点"
+    assert after_hit > after_miss

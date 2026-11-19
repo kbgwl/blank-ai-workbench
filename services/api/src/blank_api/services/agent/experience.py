@@ -526,6 +526,39 @@ class ExperienceStore:
             self.save(workspace, entries)
         return action, entries
 
+    def record_outcome(self, workspace: str | Path, experience_id: str, *, success: bool) -> str:
+        """这条经验被用过了，结果如何。返回它现在的状态。
+
+        这是整个闭环里最容易被做成摆设的一环：只写不读、读了不回溯，条目就永远停在
+        candidate，谁也不知道它有没有用（开源实现里普遍如此——OpenHands 的两级
+        MEMORY.md 就完全没有这个回路）。
+
+        两个方向的步长不对称，因为**归因本身不对称**：
+        - 成功时 +0.05：任务成功很可能是别的因素，不能全记在经验头上；
+        - 失败时 −0.12：也可能是经验带偏了，同样不能全怪它，但代价更该被记住。
+        攒够两次成功才晋级，两次失败就退役——小样本上单次结论不可靠。
+        """
+        path = self.path_for(workspace)
+        with _lock_for(path):
+            entries = self.load(workspace)
+            for item in entries:
+                if item.fingerprint != experience_id or item.status == "retired":
+                    continue
+                if success:
+                    item.hits += 1
+                    item.confidence = round(min(0.9, float(item.confidence) + 0.05), 2)
+                    if item.hits >= 2 and item.status == "candidate":
+                        item.status = "active"
+                else:
+                    item.misses += 1
+                    item.confidence = round(max(0.1, float(item.confidence) - 0.12), 2)
+                    if item.misses >= 2:
+                        # 两次都没帮上忙就退役。留着只会继续被检索到、继续干扰。
+                        item.status = "retired"
+                self.save(workspace, entries)
+                return item.status
+        return ""
+
     def recall(
         self, workspace: str | Path, *, goal: str = "", paths: Iterable[Any] = (), limit: int = 1
     ) -> list[Experience]:
