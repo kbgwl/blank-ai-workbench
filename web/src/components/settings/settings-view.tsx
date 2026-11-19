@@ -238,9 +238,15 @@ export function SettingsView() {
         {/* 分类改成顶部横向 tab：去掉第二层 208px 侧栏，内容区铺满。
              Qoder 的设置就是单栏 + 顶部分类，不再让左栏叠左栏。
              标题只由外壳顶栏显示一次，这里不再重复写一遍「设置」——
-             同一屏出现两个一样的标题，是之前"看着乱"最直接的一处。 */}
-        <div className="flex flex-col gap-3 border-b border-line pb-3">
-          <nav aria-label="设置分类" className="flex flex-wrap items-center gap-1">
+             同一屏出现两个一样的标题，是之前"看着乱"最直接的一处。
+
+            选中态用品牌色下划线：浅色皮肤是近黑、深色皮肤是浅蓝，两套都够对比；
+             白底胶囊在浅色下和背景差一档、在深色下又像"更黑的一块"，两头都不稳。
+             指示条用 bg-brand 的元素画、不写 border-bottom：globals.css 里的
+             `* { border-color: var(--line) }` 是未分层的规则，会盖掉 utility 层的
+             `border-brand`（两边都看不出品牌色）。 */}
+        <div className="border-b border-line">
+          <nav aria-label="设置分类" className="flex flex-wrap items-center gap-0.5">
             {SECTIONS.map((item) => {
               const selected = item.key === active;
               return (
@@ -249,23 +255,27 @@ export function SettingsView() {
                   href={`#${item.key}`}
                   aria-current={selected ? "page" : undefined}
                   onClick={() => select(item.key)}
-                  className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13px] transition-colors ${
-                    selected ? "bg-surface-3 font-medium text-text" : "text-muted hover:bg-surface-2 hover:text-text"
+                  className={`relative flex shrink-0 items-center gap-1.5 px-3 pt-1 pb-3 text-[13px] transition-colors ${
+                    selected ? "font-medium text-text" : "text-muted hover:text-text"
                   }`}
                 >
-                  <span className={selected ? "text-text" : "text-faint"}>{item.icon}</span>
+                  <span className={selected ? "text-brand" : "text-faint"}>{item.icon}</span>
                   <span className="whitespace-nowrap">{item.label}</span>
+                  {selected && (
+                    <span aria-hidden className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-brand" />
+                  )}
                 </a>
               );
             })}
           </nav>
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-faint">
-            {section.status}
-          </span>
-          <p className="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">{section.description}</p>
-        </div>
+        {/* 描述降到辅助层：状态不再是带边框的等宽 chip，只作为句首一个小注脚，
+            和正文同一行读下来，不与 tab 抢注意力。 */}
+        <p className="mt-2.5 text-[12px] leading-relaxed text-muted">
+          <span className="font-medium text-muted">{section.status}</span>
+          <span className="mx-1.5 text-line-strong">·</span>
+          {section.description}
+        </p>
 
         <div className="mt-4">
           <SectionBody active={active} />

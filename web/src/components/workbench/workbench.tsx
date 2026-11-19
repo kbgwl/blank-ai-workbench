@@ -37,6 +37,7 @@ import { DiffPanel } from "@/components/tasks/diff-panel";
 import { EvidencePanel } from "@/components/tasks/evidence-panel";
 import { useTaskEvents } from "@/components/tasks/use-task-events";
 import { HealthPill } from "@/components/health-pill";
+import { RailEmpty } from "@/components/rail-empty";
 
 type RightTab = "diff" | "evidence" | "activity";
 type Busy = "run" | "cancel" | "decide" | "answer" | "send" | null;
@@ -823,14 +824,50 @@ export function Workbench() {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-3.5 py-3">
           {!task ? (
-            <p className="px-1 py-6 text-[12px] leading-relaxed text-faint">选一条任务后，这里显示这次改了哪些文件、证据和全部活动。</p>
+            /* 整栏没有内容时垂直居中：贴着顶放会像"内容只加载了一半"，
+                居中才读得出这是一个刻意的空态。 */
+            <div className="flex h-full items-center justify-center">
+              <RailEmpty
+                icon={<Icon d="M4 5h16v14H4zM15 5v14" box={24} className="size-5" />}
+                title="右栏跟着选中的任务走"
+                body="选中左边一条任务，这里会列出它改过的文件、验收证据和全部活动。"
+              >
+                <button type="button" onClick={newTask} className={primaryBtn}>
+                  新建任务
+                </button>
+                <Link href="/tasks" className="rounded-md px-1.5 py-1 text-[12px] text-muted transition-colors hover:text-text">
+                  全部任务 →
+                </Link>
+              </RailEmpty>
+            </div>
           ) : tab === "diff" ? (
             <div className="flex flex-col gap-4">
-              <Block label="本次改动">
-                {(evidence?.changes.length ?? 0) === 0 ? (
-                  <p className="px-1 text-[12px] text-faint">还没有文件改动</p>
+              {(evidence?.changes.length ?? 0) === 0 ? (
+                evidenceError ? (
+                  /* 读失败不是「没有改动」，别用空态把错误盖过去。 */
+                  <RailEmpty
+                    icon={<Icon d="M12 8v5M12 17h.01M10.3 3.9 2.5 17a2 2 0 0 0 1.7 3h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" box={24} className="size-5" />}
+                    title="改动记录读取失败"
+                    body={evidenceError}
+                  >
+                    <button type="button" onClick={() => void loadDetail(task.id)} className={primaryBtn}>
+                      重试
+                    </button>
+                  </RailEmpty>
                 ) : (
-                  evidence?.changes.map((change) => {
+                  <RailEmpty
+                    icon={<Icon d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" box={24} className="size-5" />}
+                    title="这一轮还没有改动文件"
+                    body="Agent 动手改文件后，这里会按文件列出改动，并在下方展示 diff 和增删行数。"
+                  >
+                    <button type="button" onClick={() => setTab("activity")} className={primaryBtn}>
+                      看执行活动
+                    </button>
+                  </RailEmpty>
+                )
+              ) : (
+                <Block label="本次改动">
+                  {evidence?.changes.map((change) => {
                     const stat = diffStats(change.diff);
                     const label = changeLabel(change.changeType);
                     return (
@@ -847,9 +884,9 @@ export function Workbench() {
                         </span>
                       </button>
                     );
-                  })
-                )}
-              </Block>
+                  })}
+                </Block>
+              )}
 
               <Block label="证据">
                 <Kv k="测试" v={evidence?.test ? verdictOf(evidence.test.passed).label : "未运行"} />
@@ -864,15 +901,18 @@ export function Workbench() {
                 <Kv k="任务" v={task.id.slice(0, 8)} mono />
               </Block>
 
-              <div className="border-t border-line pt-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-[12px] font-semibold text-faint">Diff</span>
-                  <button type="button" onClick={() => setTab("evidence")} className="text-[12px] text-brand hover:underline">
-                    完整证据 →
-                  </button>
+              {/* 没有改动时上面已经有一块空态说明，这里不再重复一张空的 Diff。 */}
+              {(evidence?.changes.length ?? 0) > 0 && (
+                <div className="border-t border-line pt-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[12px] font-semibold text-faint">Diff</span>
+                    <button type="button" onClick={() => setTab("evidence")} className="text-[12px] text-brand hover:underline">
+                      完整证据 →
+                    </button>
+                  </div>
+                  <DiffPanel changes={evidence?.changes ?? []} focusPath={focusPath} />
                 </div>
-                <DiffPanel changes={evidence?.changes ?? []} focusPath={focusPath} />
-              </div>
+              )}
             </div>
           ) : tab === "evidence" ? (
             <EvidencePanel taskId={task.id} evidence={evidence} error={evidenceError} />
@@ -880,7 +920,13 @@ export function Workbench() {
             <div className="flex flex-col">
               <div className="mb-1.5 text-[12px] font-semibold text-faint">全部活动</div>
               {/* node.* 是图内部的节点起止，对用户没有信息量，跟对话流一样不列。 */}
-              {visibleEvents.length === 0 && <p className="px-1 py-4 text-[12px] text-faint">还没有事件</p>}
+              {visibleEvents.length === 0 && !streaming && (
+                <RailEmpty
+                  icon={<Icon d="M4 6h16M4 12h16M4 18h10" box={24} className="size-5" />}
+                  title="还没有活动"
+                  body="任务开始执行后，每一次工具调用和判定都会按顺序记在这里。"
+                />
+              )}
               {visibleEvents.map((event) => {
                 const detail = eventDetail(event);
                 const hint = eventHint(event);
@@ -1053,9 +1099,9 @@ function RailLink({ href, label, d }: { href: string; label: string; d: string }
   );
 }
 
-function Icon({ d, box = 16 }: { d: string; box?: number }) {
+function Icon({ d, box = 16, className = "size-[14px]" }: { d: string; box?: number; className?: string }) {
   return (
-    <svg viewBox={`0 0 ${box} ${box}`} className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+    <svg viewBox={`0 0 ${box} ${box}`} className={`${className} shrink-0`} fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
       <path d={d} />
     </svg>
   );
