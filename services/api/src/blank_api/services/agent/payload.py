@@ -14,6 +14,10 @@
    不再重发正文。
 3. **记账**。每次省下多少字符都进事件流，所以"省了多少"是量出来的，不是估的。
 
+另有一条：**被裁掉的中段不该消失**。超预算的结果整份写到工作区
+（`.blank/tool-results/`），回执里给路径——省 token 的方式从"删"变成"挪"，
+模型需要细节时仍然读得到（`git diff` 稍大就只剩前后两段，那种损失是查不出来的）。
+
 必须在结果产生时做、而不是事后改写历史：历史一旦改动，前缀缓存全失效，
 省下的上下文会被未命中缓存的差价吃掉。
 """
@@ -27,6 +31,8 @@ import re
 # 每个工具在上下文里允许占的字符数：(头部, 尾部)。尾部为 0 表示只要头部。
 # 数值不是拍脑袋：读文件平均 2.7k 字符、shell 平均 0.7k，预算设在均值之上、
 # 灾难值之下——正常输出完整进入，异常巨大的输出才被切。
+OverflowWriter = "Callable[[str, str], str | None]"
+
 TOOL_BUDGETS: dict[str, tuple[int, int]] = {
     # shell 与测试的输出是"编程现场"：失败的断言在中段、结论在末尾、diff 在整段。
     # 原来 1000+2500 只够 85 行——改三个文件的 diff 就看不全，模型只能再跑一次
@@ -182,7 +188,11 @@ def _budget_for(tool_name: str, output: str) -> tuple[int, int]:
 
 
 def render(
-    tool_name: str, payload: dict, seen: dict[str, int] | None = None, step: int = 0
+    tool_name: str,
+    payload: dict,
+    seen: dict[str, int] | None = None,
+    step: int = 0,
+    overflow: "OverflowWriter | None" = None,
 ) -> tuple[str, dict]:
     """把一次工具结果渲染成要放进上下文的字符串。
 
@@ -212,6 +222,16 @@ def render(
             body["output"] = f"{_head(output, head).rstrip()}\n{note}"
         else:
             body["output"], _ = _clip(output, head, tail)
+        # 裁掉了就存一份完整的：回执里给路径，模型需要细节时读得到。
+        # 只在**真的裁了**的时候写盘——没裁的结果本来就在上下文里，再存一份是垃圾。
+        if overflow is not None and len(body["output"]) < len(output):
+            saved_to = overflow(tool_name, output)
+            if saved_to:
+                body["output"] = (
+                    f"{body['output']}\n（完整输出已存盘：{saved_to}，共 {len(output)} 字符；"
+                    f"需要中段就用 read_file 读那个文件）"
+                )
+                stats["overflow_path"] = saved_to
 
     data = body.get("data")
     if isinstance(data, dict) and tool_name in DROP_DIFF_TOOLS and data.get("diff"):

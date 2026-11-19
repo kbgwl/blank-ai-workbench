@@ -51,6 +51,17 @@ SUMMARY_TOTAL_CHARS = 24_000
 
 # 水位默认值：到窗口的 82% 开始压缩，给模型回复预留 16k tokens。
 # 与设置页 data/settings.json 的 compaction 段一一对应，这里是缺省兜底。
+# 空闲压缩：百分比阈值在 1M 窗口上等于没有阈值（0.82 × 1M = 820K，永远到不了）。
+# 参照 Claude Code 的口径（200K+ token 的会话、空闲约 54 分钟后压缩，赶在 1 小时
+# 提示缓存过期之前），改成三条绝对条件，任一命中就压：
+IDLE_ABSOLUTE_TOKENS = 200_000
+IDLE_MIN_TOKENS = 40_000          # 不到这个量，压了也没多少可压
+IDLE_SECONDS = 45 * 60            # 会话闲置多久算"该整理了"
+IDLE_STEPS = 40                   # 距上次压缩跑了多少步
+# 空闲压缩折到原来的多少。不是「降到水位线以下」——那可能是 3M 字符，等于没折。
+# 参照 Claude Code：最近若干条原样保留，其余折成摘要。
+IDLE_FOLD_RATIO = 0.5
+
 DEFAULT_TRIGGER_RATIO = 0.82
 DEFAULT_RESERVE_TOKENS = 16_384
 # 校准系数的合理区间：超出这个范围说明测到的不是同一件事（例如缓存命中），
@@ -609,7 +620,31 @@ class ContextCompactor:
     def measure(self, messages: Sequence[dict]) -> int:
         return max(0, int(round(message_tokens(messages) * self.calibration)))
 
-    def over_trigger(self, messages: Sequence[dict]) -> bool:
+    def idle_reason(
+        self, tokens: int, *, steps_since_compact: int | None = None, idle_seconds: float | None = None
+    ) -> str:
+        """不靠水位线也该压的理由（空串 = 没有）。
+
+        百分比水位在大窗口上永远不触发：0.82 × 1M = 820K，而真机里 26 步才涨到 83K。
+        结果就是"从不压缩"，模型一路拖着自己几十步前写的代码往前走。
+        """
+        if tokens < IDLE_MIN_TOKENS:
+            return ""
+        if tokens >= IDLE_ABSOLUTE_TOKENS:
+            return "tokens"
+        if steps_since_compact is not None and steps_since_compact >= IDLE_STEPS:
+            return "steps"
+        if idle_seconds is not None and idle_seconds >= IDLE_SECONDS:
+            return "seconds"
+        return ""
+
+    def over_trigger(
+        self,
+        messages: Sequence[dict],
+        *,
+        steps_since_compact: int | None = None,
+        idle_seconds: float | None = None,
+    ) -> bool:
         """这一次装配是否真的会压（与 build 的第一次水位判定同一行）。
 
         PreCompact 只在"要压"时触发。两处判定一旦分叉，钩子会在不该跑的时候跑
@@ -619,7 +654,10 @@ class ContextCompactor:
         if not normalized:
             return False
         if self.context_window > 0:
-            return self.measure(normalized) > self.trigger_tokens()
+            tokens = self.measure(normalized)
+            if tokens > self.trigger_tokens():
+                return True
+            return bool(self.idle_reason(tokens, steps_since_compact=steps_since_compact, idle_seconds=idle_seconds))
         return _total_chars(normalized) > self.max_chars
 
     def observe(self, prompt_tokens: int, estimated_tokens: int) -> None:
@@ -667,7 +705,13 @@ class ContextCompactor:
         return max(2_000, int(trigger * self._chars_per_token(messages)))
 
     async def build(
-        self, messages: Sequence[dict], summarize: SummarizeFn | None = None, *, author_run_id: str = ""
+        self,
+        messages: Sequence[dict],
+        summarize: SummarizeFn | None = None,
+        *,
+        author_run_id: str = "",
+        steps_since_compact: int | None = None,
+        idle_seconds: float | None = None,
     ) -> list[dict]:
         normalized = _normalize(messages)
         if not normalized:
@@ -688,6 +732,17 @@ class ContextCompactor:
             "observed_tokens": self.observed_tokens,
         }
         over_trigger = tokens_before > trigger if token_mode else _total_chars(normalized) > char_budget
+        # 水位线之外的两条绝对条件：量到了、或者拖太久了。
+        # 命中就**强制整折**，不走下面"先微压缩看看"的短路——那一层在没超水位时
+        # 几乎削不动任何东西，会变成"说要压、其实没压"。
+        idle_reason = (
+            self.idle_reason(tokens_before, steps_since_compact=steps_since_compact, idle_seconds=idle_seconds)
+            if token_mode and not over_trigger
+            else ""
+        )
+        if idle_reason:
+            over_trigger = True
+            triggered_by = f"idle:{idle_reason}"
         if not over_trigger:
             self.last_report = CompactionReport(
                 **base_report,
@@ -702,7 +757,7 @@ class ContextCompactor:
         after_micro_chars = _total_chars(trimmed)
         after_micro_tokens = self.measure(trimmed)
         still_over = after_micro_tokens > trigger if token_mode else after_micro_chars > char_budget
-        if not still_over:
+        if not still_over and not idle_reason:
             self.last_report = CompactionReport(
                 **base_report,
                 tokens_after=after_micro_tokens,
@@ -726,6 +781,11 @@ class ContextCompactor:
             )
             return trimmed
 
+        if idle_reason:
+            # 空闲压缩用**自己的目标**：砍掉一半继续。沿用 820K 水位换算出来的
+            # 3M 字符预算，尾巴会把整段历史都装下，cut 永远是 0——
+            # 报告上写着「触发了」，上下文一个字节没变。
+            char_budget = max(2_000, int(_total_chars(normalized) * IDLE_FOLD_RATIO))
         budget = max(1000, char_budget - _total_chars(prefix) - len(self.summary))
         tail: list[dict] = []
         used = 0

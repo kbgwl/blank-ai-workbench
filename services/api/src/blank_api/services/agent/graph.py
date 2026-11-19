@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from pathlib import Path
 import json
 import os
 import random
@@ -784,6 +785,10 @@ class AgentSession:
     # 进展哨兵：判「这一步有没有带来新信息」。空转断路器只认「同签名失败两次」，
     # 而真机里更贵的是「每次参数都不同、目标没变」——同一文件重写 6 次。见 agent/progress.py。
     progress: ProgressSentinel = field(default_factory=ProgressSentinel)
+    # 空闲压缩的两个输入：距上次压缩跑了多少步、距上次模型调用过了多久。
+    # 不看这两个，1M 窗口上的百分比水位等于没有水位（永远到不了 820K）。
+    steps_since_compact: int = 0
+    last_activity_at: float = 0.0
     # 已经被记录过的问题调用：节点会因中断被重放，不记账就会重复写 question.* 事件。
     recorded_questions: set[str] = field(default_factory=set)
     # 「替你定的」账本：用户没答、按推荐默认值走下去的偏好题。交付正文要据此说明，
@@ -1385,13 +1390,25 @@ class AgentSession:
         covered_before = self.compactor.covered
         # PreCompact 只在"这一次真的要压"时跑：压缩不可逆，钩子想保住哪段历史
         # 只有这一次机会。跑在 build 之前，指令由 summarize_history 带进摘要提示词。
-        if self.compactor.over_trigger(messages):
+        idle_seconds = (time.monotonic() - self.last_activity_at) if self.last_activity_at else None
+        if self.compactor.over_trigger(
+            messages, steps_since_compact=self.steps_since_compact, idle_seconds=idle_seconds
+        ):
             await self._precompact_gate(node)
         compacted = await self.compactor.build(
-            messages, self.summarize_history, author_run_id=self.run_id
+            messages,
+            self.summarize_history,
+            author_run_id=self.run_id,
+            steps_since_compact=self.steps_since_compact,
+            idle_seconds=idle_seconds,
         )
         report = self.compactor.last_report
         self.context_tokens = report.tokens_after
+        self.last_activity_at = time.monotonic()
+        if report.folded or report.covered > covered_before:
+            self.steps_since_compact = 0
+        else:
+            self.steps_since_compact += 1
         # 交接笔记：压缩后必带（摘要会丢操作细节），换窗口后的第一次调用也带一次。
         # 开关关掉就整块跳过：笔记本身要占上下文，长对话里有人宁可让摘要独扛；
         # 注意跳过时也不置 notes_injected，否则关掉再打开就再也注入不进去了。
@@ -3082,6 +3099,42 @@ def _fork_history(messages: list[dict]) -> list[dict]:
     return trimmed
 
 
+# 溢出结果的落盘目录。放在 .blank 下：它是运行时证据，不进仓库，也不占交付目录。
+OVERFLOW_DIR = ".blank/tool-results"
+OVERFLOW_KEEP = 60
+
+
+def _overflow_writer(session: "AgentSession | None", step: int, tool: str):
+    """返回一个"把完整结果写进工作区"的写手；拿不到工作区就返回 None。
+
+    为什么要它：裁剪是把中段**删掉**。`git diff` 稍大、测试日志长一点，模型就只剩
+    前后两段，而中间恰好是它要改的地方——它只能重跑同一条命令，再花一遍上下文。
+    落盘之后裁剪变成"挪"，需要细节时 read_file 读得回来。
+    """
+    root = getattr(getattr(session, "context", None), "root", None)
+    if root is None:
+        return None
+
+    def write(tool_name: str, text: str) -> str | None:
+        try:
+            directory = Path(root) / OVERFLOW_DIR
+            directory.mkdir(parents=True, exist_ok=True)
+            digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:8]
+            target = directory / f"{step:03d}-{tool_name}-{digest}.txt"
+            if not target.exists():
+                target.write_text(text, encoding="utf-8")
+            # 只留最近 N 份：这些文件是证据，不是账本，堆到几百份就没人看了。
+            files = sorted(directory.glob("*.txt"), key=lambda item: item.stat().st_mtime)
+            for stale in files[:-OVERFLOW_KEEP]:
+                stale.unlink(missing_ok=True)
+            return target.relative_to(Path(root)).as_posix()
+        except Exception:
+            # 写盘失败不能让工具调用本身失败：落盘是加法，不是前提。
+            return None
+
+    return write
+
+
 def _append_tool_response(
     messages: list[dict], call: dict, payload: dict, *, session: "AgentSession | None" = None, step: int = 0
 ) -> list[dict]:
@@ -3121,7 +3174,7 @@ def _append_tool_response(
         # 用 getattr 取而不是直接点：单测里的会话替身没有这个字段，
         # 记不上账不该让整条工具链断掉。
         sentinel.record(step=step, tool=name, payload=payload)
-    content, stats = render(name, payload, seen, step)
+    content, stats = render(name, payload, seen, step, overflow=_overflow_writer(session, step, name))
     if stats.get("saved") and session is not None:
         # 省了多少要进事件流：不然"减 token"只是说法，不是数据。
         session.trimmed_chars += int(stats["saved"])
