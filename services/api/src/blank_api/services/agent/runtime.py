@@ -1946,6 +1946,15 @@ class AgentRuntime:
                         ),
                     },
                 )
+                # 把他的标准沉淀成 Skill 提案——一句话进提示只能影响"注意什么"，
+                # 真正"按他的方式做"是程序性的，得有个带步骤的正文。
+                # 走既有的 proposed 通道：人点采用才生效，因为展开是我们的理解。
+                # 幂等（同名已存在就跳过），否则每跑一个任务就提一次。
+                from blank_api.services.agent.skillsmith import drafts_for, stage as stage_skills
+
+                drafts = drafts_for(persona, session.context.root)
+                if drafts:
+                    await stage_skills(scope.store, drafts, recorder=scope.recorder)
         except Exception:  # noqa: BLE001 - 核对失败不该让任务结论变掉
             pass
 

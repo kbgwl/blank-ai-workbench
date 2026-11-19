@@ -137,6 +137,11 @@ def main() -> int:
     parser.add_argument("--keep", default="", help="冲突里留这一条（指纹前缀）")
     parser.add_argument("--retire", default="", help="退役这一条（指纹前缀）")
     parser.add_argument("--retire-all", action="store_true", help="退役全部")
+    parser.add_argument(
+        "--crystallize",
+        action="store_true",
+        help="看他的标准会被沉淀成什么 Skill（只预览，不写库）",
+    )
     parser.add_argument("--report", action="store_true", help="度量：我有多懂他")
     parser.add_argument(
         "--db", default=str(REPO / "services" / "api" / "data" / "blank_dev.db"), help="事件库"
@@ -147,6 +152,19 @@ def main() -> int:
 
     if args.harvest:
         return harvest(store, args.workspace, args.db, dry_run=args.dry_run)
+
+    if args.crystallize:
+        from blank_api.services.agent.skillsmith import drafts_for
+
+        drafts = drafts_for(store, args.workspace)
+        if not drafts:
+            print("还没有已生效的做事标准——先说一句「做事要严谨」，再来看。")
+            return 0
+        print(f"会沉淀成 {len(drafts)} 个 Skill（每次任务收尾自动提交为提案，要采用才生效）：\n")
+        for item in drafts:
+            print(f"=== {item['name']} ===")
+            print(item["skill_md"])
+        return 0
 
     if args.report:
         return report(args.db)

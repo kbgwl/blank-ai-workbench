@@ -138,6 +138,52 @@ def normalize_proposals(arguments: dict) -> tuple[list[dict], str]:
     return proposals, ""
 
 
+async def store_proposals(
+    session_factory, proposals: list[dict], *, source: str = "agent"
+) -> list[dict]:
+    """把规范化后的提案写进 `skills` 表（status=proposed），返回落库摘要。
+
+    抽出来是因为除了模型自己提（`propose_skills`），还有人主动说了一句
+    "做事要严谨"之后由 `skillsmith` 确定性地沉淀成 Skill 这条路径。
+    两条路径的入库形状必须一致，否则界面上会出现两种"提案"。
+    """
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    stored: list[dict] = []
+    async with session_factory() as db:
+        for item in proposals:
+            row = Skill(
+                id=str(uuid.uuid4()),
+                name=item["name"],
+                instructions=item["body"],
+                status="proposed",
+                version=1,
+                history=[],
+                metadata_json={
+                    "kind": item["kind"],
+                    "target": item["target"],
+                    "description": item["description"],
+                    "evidence": item["evidence"],
+                    "frontmatter_keys": item["frontmatter_keys"],
+                    "proposed_at": now.isoformat(),
+                    # 谁写的这一条。`persona` = 从他的做事标准展开的，
+                    # 不是模型自己想到的——两者在界面上该能分开看。
+                    "source": source,
+                },
+            )
+            db.add(row)
+            stored.append(
+                {
+                    "id": row.id,
+                    "name": item["name"],
+                    "kind": item["kind"],
+                    "target": item["target"],
+                    "description": item["description"],
+                }
+            )
+        await db.commit()
+    return stored
+
+
 async def _propose_skills(context: ToolContext, arguments: dict) -> ToolOutcome:
     proposals, problem = normalize_proposals(arguments)
     if problem:
@@ -161,37 +207,7 @@ async def _propose_skills(context: ToolContext, arguments: dict) -> ToolOutcome:
                 "error",
                 f"提改进之前先用 skill 工具加载「{target}」的正文，再据实写提案。",
             )
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    stored: list[dict] = []
-    async with context.session_factory() as db:
-        for item in proposals:
-            row = Skill(
-                id=str(uuid.uuid4()),
-                name=item["name"],
-                instructions=item["body"],
-                status="proposed",
-                version=1,
-                history=[],
-                metadata_json={
-                    "kind": item["kind"],
-                    "target": item["target"],
-                    "description": item["description"],
-                    "evidence": item["evidence"],
-                    "frontmatter_keys": item["frontmatter_keys"],
-                    "proposed_at": now.isoformat(),
-                },
-            )
-            db.add(row)
-            stored.append(
-                {
-                    "id": row.id,
-                    "name": item["name"],
-                    "kind": item["kind"],
-                    "target": item["target"],
-                    "description": item["description"],
-                }
-            )
-        await db.commit()
+    stored = await store_proposals(context.session_factory, proposals)
     recorder = getattr(context, "recorder", None)
     if recorder is not None:
         await recorder.add("skill.proposed", "skill", {"proposals": stored, "count": len(stored)})
