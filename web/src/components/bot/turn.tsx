@@ -1,15 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/projects/ui";
 import { formatDuration } from "../tasks/format";
 import { guardianReviewLabel } from "../tasks/status";
 import { approvalGrantOptions } from "../tasks/api";
+import { ApprovalOptions, approvalQuestion } from "../tasks/approval";
 import type { AnswerValues, AttachmentRef, PendingApproval, PendingQuestion } from "../tasks/api";
 import { MarkdownView } from "./markdown-view";
 import { StepView } from "./steps";
 import type { BotStep, PlanView, StepFilter } from "./turns";
-import { filterSteps, turnEvidence, collapseRepeatedNotes } from "./turns";
+import { filterSteps, turnEvidence, collapseRepeatedNotes, thinkVerb } from "./turns";
 import { uploadUrl } from "./uploads";
 import type { SkillSuggestion } from "@/lib/skill-suggest";
 
@@ -32,6 +33,42 @@ function timeLabel(value: string): string {
   if (Number.isNaN(date.getTime())) return "";
   const pad = (input: number) => String(input).padStart(2, "0");
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function parseMoment(value: string): number | null {
+  if (!value) return null;
+  const ms = Date.parse(value.includes("T") ? value : value.replace(" ", "T"));
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * 「在想怎么做…」跑 30 秒和跑 3 分钟原本长得一模一样，用户分不清它是在想、
+ * 还是已经卡死——这时候人只会做一件事：按停止。给它两个可验证的量（换了哪个
+ * 词、已经花了多久），等不等就变成用户自己的判断，而不是靠猜。
+ */
+function ThinkingLine({ createdAt }: { createdAt: string }) {
+  const startedAt = parseMoment(createdAt);
+  // 首帧不取 Date.now()：服务端与浏览器的时间不同，取当前时间会造成 hydration 不一致。
+  const [now, setNow] = useState(() => startedAt ?? 0);
+  useEffect(() => {
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  // 词由开始时间定死：同一轮无论重渲染多少次都是同一个词，不会每帧跳。
+  const verb = thinkVerb(startedAt);
+  const seconds = startedAt === null ? 0 : Math.max(0, Math.floor((now - startedAt) / 1000));
+  return (
+    <p className="flex items-center gap-2 py-1 text-[13px]">
+      <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-brand" />
+      <span className="text-text">{verb}…</span>
+      {seconds > 0 && (
+        <span className="font-mono text-[11px] tabular-nums text-faint">
+          {seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`}
+        </span>
+      )}
+    </p>
+  );
 }
 
 function StatusChip({ status, running }: { status: string; running: boolean }) {
@@ -89,10 +126,13 @@ function ApprovalCard({
   const reviewNote = guardianReviewLabel(approval.guardian);
   return (
     <div className="my-2 rounded-xl border border-warn/35 bg-warn/[0.04] p-3">
-      <p className="text-[13px] font-medium text-warn">
-        需要你批准：{approval.tool}
-        {approval.risk && <span className="ml-1.5 font-normal text-warn/80">（风险 {approval.risk}）</span>}
-      </p>
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <p className="min-w-0 flex-1 text-[13px] font-medium text-text">{approvalQuestion(approval.tool, approval.args)}</p>
+        <span className="shrink-0 font-mono text-[11px] text-faint">
+          {approval.tool}
+          {approval.risk && <span className="ml-1.5 text-warn">风险 {approval.risk}</span>}
+        </span>
+      </div>
       {command && (
         <pre className="mt-1.5 overflow-auto rounded-md bg-surface px-2.5 py-1.5 font-mono text-[12px] text-text">
           {command}
@@ -104,20 +144,13 @@ function ApprovalCard({
           {reviewNote}
         </p>
       )}
-      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-        {grants.map((option) => (
-          <Button
-            key={option.scope}
-            variant={option.scope === "once" ? "primary" : undefined}
-            disabled={busy}
-            onClick={() => onDecide("approve", option.scope)}
-          >
-            {option.label}
-          </Button>
-        ))}
-        <Button variant="danger" disabled={busy} onClick={() => onDecide("deny", "once")}>
-          拒绝
-        </Button>
+      <div className="mt-2.5">
+        <ApprovalOptions
+          grants={grants}
+          busy={busy}
+          onApprove={(scope) => onDecide("approve", scope)}
+          onDeny={() => onDecide("deny", "once")}
+        />
       </div>
       {grants
         .filter((option) => option.warning)
@@ -353,7 +386,7 @@ export function TurnView(props: TurnViewProps) {
               type="button"
               onClick={() => setOpenSteps(!expanded)}
               title={evidence.commands.length ? `跑过的命令：\n${evidence.commands.join("\n")}` : undefined}
-              className="mb-1 flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-[12px] text-faint transition-colors hover:bg-surface-2 hover:text-muted"
+              className="mb-1 flex w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-[12px] text-faint transition-colors hover:bg-surface-2 hover:text-muted"
             >
               <svg
                 viewBox="0 0 24 24"
@@ -371,8 +404,12 @@ export function TurnView(props: TurnViewProps) {
               {evidence.commandCount > 0 && <span className="shrink-0">· 跑了 {evidence.commandCount} 条命令</span>}
               {evidence.calls === 0 && <span className="shrink-0">{props.stepCount} 步</span>}
               {evidence.failed > 0 && <span className="shrink-0 font-medium text-danger">· {evidence.failed} 次失败</span>}
+              {/* 耗时单独成列并对齐：它原来跟在数字串尾巴上，位数一变
+                  （9 秒 → 1 分 20 秒）整行就跟着左右跳，多轮排在一起扫不出规律。 */}
               {evidence.durationMs > 0 && (
-                <span className="ml-1 shrink-0 font-mono">· {formatDuration(evidence.durationMs)}</span>
+                <span className="ml-auto shrink-0 pl-2 text-right font-mono text-[11px] tabular-nums">
+                  {formatDuration(evidence.durationMs)}
+                </span>
               )}
             </button>
 
@@ -427,10 +464,7 @@ export function TurnView(props: TurnViewProps) {
           )}
 
           {!props.streaming && !props.reply && running && props.stepCount === 0 && (
-            <p className="flex items-center gap-2 py-1 text-[13px] text-muted">
-              <span className="size-2 animate-pulse rounded-full bg-brand" />
-              在想怎么做…
-            </p>
+            <ThinkingLine createdAt={props.createdAt} />
           )}
 
           {props.reason && (
@@ -495,8 +529,15 @@ export function TurnView(props: TurnViewProps) {
  * 计划卡片。三态用字符而不是彩色圆点：字符在色觉差异下也能读，
  * 且和正文的字重/字号同一档，不抢正文。
  */
+/** 计划超过这个条数就折尾。短计划（3–5 步，绝大多数）完全不受影响。 */
+const PLAN_LIMIT = 6;
+
 function PlanCard({ plan }: { plan: PlanView }) {
   const percent = plan.total > 0 ? Math.round((plan.completed / plan.total) * 100) : 0;
+  // 保持原顺序，只折尾部：计划是有先后次序的，把"进行中"排到前面会让
+  // 第 3 步看起来像第 1 步。折叠掉的永远是最后几条，用户往下读的顺序不变。
+  const shown = plan.items.length > PLAN_LIMIT ? plan.items.slice(0, PLAN_LIMIT) : plan.items;
+  const hidden = plan.items.length - shown.length;
   return (
     // 不套边框：这一屏里已经有审批卡（唯一的"要你动手"的框）和用户气泡，
     // 计划再画一个框就变成三个同等重量的盒子。用一条左边线把它挂在正文旁边，
@@ -512,7 +553,7 @@ function PlanCard({ plan }: { plan: PlanView }) {
         </div>
       </div>
       <ol className="mt-1.5 flex flex-col gap-1">
-        {plan.items.map((item, index) => {
+        {shown.map((item, index) => {
           const done = item.status === "completed";
           const active = item.status === "in_progress" || item.status === "running";
           return (
@@ -529,6 +570,9 @@ function PlanCard({ plan }: { plan: PlanView }) {
             </li>
           );
         })}
+        {hidden > 0 && (
+          <li className="pl-[14px] font-mono text-[11px] text-faint">… 还有 {hidden} 项</li>
+        )}
       </ol>
     </div>
   );

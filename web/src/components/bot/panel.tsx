@@ -194,9 +194,8 @@ export function TaskPanel(props: TaskPanelProps) {
             贴在顶部时整栏下半截是白的，看着像只加载了一半。 */}
         <div className="flex min-h-full flex-col gap-4">
         <section>
-          <p className="mb-1.5 truncate text-[13px] text-muted" title={props.title}>
-            {props.title || "未命名对话"}
-          </p>
+          {/* 这一轮的标题不再抄一遍：顶栏已经是它，左栏也是它，右栏再来第三次
+              只会让人怀疑三处说的是不是同一件事。这里直接从账本开始。 */}
           {/* 这一轮的账本收成一行。
               原来四个 8px 小标签各自一块灰底格子，占掉右栏最上面 90px，
               而右栏其余部分是空的——四个"0"反而成了这一栏最显眼的东西。

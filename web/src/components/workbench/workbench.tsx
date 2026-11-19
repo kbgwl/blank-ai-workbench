@@ -114,9 +114,26 @@ function userText(prompt: string): string {
     .trim();
 }
 
+/**
+ * 任务行的状态点。
+ *
+ * 不复用 `bot/status-dot.tsx`：那个回答的是「这一轮跑成没有」，只有跑着/失败/完成
+ * 三档；任务多两档（待审批、已暂停），把「待审批」画成蓝点就把"要你动手"这件事弄丢了。
+ *
+ * 但有一条口径必须一致：**成功不画点**。一屏十几行都是「已完成」时，排出一列绿点
+ * 等于没有信息，还把标题往右推。槽位留着，列表不因状态变化而左右跳。
+ */
 function Dot({ status }: { status: string }) {
-  const tone = statusMeta(status);
-  return <span className={`size-1.5 shrink-0 rounded-full ${tone.dot.replace("animate-pulse", "")}`} />;
+  const meta = statusMeta(status);
+  const key = (status ?? "").toLowerCase();
+  if (key === "succeeded" || key === "completed") return <span className="size-1.5 shrink-0" aria-hidden />;
+  return (
+    <span
+      title={meta.label}
+      aria-label={meta.label}
+      className={`size-1.5 shrink-0 rounded-full ${meta.dot.replace("animate-pulse", "")}`}
+    />
+  );
 }
 
 /**
@@ -710,6 +727,30 @@ export function Workbench() {
                       : "还没有工作区，先去「项目」绑定一个目录。"}
                   </p>
                 )}
+                {/* 空态不能只有一句 slogan：把最近几条会话摆出来，用户可以直接接着上次做，
+                    而不是重新描述一遍。一眼能看到"这里已经有东西"，才有人愿意下手。 */}
+                {filteredTasks.length > 0 && (
+                  <div className="mt-7 w-full max-w-[26rem] overflow-hidden rounded-xl border border-line bg-surface text-left">
+                    <div className="px-3 pt-2 pb-1 text-[11px] font-medium text-faint">接着上次</div>
+                    <div className="flex flex-col p-1.5 pt-0">
+                      {filteredTasks.slice(0, 4).map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => setSelectedId(item.id)}
+                          title={item.title}
+                          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
+                        >
+                          <Dot status={item.status} />
+                          <span className="min-w-0 flex-1 truncate text-[13px] text-text">{item.title}</span>
+                          <span className="shrink-0 font-mono text-[11px] text-faint">
+                            {item.updatedAt ? formatDateTime(item.updatedAt).slice(5, 16) : ""}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <>
@@ -787,17 +828,13 @@ export function Workbench() {
                 </button>
               </div>
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[12px] text-faint">
+            {/* 这里只留输入相关的两个状态：上下文还剩多少、事件怎么同步。
+                用量与步数右栏「证据」里已经有了，同一块屏不重复第二遍。 */}
+            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-faint">
               <span className="h-1 w-16 overflow-hidden rounded-full bg-surface-2 ring-1 ring-line">
                 <span className="block h-full bg-brand" style={{ width: `${contextPercent(evidence)}%` }} />
               </span>
-              <span>{tokenLabel(evidence)}</span>
-              {task?.stepsUsed !== null && task?.stepsUsed !== undefined && (
-                <span>
-                  第 {task.stepsUsed} 步{task.maxSteps ? ` / ${task.maxSteps}` : ""}
-                </span>
-              )}
-              <span>{events.length} 条事件</span>
+              <span>上下文 {contextPercent(evidence)}%</span>
               <span className="ml-auto">{mode === "sse" ? "实时推送" : mode === "polling" ? "轮询同步" : mode === "snapshot" ? "历史快照" : "空闲"}</span>
             </div>
           </div>

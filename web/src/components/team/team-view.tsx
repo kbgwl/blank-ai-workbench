@@ -626,11 +626,9 @@ export function TeamView() {
                     </button>
                   </div>
                   {groups.length === 0 && boot && (
-                    <p className="px-2 py-6 text-center text-[12px] leading-relaxed text-faint">
-                      还没有群
-                      <br />
-                      点上方「新建群」开始
-                    </p>
+                    /* 主区已经有一整块"组一个团队"的空态并给了按钮，这里只留一句状态，
+                       不再重复第二个"点上方新建"。 */
+                    <p className="px-2 py-6 text-center text-[12px] text-faint">暂无群聊</p>
                   )}
                   <div className="space-y-0.5">
                     {groups.map((group) => {
@@ -676,11 +674,7 @@ export function TeamView() {
               </div>
               <div className="space-y-0.5">
                 {(boot?.bots ?? []).length === 0 && boot && (
-                  <p className="px-2 py-6 text-center text-[12px] leading-relaxed text-faint">
-                    还没有 Bot
-                    <br />
-                    点上方「新建 Bot」添加
-                  </p>
+                  <p className="px-2 py-6 text-center text-[12px] text-faint">暂无 Bot</p>
                 )}
                 {(boot?.bots ?? []).map((bot) => (
                   <button
@@ -1450,6 +1444,20 @@ function BotRoster({
 
         {!boot ? (
           <StateLine>读取名册…</StateLine>
+        ) : bots.length === 0 ? (
+          /* 空名册不能只留一片白：说清一个 Bot 是什么、下一步点哪里。
+             按钮在右上角已经有了，这里不再放第二个。 */
+          <div className="mt-14 flex flex-col items-center text-center">
+            <span className="grid size-11 place-items-center rounded-xl bg-surface-2 text-faint">
+              <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth={1.6}>
+                <path d="M12 8V5M8 5h8M5 10a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2zM9 14h.01M15 14h.01" />
+              </svg>
+            </span>
+            <p className="mt-3 text-[14px] font-medium text-text">名册还是空的</p>
+            <p className="mt-1 max-w-sm text-[12px] leading-relaxed text-muted">
+              一个 Bot 就是「一个模型 + 一个工作区 + 一档权限」。建两个不同分工的，就能在群里互相接手。
+            </p>
+          </div>
         ) : (
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             {bots.map((bot) => (

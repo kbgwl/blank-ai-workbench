@@ -13,6 +13,7 @@ import {
   resolveTouchedPath,
   shouldAutoRunTurn,
   splitTitleStamp,
+  thinkVerb,
   threadTitleFrom,
   touchedFiles,
   turnEvidence,
@@ -413,4 +414,23 @@ test("标题里没有时间就原样返回，不改写", () => {
   // 冒号在中间的不是时间尾巴
   assert.deepEqual(splitTitleStamp("把 3:1 改成 2:1"), { base: "把 3:1 改成 2:1", stamp: "" });
   assert.deepEqual(splitTitleStamp(""), { base: "", stamp: "" });
+});
+
+test("「在想…」的词由开始时间定死，同一轮不会每帧跳", () => {
+  const at = Date.parse("2026-11-19T10:00:00");
+  assert.equal(thinkVerb(at), thinkVerb(at));
+  // 相隔不到一秒：还是同一个词（重新渲染不该换词）
+  assert.equal(thinkVerb(at), thinkVerb(at + 800));
+});
+
+test("不同的开始时间会落进不同的词，六秒一轮回", () => {
+  const seen = new Set<string>();
+  for (let i = 0; i < 6; i += 1) seen.add(thinkVerb(1_700_000_000_000 + i * 1000));
+  assert.equal(seen.size, 6);
+  assert.equal(thinkVerb(1_700_000_000_000), thinkVerb(1_700_000_006_000));
+});
+
+test("没有开始时间也不空白，回落第一个词", () => {
+  assert.equal(thinkVerb(null), "在想");
+  assert.equal(thinkVerb(Number.NaN), "在想");
 });

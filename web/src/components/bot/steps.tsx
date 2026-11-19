@@ -57,6 +57,21 @@ function StatusDot({ status }: { status: "running" | "ok" | "failed" }) {
   );
 }
 
+/**
+ * 参数的行数上限。12 不是随手取的：它就是 Claude Code 终端的常量，
+ * 再多的参数在展开状态下也读不完，只会把下一条步骤顶出屏幕。
+ */
+const ARG_LIMIT = 12;
+/** 输出只给前 6 行：展开是要"确认它干了什么"，不是要在这里读完整日志。 */
+const OUTPUT_LIMIT = 6;
+
+function argValueText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return "";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
 function ToolStepRow({ step }: { step: Extract<BotStep, { kind: "tool" }> }) {
   const [open, setOpen] = useState(false);
   // 参数里的 command / path 比工具名更能说明"它在干什么"，优先拿它当副标题。
@@ -66,7 +81,10 @@ function ToolStepRow({ step }: { step: Extract<BotStep, { kind: "tool" }> }) {
     String(step.args.pattern ?? "") ||
     String(step.args.query ?? "") ||
     "";
-  const hasDetail = Object.keys(step.args).length > 0 || step.output !== "";
+  const entries = Object.entries(step.args);
+  const hasDetail = entries.length > 0 || step.output !== "";
+  // 输出尾巴上的换行会多切出一个空行，先去掉再数行。
+  const outputLines = step.output ? step.output.replace(/\n$/, "").split("\n") : [];
 
   return (
     <div className="group/step rounded-md">
@@ -88,8 +106,11 @@ function ToolStepRow({ step }: { step: Extract<BotStep, { kind: "tool" }> }) {
           </span>
         )}
         {!hint && <span className="flex-1" />}
+        {/* 失败不能只靠红点：色觉差异下、黑白截图里红点和绿点长得一样。
+            成功的行不加字——只有异常才说话，这一行才不会每条都拖着尾巴。 */}
+        {step.status === "failed" && <span className="shrink-0 text-[11px] text-danger">失败</span>}
         {step.durationMs !== null && (
-          <span className="shrink-0 font-mono text-[11px] text-faint">{formatDuration(step.durationMs)}</span>
+          <span className="shrink-0 font-mono text-[11px] text-faint tabular-nums">{formatDuration(step.durationMs)}</span>
         )}
         <StatusDot status={step.status} />
         {hasDetail && (
@@ -108,15 +129,31 @@ function ToolStepRow({ step }: { step: Extract<BotStep, { kind: "tool" }> }) {
 
       {open && (
         <div className="mt-1 mb-1.5 ml-[22px] space-y-1.5 border-l border-line pl-3">
-          {Object.keys(step.args).length > 0 && (
-            <pre className="max-h-52 overflow-auto rounded-md bg-surface-2 px-2.5 py-2 font-mono text-[12px] leading-relaxed text-muted">
-              {JSON.stringify(step.args, null, 2)}
+          {/* 参数按 key: value 逐行摆，不 dump JSON。
+              {"command":"curl …"} 摊成四行带引号带花括号，比命令本身还长；
+              逐行 key: value 一眼能扫出"它带了哪几个参数"。 */}
+          {entries.length > 0 && (
+            <dl className="max-h-52 overflow-auto rounded-md bg-surface-2 px-2.5 py-2 font-mono text-[12px] leading-relaxed">
+              {entries.slice(0, ARG_LIMIT).map(([key, value]) => (
+                <div key={key} className="flex gap-2">
+                  <dt className="w-24 shrink-0 truncate text-faint" title={key}>
+                    {key}:
+                  </dt>
+                  <dd className="min-w-0 flex-1 break-all whitespace-pre-wrap text-muted">{argValueText(value)}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+          {entries.length > ARG_LIMIT && (
+            <p className="font-mono text-[11px] text-faint">… 还有 {entries.length - ARG_LIMIT} 项</p>
+          )}
+          {outputLines.length > 0 && (
+            <pre className="max-h-72 overflow-auto rounded-md border border-line bg-surface px-2.5 py-2 font-mono text-[12px] leading-relaxed text-text">
+              {outputLines.slice(0, OUTPUT_LIMIT).join("\n")}
             </pre>
           )}
-          {step.output && (
-            <pre className="max-h-72 overflow-auto rounded-md border border-line bg-surface px-2.5 py-2 font-mono text-[12px] leading-relaxed text-text">
-              {step.output}
-            </pre>
+          {outputLines.length > OUTPUT_LIMIT && (
+            <p className="font-mono text-[11px] text-faint">… 还有 {outputLines.length - OUTPUT_LIMIT} 行</p>
           )}
         </div>
       )}

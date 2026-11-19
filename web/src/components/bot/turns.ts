@@ -568,3 +568,21 @@ export function splitTitleStamp(title: string): { base: string; stamp: string } 
   if (!match) return { base: raw, stamp: "" };
   return { base: match[1], stamp: match[2] };
 }
+
+/**
+ * 「在想…」那句话用的动词。
+ *
+ * Claude Code 终端有 188 个动词，我们不需要那么多：前 6 分钟换个词就够让
+ * 人感觉到"它在动"，再长用户也不看词，只看计时。所以这里真正能止住疑虑的
+ * 不是词，是旁边那个一直在走的秒数。
+ */
+const THINK_VERBS = ["在想", "在核对", "在翻代码", "在理顺", "在拆解", "在比对"];
+
+/**
+ * 由开始时间挑一个词：同一轮无论重渲染多少次都是同一个词。
+ * 用随机数会让它在打字时不停跳，反而更像卡住了。
+ */
+export function thinkVerb(startedAtMs: number | null): string {
+  if (startedAtMs === null || !Number.isFinite(startedAtMs)) return THINK_VERBS[0];
+  return THINK_VERBS[Math.floor(startedAtMs / 1000) % THINK_VERBS.length];
+}

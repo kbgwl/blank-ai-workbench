@@ -147,7 +147,16 @@ export function ProvidersView() {
 
   return (
     <div className="flex flex-col gap-4">
-      <Panel title="模型" hint={providers === null ? "载入中" : `共 ${count} 家`}>
+      <Panel
+        title="模型"
+        hint={
+          providers === null
+            ? "载入中"
+            : count === providers.length
+              ? `共 ${providers.length} 家`
+              : `共 ${providers.length} 家 · 启用 ${count}`
+        }
+      >
         <div className="flex flex-col gap-3">
           <p className="text-[12px] leading-relaxed text-faint">
             选一个模型，填上 API Key 就能用。接入点和型号已经配好，通常只需要填 Key。

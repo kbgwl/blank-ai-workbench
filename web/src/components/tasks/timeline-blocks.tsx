@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Button, Notice } from "@/components/projects/ui";
+import { ApprovalOptions, approvalQuestion } from "./approval";
 import { clip, formatClock, formatDuration } from "./format";
 import {
   boundaryLabel,
@@ -60,6 +61,7 @@ function CardShell({
   title,
   trailing,
   children,
+  flat = false,
 }: {
   block: Block;
   accent: string;
@@ -67,15 +69,28 @@ function CardShell({
   title: string;
   trailing?: React.ReactNode;
   children: React.ReactNode;
+  /**
+   * 一次任务里十几次工具调用，每条都套一个描边卡片，一屏就成了四个盒子叠在一起。
+   * flat 版本只留图标 + 一行标题，靠间距分块——需要你动手的卡片（审批/提问）才保留外框。
+   */
+  flat?: boolean;
 }) {
   return (
-    <article className={`rounded-xl border px-3.5 py-3 ${accent}`}>
+    <article className={flat ? "px-0.5 py-1" : `rounded-xl border px-3.5 py-3 ${accent}`}>
       <header className="flex flex-wrap items-center gap-2">
         <span className="shrink-0">{icon}</span>
-        <h3 className="min-w-0 flex-1 text-[14px] font-medium tracking-tight">{title}</h3>
+        <h3
+          className={
+            flat
+              ? "min-w-0 flex-1 text-[13px] font-medium tracking-tight text-text/85"
+              : "min-w-0 flex-1 text-[14px] font-medium tracking-tight"
+          }
+        >
+          {title}
+        </h3>
         {trailing}
       </header>
-      <div className="mt-2 flex flex-col gap-2">{children}</div>
+      <div className={flat ? "mt-1 flex flex-col gap-1.5" : "mt-2 flex flex-col gap-2"}>{children}</div>
     </article>
   );
 }
@@ -322,7 +337,8 @@ function ToolCard({ block }: { block: Extract<Block, { kind: "tool" }> }) {
   return (
     <CardShell
       block={block}
-      accent={failed ? "border-danger/30 bg-danger/[0.05]" : "border-line bg-surface"}
+      accent={failed ? "border-danger/30 bg-danger/[0.05]" : ""}
+      flat={!failed}
       icon={
         <span className={running ? "text-brand" : "text-muted"}>
           <BlockIcon kind="tool" />
@@ -606,14 +622,23 @@ function ApprovalCard({
           <BlockIcon kind="approval" />
         </span>
       }
-      title={`审批请求 · ${block.tool}`}
+      title={approvalQuestion(block.tool, block.args)}
       trailing={
-        <span className="shrink-0 rounded-md border border-line px-1.5 py-0.5 font-mono text-[11px] text-text/80">
-          {block.state === "pending" ? "待审批" : block.state === "granted" ? "已批准" : "已拒绝"}
+        <span className="flex shrink-0 items-center gap-1.5">
+          <span className="font-mono text-[11px] text-faint">{block.tool}</span>
+          {/* 风险档挪到标题行：它原来自己占一行写「高风险操作，需人工确认后才继续执行」，
+              而这张卡本身就是确认动作，后半句是废话。 */}
+          {block.risk && (
+            <span className="rounded bg-warn/[0.14] px-1.5 py-0.5 font-mono text-[10px] text-warn">
+              {riskLabel(block.risk)}
+            </span>
+          )}
+          <span className="rounded-md border border-line px-1.5 py-0.5 font-mono text-[11px] text-text/80">
+            {block.state === "pending" ? "待审批" : block.state === "granted" ? "已批准" : "已拒绝"}
+          </span>
         </span>
       }
     >
-      {block.risk && <p className="text-[13px] text-warn">{riskLabel(block.risk)}操作，需人工确认后才继续执行</p>}
       {block.message && <p className="text-[13px] leading-relaxed text-text/80">{block.message}</p>}
       {reviewNote && (
         <p
@@ -624,28 +649,13 @@ function ApprovalCard({
         </p>
       )}
       <JsonBlock value={block.args} />
-      {decided ? (
-        <p className="font-mono text-[12px] text-faint">该请求已处理，不会重复执行。</p>
-      ) : (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="danger" disabled={busy} onClick={() => onDecide("deny", block)}>
-            拒绝
-          </Button>
-          {grants.map((option) => (
-            <Button
-              key={option.scope}
-              variant={option.scope === "once" ? "primary" : "ghost"}
-              disabled={busy}
-              onClick={() => onDecide("approve", block, option.scope)}
-            >
-              {option.scope === "once" && busy ? "提交中" : option.label}
-            </Button>
-          ))}
-          <span className="font-mono text-[11px] text-faint">
-            {block.toolCallId ? `调用 ${block.toolCallId.slice(0, 8)}` : ""}
-          </span>
-        </div>
-      )}
+      <ApprovalOptions
+        grants={grants}
+        busy={busy}
+        decided={decided}
+        onApprove={(scope) => onDecide("approve", block, scope)}
+        onDeny={() => onDecide("deny", block)}
+      />
       {grants
         .filter((option) => option.warning)
         .map((option) => (
