@@ -295,6 +295,192 @@ def _decode_text(raw: bytes) -> tuple[str, str, bool]:
     return "", "binary", True
 
 
+def _sniff_encoding(head: bytes) -> tuple[str, bool]:
+    """只看开头一段判断编码，返回 (编码, 是否二进制)。
+
+    和 ``_decode_text`` 的区别只有一点：这里的 head 是**截断过的**，末尾很可能
+    正好切在一个多字节字符中间。严格解码会因此失败，把一个纯中文文件判成二进制
+    （实测 1.2MB 的中文单行文件就这样变成了"不可读"）。所以从末尾退 0–3 字节再试。
+    """
+    if b"\x00" in head:
+        return "binary", True
+    for encoding in ("utf-8", "gbk") if os.name == "nt" else ("utf-8",):
+        for cut in range(4):
+            sample = head[: len(head) - cut] if cut else head
+            try:
+                sample.decode(encoding)
+                return encoding, False
+            except UnicodeDecodeError:
+                continue
+    return "binary", True
+
+
+_SCAN_CHUNK = 1 << 20
+# 数行时要扫全文件；再大就停：调用方要的是"从哪行开始读"，不是一份精确到字节的账本。
+# 停下来时行数变成下限，消息里如实写成"至少 N 行"，而不是编一个看起来很准的数。
+MAX_SCAN_BYTES = 256 * 1024 * 1024
+
+
+def _scan_line_index(target: Path, start_line: int) -> tuple[int | None, int, bool]:
+    """扫一遍文件，回答两件事：第 ``start_line`` 行从哪个字节开始、总共有多少行。
+
+    只留两个整数，不建行表：十万行的日志建行表要 800KB 内存，而调用方要的
+    只是"从哪儿开始读"。这也是 Claude 的 Read 对大文件的读法——按字节定位，
+    而不是把整个文件读进内存再切行。
+
+    返回 (起始字节, 总行数, 行数是否精确)。起始字节为 None 表示这一行不存在。
+    """
+    line = 1
+    line_start = 0
+    found: int | None = None
+    newlines = 0
+    scanned = 0
+    last = b""
+    with open(target, "rb") as handle:
+        while True:
+            chunk = handle.read(_SCAN_CHUNK)
+            if not chunk:
+                break
+            base = scanned
+            scanned += len(chunk)
+            index = 0
+            while True:
+                newline = chunk.find(b"\n", index)
+                if newline < 0:
+                    break
+                if found is None and line == start_line:
+                    found = line_start
+                newlines += 1
+                line += 1
+                line_start = base + newline + 1
+                index = newline + 1
+            last = chunk[-1:]
+            if scanned >= MAX_SCAN_BYTES:
+                if found is None and line == start_line:
+                    found = line_start
+                return found, newlines, False
+    # 结尾没有换行时还有一行（"a\nb" 是两行）。以换行结尾的文件不能多算一行，
+    # 否则最后一行会变成一行永远读不到的空行。
+    if found is None and last != b"\n" and last and line == start_line:
+        found = line_start
+    total = newlines if last == b"\n" or scanned == 0 else newlines + 1
+    return found, total, True
+
+
+def _read_text_window(
+    target: Path, start_byte: int, size: int, encoding: str, limit: int | None
+) -> tuple[str, int, bool, bool]:
+    """从起始字节按行读一个窗口。
+
+    返回 (文本, 行数, 是否读到文件尾, 是否切在行中间)。
+    最后一个标记要单独给出来：预算被一行本身吃光时，"用 offset 续读"是句空话——
+    下一行根本不存在，续读只会读到空。
+    """
+    with open(target, "rb") as handle:
+        handle.seek(start_byte)
+        raw = handle.read(MAX_READ_BYTES)
+    if not raw:
+        return "", 0, True, False
+    at_eof = start_byte + len(raw) >= size
+    cut_mid_line = False
+    if not at_eof:
+        cut = raw.rfind(b"\n")
+        if cut >= 0:
+            raw = raw[: cut + 1]
+        else:
+            cut_mid_line = True
+    codec = encoding if encoding not in ("", "binary") else "utf-8"
+    text = raw.decode(codec, errors="replace")
+    # 窗口从字符中间切开时，首尾会各剩半个字。只在这一侧不是文件边界时才剥掉，
+    # 否则会把文件里真实的替换字符也当成残渣。
+    if start_byte > 0 and text.startswith("\ufffd"):
+        text = text[1:]
+    if not at_eof and text.endswith("\ufffd"):
+        text = text[:-1]
+    chunk_lines = text.splitlines(keepends=True)
+    kept = chunk_lines if limit is None else chunk_lines[: max(int(limit), 0)]
+    return "".join(kept), len(kept), at_eof and len(kept) == len(chunk_lines), cut_mid_line
+
+
+def _read_large_text(
+    relative: str,
+    target: Path,
+    size: int,
+    mtime_ns: int,
+    head: bytes,
+    offset: int | None,
+    limit: int | None,
+) -> dict:
+    """超过 MAX_READ_BYTES 的文件：按字节定位后只读需要的那一段。
+
+    原来这里把"只读了前 512KB"当成"整个文件"，于是 4 万行的日志会自称
+    "共 9893 行"，第 3 万行直接读不到——而截断提示里还教模型"把输出重定向到
+    文件再分批读"。分批读到 512KB 就断，等于把建议骗回去。
+    """
+    encoding, is_binary = _sniff_encoding(head)
+    start_line = max(int(offset or 1), 1)
+    base = {
+        "path": relative,
+        "size": size,
+        "mtime_ns": mtime_ns,
+        # 只读了窗口，拿不到全文哈希：读后写闸门退回只比 stat。
+        "sha256": "",
+        "encoding": encoding,
+    }
+    if is_binary:
+        return {
+            **base,
+            "binary": True,
+            "truncated": True,
+            "content": "",
+            "start_line": start_line,
+            "end_line": start_line - 1,
+            "total_lines": 0,
+            "message": "该文件是二进制文件，界面不展示内容",
+        }
+    found, total_lines, exact = _scan_line_index(target, start_line)
+    floor = "" if exact else "（文件很大，行数为已统计的下限）"
+    if found is None:
+        return {
+            **base,
+            "binary": False,
+            "truncated": True,
+            "content": "",
+            "start_line": start_line,
+            "end_line": start_line - 1,
+            "total_lines": total_lines,
+            "message": f"该文件共 {total_lines} 行{floor}，offset={start_line} 已超出末尾",
+        }
+    content, count, reached_eof, cut_mid_line = _read_text_window(target, found, size, encoding, limit)
+    end_line = start_line + max(count - 1, 0)
+    if reached_eof:
+        message = ""
+    elif cut_mid_line:
+        # 一行本身就把预算吃光了：这一行没有"下一行"可以续读，别开空头支票。
+        message = (
+            f"第 {start_line} 行本身超过单次读取上限（{MAX_READ_BYTES // 1024}KB），"
+            "只返回了它的前半段。这一行不能用 offset 续读——"
+            "改用 search_code 定位，或先把它在磁盘上拆成多行。"
+        )
+    elif count > 0:
+        message = (
+            f"已返回第 {start_line}–{end_line} 行（共 {total_lines} 行{floor}），"
+            f"继续请用 offset={end_line + 1}"
+        )
+    else:
+        message = f"单次最多读 {MAX_READ_BYTES // 1024}KB，这一段一行都放不下，请缩小 limit 或换 offset"
+    return {
+        **base,
+        "binary": False,
+        "truncated": not (start_line == 1 and reached_eof and exact),
+        "content": content,
+        "start_line": start_line,
+        "end_line": end_line,
+        "total_lines": total_lines,
+        "message": message,
+    }
+
+
 def read_text_file(
     root: Path | str,
     relative: str,
@@ -324,6 +510,9 @@ def read_text_file(
             raise ApiError(code="is_a_directory", message="该路径是目录，无法作为文件读取", status_code=422) from None
         raise ApiError(code="path_unreadable", message="该路径无法读取", status_code=403) from None
     truncated = size > MAX_READ_BYTES
+    if truncated:
+        # 大文件不能拿"前 512KB"冒充整个文件：行数、offset 续读都得以真实字节为准。
+        return _read_large_text(relative, target, size, mtime_ns, raw, offset, limit)
     content, encoding, is_binary = _decode_text(raw)
 
     lines = content.splitlines(keepends=True) if content else []
