@@ -114,6 +114,29 @@ from blank_api.services.workspace import mask_path
 log = logging.getLogger(__name__)
 
 
+# 开启强制时，交付文本必须自己说明哪几条没过——与 UNVERIFIED_NOTE 同一处手法：
+# 状态可以还是成功（活确实干完了），但绝不能让读者以为"按他的标准做到了"。
+STANDARD_UNMET_NOTE = (
+    "\n按你的做事标准，这次有没做到的：{items}。"
+    "（这几条是收尾时按事实核对的，不是模型自评。想关掉：设置 features.standard_enforce=false）"
+)
+
+
+def _standard_enforced() -> bool:
+    """是否把标准变成硬约束。**默认关**。
+
+    为什么默认关：条款是从他的话里展开的，理解可能偏；一上来就拦，会把
+    "理解偏了"变成"任务被判不合格"。先只看不拦，等符合度有真实样本再说。
+    """
+    try:
+        from blank_api.services.settings import SettingsStore
+
+        features = SettingsStore().read().get("features") or {}
+        return bool(features.get("standard_enforce"))
+    except Exception:  # noqa: BLE001 - 读不到设置就当没开
+        return False
+
+
 class _CancelledLookup:
     def __init__(self, session_factory, task_id: str) -> None:
         self.session_factory = session_factory
@@ -1539,9 +1562,38 @@ class AgentRuntime:
         # 任务描述（`scripts/persona.py --harvest` 显式扫，只出候选，要人确认）。
         persona_block = ""
         try:
-            from blank_api.services.agent.persona import PersonaStore
+            from blank_api.services.agent.persona import (
+                PersonaStore,
+                injectable,
+                standards_of,
+            )
 
-            persona_block = PersonaStore().persona_block(session.context.root)
+            persona = PersonaStore()
+            persona_block = persona.persona_block(session.context.root)
+
+            # 追问：同一个 thread 的第二轮及以后，用户那句话本身就是"上次哪里不对"，
+            # 是"工序"最主要的来源。任务描述（第一轮）不能学，因为它写的是这一次要
+            # 做什么；追问不一样，它天然是纠正。
+            if history:
+                persona.learn_from_text(
+                    session.context.root,
+                    session.goal,
+                    task_id=request.task_id,
+                    source="followup",
+                    scope_ref=str(session.context.root),
+                )
+
+            entries = persona.load_all(session.context.root)
+            used = injectable(entries, scope_ref=str(session.context.root))
+            if used or standards_of(entries):
+                await recorder.add(
+                    "persona.recalled",
+                    "initial",
+                    {
+                        "rules": [item.rule[:120] for item in used],
+                        "standards": standards_of(entries),
+                    },
+                )
         except Exception:  # noqa: BLE001 - 学人失败不该让任务起不来
             persona_block = ""
 
@@ -1792,6 +1844,62 @@ class AgentRuntime:
             # 像"验证过了"。模型自己写的那句"自动化校验未通过：npm test"指的是
             # 同一条没跑完的命令，留着会自相矛盾，所以整句如实改写。
             summary = summary.split("（自动化校验")[0].rstrip() + "\n" + UNVERIFIED_NOTE.format(reason=unverified)
+        # 交付**是否符合他一贯的标准**——必须在落状态之前算：开启强制时它要改交付文本，
+        # 落完状态再算就只能事后记账了。判据只读事实，与 done_when 同一条纪律
+        # （没改文件记 unverifiable，不记失败）。
+        standard_results: list[dict] = []
+        try:
+            from blank_api.services.agent.persona import (
+                PersonaStore,
+                conformance,
+                standards_of,
+            )
+
+            persona_store = PersonaStore()
+            standard_keys = standards_of(persona_store.load_all(scope.session.context.root))
+            if standard_keys:
+                rows = [item for item in (result.get("tool_results") or []) if isinstance(item, dict)]
+                standard_results = conformance(
+                    standard_keys,
+                    {
+                        "changed_paths": _changed_paths(rows),
+                        "validation": validation,
+                        "report": summary,
+                        "failures": len(
+                            [
+                                item
+                                for item in rows
+                                if item.get("ok") is False
+                                or str(item.get("status") or "") in ("failed", "error", "timeout")
+                            ]
+                        ),
+                    },
+                )
+                unmet = [item for item in standard_results if item["status"] == "failed"]
+                if unmet and _standard_enforced():
+                    # 不许"看起来完成了"。和 unverified 同一处手法：交付文本自己说出来。
+                    summary = summary.rstrip() + "\n\n" + STANDARD_UNMET_NOTE.format(
+                        items="；".join(item["text"] for item in unmet[:4])
+                    )
+                await scope.recorder.add(
+                    "standard.conformance",
+                    "complete",
+                    {
+                        "standards": standard_keys,
+                        "results": standard_results,
+                        "passed": sum(
+                            1 for item in standard_results if item["status"] == "passed"
+                        ),
+                        "failed": len(unmet),
+                        "unverifiable": sum(
+                            1 for item in standard_results if item["status"] == "unverifiable"
+                        ),
+                        "enforced": _standard_enforced(),
+                    },
+                )
+        except Exception:  # noqa: BLE001 - 核对失败不该让任务结论变掉
+            standard_results = []
+
         await self._finish(
             scope,
             status,
@@ -1915,48 +2023,21 @@ class AgentRuntime:
             {"count": len(learned), "actions": actions, "statements": [e.statement[:160] for e in learned]},
         )
 
-        # 交付**是否符合他一贯的标准**——这是"像不像他"的直接判据，和"任务成不成功"
-        # 是两件事：一个任务可以成功，但用的不是他要的做法（跑通了、但没验证、结论靠猜）。
-        # 只记事实，不拦：展开的条款是我们对他要求的理解，理解偏了要能被他看见。
+
+        # 他的标准沉淀成 Skill 提案——一句话进提示只能影响"注意什么"，
+        # 真正"按他的方式做"是程序性的，得有个带步骤的正文。
+        # 走既有的 proposed 通道：人点采用才生效，因为展开是我们的理解。
+        # 幂等（同名已存在就跳过），否则每跑一个任务就提一次。
         try:
-            from blank_api.services.agent.persona import PersonaStore, conformance, standards_of
+            from blank_api.services.agent.persona import PersonaStore
+            from blank_api.services.agent.skillsmith import drafts_for, stage as stage_skills
 
-            persona = PersonaStore()
-            standards = standards_of(persona.load(session.context.root))
-            if standards:
-                results = conformance(
-                    standards,
-                    {
-                        "changed_paths": [path for path in changed if path],
-                        "validation": result.get("validation") or {},
-                        "report": str(result.get("summary") or ""),
-                        "failures": len(failures),
-                    },
-                )
-                await scope.recorder.add(
-                    "standard.conformance",
-                    "complete",
-                    {
-                        "standards": standards,
-                        "results": results,
-                        "passed": sum(1 for item in results if item["status"] == "passed"),
-                        "failed": sum(1 for item in results if item["status"] == "failed"),
-                        "unverifiable": sum(
-                            1 for item in results if item["status"] == "unverifiable"
-                        ),
-                    },
-                )
-                # 把他的标准沉淀成 Skill 提案——一句话进提示只能影响"注意什么"，
-                # 真正"按他的方式做"是程序性的，得有个带步骤的正文。
-                # 走既有的 proposed 通道：人点采用才生效，因为展开是我们的理解。
-                # 幂等（同名已存在就跳过），否则每跑一个任务就提一次。
-                from blank_api.services.agent.skillsmith import drafts_for, stage as stage_skills
-
-                drafts = drafts_for(persona, session.context.root)
-                if drafts:
-                    await stage_skills(scope.store, drafts, recorder=scope.recorder)
-        except Exception:  # noqa: BLE001 - 核对失败不该让任务结论变掉
+            drafts = drafts_for(PersonaStore(), session.context.root)
+            if drafts:
+                await stage_skills(scope.store, drafts, recorder=scope.recorder)
+        except Exception:  # noqa: BLE001 - 沉淀失败不该让任务结论变掉
             pass
+
 
     async def _set_status(self, scope: _RunScope, status: str) -> None:
         async with scope.store() as session:

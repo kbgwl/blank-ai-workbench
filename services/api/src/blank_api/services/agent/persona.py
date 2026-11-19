@@ -651,9 +651,28 @@ class PersonaStore:
         # 一眼能分清"这是学世界的"还是"这是学我的"。
         return self.root / f"{slug or 'root'}-{digest}.persona.jsonl"
 
-    def load(self, workspace: str | Path) -> list[Preference]:
+    def global_path(self) -> Path:
+        """跨项目的那一份。
+
+        为什么单独一个文件而不是塞进各项目库：跨项目偏好（"他从不用 tab 缩进"）
+        在每个仓库都该生效，复制到每个项目库会变成 N 份需要各自维护的副本——
+        改一处就要改 N 处，而漏改的后果是"在某个仓库里突然不像他了"。
+        """
+        return self.root / "_global.persona.jsonl"
+
+    def load_global(self) -> list[Preference]:
+        return self._load_path(self.global_path())
+
+    def load_all(self, workspace: str | Path) -> list[Preference]:
+        """项目层 + 全局层。项目里的同一条盖住全局的（与技能的三层加载同序）。"""
+        merged: dict[str, Preference] = {}
+        for item in self.load_global() + self.load(workspace):
+            merged[item.fingerprint] = item
+        return list(merged.values())
+
+    def _load_path(self, path: Path) -> list[Preference]:
         try:
-            text = self.path_for(workspace).read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8")
         except (FileNotFoundError, OSError, UnicodeDecodeError):
             return []
         out: list[Preference] = []
@@ -669,12 +688,20 @@ class PersonaStore:
                 out.append(_from_dict(data))
         return out
 
-    def save(self, workspace: str | Path, entries: Iterable[Preference]) -> None:
-        path = self.path_for(workspace)
+    def load(self, workspace: str | Path) -> list[Preference]:
+        return self._load_path(self.path_for(workspace))
+
+    def _save_path(self, path: Path, entries: Iterable[Preference]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         body = "\n".join(json.dumps(item.as_dict(), ensure_ascii=False) for item in entries) + "\n"
         with _lock_for(path):
             path.write_text(body, encoding="utf-8")
+
+    def save(self, workspace: str | Path, entries: Iterable[Preference]) -> None:
+        self._save_path(self.path_for(workspace), entries)
+
+    def save_global(self, entries: Iterable[Preference]) -> None:
+        self._save_path(self.global_path(), entries)
 
     def record(self, workspace: str | Path, incoming: Preference) -> tuple[str, Preference]:
         path = self.path_for(workspace)
@@ -715,7 +742,9 @@ class PersonaStore:
                 out.append(self.record(workspace, pref))
         return out
 
-    def record_assertion(self, workspace: str | Path, text: str) -> list[Preference]:
+    def record_assertion(
+        self, workspace: str | Path, text: str, *, scope: str = "project"
+    ) -> list[Preference]:
         """他当面提的要求：记下来，**一次就生效**。
 
         为什么这一次不用"出现两次"：那个门槛是给**自动推断**用的——从行为里猜他
@@ -723,32 +752,53 @@ class PersonaStore:
         证据本身。（消费级调研里的同一条：钉钉只认"帮我记住……"这类触发指令。）
 
         置信度给 0.8 但不给 1.0：连他本人都可能是这次这么想。
+
+        `scope="global"` 写跨项目那一份。注意：**不能先落项目库再改成全局**——
+        那样项目库会留下一条副本，而全局库里什么都没有（第一版就错在这）。
         """
-        learned = self.learn_from_text(
-            workspace, text, task_id="", source="tell", scope_ref=str(workspace)
-        )
-        if not learned:
+        global_ = scope == "global"
+        clauses = extract_instructions(text)
+        if not clauses:
             return []
-        entries = self.load(workspace)
+        incoming = [
+            preference_from_quote(
+                clause,
+                task_id="",
+                source="tell",
+                scope="global" if global_ else "project",
+                scope_ref="" if global_ else str(workspace),
+            )
+            for clause in clauses
+        ]
+        incoming = [item for item in incoming if item is not None]
+        if not incoming:
+            return []
+        entries = self.load_global() if global_ else self.load(workspace)
+        for item in incoming:
+            entries, _action = merge(entries, item)
+
+        stamps = {item.fingerprint for item in incoming}
         touched: list[Preference] = []
-        stamps = {pref.fingerprint for _action, pref in learned}
         for item in entries:
-            if item.fingerprint not in stamps:
+            if item.fingerprint not in stamps or item.status in ("retired", "conflict"):
                 continue
             item.status = "active"
             # 他说一次就等于满足门槛。不补这一步会**静默失效**：状态是 active，
-            # 但 injectable 按 occurrences >= 2 过滤，条目看着生效了、其实一条都进不了提示。
+            # 但 injectable 按 occurrences >= 2 过滤，条目看着生效了、其实进不了提示。
             item.occurrences = max(int(item.occurrences), MIN_OCCURRENCES)
             item.confidence = max(float(item.confidence), 0.8)
             item.last_confirmed = _TIMESTAMP()
             touched.append(item)
-        self.save(workspace, entries)
+        if global_:
+            self.save_global(entries)
+        else:
+            self.save(workspace, entries)
         return touched
 
     def persona_block(self, workspace: str | Path) -> str:
         """给提示用的那一块。取不到就返回空串，绝不挡任务。"""
         try:
-            entries = self.load(workspace)
+            entries = self.load_all(workspace)
             parts = [
                 render(injectable(entries, scope_ref=str(workspace))),
                 render_standards(standards_of(entries)),

@@ -133,6 +133,12 @@ def main() -> int:
         default="",
         help="他当面提的要求，记下来并立刻生效（如 --tell \"做事要严谨\"）",
     )
+    parser.add_argument(
+        "--global",
+        dest="global_scope",
+        action="store_true",
+        help="和 --tell 一起用：这是跨项目的要求（存全局，每个仓库都生效）",
+    )
     parser.add_argument("--promote", default="", help="确认这一条，立刻生效（指纹前缀）")
     parser.add_argument("--keep", default="", help="冲突里留这一条（指纹前缀）")
     parser.add_argument("--retire", default="", help="退役这一条（指纹前缀）")
@@ -170,7 +176,10 @@ def main() -> int:
         return report(args.db)
 
     if args.tell:
-        return tell(store, args.workspace, args.tell)
+        return tell(
+            store, args.workspace, args.tell,
+            scope="global" if args.global_scope else "project",
+        )
 
     if args.keep:
         keep(store, args.workspace, args.keep)
@@ -216,7 +225,7 @@ def main() -> int:
     return 0
 
 
-def tell(store: PersonaStore, workspace: str, text: str) -> int:
+def tell(store: PersonaStore, workspace: str, text: str, *, scope: str = "project") -> int:
     """他当面提的要求：记下来，**一次就生效**。
 
     为什么这一次不用"出现两次"：那个门槛是给**自动推断**用的——从行为里猜他想要什么，
@@ -226,14 +235,15 @@ def tell(store: PersonaStore, workspace: str, text: str) -> int:
     代价是：他会看到一条自己刚说过的话立刻生效。这正是想要的——他能马上看见
     "它记住了"，也能马上撤。
     """
-    touched = store.record_assertion(workspace, text)
+    touched = store.record_assertion(workspace, text, scope=scope)
     if not touched:
         print("没从这句话里听出可执行的要求——换一种说法，比如「做数据库改动必须先问我」。")
         return 1
-    print(f"记住了 {len(touched)} 条，从现在起生效：")
+    where = "所有项目" if scope == "global" else "这个项目"
+    print(f"记住了 {len(touched)} 条（{where}生效）：")
     for item in touched:
         print(f"  [{item.label}] {item.rule}")
-    entries = store.load(workspace)
+    entries = store.load_all(workspace)
     standards = standards_of(entries)
     if standards:
         print()

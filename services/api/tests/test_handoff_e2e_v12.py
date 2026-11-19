@@ -306,3 +306,41 @@ async def test_daily_with_opt_in_still_learns(env: Env, workspace: Path) -> None
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
     assert [e for e in events if e["type"] == "experience.learned"]
+
+
+async def test_a_standard_is_checked_before_the_task_is_finalized(  # noqa: F811
+    env: Env, workspace: Path
+) -> None:
+    """符合度必须在**落状态之前**算：开启强制时它要改交付文本。
+
+    这条走的是完整链路（建项目 → 跑任务 → 落事件），不是只测纯函数——
+    "字段建了没人读"今天已经栽过四次，接线必须真跑一遍。
+    """
+    from blank_api.services.agent.persona import PersonaStore
+
+    PersonaStore().record_assertion(str(workspace), "做事要严谨")
+
+    task_id, _provider, resp = await _successful_run(env, workspace)
+    assert resp.status_code == 200, resp.text
+
+    events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
+    kinds = [event["type"] for event in events]
+    assert "persona.recalled" in kinds, kinds
+    assert "standard.conformance" in kinds, kinds
+
+    recalled = next(event["payload"] for event in events if event["type"] == "persona.recalled")
+    assert recalled["standards"] == ["rigor"]
+
+    conformance = next(
+        event["payload"] for event in events if event["type"] == "standard.conformance"
+    )
+    assert conformance["standards"] == ["rigor"]
+    assert conformance["enforced"] is False, "默认不拦"
+    # 四条都要被核过：没改文件的两条记 unverifiable（不记失败），
+    # 这次总结里没有裸猜也没有隐瞒失败，所以 failed 为 0——这不该影响任务状态。
+    assert len(conformance["results"]) == 4
+    assert conformance["passed"] + conformance["unverifiable"] == 4
+    assert conformance["failed"] == 0
+    assert next(
+        event["payload"]["status"] for event in events if event["type"] == "task.completed"
+    ) == "succeeded"

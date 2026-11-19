@@ -132,6 +132,27 @@ async def _memory_write(context: ToolContext, arguments: dict) -> ToolOutcome:
         return fail("error", str(exc))
     except OSError as exc:
         return fail("error", f"记忆写入失败：{exc}")
+
+    # `user` / `feedback` 这两类是"关于他"的，散文形态没法被逐条核对，也不会
+    # 自动进提示。所以同时记一笔到使用者模型——但只记成**候选**：
+    # 模型不能替用户把一条要求变成"他一贯如此"，那正是这一层要防的跑偏。
+    staged = 0
+    if memory_type in ("user", "feedback"):
+        try:
+            from blank_api.services.agent.persona import PersonaStore
+
+            staged = len(
+                PersonaStore().learn_from_text(
+                    context.root,
+                    content,
+                    task_id=context.task_id,
+                    source="memory_write",
+                    scope_ref=str(context.root),
+                    origin="harvested",
+                )
+            )
+        except Exception:  # noqa: BLE001 - 记候选失败不该让写入本身失败
+            staged = 0
     if not result.added:
         # 去重命中不是失败：模型重复叮嘱同一件事时，账本上仍只有一笔。
         return ok(
@@ -140,8 +161,13 @@ async def _memory_write(context: ToolContext, arguments: dict) -> ToolOutcome:
             skipped=result.skipped,
             type=memory_type,
         )
+    tail = (
+        f"；另外记了 {staged} 条到使用者模型（待确认，重复出现或人确认后才生效）"
+        if staged
+        else ""
+    )
     return ok(
-        f"已记入项目长期记忆（{memory_type}）：{content[:80]}",
+        f"已记入项目长期记忆（{memory_type}）：{content[:80]}{tail}",
         added=len(result.added),
         skipped=result.skipped,
         type=memory_type,

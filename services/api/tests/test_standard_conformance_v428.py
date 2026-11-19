@@ -180,9 +180,12 @@ class _Recorder:
 
 
 @pytest.mark.asyncio
-async def test_the_runtime_records_conformance(tmp_path, monkeypatch):
-    """字段建了没人读是今天栽过三次的形状。所以这里真的走一遍收尾，
-    断言事件被写出来——而不是只测那个纯函数。"""
+async def test_conformance_is_not_recorded_again_during_consolidation(tmp_path, monkeypatch):
+    """符合度在**落状态之前**就算过了。收尾这里再记一次，同一个交付会被核两遍，
+    指标的分母直接翻倍——所以这条钉的是"不许重复记"。
+
+    （真正的记录时机由 `test_handoff_e2e_v12` 那条全链路用例保证。）
+    """
     monkeypatch.setenv("BLANK_PERSONA_DIR", str(tmp_path / "persona"))
     monkeypatch.setenv("BLANK_EXPERIENCE_DIR", str(tmp_path / "experience"))
 
@@ -195,10 +198,7 @@ async def test_the_runtime_records_conformance(tmp_path, monkeypatch):
     recorder = _Recorder()
     scope = SimpleNamespace(
         task_id="task-1",
-        session=SimpleNamespace(
-            goal="改个页面",
-            context=SimpleNamespace(root=tmp_path),
-        ),
+        session=SimpleNamespace(goal="改个页面", context=SimpleNamespace(root=tmp_path)),
         recorder=recorder,
     )
     result = {
@@ -215,8 +215,4 @@ async def test_the_runtime_records_conformance(tmp_path, monkeypatch):
 
     await AgentRuntime.__dict__["_consolidate"](None, scope, result, title="t")
 
-    kinds = [kind for kind, _ in recorder.events]
-    assert "standard.conformance" in kinds, kinds
-    payload = next(payload for kind, payload in recorder.events if kind == "standard.conformance")
-    assert payload["standards"] == ["rigor"]
-    assert payload["failed"] >= 2, payload
+    assert "standard.conformance" not in [kind for kind, _ in recorder.events]
