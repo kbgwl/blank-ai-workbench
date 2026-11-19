@@ -498,9 +498,12 @@ export function TurnView(props: TurnViewProps) {
 function PlanCard({ plan }: { plan: PlanView }) {
   const percent = plan.total > 0 ? Math.round((plan.completed / plan.total) * 100) : 0;
   return (
-    <div className="ml-7 mb-2 rounded-lg border border-line bg-surface px-3 py-2">
+    // 不套边框：这一屏里已经有审批卡（唯一的"要你动手"的框）和用户气泡，
+    // 计划再画一个框就变成三个同等重量的盒子。用一条左边线把它挂在正文旁边，
+    // 读得出"这是旁注"，也不抢正文。
+    <div className="mb-2 ml-7 border-l-2 border-line-strong pl-3">
       <div className="flex items-center gap-2">
-        <span className="text-[12px] font-medium text-text">计划</span>
+        <span className="text-[12px] font-medium text-muted">计划</span>
         <span className="font-mono text-[11px] text-faint">
           {plan.completed} / {plan.total}
         </span>

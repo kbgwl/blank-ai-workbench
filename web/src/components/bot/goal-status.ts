@@ -31,6 +31,14 @@ export type StatusChip = {
   label: string;
   value: string;
   tone: "plain" | "brand" | "warn" | "danger" | "muted";
+  /**
+   * 只用一个点表达状态，不把整格染成警示色。
+   *
+   * 目标那一格已经把「等你批准」四个字写出来了，后台那一格如果也整格变橙，
+   * 一行里就是两个一模一样的橙药丸——用户第一反应是"这两条是不是同一件事"。
+   * 后台是另一件事，用灰底 + 一个橙点指出来就够了。
+   */
+  dot?: "warn" | "danger" | "brand";
 };
 
 const GOAL_STATUS_LABELS: Record<string, string> = {
@@ -73,17 +81,17 @@ export function statusBarChips(data: GoalStatusBarData): StatusChip[] {
     });
   }
   if (data.backgroundCount > 0) {
-    // 状态决定这一格的颜色：卡在审批上是"要你动手"，失败是"要你知道"，
-    // 都在跑就是普通信息。全用橙色等于什么都没强调。
+    // 状态只用一个小圆点表达，不把整格染色：目标那一格已经整格橙了，
+    // 后台再整格橙，一行里就是两个一模一样的橙药丸，像在说同一件事。
     const status = data.backgroundStatus ?? "";
-    const tone: StatusChip["tone"] =
+    const dot: StatusChip["dot"] =
       status === "failed"
         ? "danger"
         : status === "waiting_approval" || status === "paused"
           ? "warn"
-          : "plain";
+          : "brand";
     // 这里不再写「等你批准」四个字：目标那一格已经在说状态了，同一行两个
-    // 「等你批准」用户只会问该点哪个。颜色说"要你看",标题说"哪一条"。
+    // 「等你批准」用户只会问该点哪个。点说"要你看"，标题说"哪一条"。
     const title = (data.backgroundLabel ?? "").trim();
     // 「4 个 · 冒烟：审批」：数量在前、标题在后，截断时先丢标题尾巴而不是数量。
     const countPart = data.backgroundCount > 1 ? `${data.backgroundCount} 个` : "";
@@ -91,7 +99,8 @@ export function statusBarChips(data: GoalStatusBarData): StatusChip[] {
       key: "background",
       label: "后台",
       value: title ? (countPart ? `${countPart} · ${title}` : title) : `${data.backgroundCount} 个任务`,
-      tone,
+      tone: "plain",
+      dot,
     });
   }
   return chips;

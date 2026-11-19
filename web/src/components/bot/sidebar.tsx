@@ -8,7 +8,7 @@ import type { Thread } from "../tasks/api";
 import { ThemeToggle } from "../theme-toggle";
 import { isNavActive, NAV_ITEMS, type NavId } from "./nav";
 import { StatusDot } from "./status-dot";
-import { dayBucket } from "./turns";
+import { dayBucket, splitTitleStamp } from "./turns";
 
 const ICON = {
   viewBox: "0 0 24 24",
@@ -285,6 +285,8 @@ export function Sidebar(props: SidebarProps) {
             <div className="space-y-0.5">
               {group.items.map((thread) => {
                 const active = thread.id === props.activeId;
+                // 标题里自带的时间拆到右列：整列 18 行「雷罡 21:51:06」读起来是一堵墙。
+                const { base, stamp } = splitTitleStamp(thread.title);
                 return (
                   <div key={thread.id} className="group/item relative">
                     <button
@@ -294,10 +296,16 @@ export function Sidebar(props: SidebarProps) {
                         active ? "bg-surface-3 text-text" : "text-muted hover:bg-surface-2 hover:text-text"
                       }`}
                     >
-                      <StatusDot status={thread.lastTurnStatus} />
-                      <span className="min-w-0 flex-1 truncate text-[13px]">{thread.title}</span>
-                      {thread.turnCount > 1 && (
-                        <span className="shrink-0 font-mono text-[9px] text-faint">{thread.turnCount}</span>
+                      {/* 留一个固定宽度的槽：点不画的时候标题也不能左右跳。 */}
+                      <span className="grid w-1.5 shrink-0 place-items-center">
+                        <StatusDot status={thread.lastTurnStatus} quietDone />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[13px]" title={thread.title}>
+                        {base}
+                      </span>
+                      {/* 时间靠右成一列；轮次数不在这里重复（打开会话后标题栏有「N 轮」）。 */}
+                      {stamp && (
+                        <span className="shrink-0 font-mono text-[10px] tabular-nums text-faint">{stamp}</span>
                       )}
                     </button>
                     {/* 操作收进一个「⋯」：三个图标并排会吃掉窄侧栏一截标题，而且它们

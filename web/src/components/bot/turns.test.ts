@@ -12,6 +12,7 @@ import {
   planOf,
   resolveTouchedPath,
   shouldAutoRunTurn,
+  splitTitleStamp,
   threadTitleFrom,
   touchedFiles,
   turnEvidence,
@@ -400,4 +401,16 @@ test("中间隔着别的步骤，同样的话算「又说了一遍」而不是�
     ev(3, "steer.queued", { message: "继续" }),
   ]);
   assert.equal(collapseRepeatedNotes(steps).length, 3);
+});
+
+test("会话标题末尾的时间拆到右列", () => {
+  assert.deepEqual(splitTitleStamp("雷罡 21:51:06"), { base: "雷罡", stamp: "21:51:06" });
+  assert.deepEqual(splitTitleStamp("修登录按钮 09:05"), { base: "修登录按钮", stamp: "09:05" });
+});
+
+test("标题里没有时间就原样返回，不改写", () => {
+  assert.deepEqual(splitTitleStamp("改一版首页"), { base: "改一版首页", stamp: "" });
+  // 冒号在中间的不是时间尾巴
+  assert.deepEqual(splitTitleStamp("把 3:1 改成 2:1"), { base: "把 3:1 改成 2:1", stamp: "" });
+  assert.deepEqual(splitTitleStamp(""), { base: "", stamp: "" });
 });

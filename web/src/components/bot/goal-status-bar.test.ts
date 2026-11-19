@@ -67,13 +67,15 @@ test("后台那一格说标题，不说数量——「后台 4 个任务」看�
   assert.equal(bg?.tone, "plain");
 });
 
-test("后台任务卡在审批上时变成警示色，但不再抢一句「等你批准」", () => {
+test("后台任务卡在审批上时用一个小橙点，不整格变橙", () => {
   const bg = statusBarChips(
     base({ backgroundCount: 1, backgroundLabel: "雷罡", backgroundStatus: "waiting_approval" }),
   ).find((item) => item.key === "background");
-  // 同一行两个「等你批准」会让人不知道该点哪个：状态由颜色说，文字只说哪一条。
+  // 同一行两个「等你批准」会让人不知道该点哪个：状态由点说，文字只说哪一条。
   assert.equal(bg?.value, "雷罡");
-  assert.equal(bg?.tone, "warn");
+  // 整格变橙会和目标那一格撞成一模一样的两条药丸，所以底色仍是普通灰。
+  assert.equal(bg?.tone, "plain");
+  assert.equal(bg?.dot, "warn");
 });
 
 test("没有标题时退回数量说法：状态条不能变成一格空白", () => {

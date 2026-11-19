@@ -24,6 +24,12 @@ const TONE_CLASS: Record<StatusChip["tone"], string> = {
   muted: "bg-surface-2 text-faint",
 };
 
+const DOT_CLASS: Record<NonNullable<StatusChip["dot"]>, string> = {
+  warn: "bg-warn",
+  danger: "bg-danger",
+  brand: "bg-brand",
+};
+
 type Props = {
   data: GoalStatusBarData;
   /** 后台任务有会话时：点了回那条会话。 */
@@ -41,6 +47,7 @@ export function GoalStatusBar({ data, onBackground, backgroundHref, backgroundTi
         const className = `inline-flex min-w-0 items-center gap-1 rounded-full px-2 py-0.5 ${TONE_CLASS[chip.tone]}`;
         const body = (
           <>
+            {chip.dot && <span className={`size-1.5 shrink-0 rounded-full ${DOT_CLASS[chip.dot]}`} />}
             <span className="shrink-0 opacity-70">{chip.label}</span>
             <span className="truncate font-medium">{chip.value}</span>
           </>
@@ -48,7 +55,9 @@ export function GoalStatusBar({ data, onBackground, backgroundHref, backgroundTi
 
         if (chip.key === "goal") {
           return (
-            <span key={chip.key} title={data.goal} className={`${className} flex-1`}>
+            // 上限 58%：目标往往是一整句，不设限它会把整行占满、把后台那一格
+            // 顶到最右边，中间再留一截空白——像是两件不相关的事被硬塞进一行。
+            <span key={chip.key} title={data.goal} className={`${className} max-w-[58%] flex-1`}>
               {body}
             </span>
           );

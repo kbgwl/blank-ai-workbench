@@ -552,3 +552,19 @@ export function dayBucket(value: string, now: number = Date.now()): "today" | "y
   return "earlier";
 }
 
+
+/**
+ * 把会话标题末尾的时间拆出来。
+ *
+ * 自动生成的会话标题形如「雷罡 21:51:06」——一整列 18 行都是这个形状，时间
+ * 和标题同字号同颜色，读起来是一堵墙。拆开之后时间靠右排成等宽小字：
+ * 眼睛可以竖着扫时间、横着读标题，两条信息各自成列。
+ *
+ * 拆不出来就原样返回（标题里本来就没有时间是很常见的情况），不改写标题。
+ */
+export function splitTitleStamp(title: string): { base: string; stamp: string } {
+  const raw = String(title ?? "");
+  const match = /^(.+?)\s+(\d{1,2}:\d{2}(?::\d{2})?)$/.exec(raw.trim());
+  if (!match) return { base: raw, stamp: "" };
+  return { base: match[1], stamp: match[2] };
+}
