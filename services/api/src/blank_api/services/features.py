@@ -130,6 +130,17 @@ _REGISTRY: tuple[FeatureFlag, ...] = (
         ),
     ),
     FeatureFlag(
+        name="context_restart",
+        stage=BETA,
+        default=False,
+        summary=(
+            "上下文重置：长任务在原地打转时，把会话拆掉、用一份交接单重建"
+            "（目标/改过的文件/未验证项/最近失败）。依据是 Ralph Loop 与 Anthropic 的"
+            "长任务实践：光压缩不够，长会话要能「重新入职」。默认关闭——关着时"
+            "与只有压缩完全一致；打开前先用同一批任务对比交接单够不够。"
+        ),
+    ),
+    FeatureFlag(
         name="tiered_tools",
         stage=BETA,
         default=False,

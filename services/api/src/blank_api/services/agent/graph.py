@@ -42,6 +42,7 @@ from blank_api.services.agent import remediation
 from blank_api.services.agent import workflow as workflow_module
 from blank_api.services.agent.live import OutputRelay
 from blank_api.services.agent.progress import ProgressSentinel
+from blank_api.services.agent.restart import build_restart_messages, should_restart, summarize_changed
 from blank_api.services.agent.stall import StallBreaker, signature as _stall_signature
 from blank_api.services.agent.intent import (
     ADVISE_INSTRUCTION,
@@ -787,6 +788,8 @@ class AgentSession:
     progress: ProgressSentinel = field(default_factory=ProgressSentinel)
     # 空闲压缩的两个输入：距上次压缩跑了多少步、距上次模型调用过了多久。
     # 不看这两个，1M 窗口上的百分比水位等于没有水位（永远到不了 820K）。
+    # 最近一次工具失败的原文：重置后交接单要把「卡在哪」带过去。
+    last_error_text: str = ""
     steps_since_compact: int = 0
     last_activity_at: float = 0.0
     # 已经被记录过的问题调用：节点会因中断被重放，不记账就会重复写 question.* 事件。
@@ -1409,6 +1412,42 @@ class AgentSession:
             self.steps_since_compact = 0
         else:
             self.steps_since_compact += 1
+        # 上下文重置（BETA，默认关）：步数、上下文、无进展三条同时成立才拆会话。
+        # 拆掉之后只留「system + 交接单」两条——任何"顺带保留"的历史都会把腐烂搬过去。
+        if feature_enabled("context_restart"):
+            idle_steps = max(0, step - max(self.progress.last_evidence, 1))
+            reason = should_restart(
+                steps=step,
+                tokens=int(report.tokens_after or 0),
+                idle_steps=idle_steps,
+            )
+            if reason:
+                system_text = next(
+                    (str(item.get("content") or "") for item in compacted if item.get("role") == "system"),
+                    "",
+                )
+                compacted = build_restart_messages(
+                    system=system_text,
+                    goal=self.goal,
+                    changed=summarize_changed(self.progress.writes),
+                    unverified=self.progress.unverified,
+                    last_error=self.last_error_text,
+                    notes=self.notes_handoff(),
+                )
+                # 摘要与折叠游标属于旧历史，留着会让下一次压缩按错位的下标切。
+                self.compactor.covered = 0
+                self.compactor.summary = ""
+                self.progress.last_evidence = step
+                await self.recorder.add(
+                    "context.restarted",
+                    node,
+                    {
+                        "reason": reason,
+                        "steps": step,
+                        "tokens_before": report.tokens_after,
+                        "changed": summarize_changed(self.progress.writes),
+                    },
+                )
         # 交接笔记：压缩后必带（摘要会丢操作细节），换窗口后的第一次调用也带一次。
         # 开关关掉就整块跳过：笔记本身要占上下文，长对话里有人宁可让摘要独扛；
         # 注意跳过时也不置 notes_injected，否则关掉再打开就再也注入不进去了。
@@ -3168,6 +3207,10 @@ def _append_tool_response(
             image = None
         payload = body
     sentinel = getattr(session, "progress", None) if session is not None else None
+    if session is not None and not (payload.get("ok") if isinstance(payload, dict) else True):
+        message = str(payload.get("message") or payload.get("output") or "").strip()
+        if message:
+            session.last_error_text = message[:400]
     if sentinel is not None:
         # 记账点选在这里：这是「工具结果即将进入上下文」的唯一入口，
         # 四个调用点（主循环、验证、子代理、重放）都会经过它。
