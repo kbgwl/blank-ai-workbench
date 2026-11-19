@@ -54,13 +54,29 @@ SUMMARY_TOTAL_CHARS = 24_000
 # 空闲压缩：百分比阈值在 1M 窗口上等于没有阈值（0.82 × 1M = 820K，永远到不了）。
 # 参照 Claude Code 的口径（200K+ token 的会话、空闲约 54 分钟后压缩，赶在 1 小时
 # 提示缓存过期之前），改成三条绝对条件，任一命中就压：
-IDLE_ABSOLUTE_TOKENS = 200_000
-IDLE_MIN_TOKENS = 40_000          # 不到这个量，压了也没多少可压
+IDLE_ABSOLUTE_RATIO = 0.6         # 占窗口的比例：小窗口上要靠它，不能写死一个数
+IDLE_ABSOLUTE_CEILING = 200_000   # 大窗口上的上限（1M 窗口不必等到 600K）
+IDLE_MIN_TOKENS = 40_000          # 地板是绝对判断：不到这个量，压了也没多少可压
 IDLE_SECONDS = 45 * 60            # 会话闲置多久算"该整理了"
 IDLE_STEPS = 40                   # 距上次压缩跑了多少步
 # 空闲压缩折到原来的多少。不是「降到水位线以下」——那可能是 3M 字符，等于没折。
 # 参照 Claude Code：最近若干条原样保留，其余折成摘要。
 IDLE_FOLD_RATIO = 0.5
+
+
+def idle_absolute_limit(window: int) -> int:
+    """「量到了」这条线该定在多少。
+
+    原来写死 200,000，在 1M 窗口上是对的，在 200K 窗口上却正好等于整个窗口——
+    到了那一刻已经溢出，这条分支永远不触发，等于没有。窗口越小越该早压，
+    所以取 min(上限, 窗口 × 比例)，并且不能越过水位线（否则水位先到，它永远轮不上）。
+    """
+    if window <= 0:
+        return IDLE_ABSOLUTE_CEILING
+    limit = min(IDLE_ABSOLUTE_CEILING, int(window * IDLE_ABSOLUTE_RATIO))
+    # 水位线 0.82 先到的话，这条就该更早一点才有意义。
+    return max(1, min(limit, int(window * 0.8)))
+
 
 DEFAULT_TRIGGER_RATIO = 0.82
 DEFAULT_RESERVE_TOKENS = 16_384
@@ -627,10 +643,13 @@ class ContextCompactor:
 
         百分比水位在大窗口上永远不触发：0.82 × 1M = 820K，而真机里 26 步才涨到 83K。
         结果就是"从不压缩"，模型一路拖着自己几十步前写的代码往前走。
+
+        两条量化的线都跟着**实际窗口**走：换一个 200K 窗口的模型（讯飞 spark-x2.6 就是），
+        写死的 200K 恰好等于整个窗口，那条分支永远轮不上——越小窗口越早该压。
         """
         if tokens < IDLE_MIN_TOKENS:
             return ""
-        if tokens >= IDLE_ABSOLUTE_TOKENS:
+        if tokens >= idle_absolute_limit(self.context_window):
             return "tokens"
         if steps_since_compact is not None and steps_since_compact >= IDLE_STEPS:
             return "steps"

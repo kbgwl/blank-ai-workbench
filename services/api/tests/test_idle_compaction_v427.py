@@ -23,11 +23,11 @@ from __future__ import annotations
 import asyncio
 
 from blank_api.services.agent.context import (
-    IDLE_ABSOLUTE_TOKENS,
     IDLE_MIN_TOKENS,
     IDLE_SECONDS,
     IDLE_STEPS,
     ContextCompactor,
+    idle_absolute_limit,
 )
 
 
@@ -52,7 +52,7 @@ def test_enough_steps_trigger_compaction_even_below_the_water_line():
     compactor = _compactor()
     messages = _bulk(45)  # 要过 40K token 的地板，否则测的是"太小不压"
     tokens = compactor.measure(messages)
-    assert IDLE_MIN_TOKENS <= tokens < IDLE_ABSOLUTE_TOKENS
+    assert IDLE_MIN_TOKENS <= tokens < idle_absolute_limit(1_000_000)
 
     report_before = len(messages)
     out = asyncio.run(compactor.build(messages, None, steps_since_compact=IDLE_STEPS))
@@ -65,7 +65,7 @@ def test_enough_steps_trigger_compaction_even_below_the_water_line():
 def test_absolute_tokens_trigger_regardless_of_steps():
     compactor = _compactor()
     messages = _bulk(200)  # 约 20 万 token
-    assert compactor.measure(messages) >= IDLE_ABSOLUTE_TOKENS
+    assert compactor.measure(messages) >= idle_absolute_limit(1_000_000)
 
     asyncio.run(compactor.build(messages, None, steps_since_compact=1))
 
@@ -113,3 +113,22 @@ def test_water_line_still_wins_when_it_actually_fires():
     asyncio.run(compactor.build(messages, None, steps_since_compact=1))
 
     assert compactor.last_report.triggered_by.startswith("tokens"), compactor.last_report.triggered_by
+
+
+def test_a_200k_window_still_has_a_reachable_absolute_line():
+    """讯飞 spark-x2.6 的窗口就是 200K。
+
+    原先绝对线写死 200,000，正好等于整个窗口——到那一刻早就溢出了，这条分支
+    永远轮不上，等于没有。换小窗口模型时才发现：阈值必须跟着窗口走。
+    """
+    compactor = ContextCompactor(context_window=200_000)
+    limit = idle_absolute_limit(200_000)
+
+    assert limit < compactor.trigger_tokens(), "绝对线必须早于水位线，否则它永远轮不到"
+    assert compactor.idle_reason(limit) == "tokens"
+    assert compactor.idle_reason(limit - 1) == ""
+
+
+def test_bigger_window_keeps_the_old_ceiling():
+    """1M 窗口别把线抬到 600K：大窗口上的过早压缩同样是浪费。"""
+    assert idle_absolute_limit(1_000_000) == 200_000
