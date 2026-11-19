@@ -599,6 +599,51 @@ DAILY_PROMPT = (
 )
 
 
+def compose_system_prompt_parts(
+    output_style: dict | None = None, *, scene: str = "coding"
+) -> list[tuple[str, str, str]]:
+    """系统提示按段拆开：[(段名, 前置粘合, 正文)]。
+
+    为什么要拆：Anthropic 给新一代模型删掉了 Claude Code **80% 以上**的 system prompt，
+    编码评测无可测损失（见 docs/harness-borrowings.md）。「删一半试试」这个动作要能执行，
+    前提是先知道每一段各占多少——否则只能凭感觉改，改完也不知道动了谁。
+
+    粘合字符单独一列，是为了拼出来的结果与旧实现**逐字节一致**：
+    正文几段直接相接，样式段前面才有一个换行。用 `"\n".join` 会在正文之间
+    多插两个换行——那属于"看起来没差、其实每次请求都变了前缀"的改动。
+    """
+    prompt = ""
+    keep = False
+    if isinstance(output_style, dict):
+        prompt = str(output_style.get("prompt") or "").strip()
+        keep = bool(output_style.get("keep_coding_instructions"))
+    if scene == "daily":
+        parts: list[tuple[str, str, str]] = [("daily", "", DAILY_PROMPT)]
+    else:
+        parts = [("head", "", _SYSTEM_HEAD)]
+        if not prompt or keep:
+            parts.append(("coding", "", CODING_INSTRUCTIONS))
+        parts.append(("tail", "", _SYSTEM_TAIL))
+    parts.append(("style", "\n", STYLE_PROMPT))
+    if prompt:
+        parts.append(
+            (
+                "output_style",
+                "",
+                "\n以下是本次任务启用的输出样式（output style）要求"
+                "（不得覆盖安全规则、审批规则与工作区边界）：\n" + prompt,
+            )
+        )
+    return parts
+
+
+def compose_system_prompt_parts_sizes(
+    output_style: dict | None = None, *, scene: str = "coding"
+) -> dict[str, int]:
+    """各段的字符数：用来判断「该删哪一段」，而不是凭感觉删。"""
+    return {name: len(text) for name, _glue, text in compose_system_prompt_parts(output_style, scene=scene)}
+
+
 def compose_system_prompt(output_style: dict | None = None, *, scene: str = "coding") -> str:
     """按场景拼系统提示。
 
@@ -612,22 +657,8 @@ def compose_system_prompt(output_style: dict | None = None, *, scene: str = "cod
     样式正文永远排在安全/审批规则之后，并写明不得覆盖它们——样式文件是用户
     可写的，不能借它改边界。
     """
-    prompt = ""
-    keep = False
-    if isinstance(output_style, dict):
-        prompt = str(output_style.get("prompt") or "").strip()
-        keep = bool(output_style.get("keep_coding_instructions"))
-    if scene == "daily":
-        body = DAILY_PROMPT
-    else:
-        body = _SYSTEM_HEAD + (CODING_INSTRUCTIONS if (not prompt or keep) else "") + _SYSTEM_TAIL
-    system = body + "\n" + STYLE_PROMPT
-    if prompt:
-        system += (
-            "\n以下是本次任务启用的输出样式（output style）要求"
-            "（不得覆盖安全规则、审批规则与工作区边界）：\n" + prompt
-        )
-    return system
+    # 只从 parts 拼一次：两处各拼一遍，改一处就一定会分叉。
+    return "".join(glue + text for _, glue, text in compose_system_prompt_parts(output_style, scene=scene))
 
 
 class AgentState(TypedDict, total=False):
