@@ -40,6 +40,7 @@ from blank_api.services.agent import governance
 from blank_api.services.agent import remediation
 from blank_api.services.agent import workflow as workflow_module
 from blank_api.services.agent.live import OutputRelay
+from blank_api.services.agent.progress import ProgressSentinel
 from blank_api.services.agent.stall import StallBreaker, signature as _stall_signature
 from blank_api.services.agent.intent import (
     ADVISE_INSTRUCTION,
@@ -779,6 +780,9 @@ class AgentSession:
     # 空转断路器：这一回合已经试过哪些调用、失败成什么样。判的是"重复"，不是"能力"，
     # 所以只活在内存里，不跨进程也不跨轮（见 agent/stall.py 的口径说明）。
     stall: StallBreaker = field(default_factory=StallBreaker)
+    # 进展哨兵：判「这一步有没有带来新信息」。空转断路器只认「同签名失败两次」，
+    # 而真机里更贵的是「每次参数都不同、目标没变」——同一文件重写 6 次。见 agent/progress.py。
+    progress: ProgressSentinel = field(default_factory=ProgressSentinel)
     # 已经被记录过的问题调用：节点会因中断被重放，不记账就会重复写 question.* 事件。
     recorded_questions: set[str] = field(default_factory=set)
     # 「替你定的」账本：用户没答、按推荐默认值走下去的偏好题。交付正文要据此说明，
@@ -1429,6 +1433,10 @@ class AgentSession:
             )
         # 钩子的 additionalContext：压缩之后再追加，避免刚收到就被折进摘要；
         # 只进这一次调用，不写回 state，避免同一条外部信息在历史里反复出现。
+        # 进展提醒走和钩子同一条通道：只进这一次调用、不写回历史。
+        # 放在 drain 之前，两类系统侧输入合成一条消息，不各占一段。
+        for text in self.progress.advise(step):
+            self.hook_context.append({"event": "progress.nudge", "tool": "", "text": text})
         hook_notes = self.drain_hook_context()
         if hook_notes:
             note_block = render_hook_context(hook_notes)
@@ -3098,6 +3106,13 @@ def _append_tool_response(
             )
             image = None
         payload = body
+    sentinel = getattr(session, "progress", None) if session is not None else None
+    if sentinel is not None:
+        # 记账点选在这里：这是「工具结果即将进入上下文」的唯一入口，
+        # 四个调用点（主循环、验证、子代理、重放）都会经过它。
+        # 用 getattr 取而不是直接点：单测里的会话替身没有这个字段，
+        # 记不上账不该让整条工具链断掉。
+        sentinel.record(step=step, tool=name, payload=payload)
     content, stats = render(name, payload, seen, step)
     if stats.get("saved") and session is not None:
         # 省了多少要进事件流：不然"减 token"只是说法，不是数据。
