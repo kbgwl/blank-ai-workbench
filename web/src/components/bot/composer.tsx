@@ -285,29 +285,10 @@ export function Composer(props: ComposerProps) {
             </span>
           )}
 
-          {/* 上下文条：这一轮在哪个项目、哪个目录里干。
-              Codex 桌面版同样是这条（项目 | Local | 分支），分支我们还没取，先不摆假数据。
-              项目名和目录名常常同名（项目 kgbai 绑的目录也叫 kgbai），
-              并排写出来就是「kgbai · kgbai」——看着像重复渲染，其实只是名字撞了。 */}
-          <div className="flex items-center gap-1.5 px-4 pt-2.5 text-[11px] text-faint">
-            <span className="max-w-[40%] truncate rounded bg-surface-2 px-1.5 py-0.5 text-muted">
-              {props.projectName || "未命名项目"}
-            </span>
-            {activeWorkspace?.label !== props.projectName && (
-              <>
-                <span className="text-faint">·</span>
-                <span className="min-w-0 truncate" title={activeWorkspace?.path ?? ""}>
-                  {activeWorkspace?.label ?? "未绑定目录"}
-                </span>
-              </>
-            )}
-            {activeWorkspace?.branch && (
-              <>
-                <span className="text-faint">·</span>
-                <span className="shrink-0 font-mono">{activeWorkspace.branch}</span>
-              </>
-            )}
-          </div>
+          {/* 项目与目录不再写在输入框上方那一条里：同一条信息在下方工具栏已经有一个
+              可点的下拉（`📁 目录名`），再摆一行只读的「项目 · 目录」就是同一件事说两遍，
+              而且它把输入框往下推了一行。用户的原话是「把上面的项目目录也去掉」。
+              分支名也随之不再重复——等真取到分支，放进目录下拉的说明里更合适。 */}
 
           <textarea
             ref={textarea}
@@ -379,7 +360,7 @@ export function Composer(props: ComposerProps) {
                       ? "它正在做，可以插一句话调整方向…（Enter 发送）"
                       : `${placeholderText}（Enter 发送，Shift+Enter 换行）`
             }
-            className="block max-h-[262px] min-h-[80px] w-full resize-none bg-transparent px-4 pt-3 pb-2 text-[14px] leading-[1.7] text-text placeholder:text-faint focus:outline-none"
+            className="block max-h-[262px] min-h-[68px] w-full resize-none bg-transparent px-4 pt-2.5 pb-2 text-[14px] leading-[1.7] text-text placeholder:text-faint focus:outline-none"
           />
 
           {/* 工具条：左边是"在哪儿干活、按什么规矩"，右边是"用哪个模型、发不发"。

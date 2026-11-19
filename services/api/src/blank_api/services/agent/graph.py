@@ -5872,6 +5872,10 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
                 # 带 id 才能把这次测试和台账里那一行对上：证据包靠它贴回执行边界，
                 # 「测试到底在哪跑的」是用户最关心的一条，不能只留给主循环那一路。
                 "tool_call_id": payload.get("tool_call_id"),
+                # 原因也要落进这条事件：验证路径原先只记 status/ok，超时的卡片在时间线上
+                # 只剩一个空壳（界面上就是一个 `{}`），用户和模型都不知道发生了什么。
+                "summary": str(payload.get("message") or payload.get("output") or "")[:500],
+                "command": (payload.get("data") or {}).get("command") or "run_tests",
                 **validation_identity,
                 **sandbox_backend_event_field(payload),
             },
@@ -5954,6 +5958,7 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         "passed": status == "ok",
         "status": status,
         "exit_code": data.get("exit_code"),
+        "timeout_seconds": data.get("timeout_seconds"),
         "summary": data.get("summary") or {},
         "output_tail": str(payload.get("output") or payload.get("message") or "")[-2000:],
     }
@@ -5982,9 +5987,13 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
     rounds = int(state.get("repair_rounds") or 0) + 1
     update["repair_rounds"] = rounds
     failure = {
-        "kind": "test_failed" if status in ("failed", "error", "timeout") else "validation_failed",
+        "kind": "test_timeout" if status == "timeout" else ("test_failed" if status in ("failed", "error") else "validation_failed"),
         "detail": str(validation.get("output_tail") or hint)[:160],
     }
+    if status == "timeout":
+        # 超时的修法不是"改代码"，是"换一条能在单次调用里跑完的验证路径"：
+        # 把 kind 分开，改版步骤才会指向缩小范围/后台跑，而不是再修一遍代码。
+        failure["detail"] = f"验证命令超时未跑完：{validation.get('command')}"[:160]
     manifest = revise_plan(state.get("plan_manifest"), failure=failure, repair_round=rounds)
     update["plan_manifest"] = manifest
     await session.recorder.add(

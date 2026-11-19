@@ -302,8 +302,19 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
             ok=False,
             status="timeout",
             output=combined,
-            message=f"测试命令超时（{timeout:.0f}s），进程已终止：{command_text}",
-            data={"command": command_text, "timed_out": True, "sandbox": result["sandbox"],
+            # 超时要和"没通过"分开说：这条命令**没跑完**，拿不到任何结论。
+            # 真机轨迹：工作区里一个静态页面目录，自动识别到的却是仓库根的 `npm test`
+            # （全量后端单测，约 25 分钟），180 秒上限必然超时——模型读到的却是
+            # "测试未通过"，于是回头去"修"一段没问题的代码。
+            message=(
+                f"测试命令超时（{timeout:.0f}s），进程已终止，**没有拿到任何测试结论**：{command_text}。"
+                "这不等于测试失败。要么换一条能在单次调用内跑完的范围"
+                "（用 command 指定具体测试文件/目录），要么用 run_shell 起后台跑、"
+                "再用 task_output 取结果。"
+                + (f"已捕获的最后输出：{combined[-400:]}" if combined else "（超时前没有任何输出，通常说明它在等输入或起了长驻进程）")
+            ),
+            data={"command": command_text, "timed_out": True, "timeout_seconds": timeout,
+                  "sandbox": result["sandbox"],
                   "tier": result.get("tier", {}), "enforcement": result["enforcement"]},
         )
     passed = result["exit_code"] == 0

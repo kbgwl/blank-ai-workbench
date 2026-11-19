@@ -182,6 +182,10 @@ def revise_plan(
     if failure_kind in ("file_missing", "not_found") or "不存在" in detail or "not found" in detail.lower():
         title = "重新定位目标文件，不重复盲读原路径"
         kind, tools = "inspect", list(_TOOLS_BY_KIND["inspect"])
+    elif failure_kind == "test_timeout":
+        # 超时不是"代码错了"，是"这条路走不完"。让模型去修代码只会再烧一轮。
+        title = f"换一条能在单次调用内跑完的验证路径（第 {repair_round} 轮）"
+        kind, tools = "inspect", ["run_shell", "read_file", "run_tests"]
     elif failure_kind in ("test_failed", "validation_failed", "timeout") or "测试" in detail:
         title = f"按失败输出定位根因并做最小范围修复（第 {repair_round} 轮）"
         kind, tools = "repair", list(_TOOLS_BY_KIND["repair"])
@@ -236,6 +240,16 @@ def repair_hint(failure: dict[str, Any], repair_round: int) -> str:
     （v164 删掉场景模式前缀就是因为这个）。
     """
     detail = str(failure.get("detail") or failure.get("reason") or "")[:300]
+    if str(failure.get("kind") or "") == "test_timeout":
+        # 超时没有"失败证据"可修：它连一条断言的输出都没有。让它"改最小范围"只会
+        # 把模型推去改一段没问题的代码，然后原样再跑一次同一条跑不完的命令。
+        return (
+            f"【系统：第 {repair_round} 轮自动修复】上一轮验证**超时**，没有拿到任何结论——"
+            f"这不是代码没通过。失败事实：{detail or '未提供'}。"
+            "请换一条能在单次调用内跑完的验证路径：缩小范围（只跑相关测试文件或目录）、"
+            "或用 run_shell 起后台运行再取结果。不要原样重跑同一条命令，"
+            "也不要为了“让它通过”去改代码。"
+        )
     return (
         f"【系统：第 {repair_round} 轮自动修复】上一轮验证没有通过，失败证据：{detail or '未提供'}。"
         "请先用只读工具确认根因，再改最小范围；不要重跑完全相同的失败命令，"

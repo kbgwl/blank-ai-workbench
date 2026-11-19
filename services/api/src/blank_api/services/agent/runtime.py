@@ -2068,6 +2068,16 @@ def _failure_reason(validation: dict) -> str:
         return f"任务未完成：{validation.get('skipped_reason') or '本次没有执行自动化校验'}"
     if state == "blocked":
         return f"反复执行同一条命令没产生新结果，已停止：{command}"
+    if state == "timeout":
+        # 超时 ≠ 没通过。真机轨迹里 `npm test` 是仓库根的全量后端单测（约 25 分钟），
+        # 180 秒上限必然超时；写进"测试未通过"会让用户去翻一堆没问题的代码，
+        # 也让修复回路去"修"一个不存在的问题。
+        budget = validation.get("timeout_seconds")
+        span = f"{int(float(budget))} 秒" if budget else "单次上限"
+        return (
+            f"测试超时（{span}内没跑完，进程已终止）：{command}——"
+            "这不是测试失败，是这条命令不适合在一次调用里跑完"
+        )
     if state == "error":
         return f"测试未能执行：{command}"
     return f"测试未通过：{command}"
