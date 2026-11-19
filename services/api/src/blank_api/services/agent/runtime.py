@@ -1724,10 +1724,17 @@ class AgentRuntime:
             reason = "任务已取消"
         elif status == "paused":
             reason = "用户暂停了任务"
+        unverified = validation_unverified(validation) if status == "succeeded" else ""
+        summary = str(result.get("summary") or "")
+        if unverified:
+            # 状态可以是成功（交付确实在、事实校验也过了），但绝不能让它看起来
+            # 像"验证过了"。模型自己写的那句"自动化校验未通过：npm test"指的是
+            # 同一条没跑完的命令，留着会自相矛盾，所以整句如实改写。
+            summary = summary.split("（自动化校验")[0].rstrip() + "\n" + UNVERIFIED_NOTE.format(reason=unverified)
         await self._finish(
             scope,
             status,
-            summary=str(result.get("summary") or ""),
+            summary=summary,
             reason=reason,
             acceptance=result.get("acceptance_results"),
             steps=int(result.get("steps") or 0),
@@ -1737,6 +1744,7 @@ class AgentRuntime:
             extra={
                 "usage": result.get("usage") or {},
                 "validation": validation,
+                "unverified": unverified,
                 "verdict": {
                     "verdict": verdict["verdict"],
                     "passed": verdict["passed"],
@@ -2122,6 +2130,31 @@ def _turn_state_from_expansion(expansion: dict | None) -> dict:
     return state
 
 
+# 「验证没跑成」与「验证跑了但没通过」是两件事，混在一起会判死好交付。
+#
+# 真机里撞过三次：run_tests 按仓库根的 test 脚本跑了 `npm test`（全仓后端单测，
+# 约 25 分钟），单次上限 120-180 秒，必然超时；交付物是好的（12KB 页面、
+# browser_check 零控制台错误），却因为一句「没跑完的命令」被判失败。
+#
+# 所以只有**明确跑了并失败**才算失败；超时、命令找不到、判定器起不来，
+# 都是「我们没拿到结论」——状态可以是成功，但必须显式标注未验证。
+UNVERIFIED_STATUSES = frozenset({"timeout", "error", "unavailable", "skipped"})
+
+UNVERIFIED_NOTE = "（验证未完成：{reason}——本次结论未经自动化校验，请自行复核）"
+
+
+def validation_unverified(validation: dict) -> str:
+    """验证没跑成时返回原因，跑成了（无论通过与否）返回空串。"""
+    if not validation:
+        return ""
+    status = str(validation.get("status") or "")
+    if status == "timeout":
+        return "验证命令超时，没拿到任何结论"
+    if status in ("error", "unavailable"):
+        return str(validation.get("message") or "验证命令没能执行")
+    return ""
+
+
 def resolve_status(result: dict) -> str:
     if result.get("status") in ("cancelled", "paused", "failed"):
         return str(result["status"])
@@ -2131,9 +2164,12 @@ def resolve_status(result: dict) -> str:
     if verdict.get("blocking"):
         return "failed"
     validation = result.get("validation") or {}
-    # skipped = 本次没改文件，校验本就不适用（纯问答），不算失败
-    if validation and validation.get("status") not in ("ok", "skipped"):
-        return "failed"
+    # 只有「跑了并失败」才判失败；没跑成（超时/起不来）算未验证。
+    if validation:
+        status = str(validation.get("status") or "")
+        if status and status not in UNVERIFIED_STATUSES and status != "ok":
+            return "failed"
     if validation.get("exit_code") not in (None, 0):
         return "failed"
     return "succeeded"
+
