@@ -207,10 +207,10 @@ def _call() -> dict:
     return {"id": "call_1", "function": {"name": "read_file", "arguments": "{}"}}
 
 
-def test_vision_model_gets_a_follow_up_message_with_the_image() -> None:
+async def test_vision_model_gets_a_follow_up_message_with_the_image() -> None:
     from blank_api.services.agent.graph import _append_tool_response
 
-    messages = _append_tool_response([], _call(), _payload(), session=_Session(True), step=1)
+    messages = await _append_tool_response([], _call(), _payload(), session=_Session(True), step=1)
 
     assert [item["role"] for item in messages] == ["tool", "user"]
     assert messages[1]["images"] == [{"media_type": "image/png", "data": "AAA"}]
@@ -218,10 +218,10 @@ def test_vision_model_gets_a_follow_up_message_with_the_image() -> None:
     assert "read_file" in messages[1]["content"]
 
 
-def test_text_only_model_is_told_it_cannot_see() -> None:
+async def test_text_only_model_is_told_it_cannot_see() -> None:
     from blank_api.services.agent.graph import _append_tool_response
 
-    messages = _append_tool_response([], _call(), _payload(), session=_Session(False), step=1)
+    messages = await _append_tool_response([], _call(), _payload(), session=_Session(False), step=1)
 
     assert [item["role"] for item in messages] == ["tool"]
     assert "不支持看图" in messages[0]["content"]
@@ -229,11 +229,11 @@ def test_text_only_model_is_told_it_cannot_see() -> None:
     assert "AAA" not in messages[0]["content"]
 
 
-def test_plain_results_are_unchanged() -> None:
+async def test_plain_results_are_unchanged() -> None:
     from blank_api.services.agent.graph import _append_tool_response
 
     payload = {"ok": True, "status": "ok", "output": "1\tprint(1)", "data": {"path": "a.py"}}
-    messages = _append_tool_response([], _call(), payload, session=_Session(True), step=1)
+    messages = await _append_tool_response([], _call(), payload, session=_Session(True), step=1)
 
     assert [item["role"] for item in messages] == ["tool"]
     assert "images" not in messages[0]

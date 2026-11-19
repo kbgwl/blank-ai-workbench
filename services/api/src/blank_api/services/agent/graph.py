@@ -42,6 +42,7 @@ from blank_api.services.agent import remediation
 from blank_api.services.agent import workflow as workflow_module
 from blank_api.services.agent.live import OutputRelay
 from blank_api.services.agent.progress import ProgressSentinel
+from blank_api.services.agent.vision_proxy import describe_for_session
 from blank_api.services.agent.restart import build_restart_messages, should_restart, summarize_changed
 from blank_api.services.agent.verify_hook import (
     check_command,
@@ -736,6 +737,9 @@ class AgentSession:
     # 这一轮模型能不能看图（供应商声明 or 模型名像视觉模型）。
     # read_file 读到图片时按它决定是附图还是只回一句"看不到"，见 _append_tool_response。
     supports_vision: bool = False
+    # 看不了图时请别的模型代看的次数。上限在 vision_proxy.MAX_PROXY_CALLS：
+    # 模型会反复截图，没有上限就是给它一个无限花钱的按钮。
+    vision_proxy_calls: int = 0
     # 这一档是"有人明确要的"（用户说了 ultrathink/ultracode，或供应商配置里手填了
     # reasoning_effort），不是"没人指定于是兜底出来的"。
     # 分阶段收紧只处理兜底档：用户明确要深想的时候，不该被我们的效率优化说服。
@@ -3268,7 +3272,7 @@ def _overflow_writer(session: "AgentSession | None", step: int, tool: str):
     return write
 
 
-def _append_tool_response(
+async def _append_tool_response(
     messages: list[dict], call: dict, payload: dict, *, session: "AgentSession | None" = None, step: int = 0
 ) -> list[dict]:
     """工具结果进上下文：先瘦身再写。
@@ -3293,11 +3297,27 @@ def _append_tool_response(
         if isinstance(body.get("data"), dict):
             body["data"] = {k: v for k, v in body["data"].items() if k != "image"}
         if not (session is not None and getattr(session, "supports_vision", False)):
-            # 不支持视觉时说清楚，别让模型对着一个空文件地址瞎猜。
-            body["output"] = (
-                "图片已读取，但当前模型不支持看图，图片内容你看不到。"
-                "不要猜测图里是什么，也不要说你看到了；在结论里说明需要切换到支持视觉的模型。"
-            )
+            # 主模型看不了图：请一家能看的代看一次，把**描述**交给它。
+            # 这一步取代了原来那句干巴巴的"你看不到图"——那条话让模型只能靠猜，
+            # 而代价是它会把"页面大概没问题"写进结论（真机里就是这么错的）。
+            #
+            # session 为 None（单测、无会话的重放路径）时**不代看**：没有会话就没有
+            # 节流与账本，一次装配顺手调一次模型是失控的。
+            described, seen_by = ("", "")
+            if session is not None:
+                described, seen_by = await describe_for_session(image, session=session, step=step)
+            if described:
+                body["output"] = (
+                    f"{body.get('output') or ''}\n\n"
+                    f"（当前模型不能看图，以下由 {seen_by} 代为观察这张截图：\n{described}\n"
+                    "以上是另一个模型的观察，不是你的判断；据此下结论，别复述这段话。）"
+                ).strip()
+            else:
+                body["output"] = (
+                    f"{body.get('output') or ''}\n\n"
+                    "图片已读取，但当前模型不支持看图，也没有可用的视觉模型代看，图片内容你看不到。"
+                    "不要猜测图里是什么，也不要说你看到了；在结论里说明这一项未经验证。"
+                ).strip()
             image = None
         payload = body
     sentinel = getattr(session, "progress", None) if session is not None else None
@@ -5260,7 +5280,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                     "output": str(payload.get("output") or payload.get("message") or "")[-2000:],
                 }
             )
-            messages = _append_tool_response(messages, item.call, payload, session=session, step=steps)
+            messages = await _append_tool_response(messages, item.call, payload, session=session, step=steps)
             # 答题这一路过去直接 continue，把工具完成事件整条跳过了：`tools` 台账里有那一行，
             # 但时间线——前端逐条渲染、审计逐条回放的那一份——上没有。于是「答案回到了模型
             # 上下文」这句话在证据里拿不出可对核对的实物（方言端到端第 61 步实测：答完题的
@@ -5423,7 +5443,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 "output": str(payload.get("output") or payload.get("message") or "")[-2000:],
             }
         )
-        messages = _append_tool_response(messages, item.call, payload, session=session, step=steps)
+        messages = await _append_tool_response(messages, item.call, payload, session=session, step=steps)
 
     # 一批工具跑完之后再通知一次（上游 PostToolBatch）：逐条的 post_tool_use 看的是
     # 单次调用，钩子想按"这一批做了什么"判断（整批都失败、一次改了几个文件）只有这里。

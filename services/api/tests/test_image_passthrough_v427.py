@@ -111,7 +111,7 @@ async def test_text_in_the_same_result_is_still_trimmed_and_redacted(workspace, 
     assert "sk-live-1234567890" not in str(payload["data"].get("secret"))
 
 
-def test_the_image_never_enters_the_tool_message():
+async def test_the_image_never_enters_the_tool_message():
     """工具消息里带一张图 = 每步重发 7k token 的残废 JSON；图只走它自己那条消息。"""
     b64 = _jpeg_b64(20)
     payload = {
@@ -125,7 +125,7 @@ def test_the_image_never_enters_the_tool_message():
     )
     call = {"id": "c1", "function": {"name": "browser_check", "arguments": "{}"}}
 
-    messages = _append_tool_response([], call, payload, session=session, step=1)
+    messages = await _append_tool_response([], call, payload, session=session, step=1)
 
     tool_message = messages[0]
     assert "base64" not in tool_message["content"] and b64[:40] not in tool_message["content"]

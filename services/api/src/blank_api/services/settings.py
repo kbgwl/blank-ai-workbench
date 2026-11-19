@@ -102,6 +102,10 @@ DEFAULTS: dict[str, Any] = {
         # 用户换一家就得改排序、或者把别家停用——两种做法都会连带影响别的判断。
         # 而且默认模型是"这条链路上唯一的变量"里最影响结果的一个，它不该由字符串序决定。
         "default_provider": "",
+        # 代看图的供应商 id。主模型看不了图（例如纯文本模型）时，由它看一眼截图，
+        # 把描述以文本交给主模型——"看图"是辅助动作，不该逼用户把主模型换成视觉模型。
+        # 留空则自动挑一家：启用 + 有 key + 声明支持视觉，且不是主模型自己。
+        "vision_provider": "",
     },
     # enter_worktree 新建工作树的基准引用（对齐 Claude 的 worktree.baseRef）：
     # fresh = 从 origin/<默认分支> 建；head = 从当前本地 HEAD 建。没有远端跟踪
@@ -364,6 +368,9 @@ def normalize(raw: Any) -> dict[str, Any]:
     default_provider = str(model.get("default_provider") or "").strip()
     if len(default_provider) > 64:
         default_provider = ""
+    vision_provider = str(model.get("vision_provider") or "").strip()
+    if len(vision_provider) > 64:
+        vision_provider = ""
     # Claude 用驼峰 baseRef；两种写法都收，下划线写法优先。认不出的值回落 fresh
     # ——工作树从哪条线起，不能由一个拼错的词随机决定。
     base_ref = str(worktree.get("base_ref") or worktree.get("baseRef") or "").strip().lower()
@@ -413,7 +420,7 @@ def normalize(raw: Any) -> dict[str, Any]:
             )
         },
         "tools": {"search": _as_bool(tools.get("search"), DEFAULTS["tools"]["search"])},
-        "model": {"default_provider": default_provider},
+        "model": {"default_provider": default_provider, "vision_provider": vision_provider},
         "worktree": {"base_ref": base_ref},
         "output_style": output_style,
         # 只收认得出布尔语义的值：手改文件时写成字符串 "on" 也认，写成一坨

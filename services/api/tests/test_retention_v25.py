@@ -154,7 +154,7 @@ def test_handoff_note_is_attributed_to_the_run_that_wrote_it() -> None:
     assert next(item for item in without if item.get("content") == "笔记")["run_id"] == ""
 
 
-def test_initial_prompt_carries_the_run_but_carried_history_does_not() -> None:
+async def test_initial_prompt_carries_the_run_but_carried_history_does_not() -> None:
     """本会话自己写的每条都记出身；从别的任务带进来的历史绝不能冒充本轮。"""
     first = initial_messages(
         "留存", [], history=[{"role": "user", "content": "上一趟的问题"}, {"role": "assistant", "content": "上一趟的答"}],
@@ -166,16 +166,20 @@ def test_initial_prompt_carries_the_run_but_carried_history_does_not() -> None:
         "带进来的历史属于别轮，补上本轮 id 就是假账"
     )
     # 没有会话可问出身时留空，不编一个
-    tool_row = _append_tool_response(
-        [], {"id": "call_1", "name": "read_file"}, {"path": "a.txt"}, session=None, step=1
+    tool_row = (
+        await _append_tool_response(
+            [], {"id": "call_1", "name": "read_file"}, {"path": "a.txt"}, session=None, step=1
+        )
     )[-1]
     assert tool_row["run_id"] == ""
 
 
 async def test_tool_result_written_by_a_run_is_attributed_to_it(seeded, tmp_path) -> None:
     session = _session(tmp_path, _CompactAdapter())
-    row = _append_tool_response(
-        [], {"id": "call_1", "name": "read_file"}, {"path": "a.txt"}, session=session, step=1
+    row = (
+        await _append_tool_response(
+            [], {"id": "call_1", "name": "read_file"}, {"path": "a.txt"}, session=session, step=1
+        )
     )[-1]
     assert row["run_id"] == RUN_ID == session.run_id
 
