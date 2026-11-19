@@ -265,6 +265,50 @@ def missing_test_runner(argv: list[str], tier: str = "") -> str:
     return "" if shutil.which(name) else name
 
 
+def _restart_in_background(context: ToolContext, command: str, shell: bool, tier: str):
+    """把超时的测试命令挪到后台重跑，返回 shell_id（拿不到就是空串）。
+
+    为什么不是直接杀掉：`npm test` 这类命令跑 25 分钟是**正常**的，只是不适合塞进
+    一次工具调用。杀掉之后模型只能二选一——再撞一次 120 秒，或者干脆不验证了
+    （真机里它后来就选了后者，然后把"没验证"写进交付）。
+
+    OpenCode 2.3.x 的做法是"超时 shell 转后台"：进程继续跑，调用立刻返回，
+    需要结果时再取。这里照抄——重跑会浪费已经过去的那两分钟，但比永远拿不到结论好。
+
+    任何一步失败都只返回空串：转后台是加法，不能反过来让超时这件事变得更糟。
+    """
+    try:
+        from blank_api.services import shell_tasks
+        from blank_api.services.tools.shell import _event_recorder
+
+        limit = float(shell_tasks.DEFAULT_BACKGROUND_TIMEOUT)
+
+        def runner(sink):
+            return execute_command(
+                command,
+                context.root,
+                limit,
+                shell=shell,
+                safety=getattr(context, "safety", None),
+                tier=tier,
+                isolation_profile=str(getattr(context, "isolation_profile", "") or ""),
+                on_chunk=sink,
+            )
+
+        record = shell_tasks.start(
+            task_id=str(getattr(context, "task_id", "") or ""),
+            command=command,
+            description="run_tests（超时后转后台重跑）",
+            timeout_seconds=limit,
+            runner=runner,
+            recorder=_event_recorder(context),
+            mask=lambda text: mask_output(text, context.root),
+        )
+        return record.shell_id
+    except Exception:  # noqa: BLE001 - 转后台失败不能让"超时"这条事实说不出口
+        return ""
+
+
 async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
     blocked = policy_gate(context, "run_tests", arguments)
     if blocked is not None:
@@ -387,6 +431,17 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
     if result["timed_out"]:
         # 记住这条命令跑不完：下次无参调用直接跳过，别让每个新任务都重新踩一遍。
         remember_timeout(command_text, timeout)
+        # 超时不是终点：把同一条命令挪到后台继续跑，别让这次白等。
+        shell_id = _restart_in_background(context, command_text, shell, tier)
+        tail = str(combined)[-400:] if combined else ""
+        if shell_id:
+            moved = (
+                f"已把同一条命令转到后台重跑（{shell_id}）：它不占用这一次调用，"
+                f"稍后用 task_output(shell_id=\"{shell_id}\") 取结果，不必轮询、也不要为此 sleep。"
+                "注意：后台是从头跑的，刚才那段时间白花了。"
+            )
+        else:
+            moved = "后台重跑没起来，下面两条路自己选。"
         return ToolOutcome(
             ok=False,
             status="timeout",
@@ -396,13 +451,13 @@ async def _run_tests(context: ToolContext, arguments: dict) -> ToolOutcome:
             # （全量后端单测，约 25 分钟），180 秒上限必然超时——模型读到的却是
             # "测试未通过"，于是回头去"修"一段没问题的代码。
             message=(
-                f"测试命令超时（{timeout:.0f}s），进程已终止，**没有拿到任何测试结论**：{command_text}。"
-                "这不等于测试失败。要么换一条能在单次调用内跑完的范围"
-                "（用 command 指定具体测试文件/目录），要么用 run_shell 起后台跑、"
-                "再用 task_output 取结果。"
-                + (f"已捕获的最后输出：{combined[-400:]}" if combined else "（超时前没有任何输出，通常说明它在等输入或起了长驻进程）")
+                f"测试命令超时（{timeout:.0f}s），这一次**没有拿到任何测试结论**：{command_text}。"
+                "这不等于测试失败。" + moved + " "
+                "也可以换一条能在单次调用内跑完的范围（用 command 指定具体测试文件/目录）。"
+                + (f"已捕获的最后输出：{tail}" if tail else "（超时前没有任何输出，通常说明它在等输入或起了长驻进程）")
             ),
             data={"command": command_text, "timed_out": True, "timeout_seconds": timeout,
+                  "background_shell_id": shell_id or "",
                   "sandbox": result["sandbox"],
                   "tier": result.get("tier", {}), "enforcement": result["enforcement"]},
         )

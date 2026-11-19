@@ -111,3 +111,58 @@ def test_the_history_is_capped(history):
     assert len(saved) <= testing.HISTORY_LIMIT
     # 留下的是最近的：最后写进去的一定在
     assert f"cmd-{testing.HISTORY_LIMIT + 5}" in saved
+
+
+# ── 超时之后：把命令挪到后台继续跑，而不是白等一场 ──────────────────────────
+def test_a_timed_out_test_is_moved_to_the_background(tmp_path, monkeypatch, history):
+    """OpenCode 2.3.x 的做法：超时的 shell 转后台，调用立刻返回，要结果时再取。
+
+    直接杀掉的问题不是"浪费了两分钟"，而是模型从此没有别的路——要么再撞一次，
+    要么干脆不验证（真机里它选了后者，然后把"未验证"写进交付）。
+    """
+    from types import SimpleNamespace
+
+    from blank_api.services import shell_tasks
+
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": "npm test"}}), encoding="utf-8")
+
+    async def slow(*args, **kwargs):
+        return _result(timed_out=True, timeout_budget=120)
+
+    started = {}
+
+    def fake_start(**kwargs):
+        started.update(kwargs)
+        return SimpleNamespace(shell_id="sh-test-1")
+
+    monkeypatch.setattr(testing, "execute_command", slow)
+    monkeypatch.setattr(shell_tasks, "start", fake_start)
+    import asyncio
+
+    outcome = asyncio.run(testing._run_tests(_context(tmp_path), {}))
+    assert outcome.status == "timeout"
+    assert outcome.data["background_shell_id"] == "sh-test-1"
+    assert "转到后台" in outcome.message and "sh-test-1" in outcome.message
+    assert started.get("command"), "后台没拿到要跑的命令"
+
+
+def test_a_failed_handover_still_reports_the_timeout(tmp_path, monkeypatch, history):
+    """转后台起不来时，超时这条事实仍要说清楚——加法失败不能把主结论弄丢。"""
+    from blank_api.services import shell_tasks
+
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": "npm test"}}), encoding="utf-8")
+
+    async def slow(*args, **kwargs):
+        return _result(timed_out=True, timeout_budget=120)
+
+    def boom(**kwargs):
+        raise RuntimeError("后台管理器没起来")
+
+    monkeypatch.setattr(testing, "execute_command", slow)
+    monkeypatch.setattr(shell_tasks, "start", boom)
+    import asyncio
+
+    outcome = asyncio.run(testing._run_tests(_context(tmp_path), {}))
+    assert outcome.status == "timeout"
+    assert outcome.data["background_shell_id"] == ""
+    assert "没起来" in outcome.message
