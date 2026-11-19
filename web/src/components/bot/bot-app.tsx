@@ -1193,6 +1193,7 @@ export function BotApp() {
         <Composer
           projects={boot?.projects ?? []}
           providers={boot?.providers ?? []}
+          providersReady={boot !== null}
           projectId={projectId}
           onProjectChange={(id) => {
             setProjectId(id);

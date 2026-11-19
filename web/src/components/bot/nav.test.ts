@@ -8,8 +8,9 @@ test("常驻导航只留工作区；辅助入口统一收进设置页，不许�
   for (const item of NAV_ITEMS) {
     assert.ok(item.label, `${item.id} 必须有中文标签，否则侧栏上是个空按钮`);
   }
-  // 收进设置页的四项仍要可达：监控/证据库/技能/连接器一个都不能丢。
+  // 收进设置页的入口仍要可达：全部任务/监控/证据库/技能/连接器一个都不能丢。
   assert.deepEqual(UTILITY_LINKS.map((item) => item.href), [
+    "/tasks",
     "/monitor",
     "/evidence",
     "/skills",

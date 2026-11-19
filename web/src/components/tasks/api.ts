@@ -1833,13 +1833,17 @@ export function fetchProviders(): Promise<Provider[]> {
         const raw = row as Record<string, unknown>;
         const id = textOf(raw, "id", "provider_id");
         if (!id) return null;
-        return {
+        const provider: Provider = {
           id,
           name: textOf(raw, "name") || id,
           model: textOf(raw, "model"),
           kind: textOf(raw, "kind"),
           enabled: boolOf(raw, "enabled") ?? true,
-        } satisfies Provider;
+          // 选择器靠它区分"可用"与"还没填 Key"；漏掉这个字段会让 8 家供应商
+          // 全被当成没配置，界面一直误报「未配置模型」。
+          api_key_hint: textOf(raw, "api_key_hint", "apiKeyHint"),
+        };
+        return provider;
       })
       .filter((provider): provider is Provider => provider !== null),
   );

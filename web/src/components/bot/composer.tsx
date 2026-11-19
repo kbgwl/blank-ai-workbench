@@ -9,6 +9,7 @@ import { matchSlash, type SlashCommand } from "@/lib/slash-commands";
 import { NEW_CHAT_EVENT } from "@/lib/commands";
 import { DraftImageChips } from "./image-chips";
 import { insertReference } from "./picker";
+import { providerLabel } from "./provider-choice";
 import { composerAction } from "./turns";
 import { ReferenceChips } from "./reference-chips";
 import { referencesIn } from "./references";
@@ -17,6 +18,13 @@ import { ACCEPT_ATTR, filesFrom, type DraftAttachment } from "./uploads";
 export type ComposerProps = {
   projects: Project[];
   providers: Provider[];
+  /**
+   * 供应商列表是否已经读回来。
+   *
+   * 与 `workspaceReady` 同一个道理：首屏 `providers` 是空数组，那只是"还没读到"，
+   * 拿它去判"没配模型"会先红一下再改口。那一刻用户看到的是自己的配置被否认。
+   */
+  providersReady?: boolean;
   projectId: string;
   onProjectChange: (id: string) => void;
   /** 当前项目已绑定的目录。空数组表示还没绑——这时候一眼就能看出来"没地方干活"。 */
@@ -158,6 +166,8 @@ export function Composer(props: ComposerProps) {
   const unconfigured = props.providers.filter(
     (provider) => provider.enabled && (provider.api_key_hint ?? "") === "",
   );
+  // 空 id 只是"没显式选"，后端会按角色分工挑默认供应商——不能画成红色报错。
+  const providerInfo = providerLabel(props.providerId, props.providers, props.providersReady ?? true);
 
   const readyImages = props.images.filter((image) => image.id && !image.uploading && !image.error);
   const uploading = props.images.some((image) => image.uploading);
@@ -570,7 +580,9 @@ export function Composer(props: ComposerProps) {
                 ariaLabel="用哪个模型"
                 value={props.providerId}
                 options={
-                  usableProviders.length === 0
+                  props.providersReady === false
+                    ? [{ value: "", label: "读取中…", disabled: true }]
+                    : usableProviders.length === 0
                     ? [
                         {
                           value: "",
@@ -596,15 +608,13 @@ export function Composer(props: ComposerProps) {
                 }
                 onChange={props.onProviderChange}
                 disabled={props.providers.length === 0}
-                renderValue={(option) => (
+                renderValue={() => (
                   // 颜色写在里层：触发器自己带 text-muted，同优先级下谁在 CSS 后面
                   // 谁生效——挂在 triggerClassName 上不一定红得起来。
-                  <span className={`truncate ${usableProviders.length === 0 ? "text-danger" : ""}`}>
-                    {usableProviders.length === 0
-                      ? "未配置模型"
-                      : props.providerId
-                        ? (option?.label ?? "")
-                        : props.defaultModelLabel || "默认模型"}
+                  <span className={`truncate ${providerInfo.warn ? "text-danger" : ""}`}>
+                    {providerInfo.text === "默认模型"
+                      ? props.defaultModelLabel || providerInfo.text
+                      : providerInfo.text}
                   </span>
                 )}
                 triggerClassName="max-w-[168px] min-w-[72px]"

@@ -23,6 +23,7 @@ export const NAV_ITEMS: NavItem[] = [
 export type UtilityLink = { href: string; label: string; hint: string };
 
 export const UTILITY_LINKS: UtilityLink[] = [
+  { href: "/tasks", label: "全部任务", hint: "按状态找历史任务，点一行回到那条会话" },
   { href: "/monitor", label: "监控", hint: "它现在在盯什么" },
   { href: "/evidence", label: "证据库", hint: "每次交付的验收、改动与用量" },
   { href: "/skills", label: "技能", hint: "你确认过的做法" },
