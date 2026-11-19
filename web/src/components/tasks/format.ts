@@ -102,3 +102,21 @@ export function diffStats(diff: string): { added: number; removed: number } {
   }
   return { added, removed };
 }
+
+
+/**
+ * 从文件路径猜语言，喂给 `components/bot/syntax.tsx` 的正则高亮器。
+ *
+ * 放在这里而不是各个面板里：文件预览和 Diff 面板必须用同一种语言判定，
+ * 否则同一个 .tsx 会在两处显示成两种颜色。
+ */
+export function langOf(path: string): string {
+  const ext = String(path || "").toLowerCase().split("?").pop()?.split(".").pop() ?? "";
+  const table: Record<string, string> = {
+    ts: "ts", tsx: "tsx", js: "js", jsx: "jsx", mjs: "js", cjs: "js",
+    py: "py", pyi: "py", html: "html", htm: "html", xml: "xml", svg: "xml",
+    css: "css", scss: "scss", json: "json", sh: "bash", bash: "bash",
+    yml: "yaml", yaml: "yaml", md: "md",
+  };
+  return table[ext] ?? "ts";
+}

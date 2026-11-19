@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Notice, StateLine } from "@/components/projects/ui";
-import { clip, diffStats, parseDiff } from "./format";
+import { clip, diffStats, langOf, parseDiff } from "./format";
+import { TOKEN_CLASSES, tokenize } from "@/components/bot/syntax";
 import type { ChangeItem } from "./api";
 
 const CHANGE_LABELS: Record<string, string> = {
@@ -15,6 +16,28 @@ const CHANGE_LABELS: Record<string, string> = {
 function changeLabel(value: string): string {
   if (!value) return "";
   return CHANGE_LABELS[value.toLowerCase()] ?? value;
+}
+
+/**
+ * 把一行 diff 文本按语言切成 token。
+ *
+ * 局限（与高亮器本身一致）：逐行切，多行注释/多行字符串的第二行不高亮。
+ * 但 diff 本来就只在 hunk 内连续，跨 hunk 的语法状态本来也无法重建——
+ * 与其为了 5% 的准确性引入一个 200KB 的语法库，不如保持零依赖。
+ */
+function DiffLine({ text, tone, lang }: { text: string; tone: string; lang: string }) {
+  const tokens = text ? tokenize(text, lang)[0] ?? [] : [];
+  return (
+    <div className={`whitespace-pre-wrap break-words px-1 ${lineTone[tone] ?? "text-muted"}`}>
+      {tokens.length > 0
+        ? tokens.map((token, index) => (
+            <span key={index} className={TOKEN_CLASSES[token.kind] ?? ""}>
+              {token.text}
+            </span>
+          ))
+        : text || " "}
+    </div>
+  );
 }
 
 const lineTone: Record<string, string> = {
@@ -111,9 +134,7 @@ export function DiffPanel({ changes, focusPath }: { changes: ChangeItem[]; focus
               ) : (
                 <div className="max-h-72 overflow-auto border-t border-line bg-surface-2 px-2.5 py-2 font-mono text-[12px] leading-relaxed">
                   {file.lines.map((line, index) => (
-                    <div key={index} className={`whitespace-pre-wrap break-words px-1 ${lineTone[line.tone] ?? "text-muted"}`}>
-                      {line.text || " "}
-                    </div>
+                    <DiffLine key={index} text={line.text} tone={line.tone} lang={langOf(file.path)} />
                   ))}
                 </div>
               ))}

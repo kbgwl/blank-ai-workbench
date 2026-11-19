@@ -132,7 +132,8 @@ export function tokenize(text: string, lang: string): Token[][] {
 
 /* ---------- 渲染 ---------- */
 
-const TOKEN_CLASSES: Record<TokenKind, string> = {
+// 导出给别处复用（如 diff 面板）：同一个产品里两套 token 配色会先打架。
+export const TOKEN_CLASSES: Record<TokenKind, string> = {
   keyword: "text-[#cf222e] dark:text-[#ff7b72] font-semibold",
   string: "text-[#0a3069] dark:text-[#a5d6ff]",
   comment: "text-[#6e7781] dark:text-[#8b949e] italic",

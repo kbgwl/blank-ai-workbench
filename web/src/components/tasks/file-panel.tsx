@@ -11,7 +11,8 @@ import {
   type Project,
   type TreeEntry,
 } from "./api";
-import { clip, formatSize } from "./format";
+import { HighlightedCode } from "@/components/bot/syntax";
+import { clip, formatSize, langOf } from "./format";
 
 const ROOT = "";
 
@@ -35,6 +36,10 @@ export function FilePanel({ project }: { project: Project | null }) {
   const [tree, setTree] = useState<TreeStore | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [openFile, setOpenFile] = useState<TreeEntry | null>(null);
+  // HTML 产物：源码 / 渲染结果两态。默认源码——用户点开文件通常是想看内容，
+  // 但"这个东西长什么样"必须在同一个面板里能立刻回答（原来只能看源码，
+  // 要自己去找文件双击）。
+  const [renderHtml, setRenderHtml] = useState(false);
   const [result, setResult] = useState<FileResult>(null);
   const projectId = project?.id ?? null;
   const workspaceId = project?.workspaces.find((item) => item.is_active)?.id ?? project?.workspaces[0]?.id ?? "";
@@ -95,6 +100,7 @@ export function FilePanel({ project }: { project: Project | null }) {
   const requestKey = projectId && path ? `${projectId}:${workspaceId}:${path}` : null;
   useEffect(() => {
     if (!projectId || !path || !requestKey) return;
+    setRenderHtml(false);
     let ignore = false;
     fetchFile(projectId, path)
       .then((data) => {
@@ -124,6 +130,8 @@ export function FilePanel({ project }: { project: Project | null }) {
   }
 
   const pid: string = project.id;
+  // 能直接渲染的产物：HTML。判定放在渲染副作用之外，读起来就是"这是什么文件"。
+  const isHtml = /\.html?$/i.test(String(path || ""));
   const store = tree && tree.projectId === projectId ? tree : null;
 
   function toggle(entry: TreeEntry) {
@@ -221,7 +229,25 @@ export function FilePanel({ project }: { project: Project | null }) {
               <span className="min-w-0 truncate font-mono text-[12px] text-brand" title={settled.data.path}>
                 {clip(settled.data.path, 40)}
               </span>
-              <span className="shrink-0 font-mono text-[11px] text-faint">{formatSize(settled.data.size)}</span>
+              <span className="flex shrink-0 items-center gap-2">
+                {isHtml && !settled.data.binary && (
+                  <span className="flex overflow-hidden rounded-md border border-line font-mono text-[11px]">
+                    {([["源码", false], ["预览", true]] as const).map(([label, value]) => (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={() => setRenderHtml(value)}
+                        className={`px-2 py-0.5 transition-colors ${
+                          renderHtml === value ? "bg-surface text-text" : "text-muted hover:text-text"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </span>
+                )}
+                <span className="font-mono text-[11px] text-faint">{formatSize(settled.data.size)}</span>
+              </span>
             </div>
             {settled.data.binary ? (
               <div className="p-3">
@@ -234,9 +260,25 @@ export function FilePanel({ project }: { project: Project | null }) {
                     {settled.data.message || "文件过大，内容已截断"}
                   </div>
                 )}
-                <pre className="max-h-56 overflow-auto px-3 py-2.5 font-mono text-[12px] leading-relaxed whitespace-pre text-muted">
-                  {settled.data.content || "（空文件）"}
-                </pre>
+                {renderHtml && isHtml ? (
+                  <iframe
+                    title="产物预览"
+                    srcDoc={settled.data.content}
+                    className="h-72 w-full border-0 bg-white"
+                    // 不给 allow-same-origin：脚本能跑，但 iframe 是不透明源，
+                    // 拿不到本站的 cookie / localStorage，也发不出带凭据的请求。
+                    // 这正是「能看渲染结果」和「不能反过来动我们」的分界。
+                    sandbox="allow-scripts allow-forms allow-popups allow-modals"
+                  />
+                ) : (
+                  <div className="max-h-72 overflow-auto">
+                    {settled.data.content ? (
+                      <HighlightedCode text={settled.data.content} lang={langOf(settled.data.path)} />
+                    ) : (
+                      <p className="px-3 py-2.5 font-mono text-[12px] text-faint">（空文件）</p>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </div>
