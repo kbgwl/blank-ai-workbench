@@ -65,10 +65,22 @@ Heartbeat / Dreaming 三种唤醒——我们只有第一种的一半（事件�
 
 | 步骤 | 内容 | 验收 |
 |---|---|---|
-| 1 | 进化评价：每次改动前后对照成功率/错误率/耗时/人工干预 | 能回答"这次改动是不是真的变好了" |
+| 1 | 进化评价 ✅ 已做（`harness/evolution.py` + `scripts/evolution.py`） | 改前存快照、改后对照；样本 <20 明确不下结论 |
 | 2 | 默认输出基线（07+08）✅ 已做 | 内置 skill `report-style`：结论先行、证据跟随、禁套话、四条自检 |
-| 3 | Heartbeat：定时巡检任务阻塞/目标停滞，只出报告不自动动手 | 能看到"系统自己发现的 N 件事" |
+| 3 | Heartbeat ✅ 已做（`heartbeat.py` + `scripts/heartbeat.py`） | 同类合并、只报告不动手；还差接定时执行 |
 | 4 | 目标层级：Mission→Strategic→Project→Operational | 任务能挂到目标上，目标能汇总进度 |
 | 5 | 语义层（图谱或向量） | 能回答"这个模块谁依赖谁" |
 
 前三步都不需要新基础设施，能在一两周内落地。
+
+## 五、两条已经能用的命令
+
+    python scripts/evolution.py --snapshot --label "改了什么"
+    python scripts/evolution.py --compare data/evolution/<基线>.json
+    python scripts/heartbeat.py
+
+基线（2026-11-19，98 条已结束任务）：成功率 0.918 / 每任务 69k token /
+每任务 2.38 步 / 驳回率 0.372 / 需要解释的驳回 0.062。
+
+心跳首次巡检发现四件：2 个任务跑了 9 小时没动静、同一原因（上下文超限 400）失败 3 次、
+9 个审批停着最久 26 小时、金额闸触发 2 次。**都是真事，且都不该由系统自己动手处理。**
