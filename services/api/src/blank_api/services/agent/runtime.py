@@ -1527,6 +1527,24 @@ class AgentRuntime:
                 )
         except Exception:  # noqa: BLE001 - 想起一条经验失败，不该让任务起不来
             recalled_experience = ""
+
+        # 使用者模型：这里**只读不写**。
+        #
+        # 第一版在这里顺手从任务描述里学，拿 111 个真实任务跑出来是灾难：任务描述
+        # 写的是"这一次要做什么"，不是"他一贯怎么做"。它把冒烟脚本里的
+        # "必须用 run_shell 执行 echo smoke-ok" 学了进去，还因为同一段脚本跑了
+        # 26 遍而晋级成"一贯要求"。
+        #
+        # 所以写入分两条路：驳回反馈（他明说的，当场记，两次即生效）、
+        # 任务描述（`scripts/persona.py --harvest` 显式扫，只出候选，要人确认）。
+        persona_block = ""
+        try:
+            from blank_api.services.agent.persona import PersonaStore
+
+            persona_block = PersonaStore().persona_block(session.context.root)
+        except Exception:  # noqa: BLE001 - 学人失败不该让任务起不来
+            persona_block = ""
+
         state: dict[str, Any] = {
             "task_id": request.task_id,
             "messages": initial_messages(
@@ -1558,6 +1576,7 @@ class AgentRuntime:
                 hook_context=session_hook_notes,
                 initial_user_message=initial_user_message,
                 recalled_experience=recalled_experience,
+                persona_block=persona_block,
             ),
             "plan": [],
             "steps": 0,

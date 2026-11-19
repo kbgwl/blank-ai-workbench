@@ -2711,6 +2711,10 @@ def initial_messages(
     # "任务描述之后、第一次定位/编辑之前"，而且措辞是"可能不适用"——它是上下文，
     # 不是规则。真正的硬约束走 hook / lint / 审批，不走记忆。
     recalled_experience: str = "",
+    # 使用者模型（他一贯怎么干活）。放在 system 而不是 user 消息：
+    # 它是**一贯约定**，不是这次任务的情境。压缩时保留的是「第一条 system + 当前目标」，
+    # 塞进 user 消息会在压缩后消失——那样一条学会的偏好只能用一次，正好和"越来越像他"相反。
+    persona_block: str = "",
 ) -> list[dict]:
     from blank_api.services.instructions import compose
 
@@ -2790,6 +2794,10 @@ def initial_messages(
         # 分层指令（用户级 → 项目 AGENTS.md → 本次任务）在这里合进系统提示，
         # 越靠近任务的层优先级越高，但都不得放宽安全与审批规则。
         system = compose(system, list(instruction_layers))
+    if persona_block.strip():
+        # 放在分层指令之后：项目自己的 AGENTS.md 是硬约定，使用者模型排在其后、
+        # 但明确声明"与本次任务的明确要求冲突时以本次为准"——它是伞不是锁。
+        system += "\n" + persona_block.strip()
     # 日期与时区并进**第一段 system**，不是另起一条消息：上下文管家压缩时留下的
     # 是「第一条 system + 当前目标」（`context.py` 的 prefix），另起的那条会在压缩后消失，
     # 表现为任务跑到后半程模型反而不知道今天几号了。
@@ -4573,6 +4581,24 @@ async def _approval_gate(
                 note = str(answer.get("feedback") or "").strip()[:600]
             if note:
                 denials[name] = note
+                # 驳回时说的那句话，是**最纯的用户逻辑信号**：他亲口说了为什么不许这么做。
+                # 这里只记成候选（occurrences=1，不注入）——一次纠正很可能是这次任务的
+                # 临时约束，"先别列目录"不等于"他一贯不用目录工具"。攒到第二次才晋级。
+                # 学人失败绝不能影响审批本身，所以整段包在 try 里。
+                try:
+                    from blank_api.services.agent.persona import PersonaStore
+
+                    root = getattr(session.context, "root", None)
+                    if root:
+                        PersonaStore().learn_from_text(
+                            root,
+                            note,
+                            task_id=str(getattr(session, "task_id", "") or ""),
+                            source="denial",
+                            scope_ref=str(root),
+                        )
+                except Exception:  # noqa: BLE001 - 审批不能被"学人"拖坏
+                    pass
             session.permissions.forget(name, arguments, scope)
             learned = decision.memo if scope == SCOPE_PREFIX and decision.memo else decision.prefix
             await session.recorder.add(
