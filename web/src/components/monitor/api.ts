@@ -24,6 +24,8 @@ export type MonitorJudgement = {
   scenario: string;
   automation_mode: string;
   permission_mode: string;
+  /** 权限模式的中文标签，由后端按 MODE_LABELS 给出；空串表示这条没设权限模式。 */
+  permission_label: string;
   created_at: string;
 };
 

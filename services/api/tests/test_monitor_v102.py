@@ -29,15 +29,27 @@ from tests.test_agent_v04 import (  # noqa: F401  (复用端到端夹具)
 FEATURE = "BLANK_FEATURE_BACKGROUND_EXECUTION"
 
 
-async def _make_task(project_id: str, *, goal: str = "改一下按钮颜色", status: str = "succeeded", supervisor: dict | None = None) -> str:
+async def _make_task(
+    project_id: str,
+    *,
+    goal: str = "改一下按钮颜色",
+    status: str = "succeeded",
+    supervisor: dict | None = None,
+    permission_mode: str = "",
+) -> str:
     async with get_session_factory()() as session:
+        spec: dict = {}
+        if supervisor:
+            spec["supervisor"] = supervisor
+        if permission_mode:
+            spec["dispatch"] = {"permission_mode": permission_mode}
         task = Task(
             id=str(uuid4()),
             project_id=project_id,
             title=goal[:20],
             goal=goal,
             status=status,
-            goal_spec={"supervisor": supervisor} if supervisor else {},
+            goal_spec=spec,
         )
         session.add(task)
         await session.commit()
@@ -88,6 +100,45 @@ async def test_monitor_skips_tasks_without_a_supervisor_block(env, workspace):
     assert data["watching"][0]["intent"] == "execute"
     assert data["watching"][0]["needs_execution"] is True
     assert data["counts"]["watching"] == 1
+
+
+async def test_monitor_gives_permission_mode_a_readable_label(env, workspace):
+    """权限模式要带中文标签，不能把内部值（default / acceptEdits）直接印给用户。
+
+    这一格以前前端直接渲染 `permission_mode`，页面上是「· 权限 default」——
+    用户读不懂，而且 default / acceptEdits / bypassPermissions 三个词长得也不像
+    给终端用户看的。标签的唯一真源在后端 permissions.MODE_LABELS，这里固定住：
+    有模式就必须有标签，没模式标签为空（前端据此整段不显示）。
+    """
+    project_id = await create_project(env, workspace)
+    await _make_task(project_id, goal="有模式", supervisor=await _judgement(), permission_mode="default")
+    await _make_task(project_id, goal="没模式", supervisor=await _judgement())
+
+    data = await _get(env)
+    rows = {item["goal"]: item for item in data["watching"]}
+
+    assert rows["有模式"]["permission_mode"] == "default"
+    label = rows["有模式"]["permission_label"]
+    assert label == "默认", f"短名不对：{label!r}（该是「默认：高风险操作逐个确认」冒号前那半句）"
+
+    assert rows["没模式"]["permission_mode"] == ""
+    assert rows["没模式"]["permission_label"] == "", "没设权限模式时不该编一个标签出来"
+
+
+async def test_monitor_keeps_unknown_permission_mode_visible(env, workspace):
+    """不认识的权限模式要原样露出来，不能悄悄变成空串。
+
+    变空串的后果：那一行看起来「没设权限模式」，而实际设了某个新值——
+    排查时人会往完全相反的方向找。
+    """
+    project_id = await create_project(env, workspace)
+    await _make_task(project_id, goal="将来的模式", supervisor=await _judgement(), permission_mode="futureMode")
+
+    data = await _get(env)
+    row = next(item for item in data["watching"] if item["goal"] == "将来的模式")
+
+    assert row["permission_mode"] == "futureMode"
+    assert row["permission_label"] == "futureMode", "未知模式该原样返回，而不是猜一个中文名或清空"
 
 
 async def test_monitor_lists_open_tasks_but_not_finished_ones(env, workspace):

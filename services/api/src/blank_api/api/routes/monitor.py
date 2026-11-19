@@ -29,6 +29,7 @@ from blank_api.models.task import Task
 from blank_api.models.trigger import AgentTrigger
 from blank_api.services.agent import triggers as triggers_module
 from blank_api.services.features import is_enabled
+from blank_api.services.permissions import MODE_LABELS
 
 router = APIRouter(tags=["monitor"], dependencies=[Depends(require_token)])
 
@@ -171,6 +172,19 @@ def _iso(moment: datetime | None) -> str:
     return moment.isoformat() if moment else ""
 
 
+def _short_label(mode: str) -> str:
+    """权限模式的中文短名：取 ``MODE_LABELS`` 里冒号前的半句（「默认：高风险…」→「默认」）。
+
+    这一列在判定流里每行都出现，完整描述重复几十遍就是噪音。
+    空模式返回空串（前端据此整段不显示）；未知模式原样返回内部值——与其猜一个
+    中文名，不如把它露出来，这样还能搜到。
+    """
+    if not mode:
+        return ""
+    label = MODE_LABELS.get(mode)
+    return label.split("：", 1)[0] if label else mode
+
+
 def _supervisor_of(task: Task) -> dict:
     spec = task.goal_spec or {}
     block = spec.get("supervisor")
@@ -241,6 +255,13 @@ async def monitor(db: DbSession, limit: int = Query(default=30, ge=1, le=200)) -
                 "scenario": str(block.get("scenario") or ""),
                 "automation_mode": str(block.get("automation_mode") or ""),
                 "permission_mode": str(((task.goal_spec or {}).get("dispatch") or {}).get("permission_mode") or ""),
+                # 中文标签由后端给：MODE_LABELS 是权限模式的唯一真源，前端自己再写一份
+                # 映射，两处迟早对不上（页面上会冒出裸的 default）。
+                # 只取冒号前的短名——这一列在判定流里每行都出现，完整描述（「默认：高风险
+                # 操作逐个确认」）重复 30 遍就是噪音，完整说法留给设置页的下拉。
+                "permission_label": _short_label(
+                    str(((task.goal_spec or {}).get("dispatch") or {}).get("permission_mode") or "")
+                ),
                 "created_at": _iso(task.created_at),
             }
         )

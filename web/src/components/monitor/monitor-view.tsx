@@ -231,7 +231,7 @@ export function MonitorView() {
                   <p className="mt-0.5 truncate text-[11px] text-faint">
                     {judgementOutcome(item)}
                     {item.reason ? ` · ${item.reason}` : ""}
-                    {item.permission_mode ? ` · 权限 ${item.permission_mode}` : ""}
+                    {item.permission_label ? ` · 权限 ${item.permission_label}` : ""}
                   </p>
                 </div>
                 <span
