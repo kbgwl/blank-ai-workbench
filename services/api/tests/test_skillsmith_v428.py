@@ -155,3 +155,72 @@ async def test_the_runtime_actually_stages_a_proposal(seeded, tmp_path, monkeypa
     assert "skill.crystallized" in kinds, kinds
     payload = next(payload for kind, payload in recorder.events if kind == "skill.crystallized")
     assert "work-rigorously" in payload["names"]
+
+
+# ── 他会怎么判：只写有证据的 ──────────────────────────────────────────────
+def test_the_judgement_section_admits_what_it_does_not_know(tmp_path):
+    """留空比编造有用：它会提醒我们"这块还没学到"。
+    编一句"他偏好稳妥"听起来很像，但我们没有依据。"""
+    store, ws = _live(tmp_path)
+    body = skillsmith.drafts_for(store, str(ws))[0]["skill_md"]
+
+    assert "## 他会怎么判" in body
+    assert "暂无记录" in body
+
+
+def test_a_verification_command_he_approved_shows_up(tmp_path):
+    """他认可过的验证命令，比任何"请务必验证"都有用——那是具体的。"""
+    from blank_api.services.agent.experience import Experience, ExperienceStore
+
+    store, ws = _live(tmp_path)
+    # 经验库与人设库同目录（运行时就是这样）
+    ExperienceStore(store.root).record(
+        str(ws),
+        Experience(
+            statement="改动 a.py 之后，用 `pytest -q tests/test_a.py` 验证能通过",
+            kind="procedure",
+            trigger_paths=["a.py"],
+        ),
+    )
+
+    body = skillsmith.drafts_for(store, str(ws))[0]["skill_md"]
+
+    assert "pytest -q tests/test_a.py" in body
+    assert body.count("暂无记录") == 2, "只有这一条有证据，另外两条仍应留空"
+
+
+def test_a_rule_about_asking_first_lands_there(tmp_path):
+    store, ws = _live(tmp_path)
+    store.record_assertion(str(ws), "改数据库之前必须先问我")
+
+    body = skillsmith.drafts_for(store, str(ws))[0]["skill_md"]
+
+    assert "改数据库之前必须先问我" in body
+
+
+def test_his_denial_words_are_the_record_of_what_he_stopped(tmp_path):
+    store, ws = _live(tmp_path)
+    # 驳回时说的那句话是"他叫停过什么"的直接记录
+    store.learn_from_text(str(ws), "先别列目录，直接用 list_files", task_id="T9", source="denial", scope_ref=str(ws))
+    for index in range(2):
+        store.learn_from_text(str(ws), "先别列目录，直接用 list_files", task_id=f"D{index}", source="denial", scope_ref=str(ws))
+
+    body = skillsmith.drafts_for(store, str(ws))[0]["skill_md"]
+
+    assert "先别列目录" in body
+
+
+def test_it_does_not_depend_on_the_working_directory(tmp_path, monkeypatch):
+    """`ExperienceStore()` 的默认值是「相对 cwd 的 data/experience」，
+    换个目录跑脚本就找不到经验库，而文件其实在别处——`lint_experience.py` 踩过一次。"""
+    from blank_api.services.agent.experience import Experience, ExperienceStore
+
+    store, ws = _live(tmp_path)
+    ExperienceStore(store.root).record(
+        str(ws), Experience(statement="改动 a.py 之后，用 `npm test` 验证能通过", kind="procedure")
+    )
+    monkeypatch.chdir(tmp_path)  # 换到完全无关的目录
+
+    body = skillsmith.drafts_for(store, str(ws))[0]["skill_md"]
+
+    assert "npm test" in body

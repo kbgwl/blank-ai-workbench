@@ -693,7 +693,10 @@ class PersonaStore:
         text: str,
         *,
         task_id: str = "",
-        source: str = "denial",
+        # 默认 `tell`：直接调这个函数多是我们转述他的话。只有审批门那条路径
+        # 才标 `denial`——"他叫停过什么"要靠这个标签区分，标错会让 Skill 里
+        # 多出一条并不存在的"叫停记录"。
+        source: str = "tell",
         scope_ref: str = "",
         origin: str = "explicit",
         task_specific: bool = False,

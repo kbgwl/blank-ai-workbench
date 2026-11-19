@@ -27,6 +27,7 @@ Skill 正好是这个形状：**按需加载、有触发条件、正文可以写
 
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 from blank_api.services.agent.persona import (
@@ -65,7 +66,33 @@ def _yaml_str(text: str) -> str:
     return f'"{body}"'
 
 
-def draft(standard_keys: Iterable[str], quotes: dict[str, str]) -> list[dict]:
+def _judgement(context: dict) -> str:
+    """他会怎么判——**只写有记录的部分**。
+
+    这一段是最容易变成编造的地方：写"他偏好稳妥"听起来很像，但我们没有依据。
+    所以三条各自独立判断，没有记录就明说"暂无"，把空白留着。
+    空白比编造有用——它会提醒我们"这块还没学到"。
+    """
+    rows = (
+        ("什么必须先问", context.get("asks_first"), "暂无记录——还没见你在这类事上叫停过"),
+        ("用什么验收", context.get("verifies_with"), "暂无记录——还没见过你认可的一条验证命令"),
+        ("什么时候该停", context.get("stops_when"), "暂无记录——暂按默认：同一处失败两次就停"),
+    )
+    lines: list[str] = []
+    for label, values, empty in rows:
+        picked = [str(value).strip() for value in (values or []) if str(value).strip()][:3]
+        if picked:
+            lines.append(f"- **{label}**：" + "；".join(picked))
+        else:
+            lines.append(f"- **{label}**：{empty}")
+    return "\n".join(lines)
+
+
+def draft(
+    standard_keys: Iterable[str],
+    quotes: dict[str, str],
+    context: dict | None = None,
+) -> list[dict]:
     """一个标准 → 一条 Skill 提案。
 
     `quotes` 是 标准 key → 他的原话。没有原话的标准不出提案：
@@ -105,6 +132,13 @@ def draft(standard_keys: Iterable[str], quotes: dict[str, str]) -> list[dict]:
 ## 流程
 
 {steps}
+
+## 他会怎么判
+
+下面这段不是我们猜的：只写有记录的部分，没记录就留空（留空本身是信息——
+说明这块还没学到）。
+
+{_judgement(context or {})}
 
 ## 怎么算做到
 
@@ -156,7 +190,49 @@ def drafts_for(store: PersonaStore, workspace: str) -> list[dict]:
                 continue
             if any(trigger in item.rule for trigger in spec["triggers"]):
                 quotes[key] = item.rule
-    return draft(keys, quotes)
+    context = _context_for(entries, store.root)
+    return draft(keys, quotes, context)
+
+
+def _context_for(entries, experience_dir=None) -> dict:
+    """从已有记录里凑"他怎么判"的三条。凑不出来就空着——不编。"""
+    asks_first: list[str] = []
+    stops_when: list[str] = []
+    for item in entries:
+        if item.status != "active":
+            continue
+        if item.dimension == "boundary":
+            asks_first.append(item.rule)
+        for quote in item.quotes:
+            # 驳回时说的那句话，是"他叫停过什么"的直接记录。
+            if quote.get("source") == "denial" and quote.get("text"):
+                stops_when.append(str(quote["text"])[:80])
+
+    verifies_with: list[str] = []
+    try:
+        from blank_api.services.agent.experience import ExperienceStore
+
+        # 显式传目录：`ExperienceStore()` 的默认值是「相对 cwd 的 data/experience」，
+        # 从仓库根跑脚本就指到了另一个地方，结果"经验库是空的"而文件其实在
+        # services/api 下。这个坑在 `lint_experience.py` 上已经踩过一次。
+        store = ExperienceStore(experience_dir) if experience_dir else ExperienceStore()
+        for entry in store.load(_workspace_hint(entries)):
+            if entry.kind != "procedure" or entry.status == "retired":
+                continue
+            match = re.search(r"`([^`]{4,200})`", entry.statement)
+            if match:
+                verifies_with.append(match.group(1))
+    except Exception:  # noqa: BLE001 - 取不到验证命令就不写，不挡沉淀
+        verifies_with = []
+    return {"asks_first": asks_first, "stops_when": stops_when, "verifies_with": verifies_with}
+
+
+def _workspace_hint(entries) -> str:
+    """条目上带着作用域路径，用它去读经验库，不必再传一遍工作区。"""
+    for item in entries:
+        if item.scope_ref:
+            return item.scope_ref
+    return ""
 
 
 async def stage(session_factory, drafts: list[dict], *, recorder=None) -> list[dict]:
