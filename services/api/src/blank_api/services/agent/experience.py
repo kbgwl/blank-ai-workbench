@@ -559,6 +559,57 @@ class ExperienceStore:
                 return item.status
         return ""
 
+    def retire(
+        self,
+        workspace: str | Path,
+        *,
+        path: str = "",
+        kind: str = "",
+        experience_id: str = "",
+        everything: bool = False,
+    ) -> list[str]:
+        """退役符合条件的条目，返回被退役的 statement。
+
+        **负反馈要能分层**，这是消费级软件做对而我们原来没做的一件事：
+        YouTube / TikTok 的"不感兴趣"是三档——这条、这类频道、清空全部反馈。
+        我们原来只有"失败两次自动退役"这一条路，等于只有"这条"。
+
+        为什么"这类"必须存在：agent 学歪的典型形态不是单条记错，而是**一类任务
+        反复套同一个错误做法**。只支持删单条，用户就得一条条删同类项，删到第五条
+        就烦了——而烦了之后他不会再删，只会把整个功能关掉（Copilot 的教训：
+        关掉记忆不删数据、删掉的推断 30 天复活，是信任崩塌的典型）。
+
+        四档：`experience_id`（这条）/ `path` 或 `kind`（这类）/ `everything`（全部）。
+        都不传就什么都不做——退役是破坏性操作，不接受"没指定等于全选"。
+        """
+        if not (path or kind or experience_id or everything):
+            return []
+        target = path.rstrip("*").rstrip("/").lower()
+        retired: list[str] = []
+        file_path = self.path_for(workspace)
+        with _lock_for(file_path):
+            entries = self.load(workspace)
+            for item in entries:
+                if item.status == "retired":
+                    continue
+                hit = everything
+                if experience_id:
+                    hit = hit or item.fingerprint == experience_id
+                if kind:
+                    hit = hit or item.kind == kind
+                if target:
+                    hit = hit or any(
+                        trigger.rstrip("*").rstrip("/").lower().startswith(target)
+                        for trigger in item.trigger_paths
+                    )
+                if not hit:
+                    continue
+                item.status = "retired"
+                retired.append(item.statement)
+            if retired:
+                self.save(workspace, entries)
+        return retired
+
     def recall(
         self, workspace: str | Path, *, goal: str = "", paths: Iterable[Any] = (), limit: int = 1
     ) -> list[Experience]:

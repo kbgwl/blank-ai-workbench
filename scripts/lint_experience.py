@@ -35,11 +35,33 @@ def main() -> None:
         default=str(REPO / "services" / "api" / "data" / "experience"),
         help="经验库目录（默认 services/api/data/experience）",
     )
+    # 负反馈三档：这条 / 这类 / 全部。默认什么都不做——退役是破坏性操作，
+    # 不接受"没指定等于全选"。
+    parser.add_argument("--retire-id", default="", help="退役这一条（条目指纹）")
+    parser.add_argument("--retire-path", default="", help="退役这一类（按触发路径前缀）")
+    parser.add_argument("--retire-kind", default="", choices=["", "pitfall", "procedure", "fact"])
+    parser.add_argument("--retire-all", action="store_true", help="退役全部")
     args = parser.parse_args()
 
     from blank_api.services.agent.experience import ExperienceStore, lint, render_lint
 
     store = ExperienceStore(args.db_dir)
+    if args.retire_id or args.retire_path or args.retire_kind or args.retire_all:
+        retired = store.retire(
+            args.workspace,
+            path=args.retire_path,
+            kind=args.retire_kind,
+            experience_id=args.retire_id,
+            everything=args.retire_all,
+        )
+        if not retired:
+            print("没有符合条件的条目。")
+            return
+        print(f"已退役 {len(retired)} 条：")
+        for statement in retired:
+            print(f"  · {statement[:100]}")
+        print("（退役不是删除：条目还在文件里，只是不再被检索。要恢复就改 status。）")
+        return
     path = store.path_for(args.workspace)
     entries = store.load(args.workspace)
     if not entries:

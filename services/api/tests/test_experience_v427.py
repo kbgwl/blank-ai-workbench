@@ -278,3 +278,65 @@ def test_lint_reports_but_never_removes():
     lint(entries)
 
     assert [item.status for item in entries] == before, "lint 不该改动任何条目"
+
+
+# ── 负反馈三档：这条 / 这类 / 全部 ────────────────────────────────────────
+def _seeded():
+    import tempfile
+    from pathlib import Path
+
+    from blank_api.services.agent.experience import ExperienceStore
+
+    root = Path(tempfile.mkdtemp())
+    store = ExperienceStore(root)
+    ws = root / "ws"
+    for statement, path in (
+        ("坑A", "src/api/"), ("坑B", "src/api/"), ("坑C", "web/src/"), ("坑D", "src/db/"),
+    ):
+        store.record(ws, Experience(statement=statement, trigger_paths=[path], confidence=0.6))
+    return store, ws
+
+
+def _live(store, ws):
+    return sorted(item.statement for item in store.load(ws) if item.status != "retired")
+
+
+def test_retiring_a_whole_class_at_once():
+    """agent 学歪往往是一类任务反复套同一个错误做法。只支持删单条，
+    用户就得一条条删同类项，删到第五条就烦了——烦了之后他会把整个功能关掉。"""
+    store, ws = _seeded()
+
+    retired = store.retire(ws, path="src/api")
+
+    assert sorted(retired) == ["坑A", "坑B"]
+    assert _live(store, ws) == ["坑C", "坑D"]
+
+
+def test_retiring_everything_needs_the_explicit_flag():
+    """退役是破坏性操作，不接受"没指定等于全选"。"""
+    store, ws = _seeded()
+
+    assert store.retire(ws) == []
+    assert len(_live(store, ws)) == 4
+
+    assert len(store.retire(ws, everything=True)) == 4
+    assert _live(store, ws) == []
+
+
+def test_retiring_by_id_touches_only_that_one():
+    store, ws = _seeded()
+    target = next(item for item in store.load(ws) if item.statement == "坑C")
+
+    store.retire(ws, experience_id=target.fingerprint)
+
+    assert _live(store, ws) == ["坑A", "坑B", "坑D"]
+
+
+def test_retired_entries_are_kept_not_deleted():
+    """退役不是删除：条目还在文件里，只是不再被检索。要恢复就改 status。"""
+    store, ws = _seeded()
+    store.retire(ws, path="src/api")
+
+    all_items = store.load(ws)
+    assert len(all_items) == 4
+    assert sum(1 for item in all_items if item.status == "retired") == 2
