@@ -4281,6 +4281,12 @@ async def _approval_gate(
     拒绝表，模型收到的文案与"钩子拒绝"完全一致。
     """
     denied: set[str] = set()
+    # 驳回时用户写的那句话（工具名 → 反馈）。为空就是"就是不批"。
+    #
+    # 为什么单独一张表而不是把 denied 改成 dict：denied 是集合语义（"本轮别再弹这张卡"），
+    # 混进字典会让每一处 `in denied` 都要想一遍值是什么。反馈只影响**回执文案**，
+    # 单独存，读的地方只有一处。
+    denials: dict[str, str] = {}
     blocked: dict[str, str] = {}
     hook_denied: dict[str, str] = {}
     rewritten = rewritten or {}
@@ -4555,6 +4561,11 @@ async def _approval_gate(
                 )
         else:
             denied.add(name)
+            note = ""
+            if isinstance(answer, dict):
+                note = str(answer.get("feedback") or "").strip()[:600]
+            if note:
+                denials[name] = note
             session.permissions.forget(name, arguments, scope)
             learned = decision.memo if scope == SCOPE_PREFIX and decision.memo else decision.prefix
             await session.recorder.add(
@@ -4566,9 +4577,12 @@ async def _approval_gate(
                     **identity,
                     "scope": scope,
                     "prefix": learned,
+                    # 用户驳回时说的话要进账：事后复盘"为什么这步被否了"，
+                    # 只有一条 denied 是没有信息量的。
+                    "feedback": denials.get(name, ""),
                 },
             )
-    return denied, blocked, hook_denied
+    return denied, blocked, hook_denied, denials
 
 
 @dataclass
@@ -4599,6 +4613,26 @@ class _PlannedCall:
     # 空转断路器给这步的提示（"这一步刚失败过一次，下一步是 X"）。放行时才带，
     # 拦截时不走这里——被拦的调用根本没有回执可挂。
     note: str = ""
+
+
+def _denial_reason(name: str, feedback: str) -> str:
+    """驳回回执：用户说了什么就传什么，没说话才用通用文案。
+
+    只说"被驳回了"时，模型最常见的反应是原样重试或换个等价写法——它不知道
+    用户是嫌范围太大、嫌方案不对，还是压根不想动这个文件。一句话反馈能把
+    三四种瞎试压成一次调整（Claude Code 的 `a denied call means the user declined it
+    — adjust, don't retry verbatim` 是同一层意思，但用户的原话永远比这句更有用）。
+    """
+    text = str(feedback or "").strip()
+    if text:
+        return (
+            f"用户驳回了 {name}，并说：{text}\n"
+            "按这句话调整后再来（改范围、改做法，或先问清），不要原样重试同一个调用。"
+        )
+    return (
+        f"用户驳回了该操作，本次会话不再执行：{name}。"
+        "不要原样重试：换一种做法，或停下来把选择交给用户。"
+    )
 
 
 def _parallel_ok(enabled: bool, item: _PlannedCall) -> bool:
@@ -5032,7 +5066,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     # 钩子必须在审批门之前跑完：updatedInput 改写后的参数要同时进审批卡与执行，
     # ask 也要变成一次真正的中断。顺序反过来，卡片上放行的参数与实际执行的参数就会分叉。
     hook_plan = await _scan_pre_tool_hooks(session, node, approvable, answers, readonly)
-    denied, guardian_blocked, hook_denied = await _approval_gate(
+    denied, guardian_blocked, hook_denied, denials = await _approval_gate(
         session,
         node,
         approvable,
@@ -5183,10 +5217,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                     name,
                     arguments,
                     "refuse",
-                    reason=(
-                        f"用户驳回了该操作，本次会话不再执行：{name}。"
-                        "不要原样重试：换一种做法，或停下来把选择交给用户。"
-                    ),
+                    reason=(_denial_reason(name, denials.get(name, ""))),
                 )
             )
         else:

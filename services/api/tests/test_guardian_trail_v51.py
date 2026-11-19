@@ -371,7 +371,7 @@ async def test_the_gate_records_the_review_with_the_same_seq_as_the_event(seeded
     session = _gate_session(
         tmp_path, '{"verdict": "deny", "reasons": ["未经确认的递归删除"]}'
     )
-    denied, blocked, hook_denied = await _approval_gate(
+    denied, blocked, hook_denied, _denials = await _approval_gate(
         session, "call_model", [{"id": "call-1", "name": "run_shell", "args": arguments}]
     )
     assert denied == set() and blocked == {"run_shell": "未经确认的递归删除"}
@@ -510,7 +510,7 @@ async def test_a_reversible_denial_still_blocks_without_a_card(seeded, tmp_path,
 
     seen = _capture_interrupt(monkeypatch)
     session = _gate_session(tmp_path, '{"verdict": "deny", "reasons": ["未经确认的递归删除"]}')
-    denied, blocked, _ = await _approval_gate(
+    denied, blocked, _, _denials = await _approval_gate(
         session, "call_model", [{"id": "call-1", "name": "run_shell", "args": {"command": "rm -rf build"}}]
     )
 

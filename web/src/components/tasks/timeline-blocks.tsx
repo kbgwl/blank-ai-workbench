@@ -608,6 +608,8 @@ function ApprovalCard({
     decision: "approve" | "deny",
     block: Extract<Block, { kind: "approval" }>,
     scope?: ApprovalScope,
+    /** 驳回时用户写的那句话，会被原样交给模型。 */
+    feedback?: string,
   ) => void;
 }) {
   const decided = block.state !== "pending";
@@ -660,7 +662,7 @@ function ApprovalCard({
         busy={busy}
         decided={decided}
         onApprove={(scope) => onDecide("approve", block, scope)}
-        onDeny={() => onDecide("deny", block)}
+        onDeny={(feedback) => onDecide("deny", block, "once", feedback)}
       />
       {grants
         .filter((option) => option.warning)
@@ -764,6 +766,8 @@ export function TimelineBlock({
     decision: "approve" | "deny",
     block: Extract<Block, { kind: "approval" }>,
     scope?: ApprovalScope,
+    /** 驳回时用户写的那句话，会被原样交给模型。 */
+    feedback?: string,
   ) => void;
   onAnswer: (
     answers: AnswerValues,

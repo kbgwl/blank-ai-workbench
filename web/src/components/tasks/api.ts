@@ -1999,6 +1999,8 @@ export function decideApproval(
   input: {
     decision: "approve" | "deny";
     scope?: ApprovalScope;
+    /** 驳回时想说的话：会原样进工具回执交给模型。空着就是"就是不批"。 */
+    feedback?: string;
     approvalId?: string;
     toolCallId?: string;
     argumentsHash?: string;
@@ -2007,6 +2009,9 @@ export function decideApproval(
 ): Promise<{ used: string }> {
   const body: Record<string, unknown> = { approve: input.decision === "approve" };
   if (input.decision === "approve" && input.scope) body.scope = input.scope;
+  // 只在驳回时带上：批准时带一句"批准理由"没有消费者，白占协议。
+  const note = String(input.feedback || "").trim();
+  if (input.decision === "deny" && note) body.feedback = note;
   if (input.approvalId) body.approval_id = input.approvalId;
   // 老卡片没有 tool_call_id 时 normalize 会回落成 approval_id——把它当
   // tool_call_id 发回去必然 mismatch，不如不发（后端按 approval_id 对号）。

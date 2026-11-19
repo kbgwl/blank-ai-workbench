@@ -1825,7 +1825,12 @@ async def _decide_approval_locked(
         db, task, TaskRunIn(provider_id=payload.provider_id), request
     )
     evidence = await AgentRuntime(get_session_factory()).resume(
-        run_request, decision={"approve": payload.approve, "scope": payload.scope}
+        run_request,
+        decision={
+            "approve": payload.approve,
+            "scope": payload.scope,
+            "feedback": payload.feedback,
+        },
     )
     async with get_session_factory()() as session:
         finished = await load_task(session, task_id)

@@ -220,6 +220,7 @@ export function TasksView({ initialTaskId = null }: Props) {
       decision: "approve" | "deny",
       block?: Extract<Block, { kind: "approval" }>,
       scope: ApprovalScope = "once",
+      feedback?: string,
     ) => {
       if (!selectedId) return;
       setBusyAction(decision);
@@ -229,6 +230,7 @@ export function TasksView({ initialTaskId = null }: Props) {
         await decideApproval(selectedId, {
           decision,
           scope,
+          feedback,
           approvalId: block?.approvalId,
           toolCallId: block?.toolCallId,
           argumentsHash: block?.argumentsHash,

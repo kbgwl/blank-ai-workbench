@@ -1,6 +1,6 @@
 "use client";
 
-import type { KeyboardEvent } from "react";
+import { useState, type KeyboardEvent } from "react";
 import type { ApprovalGrant, ApprovalScope } from "./api";
 
 /**
@@ -17,7 +17,11 @@ type ApprovalOptionsProps = {
   /** 已经批过 / 拒过的卡：不再给选项，只留一句状态。 */
   decided?: boolean;
   onApprove: (scope: ApprovalScope) => void;
-  onDeny: () => void;
+  /**
+   * 驳回。带上用户写的那句话（可选）——它会被原样交给模型。
+   * 键盘路径（Esc / 数字键）永远不带：那时用户在按快捷键，不是在写理由。
+   */
+  onDeny: (feedback?: string) => void;
 };
 
 /**
@@ -30,6 +34,8 @@ type ApprovalOptionsProps = {
  * 点了这里（或 Tab 到它）就是要动手了，这时 1–N 才有意义。
  */
 export function ApprovalOptions({ grants, busy, decided = false, onApprove, onDeny }: ApprovalOptionsProps) {
+  // 驳回理由。放在组件内而不是上层：换一张卡就该清空，上一次的理由不该跟着跑到下一张。
+  const [note, setNote] = useState("");
   if (decided) {
     return <p className="font-mono text-[12px] text-faint">该请求已处理，不会重复执行。</p>;
   }
@@ -81,10 +87,22 @@ export function ApprovalOptions({ grants, busy, decided = false, onApprove, onDe
           </li>
         ))}
         <li>
+          {/* 驳回理由：默认空着，写了就跟驳回一起交回去。
+              "被驳回了"没有信息量，模型只能原样重试或换等价写法；
+              "先把测试方案补上"能省掉三四轮试错。 */}
+          <input
+            type="text"
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            onKeyDown={(event) => event.stopPropagation()}
+            placeholder="驳回理由（可选，会告诉 Agent 怎么改）"
+            maxLength={600}
+            className="mb-1 w-full rounded-md border border-line bg-surface px-2 py-1 text-[12px] text-text placeholder:text-faint focus:border-brand/40 focus:outline-none"
+          />
           <button
             type="button"
             disabled={busy}
-            onClick={onDeny}
+            onClick={() => onDeny(note.trim() || undefined)}
             className="flex w-full items-baseline gap-2 rounded-md px-2 py-1 text-left text-[13px] text-muted transition-colors hover:bg-surface-2 hover:text-text disabled:opacity-50"
           >
             <span className="w-2 shrink-0" />
