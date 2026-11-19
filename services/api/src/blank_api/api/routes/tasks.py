@@ -1171,7 +1171,11 @@ async def _record_notify_decision(task_id: str, status: str) -> None:
             title = str(task.title or "")
             goal = str(task.goal or "")
             detail = str(task.failure_reason or task.result_summary or "")
-            disturb = bool(decision["disturb"])
+            # 策略说要打扰 ≠ 可以主动发。只有"用户自己设的定时/触发器"或"他显式改了
+            # 通知策略"才允许推；默认的 approval_only 是产品兜底，不是用户的请求。
+            disturb = notify.may_push(
+                disturb=bool(decision["disturb"]), policy=policy, origin=origin
+            )
             # 「这一次是谁起的」——定时到点、工作区变了、还是人自己发的。
             # 桌面通知要靠它决定标题写「提醒：检查部署」还是「任务已完成」：
             # 同一句"任务完成"扣在定时提醒上，读起来就不像提醒了。
@@ -1181,7 +1185,14 @@ async def _record_notify_decision(task_id: str, status: str) -> None:
             await EventRecorder(get_session_factory(), task_id).add(
                 "notify.decided",
                 "finish",
-                {**decision, "status": status, "origin": origin},
+                {
+                    **decision,
+                    "status": status,
+                    "origin": origin,
+                    "would_disturb": bool(decision.get("disturb")),
+                    # 推送闸的结论单独记：事后能回答"策略说要发，为什么没发"。
+                    "allowed_to_push": bool(disturb),
+                },
             )
     except Exception:  # 通知判定是旁路，坏了也不能把任务的终态带走
         log.warning("记录通知判定失败 task=%s", task_id, exc_info=True)

@@ -208,3 +208,48 @@ async def test_snapshot_intent_wins_over_the_trigger(env, workspace, monkeypatch
     payload = await _decided(task_id)
 
     assert payload["origin"] == "execute"
+
+
+# ── 推送闸：只有"用户自己设的定时任务"才允许主动发 ────────────────────────
+def test_a_scheduled_task_may_push():
+    """用户 2026-11-20：做了定时任务、他有这个需求，那就发。"""
+    from blank_api.services.agent.notify import may_push
+
+    assert may_push(disturb=True, policy="approval_only", origin="cron") is True
+
+
+def test_a_manually_started_task_does_not_push_by_itself():
+    """没做定时发送的任务，不要自主发。
+
+    用户配了通道，意思是"我能从这里回话"，不等于"你可以主动找我"。
+    """
+    from blank_api.services.agent.notify import may_push
+
+    assert may_push(disturb=True, policy="approval_only", origin="") is False
+
+
+def test_an_explicit_policy_is_a_request():
+    """他自己把通知策略改成 always / milestone——那是明确要求，不是默认值。"""
+    from blank_api.services.agent.notify import may_push
+
+    assert may_push(disturb=True, policy="always", origin="") is True
+    assert may_push(disturb=True, policy="milestone", origin="") is True
+
+
+def test_quiet_hours_still_wins():
+    """免打扰比任何策略都硬：到点了也不发。"""
+    from blank_api.services.agent.notify import may_push
+
+    assert may_push(disturb=False, policy="always", origin="cron") is False
+
+
+def test_the_gate_is_recorded_as_a_fact():
+    """策略说要打扰、但闸没放行时，事后要能回答"为什么没发"。"""
+    import inspect
+
+    from blank_api.api.routes import tasks as tasks_module
+
+    source = inspect.getsource(tasks_module._record_notify_decision)
+
+    assert "allowed_to_push" in source
+    assert "would_disturb" in source

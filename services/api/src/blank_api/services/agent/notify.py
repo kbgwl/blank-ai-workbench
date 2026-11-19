@@ -59,6 +59,31 @@ def should_disturb(policy: str, event_kind: str, *, quiet_hours: bool = False) -
     return False
 
 
+def may_push(*, disturb: bool, policy: str, origin: str) -> bool:
+    """是否允许**主动**把消息发出去（不含"回到原来那个会话"的应答）。
+
+    用户 2026-11-20 的规则，一句话：
+
+    > 做了定时任务、用户有这个需求，那就发；没做定时发送的任务，不要自主发。
+
+    对应到代码里两条：
+
+    1. **定时/触发器起的任务**（`origin` 非空，说明有触发器行）→ 允许，这是用户自己
+       设的"到点告诉我"；
+    2. 用户把通知策略**显式**改成 always / milestone → 允许，这是他主动要的；
+    3. 其余（默认的 approval_only、silent、或者根本不认识的策略）→ **不发**。
+
+    为什么把默认的 `approval_only` 也算"不发"：它是产品的兜底默认值，不是用户的请求。
+    用户配了一个通道，意思是"我能从这里回话"，不等于"你可以主动找我"。
+    分不清"默认"和"要求"，正是主动推送让人反感的原因。
+    """
+    if not disturb:
+        return False
+    if str(origin or "").strip():
+        return True
+    return str(policy or "").strip().lower() in (NOTIFY_ALWAYS, NOTIFY_MILESTONE)
+
+
 def explain(policy: str, event_kind: str, *, quiet_hours: bool = False) -> dict:
     """给证据页看的判定结果：要不要打扰、为什么。"""
     disturb = should_disturb(policy, event_kind, quiet_hours=quiet_hours)
