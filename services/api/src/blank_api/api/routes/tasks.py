@@ -165,6 +165,24 @@ async def _resolve_provider(db: DbSession, task: Task, requested: str | None) ->
         if not provider.enabled:
             raise ApiError(code="provider_disabled", message="该模型供应商已停用", status_code=409)
         return provider
+    # 用户在设置里显式指定的默认供应商（settings.model.default_provider）。
+    #
+    # 没有它的时候，默认是「有 key 的第一个」——按名字排序决定。装了多家之后，
+    # 想换一家就得改排序或把别家停用，两种做法都会连带影响别的判断；而默认模型
+    # 恰恰是这条链路上影响结果最大的变量，不该由字符串序决定。
+    configured = str((SettingsStore().read().get("model") or {}).get("default_provider") or "").strip()
+    if configured:
+        provider = await db.get(ModelProvider, configured)
+        if provider is not None and provider.enabled:
+            return provider
+        # 指向不存在的供应商 / 已停用：不报 404 把任务挡死（那会让"设置写错"变成
+        # "什么都跑不了"），回落到下面的通用逻辑，但留一条日志说明为什么没照办。
+        log.warning(
+            "默认供应商 %s 不可用（%s），回落到「有 key 的第一个」 task=%s",
+            configured,
+            "不存在" if provider is None else "已停用",
+            task.id,
+        )
     # 默认模型优先挑「配了 key 的」：只按名字取第一个启用项，很容易挑到模板里预置但
     # 没填 key 的供应商，用户第一次发消息就是 401，还得自己猜是哪一环出的问题。
     # 全都没配 key 时退回第一个启用项，报错仍然来自供应商，不会凭空成功。

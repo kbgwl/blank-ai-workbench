@@ -95,6 +95,14 @@ DEFAULTS: dict[str, Any] = {
         # 工具超过一定数量后按需检索加载（tool_search）
         "search": True,
     },
+    "model": {
+        # 默认供应商 id。为空时按历史行为挑「有 key 的第一个」。
+        #
+        # 为什么需要显式指认：装了多家之后，"有 key 的第一个"是按名字排序决定的，
+        # 用户换一家就得改排序、或者把别家停用——两种做法都会连带影响别的判断。
+        # 而且默认模型是"这条链路上唯一的变量"里最影响结果的一个，它不该由字符串序决定。
+        "default_provider": "",
+    },
     # enter_worktree 新建工作树的基准引用（对齐 Claude 的 worktree.baseRef）：
     # fresh = 从 origin/<默认分支> 建；head = 从当前本地 HEAD 建。没有远端跟踪
     # 分支时一律回落本地 HEAD。
@@ -303,6 +311,7 @@ def normalize(raw: Any) -> dict[str, Any]:
     compaction = data.get("compaction") if isinstance(data.get("compaction"), dict) else {}
     permissions = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
     tools = data.get("tools") if isinstance(data.get("tools"), dict) else {}
+    model = data.get("model") if isinstance(data.get("model"), dict) else {}
     worktree = data.get("worktree") if isinstance(data.get("worktree"), dict) else {}
     sandbox = data.get("sandbox") if isinstance(data.get("sandbox"), dict) else {}
     safety = data.get("safety") if isinstance(data.get("safety"), dict) else {}
@@ -349,6 +358,12 @@ def normalize(raw: Any) -> dict[str, Any]:
     output_style = str(data.get("output_style") or "").strip()
     if not output_style or len(output_style) > 256:
         output_style = DEFAULTS["output_style"]
+    # 默认供应商 id：只做 trim 与长度限制。指向不存在的供应商时不在这里报错，
+    # 由选供应商那一步回落到「有 key 的第一个」——设置写坏不该让任务起不来，
+    # 但也不能悄悄换成别家而不留痕（回落处会写进 dispatch 快照）。
+    default_provider = str(model.get("default_provider") or "").strip()
+    if len(default_provider) > 64:
+        default_provider = ""
     # Claude 用驼峰 baseRef；两种写法都收，下划线写法优先。认不出的值回落 fresh
     # ——工作树从哪条线起，不能由一个拼错的词随机决定。
     base_ref = str(worktree.get("base_ref") or worktree.get("baseRef") or "").strip().lower()
@@ -398,6 +413,7 @@ def normalize(raw: Any) -> dict[str, Any]:
             )
         },
         "tools": {"search": _as_bool(tools.get("search"), DEFAULTS["tools"]["search"])},
+        "model": {"default_provider": default_provider},
         "worktree": {"base_ref": base_ref},
         "output_style": output_style,
         # 只收认得出布尔语义的值：手改文件时写成字符串 "on" 也认，写成一坨
