@@ -234,7 +234,7 @@ export function AgentRuntimePanel() {
               onChange={(event) =>
                 void apply({ guardian: { timeout_seconds: Number(event.target.value) } }, "超时已更新")
               }
-              className="w-20 rounded-md border border-line bg-surface px-2 py-1 text-right font-mono text-[13px] text-text outline-none"
+              className="field w-20 rounded-md px-2 py-1 text-right font-mono text-[13px] outline-none"
             />
             <span className="text-[12px] text-faint">秒</span>
           </div>
@@ -281,7 +281,7 @@ export function AgentRuntimePanel() {
               onChange={(event) =>
                 void apply({ compaction: { reserve_tokens: Number(event.target.value) } }, "预留已更新")
               }
-              className="w-24 rounded-md border border-line bg-surface px-2 py-1 text-right font-mono text-[13px] text-text outline-none"
+              className="field w-24 rounded-md px-2 py-1 text-right font-mono text-[13px] outline-none"
             />
             <span className="text-[12px] text-faint">tokens</span>
           </div>
@@ -370,7 +370,7 @@ export function AgentRuntimePanel() {
               onKeyDown={(event) => {
                 if (event.key === "Enter") saveQuietHours();
               }}
-              className="w-36 rounded-md border border-line bg-surface px-2 py-1 text-center font-mono text-[13px] text-text outline-none"
+              className="field w-36 rounded-md px-2 py-1 text-center font-mono text-[13px] outline-none"
             />
             <button
               type="button"

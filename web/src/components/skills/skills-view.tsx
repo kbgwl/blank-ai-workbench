@@ -270,13 +270,13 @@ export function SkillsView() {
                     onChange={(event) => setInstallSource(event.target.value)}
                     placeholder="地址（.md / .zip）或本机目录，例如 E:////skills////code-review"
                     aria-label="技能来源"
-                    className="min-w-[16rem] flex-1 rounded-md border border-line bg-surface px-2 py-1.5 font-mono text-[12px] text-text placeholder:text-faint focus:outline-none"
+                    className="field min-w-[16rem] flex-1 rounded-md px-2 py-1.5 font-mono text-[12px] focus:outline-none"
                   />
                   <select
                     value={installScope}
                     onChange={(event) => setInstallScope(event.target.value as "user" | "project")}
                     aria-label="安装范围"
-                    className="rounded-md border border-line bg-surface px-2 py-1.5 text-[12px] text-text focus:outline-none"
+                    className="field rounded-md px-2 py-1.5 text-[12px] focus:outline-none"
                   >
                     <option value="user">装到「我的」</option>
                     <option value="project">装到当前项目</option>

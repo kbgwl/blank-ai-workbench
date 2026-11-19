@@ -3,10 +3,14 @@
 import type { ReactNode, TextareaHTMLAttributes } from "react";
 import { statusMeta } from "./status";
 
+/**
+ * 任务页的多行输入。外观与 `Input` 共用 `.field`——
+ * 之前这里写 `bg-surface-2`（灰填充），和只读的事件块长得一样。
+ */
 export function Textarea({ className = "", ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
-      className={`w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 font-sans text-[14px] leading-relaxed text-text placeholder:text-faint focus:border-brand/60 focus:outline-none ${className}`}
+      className={`field w-full resize-y rounded-md px-3 py-2 font-sans text-[14px] leading-relaxed focus:outline-none ${className}`}
       {...props}
     />
   );

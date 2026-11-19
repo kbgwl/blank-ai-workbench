@@ -1297,7 +1297,7 @@ function QuestionBlock({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder={options.length > 0 ? "或者直接输入…" : "输入你的回答…"}
-          className="mt-2 w-full rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[13px] placeholder:text-faint focus:border-brand/60 focus:outline-none"
+          className="field mt-2 w-full rounded-md px-2.5 py-1.5 text-[13px] focus:outline-none"
         />
       )}
       {activePreview && (

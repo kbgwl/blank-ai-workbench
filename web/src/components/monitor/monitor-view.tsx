@@ -41,6 +41,10 @@ const STATUS_CLASS: Record<ReturnType<typeof statusTone>, string> = {
 };
 
 const REFRESH_MS = 5000;
+// 判定记录是最容易失控的一块：每发一句话就多一条，同一条目标的重复尝试会排出几十行。
+// 默认只摆最近 8 条，其余折起来——这一页要回答「它现在在盯什么」，
+// 不是「它至今判过多少条」，后者滚一屏也读不出结论。
+const RECENT_LIMIT = 8;
 const CONTROL_BUTTON =
   "shrink-0 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-[11px] text-muted transition-colors hover:text-text disabled:opacity-50";
 
@@ -68,6 +72,7 @@ export function MonitorView() {
   const [error, setError] = useState("");
   const [releasing, setReleasing] = useState("");
   const [controlling, setControlling] = useState("");
+  const [showAll, setShowAll] = useState(false);
   const alive = useRef(true);
 
   const load = useCallback(async () => {
@@ -139,12 +144,13 @@ export function MonitorView() {
   const ORDER: Record<string, number> = { running: 0, queued: 1, waiting_approval: 2, paused: 3, draft: 4 };
   const ordered = [...running].sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9));
   const drafts = ordered.filter((item) => item.status === "draft").length;
+  const shownWatching = showAll ? watching : watching.slice(0, RECENT_LIMIT);
 
   return (
     <PageBody>
       <PageHeader
         title="监控"
-        description="它现在在盯什么。监督者每收到一条消息都会判一次——要不要动手、要不要问、要不要接着上一轮。这里不做美化：等不到事件的待触发项、没接通的聊天软件，都照实写。"
+        description="它现在在盯什么。每收到一句话都会判一次：动不动手、要不要问、要不要接上一轮。这里不做美化——等不到事件的待触发项、没接通的聊天软件，都照实写。"
         actions={
           <>
             <span className="font-mono text-[11px] text-faint">
@@ -166,8 +172,14 @@ export function MonitorView() {
       )}
 
       <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Stat label="已判定" value={counts.watching} hint="最近这些消息各判成了什么" />
-        <Stat label="正在跑" value={counts.running} hint="后台还有多少条在动" />
+        <Stat label="已判定" value={counts.watching} hint="每收到一句话就判一次" />
+        <Stat
+          label="正在跑"
+          value={counts.running}
+          // 草稿建了没启动，不该算进「在跑」；但只显示 0 又会和下面「6 条未结束」打架，
+          // 所以把差额写在 hint 里，两个数字对得上。
+          hint={drafts > 0 ? `另有 ${drafts} 条草稿没启动` : "后台在动的条数"}
+        />
         <Stat label="等你处理" value={counts.waiting_approval} hint="卡在审批或已暂停" tone={counts.waiting_approval > 0 ? "warn" : undefined} />
         <Stat
           label="待触发"
@@ -178,15 +190,30 @@ export function MonitorView() {
       </div>
 
       <div className="space-y-3">
-        <Panel title="它把每句话判成了什么" hint={`每 ${REFRESH_MS / 1000} 秒自动刷`}>
+        <Panel
+          title="它把每句话判成了什么"
+          action={
+            watching.length > RECENT_LIMIT ? (
+              <button
+                type="button"
+                onClick={() => setShowAll((prev) => !prev)}
+                className="shrink-0 rounded border border-line bg-surface px-2 py-0.5 font-mono text-[11px] text-muted transition-colors hover:border-line-strong hover:text-text"
+              >
+                {showAll ? `收起 · 只看最近 ${RECENT_LIMIT} 条` : `展开全部 ${watching.length} 条`}
+              </button>
+            ) : (
+              <span className="font-mono text-[11px] text-faint">共 {watching.length} 条 · 每 {REFRESH_MS / 1000} 秒刷新</span>
+            )
+          }
+        >
           {!loaded && <p className="py-6 text-center font-mono text-[12px] text-faint">读取中…</p>}
           {loaded && watching.length === 0 && (
             <p className="py-6 text-center text-[13px] leading-relaxed text-faint">
               还没有判定记录。在对话页发一句话，它怎么判的会立刻出现在这里。
             </p>
           )}
-          <div className="space-y-1">
-            {watching.map((item) => (
+          <div className={`space-y-1 ${showAll ? "max-h-[60vh] overflow-y-auto pr-1" : ""}`}>
+            {shownWatching.map((item) => (
               <div
                 key={item.task_id}
                 className="flex items-start gap-2 rounded-md border border-line bg-surface px-2.5 py-2"
@@ -215,6 +242,11 @@ export function MonitorView() {
               </div>
             ))}
           </div>
+          {!showAll && watching.length > RECENT_LIMIT && (
+            <p className="mt-2 border-t border-line pt-2 text-center text-[11px] text-faint">
+              {`下面还有 ${watching.length - RECENT_LIMIT} 条更早的判定，点右上角展开`}
+            </p>
+          )}
         </Panel>
 
         <Panel

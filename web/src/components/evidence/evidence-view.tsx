@@ -108,7 +108,7 @@ export function EvidenceView() {
       />
 
       <div className="mb-4 flex items-center gap-2">
-        <div className="flex flex-1 items-center gap-1.5 rounded-lg border border-line-strong bg-surface px-2 py-1.5">
+        <div className="field flex flex-1 items-center gap-1.5 rounded-lg px-2 py-1.5">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="size-3.5 shrink-0 text-faint" aria-hidden>
             <path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM16.5 16.5 21 21" />
           </svg>

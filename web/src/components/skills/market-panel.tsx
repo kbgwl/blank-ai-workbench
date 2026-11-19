@@ -135,13 +135,13 @@ export function SkillMarketPanel({ onInstalled }: { onInstalled: () => void }) {
           }}
           placeholder="要做的事，例如：给 PDF 提取表格 / 写一个 Playwright 测试"
           aria-label="搜索技能或工具"
-          className="min-w-[17rem] flex-1 rounded-md border border-line bg-surface px-2 py-1.5 text-[12px] text-text placeholder:text-faint focus:outline-none"
+          className="field min-w-[17rem] flex-1 rounded-md px-2 py-1.5 text-[12px] focus:outline-none"
         />
         <select
           value={scope}
           onChange={(event) => setScope(event.target.value as "user" | "project")}
           aria-label="装到哪"
-          className="rounded-md border border-line bg-surface px-2 py-1.5 text-[12px] text-text focus:outline-none"
+          className="field rounded-md px-2 py-1.5 text-[12px] focus:outline-none"
         >
           <option value="user">装到「我的」</option>
           <option value="project">装到当前项目</option>
@@ -162,7 +162,7 @@ export function SkillMarketPanel({ onInstalled }: { onInstalled: () => void }) {
           value={source}
           onChange={(event) => setSource(event.target.value)}
           aria-label="市场来源"
-          className="rounded-md border border-line bg-surface px-2 py-1 text-[12px] text-text focus:outline-none"
+          className="field rounded-md px-2 py-1 text-[12px] focus:outline-none"
         >
           {sources.map((row) => (
             <option key={row.id} value={row.id}>

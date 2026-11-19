@@ -122,7 +122,7 @@ function ListEditor({
           onKeyDown={(event) => {
             if (event.key === "Enter") submit();
           }}
-          className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 font-mono text-[12px] text-text outline-none focus:border-brand/50"
+          className="field min-w-0 flex-1 rounded-md px-2 py-1 font-mono text-[12px] outline-none"
         />
         <button
           type="button"
@@ -369,7 +369,7 @@ export function SafetyPanel() {
                   onKeyDown={(event) => {
                     if (event.key === "Enter") event.currentTarget.blur();
                   }}
-                  className="w-20 rounded-md border border-line bg-surface px-2 py-1 text-right font-mono text-[13px] text-text outline-none focus:border-brand/50"
+                  className="field w-20 rounded-md px-2 py-1 text-right font-mono text-[13px] outline-none"
                 />
                 <span className="text-[12px] text-faint">秒</span>
               </div>

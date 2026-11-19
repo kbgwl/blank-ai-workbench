@@ -750,7 +750,9 @@ export function Workbench() {
           </div>
         </div>
 
-        <div className="shrink-0 border-t border-line bg-bg py-3">
+        {/* 输入区跟着画布走白底：用 bg-bg（窗口灰）会在白画布下方压出一条灰带，
+            看着像没铺满的脏边。分隔交给上面那条 border-t。 */}
+        <div className="shrink-0 border-t border-line bg-canvas py-3">
           <div className="mx-auto w-full max-w-[720px] px-6">
             <div className="rounded-lg border border-line-strong bg-surface p-2.5 shadow-sm focus-within:border-brand">
               <textarea

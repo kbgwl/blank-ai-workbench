@@ -9,7 +9,9 @@ const buttonBase =
 
 const buttonVariants: Record<ButtonVariant, string> = {
   primary: "bg-brand text-on-brand hover:bg-brand/85",
-  ghost: "bg-surface-2 text-muted ring-1 ring-line hover:text-text hover:ring-line-strong",
+  // 次级按钮用白底 + 描边（和输入框同一套边界语言）；
+  // 用灰填充时它和禁用态只差一个透明度，分不清哪个能点。
+  ghost: "bg-surface text-muted ring-1 ring-line hover:text-text hover:ring-line-strong",
   danger: "bg-danger/10 text-danger ring-1 ring-danger/30 hover:bg-danger/20",
 };
 
@@ -47,10 +49,16 @@ export function IconButton({
   );
 }
 
+/**
+ * 全站输入框。外观只在 `globals.css` 的 `.field` 里定义一次——
+ * 之前这里写 `bg-surface-2`（灰填充），和只读卡片长得一样，看起来像禁用；
+ * 各个面板又各自抄一遍 `bg-surface` / `rounded` / `py-1`，同一页能出现三种输入框。
+ * 尺寸留在这里（px/py/圆角），颜色和状态交给 `.field`。
+ */
 export function Input({ className = "", ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
-      className={`w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-[14px] text-text placeholder:text-faint focus:border-brand/60 focus:outline-none ${className}`}
+      className={`field w-full rounded-md px-3 py-1.5 text-[14px] focus:outline-none ${className}`}
       {...props}
     />
   );

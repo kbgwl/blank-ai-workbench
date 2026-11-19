@@ -78,6 +78,13 @@ export function CapChips({ caps }: { caps: Capabilities }) {
   );
 }
 
+/**
+ * 开关。
+ *
+ * 关：中性描边 + 灰点；开：品牌实色 + 白点。
+ * 旧版打开时用 `bg-brand/70`（半透明），在黑底上读出来是脏灰，"开"和"关"
+ * 在缩略图里几乎一样；实色 + 高对比滑块才是开关该有的读法。
+ */
 export function Toggle({
   checked,
   onChange,
@@ -96,16 +103,16 @@ export function Toggle({
       aria-checked={checked}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="flex items-center gap-2 text-[13px] text-muted transition-colors hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+      className="group flex items-center gap-2 text-[13px] text-muted transition-colors hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
     >
       <span
-        className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${
-          checked ? "bg-brand/70" : "bg-surface-2 ring-1 ring-line"
+        className={`relative h-[18px] w-8 shrink-0 rounded-full border transition-colors ${
+          checked ? "border-transparent bg-brand" : "border-line-strong bg-surface-2 group-hover:border-faint"
         }`}
       >
         <span
-          className={`absolute top-0.5 size-3 rounded-full transition-all ${
-            checked ? "left-3.5 bg-bg" : "left-0.5 bg-faint"
+          className={`absolute top-1/2 size-3.5 -translate-y-1/2 rounded-full shadow-[0_1px_2px_rgba(16,24,40,0.25)] transition-all ${
+            checked ? "left-[15px] bg-on-brand" : "left-[2px] bg-surface"
           }`}
         />
       </span>

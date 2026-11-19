@@ -231,7 +231,7 @@ function AddForm({
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
-            className="mt-1 w-full rounded border border-line bg-surface px-2 py-1 text-[13px] text-text"
+            className="field mt-1 w-full rounded-md px-2 py-1 text-[13px]"
           />
         </label>
         {visible.map((field) => (
@@ -242,7 +242,7 @@ function AddForm({
               value={values[field.key] ?? ""}
               placeholder={field.placeholder}
               onChange={(event) => setValues((prev) => ({ ...prev, [field.key]: event.target.value }))}
-              className="mt-1 w-full rounded border border-line bg-surface px-2 py-1 font-mono text-[12px] text-text"
+              className="field mt-1 w-full rounded-md px-2 py-1 font-mono text-[12px]"
             />
             {field.help && <span className="mt-0.5 block text-[11px] leading-relaxed text-faint">{field.help}</span>}
           </label>

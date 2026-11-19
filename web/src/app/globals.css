@@ -36,6 +36,13 @@
   --radius-md: 8px;
   --radius-lg: 12px;
 
+  /* 表单控件单独一档底色：
+     浅色皮肤用纯白 + 描边，才读得出「这里可以打字」；
+     跟着 surface-2 用灰填充时，输入框和只读卡片长得一样，会被当成禁用态。 */
+  --field-bg: #ffffff;
+  --field-line: #dcdcdc;
+  --field-line-hover: #c4c4c4;
+
   --accent: #15803d;
   --accent-dim: #166534;
   --accent-soft: #edf7f0;
@@ -77,6 +84,11 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 6px 20px -10px rgba(0, 0, 0, 0.6);
   --shadow-lg: 0 20px 52px -24px rgba(0, 0, 0, 0.7);
+
+  /* 深色下输入框比画布再暗一档（内凹），靠描边区分边界，不用灰填充。 */
+  --field-bg: #101012;
+  --field-line: #34343b;
+  --field-line-hover: #4a4a53;
 
   --accent: #3fb950;
   --accent-dim: #46954a;
@@ -165,6 +177,55 @@ optgroup {
   outline: 2px solid color-mix(in srgb, var(--brand-color) 50%, transparent);
   outline-offset: 1px;
 }
+
+/*
+ * 输入框的唯一外观（input / textarea / select 都挂这个类）。
+ *
+ * 三条状态必须互相分得开，否则用户判断不出哪个能用：
+ *   默认 —— 白底（深色皮肤是内凹暗底）+ 1px 描边；
+ *   悬停 —— 只加深描边，不动底色，避免整排在鼠标扫过时闪；
+ *   聚焦 —— 描边转品牌色 + 3px 同色淡环，环不占布局（box-shadow 不是 outline）。
+ * 禁用态才回到灰填充，这样「灰 = 不可编辑」这条读法在全站一致。
+ *
+ * 必须写成 `@utility`：写成普通 `.field { }` 选择器时，Turbopack 侧的 Tailwind
+ * 处理会把它当成未使用的自定义类整段删掉（编译产物里只剩变量、没有规则），
+ * 页面上表现为输入框完全没有边框和底色。改用官方自定义 utility 语法后才会保留。
+ */
+@utility field {
+  background-color: var(--field-bg);
+  border: 1px solid var(--field-line);
+  color: var(--text);
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+
+  &::placeholder {
+    color: var(--faint);
+  }
+  &:hover:not(:disabled):not(:focus) {
+    border-color: var(--field-line-hover);
+  }
+  &:focus,
+  &:focus-visible,
+  /* 搜索框这类「容器描边 + 内部 input 透明」的组合，焦点在内部元素上，
+     但视觉上要整块亮起来，所以容器也要认 focus-within。 */
+  &:focus-within {
+    outline: none;
+    border-color: color-mix(in srgb, var(--brand-color) 55%, var(--field-line));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-color) 12%, transparent);
+  }
+  &:disabled,
+  &[readonly] {
+    background-color: var(--surface-2);
+    border-color: var(--line);
+    color: var(--faint);
+    cursor: not-allowed;
+  }
+  /* 校验失败：红描边，仍保留聚焦时的环，两者叠在一起不打架。 */
+  &[aria-invalid="true"] {
+    border-color: color-mix(in srgb, var(--danger) 55%, var(--field-line));
+  }
+}
+
+
 
 ::-webkit-scrollbar { width: 12px; height: 12px; }
 ::-webkit-scrollbar-track { background: transparent; }

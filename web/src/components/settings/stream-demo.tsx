@@ -111,7 +111,7 @@ export function StreamDemo({ providers, onFinished }: Props) {
         aria-label="演示提示词"
         rows={2}
         spellCheck={false}
-        className="w-full resize-y rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13px] leading-relaxed text-text placeholder:text-faint focus:border-brand/60 focus:outline-none"
+        className="field w-full resize-y rounded-md px-3 py-2 text-[13px] leading-relaxed focus:outline-none"
         placeholder="输入一段发给模型的文本"
       />
 
