@@ -20,7 +20,10 @@ API = Path(__file__).resolve().parent.parent
 PY = API / ".venv" / "Scripts" / "python.exe"
 SHELL = API / "src" / "blank_api" / "services" / "tools" / "shell.py"
 
-TESTS = ["tests/test_shell_capture_cap_v419.py"]
+TESTS = [
+    "tests/test_shell_capture_cap_v419.py",
+    "tests/test_async_capture_cap_v420.py",
+]
 
 MUTATIONS = [
     (
@@ -48,6 +51,32 @@ MUTATIONS = [
         "            return {\n"
         '                "exit_code": None,',
         "test_a_timeout_still_hands_back_what_ran",
+    ),
+    (
+        "流式 sink 不设上限",
+        "        room = MAX_CAPTURE_BYTES - self._kept\n        if room <= 0:\n            return\n        piece = chunk[:room]",
+        "        room = len(chunk)\n        piece = chunk",
+        "test_the_stream_callback_sees_everything_while_memory_is_capped",
+    ),
+    (
+        "取消被写成超时",
+        "    return (not cancelled), cancelled",
+        "    return True, cancelled",
+        "test_cancel_is_not_reported_as_timeout",
+    ),
+    (
+        "异步路径不再报截断",
+        '            "timed_out": timed_out,\n'
+        '            "cancelled": cancelled,\n'
+        '            "stdout_bytes": out_total,\n'
+        '            "stderr_bytes": err_total,\n'
+        '            "stdout_truncated": out_total > MAX_CAPTURE_BYTES,',
+        '            "timed_out": timed_out,\n'
+        '            "cancelled": cancelled,\n'
+        '            "stdout_bytes": out_total,\n'
+        '            "stderr_bytes": err_total,\n'
+        '            "stdout_truncated": False,',
+        "test_a_huge_output_is_capped_but_totalled",
     ),
 ]
 

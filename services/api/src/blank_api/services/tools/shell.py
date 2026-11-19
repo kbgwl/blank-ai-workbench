@@ -260,7 +260,7 @@ def normalize_relative_executable(command: str | list[str], root: Path) -> str |
 
 async def _pump(
     reader: asyncio.StreamReader | None,
-    sink: list[bytes],
+    sink: "_CappedSink",
     on_chunk: Callable[[str, bytes], None],
     tag: str,
 ) -> None:
@@ -270,7 +270,7 @@ async def _pump(
         chunk = await reader.read(65_536)
         if not chunk:
             return
-        sink.append(chunk)
+        sink.feed(chunk)
         try:
             on_chunk(tag, chunk)
         except Exception:  # noqa: BLE001 - 输出落盘失败不该把命令本身打断
@@ -309,14 +309,42 @@ async def _end_process(process: asyncio.subprocess.Process) -> None:
         pass
 
 
+class _CappedSink:
+    """只留前 ``MAX_CAPTURE_BYTES`` 字节，但把原始总量记下来。
+
+    流式路径上完整输出已经由 ``on_chunk`` 写进日志/产物了，内存里再存一份等于把
+    "命令吐多少就占多少内存"这个风险复制一遍。这里既保住"前面这段要能交给模型"，
+    又说得清"还有多少没看到"。
+    """
+
+    __slots__ = ("_chunks", "_kept", "total")
+
+    def __init__(self) -> None:
+        self._chunks: list[bytes] = []
+        self._kept = 0
+        self.total = 0
+
+    def feed(self, chunk: bytes) -> None:
+        self.total += len(chunk)
+        room = MAX_CAPTURE_BYTES - self._kept
+        if room <= 0:
+            return
+        piece = chunk[:room]
+        self._chunks.append(piece)
+        self._kept += len(piece)
+
+    def value(self) -> bytes:
+        return b"".join(self._chunks)
+
+
 async def _stream_process(
     process: asyncio.subprocess.Process,
     timeout: float,
     on_chunk: Callable[[str, bytes], None],
-) -> tuple[bytes, bytes, bool]:
-    """边跑边把输出交给回调（后台命令写日志），结束时返回同一份完整输出。"""
-    out: list[bytes] = []
-    err: list[bytes] = []
+) -> tuple[bytes, bytes, bool, int, int]:
+    """边跑边把输出交给回调（后台命令写日志），结束时返回前一段与原始总量。"""
+    out = _CappedSink()
+    err = _CappedSink()
     readers = [
         asyncio.create_task(_pump(process.stdout, out, on_chunk, "stdout")),
         asyncio.create_task(_pump(process.stderr, err, on_chunk, "stderr")),
@@ -339,54 +367,45 @@ async def _stream_process(
         await _end_process(process)
         await asyncio.gather(*readers, return_exceptions=True)
         raise
-    return b"".join(out), b"".join(err), timed_out
+    return out.value(), err.value(), timed_out, out.total, err.total
 
 
-async def _communicate_or_cancel(
+async def _wait_or_cancel(
     process: asyncio.subprocess.Process,
     timeout: float,
-    cancel_event: asyncio.Event,
-) -> tuple[bytes, bytes, bool, bool]:
-    """等命令结束；用户按了停止就立刻杀掉整棵进程树。
+    cancel_event: asyncio.Event | None,
+) -> tuple[bool, bool]:
+    """等命令结束；用户按了停止就立刻杀掉整棵进程树。返回 ``(timed_out, cancelled)``。
 
-    只有前台 `run_shell` 会把 ``cancel_event`` 传进来：读文件、写补丁都是毫秒级，
-    为它们各加一条竞速路径只会让取消逻辑更难推理。真正会长时间占住一条协程的
-    只有命令。
-
-    返回 ``(stdout, stderr, timed_out, cancelled)``。取消与超时必须分开报：
-    超时是"这条命令有问题"，取消是"用户改主意了"——把前者写成后者，模型会以为
-    用户否掉了这个方案，于是换一个更保守的做法。
+    只说"结束没结束"，输出从临时文件读——`communicate()` 会先把命令吐的全读进内存，
+    那正是这一版要断掉的形状。取消与超时必须分开报：超时是"这条命令有问题"，
+    取消是"用户改主意了"；把前者写成后者，模型会以为用户否掉了这个方案。
     """
-    comm = asyncio.ensure_future(process.communicate())
-    stopper = asyncio.ensure_future(cancel_event.wait())
+    waiter = asyncio.ensure_future(process.wait())
+    stopper = asyncio.ensure_future(cancel_event.wait()) if cancel_event is not None else None
+    pending = {waiter, stopper} if stopper is not None else {waiter}
     try:
         done, _pending = await asyncio.wait(
-            {comm, stopper}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            pending, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
         )
     except asyncio.CancelledError:
         # 外层把这条协程掐了（任务收尾、请求断开）：进程得跟着走，不能留在那儿写文件。
         await _end_process(process)
-        comm.cancel()
-        stopper.cancel()
+        waiter.cancel()
+        if stopper is not None:
+            stopper.cancel()
         raise
-    timed_out = False
-    cancelled = False
-    if comm in done:
-        stopper.cancel()
-        try:
-            return (*comm.result(), False, False)
-        except Exception:  # noqa: BLE001 - 收进程残留输出失败不该把结果变成异常
-            return b"", b"", False, False
-    if stopper in done:
-        cancelled = True
-    else:
-        timed_out = True
+    if waiter in done:
+        if stopper is not None:
+            stopper.cancel()
+        return False, False
+    cancelled = stopper is not None and stopper in done
     await _end_process(process)
     try:
-        out, err = await asyncio.wait_for(comm, 5)
-    except Exception:  # noqa: BLE001 - 已经杀掉了，拿不到输出就是空
-        out, err = b"", b""
-    return out, err, timed_out, cancelled
+        await asyncio.wait_for(waiter, 5)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        waiter.cancel()
+    return (not cancelled), cancelled
 
 
 async def run_process(
@@ -401,64 +420,59 @@ async def run_process(
     # 命令首段是工作区里的相对可执行文件时要先补成绝对路径（见函数注释）。
     # 放在这里而不是各个工具里：run_shell 与 run_tests、宿主直连与沙箱执行都经过它。
     command = normalize_relative_executable(command, root)
+    streaming = on_chunk is not None
+    out, err = _capture_files()
     kwargs = {
         "cwd": str(root),
-        "stdout": asyncio.subprocess.PIPE,
-        "stderr": asyncio.subprocess.PIPE,
+        # 流式路径必须走管道（回调要边跑边收）；其余两条写临时文件——
+        # 管道意味着"命令吐多少，进程里就存多少"，文件意味着只跟上限有关。
+        "stdout": asyncio.subprocess.PIPE if streaming else out,
+        "stderr": asyncio.subprocess.PIPE if streaming else err,
         "env": env or build_env(),
     }
     try:
-        if shell:
-            process = await asyncio.create_subprocess_shell(command, **kwargs)  # type: ignore[arg-type]
-        else:
-            process = await asyncio.create_subprocess_exec(*command, **kwargs)  # type: ignore[misc]
-    except NotImplementedError:
-        # Selector 事件循环（Windows 上 uvicorn --reload 的子进程）不支持 asyncio 子进程，退回线程执行。
-        return await asyncio.to_thread(_run_blocking, command, root, timeout, shell, env)
-    if on_chunk is not None:
-        stdout, stderr, timed_out = await _stream_process(process, timeout, on_chunk)
+        try:
+            if shell:
+                process = await asyncio.create_subprocess_shell(command, **kwargs)  # type: ignore[arg-type]
+            else:
+                process = await asyncio.create_subprocess_exec(*command, **kwargs)  # type: ignore[misc]
+        except NotImplementedError:
+            # Selector 事件循环（Windows 上 uvicorn --reload 的子进程）不支持 asyncio 子进程，退回线程执行。
+            return await asyncio.to_thread(_run_blocking, command, root, timeout, shell, env)
+
+        if streaming:
+            stdout, stderr, timed_out, out_total, err_total = await _stream_process(
+                process, timeout, on_chunk
+            )
+            return {
+                "exit_code": process.returncode,
+                "stdout": _decode_capped(stdout, out_total > MAX_CAPTURE_BYTES),
+                "stderr": _decode_capped(stderr, err_total > MAX_CAPTURE_BYTES),
+                "timed_out": timed_out,
+                # 后台命令不参与取消竞速（它由 task_stop 管），但键要在：
+                # 调用方只该问"是不是被中断了"，不该先问"这个字段有没有"。
+                "cancelled": False,
+                "stdout_bytes": out_total,
+                "stderr_bytes": err_total,
+                "stdout_truncated": out_total > MAX_CAPTURE_BYTES,
+            }
+
+        timed_out, cancelled = await _wait_or_cancel(process, timeout, cancel_event)
+        stdout, out_total = _read_capture(out)
+        stderr, err_total = _read_capture(err)
         return {
             "exit_code": process.returncode,
-            "stdout": _decode(stdout),
-            "stderr": _decode(stderr),
-            "timed_out": timed_out,
-            # 后台命令不参与取消竞速（它由 task_stop 管），但键要在：
-            # 调用方只该问"是不是被中断了"，不该先问"这个字段有没有"。
-            "cancelled": False,
-        }
-    timed_out = False
-    cancelled = False
-    if cancel_event is not None and on_chunk is None:
-        stdout, stderr, timed_out, cancelled = await _communicate_or_cancel(
-            process, timeout, cancel_event
-        )
-        return {
-            "exit_code": process.returncode,
-            "stdout": _decode(stdout),
-            "stderr": _decode(stderr),
+            "stdout": stdout,
+            "stderr": stderr,
             "timed_out": timed_out,
             "cancelled": cancelled,
+            "stdout_bytes": out_total,
+            "stderr_bytes": err_total,
+            "stdout_truncated": out_total > MAX_CAPTURE_BYTES,
         }
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
-    except asyncio.TimeoutError:
-        timed_out = True
-        try:
-            process.terminate()
-            stdout, stderr = await asyncio.wait_for(process.communicate(), 5)
-        except (asyncio.TimeoutError, ProcessLookupError):
-            process.kill()
-            try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), 5)
-            except (asyncio.TimeoutError, ProcessLookupError):
-                stdout, stderr = b"", b""
-    return {
-        "exit_code": process.returncode,
-        "stdout": _decode(stdout),
-        "stderr": _decode(stderr),
-        "timed_out": timed_out,
-        "cancelled": False,
-    }
+    finally:
+        out.close()
+        err.close()
 
 
 def mask_output(text: str, root: Path) -> str:
