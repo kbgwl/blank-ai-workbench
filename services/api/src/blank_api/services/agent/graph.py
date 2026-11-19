@@ -43,6 +43,11 @@ from blank_api.services.agent import workflow as workflow_module
 from blank_api.services.agent.live import OutputRelay
 from blank_api.services.agent.progress import ProgressSentinel
 from blank_api.services.agent.restart import build_restart_messages, should_restart, summarize_changed
+from blank_api.services.agent.verify_hook import (
+    check_command,
+    failure_note,
+    should_check,
+)
 from blank_api.services.agent.stall import StallBreaker, signature as _stall_signature
 from blank_api.services.agent.intent import (
     ADVISE_INSTRUCTION,
@@ -790,6 +795,11 @@ class AgentSession:
     # 不看这两个，1M 窗口上的百分比水位等于没有水位（永远到不了 820K）。
     # 最近一次工具失败的原文：重置后交接单要把「卡在哪」带过去。
     last_error_text: str = ""
+    # 改完自动校验的节流：改了几次、隔了几步。没配命令时这两格不参与任何判断。
+    edits_since_check: int = 0
+    steps_since_check: int = 0
+    # 校验命令的超时：默认 60 秒。它跑在每一步之前，跑太久等于卡住主循环。
+    post_edit_check_timeout: float = 60.0
     steps_since_compact: int = 0
     last_activity_at: float = 0.0
     # 已经被记录过的问题调用：节点会因中断被重放，不记账就会重复写 question.* 事件。
@@ -1369,6 +1379,53 @@ class AgentSession:
         )
         return True
 
+    async def _maybe_post_edit_check(self, node: str, step: int, changed_this_step: bool) -> None:
+        """改完自动校验：成功沉默，失败把原文塞进这一次调用。
+
+        节流在 `verify_hook.should_check` 里：改够次数、隔够步数才跑，
+        否则一次重构会把测试跑成刷屏。没有配置命令时整段是空转（零成本）。
+        """
+        command = check_command()
+        if not should_check(
+            command=command,
+            edits_since_check=self.edits_since_check,
+            steps_since_check=self.steps_since_check,
+            changed_in_this_step=changed_this_step,
+        ):
+            self.steps_since_check += 1
+            return
+        self.edits_since_check = 0
+        self.steps_since_check = 0
+        from blank_api.services.tools.shell import execute_command
+
+        try:
+            result = await execute_command(
+                command,
+                self.context.root,
+                float(self.post_edit_check_timeout),
+                shell=True,
+                safety=getattr(self.context, "safety", None),
+                tier=str(getattr(self.context, "sandbox_tier", "") or ""),
+            )
+        except Exception as error:  # 校验本身起不来，不能反过来把任务打断
+            await self.recorder.add(
+                "verify.skipped", node, {"command": command, "reason": str(error)[:200]}
+            )
+            return
+        exit_code = int(result.get("exit_code") or 0)
+        if exit_code == 0:
+            # 成功什么都不说：安静的那一半才是这机制能长期开着的原因。
+            await self.recorder.add("verify.passed", node, {"command": command, "step": step})
+            return
+        output = str(result.get("stdout") or "") + str(result.get("stderr") or "")
+        note = failure_note(command, exit_code, output)
+        self.hook_context.append({"event": "verify.failed", "tool": "", "text": note})
+        await self.recorder.add(
+            "verify.failed",
+            node,
+            {"command": command, "exit_code": exit_code, "tail": output[-600:]},
+        )
+
     async def call_model(self, messages: list[dict], node: str, *, step: int = 0) -> tuple[Any, dict]:
         role = role_for_node(node)
         adapter = self.role_adapters.get(role, self.adapter)
@@ -1379,6 +1436,8 @@ class AgentSession:
             # 选中的供应商其实不支持工具调用，退回默认模型。档位也要一起退：
             # 它是「给这个模型看多少工具」的依据，模型换了依据就失效了。
             adapter, tier = self.adapter, ""
+        # 改完自动校验：跑完再说别的。失败原文会进这一次调用的 hook_context。
+        await self._maybe_post_edit_check(node, step, changed_this_step=self.edits_since_check > 0)
         # 治理快照必须在真正调用之前落下：这一步可能失败、可能被中断，
         # 而「当时是哪个模型、哪套审批与沙箱策略在管」恰恰是失败之后最该能看到的东西。
         await self.emit_governance(node, step, adapter, tier)
@@ -3140,6 +3199,10 @@ def _fork_history(messages: list[dict]) -> list[dict]:
 
 # 溢出结果的落盘目录。放在 .blank 下：它是运行时证据，不进仓库，也不占交付目录。
 OVERFLOW_DIR = ".blank/tool-results"
+# 会改变工作区内容的工具：只有它们成功之后才谈得上"改完校验"。
+MUTATING_TOOL_NAMES = frozenset(
+    {"apply_patch", "edit_file", "write_file", "notebook_edit", "create_file", "delete_file", "move_file"}
+)
 OVERFLOW_KEEP = 60
 
 
@@ -3207,6 +3270,10 @@ def _append_tool_response(
             image = None
         payload = body
     sentinel = getattr(session, "progress", None) if session is not None else None
+    if session is not None and isinstance(payload, dict) and payload.get("ok") and name in MUTATING_TOOL_NAMES:
+        # 改成功一次记一笔，由调用方在下一步决定要不要跑校验（这里只记账，
+        # 不在这里跑命令：这条函数是纯装配，不能有副作用）。
+        session.edits_since_check += 1
     if session is not None and not (payload.get("ok") if isinstance(payload, dict) else True):
         message = str(payload.get("message") or payload.get("output") or "").strip()
         if message:
