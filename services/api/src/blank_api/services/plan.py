@@ -62,6 +62,36 @@ def _norm_text(value: str) -> str:
 # --------------------------------------------------------------------------- 目标
 
 
+# 可执行的判据类型。只认这三种，全部能由 verifier 只读事实核对：
+#   path_exists   文件/目录在不在
+#   file_contains 文件里有没有那段文字
+#   command       本轮有没有跑过这条命令且退出码为 0
+# 刻意不收 http / db 这类：verifier 是纯函数，不能发请求、不能连库。
+CHECK_TYPES = ("path_exists", "file_contains", "command")
+
+
+def _clean_check(check: object) -> dict:
+    """把一条 check 洗成已知形状；认不出就返回空字典（= 这条没有可执行判据）。"""
+    if not isinstance(check, dict):
+        return {}
+    kind = str(check.get("type") or "").strip().lower()
+    if kind not in CHECK_TYPES:
+        return {}
+    if kind == "command":
+        cmd = str(check.get("cmd") or check.get("command") or "").strip()
+        return {"type": "command", "cmd": cmd[:MAX_STEP_CHARS]} if cmd else {}
+    path = str(check.get("path") or "").strip()
+    if not path:
+        return {}
+    body = {"type": kind, "path": path[:MAX_STEP_CHARS]}
+    if kind == "file_contains":
+        text = str(check.get("text") or "").strip()
+        if not text:
+            return {}
+        body["text"] = text[:MAX_STEP_CHARS]
+    return body
+
+
 def normalize_goal(raw: object, *, fallback: str = "") -> dict:
     """把目标归一化成 ``{objective, done_when, constraints, out_of_scope}``。
 
@@ -88,6 +118,40 @@ def normalize_goal(raw: object, *, fallback: str = "") -> dict:
             "out_of_scope": [],
         }
 
+    def _done(*keys: str) -> tuple[list[str], list[dict]]:
+        """解析完成判据：每一项可以是字符串，也可以是 `{text, check}`。
+
+        为什么要 check：`done_when` 现在只是给人看的一句话，verifier 只用它判
+        "有没有交付文本"。写成可执行的检查（文件在不在、内容有没有、命令退出码）
+        才能逐条回答"哪条判据没过"——这是 opencode / DSH 都没做到的一件事。
+
+        兼容：字符串照旧进 done_when；带 check 的额外进 done_checks（同索引）。
+        认不出的 check 类型**保留文本、丢掉 check**，不报错——一条判据写错不该
+        让整个目标起不来。
+        """
+        for key in keys:
+            value = raw.get(key)
+            if not value:
+                continue
+            items = [value] if isinstance(value, str) else value
+            if not isinstance(items, list):
+                continue
+            texts: list[str] = []
+            checks: list[dict] = []
+            for item in items[:10]:
+                if isinstance(item, dict):
+                    text = str(item.get("text") or item.get("criterion") or "").strip()
+                    check = item.get("check")
+                    if not text and not check:
+                        continue
+                    texts.append(_clip(text, MAX_STEP_CHARS))
+                    checks.append(_clean_check(check))
+                else:
+                    texts.append(_clip(item, MAX_STEP_CHARS))
+                    checks.append({})
+            return [t for t in texts if t], checks
+        return [], []
+
     def _list(*keys: str) -> list[str]:
         for key in keys:
             value = raw.get(key)
@@ -101,9 +165,11 @@ def normalize_goal(raw: object, *, fallback: str = "") -> dict:
     objective = _clip(
         raw.get("objective") or raw.get("goal") or raw.get("summary"), 1000
     )
+    done_when, done_checks = _done("done_when", "doneWhen", "acceptance", "definition_of_done")
     return {
         "objective": objective or _clip(fallback, 1000),
-        "done_when": _list("done_when", "doneWhen", "acceptance", "definition_of_done"),
+        "done_when": done_when,
+        "done_checks": done_checks,
         "constraints": _list("constraints", "limits", "rules"),
         "out_of_scope": _list("out_of_scope", "outOfScope", "non_goals", "excluded"),
     }

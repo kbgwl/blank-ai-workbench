@@ -12,6 +12,7 @@ v0.9.1 实测里「已批准但显示失败」正是把环境问题和代码问�
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Iterable
 
 CHECKS = (
@@ -167,6 +168,74 @@ def _broke_test_config(
     )
 
 
+def _ran_command(rows: list[dict[str, Any]], wanted: str) -> tuple[str, str]:
+    """本轮有没有跑过这条命令，结果如何。返回 (status, 证据)。
+
+    只认**退出码为 0 且真的跑过**的那次：跑过但非零是 failed，没跑是 unknown。
+    这两种绝不能混——"没跑"是没拿到结论，"跑了没过"是拿到了结论。
+    """
+    target = " ".join(str(wanted or "").split())
+    if not target:
+        return "unknown", "判据里没有写命令"
+    for row in rows:
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        text = " ".join(str(data.get("command") or "").split())
+        if not text or text != target:
+            continue
+        code = data.get("exit_code")
+        if not isinstance(code, int) or isinstance(code, bool):
+            return "unknown", f"跑过 {text}，但退出码未知"
+        return ("passed" if code == 0 else "failed"), f"{text} 退出码 {code}"
+    return "unknown", f"本轮没跑过 {target}"
+
+
+def _run_done_checks(
+    done_when: list[str], checks: list[Any], rows: list[dict[str, Any]], root: Any
+) -> list[dict[str, Any]]:
+    """逐条核对完成判据。没有可执行检查的条目记 `unverifiable`，不算失败。
+
+    这是"什么算完成"第一次由**事实**回答，而不是由模型的交付文本回答。
+    但第一版刻意**不设 blocking**：判据是模型自己写的，写歪了不该让一个好交付判死；
+    先把"哪条过了、哪条没过"摆出来，跑几天看准了再考虑升级成拦。
+    """
+    out: list[dict[str, Any]] = []
+    base = Path(root) if root else None
+    for index, text in enumerate(done_when):
+        check = checks[index] if index < len(checks) and isinstance(checks[index], dict) else {}
+        kind = str(check.get("type") or "")
+        if not kind:
+            out.append({"text": text, "status": "unverifiable", "evidence": "这条没有可执行判据"})
+            continue
+        if kind == "command":
+            status, evidence = _ran_command(rows, str(check.get("cmd") or ""))
+            out.append({"text": text, "status": status, "evidence": evidence})
+            continue
+        if base is None:
+            out.append({"text": text, "status": "unknown", "evidence": "拿不到工作区根目录"})
+            continue
+        rel = str(check.get("path") or "").strip().lstrip("./")
+        target = base / rel
+        try:
+            if not target.exists():
+                out.append({"text": text, "status": "failed", "evidence": f"{rel} 不存在"})
+                continue
+            if kind == "path_exists":
+                out.append({"text": text, "status": "passed", "evidence": f"{rel} 存在"})
+                continue
+            # file_contains：只在文本文件上做，读不动就 unknown（二进制/编码问题不是"没写对"）
+            body = target.read_text(encoding="utf-8", errors="strict")
+            needle = str(check.get("text") or "")
+            if needle and needle in body:
+                out.append({"text": text, "status": "passed", "evidence": f"{rel} 含「{needle}」"})
+            else:
+                out.append({"text": text, "status": "failed", "evidence": f"{rel} 不含「{needle}」"})
+        except OSError as error:
+            out.append({"text": text, "status": "unknown", "evidence": f"{rel} 读不了：{error.__class__.__name__}"})
+        except UnicodeDecodeError:
+            out.append({"text": text, "status": "unknown", "evidence": f"{rel} 不是文本文件"})
+    return out
+
+
 def verify(
     *,
     goal_spec: dict[str, Any] | None = None,
@@ -180,6 +249,9 @@ def verify(
     readonly: bool = False,
     direct_answer: bool = False,
     budget_exhausted: bool = False,
+    # 工作区根目录：核对 path_exists / file_contains 要读磁盘。传 None 时这类判据记 unknown，
+    # 不判失败——拿不到目录是"没验成"，不是"没做到"。
+    root: Any = None,
 ) -> dict[str, Any]:
     """产出 v165 §6.2 顺序的最终 verdict。
 
@@ -312,6 +384,18 @@ def verify(
     if budget_exhausted:
         findings.append("预算耗尽，目标只完成到当前轮")
 
+    # ⑩ 逐条核对 done_when（有可执行判据的那几条）。
+    # 这里只摆事实、不改 verdict：判据是模型写的，写歪了不该把好交付判死。
+    done_results = _run_done_checks(
+        done_when, list((goal_spec or {}).get("done_checks") or []), rows, root
+    )
+    checked = [item for item in done_results if item["status"] in ("passed", "failed")]
+    if checked:
+        failed_items = [item for item in checked if item["status"] == "failed"]
+        checks["done_when"] = not failed_items
+        for item in failed_items:
+            findings.append(f"判据没过：{item['text']}（{item['evidence']}）")
+
     verdict = "failed" if blocking else ("incomplete" if findings else "passed")
     return {
         "verdict": verdict,
@@ -320,6 +404,7 @@ def verify(
         "checks": checks,
         "findings": findings[:12],
         "evidence": {
+            "done_when": done_results,
             "changed_paths": paths[:20],
             "changed_count": len(paths),
             "tool_results": len(rows),

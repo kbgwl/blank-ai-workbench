@@ -309,8 +309,38 @@ def plan_tools() -> list[ToolDefinition]:
                     "objective": {"type": "string", "description": "一句话说清要达成什么"},
                     "done_when": {
                         "type": "array",
-                        "items": {"type": "string"},
-                        "description": "可判定的完成标准，最好是能跑命令验证的",
+                        # 两种写法都收：一句话（给人看），或 {text, check}（能自动核对）。
+                        # check 只认三种，全部由验收器只读事实核对：文件在不在、
+                        # 文件里有没有那段字、某条命令这轮跑过且退出码为 0。
+                        "items": {
+                            "anyOf": [
+                                {"type": "string"},
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "text": {"type": "string", "description": "这条判据说的是什么"},
+                                        "check": {
+                                            "type": "object",
+                                            "properties": {
+                                                "type": {
+                                                    "type": "string",
+                                                    "enum": ["path_exists", "file_contains", "command"],
+                                                },
+                                                "path": {"type": "string", "description": "工作区相对路径"},
+                                                "text": {"type": "string", "description": "file_contains 要找的文字"},
+                                                "cmd": {"type": "string", "description": "command 要跑的命令，需与本轮实际执行的完全一致"},
+                                            },
+                                            "required": ["type"],
+                                        },
+                                    },
+                                    "required": ["text"],
+                                },
+                            ]
+                        },
+                        "description": (
+                            "可判定的完成标准。能写成可执行检查的就写成对象，验收时会逐条核对并告诉你"
+                            "哪条没过；写不成检查的（比如「体验好」）就用字符串，验收时标为无法自动核对。"
+                        ),
                     },
                     "constraints": {
                         "type": "array",

@@ -1702,6 +1702,8 @@ class AgentRuntime:
             readonly=bool(result.get("readonly")),
             direct_answer=bool(result.get("direct_answer")),
             budget_exhausted=bool(result.get("budget_exhausted")),
+            # 判据里的 path_exists / file_contains 要读磁盘；拿不到就不判（记 unknown）。
+            root=getattr(scope.session.context, "root", None),
         )
         await scope.recorder.add(
             "verification.verdict",
