@@ -222,6 +222,10 @@ export function StepView({ step }: { step: BotStep }) {
       }`}
     >
       {step.text}
+      {/* 同一句话被提交了多次：说一遍、标次数，不要让它占两行。 */}
+      {step.repeat && step.repeat > 1 && (
+        <span className="ml-1.5 font-mono text-[11px] text-faint">×{step.repeat}</span>
+      )}
     </p>
   );
 }

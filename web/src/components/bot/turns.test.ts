@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   buildSteps,
+  collapseRepeatedNotes,
   composerAction,
   dayBucket,
   dispatchAutoStart,
@@ -378,4 +379,25 @@ test("两条插话按先后各自配对", () => {
   assert.equal(steps.length, 2);
   assert.match((steps[0] as Extract<BotStep, { kind: "note" }>).text, /第一句/);
   assert.match((steps[1] as Extract<BotStep, { kind: "note" }>).text, /第二句/);
+});
+
+test("同一句话被提交两次：只显示一条，标出次数", () => {
+  // 连按两次回车曾经会真的发两次（draft 异步清空），后端各记一条，
+  // 界面上就是两段逐字相同的话，看着像它在复读。
+  const steps = buildSteps([
+    ev(1, "steer.queued", { message: "换一条命令" }),
+    ev(2, "steer.queued", { message: "换一条命令" }),
+  ]);
+  const collapsed = collapseRepeatedNotes(steps);
+  assert.equal(collapsed.length, 1);
+  assert.equal((collapsed[0] as Extract<BotStep, { kind: "note" }>).repeat, 2);
+});
+
+test("中间隔着别的步骤，同样的话算「又说了一遍」而不是重复", () => {
+  const steps = buildSteps([
+    ev(1, "steer.queued", { message: "继续" }),
+    ev(2, "tool.requested", { tool: "read_file", arguments: { path: "a.ts" } }),
+    ev(3, "steer.queued", { message: "继续" }),
+  ]);
+  assert.equal(collapseRepeatedNotes(steps).length, 3);
 });

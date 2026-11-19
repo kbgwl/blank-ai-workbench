@@ -57,3 +57,28 @@ test("未知状态回落而不是显示原始英文键", () => {
   assert.equal(goalStatusLabel("bogus"), "");
   assert.equal(goalStatusLabel("repairing"), "修复中");
 });
+
+test("后台那一格说标题，不说数量——「后台 4 个任务」看不出是哪一个", () => {
+  const bg = statusBarChips(
+    base({ backgroundCount: 3, backgroundLabel: "雷罡", backgroundStatus: "running" }),
+  ).find((item) => item.key === "background");
+  assert.equal(bg?.value, "3 个 · 雷罡");
+  // 在跑就是普通信息，不给颜色。
+  assert.equal(bg?.tone, "plain");
+});
+
+test("后台任务卡在审批上时变成警示色，但不再抢一句「等你批准」", () => {
+  const bg = statusBarChips(
+    base({ backgroundCount: 1, backgroundLabel: "雷罡", backgroundStatus: "waiting_approval" }),
+  ).find((item) => item.key === "background");
+  // 同一行两个「等你批准」会让人不知道该点哪个：状态由颜色说，文字只说哪一条。
+  assert.equal(bg?.value, "雷罡");
+  assert.equal(bg?.tone, "warn");
+});
+
+test("没有标题时退回数量说法：状态条不能变成一格空白", () => {
+  const bg = statusBarChips(base({ backgroundCount: 2, backgroundLabel: "", backgroundStatus: "" })).find(
+    (item) => item.key === "background",
+  );
+  assert.equal(bg?.value, "2 个任务");
+});

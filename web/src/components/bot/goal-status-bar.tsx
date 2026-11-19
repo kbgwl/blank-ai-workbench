@@ -8,6 +8,10 @@
  *
  * 新对话、没有目标、服务正常 → 整条不渲染。多一行常驻状态栏，
  * 换来的只是「这行是什么」的疑问。
+ *
+ * 一行放完「这一轮在做什么」和「别的任务卡在哪」：原来后台任务是条独立的
+ * 橙色横幅，挂在状态条下面，两条都在说审批、都是整行——一屏里两条告示互相
+ * 抢注意力，看着就乱。后台任务现在是这一行右边的一格，点它就过去。
  */
 
 import { statusBarChips, statusBarVisible, type GoalStatusBarData, type StatusChip } from "./goal-status";
@@ -20,20 +24,70 @@ const TONE_CLASS: Record<StatusChip["tone"], string> = {
   muted: "bg-surface-2 text-faint",
 };
 
-export function GoalStatusBar({ data }: { data: GoalStatusBarData }) {
+type Props = {
+  data: GoalStatusBarData;
+  /** 后台任务有会话时：点了回那条会话。 */
+  onBackground?: () => void;
+  /** 后台任务没有会话时：直接给任务详情的地址。 */
+  backgroundHref?: string;
+  backgroundTitle?: string;
+};
+
+export function GoalStatusBar({ data, onBackground, backgroundHref, backgroundTitle }: Props) {
   if (!statusBarVisible(data)) return null;
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-line px-4 py-1.5 text-[11px]">
-      {statusBarChips(data).map((chip) => (
-        <span
-          key={chip.key}
-          title={chip.key === "goal" ? data.goal : `${chip.label}：${chip.value}`}
-          className={`inline-flex max-w-[min(42vw,320px)] items-center gap-1 rounded-full px-2 py-0.5 ${TONE_CLASS[chip.tone]}`}
-        >
-          <span className="shrink-0 opacity-70">{chip.label}</span>
-          <span className="truncate font-medium">{chip.value}</span>
-        </span>
-      ))}
+    <div className="flex shrink-0 items-center gap-1.5 border-b border-line px-3 py-1.5 text-[11px]">
+      {statusBarChips(data).map((chip) => {
+        const className = `inline-flex min-w-0 items-center gap-1 rounded-full px-2 py-0.5 ${TONE_CLASS[chip.tone]}`;
+        const body = (
+          <>
+            <span className="shrink-0 opacity-70">{chip.label}</span>
+            <span className="truncate font-medium">{chip.value}</span>
+          </>
+        );
+
+        if (chip.key === "goal") {
+          return (
+            <span key={chip.key} title={data.goal} className={`${className} flex-1`}>
+              {body}
+            </span>
+          );
+        }
+
+        // 后台这一格是入口，不是装饰：状态色 + 可点。宽度压在上限里，
+        // 不让一条长会话名把目标挤成半句。
+        const backgroundClass = `${className} max-w-[42%] shrink-0`;
+        if (backgroundHref) {
+          return (
+            <a
+              key={chip.key}
+              href={backgroundHref}
+              title={backgroundTitle ? `${backgroundTitle}（没有关联会话，打开任务详情）` : "打开任务详情"}
+              className={`${backgroundClass} transition-opacity hover:opacity-80`}
+            >
+              {body}
+            </a>
+          );
+        }
+        if (onBackground) {
+          return (
+            <button
+              key={chip.key}
+              type="button"
+              onClick={onBackground}
+              title={backgroundTitle ?? "打开那条会话"}
+              className={`${backgroundClass} transition-opacity hover:opacity-80`}
+            >
+              {body}
+            </button>
+          );
+        }
+        return (
+          <span key={chip.key} className={backgroundClass}>
+            {body}
+          </span>
+        );
+      })}
       {!data.serviceOnline && (
         <span
           title="后端服务未连接：发出去的消息不会被执行"

@@ -9,7 +9,7 @@ import type { AnswerValues, AttachmentRef, PendingApproval, PendingQuestion } fr
 import { MarkdownView } from "./markdown-view";
 import { StepView } from "./steps";
 import type { BotStep, PlanView, StepFilter } from "./turns";
-import { filterSteps, turnEvidence } from "./turns";
+import { filterSteps, turnEvidence, collapseRepeatedNotes } from "./turns";
 import { uploadUrl } from "./uploads";
 import type { SkillSuggestion } from "@/lib/skill-suggest";
 
@@ -273,7 +273,9 @@ export function TurnView(props: TurnViewProps) {
   const [filter, setFilter] = useState<StepFilter>("all");
   const evidence = turnEvidence(steps);
   const paths = props.files.map((file) => file.path);
-  const shown = filterSteps(steps, filter);
+  // 相同的话连说两遍：合并成一条再算筛选与计数，否则「全部 3」里有一半是复读。
+  const collapsed = collapseRepeatedNotes(steps);
+  const shown = filterSteps(collapsed, filter);
   const hasBody = props.streaming !== "" || props.reply !== "" || props.reason !== "";
 
   // 正文里点文件名：就地定位到那一行，而不是另开一个页面去翻。
@@ -381,7 +383,7 @@ export function TurnView(props: TurnViewProps) {
                   <div className="mb-1 flex items-center gap-1 pl-0.5">
                     {(
                       [
-                        ["all", `全部 ${steps.length}`],
+                        ["all", `全部 ${collapsed.length}`],
                         ["changes", `改动 ${props.files.length}`],
                         ["failures", `失败 ${evidence.failed}`],
                       ] as [StepFilter, string][]

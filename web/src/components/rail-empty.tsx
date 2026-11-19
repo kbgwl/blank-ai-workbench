@@ -19,6 +19,7 @@ export function RailEmpty({
   body,
   children,
   compact = false,
+  fill = false,
 }: {
   icon: ReactNode;
   title: string;
@@ -27,9 +28,15 @@ export function RailEmpty({
   children?: ReactNode;
   /** 窄栏 / 已经有分组标题时用紧凑档：不抢上方信息的注意力。 */
   compact?: boolean;
+  /** 撑满剩余高度并垂直居中：整栏都空的时候，贴在顶部会像只加载了一半。 */
+  fill?: boolean;
 }) {
   return (
-    <div className={`flex flex-col items-center text-center ${compact ? "px-1 py-5" : "px-2 py-8"}`}>
+    <div
+      className={`flex flex-col items-center text-center ${compact ? "px-1 py-5" : "px-2 py-8"} ${
+        fill ? "flex-1 justify-center" : ""
+      }`}
+    >
       <span
         className={`grid shrink-0 place-items-center rounded-lg border border-line bg-surface text-muted ${
           compact ? "size-8" : "size-10"

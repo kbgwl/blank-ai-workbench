@@ -197,34 +197,34 @@ export function TaskPanel(props: TaskPanelProps) {
           <p className="mb-1.5 truncate text-[13px] text-muted" title={props.title}>
             {props.title || "未命名对话"}
           </p>
-          <dl className="grid grid-cols-2 gap-1.5">
-            {/* 格子原来写 bg-surface：面板本身就是 canvas 白，白套白白套，
-                四块卡片等于不存在。改用 surface-2 的浅灰底，才读得出「这是一组数」。 */}
-            <div className="rounded-lg bg-surface-2 px-2.5 py-1.5">
-              <dt className="font-mono text-[9px] tracking-wide text-muted uppercase">工具调用</dt>
-              <dd className="font-mono text-[14px] text-text">
-                {evidence.calls}
-                {evidence.failed > 0 && <span className="ml-1 text-[12px] text-danger">（{evidence.failed} 失败）</span>}
-              </dd>
+          {/* 这一轮的账本收成一行。
+              原来四个 8px 小标签各自一块灰底格子，占掉右栏最上面 90px，
+              而右栏其余部分是空的——四个"0"反而成了这一栏最显眼的东西。
+              一行读完：用了什么、动了什么、花了多久。 */}
+          <dl className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1">
+            <div className="flex items-baseline gap-1">
+              <dd className="font-mono text-[12px] text-text">{evidence.calls}</dd>
+              <dt className="font-mono text-[11px] text-faint">工具</dt>
+              {evidence.failed > 0 && (
+                <span className="font-mono text-[11px] text-danger">({evidence.failed} 失败)</span>
+              )}
             </div>
-            <div className="rounded-lg bg-surface-2 px-2.5 py-1.5">
-              <dt className="font-mono text-[9px] tracking-wide text-muted uppercase">改动文件</dt>
-              <dd className="font-mono text-[14px] text-text">
-                {files.length}
-                {evidence.commandCount > 0 && (
-                  <span className="ml-1 text-[11px] text-faint">/ {evidence.commandCount} 条命令</span>
-                )}
-              </dd>
+            <div className="flex items-baseline gap-1">
+              <dd className="font-mono text-[12px] text-text">{files.length}</dd>
+              <dt className="font-mono text-[11px] text-faint">文件</dt>
+              {evidence.commandCount > 0 && (
+                <span className="font-mono text-[11px] text-faint">/ {evidence.commandCount} 命令</span>
+              )}
             </div>
-            <div className="rounded-lg bg-surface-2 px-2.5 py-1.5">
-              <dt className="font-mono text-[9px] tracking-wide text-muted uppercase">耗时</dt>
-              <dd className="font-mono text-[14px] text-text">{latency > 0 ? formatDuration(latency) : "—"}</dd>
+            <div className="flex items-baseline gap-1">
+              <dd className="font-mono text-[12px] text-text">{latency > 0 ? formatDuration(latency) : "—"}</dd>
+              <dt className="font-mono text-[11px] text-faint">耗时</dt>
             </div>
-            <div className="rounded-lg bg-surface-2 px-2.5 py-1.5">
-              <dt className="font-mono text-[9px] tracking-wide text-muted uppercase">Token</dt>
-              <dd className="font-mono text-[14px] text-text">
+            <div className="flex items-baseline gap-1">
+              <dd className="font-mono text-[12px] text-text">
                 {props.usage?.totalTokens ? props.usage.totalTokens.toLocaleString() : "—"}
               </dd>
+              <dt className="font-mono text-[11px] text-faint">token</dt>
             </div>
           </dl>
         </section>
@@ -235,6 +235,7 @@ export function TaskPanel(props: TaskPanelProps) {
             // 也说不清这一栏本来会出现什么。
             <RailEmpty
               compact
+              fill
               icon={<RailIcon d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" />}
               title="这一轮还没有改动文件"
               body="Agent 改文件后，这里会按文件列出路径、改动类型和 diff。"
@@ -288,6 +289,7 @@ export function TaskPanel(props: TaskPanelProps) {
             // 读起来像两次报错。
             <RailEmpty
               compact
+              fill
               icon={<RailIcon d="M9 11l2.5 2.5L16 8M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z" />}
               title="这一轮还没有证据"
               body="验收条件和测试结论会出现在这里，回答「凭什么说改对了」。"
@@ -349,6 +351,7 @@ export function TaskPanel(props: TaskPanelProps) {
             // 否则用户会以为这一轮什么都没做。
             <RailEmpty
               compact
+              fill
               icon={<RailIcon d="M4 6h16M4 12h16M4 18h10" />}
               title={props.running ? "正在开始" : "这一轮还没有记录"}
               body={

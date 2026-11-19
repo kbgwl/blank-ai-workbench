@@ -112,15 +112,6 @@ function entryFor(file: File, kind: DraftAttachment["kind"], error: string): Dra
   };
 }
 
-/** 后台任务横幅上的状态词。比任务卡片的徽标更短，一行放得下。 */
-function activeTaskLabel(status: string): string {
-  if (status === "waiting_approval") return "等你批准";
-  if (status === "paused") return "已暂停";
-  if (status === "failed") return "失败";
-  if (status === "queued") return "排队中";
-  return "进行中";
-}
-
 export function BotApp() {
   const [boot, setBoot] = useState<{ projects: Project[]; providers: Provider[] } | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -183,6 +174,8 @@ export function BotApp() {
 
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  /** 插话正在提交：挡住连按回车造成的重复排队（见 steer）。 */
+  const steerBusy = useRef(false);
 
   /** 当前项目与它绑定的目录。工作区是"在哪个目录里干活"，是项目的一个属性。 */
   const currentProject = boot?.projects.find((project) => project.id === projectId) ?? null;
@@ -452,8 +445,14 @@ export function BotApp() {
   useEffect(() => {
     const node = scroller.current;
     if (!node || !stick.current) return;
-    node.scrollTop = node.scrollHeight;
-  }, [live.revision, live.streaming, conv?.turns.length]);
+    // 等这一帧布局落定再滚：在 effect 里直接读 scrollHeight 拿到的是"变高之前"
+    // 的高度，于是打开一条等审批的会话时，最需要看见的批准按钮正好停在视口外。
+    const frame = requestAnimationFrame(() => {
+      node.scrollTop = node.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
+    // 审批卡出现 / 消失也要跟着贴底：它不是新事件，是一条要你动手的东西。
+  }, [live.revision, live.streaming, conv?.turns.length, evidence?.pendingApprovals?.length, loadingConv]);
 
   const onScroll = useCallback(() => {
     const node = scroller.current;
@@ -837,15 +836,21 @@ export function BotApp() {
    */
   const steer = useCallback(() => {
     const text = draft.trim();
-    if (!text || !activeTaskId) return;
+    // 连按两次回车会发两次：draft 是在 then 里才清空的，第二次按的时候还是原文，
+    // 后端于是收到两条一模一样的插话，对话里就出现两段逐字相同的话。
+    // 清空移到请求之前（失败再放回去），并用一个 in-flight 标记挡住重复提交。
+    if (!text || !activeTaskId || steerBusy.current) return;
+    steerBusy.current = true;
     setSendError(null);
     setComposerHint(null);
+    setDraft("");
     steerTask(activeTaskId, text)
       .then((result) => {
-        setDraft("");
         setComposerHint(result.queued ? "已经排上了，从它下一次想想的时候开始生效。" : "后端没有确认排队，这句话可能没生效。");
       })
       .catch((error: unknown) => {
+        // 没发出去就把话放回输入框：输入框空了而什么都没发生，用户会以为自己没按。
+        setDraft((current) => (current ? current : text));
         if (errorCode(error) !== "task_not_steerable") {
           setSendError(errorMessage(error));
           return;
@@ -858,6 +863,9 @@ export function BotApp() {
         void send().then(() => {
           setComposerHint("上一轮已经结束，这句话作为新的一轮发出。");
         });
+      })
+      .finally(() => {
+        steerBusy.current = false;
       });
   }, [activeTaskId, draft, send]);
 
@@ -1008,15 +1016,21 @@ export function BotApp() {
   const backgroundTasks = visibleBackgroundTasks(activeTasks, conv?.thread.id);
   const topBackground = backgroundTasks[0] ?? null;
   const backgroundTarget = topBackground ? backgroundTaskTarget(topBackground) : null;
+  // 分成两个入口：有会话的回会话（要调 openThread），没会话的直接跳详情页。
+  const backgroundThreadId = backgroundTarget?.kind === "thread" ? backgroundTarget.threadId : null;
+  const backgroundHref = backgroundTarget?.kind === "detail" ? backgroundTarget.href : undefined;
 
-  // 顶部状态条只留「这一轮在做什么」：目标进度、后台任务数、服务是否断。
+  // 顶部状态条只留「这一轮在做什么」：目标进度、后台任务、服务是否断。
   // 场景 / 模型 / 权限档都在输入框工具条上，各有可点的选择器，
   // 顶部再放一份就是三重重复——用户第一反应是「模式 辅助 是什么东西」。
   const activeGoal = threadGoal && threadGoal.threadId === conv?.thread.id ? threadGoal.goal : null;
   const statusBarData: GoalStatusBarData = {
     goal: activeGoal?.title ?? "",
     goalStatus: activeGoal?.status ?? "",
-    backgroundCount: activeTasks.length,
+    // 数的是「别的」会话：当前这条已经在眼前了，再报一次只会让人以为还有一份。
+    backgroundCount: backgroundTasks.length,
+    backgroundLabel: topBackground?.title ?? "",
+    backgroundStatus: topBackground?.status ?? "",
     serviceOnline,
   };
 
@@ -1084,53 +1098,14 @@ export function BotApp() {
             </svg>
           </button>
         </header>
-        <GoalStatusBar data={statusBarData} />
-
-        {/* 后台任务条：还有别的任务在动、或者在等人点，就在这里说一句。
-            关窗不等于结束——没有这条，用户重开只会看到当前会话，以为另一条没了。 */}
-        {topBackground && (
-          <div className="flex shrink-0 items-center gap-2 border-b border-line bg-warn/[0.05] px-4 py-1.5 text-[12px]">
-            <span
-              className={`size-1.5 shrink-0 rounded-full ${
-                topBackground.status === "waiting_approval" || topBackground.status === "paused"
-                  ? "bg-warn"
-                  : topBackground.status === "failed"
-                    ? "bg-danger"
-                    : "bg-brand"
-              }`}
-            />
-            <span className="shrink-0 text-faint">后台任务</span>
-            {backgroundTarget?.kind === "thread" ? (
-              <button
-                type="button"
-                onClick={() => openThread(backgroundTarget.threadId)}
-                title={topBackground.title}
-                className="min-w-0 flex-1 truncate text-left text-muted transition-colors hover:text-text"
-              >
-                {topBackground.title}
-              </button>
-            ) : (
-              <a
-                href={backgroundTarget?.href ?? "#"}
-                title="这条任务没有关联会话，打开任务详情看事件与证据"
-                className="min-w-0 flex-1 truncate text-left text-muted transition-colors hover:text-text"
-              >
-                {topBackground.title}
-                <span className="ml-1 text-faint">（无会话 · 打开任务详情）</span>
-              </a>
-            )}
-            <span
-              className={`shrink-0 ${
-                topBackground.status === "failed" ? "text-danger" : "text-warn"
-              }`}
-            >
-              {activeTaskLabel(topBackground.status)}
-            </span>
-            {backgroundTasks.length > 1 && (
-              <span className="shrink-0 text-faint">还有 {backgroundTasks.length - 1} 个</span>
-            )}
-          </div>
-        )}
+        {/* 后台任务收进状态条那一格（见 goal-status-bar）：同一件事原来在
+            状态条和下面的橙色横幅各说一遍，两条整行告示互相抢注意力。 */}
+        <GoalStatusBar
+          data={statusBarData}
+          onBackground={backgroundThreadId ? () => openThread(backgroundThreadId) : undefined}
+          backgroundHref={backgroundHref}
+          backgroundTitle={topBackground?.title}
+        />
 
         <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl px-4 py-6">

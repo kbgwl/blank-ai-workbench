@@ -14,6 +14,15 @@ export type GoalStatusBarData = {
   goal: string;
   goalStatus: string;
   backgroundCount: number;
+  /**
+   * 排在最前的那个后台任务的标题与状态。
+   *
+   * 只说「后台 4 个任务」，用户不知道是哪四个、更不知道有没有卡在他身上。
+   * 原来这句话下面还挂着一条橙色横幅专门讲同一个后台任务——同一件事在一屏里
+   * 说了两遍，两条都是横幅，看起来就是"两条打架的告示"。现在收进这一格。
+   */
+  backgroundLabel?: string;
+  backgroundStatus?: string;
   serviceOnline: boolean;
 };
 
@@ -64,7 +73,26 @@ export function statusBarChips(data: GoalStatusBarData): StatusChip[] {
     });
   }
   if (data.backgroundCount > 0) {
-    chips.push({ key: "background", label: "后台", value: `${data.backgroundCount} 个任务`, tone: "plain" });
+    // 状态决定这一格的颜色：卡在审批上是"要你动手"，失败是"要你知道"，
+    // 都在跑就是普通信息。全用橙色等于什么都没强调。
+    const status = data.backgroundStatus ?? "";
+    const tone: StatusChip["tone"] =
+      status === "failed"
+        ? "danger"
+        : status === "waiting_approval" || status === "paused"
+          ? "warn"
+          : "plain";
+    // 这里不再写「等你批准」四个字：目标那一格已经在说状态了，同一行两个
+    // 「等你批准」用户只会问该点哪个。颜色说"要你看",标题说"哪一条"。
+    const title = (data.backgroundLabel ?? "").trim();
+    // 「4 个 · 冒烟：审批」：数量在前、标题在后，截断时先丢标题尾巴而不是数量。
+    const countPart = data.backgroundCount > 1 ? `${data.backgroundCount} 个` : "";
+    chips.push({
+      key: "background",
+      label: "后台",
+      value: title ? (countPart ? `${countPart} · ${title}` : title) : `${data.backgroundCount} 个任务`,
+      tone,
+    });
   }
   return chips;
 }

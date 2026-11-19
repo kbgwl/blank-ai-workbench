@@ -36,7 +36,7 @@ export type ToolStep = {
 export type BotStep =
   | { kind: "plan"; key: string; items: string[] }
   | { kind: "change"; key: string; path: string; changeType: string }
-  | { kind: "note"; key: string; text: string; tone: "muted" | "warn" | "danger" }
+  | { kind: "note"; key: string; text: string; tone: "muted" | "warn" | "danger"; repeat?: number }
   | { kind: "question"; key: string; text: string; answered: string }
   | { kind: "approval"; key: string; text: string; granted: boolean | null }
   | ToolStep;
@@ -307,6 +307,28 @@ export function turnReply(events: readonly RawEvent[]): { text: string; status: 
     }
   }
   return { text, status, reason };
+}
+
+/**
+ * 相邻两条一模一样的备注合成一条，后面标次数。
+ *
+ * 连按两次回车曾真的会发两次插话（draft 是在 then 里才清空的），后端各记一条，
+ * 对话里于是出现两段逐字相同的话——看起来像它在复读。发送侧已经挡住了重复提交，
+ * 这里兜住历史数据和任何别的重复来源：同一句话只在屏幕上出现一次。
+ *
+ * 只合并相邻的：两句相同的话中间夹着一步工具调用，那是"又说了一遍"，不是重复。
+ */
+export function collapseRepeatedNotes(steps: readonly BotStep[]): BotStep[] {
+  const out: BotStep[] = [];
+  for (const step of steps) {
+    const prev = out[out.length - 1];
+    if (step.kind === "note" && prev?.kind === "note" && prev.text === step.text) {
+      out[out.length - 1] = { ...prev, repeat: (prev.repeat ?? 1) + 1 };
+      continue;
+    }
+    out.push(step);
+  }
+  return out;
 }
 
 /**
