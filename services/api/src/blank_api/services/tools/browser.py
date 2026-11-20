@@ -4,9 +4,14 @@
 只能起 electron 去试，GPU 进程连崩五次，最后在交付里写「浏览器里从未跑通，
 需要你换 Chrome 打开确认」。而那个页面其实是好的——用这个工具三秒钟就能看到。
 
-它做四件事，一件不多：打开、收控制台错误、按选择器断言、截一张图。
-截图会作为图片附在工具结果里（和 read_file 读到图片同一条通道），模型于是
-不是"听说页面能跑"，而是真的看见了。
+它做五件事，一件不多：打开、收控制台错误、按选择器断言、按步骤做一遍动作、
+截两张图（首屏 / 末态）。截图会作为图片附在工具结果里（和 read_file 读到图片
+同一条通道），模型于是不是"听说页面能跑"，而是真的看见了。
+
+动作序列（``steps``）是后加的一件事，起因很具体：一个任务看板交了四条判据全过的
+成品——拖拽真派事件验过，localStorage 真写三条刷过——但交付文件里没有数据，
+用户打开只有三个空框。**空页面永远不会有控制台错误**，所以"无报错"这种判据
+在空壳身上是最容易满足的。步骤让验收问的是"打开时有什么、动一下变不变"。
 
 边界（写在代码里，不靠模型自觉）：
 
@@ -25,6 +30,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -171,10 +177,19 @@ def _summarize(result: dict, shot_rel: str) -> str:
             lines.append(
                 f"  · {item.get('selector')} 期望至少 {item.get('min')} 个，实际 {item.get('count')} 个 → {mark}"
             )
+    steps = result.get("steps") or []
+    if steps:
+        lines.append("动作：")
+        for item in steps:
+            mark = "通过" if item.get("ok") else "不通过"
+            label = item.get("text") or item.get("do") or ""
+            got = item.get("actual")
+            tail = "" if got in (None, True) else f"，实际 {str(got)[:80]}"
+            lines.append(f"  · {label} → {mark}{tail}")
     if shot_rel:
         lines.append(f"截图：{shot_rel}（这张图已经附给你，直接看）")
     lines.append(
-        "结论：页面能打开，控制台无错"
+        "结论：页面能打开，动作走得通，控制台无错"
         if result.get("ok")
         else "结论：页面有问题，先看上面这几条再改"
     )
@@ -196,6 +211,9 @@ async def _browser_check(context: ToolContext, arguments: dict) -> ToolOutcome:
     shot_dir = Path(context.root) / SHOT_DIR
     shot_dir.mkdir(parents=True, exist_ok=True)
     shot_path = shot_dir / f"{stamp}.png"
+    # 动作跑完之后页面已经不是用户打开时的那一屏。两张都留：
+    # 首屏证明"有没有东西"，末态证明"动作之后变成什么"。
+    shot_open_path = shot_dir / f"{stamp}-open.png"
 
     viewport = str(arguments.get("viewport") or "1280x800")
     expect = [str(item) for item in (arguments.get("expect") or []) if str(item).strip()]
@@ -212,15 +230,24 @@ async def _browser_check(context: ToolContext, arguments: dict) -> ToolOutcome:
         viewport,
         "--shot",
         str(shot_path),
+        "--shot-open",
+        str(shot_open_path),
     ]
     for item in expect:
         argv.extend(["--expect", item])
     evaluate = str(arguments.get("eval") or "").strip()
     if evaluate:
         argv.extend(["--eval", evaluate])
-
-    timeout = float(arguments.get("timeout_ms") or 20000) / 1000 + 15
-    result, problem = await _run_probe(argv, timeout)
+    # 动作序列：填、点、拖、刷新。页面"长得对"不等于"用起来对"——
+    # 一个打开是空白的看板可以没有一条控制台错误。要走一遍才算验过。
+    steps = [item for item in (arguments.get("steps") or []) if isinstance(item, dict)]
+    with tempfile.TemporaryDirectory(prefix="blank-steps-") as tmp:
+        if steps:
+            step_file = Path(tmp) / "steps.json"
+            step_file.write_text(json.dumps(steps, ensure_ascii=False), encoding="utf-8")
+            argv.extend(["--steps", str(step_file)])
+        timeout = float(arguments.get("timeout_ms") or 20000) / 1000 + 15
+        result, problem = await _run_probe(argv, timeout)
     if problem or result is None:
         return fail("error", problem or "浏览器探针失败")
     if result.get("fatal"):
@@ -229,11 +256,14 @@ async def _browser_check(context: ToolContext, arguments: dict) -> ToolOutcome:
     jpeg = shot_path.with_suffix(".png.jpg")
     shot_rel = ""
     image = None
-    if shot_path.is_file():
-        shot_rel = shot_path.relative_to(Path(context.root)).as_posix()
-        size = jpeg.stat().st_size if jpeg.is_file() else shot_path.stat().st_size
+    # 附给模型看的是**首屏**：它的验收标准里现在第一条就是"打开时有什么"，
+    # 给末态图等于让它在自己造出来的现场里自证。
+    pick = shot_open_path if shot_open_path.is_file() else shot_path
+    if pick.is_file():
+        shot_rel = pick.relative_to(Path(context.root)).as_posix()
+        size = jpeg.stat().st_size if (pick is shot_path and jpeg.is_file()) else pick.stat().st_size
         if size <= MAX_ATTACH_BYTES:
-            source = jpeg if jpeg.is_file() else shot_path
+            source = jpeg if (pick is shot_path and jpeg.is_file()) else pick
             media = "image/jpeg" if source is jpeg else "image/png"
             image = {
                 "media_type": media,
@@ -251,7 +281,11 @@ async def _browser_check(context: ToolContext, arguments: dict) -> ToolOutcome:
         console=[item for item in result.get("console") or []][:20],
         failed_requests=[item for item in result.get("errors") or []][:10],
         asserts=result.get("asserts") or [],
+        steps=result.get("steps") or [],
         screenshot=shot_rel,
+        screenshot_end=(
+            shot_path.relative_to(Path(context.root)).as_posix() if shot_path.is_file() else ""
+        ),
         text=str(result.get("text") or "")[:2000],
         duration_ms=result.get("duration_ms"),
     )
@@ -262,7 +296,7 @@ async def _browser_check(context: ToolContext, arguments: dict) -> ToolOutcome:
         # status 保持 "failed" 而不是 error——它确实跑完了，只是结论是坏的。
         outcome.ok = False
         outcome.status = "failed"
-        outcome.message = "页面打开了，但控制台报错或断言不通过；先按上面的清单改，改完再检查一次"
+        outcome.message = "页面打开了，但控制台报错或断言/动作不通过；先按上面的清单改，改完再检查一次"
     return outcome
 
 
@@ -271,10 +305,10 @@ def browser_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="browser_check",
             description=(
-                "用本机 Chrome/Edge 无头打开一个页面，回三样东西：控制台错误、按选择器的断言、"
-                "一张截图（截图会附给你看）。写完前端必须用它自检，不要靠猜，也不要起 electron 硬跑。"
-                "url 可以是工作区相对路径（如 deliverables/demo/index.html）或 http://localhost:端口/。"
-                "expect 写 CSS 选择器，可带最少数量：\"canvas:1\" 表示至少一个 canvas。"
+                "无头打开页面，回控制台错误、选择器断言、动作结果、截图（首屏+末态）。"
+                "写完前端必用它自检。expect 写选择器可带数量，如 canvas:1。"
+                "steps 传动作数组，项形如 {do,selector,expr,min,value,from,to}；"
+                "只断言元素存在不算验过——交付前至少验：打开有什么、点一下变没变、刷新还在不在。"
             ),
             input_schema={
                 "type": "object",
@@ -282,17 +316,22 @@ def browser_tools() -> list[ToolDefinition]:
                 "properties": {
                     "url": {
                         "type": "string",
-                        "description": "工作区相对路径或本机 http 地址（只允许 localhost / 127.0.0.1）",
+                        "description": "工作区相对路径或 localhost 地址",
                     },
                     "expect": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "要断言的选择器，可写成 \"canvas:1\"（至少 1 个）",
+                        "description": "选择器，可写成 canvas:1",
                     },
-                    "wait_ms": {"type": "integer", "description": "load 之后再等多少毫秒，默认 800"},
-                    "viewport": {"type": "string", "description": "视口，形如 1280x800"},
-                    "eval": {"type": "string", "description": "可选：在页面里跑的 JS 表达式，返回值会带回来"},
-                    "timeout_ms": {"type": "integer", "description": "整体超时，默认 20000"},
+                    "wait_ms": {"type": "integer", "description": "默认 800"},
+                    "viewport": {"type": "string", "description": "如 1280x800"},
+                    "eval": {"type": "string", "description": "页面里求值的 JS"},
+                    "steps": {
+                        "type": "array",
+                        "description": "动作项 {do,selector,expr,min,value,from,to}；do 取 assert/click/type/drag 等",
+                        "items": {"type": "object"},
+                    },
+                    "timeout_ms": {"type": "integer", "description": "默认 20000"},
                 },
             },
             risk_level="low",

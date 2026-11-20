@@ -1,0 +1,81 @@
+{
+  "name": "任务看板",
+  "note": "L6 的验收脚本。判据从「功能清单」换成「打开时有什么 + 做一遍动作」。断言一律写成相对基准，不焊死初始条数。",
+  "open": [
+    {
+      "do": "assert",
+      "text": "打开就有卡片（至少 3 张，不能等用户先输入）",
+      "expr": "document.querySelectorAll('.task-item').length",
+      "min": 3
+    },
+    {
+      "do": "assert",
+      "text": "卡片至少分布在两列（一眼能看出这是一块板，不是一列清单）",
+      "expr": "new Set([...document.querySelectorAll('.task-item')].map(function (e) { return e.dataset.status; })).size",
+      "min": 2
+    },
+    {
+      "do": "assert",
+      "text": "不能三列同时挂着空占位",
+      "expr": "[...document.querySelectorAll('.empty-hint')].filter(function (e) { return !e.hidden; }).length < 3"
+    }
+  ],
+  "steps": [
+    {
+      "do": "eval",
+      "expr": "window.__qaBase = document.querySelectorAll('.task-item').length"
+    },
+    {
+      "do": "type",
+      "selector": "#new-task",
+      "value": "写今天的早报"
+    },
+    {
+      "do": "click",
+      "selector": "#add-form button[type=submit]"
+    },
+    {
+      "do": "assert",
+      "text": "点添加后卡片数比刚才多 1 张",
+      "expr": "document.querySelectorAll('.task-item').length === window.__qaBase + 1"
+    },
+    {
+      "do": "assert",
+      "text": "新任务落在待办列且文字正确",
+      "expr": "[...document.querySelectorAll('.column[data-status=\"todo\"] .task-item')].some(function (e) { return e.textContent.indexOf('写今天的早报') !== -1; })"
+    },
+    {
+      "do": "drag",
+      "from": ".column[data-status=\"todo\"] .task-item",
+      "to": ".column[data-status=\"doing\"] .task-list"
+    },
+    {
+      "do": "assert",
+      "text": "拖到进行中之后，那一列真的有卡片",
+      "expr": "document.querySelectorAll('.column[data-status=\"doing\"] .task-item').length",
+      "min": 1
+    },
+    {
+      "do": "eval",
+      "expr": "sessionStorage.setItem('qaExpect', String(document.querySelectorAll('.task-item').length))"
+    },
+    {
+      "do": "reload"
+    },
+    {
+      "do": "assert",
+      "text": "刷新之后卡片一张不少（不是内存里的假象）",
+      "expr": "document.querySelectorAll('.task-item').length === Number(sessionStorage.getItem('qaExpect'))"
+    },
+    {
+      "do": "type",
+      "selector": "#filter",
+      "value": "早报"
+    },
+    {
+      "do": "assert",
+      "text": "按关键字过滤真的收窄到 1 张而且不是 0 张",
+      "expr": "document.querySelectorAll('.task-item').length === 1"
+    }
+  ]
+}

@@ -13,7 +13,7 @@
 //   node browser_probe.mjs --url file:///... --shot out.png --expect "canvas:1" --wait 800
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
@@ -35,6 +35,15 @@ const EXPECT = argv.reduce((acc, item, i) => {
   return acc;
 }, []).filter(Boolean);
 const EVAL = opt("eval", "");
+// 动作序列：一个 JSON 文件，里面是一串「做什么 + 期望什么」。
+//
+// 为什么需要它：`--expect` 只能断言"页面上有这个东西"，而一个页面最容易骗过
+// 这种断言——它只要**长得像**就够了。真正的验收必须走一遍：填、点、拖、刷新，
+// 然后看状态有没有按预期变。区别在于断言的是**动作之后的状态**，不是静态结构。
+const STEPS = opt("steps", "");
+// 首屏快照：动作跑完之后页面已经不是"用户打开时看到的那一屏"了。
+// 验收要的是**打开时**的样子，所以动作之前单独拍一张。
+const SHOT_OPEN = opt("shot-open", "");
 
 const [VW, VH] = VIEWPORT.split("x").map((n) => Number(n) || 0);
 
@@ -124,6 +133,142 @@ function parseExpect(spec) {
   return { selector: spec, min: 1 };
 }
 
+/** 在页面里跑一段表达式，把异常变成可读的错误（而不是让整个探针挂掉）。 */
+async function pageEval(client, expression, awaitPromise = true) {
+  const res = await client.send("Runtime.evaluate", {
+    expression,
+    returnByValue: true,
+    awaitPromise,
+    userGesture: true,
+  });
+  if (res.exceptionDetails) {
+    const detail = res.exceptionDetails;
+    throw new Error(detail.exception?.description || detail.text || "页面脚本抛异常");
+  }
+  return res.result?.value;
+}
+
+/** 等页面真的就绪（刷新之后 document.readyState 会先回到 loading）。 */
+async function waitReady(client, timeout) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    try {
+      const state = await pageEval(client, "document.readyState", false);
+      if (state === "complete") {
+        await sleep(120);
+        return;
+      }
+    } catch {
+      // 导航进行中，取不到就再等一轮
+    }
+    await sleep(80);
+  }
+  throw new Error("页面没有回到就绪状态");
+}
+
+async function centerOf(client, selector) {
+  const box = await pageEval(
+    client,
+    `(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })()`,
+  );
+  if (!box) throw new Error(`找不到元素：${selector}`);
+  return box;
+}
+
+async function clickAt(client, x, y) {
+  await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
+  await client.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+  await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+}
+
+/**
+ * 拖放只能靠合成事件：CDP 的真实拖拽需要 Input.dispatchDragEvent 加一份
+ * DragData，而页面里走的往往是 HTML5 的 dragstart/dragover/drop 那一套。
+ * 这里按浏览器自己派发的方式补一遍，验的是"处理链通不通"，不是"鼠标好不好用"。
+ */
+async function dragBetween(client, from, to) {
+  return pageEval(
+    client,
+    `(() => {
+      const src = document.querySelector(${JSON.stringify(from)});
+      const dst = document.querySelector(${JSON.stringify(to)});
+      if (!src) return "找不到拖拽源：" + ${JSON.stringify(from)};
+      if (!dst) return "找不到落点：" + ${JSON.stringify(to)};
+      const dt = new DataTransfer();
+      const fire = (el, type) =>
+        el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
+      fire(src, "dragstart");
+      fire(dst, "dragenter");
+      fire(dst, "dragover");
+      fire(dst, "drop");
+      fire(src, "dragend");
+      return "";
+    })()`,
+  );
+}
+
+/** 依次执行动作；每步都留一条记录，失败不中断——一次跑完才能看到全貌。 */
+async function runSteps(client, steps) {
+  const records = [];
+  for (let i = 0; i < steps.length; i += 1) {
+    const step = steps[i] || {};
+    const action = String(step.do || "").trim();
+    const rec = { index: i + 1, do: action, text: String(step.text || ""), ok: true, actual: null };
+    try {
+      if (action === "assert") {
+        const value = await pageEval(client, String(step.expr || "false"));
+        const min = step.min === undefined ? null : Number(step.min);
+        rec.ok = min === null ? Boolean(value) : Number(value) >= min;
+        rec.actual = value;
+      } else if (action === "eval") {
+        // 只跑不留判：用来记基准值（window.__x = ...），后面的断言就能写成
+        // "比刚才多 1 张"而不是"等于 4 张"——绝对数字会把用例焊死在初始状态上。
+        rec.actual = await pageEval(client, String(step.expr || "undefined"));
+      } else if (action === "click") {
+        const at = await centerOf(client, String(step.selector || ""));
+        await clickAt(client, at.x, at.y);
+        rec.actual = "已点击";
+      } else if (action === "type") {
+        const at = await centerOf(client, String(step.selector || ""));
+        await clickAt(client, at.x, at.y);
+        await client.send("Input.insertText", { text: String(step.value ?? "") });
+        rec.actual = String(step.value ?? "");
+      } else if (action === "press") {
+        const key = String(step.key || "Enter");
+        const code = key === "Enter" ? 13 : key === "Tab" ? 9 : key === "Escape" ? 27 : 0;
+        await client.send("Input.dispatchKeyEvent", { type: "keyDown", key, code: key, windowsVirtualKeyCode: code });
+        await client.send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key, windowsVirtualKeyCode: code });
+        rec.actual = key;
+      } else if (action === "drag") {
+        const problem = await dragBetween(client, String(step.from || ""), String(step.to || ""));
+        rec.ok = !problem;
+        rec.actual = problem || "已拖放";
+      } else if (action === "reload") {
+        await client.send("Page.reload", {});
+        await waitReady(client, TIMEOUT_MS);
+        rec.actual = "已刷新";
+      } else if (action === "wait") {
+        const ms = Number(step.ms || 300);
+        await sleep(ms);
+        rec.actual = `等了 ${ms}ms`;
+      } else {
+        rec.ok = false;
+        rec.actual = `不认识的步骤：${action}`;
+      }
+    } catch (error) {
+      rec.ok = false;
+      rec.actual = String(error?.message || error);
+    }
+    records.push(rec);
+  }
+  return records;
+}
+
 async function main() {
   if (!URL_ARG) throw new Error("缺少 --url");
   const browser = findBrowser();
@@ -153,7 +298,7 @@ async function main() {
   child.stderr.on("data", (chunk) => process.stderr.write(chunk));
 
   const started = Date.now();
-  const result = { ok: false, url: URL_ARG, title: "", console: [], errors: [], asserts: [], shots: {} };
+  const result = { ok: false, url: URL_ARG, title: "", console: [], errors: [], asserts: [], steps: [], shots: {} };
   let client = null;
 
   try {
@@ -249,6 +394,18 @@ async function main() {
       result.asserts.push({ selector, min, count, ok: count >= min });
     }
 
+    if (SHOT_OPEN) {
+      const png = await client.send("Page.captureScreenshot", { format: "png" });
+      writeFileSync(SHOT_OPEN, Buffer.from(png.data, "base64"));
+      result.shots.open = SHOT_OPEN;
+    }
+
+    if (STEPS) {
+      const raw = JSON.parse(readFileSync(STEPS, "utf8"));
+      const list = Array.isArray(raw) ? raw : raw.steps || [];
+      result.steps = await runSteps(client, list);
+    }
+
     if (EVAL) {
       const res = await client.send("Runtime.evaluate", {
         expression: EVAL,
@@ -274,9 +431,11 @@ async function main() {
     result.errors = failures.slice(0, 30);
     const hard = consoleItems.filter((item) => item.level === "error");
     const assertsFailed = result.asserts.filter((item) => !item.ok);
-    result.ok = hard.length === 0 && assertsFailed.length === 0;
+    const stepsFailed = (result.steps || []).filter((item) => !item.ok);
+    result.ok = hard.length === 0 && assertsFailed.length === 0 && stepsFailed.length === 0;
     result.error_count = hard.length;
     result.assert_failed = assertsFailed.length;
+    result.step_failed = stepsFailed.length;
     result.duration_ms = Date.now() - started;
   } finally {
     try {
