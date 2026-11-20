@@ -49,3 +49,16 @@ test("缺少 id 或文本的步骤直接跳过，不生成空选项", () => {
   ]);
   assert.deepEqual(choices.map((item) => item.id), ["s4"]);
 });
+
+test("失败的步骤也能打回——那正是最该重做的一步", () => {
+  // 只列 completed/in_progress 的话，某步失败后用户只能退回上一个成功步骤，
+  // 把已经做对的东西也推倒重来（rewind 会清 evidence 并 bump revision）。
+  const choices = sendBackChoices([
+    step("s1", "调研", "completed"),
+    step("s2", "实现", "failed"),
+    step("s3", "测试", "pending"),
+  ]);
+  assert.deepEqual(choices.map((item) => item.id), ["s1", "s2"]);
+  // 序号仍按计划里的原始位置，不因为中间过滤而错位。
+  assert.equal(choices[1].label, "第 2 步 实现");
+});

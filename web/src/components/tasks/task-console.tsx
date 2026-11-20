@@ -8,6 +8,7 @@ import { isTerminalStatus, type AgentEvent, type AnswerValues, type ApprovalScop
 import { LiveBadge, StatusBadge } from "./bits";
 import { formatDateTime, relativeTime } from "./format";
 import { buildBlocks, type Block } from "./timeline";
+import type { ApprovalDecision } from "./approval";
 import { sendBackChoices } from "./approval-copy";
 import { TimelineBlock } from "./timeline-blocks";
 import { PlanPanel } from "./plan-panel";
@@ -243,9 +244,7 @@ export function TaskConsole({
                 block={block}
                 busyApprovalKey={approvalKey}
                 onHighlight={onHighlight}
-                onDecide={(decision, target, scope, feedback, stepId) =>
-                  onDecideAction(onAction, decision, target, scope, feedback, stepId)
-                }
+                onDecide={(request) => onDecideAction(onAction, request)}
                 steps={sendBackChoices(task?.planSteps)}
                 onAnswer={(answers, target) => onAnswer(answers, target)}
               />
@@ -271,17 +270,16 @@ export function TaskConsole({
   );
 }
 
-function onDecideAction(
-  onAction: Props["onAction"],
-  decision: "approve" | "deny",
-  target: Extract<Block, { kind: "approval" }>,
-  scope?: ApprovalScope,
-  feedback?: string,
-  sendBackStepId?: string,
-) {
-  // 理由与打回目标必须原样往上传：之前这里只传三个参数，用户在任务页写的
-  // 驳回理由到不了后端，模型收到的还是"就是不批"。
-  onAction(decision === "approve" ? "approve" : "deny", target, scope, feedback, sendBackStepId);
+function onDecideAction(onAction: Props["onAction"], request: ApprovalDecision) {
+  // 载荷整体往上传，不再逐个拆参数：拆的那一版就是因为少传一个，
+  // 用户在任务页写的驳回理由到不了后端（模型收到的还是"就是不批"）。
+  onAction(
+    request.decision === "approve" ? "approve" : "deny",
+    request.target,
+    request.scope,
+    request.feedback,
+    request.stepId,
+  );
 }
 
 function EmptyTimeline({ blocks, events }: { blocks: number; events: number }) {

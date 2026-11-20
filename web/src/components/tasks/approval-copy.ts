@@ -69,7 +69,10 @@ export function sendBackChoices(
     const id = String(step?.id ?? "").trim();
     const text = String(step?.text ?? "").trim();
     if (!id || !text) return;
-    if (step?.status !== "completed" && step?.status !== "in_progress") return;
+    // failed 也要能打回：那正是最该重做的一步。只列 completed/in_progress 的话，
+    // 某步失败了反而只能退回上一个成功步骤，把已经做对的东西也推倒重来。
+    const status = step?.status;
+    if (status !== "completed" && status !== "in_progress" && status !== "failed") return;
     const title =
       text.length > SEND_BACK_LABEL_CHARS ? `${text.slice(0, SEND_BACK_LABEL_CHARS)}…` : text;
     choices.push({ id, label: `第 ${index + 1} 步 ${title}` });

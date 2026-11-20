@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Button, Notice } from "@/components/projects/ui";
-import { ApprovalOptions, approvalQuestion } from "./approval";
+import { ApprovalOptions, approvalQuestion, type ApprovalDecision } from "./approval";
 import type { SendBackChoice } from "./approval-copy";
 import { clip, formatClock, formatDuration } from "./format";
 import {
@@ -608,15 +608,7 @@ function ApprovalCard({
   busy: boolean;
   /** 可打回的步骤（做过或正在做的）。空表示这次只能普通驳回。 */
   steps?: SendBackChoice[];
-  onDecide: (
-    decision: "approve" | "deny",
-    block: Extract<Block, { kind: "approval" }>,
-    scope?: ApprovalScope,
-    /** 驳回时用户写的那句话，会被原样交给模型。 */
-    feedback?: string,
-    /** 打回到哪一步；空表示普通驳回。 */
-    sendBackStepId?: string,
-  ) => void;
+  onDecide: (decision: ApprovalDecision) => void;
 }) {
   const decided = block.state !== "pending";
   const grants = approvalGrantOptions(block);
@@ -674,9 +666,11 @@ function ApprovalCard({
         grants={grants}
         busy={busy}
         decided={decided}
-        onApprove={(scope) => onDecide("approve", block, scope)}
+        onApprove={(scope) => onDecide({ decision: "approve", target: block, scope })}
         steps={steps}
-        onDeny={(feedback, sendBackStepId) => onDecide("deny", block, "once", feedback, sendBackStepId)}
+        onDeny={(feedback, stepId) =>
+          onDecide({ decision: "deny", target: block, scope: "once", feedback, stepId })
+        }
       />
       {grants
         .filter((option) => option.warning)
@@ -777,15 +771,7 @@ export function TimelineBlock({
   block: Block;
   busyApprovalKey: string | null;
   onHighlight: (path: string) => void;
-  onDecide: (
-    decision: "approve" | "deny",
-    block: Extract<Block, { kind: "approval" }>,
-    scope?: ApprovalScope,
-    /** 驳回时用户写的那句话，会被原样交给模型。 */
-    feedback?: string,
-    /** 打回到哪一步；空表示普通驳回。 */
-    sendBackStepId?: string,
-  ) => void;
+  onDecide: (decision: ApprovalDecision) => void;
   /** 当前计划里能打回的步骤，交给审批卡做「退回重做」下拉。 */
   steps?: SendBackChoice[];
   onAnswer: (
@@ -814,11 +800,9 @@ export function TimelineBlock({
           block={block}
           busy={busyApprovalKey === block.key}
           steps={steps}
-          // 四个参数都要转发：之前这里只传了三个，用户写的驳回理由被静默丢掉，
-          // 模型收到的还是"就是不批"，没有任何可执行信息。
-          onDecide={(decision, target, scope, feedback, stepId) =>
-            onDecide(decision, target, scope, feedback, stepId)
-          }
+          // 整个载荷按引用透传：之前这里只转发三个位置参数，用户写的驳回理由
+          // 被静默丢掉，模型收到的还是"就是不批"，没有任何可执行信息。
+          onDecide={onDecide}
         />
       );
     case "result":
