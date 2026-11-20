@@ -121,7 +121,7 @@ function StatusChip({ status, running }: { status: string; running: boolean }) {
   return null;
 }
 
-function ApprovalCard({
+export function ApprovalCard({
   approval,
   onDecide,
   onRetry,
@@ -135,6 +135,19 @@ function ApprovalCard({
   const command = String(approval.args.command ?? approval.args.path ?? "");
   const grants = approvalGrantOptions(approval);
   const reviewNote = guardianReviewLabel(approval.guardian);
+  // 审查结论压成一个短徽标放在标题行。原来是一整行灰字铺在卡片里，读起来像脚注，
+  // 眼睛会直接跳过——而"这条有人先看过"恰恰是用户要的信息。全文进 title。
+  const reviewBadge =
+    approval.guardian === undefined
+      ? ""
+      : approval.guardian === null
+        ? "未复核"
+        : approval.guardian.verdict === "deny"
+          ? "审查：否决"
+          : approval.guardian.verdict === "allow"
+            ? "审查：放行"
+            : "审查：未表态";
+  const reviewBlocked = Boolean(approval.guardian && approval.guardian.verdict === "deny");
   return (
     <div
       className={`my-2 rounded-xl border p-3 ${
@@ -143,6 +156,16 @@ function ApprovalCard({
     >
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
         <p className="min-w-0 flex-1 text-[13px] font-medium text-text">{approvalQuestion(approval.tool, approval.args)}</p>
+        {reviewBadge && (
+          <span
+            className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] ${
+              reviewBlocked ? "bg-danger/10 text-danger" : "bg-surface-3 text-muted"
+            }`}
+            title={reviewNote || "独立审查员先看过了；它放行不等于安全，它说话也不会替你批准"}
+          >
+            {reviewBadge}
+          </span>
+        )}
         <span className="shrink-0 font-mono text-[11px] text-faint">
           {approval.tool}
           {approval.risk && <span className="ml-1.5 text-warn">风险 {approval.risk}</span>}
@@ -154,12 +177,11 @@ function ApprovalCard({
         </pre>
       )}
       {/* 过期卡不写「高风险操作等待人工审批」：它说的是"有人在等你"，而这里
-          恰恰是没人来、卡已经作废。留着这句会和下面"已经过期"直接打架。 */}
-      {approval.message && !approval.expired && <p className="mt-1 text-[12px] text-muted">{approval.message}</p>}
-      {reviewNote && (
-        <p className="mt-1 text-[12px] leading-relaxed text-muted" title="独立审查员先看过了；它放行不等于安全，它说话也不会替你批准">
-          {reviewNote}
-        </p>
+          恰恰是没人来、卡已经作废。留着这句会和下面"已经过期"直接打架。
+          同理，"等待人工审批"这类和问句重复的模板话也不再铺一遍——标题已经在问
+          "要让它跑这条命令吗"，再补一句只会把卡片撑高。 */}
+      {approval.message && !approval.expired && !approval.message.includes("等待人工审批") && (
+        <p className="mt-1 text-[12px] text-muted">{approval.message}</p>
       )}
       {/* 过期不是"再点一次就好"：后端一定回 409，任务也不会再往下走。
           这时候给按钮等于给死按钮——直接说清楚，并给唯一还有用的动作（重跑）。 */}
@@ -535,15 +557,9 @@ export function TurnView(props: TurnViewProps) {
             </div>
           )}
 
-          {props.approvals.map((approval) => (
-            <ApprovalCard
-              key={approval.toolCallId || approval.tool}
-              approval={approval}
-              busy={props.actionBusy}
-              onRetry={props.onRetry}
-              onDecide={(decision, scope, feedback) => props.onDecide(approval, decision, scope, feedback)}
-            />
-          ))}
+          {/* 审批卡不在这里渲染：它要出现在输入框上方（用户眼睛和手所在的地方），
+              而不是在一屏聊天记录底部等着被滚到。原来放这里时，长对话里它经常
+              在视口外，用户只会看到输入框被禁用、不知道为什么。见 pending-panel.tsx。 */}
 
           {props.questions.length > 0 && (
             <QuestionCard
@@ -598,6 +614,10 @@ function PlanCard({ plan, waiting = false }: { plan: PlanView; waiting?: boolean
         <span className="font-mono text-[11px] text-faint">
           {plan.completed} / {plan.total}
         </span>
+        {/* 有一步坏了就写出来。只在标题行说"3/5"会让人以为剩下两步在路上。 */}
+        {plan.failed > 0 && (
+          <span className="font-mono text-[11px] text-danger">{plan.failed} 步失败</span>
+        )}
         {waiting && firstOpen >= 0 && (
           <span className="font-mono text-[11px] text-warn">停在第 {firstOpen + 1} 步等你批准</span>
         )}
@@ -608,16 +628,34 @@ function PlanCard({ plan, waiting = false }: { plan: PlanView; waiting?: boolean
       <ol className="mt-1.5 flex flex-col gap-1">
         {shown.map((item, index) => {
           const done = item.status === "completed";
-          const active = item.status === "in_progress" || item.status === "running" || (waiting && index === firstOpen);
+          // 失败与取消都不该画成"还在做"。failed 用 ▲ + 红：它需要有人看一眼，
+          // 而不是混在灰字里被当成"迟早会完成"。
+          const dead = item.status === "cancelled";
+          const broken = item.status === "failed";
+          const active = !broken && !dead && (item.status === "in_progress" || item.status === "running" || (waiting && index === firstOpen));
           return (
             <li key={`${index}-${item.text}`} className="flex items-start gap-1.5 text-[13px] leading-relaxed">
               <span
-                className={`mt-[1px] shrink-0 font-mono text-[11px] ${done ? "text-accent" : active ? "text-brand" : "text-faint"}`}
+                className={`mt-[1px] shrink-0 font-mono text-[11px] ${
+                  broken ? "text-danger" : done ? "text-accent" : active ? "text-brand" : "text-faint"
+                }`}
                 aria-hidden
               >
-                {done ? "✓" : active ? "▸" : "○"}
+                {broken ? "▲" : done ? "✓" : dead ? "–" : active ? "▸" : "○"}
               </span>
-              <span className={done ? "text-faint line-through decoration-line-strong" : active ? "text-text" : "text-muted"}>
+              <span
+                className={
+                  broken
+                    ? "text-danger"
+                    : done
+                      ? "text-faint line-through decoration-line-strong"
+                      : dead
+                        ? "text-faint line-through decoration-line"
+                        : active
+                          ? "text-text"
+                          : "text-muted"
+                }
+              >
                 {item.text}
               </span>
             </li>

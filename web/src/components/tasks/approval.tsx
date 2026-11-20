@@ -78,7 +78,9 @@ export function ApprovalOptions({ grants, busy, decided = false, onApprove, onDe
               onClick={() => onApprove(option.scope)}
               className={`flex w-full items-baseline gap-2 rounded-md px-2 py-1 text-left text-[13px] transition-colors disabled:opacity-50 ${
                 index === 0
-                  ? "bg-surface text-text ring-1 ring-line-strong hover:ring-brand/40"
+                  ? // 默认项只给一层浅底 + 左侧 ›，不加 ring：加了边框它看起来就是个
+                    // 输入框，用户会去点它想打字。默认的含义靠符号和底色就够。
+                    "bg-surface-2 text-text hover:bg-surface-3"
                   : "text-muted hover:bg-surface-2 hover:text-text"
               }`}
             >

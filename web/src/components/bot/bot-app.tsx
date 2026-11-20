@@ -44,6 +44,7 @@ import { TaskPanel } from "./panel";
 import { Sidebar } from "./sidebar";
 import { backgroundTaskTarget, visibleBackgroundTasks } from "./background";
 import { TurnView } from "./turn";
+import { PendingPanel } from "./pending-panel";
 import { buildSteps, isTurnRunning, planOf, touchedFiles, turnReply } from "./turns";
 import {
   MAX_ATTACHMENTS_PER_TURN,
@@ -1237,6 +1238,17 @@ export function BotApp() {
             )}
           </div>
         </div>
+
+        {/* 待你处理的卡挂在输入框上方，不放在聊天流里：卡片长在正文里时，
+            长对话要往上翻才看得见，用户只会看到输入框突然不能用了。 */}
+        <PendingPanel
+          approvals={running ? (evidence?.pendingApprovals ?? []) : []}
+          waiting={liveStatus === "waiting_approval"}
+          busy={actionBusy}
+          onDecide={decide}
+          onRetry={retry}
+          onStop={stop}
+        />
 
         <Composer
           projects={boot?.projects ?? []}
