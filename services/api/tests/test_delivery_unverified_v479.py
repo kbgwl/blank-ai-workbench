@@ -151,3 +151,71 @@ def test_verify_reports_which_files_it_covers():
     stale = delivery.as_dict(graph._delivery_facts("结论", stale_state))
     assert stale["verify"]["covers"] == []
     assert stale["verify"]["stale"] is True
+
+
+# ── 两类缺口必须正交：stale ≠ missing ─────────────────────────────────────
+
+
+def test_stale_is_not_counted_as_missing():
+    """「跑了但作废」不能被统计成「从没跑过」——两类处置不同（重跑 vs 催跑）。"""
+    facts = delivery.DeliveryFacts(completed="改好了", changed_files=1, verify_stale=True)
+    payload = delivery.as_dict(facts)
+    assert payload["verify"]["stale"] is True
+    assert payload["verify"]["missing"] is False
+
+
+# ── 覆盖判据：计数 + 内容指纹（shell 写与过滤后的下标）────────────────────
+
+
+def test_a_shell_write_after_validation_invalidates_by_fingerprint(tmp_path):
+    """shell 里的 sed -i / 格式化器不走文件工具结果，只能靠内容指纹发现。"""
+    from blank_api.services.agent import graph
+
+    target = tmp_path / "a.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+    fingerprint = graph._fingerprints(str(tmp_path), ["a.py"])
+    validation = {"status": "ok", "covered_mutations": 1, "covered_fingerprint": fingerprint}
+    state = {"tool_results": [_MUTATION]}
+
+    assert graph._changes_after_validation(validation, state, str(tmp_path)) is False
+
+    target.write_text("x = 2\n", encoding="utf-8")  # 模拟 shell 改写
+    assert graph._changes_after_validation(validation, state, str(tmp_path)) is True
+
+
+def test_covering_count_survives_filtered_scratch_entries():
+    """收尾前的 scratch 隔离会删条目：按计数判，下标前移不会造成误判。"""
+    from blank_api.services.agent import graph
+
+    validation = {"status": "ok", "covered_mutations": 1}
+    filtered = [_MUTATION, _TEST_OK]  # 一条 scratch 写已被删掉，不计入两侧
+    assert graph._changes_after_validation(validation, {"tool_results": filtered}) is False
+
+    assert graph._changes_after_validation(
+        validation, {"tool_results": [_MUTATION, _TEST_OK, _MUTATION]}
+    ) is True
+
+
+def test_legacy_index_stamp_still_works():
+    """已落库的记录只有下标戳，交付时不能因此判成"没过期"。"""
+    from blank_api.services.agent import graph
+
+    legacy = {"status": "ok", "covered_results": 2}
+    assert graph._changes_after_validation(legacy, {"tool_results": [_MUTATION, _TEST_OK]}) is False
+    assert graph._changes_after_validation(
+        legacy, {"tool_results": [_MUTATION, _TEST_OK, _MUTATION]}
+    ) is True
+
+
+def test_scratchpad_writes_do_not_count_on_either_side():
+    """scratch 写两侧都不计：否则盖戳时算、判定时被删，计数下降会掩盖后续写入。"""
+    from blank_api.services.agent import graph
+
+    scratch = {
+        "tool": "apply_patch",
+        "ok": True,
+        "status": "ok",
+        "data": {"path": ".blank/scratchpad/selftest.py", "change_type": "created"},
+    }
+    assert graph._mutation_count([scratch]) == 0
+    assert graph._mutation_count([_MUTATION, scratch]) == 1

@@ -163,3 +163,44 @@ def test_goal_spec_absent_keeps_prompt_unchanged() -> None:
     without = initial_messages("目标", ["验收"])
     assert "约束（必须遵守）" not in str(without[-1].get("content"))
     assert "越界（不要做）" not in str(without[-1].get("content"))
+
+
+# ── 嵌套指令不会被读取，以及项目层的预算 ─────────────────────────────────────
+# 2026-11-20 复评发现：评测口径把 web/AGENTS.md 算成「嵌套覆盖 26%」，
+# 而加载器只读工作区根——那份文件一次都不会被注入，还会和根指令漂移
+# （它曾经让用 pnpm，根指令明确不要依赖 pnpm）。这两条判据守住事实本身。
+
+
+def test_nested_agents_md_is_never_injected(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text("根约定", encoding="utf-8")
+    nested = tmp_path / "web"
+    nested.mkdir()
+    (nested / "AGENTS.md").write_text("嵌套约定：这条正文不该出现在注入里", encoding="utf-8")
+
+    layers = load_layers(tmp_path, env=_env(tmp_path))
+    payload = compose("BASE", layers)
+
+    assert "根约定" in payload
+    assert "嵌套约定" not in payload
+
+
+def test_project_layer_fits_the_budget_and_is_not_truncated(tmp_path: Path) -> None:
+    """项目层要留出余量：越过 FILE_CHAR_LIMIT 会被静默截断，约定就少一截。"""
+    body = "约定" * 100
+    (tmp_path / "AGENTS.md").write_text(body, encoding="utf-8")
+
+    layers = load_layers(tmp_path, env=_env(tmp_path))
+    project = next(item for item in layers if item.source == LAYER_PROJECT)
+
+    assert project.truncated is False
+    assert len(project.content) < FILE_CHAR_LIMIT
+
+
+def test_real_project_instructions_still_fit() -> None:
+    """仓库自己的 AGENTS.md 也必须在上限之内——追加内容不能悄悄把它顶出去。"""
+    root = Path(__file__).resolve().parents[3]
+    path = root / "AGENTS.md"
+    if not path.exists():  # pragma: no cover - 换工作区跑单测时跳过
+        return
+    text = path.read_text(encoding="utf-8")
+    assert len(text) < FILE_CHAR_LIMIT, f"AGENTS.md 已 {len(text)} 字符，接近/超过 {FILE_CHAR_LIMIT}"

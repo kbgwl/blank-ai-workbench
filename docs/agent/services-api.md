@@ -82,12 +82,18 @@ bash check.sh                                                  # 跨端门禁，
 
 ## 校验与改动的绑定（2026-11-20 起）
 
-`run_validation_node` 会给校验记录盖章：`covered_results`（跑时已有几条工具结果）
-与 `covered_files`（覆盖到的改动文件）。交付时 `_changes_after_validation` 比较戳与
-当前结果：之后还有成功写动作就判过期，交付走「未跑校验：校验之后又改了代码」，
-接口 `/tasks/{id}/status` 的 `delivery.verify` 带 `missing` / `stale` / `covers`。
+`run_validation_node` 会给校验记录盖章：`covered_mutations`（跑时已有几次成功写动作）、
+`covered_files`（覆盖到的改动文件）、`covered_fingerprint`（这些文件的内容指纹）。
+交付时 `_changes_after_validation` 三路判断：
 
-**已知盲区**：只认工具结果里带 `path` / `change_type` 的写动作。shell 里的 `sed -i`、
-格式化器、代码生成器不算，所以经由它们改的文件不会被判过期。补法是「改动文件内容
-指纹」（见 `docs/external-verify-binding-2026-11.md` P0.1），需要读盘与工作区根。
-不知道这件事的人会以为「没报未跑校验 = 验过了」，改相关逻辑时别加深这个误会。
+1. 写动作计数超过戳 → 过期（用计数不用下标：收尾前的 scratch 隔离会删条目、让下标前移）；
+2. 覆盖文件的内容指纹变了 → 过期（shell 的 `sed -i`、格式化器不经文件工具结果，只能靠内容比对）；
+3. 只有旧 `covered_results` 下标的记录 → 按老口径兜底。
+
+scratchpad 的写在两侧都不计。过期后交付走「未跑校验：校验之后又改了代码，需要重跑」，
+接口 `/tasks/{id}/status` 的 `delivery.verify` 带 `observed` / `missing` / `stale` / `covers`。
+`missing` 与 `stale` 正交：前者是根本没跑，后者是跑了但作废，(0,1) 与 (1,0) 是两种缺口。
+
+**残留盲区**：指纹只覆盖「校验时已经改过的文件」。校验之后由 shell 新**创建**的文件
+不在指纹里，只有它同时被文件工具写、或之后再跑校验才会被发现。改相关逻辑时别把
+「没报未跑校验」直接读成「验过了」。

@@ -5942,6 +5942,57 @@ def _changed_paths(results: list[dict]) -> list[str]:
     return paths
 
 
+def _mutation_count(results: list[dict]) -> int:
+    """成功写动作的条数（**不含 scratchpad**）。
+
+    用它而不是「第几条工具结果」当校验的覆盖戳：收尾前的 scratch 隔离会从
+    ``tool_results`` 里删条目，下标会整体前移，被覆盖区间就错了（方向是少报过期）。
+
+    scratch 两侧都要排除：盖戳时把它算进去、判定时又把它删掉，计数一降，
+    之后的真实写入就可能被掩盖——那正是这次要修的形态。
+    """
+    total = 0
+    for item in results:
+        if not _is_mutation(item):
+            continue
+        if _in_scratchpad(str((item.get("data") or {}).get("path") or "")):
+            continue
+        total += 1
+    return total
+
+
+# 单文件指纹上限：再大就不读内容，退化成 size+mtime。
+_FINGERPRINT_MAX_BYTES = 1_000_000
+
+
+def _file_fingerprint(path: Path) -> str:
+    """文件内容指纹；读不了就返回可区分的原因，不要静默当"没变"。"""
+    try:
+        stat = path.stat()
+    except OSError:
+        return "missing"
+    if stat.st_size > _FINGERPRINT_MAX_BYTES:
+        return f"big:{stat.st_size}:{int(stat.st_mtime_ns)}"
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return "unreadable"
+
+
+def _fingerprints(root: str | None, paths: list[str]) -> dict[str, str]:
+    """给一批改动文件取指纹。拿不到工作区根就返回空——那是"无从判断"，不是"没变"。"""
+    if not root or not paths:
+        return {}
+    base = Path(root)
+    result: dict[str, str] = {}
+    for name in paths:
+        try:
+            result[name] = _file_fingerprint(base / name)
+        except (OSError, ValueError):
+            continue
+    return result
+
+
 def _is_mutation(item: dict) -> bool:
     """这条工具结果是不是一次成功的写动作。"""
     if not isinstance(item, dict) or not item.get("ok"):
@@ -6388,14 +6439,20 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         "timeout_seconds": data.get("timeout_seconds"),
         "summary": data.get("summary") or {},
         "output_tail": str(payload.get("output") or payload.get("message") or "")[-2000:],
-        # 盖戳：这条校验是在「第 N 条工具结果之后」跑的。收尾时靠它判断校验有没有
-        # 落在最后一次改动之后——校验之后再改代码，这条记录就不该再被当成验证。
-        # 与 `_self_run_validation` 里的 `results[last_index + 1:]` 是同一个判据，
-        # 那边在构造时判，这边留到交付时判（中间可能还有 review_result 再回到执行）。
+        # 盖戳：这条校验是在「已经发生过几次成功写动作」与「覆盖了哪几个文件」时跑的。
+        # 收尾时两个都要比：计数答「之后又写过没有」，指纹答「覆盖的文件还是不是那版」。
+        # 只用计数会漏掉 shell / 格式化器这类不经文件工具结果的写入；只用指纹会漏掉
+        # 「改的是同一批文件但内容已不同」之外的场景（例如新增文件）。
+        "covered_mutations": _mutation_count(state.get("tool_results") or []),
+        # 旧字段保留：已落库的记录里会有它，交付时仍按它兜底。
         "covered_results": len(state.get("tool_results") or []),
         # 被这次校验覆盖的改动文件。序号能回答「有没有过期」，文件集才能回答
         # 「这条校验验的是什么」。两个都留，别用一个去替代另一个。
         "covered_files": sorted(set(_changed_paths(state.get("tool_results") or []))),
+        "covered_fingerprint": _fingerprints(
+            str(getattr(getattr(session, "context", None), "root", "") or ""),
+            sorted(set(_changed_paths(state.get("tool_results") or []))),
+        ),
     }
     if data.get("self_run"):
         # 证据来源要能区分：run_tests 与「模型自己跑通的测试命令」在审计上是两件事。
@@ -6836,26 +6893,51 @@ def _change_facts(state: AgentState) -> tuple[list[str], int]:
     return list(hunks_by_path), sum(hunks_by_path.values())
 
 
-def _changes_after_validation(validation: dict, state: AgentState) -> bool:
-    """校验记录之后还有没有成功的写动作。
+def _changes_after_validation(validation: dict, state: AgentState, root: str | None = None) -> bool:
+    """校验记录之后还有没有写动作，或它覆盖的文件是不是已经变了。
 
-    校验盖了 ``covered_results`` 戳的，按戳判；没有戳的老记录一律返回 False
-    ——**不能因为缺字段就判成过期**，那会把历史上所有正常交付改成"未验证"。
+    三道判据，任一命中就算过期：
 
-    已知盲区：只认工具结果里带 ``path`` / ``change_type`` 的写动作。走 shell 的
-    ``sed -i``、格式化器、代码生成器改掉的文件不计入。补这个缺口需要「改动文件
-    内容指纹」（外部调研见 docs/external-verify-binding-2026-11.md P0.1），
-    要读盘、要工作区根，当前交付路径拿不到，所以先留着并在文档里写明。
+    1. **写动作计数**（``covered_mutations``）：之后又发生了成功的文件工具写。
+       用计数不用下标，因为收尾前的 scratch 隔离会删条目、让下标整体前移。
+    2. **内容指纹**（``covered_fingerprint``）：shell 里的 ``sed -i``、格式化器、
+       代码生成器改的同一批文件，不经文件工具结果，只能靠内容比对发现。
+    3. **旧记录兜底**（``covered_results``）：已落库的记录只有下标，按老口径判。
+
+    三样都没有的极老记录返回 False——**不能因为缺字段就判成过期**，那会把历史上
+    所有正常交付改成"未验证"。
     """
-    try:
-        covered = int(validation.get("covered_results"))
-    except (TypeError, ValueError):
-        return False
     results = state.get("tool_results") or []
-    return any(_is_mutation(item) for item in results[covered:])
+
+    covered = validation.get("covered_mutations")
+    if isinstance(covered, int) and not isinstance(covered, bool):
+        if _mutation_count(results) > covered:
+            return True
+    else:
+        # 兼容：只有下标戳的记录，仍按「下标之后有没有写动作」判。
+        try:
+            index = int(validation.get("covered_results"))
+        except (TypeError, ValueError):
+            index = None
+        if index is not None and any(_is_mutation(item) for item in results[index:]):
+            return True
+
+    fingerprint = validation.get("covered_fingerprint")
+    if root and isinstance(fingerprint, dict) and fingerprint:
+        current = _fingerprints(root, list(fingerprint.keys()))
+        for name, digest in fingerprint.items():
+            if current.get(name) != digest:
+                return True
+    return False
 
 
-def _delivery_facts(report: str, state: AgentState) -> DeliveryFacts:
+def _workspace_root(session: AgentSession | None) -> str | None:
+    """交付路径上能用来自查文件的手指根。拿不到就返回 None（不猜）。"""
+    root = getattr(getattr(session, "context", None), "root", None)
+    return str(root) if root else None
+
+
+def _delivery_facts(report: str, state: AgentState, root: str | None = None) -> DeliveryFacts:
     """四行交付的事实来源：结论取模型段落首句，改动与验证取记录。
 
     只在这里拼一次，文本与结构化负载共用同一份事实——两处各拼一遍就会出现
@@ -6875,7 +6957,7 @@ def _delivery_facts(report: str, state: AgentState) -> DeliveryFacts:
             exit_code = raw_exit
         # 校验之后又改了代码：这条记录已经不能代表最终状态。按未验证交付，
         # 否则「先跑测试再编辑」的任务会打印一行看起来合格的验证。
-        if _changes_after_validation(validation, state):
+        if _changes_after_validation(validation, state, root):
             command = ""
             exit_code = None
             verify_stale = True
@@ -6909,7 +6991,7 @@ def _delivery_text(report: str, state: AgentState, session: AgentSession) -> str
     模型没法在这里塞「已验证」——它那句原本就可能不实，而 ``验证`` 这一行只有真的
     跑过、且退出码已知时才会出现。
     """
-    facts = _delivery_facts(report, state)
+    facts = _delivery_facts(report, state, _workspace_root(session))
     # 没改动、也没真跑过校验的任务（只读分析、纯回答）不进四行格式：那类交付的价值
     # 就在正文本身，压成"一句话结论"等于把答案截掉。四行是给"有产物的工作"用的。
     if facts.changed_files == 0 and facts.verify_exit is None:
@@ -6919,9 +7001,11 @@ def _delivery_text(report: str, state: AgentState, session: AgentSession) -> str
     return text or report
 
 
-def _delivery_payload(report: str, state: AgentState, mode: str, text: str) -> dict:
+def _delivery_payload(
+    report: str, state: AgentState, mode: str, text: str, session: AgentSession | None = None
+) -> dict:
     """结构化交付负载：和正文同源，前端不必回头解析那四行。"""
-    payload = delivery_dict(_delivery_facts(report, state))
+    payload = delivery_dict(_delivery_facts(report, state, _workspace_root(session)))
     payload["mode"] = mode
     payload["chars"] = len(text)
     return payload
@@ -7271,7 +7355,7 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
                     }
                 )
             text = _delivery_text(report, delivery_state, session)
-            await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, "report", text))
+            await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, "report", text, session))
             return {
                 "summary": _enforce_no_false_claim(
                     _validation_note(
@@ -7292,7 +7376,7 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
             ]
             report = as_report(raw)
             text = _delivery_text(report, delivery_state, session)
-            await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, "fallback", text))
+            await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, "fallback", text, session))
             return {
                 "summary": _enforce_no_false_claim(
                     _validation_note(
@@ -7317,7 +7401,7 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
         usage = state.get("usage") or {}
         mode = "fallback"
     text = _delivery_text(report, delivery_state, session)
-    await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, mode, text))
+    await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, mode, text, session))
     return {
         "summary": _enforce_no_false_claim(
             _validation_note(

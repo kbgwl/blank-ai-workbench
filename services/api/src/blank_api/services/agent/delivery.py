@@ -133,7 +133,13 @@ def as_dict(facts: DeliveryFacts) -> dict:
             "command": str(facts.verify_command or "").strip(),
             "exit": facts.verify_exit,
             # 改了东西但没跑校验：结构化字段里也要能直接判，别让前端回读文本。
-            "missing": int(facts.changed_files or 0) > 0 and not verification_ran(facts),
+            # 必须排除 stale：跑了但过期是另一类缺口，混进 missing 会让
+            # 「该催跑」和「该重跑」被统计成同一件事。
+            "missing": (
+                int(facts.changed_files or 0) > 0
+                and not facts.verify_stale
+                and not verification_ran(facts)
+            ),
             # 跑过但过期（校验之后又改了代码）：与「根本没跑」分开，下游能分别处置。
             "stale": bool(facts.verify_stale),
             # 这条校验覆盖的改动文件：只给真跑过且没过期的记录，否则是空。

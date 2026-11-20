@@ -2224,13 +2224,17 @@ def _delivery_verify(payload: dict | None) -> dict:
     以前只回 ``delivery.present``：只要有交付事件就算交付了，未验证交付与已验证交付
     在接口上完全一样——「未跑校验」只活在正文那一行文本里，机器读不到。这里把它
     提到结构化字段，下游（前端标记、通知决策、验收统计）才有判据可用。
+
+    ``observed`` 说明「有没有一条真实交付记录」：没有记录时其余字段全是默认值，
+    把默认值读成「无缺口」是错的。
     """
     verify = (payload or {}).get("verify")
     if not isinstance(verify, dict):
-        return {"command": "", "exit": None, "missing": False, "stale": False, "covers": []}
+        return {"observed": False, "command": "", "exit": None, "missing": False, "stale": False, "covers": []}
     raw_exit = verify.get("exit")
     covers = verify.get("covers")
     return {
+        "observed": True,
         "command": str(verify.get("command") or ""),
         "exit": raw_exit if isinstance(raw_exit, int) and not isinstance(raw_exit, bool) else None,
         "missing": verify.get("missing") is True,
@@ -2394,10 +2398,16 @@ async def task_status(task_id: str, db: DbSession) -> dict:
             "diff_fingerprint": fingerprint,
         },
         "delivery": {
-            "present": delivered is not None,
+            # 只认真正的交付事件。以前这里把 task.completed / validation.completed
+            # 也算进来，于是「跑到校验就崩、从未交付」的任务显示成已交付且无缺口——
+            # 新的 verify 读者就建在这个过宽的口径上，两个字段会互相矛盾。
+            "present": delivery_payload is not None,
             "summary": task.result_summary,
             # 未验证交付要能被机器判出来，不能只靠正文那一行。
             "verify": _delivery_verify(delivery_payload),
+            # 老任务没有 delivery.recorded，但确实跑完了：如实标出来，
+            # 别让它看起来和"已交付且无缺口"一样。
+            "legacy": delivered is not None and delivery_payload is None,
         },
         "dispatch": {
             "intent": snapshot.get("intent"),

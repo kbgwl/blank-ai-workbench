@@ -10,7 +10,9 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## 前端测试
 
-- 纯逻辑放 `src/lib/`，用 `pnpm -C web test`（`node --test`）覆盖，不引渲染库。
-- 因 Node 的 ESM 解析要求写全后缀，测试文件里 import 写 `./xxx.ts`，
-  对应 `tsconfig.json` 已开 `allowImportingTsExtensions`。
-- 回归门禁 `pnpm regression` 已包含前端单测、类型检查与构建三步。
+见仓库根 `AGENTS.md` 的「跑测试」与「改动之后跑什么」两节。
+
+**不要把命令抄到这份文件里。** 本项目只注入工作区根的 `AGENTS.md`
+（`services/api/src/blank_api/services/instructions.py` 的 `PROJECT_FILENAMES`），
+这份 `web/AGENTS.md` 不会被任何一次运行读到；抄一份命令到这里，只会多一处在悄悄漂移、
+而且没人会执行的"约定"。
