@@ -5980,12 +5980,18 @@ def _file_fingerprint(path: Path) -> str:
 
 
 def _fingerprints(root: str | None, paths: list[str]) -> dict[str, str]:
-    """给一批改动文件取指纹。拿不到工作区根就返回空——那是"无从判断"，不是"没变"。"""
+    """给一批改动文件取指纹。拿不到工作区根就返回空——那是"无从判断"，不是"没变"。
+
+    scratchpad / 计划目录这类 harness 自有路径不取指纹：写动作计数那边已经排除它们，
+    两路判据必须用同一套口径，否则「盖戳时算、收尾时被移走」会变成一次误报的过期。
+    """
     if not root or not paths:
         return {}
     base = Path(root)
     result: dict[str, str] = {}
     for name in paths:
+        if _in_scratchpad(name):
+            continue
         try:
             result[name] = _file_fingerprint(base / name)
         except (OSError, ValueError):
@@ -6926,7 +6932,13 @@ def _changes_after_validation(validation: dict, state: AgentState, root: str | N
     if root and isinstance(fingerprint, dict) and fingerprint:
         current = _fingerprints(root, list(fingerprint.keys()))
         for name, digest in fingerprint.items():
-            if current.get(name) != digest:
+            now = current.get(name)
+            if now is None or now == "missing":
+                # 文件没了：不算「改过」。收尾会把 scratch 自测脚本移出工作区
+                # （_quarantine_scratch / 状态外移），那是 harness 自己的动作，
+                # 不是 agent 在校验之后又改了代码。真正的删除走写动作计数那一路。
+                continue
+            if now != digest:
                 return True
     return False
 

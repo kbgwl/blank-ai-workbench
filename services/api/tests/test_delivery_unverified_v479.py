@@ -219,3 +219,39 @@ def test_scratchpad_writes_do_not_count_on_either_side():
     }
     assert graph._mutation_count([scratch]) == 0
     assert graph._mutation_count([_MUTATION, scratch]) == 1
+
+
+def test_a_moved_scratch_script_is_not_a_late_change(tmp_path):
+    """收尾把自测脚本移走，不是「校验之后又改了代码」。
+
+    复评（第四轮）抓到的误报形态：盖戳时 _selftest.js 还在工作区根，收尾时被
+    _quarantine_scratch 挪进 .blank/scratchpad，交付再取指纹拿到 missing，
+    于是一次正常交付被标成「未跑校验」。
+    """
+    from blank_api.services.agent import graph
+
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "_selftest.js").write_text("console.log(1)\n", encoding="utf-8")
+    fingerprint = graph._fingerprints(str(tmp_path), ["a.py", "_selftest.js"])
+    validation = {"status": "ok", "covered_mutations": 1, "covered_fingerprint": fingerprint}
+    state = {"tool_results": [_MUTATION]}
+
+    assert graph._changes_after_validation(validation, state, str(tmp_path)) is False
+
+    (tmp_path / "_selftest.js").unlink()  # 被移出工作区（隔离/外移）
+    assert graph._changes_after_validation(validation, state, str(tmp_path)) is False
+
+
+def test_scratchpad_paths_never_enter_the_fingerprint(tmp_path):
+    """两路判据同一口径：计数排除 scratch，指纹也要排除。"""
+    from blank_api.services.agent import graph
+
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / ".blank").mkdir()
+    (tmp_path / ".blank" / "scratchpad").mkdir()
+    (tmp_path / ".blank" / "scratchpad" / "selftest.py").write_text("print(1)\n", encoding="utf-8")
+
+    fingerprint = graph._fingerprints(
+        str(tmp_path), ["a.py", ".blank/scratchpad/selftest.py"]
+    )
+    assert set(fingerprint) == {"a.py"}
