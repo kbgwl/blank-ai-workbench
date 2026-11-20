@@ -12,7 +12,20 @@
 
 from __future__ import annotations
 
+from blank_api.db import get_session_factory
+from blank_api.models.task import Task
 from blank_api.schemas.task import TaskApprovalIn
+
+# `env` 是夹具，故意导入：审批门/执行节点的接线只能在真实运行时里验。
+from tests.test_agent_v04 import (  # noqa: F401
+    ENV_PATCH,
+    call,
+    create_project,
+    create_provider,
+    create_task,
+    env,
+    provider_row,
+)
 
 
 def test_approval_accepts_a_send_back_step():
@@ -188,3 +201,92 @@ def test_rewind_patch_is_empty_when_the_step_is_unknown():
     state = {"plan_steps": [{"id": "s1", "step": "调研", "status": "completed"}]}
     assert rewind_plan_for_gate(state, "nope") == {}
     assert rewind_plan_for_gate(state, "") == {}
+
+
+# ── 接线：决定能不能真的到达计划（2026-11-21 补） ─────────────────────────
+# 上面这些都只证明「算得对」。真正会坏的是接线：审批门有没有把 step_id 记到会话上、
+# 执行节点有没有读到它并真的把计划改回去。这两根线此前没有任何判据——删掉赋值、
+# 或者在重放分支里被清掉，全部判据仍绿，而打回会静默失效。
+
+
+async def test_sending_back_really_reopens_the_plan(env, workspace):  # noqa: F811
+    """走完整链路：审批门收到 step_id → 执行节点结算 → 计划真的从该步起重开。
+
+    这一条同时钉住两根线：
+    1. ``_approval_gate`` 里 ``session.rewind_request = step_id``——没有它，
+       后面的结算永远不会触发（会话上没东西可读）；
+    2. 执行节点读到它之后调 ``rewind_gate_settlement`` + ``settlement_records``
+       并把结果写回状态——没有它，事件、计划都不动。
+
+    步骤 id 取真实计划里的那一个：前端也只能回传真实 id（``legacy-N`` 那类兜底
+    值后端永远匹配不上，是另一条已知路径，上面已有判据）。
+    """
+    from blank_api.services.agent.runtime import AgentRuntime, RunRequest
+    from blank_api.services.models.registry import build_adapter
+
+    project_id = await create_project(env, workspace)
+    provider_id = await create_provider(env)
+    task_id = await create_task(env, project_id, ["改配置"])
+    adapter = build_adapter(await provider_row(provider_id), env.mock.factory)
+    env.mock.reset(
+        [
+            {
+                "content": "先说计划",
+                "tool_calls": [
+                    call(
+                        "update_plan",
+                        {
+                            "steps": [
+                                {"step": "调研配置", "status": "completed"},
+                                {"step": "写入配置", "status": "completed"},
+                            ]
+                        },
+                    )
+                ],
+            },
+            {
+                "content": "写入配置",
+                "tool_calls": [call("apply_patch", {"path": ".env", "patch": ENV_PATCH})],
+            },
+        ]
+    )
+    request = RunRequest(
+        task_id=task_id,
+        provider_id=provider_id,
+        provider_name="mock-vendor",
+        adapter=adapter,
+        root=workspace,
+        title="改配置",
+        goal="写入 .env 配置",
+        acceptance_criteria=["配置写入且第二步重做过"],
+        max_steps=6,
+    )
+    runtime = AgentRuntime(get_session_factory())
+
+    evidence = await runtime.run(request)
+    assert evidence["task"]["status"] == "waiting_approval", evidence["task"]
+    # 计划在等审批那一刻就落库了（用户回来第一屏要看到"做到哪了"），
+    # 这里读库而不是读 evidence：证据包对 waiting_approval 不带计划明细。
+    async with get_session_factory()() as session:
+        steps = (await session.get(Task, task_id)).plan_steps
+    assert [item["status"] for item in steps] == ["completed", "completed"], steps
+    target = steps[1]["id"]
+
+    # 驳回并指定「退回第 2 步」：这正是界面上「退回重做」按钮发的那一份载荷。
+    env.mock.reset([{"content": "从第 2 步重做"}, {"content": "完成"}])
+    resumed = await runtime.resume(
+        request,
+        decision={"approve": False, "scope": "once", "feedback": "第 2 步不对", "step_id": target},
+    )
+
+    events = [event["type"] for event in resumed["timeline"]]
+    assert "plan.rewound" in events, events
+    rewound = [event for event in resumed["timeline"] if event["type"] == "plan.rewound"][-1]
+    assert rewound["payload"]["step_id"] == target
+    assert rewound["payload"]["index"] == 1
+
+    async with get_session_factory()() as session:
+        after = (await session.get(Task, task_id)).plan_steps
+    assert [item["status"] for item in after] == ["completed", "pending"], after
+    # 打回的那一步不留旧证据：留着等于"没重做也算做过了"。
+    assert after[1]["evidence"] == ""
