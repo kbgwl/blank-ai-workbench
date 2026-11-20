@@ -162,6 +162,35 @@ export function buildSteps(events: readonly RawEvent[]): BotStep[] {
     // 两处都画，用户会以为计划执行了两次。
     if (type === "plan.created" || type === "plan.updated") continue;
 
+    // 打回的结果必须在这一轮里当场有个交代：用户刚在审批卡上选了「退回第 N 步」。
+    // 计划卡只会在成功时跟着变，而"没生效"那一档连计划都不动——不写一行说明的话，
+    // 用户看到的就是「我点了退回，什么都没发生」。两档都进步骤流，口径与任务页一致。
+    if (type === "plan.rewound") {
+      const index = num(event.payload, "index");
+      const stepId = str(event.payload, "step_id");
+      steps.push({
+        kind: "note",
+        key: `rewound-${event.seq}`,
+        text:
+          index !== null
+            ? `已退回第 ${index + 1} 步，从这里重做`
+            : `已退回某一步（${stepId || "未记 id"}），从这里重做`,
+        tone: "muted",
+      });
+      continue;
+    }
+    if (type === "plan.rewind_missed") {
+      const requested = str(event.payload, "step_id");
+      const knownIds = Array.isArray(event.payload?.known_step_ids) ? event.payload.known_step_ids : [];
+      steps.push({
+        kind: "note",
+        key: `rewind-missed-${event.seq}`,
+        text: `打回没生效：请求退回 ${requested || "（空）"}，当前计划 ${knownIds.length} 步，对不上任何一步。这次只按普通驳回处理，计划没有重开`,
+        tone: "warn",
+      });
+      continue;
+    }
+
     if (type === "tool.requested" || type === "tool.started") {
       const name = toolNameOf(event);
       steps.push({

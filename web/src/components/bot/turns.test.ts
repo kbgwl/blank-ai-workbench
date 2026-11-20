@@ -497,3 +497,27 @@ test("失败事件带上原始原因和错误码：错误分层要用它们认�
   // 老数据没有 code，不能报错也不能编一个。
   assert.equal(turnReply([ev(4, "task.failed", { reason: "x" })]).code, "");
 });
+
+test("打回成功在对话页留一行说明，不用去任务页对账", () => {
+  // 计划卡只会在成功时跟着变；没有这一行，用户看不出"退回的是第几步"。
+  const steps = buildSteps([ev(1, "plan.rewound", { step_id: "s2", index: 1, steps: [] })]);
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0].kind, "note");
+  if (steps[0].kind !== "note") return;
+  assert.equal(steps[0].tone, "muted");
+  assert.match(steps[0].text, /第 2 步/, "序号要按 1 起算，与计划面板一致");
+});
+
+test("打回没生效在对话页是警告行，且写明计划没有重开", () => {
+  // 这一档计划根本不动，不给行说明的话，用户看到的就是"点了没反应"。
+  const steps = buildSteps([
+    ev(1, "plan.rewind_missed", { step_id: "legacy-0", known_step_ids: ["a1", "b2", "c3"] }),
+  ]);
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0].kind, "note");
+  if (steps[0].kind !== "note") return;
+  assert.equal(steps[0].tone, "warn");
+  assert.match(steps[0].text, /legacy-0/);
+  assert.match(steps[0].text, /3 步/);
+  assert.match(steps[0].text, /没有重开/);
+});
