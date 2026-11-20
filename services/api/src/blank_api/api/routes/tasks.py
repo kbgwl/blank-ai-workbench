@@ -962,10 +962,45 @@ async def run_task(task_id: str, payload: TaskRunIn, request: Request, db: DbSes
     if task.status == "running":
         raise ApiError(code="task_running", message="任务正在执行中", status_code=409)
     run_request = await _run_request(db, task, payload, request)
-    evidence = await AgentRuntime(get_session_factory()).run(run_request)
+    # 工作与请求解耦：客户端断开只该停止**等待**，不该停止**干活**。
+    #
+    # 实测（2026-11-20 08:50）：夜班用 curl 跑一个长任务，客户端 600 秒超时断开，
+    # 服务端抛 CancelledError、回 500，已经跑掉的十分钟连同 token 一起作废，任务
+    # 永远停在 running——再点运行就是 409「任务正在执行中」，谁也捡不回来。
+    # 所以这里 detach：请求被取消时工作继续跑完，状态照常落库，客户端回来
+    # GET /tasks/{id} 看结果。
+    work = asyncio.create_task(
+        AgentRuntime(get_session_factory()).run(run_request),
+        name=f"blank-run-{task_id}",
+    )
+    evidence = await _run_detached(work, task_id)
     async with get_session_factory()() as session:
         finished = await load_task(session, task_id)
         return {"task": TaskOut.model_validate(finished).model_dump(), "evidence": evidence}
+
+
+async def _run_detached(work: asyncio.Task, task_id: str) -> dict:
+    """等一个任务跑完；等的人被取消时，跑的人继续跑。
+
+    这条边界值得单独写出来：`await task` 在调用方被取消时会**连带取消被等待的任务**，
+    于是"客户端断开"等于"工作作废"。shield 把两者拆开——断开的只是等，工作照旧，
+    状态照旧落库。
+    """
+    try:
+        return await asyncio.shield(work)
+    except asyncio.CancelledError:
+        work.add_done_callback(lambda done: _log_detached(done, task_id))
+        raise
+
+
+def _log_detached(done: asyncio.Task, task_id: str) -> None:
+    """后台跑完的回调：异常必须有人取，否则会被 asyncio 静默丢掉。"""
+    if done.cancelled():
+        log.warning("客户端断开后后台执行被取消 task=%s", task_id)
+        return
+    error = done.exception()
+    if error is not None:
+        log.error("客户端断开后后台执行失败 task=%s: %r", task_id, error)
 
 
 async def _record_run_failure(task_id: str, run_id: str, error: BaseException) -> None:
