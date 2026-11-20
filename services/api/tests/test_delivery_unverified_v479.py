@@ -80,3 +80,74 @@ def test_graph_wires_the_skip_reason_into_the_delivery():
     text = graph._delivery_text("结论\n- 改好了", state, None)
     assert "未跑校验：本机没有可用测试命令" in text
     assert "验证：" not in text
+
+
+# ── 校验与「最后一次改动」的先后 ───────────────────────────────────────────
+
+_MUTATION = {"tool": "apply_patch", "ok": True, "status": "ok", "data": {"path": "b.py", "change_type": "modified"}}
+_TEST_OK = {"tool": "run_tests", "ok": True, "status": "ok", "data": {"command": "pytest -q", "exit_code": 0}}
+
+
+def test_validation_after_the_last_change_still_counts():
+    from blank_api.services.agent import graph
+
+    state = {
+        "tool_results": [_MUTATION, _TEST_OK],
+        "validation": {"status": "ok", "command": "pytest -q", "exit_code": 0, "covered_results": 2},
+    }
+    text = graph._delivery_text("结论\n- 改好了", state, None)
+    assert "验证：pytest -q（退出码 0）" in text
+    assert "未跑校验：" not in text
+
+
+def test_changes_after_validation_invalidate_it():
+    """先跑测试再编辑：那条校验不能代表最终状态。"""
+    from blank_api.services.agent import graph
+
+    state = {
+        "tool_results": [_MUTATION, _TEST_OK, _MUTATION],
+        "validation": {"status": "ok", "command": "pytest -q", "exit_code": 0, "covered_results": 2},
+    }
+    text = graph._delivery_text("结论\n- 改好了", state, None)
+    assert "未跑校验：校验之后又改了代码，需要重跑" in text
+    assert "验证：" not in text
+
+    assert graph._delivery_facts("结论", state).verify_stale is True
+
+
+def test_records_without_a_stamp_are_not_retroactively_invalidated():
+    """老记录没有戳：不能因为缺字段就把历史交付全改写成交付未验证。"""
+    from blank_api.services.agent import graph
+
+    state = {
+        "tool_results": [_MUTATION, _TEST_OK, _MUTATION],
+        "validation": {"status": "ok", "command": "pytest -q", "exit_code": 0},
+    }
+    assert graph._changes_after_validation(dict(state["validation"]), state) is False
+
+
+def test_verify_reports_which_files_it_covers():
+    """序号答「过没过期」，文件集答「验的是什么」——两个都要有。"""
+    from blank_api.services.agent import graph
+
+    state = {
+        "tool_results": [_MUTATION, _TEST_OK],
+        "validation": {
+            "status": "ok",
+            "command": "pytest -q",
+            "exit_code": 0,
+            "covered_results": 2,
+            "covered_files": ["a.py", "b.py"],
+        },
+    }
+    payload = delivery.as_dict(graph._delivery_facts("结论", state))
+    assert payload["verify"]["covers"] == ["a.py", "b.py"]
+
+    # 过期时不给「覆盖了哪些文件」——那会让人以为验过当前状态。
+    stale_state = {
+        "tool_results": [_MUTATION, _TEST_OK, _MUTATION],
+        "validation": state["validation"],
+    }
+    stale = delivery.as_dict(graph._delivery_facts("结论", stale_state))
+    assert stale["verify"]["covers"] == []
+    assert stale["verify"]["stale"] is True

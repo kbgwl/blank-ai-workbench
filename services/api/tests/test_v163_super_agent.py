@@ -104,8 +104,12 @@ def test_delivery_as_dict_is_structured():
         delivery.DeliveryFacts(completed="完成 A", changed_files=1, verify_command="pytest", verify_exit=1)
     )
     assert payload["changed_files"] == 1
-    # `missing` 是后加的：有改动却没校验时前端要能直接判，不必回读文本。
-    assert payload["verify"] == {"command": "pytest", "exit": 1, "missing": False}
+    # 逐个字段断言，不锁死键集：交付负载是增量扩展的（missing / stale 都是后加的），
+    # 整字典相等会让每加一个字段就炸一次，真正要守的是这几个语义。
+    verify = payload["verify"]
+    assert verify["command"] == "pytest"
+    assert verify["exit"] == 1
+    assert verify["missing"] is False
     assert "完成：完成 A" in payload["text"]
 
 
@@ -457,3 +461,81 @@ async def test_expire_stale_approvals_ignores_the_background_switch(monkeypatch)
     assert await worker.expire_stale_approvals() == 1
     async with get_session_factory()() as session:
         assert (await session.get(Task, stale_id)).status == "failed"
+
+
+# ── 未验证交付要能被机器判出来（不能只活在正文那一行）─────────────────────
+
+
+async def test_task_status_surfaces_an_unverified_delivery():
+    task_id, run_id = await _seed()
+    async with get_session_factory()() as session:
+        session.add(
+            AgentEvent(
+                id="ev-d1",
+                task_id=task_id,
+                run_id=run_id,
+                seq=2,
+                node="summarize_result",
+                type="delivery.recorded",
+                payload={"verify": {"command": "", "exit": None, "missing": True, "stale": False}},
+            )
+        )
+        await session.commit()
+
+    async with get_session_factory()() as session:
+        payload = await task_routes.task_status(task_id, session)
+
+    assert payload["delivery"]["present"] is True
+    assert payload["delivery"]["verify"]["missing"] is True
+    assert payload["delivery"]["verify"]["stale"] is False
+
+
+async def test_task_status_surfaces_a_stale_verification():
+    task_id, run_id = await _seed()
+    async with get_session_factory()() as session:
+        session.add(
+            AgentEvent(
+                id="ev-d2",
+                task_id=task_id,
+                run_id=run_id,
+                seq=2,
+                node="summarize_result",
+                type="delivery.recorded",
+                payload={"verify": {"command": "", "exit": None, "missing": True, "stale": True}},
+            )
+        )
+        await session.commit()
+
+    async with get_session_factory()() as session:
+        payload = await task_routes.task_status(task_id, session)
+
+    assert payload["delivery"]["verify"]["stale"] is True
+
+
+async def test_delivery_event_without_verify_fields_stays_readable():
+    """老事件没有 verify 字段：接口不能因此报错或编出一个缺口。"""
+    task_id, run_id = await _seed()
+    async with get_session_factory()() as session:
+        session.add(
+            AgentEvent(
+                id="ev-d3",
+                task_id=task_id,
+                run_id=run_id,
+                seq=2,
+                node="summarize_result",
+                type="delivery.recorded",
+                payload={"completed": "改好了"},
+            )
+        )
+        await session.commit()
+
+    async with get_session_factory()() as session:
+        payload = await task_routes.task_status(task_id, session)
+
+    assert payload["delivery"]["present"] is True
+    verify = payload["delivery"]["verify"]
+    assert verify["command"] == ""
+    assert verify["exit"] is None
+    assert verify["missing"] is False
+    assert verify["stale"] is False
+    assert verify["covers"] == []

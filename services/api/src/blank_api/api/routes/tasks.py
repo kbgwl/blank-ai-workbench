@@ -2218,6 +2218,28 @@ def _iso_or_none(value) -> str | None:
     return value.isoformat() if value else None
 
 
+def _delivery_verify(payload: dict | None) -> dict:
+    """把交付事件里的 ``verify`` 摊平成接口字段。
+
+    以前只回 ``delivery.present``：只要有交付事件就算交付了，未验证交付与已验证交付
+    在接口上完全一样——「未跑校验」只活在正文那一行文本里，机器读不到。这里把它
+    提到结构化字段，下游（前端标记、通知决策、验收统计）才有判据可用。
+    """
+    verify = (payload or {}).get("verify")
+    if not isinstance(verify, dict):
+        return {"command": "", "exit": None, "missing": False, "stale": False, "covers": []}
+    raw_exit = verify.get("exit")
+    covers = verify.get("covers")
+    return {
+        "command": str(verify.get("command") or ""),
+        "exit": raw_exit if isinstance(raw_exit, int) and not isinstance(raw_exit, bool) else None,
+        "missing": verify.get("missing") is True,
+        "stale": verify.get("stale") is True,
+        # 这条校验覆盖的改动文件：交付时说得出「验的是什么」，不只一个退出码。
+        "covers": [str(name) for name in covers] if isinstance(covers, list) else [],
+    }
+
+
 @router.get("/tasks/{task_id}/status")
 async def task_status(task_id: str, db: DbSession) -> dict:
     """结构化任务状态（任务书 §6）。
@@ -2313,6 +2335,14 @@ async def task_status(task_id: str, db: DbSession) -> dict:
             .limit(1)
         )
     ).scalar_one_or_none()
+    delivery_payload = (
+        await db.execute(
+            select(AgentEvent.payload)
+            .where(AgentEvent.task_id == task_id, AgentEvent.type == "delivery.recorded")
+            .order_by(AgentEvent.seq.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
     snapshot = dict(task.dispatch_snapshot or {})
     notify_row = (
         await db.execute(
@@ -2366,6 +2396,8 @@ async def task_status(task_id: str, db: DbSession) -> dict:
         "delivery": {
             "present": delivered is not None,
             "summary": task.result_summary,
+            # 未验证交付要能被机器判出来，不能只靠正文那一行。
+            "verify": _delivery_verify(delivery_payload),
         },
         "dispatch": {
             "intent": snapshot.get("intent"),

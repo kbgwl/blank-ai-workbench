@@ -54,6 +54,10 @@ class DeliveryFacts:
     needs_user: str = ""
     # 没跑校验时的具体原因（例如跳过原因）。为空则用固定的 UNVERIFIED_REASON。
     verify_note: str = ""
+    # 跑过校验，但校验之后又改了代码——记录过期。与「根本没跑」要能分开看。
+    verify_stale: bool = False
+    # 这次校验覆盖到的改动文件。序号答「过没过期」，文件集答「验的是什么」。
+    verify_files: tuple[str, ...] = ()
     # 文件名按第一次出现的顺序；只放计数不留名字，用户就没法按「文件结构」验收。
     files: tuple[str, ...] = ()
 
@@ -130,6 +134,10 @@ def as_dict(facts: DeliveryFacts) -> dict:
             "exit": facts.verify_exit,
             # 改了东西但没跑校验：结构化字段里也要能直接判，别让前端回读文本。
             "missing": int(facts.changed_files or 0) > 0 and not verification_ran(facts),
+            # 跑过但过期（校验之后又改了代码）：与「根本没跑」分开，下游能分别处置。
+            "stale": bool(facts.verify_stale),
+            # 这条校验覆盖的改动文件：只给真跑过且没过期的记录，否则是空。
+            "covers": list(facts.verify_files) if verification_ran(facts) else [],
         },
         "needs_user": _one_line(facts.needs_user, limit=80),
         "text": render(facts),

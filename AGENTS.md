@@ -49,6 +49,17 @@ cd web && E:/env/node/node-v24.20.0-win-x64/node.exe ./node_modules/typescript/b
 
 内核（agent loop / 权限 / 沙箱 / 恢复）的边界与审批口径见 `docs/agent/services-api.md`。
 
+## 内核红线（改之前先看）
+
+这三条**直接写在这里**，不要只放在文档里等人去翻：
+
+1. **不可逆动作永不越过闸门**。`permissions.py` 的 `IRREVERSIBLE` 在放行链任何一环之前生效，
+   `bypass` 也不例外；放开它等于允许删库。
+2. **只有装依赖按动作类型记账**（`_REMEMBERABLE_ACTION_KINDS`）。删除、`git push`、部署、迁移、
+   越界一律逐条确认；带管道的安装命令故意不记账（后半段不可控）。
+3. **沙箱后端不可用时不降级**。要么整任务拒绝，要么如实标注只强制了文件边界
+   （`measured_file_boundary_only`），不许写成"看起来隔离了"。
+
 ## 量成本与比质量
 
 ```bash

@@ -239,3 +239,27 @@ def test_verifier_verdict_overrides_a_false_success():
         resolve_status({"status": "cancelled", "verdict": {"blocking": True}})
         == "cancelled"
     )
+
+
+# --------------------------------------------------------------------------- 校验与改动的绑定
+
+
+@pytest.mark.asyncio
+async def test_validation_record_is_stamped_with_the_tool_results_it_saw():
+    """校验记录要盖「跑的时候已经有几条工具结果」的戳。
+
+    收尾时靠这个戳判断校验有没有落在最后一次改动之后。没有戳，交付层只能
+    相信「校验跑过」，而先跑测试再编辑的任务会打印一行看起来合格的验证。
+    """
+    session = _ValidationSession()
+    state = {
+        "tool_results": [
+            {"tool": "apply_patch", "ok": True, "status": "ok", "data": {"path": "a.py", "change_type": "modified"}},
+            {"tool": "run_tests", "ok": True, "status": "ok", "data": {"command": "pytest -q", "exit_code": 0}},
+        ],
+        "repair_rounds": 0,
+        "plan_manifest": {"plan_id": "p1", "goal_id": "g1", "steps": [], "approval_points": [], "revision": 0},
+        "goal_spec": {"goal_id": "g1"},
+    }
+    update = await run_validation_node(state, session)
+    assert update["validation"]["covered_results"] == 2

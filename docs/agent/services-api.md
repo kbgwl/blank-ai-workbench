@@ -79,3 +79,15 @@ bash check.sh                                                  # 跨端门禁，
 
 **已知环境红（4 条）**：`fs_broker` 1 条 + `sandbox_restricted` 3 条，改动前后都一样。
 不要为了"全绿"去改它们，也不要因为它们红就认为自己的改动没生效。
+
+## 校验与改动的绑定（2026-11-20 起）
+
+`run_validation_node` 会给校验记录盖章：`covered_results`（跑时已有几条工具结果）
+与 `covered_files`（覆盖到的改动文件）。交付时 `_changes_after_validation` 比较戳与
+当前结果：之后还有成功写动作就判过期，交付走「未跑校验：校验之后又改了代码」，
+接口 `/tasks/{id}/status` 的 `delivery.verify` 带 `missing` / `stale` / `covers`。
+
+**已知盲区**：只认工具结果里带 `path` / `change_type` 的写动作。shell 里的 `sed -i`、
+格式化器、代码生成器不算，所以经由它们改的文件不会被判过期。补法是「改动文件内容
+指纹」（见 `docs/external-verify-binding-2026-11.md` P0.1），需要读盘与工作区根。
+不知道这件事的人会以为「没报未跑校验 = 验过了」，改相关逻辑时别加深这个误会。

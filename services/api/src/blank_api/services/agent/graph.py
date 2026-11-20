@@ -6388,6 +6388,14 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         "timeout_seconds": data.get("timeout_seconds"),
         "summary": data.get("summary") or {},
         "output_tail": str(payload.get("output") or payload.get("message") or "")[-2000:],
+        # 盖戳：这条校验是在「第 N 条工具结果之后」跑的。收尾时靠它判断校验有没有
+        # 落在最后一次改动之后——校验之后再改代码，这条记录就不该再被当成验证。
+        # 与 `_self_run_validation` 里的 `results[last_index + 1:]` 是同一个判据，
+        # 那边在构造时判，这边留到交付时判（中间可能还有 review_result 再回到执行）。
+        "covered_results": len(state.get("tool_results") or []),
+        # 被这次校验覆盖的改动文件。序号能回答「有没有过期」，文件集才能回答
+        # 「这条校验验的是什么」。两个都留，别用一个去替代另一个。
+        "covered_files": sorted(set(_changed_paths(state.get("tool_results") or []))),
     }
     if data.get("self_run"):
         # 证据来源要能区分：run_tests 与「模型自己跑通的测试命令」在审计上是两件事。
@@ -6828,6 +6836,25 @@ def _change_facts(state: AgentState) -> tuple[list[str], int]:
     return list(hunks_by_path), sum(hunks_by_path.values())
 
 
+def _changes_after_validation(validation: dict, state: AgentState) -> bool:
+    """校验记录之后还有没有成功的写动作。
+
+    校验盖了 ``covered_results`` 戳的，按戳判；没有戳的老记录一律返回 False
+    ——**不能因为缺字段就判成过期**，那会把历史上所有正常交付改成"未验证"。
+
+    已知盲区：只认工具结果里带 ``path`` / ``change_type`` 的写动作。走 shell 的
+    ``sed -i``、格式化器、代码生成器改掉的文件不计入。补这个缺口需要「改动文件
+    内容指纹」（外部调研见 docs/external-verify-binding-2026-11.md P0.1），
+    要读盘、要工作区根，当前交付路径拿不到，所以先留着并在文档里写明。
+    """
+    try:
+        covered = int(validation.get("covered_results"))
+    except (TypeError, ValueError):
+        return False
+    results = state.get("tool_results") or []
+    return any(_is_mutation(item) for item in results[covered:])
+
+
 def _delivery_facts(report: str, state: AgentState) -> DeliveryFacts:
     """四行交付的事实来源：结论取模型段落首句，改动与验证取记录。
 
@@ -6839,11 +6866,24 @@ def _delivery_facts(report: str, state: AgentState) -> DeliveryFacts:
     command = ""
     exit_code: int | None = None
     verify_note = ""
+    verify_stale = False
+    verify_files: tuple[str, ...] = ()
     if validation and str(validation.get("status") or "") != "skipped":
         command = str(validation.get("command") or "").strip()
         raw_exit = validation.get("exit_code")
         if isinstance(raw_exit, int) and not isinstance(raw_exit, bool):
             exit_code = raw_exit
+        # 校验之后又改了代码：这条记录已经不能代表最终状态。按未验证交付，
+        # 否则「先跑测试再编辑」的任务会打印一行看起来合格的验证。
+        if _changes_after_validation(validation, state):
+            command = ""
+            exit_code = None
+            verify_stale = True
+            verify_note = "校验之后又改了代码，需要重跑"
+        else:
+            verify_files = tuple(
+                str(name) for name in (validation.get("covered_files") or []) if str(name).strip()
+            )
     elif validation:
         # 跳过校验时把原因带进交付行：只写"没跑"而不说为什么，下一轮还是不知道怎么补。
         verify_note = str(validation.get("skipped_reason") or "").strip()
@@ -6856,6 +6896,8 @@ def _delivery_facts(report: str, state: AgentState) -> DeliveryFacts:
         verify_exit=exit_code,
         needs_user=needs_user,
         verify_note=verify_note,
+        verify_stale=verify_stale,
+        verify_files=verify_files,
         files=tuple(files),
     )
 
