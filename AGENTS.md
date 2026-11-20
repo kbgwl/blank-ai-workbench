@@ -139,5 +139,5 @@ cd desktop && node install-local.cjs
 ## 工程事实
 
 - 结构：`web/`（Next.js）、`services/api/`（FastAPI，环境变量前缀 `BLANK_`）、`packages/cli/`、`evals/`、`scripts/`。
-- 后端 50 个测试文件、540+ 用例，全量跑一遍约 110 秒。
+- 后端 379 个测试文件、4800+ 用例，全量跑一遍约 20 分钟（2026-11-20 实测 19 分 54 秒）。
 - 工作区路径必须命中白名单，返回前端前脱敏成 `<workspace:name>`。
