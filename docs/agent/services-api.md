@@ -78,6 +78,33 @@
 `waiting_approval` 而 `tasks` 已是 `failed`。界面看 task，所以不影响用户，但不要
 据此推断 run 状态。TTL 巡检只管 `task.status == waiting_approval` 的任务。
 
+## 这一轮为什么结束：终态码（2026-11-21 起）
+
+`task.failed` / `task.completed` / `task.cancelled` 等终态事件的载荷里多了一个
+`terminal` 对象：`{code, detail?, reason}`。`code` 是封闭枚举
+（`services/agent/terminal.py` 的 `TERMINAL_CODES`），`detail` 是族下面的种——
+`verification_blocked` 的 detail 是 verifier 的硬违规码（`zero_change` 等），
+`model_error` 的 detail 是供应商码（`model_timeout` 等）。
+
+三条性质，改的时候别破坏：
+
+1. **终态码只由一个纯函数产出**（`terminal_detail()`），两个写入点都调它：
+   `runtime._finish` 与 worker 的审批过期收敛。第三个写入点出现时也要调它，
+   否则界面得认第二种形状。
+2. **它不能被 `extra` 覆盖**。`terminal_payload()` 先铺 `extra` 再写 `terminal`；
+   反过来任何一个多传一个键的调用点都能把失败伪装成 `completed`。
+3. **不许读中文推码**。`failure_reason()` 以前靠 `"零改动" in finding` 判断，
+   同一件事换个说法就认不出。现在按 `verdict["codes"]` 取句；子串那一段只是
+   给升级前的旧 verdict 留的退路。
+
+前端按「越具体越优先」取码：`terminal.detail` → `payload.code` → `terminal.code`
+（`web/src/components/bot/turns.ts` 的 `turnReply`），码表文案在
+`web/src/components/tasks/error-copy.ts`。
+
+**还没覆盖的**：取消/暂停路径（`graph.py` 里那两处 `task.cancelled`）仍只写
+`reason` 不写 `terminal`；界面靠"/取消/"这段文字兜住，行为正确但不够干净。
+要补就在那两处调同一个函数。
+
 ## 改完怎么验
 
 最小集（按改动范围挑，别一上来跑全量 18 分钟）：

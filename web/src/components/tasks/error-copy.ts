@@ -106,6 +106,103 @@ const BY_CODE: Record<string, FailureCopy> = {
     next: "settings",
     code: "context_overflow",
   },
+
+  // ── 终态码（后端 agent/terminal.py 的 TERMINAL_CODES）───────────────────
+  // 这些是"这一轮以什么方式结束"，由后端在同一处把事实翻成码。有了它们，
+  // 这里就不必再拿中文去猜——下面 BY_TEXT 那一层只留给升级前的旧数据。
+  budget_exhausted: {
+    title: "这一轮把步数预算用完了，事没做完。",
+    action: "把它拆小：一次只让它做一件事，或者直接说要哪一部分结果。重发一整句大要求只会再撞一次预算。",
+    next: "retry",
+    code: "budget_exhausted",
+  },
+  verification_blocked: {
+    title: "独立事实校验没通过，这一轮不算完成。",
+    action: "看下面那条具体问题：说了改了却没落盘、交付里假称测试通过、或者自己写着没做完。它不是模型的自评，是磁盘上的事实。",
+    next: "retry",
+    code: "verification_blocked",
+  },
+  validation_failed: {
+    title: "自动化校验没通过，这一轮按失败结束。",
+    action: "看下面贴出的命令与输出。要它继续修，直接把那段报错一起发过去。",
+    next: "retry",
+    code: "validation_failed",
+  },
+  validation_timeout: {
+    title: "校验命令跑超时了，没拿到结论。",
+    action: "这不算测试失败，是这条命令不适合在一次调用里跑完。让它只跑相关的那个测试文件，或者在设置里放宽超时。",
+    next: "retry",
+    code: "validation_timeout",
+  },
+  validation_error: {
+    title: "校验命令没能跑起来。",
+    action: "多半是环境或命令本身的问题（依赖没装、脚本名不对）。让它先确认这条命令能手工跑通。",
+    next: "retry",
+    code: "validation_error",
+  },
+  validation_blocked: {
+    title: "同一条校验命令反复跑，结果没有变化，已经停下。",
+    action: "再跑一遍还是同一个结果。先改代码里真正的原因，或者换一条更小的校验命令。",
+    next: "retry",
+    code: "validation_blocked",
+  },
+  validation_skipped: {
+    title: "这一轮没有跑自动化校验。",
+    action: "结论是按它自己说的给的，没有机器核对过。要确认就让它跑一次测试。",
+    next: "retry",
+    code: "validation_skipped",
+  },
+  hook_blocked: {
+    title: "这条请求被一个钩子拦下了，没进模型。",
+    action: "钩子是项目里配的规则。看下面的原话确认是你自己配的那条；要放行就改钩子配置。",
+    next: "settings",
+    code: "hook_blocked",
+  },
+  model_error: {
+    title: "模型这一轮出错了。",
+    action: "下面「技术详情」里是具体的码；按那个码判断要不要重试。",
+    next: "retry",
+    code: "model_error",
+  },
+  failed: {
+    title: "这一轮失败了，但后端没给出更具体的原因。",
+    action: "再发一次；反复失败就把这段对话的编号一起报出来。",
+    next: "retry",
+    code: "",
+  },
+
+  // ── verifier 的硬违规码（agent/verifier.py 的 BLOCKING_CODES）──────────
+  // 它们是 `verification_blocked.detail`，比族码具体，所以优先命中。
+  zero_change: {
+    title: "它说改了，但工作区里没有任何文件变化。",
+    action: "再发一次，并把要改哪个文件说清楚。如果你本来只是想问一下，明确说是问答，它就不该动文件。",
+    next: "retry",
+    code: "zero_change",
+  },
+  false_claim: {
+    title: "交付里说测试通过了，但实际验证结果不支持。",
+    action: "这一轮的结论不能直接用。让它把测试重跑一遍，并把输出贴出来。",
+    next: "retry",
+    code: "false_claim",
+  },
+  delivery_incomplete: {
+    title: "交付里自己写了没做完。",
+    action: "看它列出的「需要你」那部分：要你手工恢复的，多半是它做不到的事。把剩下的要求单独再发一轮。",
+    next: "retry",
+    code: "delivery_incomplete",
+  },
+  test_config_broken: {
+    title: "这轮改动把测试配置弄坏了，之后一条测试都没跑成。",
+    action: "让它先把测试命令修回来（或回滚那处配置），再继续做原来的事。",
+    next: "retry",
+    code: "test_config_broken",
+  },
+  zero_delivery: {
+    title: "计划里要求改文件，但工作区里一个都没动。",
+    action: "再发一次，先说清要改哪几个文件；也可以先让它只做一件最小的事。",
+    next: "retry",
+    code: "zero_delivery",
+  },
 };
 
 /**

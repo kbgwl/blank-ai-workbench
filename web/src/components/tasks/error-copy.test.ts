@@ -30,6 +30,45 @@ test("登记过的码：标题是人话，码只在 code 字段里", () => {
   }
 });
 
+test("终态码与 verifier 硬违规码：每个都有专属文案，且不是靠中文猜出来的", () => {
+  // 后端 agent/terminal.py 的 TERMINAL_CODES 与 verifier.py 的 BLOCKING_CODES。
+  // 这些码出现时，`reason` 往往是一整句中文——若这里没登记，就会掉进下面的
+  // 中文正则兜底，同一件事换个说法就认不出。所以逐条钉住"有码就有专属文案"。
+  const terminal = [
+    "budget_exhausted",
+    "verification_blocked",
+    "validation_failed",
+    "validation_timeout",
+    "validation_error",
+    "validation_blocked",
+    "validation_skipped",
+    "hook_blocked",
+    "model_error",
+    "failed",
+  ];
+  const hard = ["zero_change", "false_claim", "delivery_incomplete", "test_config_broken", "zero_delivery"];
+  for (const code of [...terminal, ...hard]) {
+    const copy = explainFailure("", code);
+    assert.ok(copy.title.length > 4, `${code} 没有标题`);
+    assert.ok(copy.action.length > 0, `${code} 没告诉用户怎么办`);
+    assert.ok(!copy.title.includes(code), `${code} 的标题里裸奔了错误码：${copy.title}`);
+    // 标题不能是"这一轮没跑完，但后端没留下原因"这种什么都不说的兜底。
+    assert.ok(!copy.title.includes("没留下原因"), `${code} 掉进了兜底文案`);
+  }
+  // 硬违规都该是「重试能解决」这一档：改代码/补齐交付物，不是去改设置。
+  for (const code of hard) assert.equal(explainFailure("", code).next, "retry", code);
+  // 钩子拦下不是重试能解决的：得改钩子配置。
+  assert.equal(explainFailure("", "hook_blocked").next, "settings");
+});
+
+test("终态码优先于中文文本：同一句话换成别的说法，结论不变", () => {
+  // 后端给 detail 时，界面按码出文案；`reason` 只作为原文进折叠区。
+  const a = explainFailure("目标要求改动，但工作区没有任何文件变化", "zero_change");
+  const b = explainFailure("磁盘零改动（零交付）", "zero_change");
+  assert.equal(a.title, b.title);
+  assert.equal(a.code, "zero_change");
+});
+
 test("能靠重试解决的才给重试，改设置的不给假按钮", () => {
   // 上游排队 / 网络抖：重试有意义。
   assert.equal(explainFailure("model_timeout").next, "retry");

@@ -408,7 +408,17 @@ export function quoteDraft(current: string, text: string, limit = QUOTE_LIMIT): 
  * 需要**原始**字样才能认出成因——`reason` 已经被翻译成一句完整的建议，
  * 再拿去匹配关键词，"模型请求超时"里的"超时"是它自己写进去的，等于自证。
  *
- * `code` 来自后端 `_finish(extra=...)`，`ModelError` 一路带下来；旧数据没有这个字段。
+ * `code` 的取值顺序是「越具体越优先」，因为后端给了两层结构：
+ * 1. `terminal.detail`——终态码的细分。`verification_blocked` 的 detail 是
+ *    `zero_change` 这类 verifier 码，`model_error` 的 detail 是供应商码。
+ * 2. `payload.code`——模型错误的原始码（老数据只有这一层）。
+ * 3. `terminal.code`——终态族码，兜底用。
+ *
+ * 为什么不让后端直接给最具体的那个：族码是封闭枚举，界面要能穷举；
+ * 细分码来自不同来源（verifier / 供应商），把它们混进一张枚举表就没法穷举了。
+ * 分层之后界面既能穷举，又能拿到最具体的那一个。
+ *
+ * 旧数据没有 `terminal` 字段，走第 2 步，行为与从前一致。
  */
 export function turnReply(events: readonly RawEvent[]): {
   text: string;
@@ -430,10 +440,24 @@ export function turnReply(events: readonly RawEvent[]): {
     if (type === "task.failed" || type === "task.cancelled" || type === "task.canceled") {
       status = type.replace("task.", "");
       reason = str(event.payload, "reason", "error", "message") || reason;
-      code = str(event.payload, "code", "error_code") || code;
+      const raw = str(event.payload, "code", "error_code");
+      const terminal = terminalOf(event.payload);
+      code = terminal.detail || raw || terminal.code || code;
     }
   }
   return { text, status, reason: reasonText(reason), rawReason: reason, code };
+}
+
+/**
+ * 从终态事件里取 `terminal` 结构。取不到就是空对象——旧数据、别人的写法、
+ * 以及任何形状不对的东西都退化成"没有结构"，调用方只需判断字段是否为空。
+ */
+function terminalOf(payload: unknown): { code: string; detail: string } {
+  if (!payload || typeof payload !== "object") return { code: "", detail: "" };
+  const raw = (payload as Record<string, unknown>).terminal;
+  if (!raw || typeof raw !== "object") return { code: "", detail: "" };
+  const box = raw as Record<string, unknown>;
+  return { code: str(box, "code"), detail: str(box, "detail") };
 }
 
 /**

@@ -43,6 +43,7 @@ from blank_api.services.agent.verifier import (
     failure_reason as verdict_failure_reason,
     verify as verify_facts,
 )
+from blank_api.services.agent.terminal import terminal_detail
 from blank_api.services.agent.automation import resolve_mode as resolve_automation_mode
 from blank_api.services.agent.loadstats import recent_load
 from blank_api.services.agent import repl as repl_module
@@ -1289,7 +1290,13 @@ class AgentRuntime:
         prompt = await self._submit_prompt(scope)
         if prompt.blocked:
             await self._finish(
-                scope, "failed", summary="", reason=f"提交被钩子拦下：{prompt.reason}", steps=0
+                scope,
+                "failed",
+                summary="",
+                reason=f"提交被钩子拦下：{prompt.reason}",
+                steps=0,
+                # 钩子拦下是配置事实，由这里声明，不让终态码去中文里猜。
+                extra={"terminal_code": "hook_blocked"},
             )
             return await build_evidence(scope.store, request.task_id)
         await recorder.add(
@@ -1919,6 +1926,9 @@ class AgentRuntime:
                     "passed": verdict["passed"],
                     "blocking": verdict["blocking"],
                     "findings": verdict["findings"],
+                    # 机器码跟着 verdict 走：终态码由它派生，界面也读它。
+                    # 只带 findings 的话，下游又得回去读中文。
+                    "codes": verdict.get("codes") or [],
                 },
                 "thread_id": scope.thread_id,
                 "context_tokens": scope.session.context_tokens,
@@ -2166,7 +2176,10 @@ class AgentRuntime:
         }.get(status, "task.failed")
         # 路由记账跟着收尾一起落：没有这个数，就没人知道这个 beta 到底省没省钱，
         # 也就永远不敢把它转正。
-        payload = {"status": status, "reason": reason, "summary": summary, **(extra or {})}
+        # 终态码与人话分开装：`reason` 保持原样（已有文档、老数据、界面读它），
+        # `terminal` 是本轮新增的机读结构。放在 `**extra` 之后，避免调用方
+        # 传进来的同名键把它覆盖掉——终态码只能由这一个函数产出。
+        payload = terminal_payload(status, summary, reason, extra)
         routing = _routing_summary(scope.session)
         if routing:
             payload["routing"] = routing
@@ -2357,6 +2370,25 @@ def validation_unverified(validation: dict) -> str:
     if status in ("error", "unavailable"):
         return str(validation.get("message") or "验证命令没能执行")
     return ""
+
+
+def terminal_payload(status: str, summary: str, reason: str, extra: dict | None = None) -> dict:
+    """终态事件的载荷。
+
+    抽成纯函数是为了能被直接断言：起一个完整运行时去验证"失败事件的形状"
+    要花掉十几秒和一堆夹具，而这里真正该测的只是"码有没有产出、有没有被覆盖"。
+    """
+    return {
+        "status": status,
+        "reason": reason,
+        "summary": summary,
+        # 调用方给的键先铺，`terminal` 最后写：它只能由终端码函数产出，
+        # 不能被 `extra` 里同名的键顶掉。
+        # `terminal_code` 是只用来派生码的内部输入，不进载荷——事件流是给界面
+        # 和老数据读的，多一个同义字段只会让"以哪个为准"变成新的分歧。
+        **{k: v for k, v in (extra or {}).items() if k != "terminal_code"},
+        "terminal": terminal_detail(status, reason, extra),
+    }
 
 
 def resolve_status(result: dict) -> str:

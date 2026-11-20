@@ -33,6 +33,7 @@ from blank_api.services import metrics
 from blank_api.services.agent import triggers as triggers_module
 from blank_api.services.agent import watchdog as watchdog_module
 from blank_api.services.agent.events import EventRecorder
+from blank_api.services.agent.terminal import terminal_detail
 from blank_api.services.agent.queue import abandon_run, claim_run, finish_run, utc_now
 from blank_api.services.features import is_enabled
 
@@ -160,7 +161,17 @@ async def expire_stale_approvals() -> int:
                 "worker",
                 {"reason": "审批卡超过有效期没人处理，任务已收敛为失败，可重试"},
             )
-            await recorder.add("task.failed", "worker", {"status": "failed", "reason": "approval_expired"})
+            # 终态码与运行时收尾走同一个纯函数：这是唯一绕开 ``runtime._finish``
+            # 的终态路径，两条路各写一份结构，界面就得认两种形状。
+            await recorder.add(
+                "task.failed",
+                "worker",
+                {
+                    "status": "failed",
+                    "reason": "approval_expired",
+                    "terminal": terminal_detail("failed", "approval_expired", {}),
+                },
+            )
         except Exception:
             log.exception("记录审批过期事件失败 task=%s", task_id)
     if expired:

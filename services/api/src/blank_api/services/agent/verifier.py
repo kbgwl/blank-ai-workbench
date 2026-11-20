@@ -16,6 +16,36 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import unquote
 
+# 每条 finding 的机器码。封闭集合，改一处就要一起改：
+# 界面按码选文案、`failure_reason()` 按码选句子、验收按码断言。
+# 之前这三处都在拿**中文子串**反推（`"零改动" in item`），同一件事换个说法就
+# 判不出来了——「目标要求改动…零改动（zero-change success）」和「…磁盘零改动（零交付）」
+# 是两种完全不同的失败，靠子串只能挑到先出现的那个。码是判据，文本是给人看的。
+FINDING_CODES = (
+    "no_files_changed",       # 本轮没有任何文件改动（信息，不拦）
+    "zero_change",            # 有写意图但磁盘零改动（硬违规）
+    "expected_files_missed",  # 预期文件没全命中
+    "tests_not_executed",     # 测试没有可采信的执行结果
+    "tests_failed",           # 测试跑了但没通过
+    "exit_code_nonzero",      # 退出码非 0
+    "tool_refused",           # 工具调用被拒/未获批
+    "approval_denied",        # 审批被驳回
+    "false_claim",            # 交付文本假称测试通过（硬违规）
+    "delivery_incomplete",    # 交付文本自述未完成（硬违规）
+    "test_config_broken",     # 本轮把测试配置改坏（硬违规）
+    "no_delivery_text",       # 没有最终交付文本
+    "zero_delivery",          # 有验收标准、计划要求改，磁盘零改动（硬违规）
+    "goal_unverifiable",      # 有验收标准但没有交付文本可核对
+    "budget_exhausted",       # 预算耗尽
+    "done_check_failed",      # done_when 里的可执行判据没过
+)
+# 会改判任务失败的码。verifier 自己用它划分"硬违规 / 只是记一笔"，
+# 终态码取 detail 时也按它挑——一张 verdict 的 findings 里，第一个码常常是
+# `no_files_changed` 这种信息码，直接取 codes[0] 会说错原因。
+BLOCKING_CODES = frozenset(
+    {"zero_change", "false_claim", "delivery_incomplete", "test_config_broken", "zero_delivery"}
+)
+
 CHECKS = (
     "goal_met",
     "files_changed",
@@ -334,6 +364,17 @@ def verify(
 
     checks: dict[str, bool | None] = {name: None for name in CHECKS}
     findings: list[str] = []
+    codes: list[str] = []
+
+    def note(code: str, text: str) -> None:
+        """记一条 finding，同时记它的码。
+
+        两样都要：只有文本时界面得拿中文去猜（猜错就说错），只有码时用户
+        读到的是一堆 `zero_delivery`。码给机器，文本给人。
+        """
+        codes.append(code)
+        findings.append(text)
+
     blocking = False
 
     if readonly or direct_answer:
@@ -344,6 +385,7 @@ def verify(
             "blocking": False,
             "checks": checks,
             "findings": [],
+            "codes": [],
             "evidence": {"reason": "readonly_or_answer", "tool_results": len(rows)},
         }
 
@@ -354,18 +396,18 @@ def verify(
     # ① 文件是否真实修改
     checks["files_changed"] = bool(paths)
     if not paths:
-        findings.append("本轮没有任何文件改动")
+        note("no_files_changed", "本轮没有任何文件改动")
     write_intent = _successful_write_calls(rows)
     checks["not_zero_change"] = not (write_intent and not paths)
     if write_intent and not paths:
-        findings.append("目标要求改动且执行链有写意图，但磁盘上零改动（zero-change success）")
+        note("zero_change", "目标要求改动且执行链有写意图，但磁盘上零改动（zero-change success）")
         blocking = True
 
     # ② 预期文件 / 多余文件
     if expected:
         checks["expected_files"] = all(any(str(p).endswith(str(e)) or str(e) in str(p) for p in paths) for e in expected)
         if not checks["expected_files"]:
-            findings.append(f"预期改动的文件未全部命中：{expected[:5]}")
+            note("expected_files_missed", f"预期改动的文件未全部命中：{expected[:5]}")
     else:
         checks["expected_files"] = None
     if plan and plan.get("steps"):
@@ -381,13 +423,13 @@ def verify(
     # ③ 测试是否真的执行、退出码是否为 0
     checks["tests_executed"] = status in ("ok", "failed", "error", "timeout")
     if status in ("skipped", "awaiting_approval", "denied", ""):
-        findings.append(f"测试没有可采信的执行结果（validation.status={status or 'none'}）")
+        note("tests_not_executed", f"测试没有可采信的执行结果（validation.status={status or 'none'}）")
     elif status != "ok":
-        findings.append(f"测试未通过（validation.status={status}）")
+        note("tests_failed", f"测试未通过（validation.status={status}）")
     if status == "ok":
         checks["exit_code_zero"] = exit_code in (None, 0) and passed_flag is not False
         if not checks["exit_code_zero"]:
-            findings.append(f"测试退出码非 0：{exit_code}")
+            note("exit_code_nonzero", f"测试退出码非 0：{exit_code}")
     else:
         checks["exit_code_zero"] = None
 
@@ -396,21 +438,21 @@ def verify(
     denied_approvals = [item for item in approvals if item.get("decision") is False]
     checks["no_overreach"] = not (refused or denied_approvals)
     if refused:
-        findings.append(f"{len(refused)} 个工具调用被拒绝或未获批")
+        note("tool_refused", f"{len(refused)} 个工具调用被拒绝或未获批")
     if denied_approvals:
-        findings.append(f"{len(denied_approvals)} 次审批被驳回")
+        note("approval_denied", f"{len(denied_approvals)} 次审批被驳回")
 
     # ⑤ 交付文本有没有假称测试通过
     checks["no_false_claim"] = not _false_claim(report, val)
     if not checks["no_false_claim"]:
-        findings.append("交付文本声称测试通过，但验证结果不支持")
+        note("false_claim", "交付文本声称测试通过，但验证结果不支持")
         blocking = True
 
     # ⑥ 交付文本自己说没做完 / 要求用户手工恢复（v0.11.2 §7 真机缺陷）
     # 这是比「假称通过」更硬的事实：模型都写「页面未修好」了，状态不能是 succeeded。
     checks["delivery_says_done"] = not _delivery_is_incomplete(report)
     if not checks["delivery_says_done"]:
-        findings.append("交付文本自述未完成或要求用户手工恢复")
+        note("delivery_incomplete", "交付文本自述未完成或要求用户手工恢复")
         blocking = True
 
     # ⑦ 本轮把测试配置改坏：曾有测试跑通，最后却没有可采信的测试结果。
@@ -419,15 +461,15 @@ def verify(
     checks["tests_still_runnable"] = not _broke_test_config(rows, val, paths)
     if not checks["tests_still_runnable"]:
         if status == "skipped":
-            findings.append("本轮改动了测试文件或测试配置，之后一条测试也没收集到（配置被改坏）")
+            note("test_config_broken", "本轮改动了测试文件或测试配置，之后一条测试也没收集到（配置被改坏）")
         else:
-            findings.append("本轮改动前有测试可用，改完后测试命令无法识别（配置被改坏）")
+            note("test_config_broken", "本轮改动前有测试可用，改完后测试命令无法识别（配置被改坏）")
         blocking = True
 
     # ⑧ 最终交付证据
     checks["delivery_evidence"] = bool(str(report or "").strip())
     if not checks["delivery_evidence"]:
-        findings.append("没有最终交付文本")
+        note("no_delivery_text", "没有最终交付文本")
 
     # ⑨ 目标是否完成：没有硬性违规则认为已达成；有明确验收标准时还得有交付文本可核对。
     # 这一项只记 finding、不设 blocking——「目标没完成」和「伪成功」是两件事。
@@ -444,14 +486,14 @@ def verify(
     )
     checks["delivery_matches_plan"] = not (not paths and bool(done_when) and plan_edits)
     if not checks["delivery_matches_plan"]:
-        findings.append("目标有验收标准、计划要求改动，但磁盘零改动（零交付）")
+        note("zero_delivery", "目标有验收标准、计划要求改动，但磁盘零改动（零交付）")
         blocking = True
     has_delivery = bool(str(report or "").strip())
     checks["goal_met"] = not blocking and not budget_exhausted and (not done_when or has_delivery)
     if done_when and not has_delivery:
-        findings.append("目标有验收标准但没有交付文本，无法核对")
+        note("goal_unverifiable", "目标有验收标准但没有交付文本，无法核对")
     if budget_exhausted:
-        findings.append("预算耗尽，目标只完成到当前轮")
+        note("budget_exhausted", "预算耗尽，目标只完成到当前轮")
 
     # ⑩ 逐条核对 done_when（有可执行判据的那几条）。
     # 这里只摆事实、不改 verdict：判据是模型写的，写歪了不该把好交付判死。
@@ -463,7 +505,7 @@ def verify(
         failed_items = [item for item in checked if item["status"] == "failed"]
         checks["done_when"] = not failed_items
         for item in failed_items:
-            findings.append(f"判据没过：{item['text']}（{item['evidence']}）")
+            note("done_check_failed", f"判据没过：{item['text']}（{item['evidence']}）")
 
     verdict = "failed" if blocking else ("incomplete" if findings else "passed")
     return {
@@ -472,6 +514,9 @@ def verify(
         "blocking": blocking,
         "checks": checks,
         "findings": findings[:12],
+        # 与 findings 同序的机器码（不截断：12 条展示上限是排版问题，
+        # 判据不该因为排版丢码）。老调用方不看这个字段，新调用方不该再读中文。
+        "codes": codes,
         "evidence": {
             "done_when": done_results,
             "changed_paths": paths[:20],
@@ -488,10 +533,21 @@ def verify(
 
 
 def failure_reason(verdict: dict[str, Any] | None) -> str:
-    """把 blocking 的 verdict 翻译成用户能看懂的一句话，不写过程。"""
+    """把 blocking 的 verdict 翻译成用户能看懂的一句话，不写过程。
+
+    有 ``codes`` 就按码取句：码是判据，文本是可改的表述。升级前的 verdict
+    只有 ``findings`` 文本，所以保留一条子串回退——但那只是给老数据用的，
+    新产出不该再走它。
+    """
     if not verdict or not verdict.get("blocking"):
         return ""
     findings = [str(item) for item in verdict.get("findings") or []]
+    codes = [str(item) for item in verdict.get("codes") or [] if str(item)]
+    if codes:
+        for code, text in _BLOCKING_REASON_TEXT:
+            if code in codes:
+                return text
+        return _BLOCKING_REASON_TEXT[-1][1]
     if any("零改动" in item for item in findings):
         return "目标要求改动，但工作区没有任何文件变化"
     if any("假称" in item or "声称测试" in item for item in findings):
@@ -501,3 +557,14 @@ def failure_reason(verdict: dict[str, Any] | None) -> str:
     if any("配置被改坏" in item or "测试命令无法识别" in item for item in findings):
         return "本轮改动把测试配置弄坏了，最后没能跑出可采信的测试结果"
     return findings[0] if findings else "独立事实验证未通过"
+
+
+# 按码取句，顺序即优先级：一句话里同时有多个硬违规时，说最需要用户先处理的那个。
+_BLOCKING_REASON_TEXT = (
+    ("zero_change", "目标要求改动，但工作区没有任何文件变化"),
+    ("false_claim", "交付文本声称测试通过，实际验证结果不支持"),
+    ("delivery_incomplete", "交付文本自述未完成、需要用户接手，任务不能判成功"),
+    ("test_config_broken", "本轮改动把测试配置弄坏了，最后没能跑出可采信的测试结果"),
+    ("zero_delivery", "目标有验收标准、计划要求改动，但工作区没有任何文件变化"),
+    ("", "独立事实验证未通过"),
+)

@@ -170,6 +170,39 @@ test("这一轮的最后回答取最后一条 task.completed，失败时取原�
   assert.equal(failed.status, "failed");
 });
 
+test("终态码：细分的 detail 优先，族码兜底，旧数据退回 payload.code", () => {
+  // 后端 agent/terminal.py 的两个层次：族码是封闭枚举（界面能穷举），
+  // detail 是族下面的种（verifier 的 zero_change、供应商的 model_timeout）。
+  const blocked = turnReply([
+    ev(1, "task.failed", {
+      reason: "目标要求改动，但工作区没有任何文件变化",
+      terminal: { code: "verification_blocked", detail: "zero_change" },
+    }),
+  ]);
+  assert.equal(blocked.code, "zero_change");
+
+  const family = turnReply([
+    ev(1, "task.failed", { reason: "模型请求超时", terminal: { code: "model_error" } }),
+  ]);
+  assert.equal(family.code, "model_error");
+
+  // 升级前的数据只有 payload.code：行为必须与从前一致，不许变成空串。
+  const legacy = turnReply([ev(1, "task.failed", { reason: "x", code: "model_timeout" })]);
+  assert.equal(legacy.code, "model_timeout");
+
+  // detail 比 payload.code 更具体时才用它；两者都在时先看 detail。
+  const both = turnReply([
+    ev(1, "task.failed", { code: "model_error", terminal: { code: "model_error", detail: "model_timeout" } }),
+  ]);
+  assert.equal(both.code, "model_timeout");
+
+  // 形状不对的 terminal（不是对象、字段不是字符串）一律当没有，不许抛。
+  const broken = turnReply([
+    ev(1, "task.failed", { reason: "x", code: "model_timeout", terminal: "oops" }),
+  ]);
+  assert.equal(broken.code, "model_timeout");
+});
+
 test("跑没跑完：终态事件与终态状态都算结束", () => {
   assert.equal(isTurnRunning("running", []), true);
   assert.equal(isTurnRunning("succeeded", [ev(1, "tool.requested", { tool: "x" })]), false);
