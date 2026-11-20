@@ -8,6 +8,8 @@
 - ``完成`` 只留一句话。空泛表扬（"很高兴为您服务"）与自我复述不进来。
 - ``改动`` 用数字，不贴整段 Diff——Diff 在证据页看，正文里贴几百行没人读。
 - ``验证`` 必须带命令与退出码。没有真跑就没有这一行，不许写"已验证"。
+- 有 ``改动`` 却没有 ``验证`` 时，不许整行消失：另起一行 ``未跑校验：<原因>``
+  如实说明。静默隐藏会被读成"这次不需要验证"，和谎报是一回事。
 - ``需要你`` 没有就整行隐藏；有就只写一个动作。
 """
 
@@ -26,6 +28,9 @@ _MAX_COMPLETED = 120
 # 改动行里最多列这么多文件名。再多就只是堆名字，计数已经说清规模了。
 _MAX_LISTED_FILES = 5
 _ENTRY_NAMES = ("index.html", "index.htm")
+# 「改动有、校验没有」时写在交付里的原因。固定措辞，便于前端与判分器按同一口径匹配。
+# 措辞刻意不含「验证：」子串——那一行只留给真跑过、带退出码的记录。
+UNVERIFIED_REASON = "改动后没有任何校验记录，结果尚未自检"
 
 
 def entrypoint(files: tuple[str, ...]) -> str:
@@ -47,6 +52,8 @@ class DeliveryFacts:
     verify_command: str = ""
     verify_exit: int | None = None
     needs_user: str = ""
+    # 没跑校验时的具体原因（例如跳过原因）。为空则用固定的 UNVERIFIED_REASON。
+    verify_note: str = ""
     # 文件名按第一次出现的顺序；只放计数不留名字，用户就没法按「文件结构」验收。
     files: tuple[str, ...] = ()
 
@@ -65,8 +72,19 @@ def _one_line(text: str, *, limit: int = _MAX_COMPLETED) -> str:
     return ""
 
 
+def verification_ran(facts: DeliveryFacts) -> bool:
+    """真的跑过校验：有命令，且拿到过退出码。
+
+    只有命令没有退出码不算——那正是"说跑了其实没跑"的形态。
+    """
+    return bool(str(facts.verify_command or "").strip()) and facts.verify_exit is not None
+
+
 def render(facts: DeliveryFacts) -> str:
-    """四行交付。没有的项整行隐藏，不留"（无）"这类占位。"""
+    """四行交付。没有的项整行隐藏，不留"（无）"这类占位。
+
+    唯一的例外是「改动」有、校验没有：另起一行如实写 ``未跑校验：<原因>``。
+    """
     lines: list[str] = []
     completed = _one_line(facts.completed)
     if completed:
@@ -85,8 +103,14 @@ def render(facts: DeliveryFacts) -> str:
         if entry:
             detail += f"，入口 {entry}"
         lines.append(f"改动：{detail}")
-    if str(facts.verify_command or "").strip() and facts.verify_exit is not None:
+    if verification_ran(facts):
         lines.append(f"验证：{str(facts.verify_command).strip()}（退出码 {int(facts.verify_exit)}）")
+    elif int(facts.changed_files or 0) > 0:
+        # 改了东西却没有任何校验记录：必须显式说出来，但不能占用「验证：」前缀——
+        # 那一行只给真跑过、带退出码的记录（见 test_v163_super_agent 的不变量）。
+        # 静默隐藏等于把「没验证」谎报成「无需验证」：真机 46 个改了代码的 episode
+        # 就是这么过去的，校验跑了不少，却没有一次落在最后一次改动之后。
+        lines.append(f"未跑校验：{str(facts.verify_note or '').strip() or UNVERIFIED_REASON}")
     needs = _one_line(facts.needs_user, limit=80)
     if needs:
         lines.append(f"需要你：{needs}")
@@ -104,6 +128,8 @@ def as_dict(facts: DeliveryFacts) -> dict:
         "verify": {
             "command": str(facts.verify_command or "").strip(),
             "exit": facts.verify_exit,
+            # 改了东西但没跑校验：结构化字段里也要能直接判，别让前端回读文本。
+            "missing": int(facts.changed_files or 0) > 0 and not verification_ran(facts),
         },
         "needs_user": _one_line(facts.needs_user, limit=80),
         "text": render(facts),

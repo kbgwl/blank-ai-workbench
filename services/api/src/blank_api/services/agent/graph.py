@@ -6838,11 +6838,15 @@ def _delivery_facts(report: str, state: AgentState) -> DeliveryFacts:
     validation = dict(state.get("validation") or {})
     command = ""
     exit_code: int | None = None
+    verify_note = ""
     if validation and str(validation.get("status") or "") != "skipped":
         command = str(validation.get("command") or "").strip()
         raw_exit = validation.get("exit_code")
         if isinstance(raw_exit, int) and not isinstance(raw_exit, bool):
             exit_code = raw_exit
+    elif validation:
+        # 跳过校验时把原因带进交付行：只写"没跑"而不说为什么，下一轮还是不知道怎么补。
+        verify_note = str(validation.get("skipped_reason") or "").strip()
     files, hunks = _change_facts(state)
     return DeliveryFacts(
         completed=conclusion,
@@ -6851,6 +6855,7 @@ def _delivery_facts(report: str, state: AgentState) -> DeliveryFacts:
         verify_command=command,
         verify_exit=exit_code,
         needs_user=needs_user,
+        verify_note=verify_note,
         files=tuple(files),
     )
 
@@ -6895,7 +6900,7 @@ def _validation_note(report: str, state: AgentState) -> str:
     # 正文里已经说过了就不再补一遍——同一句话出现两次，读者会以为是两件事。
     if any(
         word in report
-        for word in ("未验证", "没验证", "未做自动化校验", "没跑测试", "测试没有执行")
+        for word in ("未验证", "没验证", "未做自动化校验", "没跑测试", "测试没有执行", "未跑校验")
     ):
         return report
     note = f"未做自动化校验：{reason}。"

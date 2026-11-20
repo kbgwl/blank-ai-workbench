@@ -104,7 +104,8 @@ def test_delivery_as_dict_is_structured():
         delivery.DeliveryFacts(completed="完成 A", changed_files=1, verify_command="pytest", verify_exit=1)
     )
     assert payload["changed_files"] == 1
-    assert payload["verify"] == {"command": "pytest", "exit": 1}
+    # `missing` 是后加的：有改动却没校验时前端要能直接判，不必回读文本。
+    assert payload["verify"] == {"command": "pytest", "exit": 1, "missing": False}
     assert "完成：完成 A" in payload["text"]
 
 

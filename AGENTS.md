@@ -25,6 +25,30 @@ cd web && E:/env/node/node-v24.20.0-win-x64/node.exe ./node_modules/typescript/b
 两条命令都实测过（43 例单测全过、tsc 无输出即通过）。工具链位置就这些，别再用
 `where` / `dir` / `--version` 逐个试——那是每次几十次调用换不出一条结论。
 
+## 改动之后跑什么
+
+按改动路径挑**最小**检查，不要因为不确定就跑全量（后端全量约 18 分钟）：
+
+| 改了哪里 | 跑什么 | 失败先看 |
+|---|---|---|
+| `services/api/src/**` | `cd services/api && .venv/Scripts/python.exe -m pytest tests/<相关文件> -q` | 末尾 traceback 第一处 `E ` |
+| `web/src/**` | `cd web && node --test --import ./test-bootstrap.mjs "src/**/*.test.ts"`，再 `tsc --noEmit` | 第一条失败用例名；tsc 首个 `文件:行` |
+| 跨端 / 准备交付 | `bash check.sh`（tsc + 前端单测 + 冒烟 17 项） | 第一处 `[FAIL]` |
+| `desktop/**` | `node desktop/verify-package.cjs` | 失败项编号 |
+| `evals/**` | `node evals/run_evals.mjs` | 分项名 |
+
+**最后一次改动之后必须再跑一次覆盖它的检查**；改动之前跑过的不算数。
+真跑不了就照实写「未跑校验：为什么」，不要静默略过——静默和谎报是一回事。
+
+## 校验挂了怎么修
+
+1. 先定位到**具体的那条用例或文件**，不要整份重跑撞运气；
+2. 先分清回归还是已知环境红：`fs_broker` 1 条 + `sandbox_restricted` 3 条改动前后都红，
+   **不要去"修"它们**，除非你要改环境本身；
+3. 改完复跑**同一条命令**，别换一个更容易过的入口证明自己过了。
+
+内核（agent loop / 权限 / 沙箱 / 恢复）的边界与审批口径见 `docs/agent/services-api.md`。
+
 ## 量成本与比质量
 
 ```bash
