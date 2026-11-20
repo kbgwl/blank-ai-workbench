@@ -21,7 +21,6 @@ import {
   isMissingEndpoint,
   runTask,
   type AnswerValues,
-  type ApprovalScope,
   type Evidence,
   type Project,
   type Provider,
@@ -29,6 +28,7 @@ import {
   type TaskDraft,
   type ThreadDetail,
 } from "./api";
+import { decisionInput, type ApprovalDecision } from "./approval-payload";
 import { DiffPanel } from "./diff-panel";
 import { EvidencePanel } from "./evidence-panel";
 import { FilePanel } from "./file-panel";
@@ -214,30 +214,18 @@ export function TasksView({ initialTaskId = null }: Props) {
   );
 
   /** 审批：POST /tasks/{id}/approval，批准会从断点继续，驳回会保留已完成的步骤并置为 paused。
-   *  scope 决定这次批准记多久：once 仅本次、prefix 记住该命令前缀、tool 记住整个工具。 */
+   *  scope 决定这次批准记多久：once 仅本次、prefix 记住该命令前缀、tool 记住整个工具。
+   *
+   *  入参是一整个 `ApprovalDecision`，不是位置参数：这条链上有四层转发，拆成位置参数
+   *  时少传一个 `tsc` 不会报，用户写的驳回理由就这样被静默丢过一版。 */
   const decide = useCallback(
-    async (
-      decision: "approve" | "deny",
-      block?: Extract<Block, { kind: "approval" }>,
-      scope: ApprovalScope = "once",
-      feedback?: string,
-      sendBackStepId?: string,
-    ) => {
+    async (request: ApprovalDecision) => {
       if (!selectedId) return;
-      setBusyAction(decision);
+      setBusyAction(request.decision);
       setActionError(null);
-      if (block) setApprovalKey(block.key);
+      if (request.target?.key) setApprovalKey(request.target.key);
       try {
-        await decideApproval(selectedId, {
-          decision,
-          scope,
-          feedback,
-          sendBackStepId,
-          approvalId: block?.approvalId,
-          toolCallId: block?.toolCallId,
-          argumentsHash: block?.argumentsHash,
-          toolName: block?.toolName,
-        });
+        await decideApproval(selectedId, decisionInput(request));
         await loadDetail(selectedId);
         reload();
       } catch (error: unknown) {
@@ -376,18 +364,14 @@ export function TasksView({ initialTaskId = null }: Props) {
     }
   }, [loadThread, notify, thread, threadBusy]);
 
+  // 只留「运行 / 取消」两个没有载荷的动作。审批有载荷，走下面的 onDecide：
+  // 两件事塞进一个函数签名时，审批那几个可选参数迟早会被谁少传一个。
   const onAction = useCallback(
-    async (
-      action: ActionKind,
-      block?: Extract<Block, { kind: "approval" }>,
-      scope: ApprovalScope = "once",
-      feedback?: string,
-      sendBackStepId?: string,
-    ) => {
+    async (action: "run" | "cancel") => {
       if (!selectedId) return;
       if (action === "run") {
         if (task?.status === "waiting_approval") {
-          await decide("approve", undefined);
+          await decide({ decision: "approve", scope: "once" });
           return;
         }
         await run(selectedId, "run");
@@ -405,10 +389,6 @@ export function TasksView({ initialTaskId = null }: Props) {
         } finally {
           setBusyAction(null);
         }
-        return;
-      }
-      if (action === "approve" || action === "deny") {
-        await decide(action, block, scope, feedback, sendBackStepId);
       }
     },
     [decide, loadDetail, notify, reload, run, selectedId, task?.status],
@@ -467,9 +447,8 @@ export function TasksView({ initialTaskId = null }: Props) {
           approvalKey={approvalKey}
           streaming={streaming}
           onHighlight={highlightChange}
-          onAction={(action, block, scope, feedback, stepId) =>
-            void onAction(action, block, scope, feedback, stepId)
-          }
+          onAction={(action) => void onAction(action)}
+          onDecide={(request) => void decide(request)}
           onAnswer={(answers, block) => void answer(answers, block)}
           onReload={() => {
             reload();

@@ -28,6 +28,8 @@ import {
   type Thread,
   type ThreadGoal,
 } from "../tasks/api";
+import { sendBackChoices } from "../tasks/approval-copy";
+import { decisionInput, type ApprovalDecision } from "../tasks/approval-payload";
 import { fetchAgentSettings } from "../settings/api";
 import { fetchSkillLibrary, type SkillLibraryItem } from "../skills/api";
 import { suggestSkill } from "@/lib/skill-suggest";
@@ -960,25 +962,24 @@ export function BotApp() {
   }, [activeTaskId, draft, send]);
 
   const decide = useCallback(
-    (
-      approval: PendingApproval,
-      decision: "approve" | "deny",
-      scope: ApprovalScope,
-      // 驳回时用户写的那句话。对话页的卡片以前根本不往上传，"写理由"是白写的。
-      feedback?: string,
-    ) => {
+    (approval: PendingApproval, request: ApprovalDecision) => {
       if (!activeTaskId) return;
       setActionBusy(true);
       setActionError(null);
-      decideApproval(activeTaskId, {
-        decision,
-        scope,
-        feedback,
-        approvalId: approval.approvalId,
-        toolCallId: approval.toolCallId,
-        argumentsHash: approval.argumentsHash,
-        toolName: approval.toolName,
-      })
+      // 卡的身份 + 决定载荷合成一次入参。对话页这边没有 Block，所以身份只取
+      // PendingApproval 与 Block 共有的那几个字段（见 approval-payload.ts）。
+      decideApproval(
+        activeTaskId,
+        decisionInput({
+          ...request,
+          target: {
+            approvalId: approval.approvalId,
+            toolCallId: approval.toolCallId,
+            argumentsHash: approval.argumentsHash,
+            toolName: approval.toolName,
+          },
+        }),
+      )
         .then(() => {
           setEvidence(null);
           live.reload();
@@ -1375,6 +1376,9 @@ export function BotApp() {
           approvals={running ? (evidence?.pendingApprovals ?? []) : []}
           waiting={liveStatus === "waiting_approval"}
           busy={actionBusy}
+          // 能打回到哪几步，跟任务页用同一个函数算：两处的"第 N 步"必须指同一步，
+          // 否则用户在对话页退回的可能是另一件事。
+          steps={sendBackChoices(liveTask?.id === activeTaskId ? liveTask.planSteps : [])}
           onDecide={decide}
           onRetry={retry}
           onStop={stop}

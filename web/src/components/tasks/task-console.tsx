@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Panel } from "@/components/panel";
 import { Notice, Spinner } from "@/components/projects/ui";
-import { isTerminalStatus, type AgentEvent, type AnswerValues, type ApprovalScope, type Task } from "./api";
+import { isTerminalStatus, type AgentEvent, type AnswerValues, type Task } from "./api";
 import { LiveBadge, StatusBadge } from "./bits";
 import { formatDateTime, relativeTime } from "./format";
 import { buildBlocks, type Block } from "./timeline";
@@ -27,14 +27,13 @@ type Props = {
   streaming?: string;
   onHighlight: (path: string) => void;
   onAction: (
-    action: "run" | "cancel" | "approve" | "deny",
-    block?: Extract<Block, { kind: "approval" }>,
-    scope?: ApprovalScope,
-    /** 驳回时用户写的那句话，会被原样交给模型。 */
-    feedback?: string,
-    /** 打回到哪一步；空表示普通驳回。 */
-    sendBackStepId?: string,
+    action: "run" | "cancel",
   ) => void;
+  /**
+   * 审批决定。载荷原样上抛，不再拆成若干位置参数：拆的那一版就是因为少传一个，
+   * 用户在任务页写的驳回理由到不了后端（模型收到的还是"就是不批"）。
+   */
+  onDecide: (request: ApprovalDecision) => void;
   /** 回答 Agent 的提问：与审批同一条中断通道，只是恢复值换成答案。 */
   onAnswer: (
     answers: AnswerValues,
@@ -65,6 +64,7 @@ export function TaskConsole({
   streaming = "",
   onHighlight,
   onAction,
+  onDecide,
   onAnswer,
   onReload,
 }: Props) {
@@ -244,7 +244,7 @@ export function TaskConsole({
                 block={block}
                 busyApprovalKey={approvalKey}
                 onHighlight={onHighlight}
-                onDecide={(request) => onDecideAction(onAction, request)}
+                onDecide={onDecide}
                 steps={sendBackChoices(task?.planSteps)}
                 onAnswer={(answers, target) => onAnswer(answers, target)}
               />
@@ -267,18 +267,6 @@ export function TaskConsole({
         )}
       </div>
     </Panel>
-  );
-}
-
-function onDecideAction(onAction: Props["onAction"], request: ApprovalDecision) {
-  // 载荷整体往上传，不再逐个拆参数：拆的那一版就是因为少传一个，
-  // 用户在任务页写的驳回理由到不了后端（模型收到的还是"就是不批"）。
-  onAction(
-    request.decision === "approve" ? "approve" : "deny",
-    request.target,
-    request.scope,
-    request.feedback,
-    request.stepId,
   );
 }
 

@@ -7,7 +7,8 @@ import { formatDuration } from "../tasks/format";
 import { guardianReviewLabel } from "../tasks/status";
 import { approvalGrantOptions } from "../tasks/api";
 import { ApprovalOptions, approvalQuestion } from "../tasks/approval";
-import { approvalApproveLabel, isPlanGate } from "../tasks/approval-copy";
+import { approvalApproveLabel, isPlanGate, type SendBackChoice } from "../tasks/approval-copy";
+import type { ApprovalDecision } from "../tasks/approval-payload";
 import { explainFailure, failureParts } from "../tasks/error-copy";
 import type { FailureCopy } from "../tasks/error-copy";
 import type { AnswerValues, AttachmentRef, PendingApproval, PendingQuestion } from "../tasks/api";
@@ -163,11 +164,18 @@ export function ApprovalCard({
   onDecide,
   onRetry,
   busy,
+  steps = [],
 }: {
   approval: PendingApproval;
-  onDecide: (decision: "approve" | "deny", scope: "once" | "prefix" | "tool", feedback?: string) => void;
+  /**
+   * 载荷是一个对象，不是若干位置参数：四层转发里少传一个参数 tsc 不会报，
+   * 用户写的驳回理由就这样丢过一整版（2026-11-21）。
+   */
+  onDecide: (request: ApprovalDecision) => void;
   onRetry: () => void;
   busy: boolean;
+  /** 能打回到哪几步。空数组表示这次只能普通驳回（新任务、纯问答、没有计划）。 */
+  steps?: SendBackChoice[];
 }) {
   const command = String(approval.args.command ?? approval.args.path ?? "");
   // 计划门的按钮要改说法：「允许这一次」放在"按这份计划开始改"上说不通。
@@ -256,11 +264,16 @@ export function ApprovalCard({
         </div>
       ) : (
         <div className="mt-2.5">
+          {/* 驳回的第二个参数不带时就是普通驳回（只否掉这次调用，计划不动）；
+              带了才是「整段退回重做」，默认必须是前者——误触一下会把已完成的步骤推回 pending。 */}
           <ApprovalOptions
             grants={grants}
             busy={busy}
-            onApprove={(scope) => onDecide("approve", scope)}
-            onDeny={(feedback) => onDecide("deny", "once", feedback)}
+            steps={steps}
+            onApprove={(scope) => onDecide({ decision: "approve", scope })}
+            onDeny={(feedback, stepId) =>
+              onDecide({ decision: "deny", scope: "once", feedback, stepId })
+            }
           />
         </div>
       )}
@@ -532,13 +545,12 @@ export type TurnViewProps = {
   approvals: PendingApproval[];
   questions: PendingQuestion[];
   actionBusy: boolean;
-  onDecide: (
-    approval: PendingApproval,
-    decision: "approve" | "deny",
-    scope: "once" | "prefix" | "tool",
-    /** 驳回时用户写的那句话。以前这里只有三个参数，"写理由"在对话页是白写的。 */
-    feedback?: string,
-  ) => void;
+  /**
+   * 审批决定。载荷是对象（见 approval-payload.ts）：这里是第二层转发，
+   * 位置参数在这一层被少传过一次，用户写的驳回理由当时静默消失了。
+   * 卡片自己的身份由面板补进来——回放中的这一轮可能同时挂着几张卡。
+   */
+  onDecide: (approval: PendingApproval, request: ApprovalDecision) => void;
   onAnswer: (questions: PendingQuestion[], answers: AnswerValues) => void;
   onRetry: () => void;
   /** 把这一段选中的话带进输入框当引用。 */

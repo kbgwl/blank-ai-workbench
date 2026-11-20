@@ -16,19 +16,11 @@ export { approvalQuestion } from "./approval-copy";
 /**
  * 一次审批决定的完整载荷。
  *
- * 为什么是一个对象而不是四个位置参数：这条链上有四层转发（时间线 → 任务台 →
- * 任务页 → API），全是可选参数时少传一个 `tsc` 不会报——用户写的驳回理由就这样
- * 被静默丢了整整一版（2026-11-21 修）。对象按引用透传，漏字段编译期就炸。
+ * 载荷本身与映射都搬到了 `approval-payload.ts`：那里能直接单测（不需要 DOM），
+ * 也能让对话页与时间线共用同一份，而不是各自拼一串可选位置参数。
+ * 这里只做转出，老调用点继续从 "./approval" 取类型。
  */
-export type ApprovalDecision = {
-  decision: "approve" | "deny";
-  target: Extract<import("./timeline").Block, { kind: "approval" }>;
-  scope: ApprovalScope;
-  /** 驳回时用户写的那句话，会被原样交给模型。 */
-  feedback?: string;
-  /** 打回到哪一步；空表示普通驳回。 */
-  stepId?: string;
-};
+export type { ApprovalDecision, ApprovalTarget } from "./approval-payload";
 
 type ApprovalOptionsProps = {
   grants: ApprovalGrant[];

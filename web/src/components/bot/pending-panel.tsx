@@ -1,6 +1,8 @@
 "use client";
 
 import type { PendingApproval } from "../tasks/api";
+import type { ApprovalDecision } from "../tasks/approval-payload";
+import type { SendBackChoice } from "../tasks/approval-copy";
 import { ApprovalCard } from "./turn";
 
 /**
@@ -20,6 +22,7 @@ export function PendingPanel({
   approvals,
   waiting,
   busy,
+  steps = [],
   onDecide,
   onRetry,
   onStop,
@@ -28,12 +31,17 @@ export function PendingPanel({
   /** 任务状态是 waiting_approval。用来判断"该有卡却一张都没有"。 */
   waiting: boolean;
   busy: boolean;
-  onDecide: (
-    approval: PendingApproval,
-    decision: "approve" | "deny",
-    scope: "once" | "prefix" | "tool",
-    feedback?: string,
-  ) => void;
+  /**
+   * 能打回到哪几步。由页面从当前任务的 planSteps 算好传进来——面板自己不该去猜
+   * 计划长什么样，它只负责摆卡。
+   */
+  steps?: SendBackChoice[];
+  /**
+   * 载荷还是对象，卡的身份由这里补上：卡片手里只有"我这次决定了什么"，
+   * 它不知道自己是哪张卡（同一屏可能有两张）。补在这里而不是让卡片记住 approval，
+   * 是为了让卡片能继续只依赖纯展示字段。
+   */
+  onDecide: (approval: PendingApproval, request: ApprovalDecision) => void;
   onRetry: () => void;
   onStop: () => void;
 }) {
@@ -50,8 +58,9 @@ export function PendingPanel({
             key={approval.approvalId || approval.toolCallId || approval.tool}
             approval={approval}
             busy={busy}
+            steps={steps}
             onRetry={onRetry}
-            onDecide={(decision, scope, feedback) => onDecide(approval, decision, scope, feedback)}
+            onDecide={(request) => onDecide(approval, request)}
           />
         ))}
         {rest > 0 && (
