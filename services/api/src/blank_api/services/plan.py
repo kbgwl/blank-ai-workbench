@@ -62,12 +62,18 @@ def _norm_text(value: str) -> str:
 # --------------------------------------------------------------------------- 目标
 
 
-# 可执行的判据类型。只认这三种，全部能由 verifier 只读事实核对：
+# 可执行的判据类型。只认这四种，全部能由 verifier 只读事实核对：
 #   path_exists   文件/目录在不在
 #   file_contains 文件里有没有那段文字
 #   command       本轮有没有跑过这条命令且退出码为 0
+#   page          本轮 browser_check 打开过这张页面，且某个选择器命中了够个数
 # 刻意不收 http / db 这类：verifier 是纯函数，不能发请求、不能连库。
-CHECK_TYPES = ("path_exists", "file_contains", "command")
+# page 同理——它只读 browser_check 已经留下的回执，不自己起浏览器。
+#
+# 加 page 是因为前三类都验不出「用户打开时看见什么」：一个三列空框的看板
+# 能过 path_exists，能过 command（构建成功），却过不了「首屏 .task-item ≥ 3」。
+# 没有这一维，判据写得再全，最优解仍然是交一个空壳。
+CHECK_TYPES = ("path_exists", "file_contains", "command", "page")
 
 
 def _clean_check(check: object) -> dict:
@@ -80,6 +86,25 @@ def _clean_check(check: object) -> dict:
     if kind == "command":
         cmd = str(check.get("cmd") or check.get("command") or "").strip()
         return {"type": "command", "cmd": cmd[:MAX_STEP_CHARS]} if cmd else {}
+    if kind == "page":
+        # 形状：哪张页面、看哪个选择器、至少几个。
+        # 选择器与个数合写在 text 里（`".task-item:3"`），和 browser_check 的 expect 同一写法——
+        # 工具手册按字符算预算且每步重发，不为这一种判据新增字段名。
+        path = str(check.get("path") or check.get("url") or "").strip()
+        spec = str(check.get("text") or check.get("selector") or "").strip()
+        if not path or not spec:
+            return {}
+        selector, _, count = spec.rpartition(":")
+        if not selector or not count.isdigit():
+            selector, minimum = spec, 1
+        else:
+            minimum = int(count)
+        return {
+            "type": "page",
+            "path": path[:MAX_STEP_CHARS],
+            "selector": selector[:MAX_STEP_CHARS],
+            "min": max(0, minimum),
+        }
     path = str(check.get("path") or "").strip()
     if not path:
         return {}

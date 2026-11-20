@@ -299,8 +299,7 @@ def plan_tools() -> list[ToolDefinition]:
             description=(
                 "把这一轮的目标结构化：objective（要达成什么）、done_when（怎么算做完）、"
                 "constraints（必须遵守的限制）、out_of_scope（明确不做什么）。"
-                "接到多步骤的工程任务时先调用它，再给 update_plan——"
-                "验收阶段会拿 done_when 逐条判定，写清楚了才不会做完才发现理解偏了。"
+                "多步骤任务先调它再给 update_plan；验收会逐条判定 done_when。"
                 "用户的原话不要改写，objective 用你自己的话概括执行意图。"
             ),
             input_schema={
@@ -310,25 +309,26 @@ def plan_tools() -> list[ToolDefinition]:
                     "done_when": {
                         "type": "array",
                         # 两种写法都收：一句话（给人看），或 {text, check}（能自动核对）。
-                        # check 只认三种，全部由验收器只读事实核对：文件在不在、
-                        # 文件里有没有那段字、某条命令这轮跑过且退出码为 0。
+                        # check 只认四种，全部由验收器只读事实核对：文件在不在、
+                        # 文件里有没有那段字、某条命令这轮跑过且退出码为 0、
+                        # 页面打开时这个选择器有几个。第四种不新增字段名，选择器复用 text。
                         "items": {
                             "anyOf": [
                                 {"type": "string"},
                                 {
                                     "type": "object",
                                     "properties": {
-                                        "text": {"type": "string", "description": "这条判据说的是什么"},
+                                        "text": {"type": "string", "description": "判据内容"},
                                         "check": {
                                             "type": "object",
                                             "properties": {
                                                 "type": {
                                                     "type": "string",
-                                                    "enum": ["path_exists", "file_contains", "command"],
+                                                    "enum": ["path_exists", "file_contains", "command", "page"],
                                                 },
                                                 "path": {"type": "string", "description": "工作区相对路径"},
-                                                "text": {"type": "string", "description": "file_contains 要找的文字"},
-                                                "cmd": {"type": "string", "description": "command 要跑的命令，需与本轮实际执行的完全一致"},
+                                                "text": {"type": "string", "description": "file_contains 找的字；page 写「选择器[:个数]」，如 .task-item:3"},
+                                                "cmd": {"type": "string", "description": "command 要跑的命令，须与本轮实际执行一致"},
                                             },
                                             "required": ["type"],
                                         },
@@ -338,8 +338,9 @@ def plan_tools() -> list[ToolDefinition]:
                             ]
                         },
                         "description": (
-                            "可判定的完成标准。能写成可执行检查的就写成对象，验收时会逐条核对并告诉你"
-                            "哪条没过；写不成检查的（比如「体验好」）就用字符串，验收时标为无法自动核对。"
+                            "可判定的完成标准。能写成检查的写成对象，验收时逐条核对；"
+                            "写不成（如「体验好」）用字符串，标为无法自动核对。"
+                            "交页面必须写 page，否则空壳也能过。"
                         ),
                     },
                     "constraints": {

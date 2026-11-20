@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import unquote
 
 CHECKS = (
     "goal_met",
@@ -39,6 +40,8 @@ _REFUSED_STATUSES = frozenset({"denied", "blocked", "awaiting_approval", "refuse
 # 只列「成功就等于声称改了文件」的工具。run_shell 是命令执行，ls/echo/git status
 # 都不落盘，把它算进来会把每一条只读命令都误判成零改动伪成功。
 _WRITE_TOOLS = frozenset({"apply_patch", "edit_file", "write_file", "notebook_edit", "delete_file", "create_file"})
+# 只有它留下的断言能回答「用户打开时看见什么」。别的工具的结果里没有 DOM。
+_BROWSER_TOOLS = frozenset({"browser_check"})
 
 # 四行交付（agent/delivery.py::render）里「完成：」自己说没做完，「需要你：」把烂摊子
 # 交回用户手工恢复。这是产品固定格式、不是模型自由散文，所以判据敢收紧。
@@ -189,6 +192,62 @@ def _ran_command(rows: list[dict[str, Any]], wanted: str) -> tuple[str, str]:
     return "unknown", f"本轮没跑过 {target}"
 
 
+def _same_page(url: str, wanted: str) -> bool:
+    """回执里的 url 是 ``file:///D:/...`` 的绝对地址，判据里写的是工作区相对路径。
+
+    只比尾部并让边界对齐到 ``/``：一次任务里通常只有一张 index.html，尾部比对足够，
+    又不会因为盘符、大小写、百分号编码不同而假阴性。
+    """
+    left = unquote(str(url or "")).replace("\\", "/").rstrip("/").lower()
+    right = unquote(str(wanted or "")).replace("\\", "/").rstrip("/").lower()
+    while right.startswith("./"):
+        right = right[2:]
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    return left.endswith("/" + right) or right.endswith("/" + left)
+
+
+def _page_asserted(
+    rows: list[dict[str, Any]], page: str, selector: str, minimum: Any
+) -> tuple[str, str]:
+    """本轮 browser_check 有没有在指定页面上断言过这个选择器，结果如何。
+
+    只读回执，不自己起浏览器——verifier 是纯函数，这条纪律不能破。
+    三种结论严格区分：跑过且断言不成立 = failed；没跑过 = unknown；
+    跑过这张页面但压根没断言这个选择器 = unknown（它验了别的，不等于验了这条）。
+    """
+    want = str(page or "").strip()
+    want_selector = str(selector or "").strip()
+    if not want or not want_selector:
+        return "unknown", "判据里没写页面或选择器"
+    try:
+        need = int(minimum)
+    except (TypeError, ValueError):
+        need = 1
+    seen_page = False
+    for row in rows:
+        if str(row.get("tool") or "") not in _BROWSER_TOOLS:
+            continue
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        if not _same_page(str(data.get("url") or ""), want):
+            continue
+        seen_page = True
+        for item in data.get("asserts") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("selector") or "").strip() != want_selector:
+                continue
+            count = item.get("count")
+            if item.get("ok") is True:
+                return "passed", f"{want} 上 {want_selector} 命中 {count} 个（要 ≥{need}）"
+            return "failed", f"{want} 上 {want_selector} 只有 {count} 个（要 ≥{need}）"
+    if seen_page:
+        return "unknown", f"检查过 {want}，但没有断言 {want_selector}"
+    return "unknown", f"本轮没打开过 {want}"
+
+
 def _run_done_checks(
     done_when: list[str], checks: list[Any], rows: list[dict[str, Any]], root: Any
 ) -> list[dict[str, Any]]:
@@ -208,6 +267,16 @@ def _run_done_checks(
             continue
         if kind == "command":
             status, evidence = _ran_command(rows, str(check.get("cmd") or ""))
+            out.append({"text": text, "status": status, "evidence": evidence})
+            continue
+        if kind == "page":
+            # 不依赖 root：它看的是 browser_check 的回执，不是磁盘。
+            status, evidence = _page_asserted(
+                rows,
+                str(check.get("path") or ""),
+                str(check.get("selector") or ""),
+                check.get("min", 1),
+            )
             out.append({"text": text, "status": status, "evidence": evidence})
             continue
         if base is None:
