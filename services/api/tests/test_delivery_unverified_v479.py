@@ -67,3 +67,16 @@ def test_no_duplicate_note_when_delivery_already_says_it():
     report = delivery.render(_facts())
     state = {"validation": {"status": "skipped", "skipped_reason": "本机没有可用测试命令"}}
     assert graph._validation_note(report, state) == report
+
+
+def test_graph_wires_the_skip_reason_into_the_delivery():
+    """全链路：state 里的跳过原因要真的走到交付文本里，不是只测纯函数。"""
+    from blank_api.services.agent import graph
+
+    state = {
+        "validation": {"status": "skipped", "skipped_reason": "本机没有可用测试命令"},
+        "tool_results": [{"ok": True, "data": {"path": "a.py", "diff": "@@ -1 +1 @@\n-a\n+b"}}],
+    }
+    text = graph._delivery_text("结论\n- 改好了", state, None)
+    assert "未跑校验：本机没有可用测试命令" in text
+    assert "验证：" not in text
