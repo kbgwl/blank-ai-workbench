@@ -290,6 +290,27 @@ export function buildSteps(events: readonly RawEvent[]): BotStep[] {
   return steps;
 }
 
+/**
+ * 事件里的 reason 有时间是机器码（后端要按它做判断），直接端给用户就是一句
+ * 英文标识符。实测页面上出现过一行红字就写着 `approval_expired`——用户读到的
+ * 是一个变量名，不是"发生了什么、我该怎么办"。
+ *
+ * 只翻译确定会进界面的码；其余保持原样，但套一句人话的壳，别让标识符裸奔。
+ */
+const REASON_TEXT: Record<string, string> = {
+  approval_expired: "审批卡超过有效期没人处理，这一轮已经结束。点下面「用同样的话再试一次」重跑一轮。",
+};
+
+export function reasonText(raw: string): string {
+  const value = raw.trim();
+  if (!value) return "";
+  const known = REASON_TEXT[value.toLowerCase()];
+  if (known) return known;
+  // 长文本是后端抄回来的真实错误，原样显示才有排查价值；短的全小写标识符才是码。
+  if (/^[a-z][a-z0-9_]{2,39}$/.test(value)) return `这一轮失败了（${value}）`;
+  return value;
+}
+
 /** 这一轮助手最后说的话。取最后一条 task.completed 的 summary；失败时取原因。 */
 export function turnReply(events: readonly RawEvent[]): { text: string; status: string; reason: string } {
   let text = "";
@@ -306,7 +327,7 @@ export function turnReply(events: readonly RawEvent[]): { text: string; status: 
       reason = str(event.payload, "reason", "error", "message") || reason;
     }
   }
-  return { text, status, reason };
+  return { text, status, reason: reasonText(reason) };
 }
 
 /**

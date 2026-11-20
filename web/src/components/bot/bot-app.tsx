@@ -441,6 +441,34 @@ export function BotApp() {
     };
   }, [activeTaskId, running, live.revision]);
 
+  // 等审批期间定期补拉一次证据。
+  //
+  // 审批卡是"停在某一刻"等来的：它出现的那一刻，未必和上面那次拉取重合。上面的
+  // effect 只在 running 变化或事件 revision 变化时跑，而等审批恰恰是"没有新事件"
+  // 的状态——于是错过那一次，页面就永远停在「等你批准」却没有任何卡片，用户既
+  // 看不到要批什么，也没有按钮。实测重开一条等审批的会话就是这样：正文只剩一行
+  // 「在翻代码 44 分」，而卡片从未出现。
+  //
+  // 2.5 秒一次很便宜（一次 GET），换来的是"卡片一定会出现"，以及过期能被看见。
+  useEffect(() => {
+    if (!activeTaskId || !running) return;
+    if (liveStatus !== "waiting_approval") return;
+    let alive = true;
+    const pull = () => {
+      fetchEvidence(activeTaskId)
+        .then((next) => {
+          if (alive && next) setEvidence(next);
+        })
+        .catch(() => undefined);
+    };
+    pull();
+    const timer = window.setInterval(pull, 2500);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [activeTaskId, running, liveStatus]);
+
   // ── 滚动：贴着底部，除非用户自己往上翻 ─────────────────────────────────
   useEffect(() => {
     const node = scroller.current;
@@ -870,13 +898,20 @@ export function BotApp() {
   }, [activeTaskId, draft, send]);
 
   const decide = useCallback(
-    (approval: PendingApproval, decision: "approve" | "deny", scope: ApprovalScope) => {
+    (
+      approval: PendingApproval,
+      decision: "approve" | "deny",
+      scope: ApprovalScope,
+      // 驳回时用户写的那句话。对话页的卡片以前根本不往上传，"写理由"是白写的。
+      feedback?: string,
+    ) => {
       if (!activeTaskId) return;
       setActionBusy(true);
       setActionError(null);
       decideApproval(activeTaskId, {
         decision,
         scope,
+        feedback,
         approvalId: approval.approvalId,
         toolCallId: approval.toolCallId,
         argumentsHash: approval.argumentsHash,
@@ -983,6 +1018,10 @@ export function BotApp() {
       const verdict = turnReply(events);
       const status = isLive ? liveStatus || turn.status : turn.status;
       const isRunning = isLive ? running : false;
+      const approvals = isLive && running ? (evidence?.pendingApprovals ?? []) : [];
+      // 审批全过期了，就不能再写「等你批准」：那个徽标在叫用户点一个必然 409 的按钮。
+      // 任务本身还要等巡检收尾（最多一拍），这一段窗口里徽标先说实话。
+      const stale = status === "waiting_approval" && approvals.length > 0 && approvals.every((item) => item.expired);
       return {
         id: turn.id,
         goal: turn.goal,
@@ -991,7 +1030,7 @@ export function BotApp() {
         plan,
         reply: verdict.text || turn.summary,
         reason: verdict.reason,
-        status,
+        status: stale ? "approval_expired" : status,
         running: isRunning,
         // 实时文字只挂在还跑着的那一轮：任务结束后事件里已经有完整回复，
         // 两处同时显示会出现一段重复的话。
@@ -1002,7 +1041,7 @@ export function BotApp() {
         // 只在真的跑着的时候挂审批/提问卡。跑完的一轮如果还挂着，用户点"允许这一次"
         // 后端会回"任务不在等审批"（409），而错误显示在对话顶部——人已经滚到底部，
         // 看起来就是"点了没反应"。卡片跟着轮次结束一起消失，才不会有这种死按钮。
-        approvals: isLive && running ? (evidence?.pendingApprovals ?? []) : [],
+        approvals,
         questions: isLive && running ? (evidence?.pendingQuestions ?? []) : [],
       };
     });
@@ -1014,7 +1053,16 @@ export function BotApp() {
   // 没有 threadId 的历史孤儿任务**不能**被过滤掉：它们恰恰是最容易"关窗后找不到"
   // 的那批，横幅是唯一的兜底入口（v164 §2.3）。它们点开走任务详情，不走会话。
   const backgroundTasks = visibleBackgroundTasks(activeTasks, conv?.thread.id);
-  const topBackground = backgroundTasks[0] ?? null;
+  // 「后台」这一格说的是还在动的那几条。
+  //
+  // 接口的 active=true 还会带回 failed / interrupted——它们是"关窗后回来找"的兜底入口，
+  // 该出现，但不该被算进"后台 N 个"：实测页面写着「后台 10 个」，其中 9 条已经失败
+  // 结束，用户找不到能等的东西，只会以为界面在乱报。数量按"还在动"算，标题也取
+  // 还在动的那条；一条都不在动时整格不显示。
+  const liveBackgrounds = backgroundTasks.filter((task) =>
+    ["queued", "running", "waiting_approval", "paused"].includes(task.status),
+  );
+  const topBackground = liveBackgrounds[0] ?? backgroundTasks[0] ?? null;
   const backgroundTarget = topBackground ? backgroundTaskTarget(topBackground) : null;
   // 分成两个入口：有会话的回会话（要调 openThread），没会话的直接跳详情页。
   const backgroundThreadId = backgroundTarget?.kind === "thread" ? backgroundTarget.threadId : null;
@@ -1028,9 +1076,9 @@ export function BotApp() {
     goal: activeGoal?.title ?? "",
     goalStatus: activeGoal?.status ?? "",
     // 数的是「别的」会话：当前这条已经在眼前了，再报一次只会让人以为还有一份。
-    backgroundCount: backgroundTasks.length,
-    backgroundLabel: topBackground?.title ?? "",
-    backgroundStatus: topBackground?.status ?? "",
+    backgroundCount: liveBackgrounds.length,
+    backgroundLabel: liveBackgrounds[0]?.title ?? "",
+    backgroundStatus: liveBackgrounds[0]?.status ?? "",
     serviceOnline,
   };
 
@@ -1268,6 +1316,9 @@ export function BotApp() {
           onSteer={steer}
           onStop={stop}
           running={running}
+          // 等审批（含已过期）时输入框改说法：running 为真只因为这一轮还没结束，
+          // 不代表它在干活。
+          waiting={lastTurn?.status === "waiting_approval" || lastTurn?.status === "approval_expired"}
           // 审批/停止/归档的失败也走这里：错误必须出现在用户刚点过的地方。
           // 原来它渲染在对话流顶部，滚到当前这一轮的人根本看不到。
           error={sendError ?? actionError}

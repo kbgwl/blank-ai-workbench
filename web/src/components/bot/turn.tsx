@@ -77,6 +77,15 @@ function StatusChip({ status, running }: { status: string; running: boolean }) {
   // isTurnRunning 把 waiting_approval 也算"还在跑"（这没错——这一轮确实没结束，
   // 输入框该显示停止按钮）。但徽标先判 running 的话，等审批的任务永远显示
   // "进行中"：关掉窗口再打开的人看到的是一个在动的任务，不知道卡在等他点一下。
+  if (status === "approval_expired") {
+    // 过期与「等你批准」是两件事：前者点什么都会 409，后者才需要动手。
+    // 徽标先说"过期"，别让人对着一个点不动的卡片等下去。
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-muted">
+        审批已过期
+      </span>
+    );
+  }
   if (status === "waiting_approval") {
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-warn/[0.12] px-2 py-0.5 text-[11px] font-medium text-warn">
@@ -115,17 +124,23 @@ function StatusChip({ status, running }: { status: string; running: boolean }) {
 function ApprovalCard({
   approval,
   onDecide,
+  onRetry,
   busy,
 }: {
   approval: PendingApproval;
-  onDecide: (decision: "approve" | "deny", scope: "once" | "prefix" | "tool") => void;
+  onDecide: (decision: "approve" | "deny", scope: "once" | "prefix" | "tool", feedback?: string) => void;
+  onRetry: () => void;
   busy: boolean;
 }) {
   const command = String(approval.args.command ?? approval.args.path ?? "");
   const grants = approvalGrantOptions(approval);
   const reviewNote = guardianReviewLabel(approval.guardian);
   return (
-    <div className="my-2 rounded-xl border border-warn/35 bg-warn/[0.04] p-3">
+    <div
+      className={`my-2 rounded-xl border p-3 ${
+        approval.expired ? "border-line bg-surface-2/40" : "border-warn/35 bg-warn/[0.04]"
+      }`}
+    >
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
         <p className="min-w-0 flex-1 text-[13px] font-medium text-text">{approvalQuestion(approval.tool, approval.args)}</p>
         <span className="shrink-0 font-mono text-[11px] text-faint">
@@ -138,28 +153,50 @@ function ApprovalCard({
           {command}
         </pre>
       )}
-      {approval.message && <p className="mt-1 text-[12px] text-muted">{approval.message}</p>}
+      {/* 过期卡不写「高风险操作等待人工审批」：它说的是"有人在等你"，而这里
+          恰恰是没人来、卡已经作废。留着这句会和下面"已经过期"直接打架。 */}
+      {approval.message && !approval.expired && <p className="mt-1 text-[12px] text-muted">{approval.message}</p>}
       {reviewNote && (
         <p className="mt-1 text-[12px] leading-relaxed text-muted" title="独立审查员先看过了；它放行不等于安全，它说话也不会替你批准">
           {reviewNote}
         </p>
       )}
-      <div className="mt-2.5">
-        <ApprovalOptions
-          grants={grants}
-          busy={busy}
-          onApprove={(scope) => onDecide("approve", scope)}
-          onDeny={() => onDecide("deny", "once")}
-        />
-      </div>
-      {grants
-        .filter((option) => option.warning)
-        .map((option) => (
-          <p key={option.scope} className="mt-1 text-[12px] leading-relaxed text-muted">
-            {option.scope === "tool" ? "工具档：" : "本会话档："}
-            {option.warning}
+      {/* 过期不是"再点一次就好"：后端一定回 409，任务也不会再往下走。
+          这时候给按钮等于给死按钮——直接说清楚，并给唯一还有用的动作（重跑）。 */}
+      {approval.expired ? (
+        <div className="mt-2.5 rounded-md border border-line bg-surface px-2.5 py-2">
+          <p className="text-[12px] leading-relaxed text-muted">
+            这张卡已经过期，批准也提交不上去了。任务停在等你确认这一步，不会自己往下走。
           </p>
-        ))}
+          <button
+            type="button"
+            onClick={onRetry}
+            className="mt-1.5 rounded-md bg-surface-2 px-2 py-1 text-[12px] text-text transition-colors hover:bg-line"
+          >
+            重跑这一轮
+          </button>
+        </div>
+      ) : (
+        <div className="mt-2.5">
+          <ApprovalOptions
+            grants={grants}
+            busy={busy}
+            onApprove={(scope) => onDecide("approve", scope)}
+            onDeny={(feedback) => onDecide("deny", "once", feedback)}
+          />
+        </div>
+      )}
+      {/* 档位警告只在还能批的时候有意义：过期卡讲"本会话档会免问多远"，
+          是一件已经不会发生的事。 */}
+      {!approval.expired &&
+        grants
+          .filter((option) => option.warning)
+          .map((option) => (
+            <p key={option.scope} className="mt-1 text-[12px] leading-relaxed text-muted">
+              {option.scope === "tool" ? "工具档：" : "本会话档："}
+              {option.warning}
+            </p>
+          ))}
     </div>
   );
 }
@@ -290,7 +327,13 @@ export type TurnViewProps = {
   approvals: PendingApproval[];
   questions: PendingQuestion[];
   actionBusy: boolean;
-  onDecide: (approval: PendingApproval, decision: "approve" | "deny", scope: "once" | "prefix" | "tool") => void;
+  onDecide: (
+    approval: PendingApproval,
+    decision: "approve" | "deny",
+    scope: "once" | "prefix" | "tool",
+    /** 驳回时用户写的那句话。以前这里只有三个参数，"写理由"在对话页是白写的。 */
+    feedback?: string,
+  ) => void;
   onAnswer: (questions: PendingQuestion[], answers: AnswerValues) => void;
   onRetry: () => void;
   /** 这一轮的活像不像某条技能的覆盖面（纯前端判断，见 lib/skill-suggest）。 */
@@ -376,7 +419,7 @@ export function TurnView(props: TurnViewProps) {
 
         {/* 计划：用户最想先知道"它打算做什么、做到哪了"，所以放在正文之上，
             且不折叠。之前它在折叠的过程明细里，等于没显示。 */}
-        {props.plan && <PlanCard plan={props.plan} />}
+        {props.plan && <PlanCard plan={props.plan} waiting={props.status === "waiting_approval"} />}
 
         {/* 依据条：一行数字回答"它到底做了什么"，正文因此不必再复述过程。
             每个数字都能点开落到具体的行，这就是"回复短但不丢溯源"的地方。 */}
@@ -463,7 +506,10 @@ export function TurnView(props: TurnViewProps) {
             <MarkdownView text={props.reply} files={paths} onFileClick={jumpToFile} />
           )}
 
-          {!props.streaming && !props.reply && running && props.stepCount === 0 && (
+          {/* 等审批时不算"在思考"。running 把 waiting_approval 也算在跑（输入框该显示
+              停止按钮），但这里不能跟着显示动词和计时：那会让人以为它还在干活，
+              实际是它在等用户点一下。计时器一路涨到"翻代码 44 分"，页面上却没说是谁在等谁。 */}
+          {!props.streaming && !props.reply && running && props.stepCount === 0 && props.approvals.length === 0 && (
             <ThinkingLine createdAt={props.createdAt} />
           )}
 
@@ -473,9 +519,9 @@ export function TurnView(props: TurnViewProps) {
             </p>
           )}
 
-          {/* 技能提示：只在这一轮的活明显属于某条技能、而模型没用它时出现。
-              一行、可点，不当广告位；点一下把话填进输入框，由用户决定发不发。 */}
-          {props.skillHint && props.onUseSkill && (
+          {/* 技能提示只在一轮还在跑时出现：失败/结束后再推荐"这次适合某个技能"，
+              是在用户已经看到红字之后补一句广告，不解决他眼前的问题。 */}
+          {props.skillHint && props.onUseSkill && running && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-faint">
               <span>这次可能适合</span>
               <button
@@ -494,7 +540,8 @@ export function TurnView(props: TurnViewProps) {
               key={approval.toolCallId || approval.tool}
               approval={approval}
               busy={props.actionBusy}
-              onDecide={(decision, scope) => props.onDecide(approval, decision, scope)}
+              onRetry={props.onRetry}
+              onDecide={(decision, scope, feedback) => props.onDecide(approval, decision, scope, feedback)}
             />
           ))}
 
@@ -532,12 +579,15 @@ export function TurnView(props: TurnViewProps) {
 /** 计划超过这个条数就折尾。短计划（3–5 步，绝大多数）完全不受影响。 */
 const PLAN_LIMIT = 6;
 
-function PlanCard({ plan }: { plan: PlanView }) {
+function PlanCard({ plan, waiting = false }: { plan: PlanView; waiting?: boolean }) {
   const percent = plan.total > 0 ? Math.round((plan.completed / plan.total) * 100) : 0;
   // 保持原顺序，只折尾部：计划是有先后次序的，把"进行中"排到前面会让
   // 第 3 步看起来像第 1 步。折叠掉的永远是最后几条，用户往下读的顺序不变。
   const shown = plan.items.length > PLAN_LIMIT ? plan.items.slice(0, PLAN_LIMIT) : plan.items;
   const hidden = plan.items.length - shown.length;
+  // 等审批时事件里没有 in_progress：整张计划会显示成一行「0 / 2」加两个空心圈，
+  // 看不出它其实已经站在第一步上、只是那一步要人点一下才能走。
+  const firstOpen = plan.items.findIndex((item) => item.status !== "completed");
   return (
     // 不套边框：这一屏里已经有审批卡（唯一的"要你动手"的框）和用户气泡，
     // 计划再画一个框就变成三个同等重量的盒子。用一条左边线把它挂在正文旁边，
@@ -548,6 +598,9 @@ function PlanCard({ plan }: { plan: PlanView }) {
         <span className="font-mono text-[11px] text-faint">
           {plan.completed} / {plan.total}
         </span>
+        {waiting && firstOpen >= 0 && (
+          <span className="font-mono text-[11px] text-warn">停在第 {firstOpen + 1} 步等你批准</span>
+        )}
         <div className="ml-auto h-1 w-20 overflow-hidden rounded-full bg-surface-3" aria-hidden>
           <div className="h-full rounded-full bg-brand transition-[width] duration-300" style={{ width: `${percent}%` }} />
         </div>
@@ -555,7 +608,7 @@ function PlanCard({ plan }: { plan: PlanView }) {
       <ol className="mt-1.5 flex flex-col gap-1">
         {shown.map((item, index) => {
           const done = item.status === "completed";
-          const active = item.status === "in_progress" || item.status === "running";
+          const active = item.status === "in_progress" || item.status === "running" || (waiting && index === firstOpen);
           return (
             <li key={`${index}-${item.text}`} className="flex items-start gap-1.5 text-[13px] leading-relaxed">
               <span

@@ -143,18 +143,20 @@ export function TaskPanel(props: TaskPanelProps) {
           }`}
         >
           {/* 等审批也要如实说：显示"进行中"会让人以为它在自己往下走，
-              实际是卡在一个等他点的按钮上。 */}
-          {props.status === "waiting_approval"
-            ? "等你批准"
-            : props.status === "paused"
-              ? "已暂停"
-              : props.running
-                ? "进行中"
-                : props.status === "failed"
-                  ? "失败"
-                  : props.status === "cancelled"
-                    ? "已停止"
-                    : "完成"}
+              实际是卡在一个等他点的按钮上。过期同理——那时候按钮点了也是 409。 */}
+          {props.status === "approval_expired"
+            ? "审批已过期"
+            : props.status === "waiting_approval"
+              ? "等你批准"
+              : props.status === "paused"
+                ? "已暂停"
+                : props.running
+                  ? "进行中"
+                  : props.status === "failed"
+                    ? "失败"
+                    : props.status === "cancelled"
+                      ? "已停止"
+                      : "完成"}
         </span>
         <button
           type="button"
@@ -215,16 +217,21 @@ export function TaskPanel(props: TaskPanelProps) {
                 <span className="font-mono text-[11px] text-faint">/ {evidence.commandCount} 命令</span>
               )}
             </div>
-            <div className="flex items-baseline gap-1">
-              <dd className="font-mono text-[12px] text-text">{latency > 0 ? formatDuration(latency) : "—"}</dd>
-              <dt className="font-mono text-[11px] text-faint">耗时</dt>
-            </div>
-            <div className="flex items-baseline gap-1">
-              <dd className="font-mono text-[12px] text-text">
-                {props.usage?.totalTokens ? props.usage.totalTokens.toLocaleString() : "—"}
-              </dd>
-              <dt className="font-mono text-[11px] text-faint">token</dt>
-            </div>
+            {/* 耗时与 token 没有值时不占位。原来没数据也渲染一个「—」，页面上
+                并排两个破折号（"— 耗时 — token"），读起来像这一栏坏了，
+                而不是"这一轮还没有数据"。0 工具/0 文件是真值，照常显示。 */}
+            {latency > 0 && (
+              <div className="flex items-baseline gap-1">
+                <dd className="font-mono text-[12px] text-text">{formatDuration(latency)}</dd>
+                <dt className="font-mono text-[11px] text-faint">耗时</dt>
+              </div>
+            )}
+            {props.usage?.totalTokens ? (
+              <div className="flex items-baseline gap-1">
+                <dd className="font-mono text-[12px] text-text">{props.usage.totalTokens.toLocaleString()}</dd>
+                <dt className="font-mono text-[11px] text-faint">token</dt>
+              </div>
+            ) : null}
           </dl>
         </section>
 

@@ -798,6 +798,16 @@ export type PendingApproval = {
   resourcePath: string;
   /** 四元匹配的第四元。老卡没有这个字段（空串），提交时就不带，行为与从前一致。 */
   toolName: string;
+  /**
+   * 这张卡是否已经过了有效期（后端 TTL，默认 30 分钟）。
+   *
+   * 过期后后端仍把它列在 pending 里（任务确实还没往下走），但提交一定 409。
+   * 不把这个字段读出来的后果是：卡片照旧给三颗可点的钮，用户点下去拿到一句
+   * 「审批请求已过期」，而任务永远停在等待——界面上给的是死按钮。
+   */
+  expired: boolean;
+  /** 过期时间（ISO）。过期时用来告诉用户"等了多久"，没过期时为空。 */
+  expiresAt: string;
   /** 独立审查员的话。undefined=这张卡是"审查进载荷之前"的老任务；null=记过了、当时审查关着。 */
   guardian?: GuardianVerdictInfo | null;
 };
@@ -1384,6 +1394,11 @@ function normalizeApprovals(container: unknown): PendingApproval[] {
         argumentsHash: textOf(item, "arguments_hash"),
         resourcePath: textOf(item, "resource_path"),
         toolName: textOf(item, "tool_name"),
+        // 后端两种写法都认：布尔 expired，或 approval_state 已经被写成「已过期」。
+        expired:
+          boolOf(item, "expired", "is_expired") === true ||
+          textOf(item, "approval_state") === "已过期",
+        expiresAt: textOf(item, "expires_at"),
         ...(guardian === undefined ? {} : { guardian }),
       };
     });

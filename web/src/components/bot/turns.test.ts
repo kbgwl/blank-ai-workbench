@@ -10,6 +10,7 @@ import {
   filterSteps,
   isTurnRunning,
   planOf,
+  reasonText,
   resolveTouchedPath,
   shouldAutoRunTurn,
   splitTitleStamp,
@@ -433,4 +434,21 @@ test("不同的开始时间会落进不同的词，六秒一轮回", () => {
 test("没有开始时间也不空白，回落第一个词", () => {
   assert.equal(thinkVerb(null), "在想");
   assert.equal(thinkVerb(Number.NaN), "在想");
+});
+
+test("失败原因里的机器码不裸奔给用户", () => {
+  // 实测页面上出现过一行红字就写着 approval_expired——那是变量名，不是"发生了什么"。
+  assert.match(reasonText("approval_expired"), /审批卡.*有效期/);
+  assert.match(reasonText("APPROVAL_EXPIRED"), /审批卡/);
+  // 后端抄回来的真实错误原样保留，那是排查依据。
+  assert.equal(reasonText("流在工具调用 write_file 的参数中途结束"), "流在工具调用 write_file 的参数中途结束");
+  // 没登记过的码也要套一句人话，把码留在括号里。
+  assert.equal(reasonText("some_new_code"), "这一轮失败了（some_new_code）");
+  assert.equal(reasonText(""), "");
+});
+
+test("失败事件的原因经过同一个翻译，页面读到的不是标识符", () => {
+  const verdict = turnReply([ev(1, "task.failed", { status: "failed", reason: "approval_expired" })]);
+  assert.equal(verdict.status, "failed");
+  assert.ok(!verdict.reason.includes("approval_expired"), verdict.reason);
 });

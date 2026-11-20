@@ -41,6 +41,37 @@ const GROUP_LABEL: Record<ReturnType<typeof dayBucket>, string> = {
 
 const GROUP_ORDER: ReturnType<typeof dayBucket>[] = ["today", "yesterday", "week", "earlier"];
 
+function clockOf(value: string): string {
+  if (!value) return "";
+  const date = new Date(value.includes("T") ? value : value.replace(" ", "T"));
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (input: number) => String(input).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * 同一分组里重名的会话，补一份「id → 时间」的补位表。
+ *
+ * 自动起的轮次（定时、夜班、批量压测）标题天然相同：一列四个「L11 性能与正确性」，
+ * 用户既分不出哪个是刚跑的、也点不进想看的那个。标题里自带时间时用标题的，
+ * 没有就用更新时间顶上——只给重名的那几条补，不重名的不加噪音。
+ */
+function disambiguate(items: Thread[]): Map<string, string> {
+  const baseOf = (thread: Thread) => splitTitleStamp(thread.title).base;
+  const counts = new Map<string, number>();
+  for (const thread of items) {
+    const base = baseOf(thread);
+    counts.set(base, (counts.get(base) ?? 0) + 1);
+  }
+  const out = new Map<string, string>();
+  for (const thread of items) {
+    if ((counts.get(baseOf(thread)) ?? 0) < 2) continue;
+    const clock = clockOf(thread.updatedAt);
+    if (clock) out.set(thread.id, clock);
+  }
+  return out;
+}
+
 export type SidebarProps = {
   threads: Thread[] | null;
   /** 项目分组：Codex 桌面版左栏就是「New chat / Projects / Recents」三段。 */
@@ -279,14 +310,17 @@ export function Sidebar(props: SidebarProps) {
           </p>
         )}
 
-        {groups.map((group) => (
+        {groups.map((group) => {
+          const stamps = disambiguate(group.items);
+          return (
           <div key={group.bucket} className="mb-2">
             <p className="px-2 py-1 text-[11px] font-medium text-faint">{group.label}</p>
             <div className="space-y-0.5">
               {group.items.map((thread) => {
                 const active = thread.id === props.activeId;
                 // 标题里自带的时间拆到右列：整列 18 行「雷罡 21:51:06」读起来是一堵墙。
-                const { base, stamp } = splitTitleStamp(thread.title);
+                const { base, stamp: titleStamp } = splitTitleStamp(thread.title);
+                const stamp = titleStamp || stamps.get(thread.id) || "";
                 return (
                   <div key={thread.id} className="group/item relative">
                     <button
@@ -323,7 +357,8 @@ export function Sidebar(props: SidebarProps) {
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="border-t border-line p-2">

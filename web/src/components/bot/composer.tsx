@@ -80,6 +80,14 @@ export type ComposerProps = {
   onSteer: () => void;
   onStop: () => void;
   running: boolean;
+  /**
+   * 这一轮停在"要你点一下"上（等审批 / 审批已过期）。
+   *
+   * running 把等审批也算在跑（停止按钮要留着），但输入框不能因此写"它正在做，
+   * 可以插一句话"——那时候它没在做，是在等人。实测页面上同时出现"这张卡已经过期"
+   * 和"它正在做"，两句互相打脸，用户不知道该等谁。
+   */
+  waiting?: boolean;
   /** 发送失败等就地提示。 */
   error: string | null;
   /** 中性提示，比如"已排队"。 */
@@ -356,9 +364,11 @@ export function Composer(props: ComposerProps) {
                   ? "正在读取项目…"
                   : props.workspaces.length === 0
                     ? "还没有工作目录：点下面的「未绑定目录」选一个，它才知道在哪儿干活"
-                    : props.running
-                      ? "它正在做，可以插一句话调整方向…（Enter 发送）"
-                      : `${placeholderText}（Enter 发送，Shift+Enter 换行）`
+                    : props.waiting
+                      ? "它在等你点一下——批不批上面那张卡，由你定"
+                      : props.running
+                        ? "它正在做，可以插一句话调整方向…（Enter 发送）"
+                        : `${placeholderText}（Enter 发送，Shift+Enter 换行）`
             }
             className="block max-h-[262px] min-h-[68px] w-full resize-none bg-transparent px-4 pt-2.5 pb-2 text-[14px] leading-[1.7] text-text placeholder:text-faint focus:outline-none"
           />
