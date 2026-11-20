@@ -248,8 +248,8 @@ export function Composer(props: ComposerProps) {
     {
       value: "bypass",
       label: "完全访问",
-      description: "工作区内自动读写文件、跑测试、装依赖、自动修复",
-      warning: "仍需确认：大量删除、工作区外路径、发布、不可逆操作",
+      description: "工作区内自动读写文件、跑测试、自动修复",
+      warning: "首次装依赖会问一次（本任务之后不再问）；大量删除、工作区外路径、发布、git push、数据库迁移、不可逆操作仍需逐次确认",
     },
     {
       value: "plan",
@@ -728,7 +728,7 @@ export function Composer(props: ComposerProps) {
                     .slice(0, 4)
                     .join(" / ")}${activeScenario.writeExtensions.length > 4 ? " 等文档" : ""}；改代码请切换到开发场景。`
                 : props.permissionMode === "bypass"
-                  ? "完全访问：工作区内自动读写和测试；删除、工作区外路径、发布仍会先确认。"
+                  ? "完全访问：工作区内自动读写和测试；装依赖首次会问一次，删除、工作区外路径、发布仍会先确认。"
                   : "它会读你的代码、改文件、跑命令；高风险操作会先问你。"}
         </p>
       </div>

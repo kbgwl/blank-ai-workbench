@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from blank_api.services.agent.automation import (
     DECISION_ALLOW,
     DECISION_ASK,
@@ -115,3 +117,52 @@ def test_classify_action_only_names_actions_the_matrix_understands():
     assert classify_action("run_shell", {"command": "pip install -r req.txt"}) == "install_dependency"
     assert classify_action("run_shell", {"command": "pytest -q"}) == ""
     assert classify_action("read_file", {"command": "git push"}) == ""
+
+
+def test_install_dependency_asks_once_then_is_remembered_per_task():
+    """完全访问档下装依赖只问一次，本任务之后不再问（真机 a69c01d2）。
+
+    带管道的 pip 命令 memo_rule 故意不记（后半段不可控），卡片上只剩"仅本次"，
+    于是用户被逐条弹卡。这里按动作类型记一次账，既止住打扰，又不碰真高危。
+    """
+    from blank_api.services.agent.automation import classify_action
+
+    policy = PermissionPolicy(mode=MODE_BYPASS, automation_mode="autonomous")
+    first = {"command": 'python -m pip install --quiet fastapi "uvicorn[standard]" 2>&1 | tail -5'}
+    second = {"command": "python -m pip install uvicorn 2>&1 | tail -3 && python -c 'print(1)'"}
+
+    # 两条命令不同 → 普通账本里是两次不同的动作
+    assert policy.decide(_tool(), first).outcome == ASK
+    assert classify_action("run_shell", first) == "install_dependency"
+    # 用户批过一次：按动作类型记账成功
+    assert policy.remember_action_kind("install_dependency") is True
+    # 第二条装依赖不再问，而且归因说清了来源
+    allowed = policy.decide(_tool(), second)
+    assert allowed.outcome == ALLOW and allowed.rule == "mode:bypass:action_kind"
+
+
+def test_approval_gate_wires_action_kind_remembering():
+    """批准装依赖卡时，审批门要把动作类型记进账本，否则第二条照样弹。
+
+    端到端构造 interrupt 很重，这里钉住接线本身：graph 的批准分支必须调用
+    remember_action_kind，且只在 v165 高风险卡上调用。
+    """
+    graph_src = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "blank_api" / "services" / "agent" / "graph.py"
+    ).read_text(encoding="utf-8")
+    assert "remember_action_kind(" in graph_src
+    assert 'decision.rule == "v165:high_risk"' in graph_src
+    # 归因字段要在审批事件里回出去，界面才能解释"为什么后面不问了"
+    assert '"action_kind_remembered"' in graph_src
+
+
+def test_dangerous_action_kinds_are_never_remembered():
+    """白名单只收装依赖：删除 / 推送 / 部署 / 迁移都不能"批一次以后不问"。"""
+    policy = PermissionPolicy(mode=MODE_BYPASS, automation_mode="autonomous")
+    for action in ("delete_file", "git_push", "deploy", "db_migration", "permission_change", ""):
+        assert policy.remember_action_kind(action) is False, action
+    # 真高危命令即便已经记了装依赖的账，仍然逐条问
+    policy.remember_action_kind("install_dependency")
+    assert policy.decide(_tool(), {"command": "git push origin main"}).outcome == ASK
+    assert policy.decide(_tool(), {"command": "rm -rf build"}).outcome == ASK

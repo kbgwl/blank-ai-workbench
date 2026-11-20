@@ -71,7 +71,7 @@ const SUGGESTIONS = [
 const FIRST_MODES: { mode: string; label: string; detail: string }[] = [
   { mode: "default", label: "危险操作先问我", detail: "读文件、改文件照做；删东西、跑高风险命令、联网会先弹卡等你点。" },
   { mode: "plan", label: "先看不改", detail: "只做只读取证，调研完把计划交给你批准，批了才动手。" },
-  { mode: "bypass", label: "尽量别打断我", detail: "写文件与执行命令不再逐个问；不可逆操作仍会拦下。" },
+  { mode: "bypass", label: "尽量别打断我", detail: "写文件与执行命令不再逐个问；装依赖首次会问一次，删除、发布、出工作区仍会拦下。" },
 ];
 
 const PROVIDER_KEY = "blank.bot.provider";

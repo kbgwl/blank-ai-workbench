@@ -60,6 +60,24 @@ SCOPE_PREFIX = "prefix"
 SCOPE_TOOL = "tool"
 SCOPES = (SCOPE_ONCE, SCOPE_PREFIX, SCOPE_TOOL)
 
+
+def _action_kind_key(action: str) -> str:
+    """按"动作类型"记账的固定键，复用 approved_actions，不另开一套账本。
+
+    只给搭环境类动作用（见 :data:`_REMEMBERABLE_ACTION_KINDS`）。键里带一个
+    不会和真实工具名撞的前缀，免得某个工具恰好叫这个名字时它的普通授权被
+    当成"整个动作类型都放行了"。
+    """
+    return approval_key("__action_kind__", {"action": str(action or "")})
+
+
+# 完全访问档下"批一次、本任务同类不再问"的动作白名单。
+# 只收**搭环境**这一类：装依赖。删除/推送/部署/数据库迁移/越界/不可逆都不在列，
+# 它们必须逐条确认——把"少问几次"建立在放宽这些闸门上不值。
+# 用 frozenset 而不是"除黑名单外都算"：白名单漏一个最多少问一次，黑名单漏一个
+# 是把危险动作悄悄变成免问，两者代价不对称。
+_REMEMBERABLE_ACTION_KINDS = frozenset({"install_dependency"})
+
 # 「本会话总是允许这个工具」把免问范围定在工具本身。这一档只有当工具的风险
 # 不由参数决定、或参数已经被路径前缀框住时才算说得出口：run_shell 的风险是
 # `assess_risk(命令正文)` 算出来的，卡片上看到的是**这一条命令**的风险，
@@ -1024,6 +1042,17 @@ class PermissionPolicy:
             if rule:
                 self.approved_prefixes.add(rule)
 
+    def remember_action_kind(self, action: str) -> bool:
+        """批过一次搭环境类动作后，本任务内同类不再问。
+
+        返回是否真的记下——只有白名单里的动作才入账。graph 层据此在审批
+        事件里回一句"本任务内装依赖不再问"，让界面解释得清为什么后来不弹了。
+        """
+        if action not in _REMEMBERABLE_ACTION_KINDS:
+            return False
+        self.approved_actions.add(_action_kind_key(action))
+        return True
+
     def forget(self, tool: str, arguments: dict, scope: str = SCOPE_ONCE) -> None:
         """驳回同样要记住，否则下一步模型会拿同一个动作再问一遍。"""
         self.denied_actions.add(approval_key(tool, arguments))
@@ -1204,6 +1233,16 @@ class PermissionPolicy:
                     automation_allowed=self.automation_allowed,
                 )
                 if not matrix["bypassable"] and matrix["decision"] == DECISION_ASK:
+                    # 装依赖这类"搭环境"动作：同一任务里模型往往要连着装几轮
+                    # （真机 a69c01d2：pip install fastapi uvicorn… 批过之后又来一条
+                    # pip install uvicorn）。带管道的命令 memo_rule 故意不记（后半段
+                    # 不可控），卡片上只剩"仅本次"，于是每条都弹——用户设了完全访问
+                    # 却觉得被反复打扰。这里对这一类**非危险的环境动作**按动作类型
+                    # 记一次账：用户批过一次，本任务内同类不再问。删除/推送/部署/
+                    # 数据库迁移/越界/不可逆一律不在这儿，仍逐条问。
+                    if action in _REMEMBERABLE_ACTION_KINDS:
+                        if _action_kind_key(action) in self.approved_actions:
+                            return approve(risk, "mode:bypass:action_kind", command_prefix(command))
                     return ask(risk, "v165:high_risk", command_prefix(command), memo=memo)
         if self.mode == MODE_BYPASS:
             return approve(risk, "mode:bypass", command_prefix(command))

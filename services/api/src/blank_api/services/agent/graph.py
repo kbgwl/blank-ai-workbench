@@ -1821,6 +1821,11 @@ class AgentSession:
         # 必须复用同一套 429/瞬时/退路闸门与台账，而不是在底层另开一条路。
         budget_recoveries = 0
         nudges = 0
+        # 工具参数被切：先放一次预算，再给几次「拆小重写」的机会。
+        # 两个计数分开，是因为它们改的是不同的东西（预算 vs 问法），
+        # 混在一起会把「已经放大过一次」误算成「拆小机会也用掉了」。
+        tool_args_budget_recoveries = 0
+        tool_args_split_recoveries = 0
         # 供应商先于我们的水位判定拒了"上下文太长"时，只给一次补救机会。
         # 再拒就说明单条消息本身就超窗，裁历史也没用。
         context_recoveries = 0
@@ -1843,6 +1848,52 @@ class AgentSession:
                     # 失败的调用也要进账：一次任务里"发了多少次请求、有多少次根本没花 token"
                     # 只能从这条记录看出来，省略它就把故障也一起省略了。
                     await self._record_usage(node, "", Usage(), latency_ms, "error", role=role)
+                    # 工具参数被输出上限切在半截。这是「输出预算不够」的一种，
+                    # 但比 model_stream_empty 多一步：参数里已经烧掉了大半预算，
+                    # 先放大一次让这份内容有机会写完；放大到模型上限还没用，
+                    # 就明确要求模型拆成多次小写入——原样重发同一个超长参数
+                    # 只会再切一次（真机 a69c01d2 连发 6 次），已在
+                    # _transient_may_retry 里堵死。
+                    if error.code == "model_stream_truncated":
+                        if tool_args_budget_recoveries < MAX_BUDGET_RECOVERIES:
+                            tool_args_budget_recoveries += 1
+                            if await self._grow_budget(
+                                adapter, error, node, role, tool_args_budget_recoveries
+                            ):
+                                await self.recorder.add(
+                                    "model.tool_args_budget_raised",
+                                    node,
+                                    {
+                                        "attempt": tool_args_budget_recoveries,
+                                        "reason": error.message,
+                                        "role": role,
+                                    },
+                                )
+                                continue
+                        if tool_args_split_recoveries < MAX_TOOL_ARGS_SPLIT_RECOVERIES:
+                            tool_args_split_recoveries += 1
+                            chat = [*base_chat, ChatMessage(role="user", content=TRUNCATED_TOOL_ARGS_PROMPT)]
+                            await self.recorder.add(
+                                "model.tool_args_split_hint",
+                                node,
+                                {
+                                    "attempt": tool_args_split_recoveries,
+                                    "max_attempts": MAX_TOOL_ARGS_SPLIT_RECOVERIES,
+                                    "reason": error.message,
+                                    "role": role,
+                                },
+                            )
+                            continue
+                        # 放大 + 拆小都没救回来：给一句能据以行动的失败，
+                        # 不再让裸 ModelError 冒到路由变成 HTTP 500。
+                        ceiling = output_ceiling(adapter.config.model)
+                        raise ModelError(
+                            "model_tool_args_exhausted",
+                            f"写入的内容超过一次输出上限（{ceiling} token），已放大预算并提示分块 "
+                            f"{MAX_TOOL_ARGS_SPLIT_RECOVERIES} 次仍写不完；"
+                            "请把这份内容拆成多次小写入，或换输出上限更大的模型。",
+                            finish_reason=error.finish_reason,
+                        ) from error
                     if _output_budget_exhausted(error):
                         if budget_recoveries < MAX_BUDGET_RECOVERIES:
                             budget_recoveries += 1
@@ -2347,6 +2398,11 @@ def _transient_may_retry(error: ModelError, retries: int, effects_before: int, e
         # 判据里带上 code 而不只看 status：有的适配器/桩只把限流写在 code 上，
         # 那样一笔 429 会来偷网络预算，两种退避语义混成一笔账。
         return False
+    # 工具参数被 max_tokens 切在半截：原样重发只能让模型把同一个超长参数再写
+    # 一遍、再切一遍（真机 a69c01d2 连发 6 次，每次都停在 10706 字）。它要走
+    # _model_node 里的专门分支——放大预算或提示拆小，才可能跳出这个循环。
+    if error.code == "model_stream_truncated":
+        return False
     return bool(error.retryable)
 
 
@@ -2416,6 +2472,19 @@ TRUNCATED_PROMPT = (
     "Your response above was cut off mid-stream. Resume directly from where it stops — "
     "no apology, no recap. If none of it survived, answer the request from the start."
 )
+# 工具参数被输出上限切在半截（不是正文被切）时发。正文续写的 RESUME_PROMPT
+# 在这里没用：模型会把同一个超长 write_file 参数原样再写一遍，再被切一次
+# （真机 a69c01d2 连发 6 次，每次都停在 10706 字）。这条明确要求换写法。
+TRUNCATED_TOOL_ARGS_PROMPT = (
+    "Your last tool call was cut off while writing its arguments — the output token limit "
+    "was reached mid-JSON, so the call did not run. Resume directly, no apology, no recap. "
+    "Do not repeat the same oversized call: write the content in several smaller pieces "
+    "(create the file with a short first chunk, then append the rest with edit_file), "
+    "or keep each single call well under the output limit."
+)
+# 放大预算也救不回来时，最多再给几次「拆小重写」的机会。对齐 opencode 的
+# CONTINUE_AFTER_OUTPUT_LIMIT 两次续写口径；再多次只会烧 token 不产生信息。
+MAX_TOOL_ARGS_SPLIT_RECOVERIES = 2
 
 
 def _output_budget_exhausted(error: ModelError) -> bool:
@@ -4553,6 +4622,17 @@ async def _approval_gate(
         granted, scope = parse_decision(answer)
         if granted:
             session.permissions.remember(name, arguments, scope)
+            # 完全访问档下批过一次装依赖，本任务同类不再问。用动作类型记账而不是
+            # 命令前缀：带管道的 pip 命令 memo_rule 故意不记，卡片上只有"仅本次"，
+            # 用户被迫每条都点。这里补上白名单动作的会话级免问，真高危不在列。
+            if decision.rule == "v165:high_risk":
+                from blank_api.services.agent.automation import classify_action
+
+                kind_remembered = session.permissions.remember_action_kind(
+                    classify_action(name, arguments)
+                )
+            else:
+                kind_remembered = False
             # 记的是哪条规则就说哪条：解释器类的前缀档超出"命令首段"，
             # 事件里仍写 `python` 会让审计以为整个解释器被放行了。
             learned = decision.memo if scope == SCOPE_PREFIX and decision.memo else decision.prefix
@@ -4571,6 +4651,9 @@ async def _approval_gate(
                     # 否则审计里会留下一条声称放行了整个工具、实际什么都没记的决定。
                     "tool_grant_recorded": not tool_grant_too_wide(name, arguments),
                     "expires_at": expires_at,
+                    # 装依赖批一次后本任务同类免问：界面可据此说明"为什么后面的
+                    # pip install 没再弹卡"，而不是让用户以为授权被跳过了。
+                    "action_kind_remembered": kind_remembered,
                 },
             )
             # 前缀档落盘：换任务、重启进程之后仍认得这条签名。写盘失败只记事实，
