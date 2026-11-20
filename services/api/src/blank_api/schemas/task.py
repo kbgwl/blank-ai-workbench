@@ -195,7 +195,7 @@ class PlanStepIn(BaseModel):
 
     id: str = ""
     step: str | None = None
-    status: Literal["pending", "in_progress", "completed"] | None = None
+    status: Literal["pending", "in_progress", "completed", "cancelled", "failed"] | None = None
     milestone_id: str | None = None
     evidence: str | None = None
 

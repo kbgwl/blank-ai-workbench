@@ -11,7 +11,7 @@
 
 // "cancelled" = 这一步不做了。没有它，前端会把"不做了"渲染成"待开始"——
 // 看上去像卡住，用户会以为 Agent 还有活没干完。
-export type PlanStatus = "pending" | "in_progress" | "completed" | "cancelled";
+export type PlanStatus = "pending" | "in_progress" | "completed" | "cancelled" | "failed";
 
 function readText(source: unknown, ...keys: string[]): string {
   if (!source || typeof source !== "object") return "";
@@ -79,6 +79,10 @@ export function normalizePlanStatus(value: string): PlanStatus {
   const text = value.trim().toLowerCase();
   if (text === "completed" || text === "done" || text === "completed ") return "completed";
   if (text === "in_progress" || text === "running" || text === "active") return "in_progress";
+  // cancelled 以前落到最后一行被归成 pending，界面上显示"待开始"——一步已经决定
+  // 不做了，却永远挂在待办里。failed 同理：它既不是待办也不是完成。
+  if (text === "cancelled" || text === "canceled") return "cancelled";
+  if (text === "failed" || text === "error") return "failed";
   return "pending";
 }
 
@@ -195,5 +199,6 @@ export function statusLabel(status: PlanStatus): string {
   if (status === "completed") return "已完成";
   if (status === "in_progress") return "进行中";
   if (status === "cancelled") return "已取消";
+  if (status === "failed") return "失败";
   return "待开始";
 }

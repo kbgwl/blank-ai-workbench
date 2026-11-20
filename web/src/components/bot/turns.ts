@@ -108,7 +108,8 @@ function planItems(payload: Record<string, unknown>): string[] {
 }
 
 export type PlanItem = { text: string; status: string };
-export type PlanView = { items: PlanItem[]; completed: number; total: number };
+/** failed 单独数出来：`3 / 5` 看不出"剩下的两步里有一歩已经炸了"。 */
+export type PlanView = { items: PlanItem[]; completed: number; failed: number; total: number };
 
 /**
  * 这一轮的计划：初始计划 + 后续每次 `update_plan` 的修订。
@@ -141,7 +142,8 @@ export function planOf(events: readonly RawEvent[]): PlanView | null {
 
   if (!items.length) return null;
   const completed = items.filter((item) => item.status === "completed").length;
-  return { items, completed, total: items.length };
+  const failed = items.filter((item) => item.status === "failed").length;
+  return { items, completed, failed, total: items.length };
 }
 
 /** 折叠后的步骤序列。顺序就是发生顺序——不要按 kind 重排，那会让读者以为计划在最后才出现。 */

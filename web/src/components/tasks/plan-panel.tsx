@@ -175,11 +175,13 @@ export function PlanPanel({ task, onChanged }: Props) {
                 <span
                   className={[
                     "size-1.5 shrink-0 rounded-full",
-                    group.milestone.status === "completed"
-                      ? "bg-brand"
-                      : group.milestone.status === "in_progress"
-                        ? "bg-brand/70 ring-2 ring-brand/25"
-                        : "bg-line-strong",
+                    group.milestone.status === "failed"
+                      ? "bg-danger"
+                      : group.milestone.status === "completed"
+                        ? "bg-brand"
+                        : group.milestone.status === "in_progress"
+                          ? "bg-brand/70 ring-2 ring-brand/25"
+                          : "bg-line-strong",
                   ].join(" ")}
                 />
                 <span className="truncate text-[12px] font-medium text-text/75">
@@ -202,22 +204,26 @@ export function PlanPanel({ task, onChanged }: Props) {
                     title={`${statusLabel(step.status)} · 点击切换`}
                     className={[
                       "mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border text-[9px] transition-colors",
-                      step.status === "completed"
-                        ? "border-brand bg-brand text-on-brand"
-                        : step.status === "in_progress"
-                          ? "border-brand/60 bg-brand/15 text-brand"
-                          : "border-line bg-surface-3 text-transparent hover:border-line-strong",
+                      step.status === "failed"
+                        ? "border-danger bg-danger/15 text-danger"
+                        : step.status === "completed"
+                          ? "border-brand bg-brand text-on-brand"
+                          : step.status === "in_progress"
+                            ? "border-brand/60 bg-brand/15 text-brand"
+                            : "border-line bg-surface-3 text-transparent hover:border-line-strong",
                       busy === step.id ? "opacity-50" : "",
                     ].join(" ")}
                   >
-                    ✓
+                    {step.status === "failed" ? "!" : "✓"}
                   </button>
                   <span
                     className={[
                       "min-w-0 text-[13px] leading-relaxed",
-                      step.status === "completed"
-                        ? "text-text/50 line-through decoration-line"
-                        : "text-text/85",
+                      step.status === "failed"
+                        ? "text-danger"
+                        : step.status === "completed"
+                          ? "text-text/50 line-through decoration-line"
+                          : "text-text/85",
                     ].join(" ")}
                   >
                     {step.text}

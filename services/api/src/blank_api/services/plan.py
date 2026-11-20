@@ -27,16 +27,20 @@ from typing import Any, Iterable
 # "cancelled" 是给「这一步不再做了」准备的：用户中途改主意，或者模型发现这条路走不通。
 # 没有它，模型只有两条烂路——留成 pending（永远显示"还没做完"，像卡住了），
 # 或者标 completed（把没做的事写成做完了）。两者都会让进度条说谎。
-PLAN_STATUSES = ("pending", "in_progress", "completed", "cancelled")
-MILESTONE_STATUSES = ("pending", "in_progress", "completed")
+#
+# "failed" 同理，而且是更严重的那种：一个包试过了、没过，模型只能留在 in_progress
+# （看起来还在做，实际已经放弃）或者谎标 completed。计划里看不出哪一步是坏的，
+# 用户看到的进度条就和实际脱节。失败必须能写下来，才谈得上"失败可定位"。
+PLAN_STATUSES = ("pending", "in_progress", "completed", "cancelled", "failed")
+MILESTONE_STATUSES = ("pending", "in_progress", "completed", "failed")
 MAX_STEPS = 12
 MAX_MILESTONES = 6
 MAX_STEP_CHARS = 200
 MAX_TITLE_CHARS = 120
 MAX_EVIDENCE_CHARS = 400
 
-_MARKS = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]", "cancelled": "[-]"}
-_MILESTONE_MARKS = {"completed": "●", "in_progress": "◐", "pending": "○"}
+_MARKS = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]", "cancelled": "[-]", "failed": "[!]"}
+_MILESTONE_MARKS = {"completed": "●", "in_progress": "◐", "pending": "○", "failed": "▲"}
 _WS = re.compile(r"\s+")
 
 
@@ -278,7 +282,7 @@ def normalize_steps(raw: object, previous: Iterable[dict] | None = None) -> list
     for index, item in enumerate(raw if isinstance(raw, list) else []):
         if isinstance(item, str):
             text, status, milestone_id, evidence = item, "pending", "", ""
-            explicit_id = ""
+            explicit_id, output, check = "", "", {}
         elif isinstance(item, dict):
             text = str(item.get("step") or item.get("text") or item.get("title") or "")
             status = str(item.get("status") or "pending")
@@ -288,6 +292,10 @@ def normalize_steps(raw: object, previous: Iterable[dict] | None = None) -> list
                 MAX_EVIDENCE_CHARS,
             )
             explicit_id = _clip(item.get("id"), 40)
+            # 工作包的产出物与判据。没有它，一条「实现整个功能」和一条
+            # 「写 index.html 的三列骨架，check = 文件里含 task-list」在数据上长得一样。
+            output = _clip(item.get("output") or item.get("deliverable"), MAX_STEP_CHARS)
+            check = _clean_check(item.get("check"))
         else:
             continue
 
@@ -321,6 +329,9 @@ def normalize_steps(raw: object, previous: Iterable[dict] | None = None) -> list
             if status not in PLAN_STATUSES:
                 status = "pending"
 
+        # 产出物与判据没给就继承上一版：模型常常只改措辞并重发整份列表，
+        # 每改一次就把判据清空，等于逼它反复重写同一件事。
+        carried_check = (carried or {}).get("check")
         steps.append(
             {
                 "id": step_id,
@@ -328,6 +339,8 @@ def normalize_steps(raw: object, previous: Iterable[dict] | None = None) -> list
                 "status": status,
                 "milestone_id": milestone_id or _clip((carried or {}).get("milestone_id"), 40),
                 "evidence": evidence or _clip((carried or {}).get("evidence"), MAX_EVIDENCE_CHARS),
+                "output": output or _clip((carried or {}).get("output"), MAX_STEP_CHARS),
+                "check": check or (carried_check if isinstance(carried_check, dict) else {}),
             }
         )
 
@@ -378,7 +391,11 @@ def resolve_milestone_status(milestones: list[dict], steps: list[dict]) -> list[
         members = [by_id[sid] for sid in milestone.get("step_ids") or [] if sid in by_id]
         if not members:
             continue
-        if all(step["status"] == "completed" for step in members):
+        # 失败优先：一个阶段里有一步坏了，这个阶段整体就不能报"进行中"或"已完成"。
+        # 顺序上放在 completed 之后、pending 之前——全做完且其中一步失败，仍然算失败。
+        if any(step["status"] == "failed" for step in members):
+            milestone["status"] = "failed"
+        elif all(step["status"] == "completed" for step in members):
             milestone["status"] = "completed"
         elif all(step["status"] == "pending" for step in members):
             milestone["status"] = "pending"
@@ -449,8 +466,10 @@ def plan_progress(steps: list[dict], milestones: list[dict]) -> dict:
     completed = sum(1 for step in steps if step["status"] == "completed")
     in_progress = sum(1 for step in steps if step["status"] == "in_progress")
     cancelled = sum(1 for step in steps if step["status"] == "cancelled")
-    # 已取消的不算待办，也不算完成：它只是"不做了"。混进 pending 会让进度条永远差一截。
-    pending = total - completed - in_progress - cancelled
+    failed = sum(1 for step in steps if step["status"] == "failed")
+    # 已取消的、失败的不算待办，也不算完成：它们都是"不在这条路上"。
+    # 混进 pending 会让进度条永远差一截；混进 completed 就是撒谎。
+    pending = total - completed - in_progress - cancelled - failed
 
     by_id = {step["id"]: step for step in steps}
     milestone_views = []
@@ -475,12 +494,83 @@ def plan_progress(steps: list[dict], milestones: list[dict]) -> dict:
         "pending": pending,
         # 单独一档给前端画"3 步已取消"，而不是让它去减 total - 其它字段。
         "cancelled": cancelled,
+        # 同理：失败要能被数出来，否则前端只能靠"有 evidence 提到失败"去猜。
+        "failed": failed,
         "percent": round(completed / total * 100) if total else 0,
         "milestones": milestone_views,
     }
 
 
 # --------------------------------------------------------------------------- 渲染
+
+
+def _check_key(check: dict) -> str:
+    """一条判据验的是哪个对象。用来发现"两个包验同一件事"。"""
+    kind = str(check.get("type") or "")
+    if kind == "command":
+        return "cmd:" + " ".join(str(check.get("cmd") or "").split())
+    if kind == "page":
+        return f"page:{check.get('path')}#{check.get('selector')}"
+    return f"{kind}:{check.get('path')}#{check.get('text') or ''}"
+
+
+def work_package_problems(steps: list[dict]) -> list[dict]:
+    """每个工作包能不能独立验证。返回问题列表，空列表=都合格。
+
+    判据来自「最小可验证」，不是「最细」——「最细」没有上界，会一路拆到"写一个 div"。
+
+    - WP_NO_OUTPUT  写不出"这一步交出什么"，说明它还是一团愿望；
+    - WP_NO_CHECK   做完没法用事实回答"做成了吗"，只能靠模型自述；
+    - WP_DUP_CHECK  两个包验同一个对象 → 它们其实是一个包，拆碎了；
+    - WP_NO_STEP    步骤文本为空（归一化一般会挡掉，这里兜底）。
+
+    刻意不判的两件事：
+    1. **不卡预计工时**。我们没有工时账本，编一个区间只会让模型去凑最安全的数字。
+       粒度大小靠 WP_DUP_CHECK 和 MAX_STEPS 约束，比伪造估算诚实。
+    2. **不判"产出物是否单一"**。那要靠"和/以及"这类词做文本规则，误报率高，
+       第一版不做——宁可漏判，不要逼模型写病句。
+    """
+    problems: list[dict] = []
+    seen: dict[str, int] = {}
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        position = index + 1
+        sid = str(step.get("id") or f"#{position}")
+        label = _clip(step.get("step"), 40) or "（无文本）"
+        if not str(step.get("step") or "").strip():
+            problems.append({"id": sid, "code": "WP_NO_STEP", "message": f"第 {position} 步没有内容"})
+            continue
+        if not str(step.get("output") or "").strip():
+            problems.append(
+                {
+                    "id": sid,
+                    "code": "WP_NO_OUTPUT",
+                    "message": f"第 {position} 步「{label}」没写产出物（输出什么文件/命令结果/结论）",
+                }
+            )
+        check = step.get("check") if isinstance(step.get("check"), dict) else {}
+        if not check:
+            problems.append(
+                {
+                    "id": sid,
+                    "code": "WP_NO_CHECK",
+                    "message": f"第 {position} 步「{label}」没有可执行的验收判据",
+                }
+            )
+            continue
+        key = _check_key(check)
+        if key and key in seen:
+            problems.append(
+                {
+                    "id": sid,
+                    "code": "WP_DUP_CHECK",
+                    "message": f"第 {position} 步与第 {seen[key]} 步验的是同一个对象，应该合并成一步",
+                }
+            )
+        elif key:
+            seen[key] = position
+    return problems
 
 
 def render_plan(steps: list[dict], milestones: list[dict] | None = None) -> str:

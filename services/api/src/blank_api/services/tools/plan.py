@@ -27,6 +27,7 @@ from blank_api.services.plan import (
     plan_progress,
     render_plan,
     resolve_milestone_status,
+    work_package_problems,
 )
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, fail, ok
 
@@ -71,14 +72,30 @@ async def _update_plan(context: ToolContext, arguments: dict) -> ToolOutcome:
     milestones = resolve_milestone_status(link_milestones(steps, milestones), steps)
     progress = plan_progress(steps, milestones)
 
+    # 工作包能不能独立验证。第一版**只提示不拦**：判据形态是新的写法，模型还没学会，
+    # 一上来就打回会让它为了过闸去凑一句废话，反而更糟。先让它看见问题，跑一阵子
+    # 看它会不会自己改——真要收紧，改这里一个 if 就行。
+    problems = work_package_problems(steps)
+    note = ""
+    if problems and len(steps) >= 2:
+        head = [f"  · {item['message']}" for item in problems[:3]]
+        rest = len(problems) - len(head)
+        note = (
+            "\n\n计划里有几处还不能独立验证（这次已写入，但失败时会定位不到是哪块）：\n"
+            + "\n".join(head)
+            + (f"\n  · …还有 {rest} 处" if rest > 0 else "")
+            + "\n每步写清 output（交出什么）和 check（怎么验：path_exists/file_contains/command/page）。"
+        )
+
     return ok(
-        render_plan(steps, milestones),
+        render_plan(steps, milestones) + note,
         steps=steps,
         milestones=milestones,
         explanation=str(arguments.get("explanation") or "").strip()[:300],
         progress=progress,
         total=progress["total"],
         completed=progress["completed"],
+        work_package_problems=problems,
     )
 
 
@@ -231,15 +248,10 @@ def plan_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="update_plan",
             description=(
-                "创建或更新当前任务的执行计划。计划是可更新对象："
-                "开始执行前先给出步骤；执行中把已完成的标为 completed、把正在做的标为 "
-                "in_progress；用户中途插话要求新内容时追加步骤。"
-                "同一时刻**只有一个步骤是 in_progress**；一步做完就立刻标 completed，"
-                "不要等都做完才回头补勾。"
-                "每次提交**完整步骤列表**（覆盖旧计划），不要只提交变化的部分。"
-                "步骤可以带 id 保持身份（不改 id 就能保住里程碑与验收条件的引用）。"
-                "工作分阶段时用 milestones 把步骤归组，用户才能看到"
-                "「调研完了、正在实现」这种阶段感，而不是一串平铺的勾选框。"
+                "创建或更新执行计划。开始前先给步骤；执行中标 completed / in_progress；"
+                "用户插话要新内容就追加。**同一时刻只有一个 in_progress**，做完立刻勾，"
+                "别都做完才补。每次提交**完整列表**（覆盖旧计划），带 id 保引用。"
+                "分阶段时用 milestones 归组，让用户看出「调研完了、正在实现」。"
             ),
             input_schema={
                 "type": "object",
@@ -252,17 +264,25 @@ def plan_tools() -> list[ToolDefinition]:
                             "properties": {
                                 "id": {
                                     "type": "string",
-                                    "description": "沿用上一版的 id 以保住引用；新建步骤可省略",
+                                    "description": "沿用旧 id 保引用；新建可省略",
                                 },
                                 "step": {"type": "string"},
                                 "status": {"type": "string", "enum": list(PLAN_STATUSES)},
                                 "milestone_id": {
                                     "type": "string",
-                                    "description": "归到哪个里程碑（milestones 里的 id）",
+                                    "description": "归到哪个里程碑 id",
                                 },
                                 "evidence": {
                                     "type": "string",
-                                    "description": "标 completed 时说明凭什么算完成：改了哪个文件、跑了什么命令",
+                                    "description": "标 completed 时说明凭什么：改了哪个文件、跑了什么命令",
+                                },
+                                "output": {
+                                    "type": "string",
+                                    "description": "交出什么（文件/结果/结论），写不出就该拆",
+                                },
+                                "check": {
+                                    "type": "object",
+                                    "description": "怎么验，同 done_when 的 check",
                                 },
                             },
                             "required": ["step"],
@@ -297,10 +317,10 @@ def plan_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="set_goal",
             description=(
-                "把这一轮的目标结构化：objective（要达成什么）、done_when（怎么算做完）、"
+                "把目标结构化：objective（要达成什么）、done_when（怎么算做完）、"
                 "constraints（必须遵守的限制）、out_of_scope（明确不做什么）。"
                 "多步骤任务先调它再给 update_plan；验收会逐条判定 done_when。"
-                "用户的原话不要改写，objective 用你自己的话概括执行意图。"
+                "用户原话别改写，objective 用自己的话概括。"
             ),
             input_schema={
                 "type": "object",
