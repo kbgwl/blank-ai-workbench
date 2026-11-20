@@ -632,6 +632,24 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
       return;
     }
 
+    // 打回没生效要单独成一行说明。它同样以 plan. 开头，但 payload 里没有步骤，
+    // 走下面的计划卡那条路会因为没有条目而被静默丢掉——用户点了「退回第 3 步」，
+    // 界面上只看到计划没变，没有任何解释。这一行就是那个解释。
+    if (rawType === "plan.rewind_missed") {
+      const requested = textOf(event.payload, "step_id");
+      const knownIds = Array.isArray(event.payload?.known_step_ids) ? event.payload.known_step_ids : [];
+      push({
+        kind: "system",
+        key,
+        seq: event.seq,
+        at: event.createdAt,
+        title: "打回没生效：那一步不在当前计划里",
+        detail: `请求退回 ${requested || "（空）"}；当前计划 ${knownIds.length} 步，对不上任何一步。这次只按普通驳回处理，计划没有重开。`,
+        tone: "warn",
+      });
+      return;
+    }
+
     if (rawType.startsWith("plan")) {
       const { items, text } = planItems(event);
       const steps = parsePlanSteps(event.payload);

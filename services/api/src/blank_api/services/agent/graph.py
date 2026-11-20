@@ -5230,20 +5230,17 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     rewind_manifest = None
     if rewind_step:
         session.rewind_request = ""
-        patch = rewind_plan_for_gate(state, rewind_step)
-        if patch:
+        settlement = rewind_gate_settlement(state, rewind_step)
+        applied = await settlement_records(
+            settlement, session=session, recorder=session.recorder, node=node
+        )
+        if applied:
             # 存独立变量：本函数后半段会 `plan_update = None` 重新初始化，
             # 直接写 plan_update 会被无声覆盖，打回等于没发生（复评实测）。
-            rewind_update = patch["steps"]
-            rewind_manifest = patch["manifest"]
-            session.hook_context.append(
-                {"event": "plan.rewound", "tool": "", "text": patch["directive"]}
-            )
-            await session.recorder.add(
-                "plan.rewound",
-                node,
-                {"step_id": rewind_step, "index": patch["index"], "steps": patch["steps"]},
-            )
+            rewind_update = applied["steps"]
+            rewind_manifest = applied["manifest"]
+        # 没对上时 applied 为空：计划不动，但事件与 hook 上下文已经在
+        # settlement_records 里落了——这一档以前是静默的。
 
     # 第一段：串行决策。事件按模型给出的顺序落，与执行顺序解耦。
     planned: list[_PlannedCall] = []
@@ -7016,6 +7013,78 @@ def rewind_plan_for_gate(state: AgentState, step_id: str) -> dict:
         "先看这一步的产物是否还在，再决定改什么。"
     )
     return {"steps": steps, "manifest": manifest, "directive": directive, "index": index}
+
+
+def rewind_gate_settlement(state: AgentState, step_id: str) -> dict:
+    """把「打回到第几步」算成一次**可记账**的结果：要么重开计划，要么如实说没对上。
+
+    为什么要有这一层：``rewind_plan_for_gate`` 对不上的步骤返回空 dict，调用点原来
+    只写 ``if patch:``，于是「驳回 + 打回第 3 步」被静默降级成普通驳回——用户以为
+    计划从第 3 步重开了，模型只收到"这次不批"，时间线上也没有任何痕迹解释为什么
+    没退。三方对同一件事的理解各不相同，而这是**必然会发生**的一档：前端
+    ``parsePlanSteps`` 会把没有 id 的老计划步骤兜底成 ``legacy-N``/``idx-N``，
+    这批 id 后端永远匹配不上。
+
+    返回两种形状，调用方据此落事件与 hook 上下文：
+
+    - ``{"kind": "rewound", "steps", "manifest", "directive", "index"}``
+    - ``{"kind": "missed", "step_id", "known", "directive", "payload"}``
+
+    抽成纯函数（不写事件、不改会话）是为了能被判据直接测：这条分支原来只有
+    源码字符串断言守着，改签名而字符串不变就会继续绿。
+    """
+    patch = rewind_plan_for_gate(state, step_id)
+    if patch:
+        return {"kind": "rewound", "step_id": str(step_id or ""), **patch}
+    # 只列真实存在的 id，不回传我们自己编的兜底值——"已知有哪些"要是事实。
+    known = [
+        str(item.get("id") or "")
+        for item in (state.get("plan_steps") or [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    return {
+        "kind": "missed",
+        "step_id": str(step_id or ""),
+        "known": known,
+        # 给模型的话必须说清"没重开"，否则它会把这次驳回当成"已退回第 N 步"，
+        # 于是跳过前面步骤直接往下做——比什么都不说更糟。
+        "directive": (
+            f"用户想把任务退回到第 {step_id} 步，但这一步不在当前计划里：计划没有重开，"
+            "这次驳回只否掉了刚刚那次调用。按当前计划继续，不要假装已经退回，"
+            "也不要自己重排步骤；如果确实需要重做前面的步骤，先用 update_plan 把步骤写清楚。"
+        ),
+        "payload": {"step_id": str(step_id or ""), "known_step_ids": known},
+    }
+
+
+async def settlement_records(settlement: dict, *, session, recorder, node: str) -> dict:
+    """把一次打回结算落到两处：hook 上下文（给模型）与事件流（给人、给事后审计）。
+
+    两处**必须同时**落。只落事件，模型不知道没退成，会跳过前面步骤直接往下做；
+    只落上下文，界面上永远解释不清"我明明点了第 3 步"。抽成一个函数还让判据能
+    直接驱动这段真实代码，而不是去源码里找字符串。
+
+    返回计划更新片段（``{steps, manifest}``）；没对上时返回空 dict，表示计划不动。
+    """
+    if settlement.get("kind") == "rewound":
+        session.hook_context.append(
+            {"event": "plan.rewound", "tool": "", "text": settlement["directive"]}
+        )
+        await recorder.add(
+            "plan.rewound",
+            node,
+            {
+                "step_id": settlement["step_id"],
+                "index": settlement["index"],
+                "steps": settlement["steps"],
+            },
+        )
+        return {"steps": settlement["steps"], "manifest": settlement["manifest"]}
+    session.hook_context.append(
+        {"event": "plan.rewind_missed", "tool": "", "text": settlement["directive"]}
+    )
+    await recorder.add("plan.rewind_missed", node, dict(settlement["payload"]))
+    return {}
 
 
 def _workspace_root(session: AgentSession | None) -> str | None:

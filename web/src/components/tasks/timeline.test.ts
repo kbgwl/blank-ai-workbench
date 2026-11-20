@@ -435,3 +435,21 @@ test("其余 hook.* 仍是内部审计，不进对话流", () => {
   const blocks = buildBlocks([promptEvent("hook.completed", { event: "session_start", results: [] })]);
   assert.equal(blocks.length, 0);
 });
+
+test("打回没生效时留一行解释，而不是让计划默默不变", () => {
+  // plan.rewind_missed 与 plan.* 同族，但 payload 里没有步骤；不走这条分支的话
+  // 计划卡会因为「条目为空」被丢掉，用户点了「退回第 3 步」后看到的就是计划没变。
+  const block = system({
+    seq: 9,
+    node: "execute_action",
+    type: "plan.rewind_missed",
+    payload: { step_id: "legacy-0", known_step_ids: ["a1", "b2"] },
+    createdAt: "2026-11-21T02:00:00+00:00",
+  });
+  assert.equal(block.tone, "warn");
+  assert.match(block.title, /没生效/);
+  // 要说清请求值、当前计划规模，以及"计划没有重开"这个结论。
+  assert.match(block.detail, /legacy-0/);
+  assert.match(block.detail, /2 步/);
+  assert.match(block.detail, /没有重开/);
+});

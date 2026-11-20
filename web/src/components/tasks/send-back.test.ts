@@ -62,3 +62,16 @@ test("失败的步骤也能打回——那正是最该重做的一步", () => {
   // 序号仍按计划里的原始位置，不因为中间过滤而错位。
   assert.equal(choices[1].label, "第 2 步 实现");
 });
+
+test("前端兜底编出来的 id 不进下拉：后端必然匹配不上，选了等于没退", () => {
+  // parsePlanSteps 对没有 id 的老计划步骤给 legacy-N / idx-N。这类值发给后端会
+  // 被当成"那个步骤不存在"，于是打回静默降级成普通驳回——用户的下拉里不该出现它。
+  const choices = sendBackChoices([
+    step("legacy-0", "调研", "completed"),
+    step("idx-1", "实现", "completed"),
+    step("a1b2c3d4e5", "测试", "completed"),
+  ]);
+  assert.deepEqual(choices.map((item) => item.id), ["a1b2c3d4e5"]);
+  // 序号按原始位置，过滤不影响「第 N 步」与计划面板对齐。
+  assert.equal(choices[0].label, "第 3 步 测试");
+});

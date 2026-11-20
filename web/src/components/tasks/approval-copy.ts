@@ -52,6 +52,16 @@ export type SendBackChoice = { id: string; label: string };
 const SEND_BACK_LABEL_CHARS = 16;
 
 /**
+ * 前端兜底出来的 id（`parsePlanSteps` 给没有 id 的老计划编的 `legacy-N` / `idx-N`）。
+ *
+ * 这类值不能进下拉：后端按 id 找不到那一步，结果是「驳回 + 打回第 N 步」被当成
+ * 普通驳回——用户以为退回了，计划其实没动。今天后端会落一条 plan.rewind_missed
+ * 说明这件事，但**不该让用户先选一个必然失败的项**。真实步骤 id 是内容寻址的
+ * sha1 前缀，不会长成这个样子。
+ */
+const FABRICATED_STEP_ID = /^(?:legacy|idx)-\d+$/;
+
+/**
  * 驳回这张卡能打回到哪几步。
  *
  * 只列**做过或正在做的**步骤：打回到一个还没开始的地方没有可重做的产物，
@@ -69,6 +79,8 @@ export function sendBackChoices(
     const id = String(step?.id ?? "").trim();
     const text = String(step?.text ?? "").trim();
     if (!id || !text) return;
+    // 前端自己编的兜底 id 后端匹配不上，列出来只会让用户点一个必然无效的动作。
+    if (FABRICATED_STEP_ID.test(id)) return;
     // failed 也要能打回：那正是最该重做的一步。只列 completed/in_progress 的话，
     // 某步失败了反而只能退回上一个成功步骤，把已经做对的东西也推倒重来。
     const status = step?.status;
