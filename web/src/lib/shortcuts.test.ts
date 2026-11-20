@@ -99,6 +99,24 @@ test("Esc 与输入态：面板类热键不该被 isEditableTarget 拦掉，Esc 
   assert.equal(isEditableTarget(inTextarea), true);
 });
 
+test("设置里的具体一项能被搜到，不用先进入设置再翻 tab", () => {
+  // 用户会打的是"审批"「密钥」"记忆"这些词，不是界面上的分类名。
+  assert.equal(filterCommands(APP_COMMANDS, "审批")[0].id, "settings-safety");
+  assert.equal(filterCommands(APP_COMMANDS, "密钥")[0].id, "settings-models");
+  assert.equal(filterCommands(APP_COMMANDS, "记忆")[0].id, "settings-memory");
+  assert.equal(filterCommands(APP_COMMANDS, "mcp")[0].id, "go-connectors");
+
+  // 每条设置命令都必须落到真实存在的分类上。写错一个字母就是静默无效的地址，
+  // 用户点了没反应，比这个命令不存在还糟。
+  const keys = ["models", "safety", "runtime", "memory", "channels", "utilities", "advanced"];
+  const settingCommands = APP_COMMANDS.filter((item) => item.group === "设置项");
+  assert.equal(settingCommands.length, keys.length);
+  for (const command of settingCommands) {
+    const hash = (command.href ?? "").split("#")[1] ?? "";
+    assert.ok(keys.includes(hash), `${command.id} 的分类 ${hash} 不存在`);
+  }
+});
+
 test("命令清单里每个 href 都不重复且以 / 开头", () => {
   const hrefs = APP_COMMANDS.flatMap((item) => (item.href ? [item.href] : []));
   assert.equal(new Set(hrefs).size, hrefs.length);
