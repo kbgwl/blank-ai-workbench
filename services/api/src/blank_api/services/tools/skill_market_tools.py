@@ -128,9 +128,8 @@ def skill_market_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="find_skills",
             description=(
-                "去 GitHub 找技能或工具。当用户要做的事没有现成技能覆盖、"
-                "或需要某个领域的具体做法时使用。返回候选的 stars（评分）、说明、仓库地址；"
-                "只读，不会下载或安装。找不到就如实说没找到，不要自己编一个技能名。"
+                "去 GitHub 找技能。现有技能不覆盖某领域时用。返回 stars、说明、仓库地址；"
+                "只读不安装。找不到就如实说，不要编技能名。"
             ),
             input_schema={
                 "type": "object",
@@ -147,9 +146,8 @@ def skill_market_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="install_market_skill",
             description=(
-                "把市场里的一条技能装到本机（会下载仓库并写盘，需要用户批准）。"
-                "repo 与 path 必须来自 find_skills 的结果，不要猜；"
-                "只是工具/库不要用这个工具，那应该用 clone 或包管理器。"
+                "安装市场技能：下载仓库并写盘，需批准。repo/path 必须取自 find_skills，别猜；"
+                "工具或库请用 clone 或包管理器。"
             ),
             input_schema={
                 "type": "object",
@@ -158,15 +156,14 @@ def skill_market_tools() -> list[ToolDefinition]:
                     "repo": {"type": "string", "description": "owner/repo"},
                     "path": {"type": "string", "description": "仓库里的技能目录"},
                     "ref": {"type": "string", "description": "分支或 tag，默认 main"},
-                    "name": {"type": "string", "description": "装成什么名字，默认取目录名"},
-                    "scope": {"type": "string", "enum": ["project", "user"], "description": "装到项目还是我的，默认 project"},
+                    "name": {"type": "string", "description": "安装名，默认目录名"},
+                    "scope": {"type": "string", "enum": ["project", "user"], "description": "默认 project"},
                     "overwrite": {"type": "boolean", "description": "同名时是否覆盖"},
-                    "stars": {"type": "integer", "description": "搜索结果里的 stars，用于记账"},
+                    "stars": {"type": "integer", "description": "用于记账"},
                     "allow_unsafe": {
                         "type": "boolean",
                         "description": (
-                            "静态检查报高危时是否仍要安装。默认 false，会直接拒绝；"
-                            "只有用户明确知道内容有问题、仍坚持安装时才传 true。"
+                            "默认 false：检查报高危就拒绝；仅当用户坚持时才传 true。"
                         ),
                     },
                 },

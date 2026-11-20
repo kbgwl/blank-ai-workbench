@@ -60,6 +60,40 @@ PROTECTED_SECTIONS: frozenset[str] = frozenset(
 )
 _PROTECTED_REASON = "安全设置只能由用户层或管理策略决定"
 
+# 归一化器同时认 Claude 的驼峰写法和内部下划线写法，但「同一层两种写法」与
+# 「不同层各写一种」必须分开处理：
+#   * 同一层里下划线写法优先（历史口径不变）；
+#   * 不同层之间必须由层级决定，不能因为用户层恰好写了下划线名就永远压住项目层
+#     的驼峰名。典型例子：用户层 data/settings.json 里的 worktree.base_ref=fresh
+#     会让项目层的 worktree.baseRef=head 永远不生效。
+# 所以每层在合并前先按路径折成内部名，再走原来的深合并。
+_LAYER_ALIASES: dict[tuple[str, ...], dict[str, str]] = {
+    (): {"disableAllHooks": "disable_all_hooks"},
+    ("permissions",): {"defaultMode": "default_mode"},
+    ("worktree",): {"baseRef": "base_ref"},
+}
+
+
+def _canonical_layer_data(raw: dict[str, Any]) -> dict[str, Any]:
+    """把这一层的驼峰别名折成内部名；同一层两种写法都在时下划线写法胜出。"""
+    result = deepcopy(raw)
+
+    def visit(node: Any, path: tuple[str, ...]) -> None:
+        if not isinstance(node, dict):
+            return
+        for alias, canonical in _LAYER_ALIASES.get(path, {}).items():
+            if alias not in node:
+                continue
+            value = node.pop(alias)
+            if canonical not in node:
+                node[canonical] = value
+        for key, value in list(node.items()):
+            if isinstance(value, dict):
+                visit(value, (*path, key))
+
+    visit(result, ())
+    return result
+
 
 @dataclass
 class Layer:
@@ -192,11 +226,13 @@ def _merge_layer(merged: dict[str, Any], sources: dict[str, str], layer: Layer) 
         return
     # 同一层里两张写法都出现时，plugins.enabled 优先（和 normalize 的口径一致），
     # 所以先把顶层 enabledPlugins 铺进去，后面处理 plugins 时再覆盖。
+    data = _canonical_layer_data(layer.data)
     for key, value in sorted(
-        layer.data.items(), key=lambda item: item[0] not in ("enabledPlugins", "disableAllHooks")
+        data.items(), key=lambda item: item[0] not in ("enabledPlugins", "disable_all_hooks")
     ):
-        # Claude 写的是驼峰 disableAllHooks：先折成内部名，再走保护与合并。
-        # 同一层两种写法都在时，下划线写法后到、覆盖驼峰（与 normalize 一致）。
+        # Claude 写的是驼峰 disableAllHooks：_canonical_layer_data 已折成内部名，
+        # 这里保留兜底以免以后漏登记别名。同一层两种写法都在时由 canonicalizer
+        # 保证下划线写法胜出（与 normalize 一致）。
         if key == "disableAllHooks":
             key = "disable_all_hooks"
         if key in PROTECTED_SECTIONS and layer.name in (LAYER_PROJECT, LAYER_LOCAL):

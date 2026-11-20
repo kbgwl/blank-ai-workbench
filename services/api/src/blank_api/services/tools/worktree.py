@@ -43,6 +43,8 @@ def _base_ref(context: ToolContext) -> str:
     """worktree.baseRef：按 用户 < 项目 < 本机 < 管理 叠一次，读生效值。"""
     settings = SettingsStore().read_layered(context.root).settings
     section = settings.get("worktree") if isinstance(settings, dict) else None
+    # 分层合并在 settings_layers 里已经把 baseRef/base_ref 折成同一个键；
+    # 这里只读生效值，不再自己猜别名，避免两层解释不一致。
     value = str((section or {}).get("base_ref") or "").strip().lower()
     if value not in worktree_session.BASE_REFS:
         value = worktree_session.BASE_REFS[0]

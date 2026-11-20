@@ -159,6 +159,10 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 headers=self._headers(),
                 json=self._payload(messages, tools, True, effort=effort, model=model),
             ) as resp:
+                # 请求体在错误分支也要能留档：payload 原先只在下面的读流循环里赋值，
+                # 于是 4xx/5xx 时 dump_failed_request 自己先抛 UnboundLocalError，
+                # 真正该抛的"上游拒了"被吞掉，上层只看到"解析器坏了"。
+                payload = ""
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode(errors="ignore")
                     dump_failed_request(payload, body)

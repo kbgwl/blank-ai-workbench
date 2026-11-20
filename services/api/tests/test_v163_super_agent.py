@@ -439,7 +439,7 @@ async def test_expire_stale_approvals_fails_only_the_expired(monkeypatch):
     assert any(event.type == "approval.expired" for event in events)
 
 
-async def test_expire_stale_approvals_respects_the_switch(monkeypatch):
+async def test_expire_stale_approvals_ignores_the_background_switch(monkeypatch):
     from blank_api import worker
 
     monkeypatch.setattr(worker, "is_enabled", lambda name: False)
@@ -451,6 +451,8 @@ async def test_expire_stale_approvals_respects_the_switch(monkeypatch):
     async with get_session_factory()() as session:
         await session.execute(sa_update(Task).where(Task.id == stale_id).values(updated_at=past))
         await session.commit()
-    assert await worker.expire_stale_approvals() == 0
+    # 审批过期是状态维护，不是"让 Agent 自己发起一轮"，所以不看 background_execution。
+    # 真机上这张卡曾挂 44 分钟：flag 默认关，收敛从未执行，界面既批不了也没有重试入口。
+    assert await worker.expire_stale_approvals() == 1
     async with get_session_factory()() as session:
-        assert (await session.get(Task, stale_id)).status == "waiting_approval"
+        assert (await session.get(Task, stale_id)).status == "failed"

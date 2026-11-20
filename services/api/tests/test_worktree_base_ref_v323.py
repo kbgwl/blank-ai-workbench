@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -119,6 +120,20 @@ def test_project_layer_carries_worktree_base_ref(tmp_path: Path):
     layered = load_layered_settings(root, user_path=tmp_path / "missing-user.json", env={})
     assert layered.settings["worktree"]["base_ref"] == "head"
     assert not any(item.get("section") == "worktree" for item in layered.layers[1].ignored)
+
+
+def test_project_alias_wins_over_user_underscore_name(tmp_path: Path):
+    """用户层老设置写着 base_ref，项目层按文档写 baseRef，必须听高层的。
+
+    回归：老设置文件带 worktree.base_ref=fresh 时，项目层 baseRef=head 曾被
+    normalize 的下划线优先规则压掉，建树仍从 origin/<分支> 起。
+    """
+    root = _repo(tmp_path)
+    user = tmp_path / "user-settings.json"
+    user.write_text(json.dumps({"worktree": {"base_ref": "fresh"}}), encoding="utf-8")
+    _setting(root, "head")
+    layered = load_layered_settings(root, user_path=user, env={})
+    assert layered.settings["worktree"]["base_ref"] == "head"
 
 
 # --------------------------------------------------------------------------- #

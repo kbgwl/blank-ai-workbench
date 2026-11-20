@@ -80,7 +80,11 @@ async def test_admin_turn_sees_team_status_and_can_call_it(env: Env, workspace: 
 
     events = (await env.client.get(f"{API}/tasks/{admin_message['task_id']}/events")).json()
     started = next(event for event in events if event["type"] == "task.started")
-    assert "team_status" in started["payload"]["tools"]
+    # 团队工具已从首屏常驻改成按需加载（工具说明占首屏上下文 59% 那次收敛）：
+    # 首屏发的是 tool_search，模型要用团队工具时通过它拉回来。
+    # 上面那条 ToolCall 断言才是"真的调到了 team_status"，这一条只钉首屏口径。
+    assert "tool_search" in started["payload"]["tools"]
+    assert "team_status" not in started["payload"]["tools"]
 
 
 async def test_high_risk_management_needs_approval(env: Env, workspace: Path) -> None:  # noqa: F811

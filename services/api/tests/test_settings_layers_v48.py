@@ -206,6 +206,28 @@ def test_nested_objects_merge_key_by_key(tmp_path: Path) -> None:
     assert result.sources["compaction"] == LAYER_PROJECT
 
 
+def test_camel_alias_and_underscore_name_are_one_key_across_layers(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    root.mkdir()
+
+    # permissions 是安全段，项目层不能写；用管理层验证驼峰跨层覆盖。
+    result = _layered(
+        root,
+        tmp_path,
+        user={"permissions": {"default_mode": "default"}},
+        managed={"permissions": {"defaultMode": "plan"}},
+    )
+    assert result.settings["permissions"]["default_mode"] == "plan"
+
+    # 同一层里两种写法都在时，下划线写法仍然优先（与 normalize 的历史口径一致）。
+    same_layer = _layered(
+        None,
+        tmp_path,
+        user={"permissions": {"defaultMode": "plan", "default_mode": "default"}},
+    )
+    assert same_layer.settings["permissions"]["default_mode"] == "default"
+
+
 def test_arrays_are_replaced_not_concatenated(tmp_path: Path) -> None:
     root = tmp_path / "ws"
     root.mkdir()
