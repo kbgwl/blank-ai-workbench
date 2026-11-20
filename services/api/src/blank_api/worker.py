@@ -120,9 +120,13 @@ async def expire_stale_approvals() -> int:
 
     收敛成 failed 而不是悄悄删除：界面因此给出「重试」，用户知道发生了什么。
     留一条 ``approval.expired`` 事件说明原因，事后能追。
+
+    **不看 ``background_execution``。** 那个 flag 的语义是「让 Agent 自己发起一轮」，
+    而这里做的是状态维护：一张已经批不动的卡必须有人收尾，否则任务永远停在
+    waiting_approval，界面上既批不了也没有重试入口。它默认关闭，于是这条收敛
+    在真机上从未执行过——本次 GUI 验收里那张卡挂了 44 分钟，就是被这行挡住的。
+    同类先例：``tasks.py:1392``、``channels/inbound.py:167`` 都刻意绕过这个 flag。
     """
-    if not is_enabled("background_execution"):
-        return 0
     from blank_api.services.agent.graph import approval_ttl_seconds
 
     cutoff = utc_now() - timedelta(seconds=approval_ttl_seconds() + 60)

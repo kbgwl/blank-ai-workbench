@@ -181,6 +181,17 @@ async def background_supervisor() -> None:
     while True:
         await asyncio.sleep(AUTONOMOUS_TICK_SECONDS)
         try:
+            # 过期审批的收敛放在所有门控**之前**：它不是「替用户推进」，是收尾。
+            #
+            # 一张过了 TTL 的卡再也批不动（提交必 409），任务却一直停在
+            # waiting_approval——界面写着等你批准，实际谁点都失败，也没有重试入口。
+            # 这件事必须在任何配置下都执行：手动模式、后台执行关闭、独立 worker
+            # 形态，都不该让一张死卡把任务永远挂住。下面两个 continue 会把它一起
+            # 跳过，所以先单独跑一次（与 supervise_once 里那次重复调用是幂等的）。
+            from blank_api.worker import expire_stale_approvals
+
+            await expire_stale_approvals()
+
             settings = SettingsStore().read()
             policy = resolve_background(settings)
             from blank_api.api.routes.tasks import inprocess_runner_enabled
