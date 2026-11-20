@@ -52,6 +52,7 @@ from blank_api.services.agent.verify_hook import (
 )
 from blank_api.services.agent.stall import StallBreaker, signature as _stall_signature
 from blank_api.services.agent.terminal import terminal_detail
+from blank_api.services.agent import transition as transition_mod
 from blank_api.services.agent.intent import (
     ADVISE_INSTRUCTION,
     INTENT_ACT,
@@ -789,6 +790,11 @@ class AgentSession:
     # 恒为 full 档，与裁剪功能上线前逐字节一致。
     tiered_tools: bool = False
     acceptance_criteria: list[str] = field(default_factory=list)
+    # 上一个节点为什么把控制权交给了下一个节点（形状见 services/agent/transition.py）。
+    # 边算出目标时写在这里，目标节点在入口把它落成 ``agent.transition`` 事件。
+    # 刻意不放进 state：这是一次性的握手，写进 state 会跟着检查点留下一条"上一轮的
+    # 理由"，恢复后可能被当成这一轮的解释。
+    pending_transition: dict = field(default_factory=dict)
     # 任务创建时的结构化目标。constraints / out_of_scope 进首轮提示；不进就等于没约束。
     goal_spec: dict = field(default_factory=dict)
     # 每条验收条件对应的计划步骤 [{id, criterion, milestone_id, step_ids}]，与上一行同序。
@@ -3508,6 +3514,8 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
     结果是简单问题也要跑一整轮工具，回复里塞满过程描述。
     """
     node = "create_plan"
+    # 这个节点没有入边跳转（START 直接进来），所以不落 agent.transition：
+    # "为什么开始这一轮"是用户那句话本身，记一条空的跳转只会污染时间线。
     await session.recorder.add("node.started", node, {"task_id": state.get("task_id", "")})
     # 新一轮开始：清掉上一轮的 effort 裁决缓存。effort 是「这一轮」的属性，
     # 上一轮的 ultrathink 不能顺延到这一轮——否则用户换一句普通提问也会被抬到 xhigh。
@@ -5157,6 +5165,9 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         return {"status": "cancelled", "pending": []}
     steps = int(state.get("steps") or 0) + 1
     await session.recorder.add("node.started", node, {"step": steps, "max_steps": session.max_steps})
+    # 排在上面那两条早退之后：取消/暂停时这一轮根本没执行，
+    # 记一条"还有待办所以继续"会把停轮的原因盖住（停轮由终态码事件说明）。
+    await emit_transition(session, node)
 
     messages = list(state.get("messages") or [])
     # fork 分身继承的是"派发这一刻"的父对话。快照必须在执行这批工具之前刷：
@@ -6296,6 +6307,7 @@ async def _ask_run_tests_approval(
 async def run_validation_node(state: AgentState, session: AgentSession) -> AgentState:
     node = "run_validation"
     await session.recorder.add("node.started", node, {})
+    await emit_transition(session, node)
     manifest_before = state.get("plan_manifest") or {}
     await session.recorder.add(
         "verification.started",
@@ -6620,6 +6632,7 @@ async def review_result_node(state: AgentState, session: AgentSession) -> AgentS
     """Review the produced change and validation evidence before delivery."""
     node = "review_result"
     await session.recorder.add("node.started", node, {})
+    await emit_transition(session, node)
     scope_text, scope_paths = _review_scope(state)
     prompt = (
         "你是交付审查 Agent。请审查当前任务的工具结果、测试结论和验收条件，"
@@ -7306,6 +7319,9 @@ async def _stop_hook_gate(
 
 async def summarize_result_node(state: AgentState, session: AgentSession) -> AgentState:
     node = "summarize_result"
+    # 在 Stop 钩子之前：钩子把这次收尾拦下来之后，节点会再进一次（stop_blocked 为真），
+    # 那时路由给出的解释是"被拦下了"，而这一次的解释是"为什么该收尾了"，两条都要留。
+    await emit_transition(session, node)
     blocked = await _stop_hook_gate(state, session, node)
     if blocked is not None:
         return blocked
@@ -7662,6 +7678,45 @@ def route_after_summarize(state: AgentState, session: AgentSession) -> str:
     return "finish"
 
 
+def edge(from_node: str, route, session: AgentSession) -> Callable[[AgentState], str]:
+    """包一层路由：算出目标之后，顺手记一句"为什么跳"。
+
+    语义上与原路由函数逐字等价（返回值就是它算的那个字符串），多出来的只有记账。
+    记账放在这里、落事件放在目标节点的入口，是刻意的两段：
+    路由函数是同步的，而写事件要等数据库；审批恢复时路由不会重跑，挂在节点入口
+    才既不会漏记，也不会重复记。
+    """
+
+    def wrapped(state: AgentState) -> str:
+        to = route(state)
+        session.pending_transition = transition_mod.explain(
+            from_node,
+            to,
+            state,
+            readonly=bool(state.get("readonly") or session.readonly),
+            max_repair=MAX_REPAIR_ROUNDS,
+            max_review=MAX_REVIEW_ROUNDS,
+        )
+        return to
+
+    return wrapped
+
+
+async def emit_transition(session: AgentSession, node: str) -> None:
+    """节点入口：把"为什么进到我这里"落成一条事件。
+
+    目标对不上就丢掉，不记：图会重算边，留一条 ``to`` 不是自己的解释只会让时间线
+    自相矛盾——宁可少一行，也不要一行错的。
+    """
+    pending = getattr(session, "pending_transition", None) or {}
+    if not pending:
+        return
+    session.pending_transition = {}
+    if pending.get("to") != node:
+        return
+    await session.recorder.add("agent.transition", node, pending)
+
+
 def build_agent_graph(session: AgentSession, checkpointer: BaseCheckpointSaver | None = None):
     builder = StateGraph(AgentState)
     builder.add_node("create_plan", partial(create_plan_node, session=session))
@@ -7672,12 +7727,12 @@ def build_agent_graph(session: AgentSession, checkpointer: BaseCheckpointSaver |
     builder.add_edge(START, "create_plan")
     builder.add_conditional_edges(
         "create_plan",
-        lambda state: route_after_plan(state, session),
+        edge("create_plan", lambda state: route_after_plan(state, session), session),
         {"execute_action": "execute_action", "summarize_result": "summarize_result"},
     )
     builder.add_conditional_edges(
         "execute_action",
-        lambda state: route_after_act(state, session),
+        edge("execute_action", lambda state: route_after_act(state, session), session),
         {
             "execute_action": "execute_action",
             "run_validation": "run_validation",
@@ -7686,7 +7741,7 @@ def build_agent_graph(session: AgentSession, checkpointer: BaseCheckpointSaver |
     )
     builder.add_conditional_edges(
         "run_validation",
-        lambda state: route_after_validation(state, session),
+        edge("run_validation", lambda state: route_after_validation(state, session), session),
         {
             "execute_action": "execute_action",
             "review_result": "review_result",
@@ -7695,12 +7750,12 @@ def build_agent_graph(session: AgentSession, checkpointer: BaseCheckpointSaver |
     )
     builder.add_conditional_edges(
         "review_result",
-        lambda state: route_after_review(state, session),
+        edge("review_result", lambda state: route_after_review(state, session), session),
         {"execute_action": "execute_action", "summarize_result": "summarize_result"},
     )
     builder.add_conditional_edges(
         "summarize_result",
-        lambda state: route_after_summarize(state, session),
+        edge("summarize_result", lambda state: route_after_summarize(state, session), session),
         {"execute_action": "execute_action", "finish": END},
     )
     return builder.compile(checkpointer=checkpointer)
