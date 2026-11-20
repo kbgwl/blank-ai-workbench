@@ -45,7 +45,7 @@ import { Sidebar } from "./sidebar";
 import { backgroundTaskTarget, visibleBackgroundTasks } from "./background";
 import { TurnView } from "./turn";
 import { PendingPanel } from "./pending-panel";
-import { buildSteps, isTurnRunning, planOf, touchedFiles, turnReply } from "./turns";
+import { buildSteps, isTurnRunning, planOf, quoteDraft, touchedFiles, turnReply } from "./turns";
 import {
   MAX_ATTACHMENTS_PER_TURN,
   MAX_TOTAL_IMAGE_BYTES,
@@ -148,6 +148,8 @@ export function BotApp() {
   const [liveTask, setLiveTask] = useState<Task | null>(null);
 
   const [draft, setDraft] = useState("");
+  /** 每加一，输入框就把焦点收回并落到末尾。引用一段话、点一条建议之后用。 */
+  const [focusToken, setFocusToken] = useState(0);
   /** 草稿里已选/已上传的图片。发送成功后清空。 */
   const [images, setImages] = useState<DraftAttachment[]>([]);
   const [sending, setSending] = useState(false);
@@ -1006,6 +1008,9 @@ export function BotApp() {
     const last = conv?.turns[conv.turns.length - 1];
     if (!last) return;
     setDraft(last.goal);
+    // 重试是"把同一句话再发一次"，不是"我自己改一改再发"。光标落进输入框，
+    // 用户能就地改一个字重发，也能直接按回车；两条路都不用再点一下输入框。
+    setFocusToken((value) => value + 1);
   }, [conv]);
 
   // ── 渲染数据 ─────────────────────────────────────────────────────────
@@ -1186,7 +1191,10 @@ export function BotApp() {
                     <button
                       key={text}
                       type="button"
-                      onClick={() => setDraft(text)}
+                      onClick={() => {
+                        setDraft(text);
+                        setFocusToken((value) => value + 1);
+                      }}
                       className="rounded-lg border border-line bg-surface px-3.5 py-2.5 text-left text-[13px] leading-relaxed text-muted transition-colors hover:border-line-strong hover:bg-surface-2 hover:text-text"
                     >
                       {text}
@@ -1225,6 +1233,11 @@ export function BotApp() {
                   onDecide={decide}
                   onAnswer={answer}
                   onRetry={retry}
+                  onQuote={(text) => {
+                    // 引用要拼在用户已经在打的内容前面，而不是把它顶掉。
+                    setDraft((current) => quoteDraft(current, text));
+                    setFocusToken((value) => value + 1);
+                  }}
                   // 技能提示只给最后一条：回放历史时每条都挂一个"你可以用…"，
                   // 等于把对话变成广告位。
                   skillHint={
@@ -1232,7 +1245,10 @@ export function BotApp() {
                       ? suggestSkill(turn.goal, skillItems, { used: turnSkills(turn.id) })
                       : null
                   }
-                  onUseSkill={(display) => setDraft(`用「${display}」技能的做法处理这件事：`)}
+                  onUseSkill={(display) => {
+                    setDraft(`用「${display}」技能的做法处理这件事：`);
+                    setFocusToken((value) => value + 1);
+                  }}
                 />
               ))}
             </div>
@@ -1325,6 +1341,7 @@ export function BotApp() {
           }}
           draft={draft}
           onDraftChange={setDraft}
+          focusToken={focusToken}
           images={images}
           onAddImages={addImages}
           onRemoveImage={removeImage}

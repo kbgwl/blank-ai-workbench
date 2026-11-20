@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/projects/ui";
 import { formatDuration } from "../tasks/format";
@@ -458,6 +458,36 @@ function FailureNotice({
   );
 }
 
+/**
+ * 消息级操作：复制这一整段，以及把选中一段带进输入框当引用。
+ *
+ * 复制做成悬停才出：一轮对话里真正被复制的不到十分之一，常驻一个按钮就是在
+ * 每段回复下面钉一行灰字。但选中就要立刻能引用——那是用户已经在做动作了，
+ * 让他再多走一步（先滚到某处找按钮）就白选了，所以引用按钮浮在选中的上方。
+ */
+function ReplyActions({
+  text,
+  copied,
+  onCopy,
+}: {
+  text: string;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  if (!text.trim()) return null;
+  return (
+    <div className="mt-1.5 flex items-center gap-2 opacity-0 transition-opacity group-hover/turn:opacity-100 focus-within:opacity-100">
+      <button
+        type="button"
+        onClick={onCopy}
+        className="font-mono text-[11px] text-faint transition-colors hover:text-text"
+      >
+        {copied ? "已复制" : "复制"}
+      </button>
+    </div>
+  );
+}
+
 export type TurnViewProps = {
   goal: string;
   /** 这一轮贴的附件。回放时要看得见，否则用户不知道自己当时发了什么。 */
@@ -492,6 +522,8 @@ export type TurnViewProps = {
   ) => void;
   onAnswer: (questions: PendingQuestion[], answers: AnswerValues) => void;
   onRetry: () => void;
+  /** 把这一段选中的话带进输入框当引用。 */
+  onQuote?: (text: string) => void;
   /** 这一轮的活像不像某条技能的覆盖面（纯前端判断，见 lib/skill-suggest）。 */
   skillHint?: SkillSuggestion | null;
   onUseSkill?: (display: string) => void;
@@ -515,6 +547,48 @@ export function TurnView(props: TurnViewProps) {
   const jumpToFile = () => {
     setOpenSteps(true);
     setFilter("changes");
+  };
+
+  // 选中一段话就浮出一个「引用」。位置贴着选中区域的左上角：眼睛刚离开选中的
+  // 那几个字，按钮就在原处，不用横跨整屏去找。
+  const replyRef = useRef<HTMLDivElement>(null);
+  const [pick, setPick] = useState<{ text: string; top: number; left: number } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const captureSelection = () => {
+    const host = replyRef.current;
+    const selection = window.getSelection();
+    if (!host || !selection || selection.isCollapsed || selection.rangeCount === 0) {
+      setPick(null);
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    if (!host.contains(range.commonAncestorContainer)) {
+      setPick(null);
+      return;
+    }
+    const text = selection.toString().trim();
+    // 三五个字以内不弹：手滑拖一下也满足"有选中"，弹出来只是挡视线。
+    if ([...text].length < 6) {
+      setPick(null);
+      return;
+    }
+    const box = host.getBoundingClientRect();
+    const rect = range.getBoundingClientRect();
+    setPick({
+      text,
+      top: Math.max(0, rect.top - box.top),
+      left: Math.max(0, Math.min(rect.left - box.left, box.width - 52)),
+    });
+  };
+
+  const copyReply = () => {
+    const text = (props.reply || props.streaming).trim();
+    if (!text) return;
+    void navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
   };
 
   return (
@@ -651,16 +725,38 @@ export function TurnView(props: TurnViewProps) {
         )}
 
         <div className="ml-7">
-          {props.streaming && (
-            <div className="relative">
-              <MarkdownView text={props.streaming} files={paths} onFileClick={jumpToFile} />
-              <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-[2px] animate-pulse bg-brand align-middle" />
-            </div>
-          )}
+          <div ref={replyRef} className="relative" onMouseUp={captureSelection}>
+            {props.streaming && (
+              <div className="relative">
+                <MarkdownView text={props.streaming} files={paths} onFileClick={jumpToFile} />
+                <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-[2px] animate-pulse bg-brand align-middle" />
+              </div>
+            )}
 
-          {!props.streaming && props.reply && (
-            <MarkdownView text={props.reply} files={paths} onFileClick={jumpToFile} />
-          )}
+            {!props.streaming && props.reply && (
+              <MarkdownView text={props.reply} files={paths} onFileClick={jumpToFile} />
+            )}
+
+            {pick && props.onQuote && (
+              <button
+                type="button"
+                // 用 mousedown 兜住"按钮自己也会触发一次选择变化"：在 mouseup 之前
+                // 就把选中文本带走了，之后浏览器把选区收起来也影响不到这次引用。
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  props.onQuote?.(pick.text);
+                  setPick(null);
+                  window.getSelection()?.removeAllRanges();
+                }}
+                style={{ top: pick.top, left: pick.left, transform: "translateY(-100%)" }}
+                className="absolute z-10 rounded-md border border-line-strong bg-surface px-2 py-0.5 text-[12px] text-text shadow-sm transition-colors hover:bg-surface-2"
+              >
+                引用
+              </button>
+            )}
+          </div>
+
+          <ReplyActions text={props.reply || props.streaming} copied={copied} onCopy={copyReply} />
 
           {/* 产物条：一轮说"改好了"，用户第一反应是"东西在哪"。
               原来只有展开"过程"或开右侧面板才看得见，等于让他自己找。

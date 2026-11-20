@@ -314,6 +314,65 @@ export function reasonText(raw: string): string {
 }
 
 /**
+ * 把回复里选中的一段做成引用块，塞进输入框。
+ *
+ * 为什么要做这件事：用户想追问某一句的时候，只能自己把那段话抄一遍，或者写
+ * 「上面说的第二点」——后者在长回复里根本指不准，模型只能猜。选中就能引用，
+ * 是把"我在说哪一句"变成确定的输入，而不是一次猜测。
+ *
+ * 三条约束：
+ * 1. 按 markdown 引用（`>` 前缀）而不是引号包裹。引用块在模型那边是明确的结构，
+ *    引号只是一对字符，长段落里哪句到哪句结束会糊掉。
+ * 2. 超长截断到句边界。选了三屏文字，原样塞进去会把它自己的上下文挤满，
+ *    用户真正想问的那句话反而被淹没。截断后标一个省略号，让它知道还有下文。
+ * 3. 已经引过的不再引第二遍。连点两次「引用」应该是没反应，不是同一段话出现两次。
+ */
+export const QUOTE_LIMIT = 600;
+
+/** 选中文本 → 引用块。空白/重复的返回空串，调用方据此不插入。 */
+export function quoteBlock(text: string, limit = QUOTE_LIMIT): string {
+  const raw = String(text ?? "").replace(/\r\n/g, "\n").trim();
+  if (!raw) return "";
+
+  let body = raw;
+  if ([...body].length > limit) {
+    const cut = [...body].slice(0, limit).join("");
+    // 尽量断在句号/问号/换行后面：截在半句话上，模型会去补全那半句。
+    const boundary = Math.max(
+      cut.lastIndexOf("。"),
+      cut.lastIndexOf("？"),
+      cut.lastIndexOf("！"),
+      cut.lastIndexOf("\n"),
+      cut.lastIndexOf(". "),
+    );
+    body = boundary > limit * 0.5 ? [...cut].slice(0, boundary + 1).join("") : cut;
+    body = body.trimEnd() + "……";
+  }
+
+  // 每行都加 `>`；空行写成单个 `>`，否则引用块在渲染时会被断成两段。
+  const quoted = body
+    .split("\n")
+    .map((line) => (line.trim() ? `> ${line}` : ">"))
+    .join("\n");
+  return `${quoted}\n\n`;
+}
+
+/**
+ * 新草稿 = 引用块 + 原有内容。
+ *
+ * 引用放最前面：它是这句话的上下文，问句跟在后面读起来才是"针对这段，我想问…"。
+ * 反过来写（先问句后引用）在人读来是两段无关的话。
+ */
+export function quoteDraft(current: string, text: string, limit = QUOTE_LIMIT): string {
+  const block = quoteBlock(text, limit);
+  if (!block) return current;
+  const rest = String(current ?? "");
+  // 同一段话连点两次：第二次什么都不做。
+  if (rest.includes(block.trim())) return current;
+  return rest.trim() ? `${block}${rest}` : block;
+}
+
+/**
  * 这一轮助手最后说的话。取最后一条 task.completed 的 summary；失败时取原因。
  *
  * 除了给人看的那句 `reason`，还交出 `rawReason` 与 `code`：错误分层（error-copy.ts）

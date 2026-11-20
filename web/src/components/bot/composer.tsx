@@ -71,6 +71,14 @@ export type ComposerProps = {
   onPermissionChange: (value: string) => void;
   draft: string;
   onDraftChange: (value: string) => void;
+  /**
+   * 每加一，就把焦点还给输入框。
+   *
+   * 用"计数"而不是"isFocused"：引用一段话、点一条建议之后，用户下一步一定是打字，
+   * 但那些按钮一按下焦点就跑到按钮上了。给一个一次性的信号，比在调用处
+   * `document.querySelector("textarea").focus()` 稳——那会抓错输入框。
+   */
+  focusToken?: number;
   /** 草稿里的图片。上传完成的才有 id，上传中的不能发送。 */
   images: DraftAttachment[];
   onAddImages: (files: File[]) => void;
@@ -128,6 +136,16 @@ export function Composer(props: ComposerProps) {
     node.style.height = "auto";
     node.style.height = `${Math.min(node.scrollHeight, 9 * 26 + 28)}px`;
   }, [props.draft]);
+
+  // 引用一段话之后光标要落进输入框末尾：用户已经想好下一句了，
+  // 还要再点一下输入框才能打字，中间那一下会让思路断掉。
+  useEffect(() => {
+    if (props.focusToken === undefined) return;
+    const node = textarea.current;
+    if (!node) return;
+    node.focus();
+    node.setSelectionRange(node.value.length, node.value.length);
+  }, [props.focusToken]);
 
   // 附件菜单点外面收起。捕获取 mousedown 而不是 click：拖动选择文本时不该触发菜单。
   useEffect(() => {

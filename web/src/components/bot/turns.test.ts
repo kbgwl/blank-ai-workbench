@@ -10,6 +10,8 @@ import {
   filterSteps,
   isTurnRunning,
   planOf,
+  quoteBlock,
+  quoteDraft,
   reasonText,
   resolveTouchedPath,
   shouldAutoRunTurn,
@@ -451,4 +453,47 @@ test("失败事件的原因经过同一个翻译，页面读到的不是标识�
   const verdict = turnReply([ev(1, "task.failed", { status: "failed", reason: "approval_expired" })]);
   assert.equal(verdict.status, "failed");
   assert.ok(!verdict.reason.includes("approval_expired"), verdict.reason);
+});
+
+test("选中一段话变成引用块，塞在用户已经在打的内容前面", () => {
+  const block = quoteBlock("就这一句话");
+  assert.equal(block, "> 就这一句话\n\n");
+
+  // 多行：每一行都带 >，否则渲染时引用块会断成两段。
+  assert.equal(quoteBlock("第一行\n第二行"), "> 第一行\n> 第二行\n\n");
+  // 空行写成单个 >，不能变成真正的空行。
+  assert.equal(quoteBlock("上\n\n下"), "> 上\n>\n> 下\n\n");
+
+  // 引用在前、已有的草稿在后：读起来才是"针对这段，我想问…"。
+  assert.equal(quoteDraft("我想问个事", "原文"), "> 原文\n\n我想问个事");
+  assert.equal(quoteDraft("", "原文"), "> 原文\n\n");
+});
+
+test("引用的三条底线：空的不插、超长截断、同一段不插两遍", () => {
+  assert.equal(quoteBlock(""), "");
+  assert.equal(quoteBlock("   \n  "), "");
+  assert.equal(quoteDraft("原有内容", "   "), "原有内容");
+
+  // 超长截到句边界，且标出还有下文。
+  const long = "第一句话在这里。".repeat(80);
+  const cut = quoteBlock(long, 60);
+  assert.ok([...cut].length < 90, `没截断：${cut.length}`);
+  assert.match(cut, /……/);
+  assert.ok(cut.trimEnd().endsWith("。……"), cut);
+
+  // 连点两次「引用」应该是没反应，不是同一段话出现两次。
+  const once = quoteDraft("", "同一段话");
+  assert.equal(quoteDraft(once, "同一段话"), once);
+});
+
+test("失败事件带上原始原因和错误码：错误分层要用它们认成因", () => {
+  const verdict = turnReply([
+    ev(3, "task.failed", { status: "failed", reason: "模型请求超时：qwen", code: "model_timeout" }),
+  ]);
+  assert.equal(verdict.code, "model_timeout");
+  assert.equal(verdict.rawReason, "模型请求超时：qwen");
+  // 给人看的那句已经翻译过，不能拿去匹配关键词。
+  assert.equal(verdict.reason, "模型请求超时：qwen");
+  // 老数据没有 code，不能报错也不能编一个。
+  assert.equal(turnReply([ev(4, "task.failed", { reason: "x" })]).code, "");
 });
