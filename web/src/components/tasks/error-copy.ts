@@ -170,6 +170,21 @@ const BY_CODE: Record<string, FailureCopy> = {
     next: "retry",
     code: "",
   },
+  // 取消与暂停不是失败，但终态码会带上来。它们必须在这里登记：否则
+  // `explainFailure("", "cancelled")` 会掉进"后端没留下原因"那条兜底——
+  // 而原因明明就在码里。文案为空标题也算"没话说"，`title` 仍给一句人话。
+  cancelled: {
+    title: "这一轮被取消了。",
+    action: "",
+    next: "none",
+    code: "cancelled",
+  },
+  paused: {
+    title: "这一轮暂停了。",
+    action: "",
+    next: "none",
+    code: "paused",
+  },
 
   // ── verifier 的硬违规码（agent/verifier.py 的 BLOCKING_CODES）──────────
   // 它们是 `verification_blocked.detail`，比族码具体，所以优先命中。

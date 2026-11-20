@@ -20,8 +20,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from blank_api.services.agent.runtime import terminal_payload
+from blank_api.db import get_session_factory
+from blank_api.models.task import Task
+from blank_api.services.agent.runtime import AgentRuntime, RunRequest, terminal_payload
 from blank_api.services.agent.terminal import TERMINAL_CODES, terminal_detail
+from blank_api.services.models.registry import build_adapter
 from blank_api.services.agent.verifier import (
     BLOCKING_CODES,
     FINDING_CODES,
@@ -31,10 +34,12 @@ from blank_api.services.agent.verifier import (
 
 from tests.test_agent_v04 import (  # noqa: F401  (env 是夹具，故意导入)
     API,
+    call,
     create_project,
     create_provider,
     create_task,
     env,
+    provider_row,
 )
 
 ZERO_CHANGE_ROWS = [
@@ -74,7 +79,6 @@ async def test_a_failed_turn_ships_a_terminal_code_in_the_event(env, workspace: 
 # --------------------------------------------------------------------------- #
 # 2. 纯函数：每条终态路径都落到一个封闭的码上
 # --------------------------------------------------------------------------- #
-
 
 def test_every_terminal_branch_lands_on_a_declared_code() -> None:
     """各条收尾路径的码，以及"码必须在封闭集合里"这条约束。"""
@@ -199,3 +203,47 @@ def test_a_failed_turn_with_no_verdict_still_gets_a_code() -> None:
     got = terminal_detail("failed", "子代理启动失败", {})
     assert got["code"] == "failed"
     assert got["reason"] == "子代理启动失败"
+
+
+# --------------------------------------------------------------------------- #
+# 4. 取消：最常见的非正常结束，也不能只留一句中文
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_cancelled_turn_ships_the_code_too(env, workspace: Path):  # noqa: F811
+    """任务被取消时，``task.cancelled`` 的载荷里也要有 ``terminal.code=cancelled``。
+
+    取消这条路径不经过 ``runtime._finish``（执行节点自己发现状态已取消就交出去），
+    所以它是"终态码只接了两条写入路径"之外最容易漏的一处。界面此前靠
+    ``/取消/`` 这段正则认它——文案一改就认不出。
+    """
+    project_id = await create_project(env, workspace)
+    provider_id = await create_provider(env)
+    task_id = await create_task(env, project_id, ["取消后不再执行"])
+    env.mock.reset(
+        [
+            {"content": "执行计划：\n1. 读取文件"},
+            {"content": "取消", "tool_calls": [call("read_file", {"path": "main.py"})]},
+        ]
+    )
+    async with get_session_factory()() as session:
+        task = await session.get(Task, task_id)
+        task.status = "cancelled"
+        await session.commit()
+
+    evidence = await AgentRuntime(get_session_factory()).run(
+        RunRequest(
+            task_id=task_id,
+            provider_id=provider_id,
+            provider_name="mock-vendor",
+            adapter=build_adapter(await provider_row(provider_id), env.mock.factory),
+            root=workspace,
+            title="取消测试",
+            goal="取消测试",
+            acceptance_criteria=["取消后不再执行"],
+            max_steps=4,
+        )
+    )
+    cancelled = [event for event in evidence["timeline"] if event["type"] == "task.cancelled"]
+    assert cancelled, [event["type"] for event in evidence["timeline"]]
+    assert (cancelled[-1].get("payload") or {}).get("terminal", {}).get("code") == "cancelled", cancelled[-1]

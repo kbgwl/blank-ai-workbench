@@ -101,9 +101,10 @@
 （`web/src/components/bot/turns.ts` 的 `turnReply`），码表文案在
 `web/src/components/tasks/error-copy.ts`。
 
-**还没覆盖的**：取消/暂停路径（`graph.py` 里那两处 `task.cancelled`）仍只写
-`reason` 不写 `terminal`；界面靠"/取消/"这段文字兜住，行为正确但不够干净。
-要补就在那两处调同一个函数。
+**取消是三条独立的写入点**（不是一条）：`runtime.run` 在开跑前发现已取消、
+`graph` 在执行节点发现已取消、`graph` 在执行中工具被中断。三处都自己写
+`task.cancelled`，而且 `_finish` 看到已有终态会跳过自己那条——所以终态码必须在
+这三处各自带上，漏一处，用户看到的恰好就是没码的那条。
 
 ## 改完怎么验
 

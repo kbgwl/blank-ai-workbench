@@ -69,6 +69,17 @@ test("终态码优先于中文文本：同一句话换成别的说法，结论�
   assert.equal(a.code, "zero_change");
 });
 
+test("取消与暂停有码可查：不该掉进「后端没留下原因」那条兜底", () => {
+  // 这两档不是失败，但终态码会带上来。空 reason + 有码时若没登记，
+  // 界面会说"这一轮没跑完，但后端没留下原因"——原因明明就在码里。
+  const cancelled = explainFailure("", "cancelled");
+  assert.ok(cancelled.title.includes("取消"), cancelled.title);
+  assert.equal(cancelled.next, "none");
+  const paused = explainFailure("", "paused");
+  assert.ok(paused.title.includes("暂停"), paused.title);
+  assert.equal(paused.next, "none");
+});
+
 test("能靠重试解决的才给重试，改设置的不给假按钮", () => {
   // 上游排队 / 网络抖：重试有意义。
   assert.equal(explainFailure("model_timeout").next, "retry");

@@ -203,6 +203,16 @@ test("终态码：细分的 detail 优先，族码兜底，旧数据退回 paylo
   assert.equal(broken.code, "model_timeout");
 });
 
+test("取消也带码：原因文案换了，界面照样认得出", () => {
+  // 取消这条路径不经过 runtime._finish，是最容易漏接的一处。以前界面靠
+  // /取消/ 这段正则认它——文案改一个字就认不出，还会给出"再发一次"的建议。
+  const renamed = turnReply([
+    ev(1, "task.cancelled", { reason: "被叫停了", terminal: { code: "cancelled" } }),
+  ]);
+  assert.equal(renamed.code, "cancelled");
+  assert.equal(renamed.status, "cancelled");
+});
+
 test("跑没跑完：终态事件与终态状态都算结束", () => {
   assert.equal(isTurnRunning("running", []), true);
   assert.equal(isTurnRunning("succeeded", [ev(1, "tool.requested", { tool: "x" })]), false);

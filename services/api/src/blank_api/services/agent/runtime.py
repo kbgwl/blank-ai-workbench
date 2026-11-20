@@ -1281,7 +1281,17 @@ class AgentRuntime:
         # 一遍整个仓库纯属浪费（大仓库要几十秒，界面看起来像卡死）。
         # 具体见 AgentSession.ensure_snapshot() 与 create_plan 节点里的调用点。
         if await session.is_cancelled():
-            await recorder.add("task.cancelled", "receive_task", {"reason": "任务已取消，未执行任何工具"})
+            # 这条事件在 _finish 之前写，而 _finish 看到已有终态就跳过自己的那条，
+            # 所以终态码必须在这里就带上——否则任务被取消后，事件流里留下的
+            # 那条恰恰是没有码的那个。
+            await recorder.add(
+                "task.cancelled",
+                "receive_task",
+                {
+                    "reason": "任务已取消，未执行任何工具",
+                    "terminal": terminal_detail("cancelled", "任务已取消，未执行任何工具"),
+                },
+            )
             await self._finish(scope, "cancelled", summary="", reason="任务已取消", steps=0)
             return await build_evidence(scope.store, request.task_id)
         await self._set_status(scope, "running")
