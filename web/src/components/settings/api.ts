@@ -435,6 +435,48 @@ export type ProjectPlugins = {
 };
 
 /**
+ * 一条定时/事件触发器。
+ *
+ * 这里没有"重复频率"字段是事实，不是遗漏：后端存的是一次性的 `fire_at`，
+ * 重复由外部每次重新登记实现。界面不能凭 fire_at 编一个「每天」出来。
+ */
+export type Trigger = {
+  id: string;
+  event_type: string;
+  source: string;
+  status: string;
+  fire_at: string;
+  fired_at: string;
+  expires_at: string;
+  created_at: string;
+  task_id: string;
+};
+
+export function fetchTriggers(projectId: string): Promise<Trigger[]> {
+  return request<unknown[]>(`${api}/projects/${projectId}/triggers?limit=100`, { cache: "no-store" }).then((rows) =>
+    (Array.isArray(rows) ? rows : []).map((row) => {
+      const item = (row ?? {}) as Record<string, unknown>;
+      const text = (key: string) => (typeof item[key] === "string" ? (item[key] as string) : "");
+      return {
+        id: text("id"),
+        event_type: text("event_type") || "user_task",
+        source: text("source"),
+        status: text("status") || "pending",
+        fire_at: text("fire_at"),
+        fired_at: text("fired_at"),
+        expires_at: text("expires_at"),
+        created_at: text("created_at"),
+        task_id: text("task_id"),
+      };
+    }),
+  );
+}
+
+export function actOnTrigger(id: string, action: "fire" | "pause" | "resume" | "cancel"): Promise<unknown> {
+  return request<unknown>(`${api}/triggers/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+}
+
+/**
  * 一条长期记忆。
  *
  * `kind` 是机器可判的类型（user / feedback / project / reference），

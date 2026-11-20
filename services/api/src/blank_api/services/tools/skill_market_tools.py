@@ -72,6 +72,7 @@ async def _install_market_skill(context: ToolContext, arguments: dict) -> ToolOu
             name=str(arguments.get("name") or ""),
             overwrite=bool(arguments.get("overwrite", False)),
             prefix=path,
+            allow_unsafe=bool(arguments.get("allow_unsafe", False)),
         )
     except SkillInstallError as exc:
         return fail("error", exc.message)
@@ -90,14 +91,23 @@ async def _install_market_skill(context: ToolContext, arguments: dict) -> ToolOu
                 "url": f"https://github.com/{repo}",
                 "installed_as": result["name"],
                 "scope": scope,
+                # 静态检查的结论也进审计事件：装完之后回头问"当时有没有看出问题"，
+                # 不能靠聊天记录里那句模型自己的复述。
+                "scan": result.get("scan", {}),
             },
         )
     return ok(
         f"已安装技能「{result['name']}」到 {result['path']}。"
-        f"来源：{repo} 的 {path}。下一轮它会出现在技能清单里，按名字调用即可。",
+        f"来源：{repo} 的 {path}。下一轮它会出现在技能清单里，按名字调用即可。"
+        + (
+            f"\n\n安装前检查：{scan['summary']}。详见展开输出。"
+            if (scan := result.get("scan") or {}).get("summary")
+            else ""
+        ),
         name=result["name"],
         path=result["path"],
         repo=repo,
+        scan=scan,
     )
 
 
@@ -152,6 +162,13 @@ def skill_market_tools() -> list[ToolDefinition]:
                     "scope": {"type": "string", "enum": ["project", "user"], "description": "装到项目还是我的，默认 project"},
                     "overwrite": {"type": "boolean", "description": "同名时是否覆盖"},
                     "stars": {"type": "integer", "description": "搜索结果里的 stars，用于记账"},
+                    "allow_unsafe": {
+                        "type": "boolean",
+                        "description": (
+                            "静态检查报高危时是否仍要安装。默认 false，会直接拒绝；"
+                            "只有用户明确知道内容有问题、仍坚持安装时才传 true。"
+                        ),
+                    },
                 },
             },
             risk_level="high",

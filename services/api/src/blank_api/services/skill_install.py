@@ -41,6 +41,7 @@ from pathlib import Path
 
 import httpx
 
+from blank_api.services.skill_scan import scan_skill_dir, scan_summary
 from blank_api.services.skills_defs import (
     MAX_BODY_CHARS,
     PROJECT_SKILLS_DIR,
@@ -318,8 +319,9 @@ def install_skill(
     name: str = "",
     overwrite: bool = False,
     prefix: str = "",
+    allow_unsafe: bool = False,
 ) -> dict:
-    """安装一份技能，返回 ``{name, path, scope, files, source}``。
+    """安装一份技能，返回 ``{name, path, scope, files, source, scan}``。
 
     失败一律抛 :class:`SkillInstallError`；成功时目标目录已经完整可读（先写暂存目录，
     验证通过再整体换名），不会留下半个技能。
@@ -333,6 +335,18 @@ def install_skill(
         _stage_from(source, staged, prefix=prefix)
         skill_dir, skill_md = _locate_skill_md(staged)
         definition = _validate_definition(skill_md)
+
+        # 静态检查放在"格式验过、还没落盘"这个位置：这时候整份内容已经在暂存目录里，
+        # 拦下来不会在目标目录留下任何东西，也不必回滚。
+        scan = scan_skill_dir(staged)
+        if scan.level == "danger" and not allow_unsafe:
+            lines = "; ".join(f"{item.detail}（{item.file}）" for item in scan.findings if item.level == "danger")
+            raise SkillInstallError(
+                "unsafe_skill",
+                f"这份技能里有明确危险的内容，没有安装：{lines}。"
+                "确认要装就在 install_market_skill 里显式传 allow_unsafe=true，那会再过一次审批。",
+                status_code=409,
+            )
 
         # 名字：用户显式给的必须**原样合法**（不替他改名，否则"我填的和它存的不一样"）；
         # 从来源推出来的才允许 slug 化（`demo-skill` / `evil.zip` 这类）。
@@ -371,6 +385,7 @@ def install_skill(
         "files": files,
         "source": source,
         "description": definition.description,
+        "scan": {**scan.as_dict(), "summary": scan_summary(scan)},
     }
 
 

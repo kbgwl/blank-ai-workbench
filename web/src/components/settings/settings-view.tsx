@@ -15,6 +15,7 @@ import { ProvidersView } from "./providers-view";
 import { RoleModelSettings } from "./role-model-settings";
 import { RoutingEvidencePanel } from "./routing-evidence-panel";
 import { SafetyPanel } from "./safety-panel";
+import { TriggerPanel } from "./trigger-panel";
 
 type SectionKey = "models" | "safety" | "runtime" | "memory" | "channels" | "tools" | "utilities" | "advanced";
 
@@ -192,7 +193,9 @@ function SectionBody({ active }: { active: SectionKey }) {
       );
     case "utilities":
       return (
-        <Panel title="低频入口" hint="从侧栏收进这里，不再占常驻位置">
+        <div className="flex flex-col gap-4">
+          <TriggerPanel />
+          <Panel title="低频入口" hint="从侧栏收进这里，不再占常驻位置">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {UTILITY_LINKS.map((item) => (
               <Link
@@ -208,7 +211,8 @@ function SectionBody({ active }: { active: SectionKey }) {
               </Link>
             ))}
           </div>
-        </Panel>
+          </Panel>
+        </div>
       );
     case "advanced":
       return (
