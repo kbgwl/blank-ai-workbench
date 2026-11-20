@@ -2,6 +2,7 @@
 
 import { useState, type KeyboardEvent } from "react";
 import type { ApprovalGrant, ApprovalScope } from "./api";
+import type { SendBackChoice } from "./approval-copy";
 
 /**
  * 审批的两件事：顶上问什么、下面怎么选。
@@ -20,8 +21,12 @@ type ApprovalOptionsProps = {
   /**
    * 驳回。带上用户写的那句话（可选）——它会被原样交给模型。
    * 键盘路径（Esc / 数字键）永远不带：那时用户在按快捷键，不是在写理由。
+   *
+   * 第二个参数是「打回到第几步」：给了就把计划从该步起重开，不给就是普通驳回。
    */
-  onDeny: (feedback?: string) => void;
+  onDeny: (feedback?: string, sendBackStepId?: string) => void;
+  /** 能打回到哪几步。空数组表示没有可退回的步骤（新任务、纯问答）。 */
+  steps?: SendBackChoice[];
 };
 
 /**
@@ -33,7 +38,7 @@ type ApprovalOptionsProps = {
  * 键盘只在列表自己拿到焦点时生效：全局监听会让「在输入框里打 1」变成「批准执行」。
  * 点了这里（或 Tab 到它）就是要动手了，这时 1–N 才有意义。
  */
-export function ApprovalOptions({ grants, busy, decided = false, onApprove, onDeny }: ApprovalOptionsProps) {
+export function ApprovalOptions({ grants, busy, decided = false, onApprove, onDeny, steps = [] }: ApprovalOptionsProps) {
   // 驳回理由。放在组件内而不是上层：换一张卡就该清空，上一次的理由不该跟着跑到下一张。
   const [note, setNote] = useState("");
   // 理由输入是否展开。理由属于「拒绝」这个分支，不是列表里的一个选项：
@@ -41,11 +46,15 @@ export function ApprovalOptions({ grants, busy, decided = false, onApprove, onDe
   // 读到第三行的人对不上号。点「不允许」才展开——这也是 Claude Code 那样的做法
   // （"No, and tell me what to do differently"），先选拒绝，再说理由。
   const [explaining, setExplaining] = useState(false);
+  // 打回到哪一步。空串 = 普通驳回（只否掉这次调用，计划不动）。
+  // 默认空：用户点「不允许」时想表达的多半就是"这次不行"，退回重做是更重的动作，
+  // 不该是默认值——误触一下就把已完成的三步推回 pending 了。
+  const [sendBackTo, setSendBackTo] = useState("");
   if (decided) {
     return <p className="font-mono text-[12px] text-faint">该请求已处理，不会重复执行。</p>;
   }
   const total = grants.length + 1;
-  const submitDeny = () => onDeny(note.trim() || undefined);
+  const submitDeny = () => onDeny(note.trim() || undefined, sendBackTo || undefined);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (busy) return;
     // 展开理由时，键盘归那个输入框：这里再抢一次 Esc 会把"在打字"判成"驳回"。
@@ -140,6 +149,28 @@ export function ApprovalOptions({ grants, busy, decided = false, onApprove, onDe
             maxLength={600}
             className="w-full rounded-md border border-line bg-surface-2 px-2 py-1 text-[12px] text-text placeholder:text-faint focus:border-brand/40 focus:outline-none"
           />
+          {/* 打回到哪一步：只在有可退回的步骤时出现。选空就是普通驳回——
+              退回重做会把该步之后的已完成步骤全部重开，代价比"这次不行"大得多，
+              所以它必须是用户主动选的，不能是默认。 */}
+          {steps.length > 0 && (
+            <label className="mt-1.5 flex items-center gap-1.5 text-[12px] text-muted">
+              <span className="shrink-0">退回重做：</span>
+              <select
+                value={sendBackTo}
+                disabled={busy}
+                onChange={(event) => setSendBackTo(event.target.value)}
+                onKeyDown={(event) => event.stopPropagation()}
+                className="min-w-0 flex-1 rounded-md border border-line bg-surface-2 px-1.5 py-1 text-[12px] text-text focus:border-brand/40 focus:outline-none"
+              >
+                <option value="">不退回，只否掉这一步</option>
+                {steps.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    从{item.label}起重做
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <div className="mt-1.5 flex items-center gap-2">
             <button
               type="button"
@@ -147,7 +178,7 @@ export function ApprovalOptions({ grants, busy, decided = false, onApprove, onDe
               onClick={submitDeny}
               className="rounded-md bg-surface-2 px-2 py-1 text-[12px] text-text transition-colors hover:bg-line disabled:opacity-50"
             >
-              确认不允许
+              {sendBackTo ? "退回重做" : "确认不允许"}
             </button>
             <button
               type="button"

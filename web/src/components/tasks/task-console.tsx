@@ -8,6 +8,7 @@ import { isTerminalStatus, type AgentEvent, type AnswerValues, type ApprovalScop
 import { LiveBadge, StatusBadge } from "./bits";
 import { formatDateTime, relativeTime } from "./format";
 import { buildBlocks, type Block } from "./timeline";
+import { sendBackChoices } from "./approval-copy";
 import { TimelineBlock } from "./timeline-blocks";
 import { PlanPanel } from "./plan-panel";
 import type { LiveMode } from "./use-task-events";
@@ -28,6 +29,10 @@ type Props = {
     action: "run" | "cancel" | "approve" | "deny",
     block?: Extract<Block, { kind: "approval" }>,
     scope?: ApprovalScope,
+    /** 驳回时用户写的那句话，会被原样交给模型。 */
+    feedback?: string,
+    /** 打回到哪一步；空表示普通驳回。 */
+    sendBackStepId?: string,
   ) => void;
   /** 回答 Agent 的提问：与审批同一条中断通道，只是恢复值换成答案。 */
   onAnswer: (
@@ -238,7 +243,10 @@ export function TaskConsole({
                 block={block}
                 busyApprovalKey={approvalKey}
                 onHighlight={onHighlight}
-                onDecide={(decision, target) => onDecideAction(onAction, decision, target)}
+                onDecide={(decision, target, scope, feedback, stepId) =>
+                  onDecideAction(onAction, decision, target, scope, feedback, stepId)
+                }
+                steps={sendBackChoices(task?.planSteps)}
                 onAnswer={(answers, target) => onAnswer(answers, target)}
               />
             ))}
@@ -268,8 +276,12 @@ function onDecideAction(
   decision: "approve" | "deny",
   target: Extract<Block, { kind: "approval" }>,
   scope?: ApprovalScope,
+  feedback?: string,
+  sendBackStepId?: string,
 ) {
-  onAction(decision === "approve" ? "approve" : "deny", target, scope);
+  // 理由与打回目标必须原样往上传：之前这里只传三个参数，用户在任务页写的
+  // 驳回理由到不了后端，模型收到的还是"就是不批"。
+  onAction(decision === "approve" ? "approve" : "deny", target, scope, feedback, sendBackStepId);
 }
 
 function EmptyTimeline({ blocks, events }: { blocks: number; events: number }) {

@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Button, Notice } from "@/components/projects/ui";
 import { ApprovalOptions, approvalQuestion } from "./approval";
+import type { SendBackChoice } from "./approval-copy";
 import { clip, formatClock, formatDuration } from "./format";
 import {
   boundaryLabel,
@@ -600,16 +601,21 @@ function QuestionCard({
 function ApprovalCard({
   block,
   busy,
+  steps,
   onDecide,
 }: {
   block: Extract<Block, { kind: "approval" }>;
   busy: boolean;
+  /** 可打回的步骤（做过或正在做的）。空表示这次只能普通驳回。 */
+  steps?: SendBackChoice[];
   onDecide: (
     decision: "approve" | "deny",
     block: Extract<Block, { kind: "approval" }>,
     scope?: ApprovalScope,
     /** 驳回时用户写的那句话，会被原样交给模型。 */
     feedback?: string,
+    /** 打回到哪一步；空表示普通驳回。 */
+    sendBackStepId?: string,
   ) => void;
 }) {
   const decided = block.state !== "pending";
@@ -669,7 +675,8 @@ function ApprovalCard({
         busy={busy}
         decided={decided}
         onApprove={(scope) => onDecide("approve", block, scope)}
-        onDeny={(feedback) => onDecide("deny", block, "once", feedback)}
+        steps={steps}
+        onDeny={(feedback, sendBackStepId) => onDecide("deny", block, "once", feedback, sendBackStepId)}
       />
       {grants
         .filter((option) => option.warning)
@@ -765,6 +772,7 @@ export function TimelineBlock({
   onHighlight,
   onDecide,
   onAnswer,
+  steps,
 }: {
   block: Block;
   busyApprovalKey: string | null;
@@ -775,7 +783,11 @@ export function TimelineBlock({
     scope?: ApprovalScope,
     /** 驳回时用户写的那句话，会被原样交给模型。 */
     feedback?: string,
+    /** 打回到哪一步；空表示普通驳回。 */
+    sendBackStepId?: string,
   ) => void;
+  /** 当前计划里能打回的步骤，交给审批卡做「退回重做」下拉。 */
+  steps?: SendBackChoice[];
   onAnswer: (
     answers: AnswerValues,
     block: Extract<Block, { kind: "question" }>,
@@ -801,7 +813,12 @@ export function TimelineBlock({
         <ApprovalCard
           block={block}
           busy={busyApprovalKey === block.key}
-          onDecide={(decision, target, scope) => onDecide(decision, target, scope)}
+          steps={steps}
+          // 四个参数都要转发：之前这里只传了三个，用户写的驳回理由被静默丢掉，
+          // 模型收到的还是"就是不批"，没有任何可执行信息。
+          onDecide={(decision, target, scope, feedback, stepId) =>
+            onDecide(decision, target, scope, feedback, stepId)
+          }
         />
       );
     case "result":

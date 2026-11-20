@@ -44,3 +44,35 @@ export function approvalApproveLabel(tool: string, scope: string, fallback: stri
   if ((tool ?? "").toLowerCase() === "enter_plan_mode") return fallback;
   return scope === "once" ? "开始执行" : fallback;
 }
+
+/** 打回时可选的目标步骤。 */
+export type SendBackChoice = { id: string; label: string };
+
+/** 标题截断上限：下拉项一行读完，不撑爆卡片。 */
+const SEND_BACK_LABEL_CHARS = 16;
+
+/**
+ * 驳回这张卡能打回到哪几步。
+ *
+ * 只列**做过或正在做的**步骤：打回到一个还没开始的地方没有可重做的产物，
+ * 列出来只会让"打回"看起来像"跳到未来"。`cancelled` 也不列——那一步是主动放弃的，
+ * 退回去等于把它复活，语义上说不通。
+ *
+ * 文案用「第 N 步」而不是内部 id：id 是 `step-3` 这种，用户对着它没法判断
+ * 自己要退回哪里；序号与计划面板上的编号是同一套。
+ */
+export function sendBackChoices(
+  steps: ReadonlyArray<{ id?: string; text?: string; status?: string }> | null | undefined,
+): SendBackChoice[] {
+  const choices: SendBackChoice[] = [];
+  (steps ?? []).forEach((step, index) => {
+    const id = String(step?.id ?? "").trim();
+    const text = String(step?.text ?? "").trim();
+    if (!id || !text) return;
+    if (step?.status !== "completed" && step?.status !== "in_progress") return;
+    const title =
+      text.length > SEND_BACK_LABEL_CHARS ? `${text.slice(0, SEND_BACK_LABEL_CHARS)}…` : text;
+    choices.push({ id, label: `第 ${index + 1} 步 ${title}` });
+  });
+  return choices;
+}

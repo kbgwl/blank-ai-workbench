@@ -221,6 +221,7 @@ export function TasksView({ initialTaskId = null }: Props) {
       block?: Extract<Block, { kind: "approval" }>,
       scope: ApprovalScope = "once",
       feedback?: string,
+      sendBackStepId?: string,
     ) => {
       if (!selectedId) return;
       setBusyAction(decision);
@@ -231,6 +232,7 @@ export function TasksView({ initialTaskId = null }: Props) {
           decision,
           scope,
           feedback,
+          sendBackStepId,
           approvalId: block?.approvalId,
           toolCallId: block?.toolCallId,
           argumentsHash: block?.argumentsHash,
@@ -379,6 +381,8 @@ export function TasksView({ initialTaskId = null }: Props) {
       action: ActionKind,
       block?: Extract<Block, { kind: "approval" }>,
       scope: ApprovalScope = "once",
+      feedback?: string,
+      sendBackStepId?: string,
     ) => {
       if (!selectedId) return;
       if (action === "run") {
@@ -404,7 +408,7 @@ export function TasksView({ initialTaskId = null }: Props) {
         return;
       }
       if (action === "approve" || action === "deny") {
-        await decide(action, block, scope);
+        await decide(action, block, scope, feedback, sendBackStepId);
       }
     },
     [decide, loadDetail, notify, reload, run, selectedId, task?.status],
@@ -463,7 +467,9 @@ export function TasksView({ initialTaskId = null }: Props) {
           approvalKey={approvalKey}
           streaming={streaming}
           onHighlight={highlightChange}
-          onAction={(action, block, scope) => void onAction(action, block, scope)}
+          onAction={(action, block, scope, feedback, stepId) =>
+            void onAction(action, block, scope, feedback, stepId)
+          }
           onAnswer={(answers, block) => void answer(answers, block)}
           onReload={() => {
             reload();
