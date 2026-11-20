@@ -67,10 +67,19 @@ const SUGGESTIONS = [
   "读一遍 README，指出和代码对不上的地方",
 ];
 
+/** 首次使用的三档说法，与发送栏那三档是同一组值，不是另一套模式。 */
+const FIRST_MODES: { mode: string; label: string; detail: string }[] = [
+  { mode: "default", label: "危险操作先问我", detail: "读文件、改文件照做；删东西、跑高风险命令、联网会先弹卡等你点。" },
+  { mode: "plan", label: "先看不改", detail: "只做只读取证，调研完把计划交给你批准，批了才动手。" },
+  { mode: "bypass", label: "尽量别打断我", detail: "写文件与执行命令不再逐个问；不可逆操作仍会拦下。" },
+];
+
 const PROVIDER_KEY = "blank.bot.provider";
 const SCENARIO_KEY = "blank.bot.scenario";
 const MEMORY_KEY = "blank.bot.memory";
 const PERMISSION_KEY = "blank.bot.permission";
+/** 首次使用的档位选择只问一次。选过、或者发过第一轮之后就不再出现。 */
+const MODE_CHOSEN_KEY = "blank.bot.mode-chosen";
 
 /** 最近用过的工作区按项目记在本地：跨会话保留，但绝不进库（它只是偏好，不是数据）。 */
 const RECENT_WS_PREFIX = "blank.recent-workspaces.";
@@ -128,6 +137,7 @@ export function BotApp() {
   // v0.10.1 §4：发送栏的权限档。默认「询问」（= 后端 default 档）。
   // 界面文案是「询问 / 完全访问 / 计划」，内部映射回既有四档枚举。
   const [permissionMode, setPermissionMode] = useState("default");
+  const [modeChosen, setModeChosen] = useState(false);
 
   const [threads, setThreads] = useState<Thread[] | null>(null);
   const [threadsError, setThreadsError] = useState<string | null>(null);
@@ -237,6 +247,9 @@ export function BotApp() {
           if (["default", "accept_edits", "plan", "bypass"].includes(savedPermission)) {
             setPermissionMode(savedPermission);
           }
+          // 选过一次就不再问。读不到就当作没选过——首次使用时多问一次，
+          // 好过把档位藏在输入框工具条里让人永远不知道它是什么。
+          setModeChosen(window.localStorage.getItem(MODE_CHOSEN_KEY) === "1");
         } catch {
           // 隐私模式下 localStorage 会抛错，忽略即可，用默认模型照样能聊。
         }
@@ -828,6 +841,13 @@ export function BotApp() {
       setEvidence(null);
       setDraft("");
       clearImages();
+      // 发出第一轮就当作已经用过：此时再在空态里问"按哪种方式做"已经没意义。
+      setModeChosen(true);
+      try {
+        window.localStorage.setItem(MODE_CHOSEN_KEY, "1");
+      } catch {
+        // 写不进去只影响下次是否再问一次，不影响这一轮的发送。
+      }
       stick.current = true;
       // 每次都刷新左侧：不只新会话要出现，老会话也要更新"几轮"和"最近活动时间"，
       // 否则左侧列表停在发消息之前的样子，看起来像没发出去。
@@ -1244,6 +1264,38 @@ export function BotApp() {
                 <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-muted">
                   说清楚要什么，它会先读代码再动手。改了什么、为什么改，都会留在对话里。
                 </p>
+                {!modeChosen && (
+                  <div className="mt-5">
+                    <p className="text-[12px] text-faint">这一轮按哪种方式做？</p>
+                    <div className="mt-1.5 flex flex-wrap justify-center gap-1.5">
+                      {FIRST_MODES.map((item) => (
+                        <button
+                          key={item.mode}
+                          type="button"
+                          onClick={() => {
+                            setPermissionMode(item.mode);
+                            setModeChosen(true);
+                            try {
+                              window.localStorage.setItem(PERMISSION_KEY, item.mode);
+                              window.localStorage.setItem(MODE_CHOSEN_KEY, "1");
+                            } catch {
+                              // 存不住也只是下次再问一次，不影响这一轮。
+                            }
+                            setFocusToken((value) => value + 1);
+                          }}
+                          title={item.detail}
+                          className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${
+                            permissionMode === item.mode
+                              ? "border-brand/50 bg-brand/[0.06] text-brand"
+                              : "border-line bg-surface text-muted hover:border-line-strong hover:text-text"
+                          }`}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="mt-7 grid w-full max-w-xl gap-2 sm:grid-cols-2">
                   {SUGGESTIONS.map((text) => (
                     <button
