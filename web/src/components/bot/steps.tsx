@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { formatDuration } from "../tasks/format";
+import { toolPhaseLabel } from "../tasks/tool-display";
 import type { BotStep } from "./turns";
 
 const ICONS: Record<string, string> = {
@@ -83,6 +84,9 @@ function ToolStepRow({ step }: { step: Extract<BotStep, { kind: "tool" }> }) {
     "";
   const entries = Object.entries(step.args);
   const hasDetail = entries.length > 0 || step.output !== "";
+  // 步骤行说人话，不说接口字段名：`read_file` 是给调用方看的，用户要的是
+  // 「正在读取文件」。三种阶段由前缀/后缀派生，见 toolPhaseLabel。
+  const phase = toolPhaseLabel(step.name, step.status);
   // 输出尾巴上的换行会多切出一个空行，先去掉再数行。
   const outputLines = step.output ? step.output.replace(/\n$/, "").split("\n") : [];
 
@@ -99,7 +103,11 @@ function ToolStepRow({ step }: { step: Extract<BotStep, { kind: "tool" }> }) {
         <span className={step.status === "failed" ? "text-danger" : "text-faint"}>
           <ToolIcon name={step.name} />
         </span>
-        <span className="shrink-0 font-mono text-[12px] text-muted">{step.name}</span>
+        {phase ? (
+          <span className="shrink-0 text-[12px] text-muted">{phase}</span>
+        ) : (
+          <span className="shrink-0 font-mono text-[12px] text-muted">{step.name}</span>
+        )}
         {hint && (
           <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-faint" title={hint}>
             {hint}
@@ -132,6 +140,9 @@ function ToolStepRow({ step }: { step: Extract<BotStep, { kind: "tool" }> }) {
           {/* 参数按 key: value 逐行摆，不 dump JSON。
               {"command":"curl …"} 摊成四行带引号带花括号，比命令本身还长；
               逐行 key: value 一眼能扫出"它带了哪几个参数"。 */}
+          {phase && (
+            <p className="font-mono text-[11px] text-faint">工具 {step.name}</p>
+          )}
           {entries.length > 0 && (
             <dl className="max-h-52 overflow-auto rounded-md bg-surface-2 px-2.5 py-2 font-mono text-[12px] leading-relaxed">
               {entries.slice(0, ARG_LIMIT).map(([key, value]) => (

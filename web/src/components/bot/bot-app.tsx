@@ -36,6 +36,8 @@ import { NEW_CHAT_EVENT } from "@/lib/commands";
 import { canPickDirectory, pickDirectory } from "@/lib/desktop";
 import { activateWorkspace, bindWorkspace, updateProject } from "../projects/api";
 import { loadBoot, loadConversation, loadConversations, sendMessage, stopTask, type BotTurn, type Conversation } from "./bot-api";
+import { BackgroundList } from "./background-list";
+import { backgroundRowsFor, type BackgroundRow } from "./background";
 import { Composer } from "./composer";
 import { GoalStatusBar } from "./goal-status-bar";
 import type { GoalStatusBarData } from "./goal-status";
@@ -150,6 +152,8 @@ export function BotApp() {
   const [draft, setDraft] = useState("");
   /** 每加一，输入框就把焦点收回并落到末尾。引用一段话、点一条建议之后用。 */
   const [focusToken, setFocusToken] = useState(0);
+  /** 后台任务清单是否展开。默认收起：只有一条在跑时它不值得常驻三行。 */
+  const [backgroundOpen, setBackgroundOpen] = useState(false);
   /** 草稿里已选/已上传的图片。发送成功后清空。 */
   const [images, setImages] = useState<DraftAttachment[]>([]);
   const [sending, setSending] = useState(false);
@@ -861,6 +865,41 @@ export function BotApp() {
       });
   }, [activeTaskId]);
 
+  /** 清单里点一行：有会话就回那条会话，没有就退到任务详情。 */
+  const openBackgroundRow = useCallback(
+    (row: BackgroundRow) => {
+      if (row.target.kind === "thread") {
+        openThread(row.target.threadId);
+        setBackgroundOpen(false);
+        return;
+      }
+      window.location.href = row.target.href;
+    },
+    [openThread],
+  );
+
+  /**
+   * 停一条后台任务。
+   *
+   * 停完立刻重拉一次清单，不等 20 秒的轮询：点完「停止」还挂在清单上，
+   * 用户会以为没停掉，然后再点一次——第二次撞的是 409。
+   */
+  const stopBackgroundRow = useCallback(
+    (row: BackgroundRow) => {
+      setActionBusy(true);
+      stopTask(row.id)
+        .catch((error: unknown) => setActionError(errorMessage(error)))
+        .finally(() => {
+          setActionBusy(false);
+          if (!projectId) return;
+          fetchActiveTasks(projectId)
+            .then((rows) => setActiveTasks(rows))
+            .catch(() => undefined);
+        });
+    },
+    [projectId],
+  );
+
   /**
    * 运行中插话。后端语义是"从下一次模型调用开始生效"，不撤回已经执行的动作——
    * 所以提示里写的是"已排队"，不写成"已改好"，否则用户会以为刚才那步被撤销了。
@@ -1075,6 +1114,9 @@ export function BotApp() {
   // 分成两个入口：有会话的回会话（要调 openThread），没会话的直接跳详情页。
   const backgroundThreadId = backgroundTarget?.kind === "thread" ? backgroundTarget.threadId : null;
   const backgroundHref = backgroundTarget?.kind === "detail" ? backgroundTarget.href : undefined;
+  // 清单的行：在做什么、跑了多久、能不能停。只有一条时状态条直接跳过去，
+  // 两条以上才值得展开——否则"清单"就是重复那一格的复制品。
+  const backgroundRows = backgroundRowsFor(activeTasks, conv?.thread.id);
 
   // 顶部状态条只留「这一轮在做什么」：目标进度、后台任务、服务是否断。
   // 场景 / 模型 / 权限档都在输入框工具条上，各有可点的选择器，
@@ -1158,10 +1200,26 @@ export function BotApp() {
             状态条和下面的橙色横幅各说一遍，两条整行告示互相抢注意力。 */}
         <GoalStatusBar
           data={statusBarData}
-          onBackground={backgroundThreadId ? () => openThread(backgroundThreadId) : undefined}
-          backgroundHref={backgroundHref}
+          backgroundExpandable={backgroundRows.length > 1}
+          backgroundOpen={backgroundOpen}
+          onBackground={
+            backgroundRows.length > 1
+              ? () => setBackgroundOpen((value) => !value)
+              : backgroundThreadId
+                ? () => openThread(backgroundThreadId)
+                : undefined
+          }
+          backgroundHref={backgroundRows.length > 1 ? undefined : backgroundHref}
           backgroundTitle={topBackground?.title}
         />
+        {backgroundOpen && backgroundRows.length > 1 && (
+          <BackgroundList
+            rows={backgroundRows}
+            busy={actionBusy}
+            onOpen={openBackgroundRow}
+            onStop={stopBackgroundRow}
+          />
+        )}
 
         <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl px-4 py-6">

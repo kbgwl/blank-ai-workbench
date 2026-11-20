@@ -37,9 +37,22 @@ type Props = {
   /** 后台任务没有会话时：直接给任务详情的地址。 */
   backgroundHref?: string;
   backgroundTitle?: string;
+  /**
+   * 不止一条后台任务。此时这一格不再是"跳过去"，而是"展开清单"——
+   * 跳只能跳到其中一条，另外几条既看不见也点不到，用户会以为它们不存在。
+   */
+  backgroundExpandable?: boolean;
+  backgroundOpen?: boolean;
 };
 
-export function GoalStatusBar({ data, onBackground, backgroundHref, backgroundTitle }: Props) {
+export function GoalStatusBar({
+  data,
+  onBackground,
+  backgroundHref,
+  backgroundTitle,
+  backgroundExpandable = false,
+  backgroundOpen = false,
+}: Props) {
   if (!statusBarVisible(data)) return null;
   return (
     <div className="flex shrink-0 items-center gap-1.5 border-b border-line px-3 py-1.5 text-[11px]">
@@ -66,6 +79,22 @@ export function GoalStatusBar({ data, onBackground, backgroundHref, backgroundTi
         // 后台这一格是入口，不是装饰：状态色 + 可点。宽度压在上限里，
         // 不让一条长会话名把目标挤成半句。
         const backgroundClass = `${className} max-w-[42%] shrink-0`;
+        if (chip.key === "background" && backgroundExpandable && onBackground) {
+          return (
+            <button
+              key={chip.key}
+              type="button"
+              onClick={onBackground}
+              aria-expanded={backgroundOpen}
+              title={backgroundOpen ? "收起后台任务清单" : "展开后台任务清单（都在这里）"}
+              className={`${backgroundClass} transition-opacity hover:opacity-80`}
+            >
+              {body}
+              {/* 有 ▽ 才知道这一格是能展开的；没有它就只是个数字，点了会跳走。 */}
+              <span className="shrink-0 opacity-60">{backgroundOpen ? "▴" : "▾"}</span>
+            </button>
+          );
+        }
         if (backgroundHref) {
           return (
             <a

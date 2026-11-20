@@ -84,6 +84,33 @@ const TOOL_LABELS: Record<string, string> = {
   team_assign_task: "给成员派活",
 };
 
+/**
+ * 一步在跑的时候，这一行该写什么。
+ *
+ * 原来对话里的步骤行直接显示工具名：`read_file` / `apply_patch` / `run_shell`。
+ * 那是接口字段名，不是"它在干什么"——非工程用户看到的就是一串带下划线的英文。
+ * 任务详情页早就用 TOOL_LABELS 翻译过了，对话页没有，同一件事两个界面两种说法。
+ *
+ * **阶段只有三种，所以不建 61 × 3 的表**：中文的进行体是加前缀（正在…），
+ * 失败是加后缀（…失败）。61 条名词短语 + 两条规则，比 183 条文案更好维护，
+ * 也不会出现"新加了一个工具、忘了补它的三种时态"那种半截翻译。
+ *
+ * 没登记的工具返回空串，调用方继续显示原始名字——`正在read_weird_tool` 比
+ * `read_weird_tool` 更难懂。
+ */
+export function toolPhaseLabel(name: string, status: "running" | "ok" | "failed"): string {
+  const label = TOOL_LABELS[(name || "").toLowerCase()];
+  if (!label) return "";
+  if (status === "running") return `正在${label}`;
+  if (status === "failed") return `${label}失败`;
+  return label;
+}
+
+/** 这个工具登记过中文说法没有。展开详情里据此决定要不要补一行原始工具名。 */
+export function hasToolLabel(name: string): boolean {
+  return Boolean(TOOL_LABELS[(name || "").toLowerCase()]);
+}
+
 function str(value: unknown): string {
   if (typeof value === "string") return value.trim();
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
