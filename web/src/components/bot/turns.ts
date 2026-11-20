@@ -313,11 +313,26 @@ export function reasonText(raw: string): string {
   return value;
 }
 
-/** 这一轮助手最后说的话。取最后一条 task.completed 的 summary；失败时取原因。 */
-export function turnReply(events: readonly RawEvent[]): { text: string; status: string; reason: string } {
+/**
+ * 这一轮助手最后说的话。取最后一条 task.completed 的 summary；失败时取原因。
+ *
+ * 除了给人看的那句 `reason`，还交出 `rawReason` 与 `code`：错误分层（error-copy.ts）
+ * 需要**原始**字样才能认出成因——`reason` 已经被翻译成一句完整的建议，
+ * 再拿去匹配关键词，"模型请求超时"里的"超时"是它自己写进去的，等于自证。
+ *
+ * `code` 来自后端 `_finish(extra=...)`，`ModelError` 一路带下来；旧数据没有这个字段。
+ */
+export function turnReply(events: readonly RawEvent[]): {
+  text: string;
+  status: string;
+  reason: string;
+  rawReason: string;
+  code: string;
+} {
   let text = "";
   let status = "";
   let reason = "";
+  let code = "";
   for (const event of events) {
     const type = event.type.toLowerCase();
     if (type === "task.completed" || type === "task.finished") {
@@ -327,9 +342,10 @@ export function turnReply(events: readonly RawEvent[]): { text: string; status: 
     if (type === "task.failed" || type === "task.cancelled" || type === "task.canceled") {
       status = type.replace("task.", "");
       reason = str(event.payload, "reason", "error", "message") || reason;
+      code = str(event.payload, "code", "error_code") || code;
     }
   }
-  return { text, status, reason: reasonText(reason) };
+  return { text, status, reason: reasonText(reason), rawReason: reason, code };
 }
 
 /**

@@ -1031,6 +1031,8 @@ export function BotApp() {
         plan,
         reply: verdict.text || turn.summary,
         reason: verdict.reason,
+        rawReason: verdict.rawReason,
+        failureCode: verdict.code,
         status: stale ? "approval_expired" : status,
         running: isRunning,
         // 实时文字只挂在还跑着的那一轮：任务结束后事件里已经有完整回复，
@@ -1209,6 +1211,8 @@ export function BotApp() {
                   plan={turn.plan}
                   reply={turn.reply}
                   reason={turn.reason}
+                  rawReason={turn.rawReason}
+                  failureCode={turn.failureCode}
                   status={turn.status}
                   running={turn.running}
                   streaming={turn.streaming}

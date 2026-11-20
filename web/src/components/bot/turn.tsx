@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Button } from "@/components/projects/ui";
 import { formatDuration } from "../tasks/format";
 import { guardianReviewLabel } from "../tasks/status";
 import { approvalGrantOptions } from "../tasks/api";
 import { ApprovalOptions, approvalQuestion } from "../tasks/approval";
+import { explainFailure, failureMeta, failureOriginal } from "../tasks/error-copy";
+import type { FailureCopy } from "../tasks/error-copy";
 import type { AnswerValues, AttachmentRef, PendingApproval, PendingQuestion } from "../tasks/api";
 import { MarkdownView } from "./markdown-view";
 import { StepView } from "./steps";
@@ -360,6 +363,101 @@ function QuestionCard({
   );
 }
 
+/**
+ * 失败提示。
+ *
+ * 原来这里只渲染一行红字，内容是 `reason` 原样——「模型请求超时：gpt-4o」
+ * 或者干脆是 `all_models_failed`。它说了出了什么事，没说用户该干什么，
+ * 于是所有失败最后都收束成同一个动作：再点一次重试。而密钥错了、额度空了、
+ * 这个模型不支持工具调用，重试一百次也一样。
+ *
+ * 三层，顺序就是人遇到故障时的提问顺序：发生了什么 → 我怎么办 → 技术详情。
+ * 技术详情默认收起：它是排查依据，不是第一眼该读的东西。
+ */
+function FailureNotice({
+  copy,
+  raw,
+  code,
+  at,
+  onRetry,
+}: {
+  copy: FailureCopy;
+  raw: string;
+  code: string;
+  at: string;
+  onRetry: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const detail = failureOriginal(raw);
+  const meta = failureMeta(code, at);
+  const hasDetail = Boolean(detail) || meta.length > 0;
+  return (
+    <div className="mt-1 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-2">
+      <p className="text-[13px] leading-relaxed text-danger">{copy.title}</p>
+      {copy.action && <p className="mt-1 text-[12px] leading-relaxed text-muted">{copy.action}</p>}
+      {(copy.next !== "none" || hasDetail) && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          {copy.next === "retry" && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="rounded-md border border-line px-2 py-0.5 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-text"
+            >
+              用同样的话再试一次
+            </button>
+          )}
+          {copy.next === "settings" && (
+            <Link
+              href="/settings"
+              className="rounded-md border border-line px-2 py-0.5 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-text"
+            >
+              去改设置
+            </Link>
+          )}
+          {hasDetail && (
+            <button
+              type="button"
+              onClick={() => setOpen((value) => !value)}
+              className="font-mono text-[11px] text-faint transition-colors hover:text-text"
+            >
+              技术详情 {open ? "▴" : "▾"}
+            </button>
+          )}
+        </div>
+      )}
+      {open && hasDetail && (
+        <div className="mt-1.5 rounded-md border border-line bg-surface px-2 py-1.5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              {meta.length > 0 && (
+                <p className="font-mono text-[11px] text-faint">{meta.join(" · ")}</p>
+              )}
+              {detail && (
+                <pre className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-muted">
+                  {detail}
+                </pre>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard?.writeText([meta.join(" "), detail].filter(Boolean).join("\n")).then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1200);
+                });
+              }}
+              className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] text-faint transition-colors hover:bg-surface-3 hover:text-text"
+            >
+              {copied ? "已复制" : "复制"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export type TurnViewProps = {
   goal: string;
   /** 这一轮贴的附件。回放时要看得见，否则用户不知道自己当时发了什么。 */
@@ -371,6 +469,9 @@ export type TurnViewProps = {
   plan: PlanView | null;
   reply: string;
   reason: string;
+  /** 翻译前的原因原话 + 后端错误码。错误分层要用它们认成因，见 tasks/error-copy.ts。 */
+  rawReason?: string;
+  failureCode?: string;
   status: string;
   running: boolean;
   /** 模型正在输出的文字。非空时优先显示它，位置就是最终回复的位置。 */
@@ -576,9 +677,13 @@ export function TurnView(props: TurnViewProps) {
           )}
 
           {props.reason && (
-            <p className="mt-1 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-1.5 text-[13px] text-danger">
-              {props.reason}
-            </p>
+            <FailureNotice
+              copy={explainFailure(props.rawReason || props.reason, props.failureCode)}
+              raw={props.rawReason || props.reason}
+              code={props.failureCode ?? ""}
+              at={timeLabel(props.createdAt)}
+              onRetry={props.onRetry}
+            />
           )}
 
           {/* 技能提示只在一轮还在跑时出现：失败/结束后再推荐"这次适合某个技能"，
@@ -613,7 +718,9 @@ export function TurnView(props: TurnViewProps) {
             <p className="text-[13px] text-faint">这一轮没有留下可显示的内容。</p>
           )}
 
-          {!running && (props.status === "failed" || props.status === "cancelled") && (
+          {/* 有 reason 时重试按钮由 FailureNotice 给：那里还多了一句"为什么"和
+              "这条能不能靠重试解决"。两处都画，用户会以为有两个不同的重试。 */}
+          {!running && !props.reason && (props.status === "failed" || props.status === "cancelled") && (
             <button
               type="button"
               onClick={props.onRetry}
