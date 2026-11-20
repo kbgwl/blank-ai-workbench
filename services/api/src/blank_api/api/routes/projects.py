@@ -160,6 +160,26 @@ def _memory_entries(text: str) -> list[dict]:
     return entries
 
 
+@router.get("/{project_id}/agents")
+async def list_project_agents(project_id: str, db: DbSession) -> dict:
+    """这个工作区实际能用到的助手档案。
+
+    和"助手列表"不同：档案要说清每个助手从哪一层来、能用什么工具、不许用什么、
+    带哪些技能、跑在什么权限档与隔离方式里。用户挑一个助手去派活时，
+    这些才是他要判断的依据；只给一个名字和一句描述等于让他蒙着选。
+
+    加载失败的条目也原样带出去（``errors``）——配置里写错一个字段时，
+    症状原本只是"那个助手不见了"，没有任何地方说明为什么。
+    """
+    project = await load_project(db, project_id)
+    workspace = project.active_workspace
+    # 必须在这里导入：agents_defs → agent_memory → tools → delegate → agents_defs
+    # 是一条真实的环，放到模块顶层会让整个 API 起不来。
+    from blank_api.services.agents_defs import discover_agents
+
+    return discover_agents(workspace.path if workspace is not None else ".").as_dict()
+
+
 @router.get("/{project_id}/commands")
 async def list_project_commands(project_id: str, db: DbSession) -> dict:
     """该工作区可用的自定义斜杠命令（用户层 + 项目层，项目同名覆盖）。

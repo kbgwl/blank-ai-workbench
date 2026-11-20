@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Panel } from "@/components/panel";
 import { PageBody } from "@/components/page";
 import { UTILITY_LINKS } from "@/components/bot/nav";
+import { AgentProfilePanel } from "./agent-profile-panel";
 import { AgentRuntimePanel } from "./agent-runtime-panel";
 import { ChannelsPanel } from "./channels-panel";
 import { FeatureFlagsPanel } from "./feature-flags-panel";
@@ -194,6 +195,7 @@ function SectionBody({ active }: { active: SectionKey }) {
     case "utilities":
       return (
         <div className="flex flex-col gap-4">
+          <AgentProfilePanel />
           <TriggerPanel />
           <Panel title="低频入口" hint="从侧栏收进这里，不再占常驻位置">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">

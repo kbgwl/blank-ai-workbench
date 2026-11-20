@@ -271,7 +271,8 @@ async def test_update_plan_rejects_more_than_one_in_progress(tmp_path: Path) -> 
     )
     assert good.ok is True, good
     assert good.data["progress"]["completed"] == 1, good.data
-    assert "只有一个步骤是 in_progress" in tools["update_plan"].description
+    # 文案改成「同一时刻只有一个 in_progress」，语义没变；断言跟着现行文案。
+    assert "同一时刻只有一个 in_progress" in tools["update_plan"].description
 
 
 # ── 5. Harness 提示词真的发得出去 ───────────────────────────────────────────

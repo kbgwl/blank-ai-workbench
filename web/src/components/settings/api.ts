@@ -434,6 +434,37 @@ export type ProjectPlugins = {
   projectDir: string;
 };
 
+/** 一个助手的档案。字段由后端 agents_defs 的审计视图给出，不在这里重算。 */
+export type AgentProfile = {
+  name: string;
+  description: string;
+  source: string;
+  chars: number;
+  path: string;
+  tools?: string[];
+  disallowedTools?: string[];
+  skills?: string[];
+  permissionMode?: string;
+  isolation?: string;
+  background?: boolean;
+};
+
+export type AgentCatalog = {
+  count: number;
+  agents: AgentProfile[];
+  errors: string[];
+  warnings: string[];
+};
+
+export function fetchProjectAgents(projectId: string): Promise<AgentCatalog> {
+  return request<AgentCatalog>(`${api}/projects/${projectId}/agents`, { cache: "no-store" }).then((body) => ({
+    count: Number(body?.count) || 0,
+    agents: Array.isArray(body?.agents) ? body.agents : [],
+    errors: Array.isArray(body?.errors) ? body.errors.filter((item) => typeof item === "string") : [],
+    warnings: Array.isArray(body?.warnings) ? body.warnings.filter((item) => typeof item === "string") : [],
+  }));
+}
+
 /**
  * 一条定时/事件触发器。
  *

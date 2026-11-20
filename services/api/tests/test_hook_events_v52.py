@@ -302,7 +302,7 @@ async def test_gate_hook_deny_skips_the_card_and_reports_the_reason(monkeypatch)
     _patch_interrupt(monkeypatch)
     hooks = _Hooks({"permission_request": [[_result("permission_request", "deny", "别动这个目录")]]})
     session = _gate_session(hooks)
-    denied, _blocked, hook_denied = await _approval_gate(
+    denied, _blocked, hook_denied, _denials = await _approval_gate(
         session, "call_model", [{"id": "call-1", "name": "demo_write", "args": {"path": "out.txt"}}]
     )
     assert denied == set()
@@ -320,7 +320,7 @@ async def test_gate_hook_allow_grants_once_without_a_card(monkeypatch):
     seen = _patch_interrupt(monkeypatch)
     hooks = _Hooks({"permission_request": [[_result("permission_request", "allow", "沙箱里可以写")]]})
     session = _gate_session(hooks)
-    denied, _blocked, hook_denied = await _approval_gate(
+    denied, _blocked, hook_denied, _denials = await _approval_gate(
         session, "call_model", [{"id": "call-1", "name": "demo_write", "args": {"path": "out.txt"}}]
     )
     assert (denied, hook_denied) == (set(), {})
