@@ -8,7 +8,7 @@ import { guardianReviewLabel } from "../tasks/status";
 import { approvalGrantOptions } from "../tasks/api";
 import { ApprovalOptions, approvalQuestion } from "../tasks/approval";
 import { approvalApproveLabel, isPlanGate } from "../tasks/approval-copy";
-import { explainFailure, failureMeta, failureOriginal } from "../tasks/error-copy";
+import { explainFailure, failureParts } from "../tasks/error-copy";
 import type { FailureCopy } from "../tasks/error-copy";
 import type { AnswerValues, AttachmentRef, PendingApproval, PendingQuestion } from "../tasks/api";
 import { MarkdownView } from "./markdown-view";
@@ -409,8 +409,7 @@ function FailureNotice({
 }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const detail = failureOriginal(raw);
-  const meta = failureMeta(code, at);
+  const { meta, original: detail } = failureParts(raw, code, at);
   const hasDetail = Boolean(detail) || meta.length > 0;
   return (
     <div className="mt-1 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-2">

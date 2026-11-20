@@ -9,7 +9,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { explainFailure, failureMeta, failureOriginal } from "./error-copy.ts";
+import { explainFailure, failureMeta, failureOriginal, failureParts } from "./error-copy.ts";
 
 test("登记过的码：标题是人话，码只在 code 字段里", () => {
   for (const code of [
@@ -103,4 +103,16 @@ test("太短的原文不值得展开", () => {
   assert.equal(failureOriginal("失败"), "");
   assert.equal(failureOriginal("  "), "");
   assert.equal(failureOriginal("模型请求超时：gpt-4o"), "模型请求超时：gpt-4o");
+});
+
+test("裸码归到第一行，正文栏不重复印一遍已经翻译过的词", () => {
+  // 老数据：reason 就是 approval_expired，没有单独的 code 字段。
+  const parts = failureParts("approval_expired", "", "18:09");
+  assert.deepEqual(parts.meta, ["code approval_expired", "18:09"]);
+  assert.equal(parts.original, "");
+
+  // 有显式 code 时以它为准，raw 里的句子进正文。
+  const real = failureParts("模型请求超时：qwen", "model_timeout", "18:09");
+  assert.deepEqual(real.meta, ["code model_timeout", "18:09"]);
+  assert.equal(real.original, "模型请求超时：qwen");
 });

@@ -263,3 +263,27 @@ export function failureOriginal(reason: string): string {
   if (raw.length < 8) return "";
   return raw;
 }
+
+/** 一整段裸标识符：`approval_expired`、`model_timeout`。它是个码，不是一句报错。 */
+function isBareCode(text: string): boolean {
+  return /^[a-z][a-z0-9_]{2,39}$/.test(text);
+}
+
+/**
+ * 折叠区该分两栏还是一栏。
+ *
+ * 老数据里 `reason` 本身就是一个裸码（`approval_expired`），没有单独的 `code` 字段。
+ * 如果照"长于 8 个字就当成原始报错"处理，它会掉进正文那一栏，在时间下面再印一遍
+ * 顶上已经翻译过的那个词——用户读到的是一段重复，还以为漏了什么。
+ *
+ * 所以裸码一律归到第一行（`code approval_expired · 18:09`），正文栏只放真的原文。
+ */
+export function failureParts(reason: string, code: string, at: string): { meta: string[]; original: string } {
+  const raw = String(reason ?? "").trim();
+  const explicit = String(code ?? "").trim();
+  const bare = !explicit && isBareCode(raw) ? raw : "";
+  return {
+    meta: failureMeta(explicit || bare, at),
+    original: bare ? "" : failureOriginal(raw),
+  };
+}
