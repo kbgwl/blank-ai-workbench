@@ -119,3 +119,23 @@ def terminal_detail(status: str, reason: str, extra: dict | None = None) -> dict
     return {"code": "failed", "reason": str(reason or "")}
 
 
+# ── 取消 / 暂停事件的载荷 ─────────────────────────────────────────────────
+# 取消不经过 ``runtime._finish``，所以它有**四处**独立写入点（runtime 开跑前发现已取消、
+# 执行节点进入时发现已取消、执行中工具被中断、以及 _finish 的映射表）。四处各自手写
+# ``{"reason", "terminal"}`` 时，漏一处不会有任何测试红——而 ``_finish`` 见到已有终态
+# 会跳过自己那条，于是用户看到的恰好是没码的那个事件。
+#
+# 抽成函数之后，"取消的载荷长什么样"只有一个答案。判据分两层：函数本身的形状，
+# 以及真实分支确实调用了它（见 ``tests/test_terminal_payload_v433.py``）。
+def cancelled_payload(reason: str, *, fallback: str = "用户已取消任务") -> dict:
+    text = str(reason or fallback)
+    return {"reason": text, "terminal": terminal_detail("cancelled", text)}
+
+
+def paused_payload(reason: str, *, fallback: str = "用户暂停了任务") -> dict:
+    # 暂停以前连码都没有：它只是"停下等人"，但界面同样要回答"这一轮为什么停"，
+    # 而"停"与"结束"的区别是 code 而不是文案。
+    text = str(reason or fallback)
+    return {"reason": text, "terminal": terminal_detail("paused", text)}
+
+

@@ -51,7 +51,7 @@ from blank_api.services.agent.verify_hook import (
     should_check,
 )
 from blank_api.services.agent.stall import StallBreaker, signature as _stall_signature
-from blank_api.services.agent.terminal import terminal_detail
+from blank_api.services.agent.terminal import cancelled_payload, paused_payload
 from blank_api.services.agent import transition as transition_mod
 from blank_api.services.agent.intent import (
     ADVISE_INSTRUCTION,
@@ -5152,15 +5152,13 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         except Exception:  # noqa: BLE001 - 状态读不到不该让执行节点崩掉
             status_now = ""
     if status_now == "paused":
-        await session.recorder.add("task.paused", node, {"reason": "用户暂停了任务"})
+        await session.recorder.add("task.paused", node, paused_payload("用户暂停了任务"))
         return {"status": "paused", "pending": []}
     if status_now == "cancelled" or await session.is_cancelled():
         # 终态码也带上：取消是最常见的一条非正常结束，界面不该靠"reason 里有没有
-        # 取消两个字"来判断。形状与 runtime._finish 的终态载荷一致。
+        # 取消两个字"来判断。载荷与其余三处共用同一个函数，漏一处就没码。
         await session.recorder.add(
-            "task.cancelled",
-            node,
-            {"reason": "用户已取消任务", "terminal": terminal_detail("cancelled", "用户已取消任务")},
+            "task.cancelled", node, cancelled_payload("用户已取消任务")
         )
         return {"status": "cancelled", "pending": []}
     steps = int(state.get("steps") or 0) + 1
@@ -5457,12 +5455,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     for payload in live_payloads:
         if str(payload.get("status") or "") == "cancelled":
             await session.recorder.add(
-                "task.cancelled",
-                node,
-                {
-                    "reason": "用户在执行中中断了命令",
-                    "terminal": terminal_detail("cancelled", "用户在执行中中断了命令"),
-                },
+                "task.cancelled", node, cancelled_payload("用户在执行中中断了命令")
             )
             return {"status": "cancelled", "pending": []}
     payloads: list[dict] = []

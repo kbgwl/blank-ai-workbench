@@ -43,7 +43,7 @@ from blank_api.services.agent.verifier import (
     failure_reason as verdict_failure_reason,
     verify as verify_facts,
 )
-from blank_api.services.agent.terminal import terminal_detail
+from blank_api.services.agent.terminal import cancelled_payload, terminal_detail
 from blank_api.services.agent.automation import resolve_mode as resolve_automation_mode
 from blank_api.services.agent.loadstats import recent_load
 from blank_api.services.agent import repl as repl_module
@@ -1283,14 +1283,11 @@ class AgentRuntime:
         if await session.is_cancelled():
             # 这条事件在 _finish 之前写，而 _finish 看到已有终态就跳过自己的那条，
             # 所以终态码必须在这里就带上——否则任务被取消后，事件流里留下的
-            # 那条恰恰是没有码的那个。
+            # 那条恰恰是没有码的那个。载荷与另外三处共用同一个函数。
             await recorder.add(
                 "task.cancelled",
                 "receive_task",
-                {
-                    "reason": "任务已取消，未执行任何工具",
-                    "terminal": terminal_detail("cancelled", "任务已取消，未执行任何工具"),
-                },
+                cancelled_payload("任务已取消，未执行任何工具"),
             )
             await self._finish(scope, "cancelled", summary="", reason="任务已取消", steps=0)
             return await build_evidence(scope.store, request.task_id)
