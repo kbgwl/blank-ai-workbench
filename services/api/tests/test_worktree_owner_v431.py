@@ -120,3 +120,36 @@ def test_the_claim_file_never_lands_in_the_working_tree(repo: Path):  # noqa: F8
     assert owner_file is not None and owner_file.is_file()
     # 元数据目录在工作树之外。
     assert session.root not in owner_file.parents
+
+
+# ── 认领不可用时：模型必须知道 ────────────────────────────────────────────
+
+
+async def test_the_model_is_told_when_exclusivity_could_not_be_registered(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):  # noqa: F811
+    """读不到/写不进 git 元数据时，进入仍成功，但正文与 data 都要如实说。
+
+    这一档存在的原因是"流程通了但性质没达成"最容易被当成成功：进去之后一切照旧，
+    直到两个任务的改动互相覆盖才发现。不改成拒绝——.git 只读的环境里用户仍要干活
+    ——但模型必须知道自己没有独占。
+    """
+    from blank_api.services.tools.worktree import worktree_tools
+
+    enter = next(tool for tool in worktree_tools() if tool.name == "enter_worktree")
+    # 直接把认领判成 unavailable：日志目录不可写在 Windows 上不好造，
+    # 而这里要测的正是"拿到这个结果之后有没有说出来"，不是 git 目录的构造。
+    monkeypatch.setattr(
+        worktree_session,
+        "claim_owner",
+        lambda root, task_id: (worktree_session.OWNER_UNAVAILABLE, {}),
+    )
+
+    from tests.test_worktree_tools_v32 import _context
+
+    outcome = await enter.handler(_context(repo, "task-a"), {"name": "wt-unavailable"})
+    assert outcome.ok, outcome.message
+    assert outcome.data["owner_status"] == worktree_session.OWNER_UNAVAILABLE
+    assert "独占登记没能完成" in (outcome.output or ""), outcome.output
+    # 新树的认领失败不该把会话记坏：任务仍在这棵树里干活。
+    assert worktree_session.get("task-a") is not None

@@ -194,6 +194,8 @@ async def test_enter_creates_branch_tree_and_moves_the_root(repo: Path) -> None:
         "base_ref": "HEAD",
         "path": ".blank-worktrees/feat",
         "owned": True,
+        # 写者认领的结果也要回给模型：unavailable 时它得知道自己没有独占。
+        "owner_status": "owned",
     }
     assert _git(repo, "rev-parse", "--verify", "refs/heads/blank/worktree-feat").returncode == 0
     assert len(recorder.events) == 1

@@ -111,6 +111,9 @@ class WorktreeSession:
             "base_ref": self.base_ref,
             "path": self.display,
             "owned": self.owned,
+            # 写者唯一的结果也要给模型看：unavailable 时它照常能干活，但得知道
+            # "这棵树没有登记独占"，否则会按独占去规划后面的改动。
+            "owner_status": self.owner_status,
         }
 
 

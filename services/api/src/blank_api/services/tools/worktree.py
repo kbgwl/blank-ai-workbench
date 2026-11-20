@@ -83,6 +83,15 @@ async def _enter_worktree(context: ToolContext, arguments: dict) -> ToolOutcome:
             "接下来所有工具调用都在这个工作树里执行；这棵树不是本任务创建的，"
             '退出时只能 action="keep"。'
         )
+    # 写者唯一没守住时必须说出来。这类"流程通了但性质没达成"最容易被当成成功：
+    # 进去之后一切照旧，直到两个任务的改动互相覆盖才发现。不改成拒绝——.git 只读
+    # 的环境里用户仍要能干活——但模型必须知道自己没有独占。
+    if session.owner_status == worktree_session.OWNER_UNAVAILABLE:
+        text += (
+            "\n注意：这棵工作树的独占登记没能完成（读不到或写不进它的 git 目录），"
+            "所以无法确认没有别的任务在同时写它。改动前先确认一下，"
+            "有冲突的话换一棵用 name 新建的树。"
+        )
     return ok(text, **session.tool_data())
 
 
