@@ -621,3 +621,29 @@ def plan_fingerprint(steps: list[dict] | None) -> tuple:
         for step in (steps or [])
         if isinstance(step, dict)
     )
+
+
+def rewind_to_step(steps: list[dict], step_id: str) -> tuple[list[dict], int]:
+    """把计划打回到指定步骤：该步及其之后全部重开成 pending。
+
+    返回 ``(新步骤列表, 被打回的下标)``；找不到该 step_id 时下标为 -1、列表原样返回。
+
+    为什么不是"只把那一步改回 pending"：后续步骤建立在那一步的产物上，只改一步会
+    留下"第 3 步还是 completed、但它依赖的第 2 步被推翻了"这种自相矛盾的计划，
+    进度条会继续显示已完成。打回是从那里重做，不是补一个勾。
+
+    清掉被打回步骤的 evidence：那条证据对应的是旧产物，留着会让下一步误以为
+    已经有了可用的输入。
+    """
+    target = str(step_id or "").strip()
+    if not target:
+        return list(steps or []), -1
+    items = [dict(step) for step in (steps or []) if isinstance(step, dict)]
+    index = next((i for i, step in enumerate(items) if str(step.get("id") or "") == target), -1)
+    if index < 0:
+        return items, -1
+    for step in items[index:]:
+        step["status"] = "pending"
+        step["evidence"] = ""
+    return items, index
+

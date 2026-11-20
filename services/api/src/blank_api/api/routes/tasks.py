@@ -1876,6 +1876,8 @@ async def _decide_approval_locked(
             "approve": payload.approve,
             "scope": payload.scope,
             "feedback": payload.feedback,
+            # 空串不传：老客户端不会带这个字段，图里按"普通驳回"处理。
+            **({"step_id": payload.send_back_step_id} if payload.send_back_step_id else {}),
         },
     )
     async with get_session_factory()() as session:

@@ -2026,6 +2026,9 @@ export function decideApproval(
     scope?: ApprovalScope;
     /** 驳回时想说的话：会原样进工具回执交给模型。空着就是"就是不批"。 */
     feedback?: string;
+    /** 驳回时"打回到第几步"（计划步骤 id）。带上表示整段退回重做：该步及其之后
+     *  全部重开；空着是普通驳回，计划不动。 */
+    sendBackStepId?: string;
     approvalId?: string;
     toolCallId?: string;
     argumentsHash?: string;
@@ -2037,6 +2040,9 @@ export function decideApproval(
   // 只在驳回时带上：批准时带一句"批准理由"没有消费者，白占协议。
   const note = String(input.feedback || "").trim();
   if (input.decision === "deny" && note) body.feedback = note;
+  // 打回只在驳回时有意义：批准时"回到某一步"是矛盾的动作，不发。
+  const stepId = String(input.sendBackStepId || "").trim();
+  if (input.decision === "deny" && stepId) body.send_back_step_id = stepId;
   if (input.approvalId) body.approval_id = input.approvalId;
   // 老卡片没有 tool_call_id 时 normalize 会回落成 approval_id——把它当
   // tool_call_id 发回去必然 mismatch，不如不发（后端按 approval_id 对号）。

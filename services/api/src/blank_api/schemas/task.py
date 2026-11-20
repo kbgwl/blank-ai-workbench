@@ -146,6 +146,9 @@ class TaskApprovalIn(BaseModel):
     tool_name: str = Field(default="", max_length=64)
     # 批准作用域：仅本次 / 本会话该命令前缀 / 本会话该工具。
     scope: Literal["once", "prefix", "tool"] = "once"
+    # 驳回时"打回到第几步"（计划步骤 id）。空串表示普通驳回——只否掉这次调用，
+    # 计划不动。带上就表示整段退回重做：该步及其之后全部重开成 pending。
+    send_back_step_id: str = Field(default="", max_length=64)
     # 驳回时用户写的那句话（可选）。会被原样带进工具回执交给模型——
     # "被驳回了"没有信息量，模型只能原样重试或换等价写法；"先把测试方案补上"才有用。
     feedback: str = Field(default="", max_length=600)

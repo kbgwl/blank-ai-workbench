@@ -44,6 +44,18 @@
 改这里的验收口径：**必须同时补测试或写明风险**（见 `CONTRIBUTING.md`），并跑
 `cd services/api && .venv/Scripts/python.exe -m pytest tests/test_permissions*.py tests/test_sandbox_refusal_v99.py -q`。
 
+### 人工闸门可以「打回到指定步骤」（2026-11-20 起）
+
+驳回不再只有"否掉这次调用"一种。审批请求带 `send_back_step_id` 时，计划会从该步
+起重开成 `pending`（`plan.rewind_to_step`），并给模型一句可据以行动的指令
+（`plan.rewound` + hook_context），同时把 `plan_manifest.revision` 加一。
+
+- 只在执行节点里改计划，**不在审批门里改**：审批门要重放安全，中断恢复会整节重放。
+- 被打回步骤的 `evidence` 会清空——那条证据对应的是旧产物，留着会让下一步误以为输入端已就绪。
+- 不带 `send_back_step_id` 时行为完全不变（老客户端不受影响）。
+
+移植来源与取舍见 `docs/external-loopforge-2026-11.md`。
+
 ## 沙箱档位
 
 `off` / `workspace`（默认）/ `workspace-net`（`tiers.py:21-24`）。

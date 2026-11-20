@@ -114,7 +114,12 @@ from blank_api.services.effort import (
     thinking_budget_ceiling,
     tighten_for_step,
 )
-from blank_api.services.plan import normalize_goal, normalize_steps, plan_progress
+from blank_api.services.plan import (
+    normalize_goal,
+    normalize_steps,
+    plan_progress,
+    rewind_to_step,
+)
 from blank_api.services.agent.planner import (
     build_plan,
     repair_hint as build_repair_hint,
@@ -4679,6 +4684,12 @@ async def _approval_gate(
             note = ""
             if isinstance(answer, dict):
                 note = str(answer.get("feedback") or "").strip()[:600]
+                # 人工闸门不止"准/不准"：驳回时可以指定打回到第几步（移植自
+                # LoopForge 的 human gate）。这里只把请求记到会话上，真正重开计划
+                # 在执行节点里做——审批门是重放安全的，不该顺手改计划状态。
+                step_id = str(answer.get("step_id") or "").strip()
+                if step_id:
+                    session.rewind_request = step_id
             if note:
                 denials[name] = note
                 # 驳回时说的那句话，是**最纯的用户逻辑信号**：他亲口说了为什么不许这么做。
@@ -5211,6 +5222,39 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     # 「钩子拒绝执行 X：理由」，不需要知道是哪个事件说的话。
     hook_plan.denied.update(hook_denied)
 
+    # 人工闸门的「打回指定步骤」：计划从那一步起重开成 pending，并把指令塞进
+    # 下一次模型调用（不进用户历史）。放在审批门之后做，是因为审批门要重放安全：
+    # 中断恢复会整节重放，改计划状态的动作不能落在里面，否则重放一次改一次。
+    rewind_step = str(getattr(session, "rewind_request", "") or "")
+    rewind_manifest = None
+    if rewind_step:
+        session.rewind_request = ""
+        rewound, rewind_index = rewind_to_step(list(state.get("plan_steps") or []), rewind_step)
+        if rewind_index >= 0:
+            plan_update = rewound
+            target_title = str(rewound[rewind_index].get("step") or "").strip()
+            session.hook_context.append(
+                {
+                    "event": "plan.rewound",
+                    "tool": "",
+                    "text": (
+                        f"用户把任务打回到第 {rewind_index + 1} 步「{target_title}」："
+                        "从这一步重做，之后原本已完成的步骤需要重新走一遍；"
+                        "先看这一步的产物是否还在，再决定改什么。"
+                    ),
+                }
+            )
+            rewind_manifest = {
+                **dict(state.get("plan_manifest") or {}),
+                "revision": int((state.get("plan_manifest") or {}).get("revision") or 0) + 1,
+                "revision_reason": f"用户打回到第 {rewind_index + 1} 步",
+            }
+            await session.recorder.add(
+                "plan.rewound",
+                node,
+                {"step_id": rewind_step, "index": rewind_index, "steps": rewound},
+            )
+
     # 第一段：串行决策。事件按模型给出的顺序落，与执行顺序解耦。
     planned: list[_PlannedCall] = []
     # 同一条消息里先 enter_plan_mode 再写文件：审批门是在执行前整批判定的，
@@ -5697,6 +5741,8 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
             "plan_steps": plan_update,
             "milestones": merged_milestones,
         }
+    if rewind_manifest is not None:
+        plan_patch["plan_manifest"] = rewind_manifest
     if goal_update:
         await session.recorder.add("goal.updated", node, goal_update)
         plan_patch["goal_spec"] = goal_update
