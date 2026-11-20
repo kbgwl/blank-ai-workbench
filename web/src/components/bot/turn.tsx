@@ -121,6 +121,39 @@ function StatusChip({ status, running }: { status: string; running: boolean }) {
   return null;
 }
 
+function ArtifactStrip({
+  files,
+  onFileClick,
+}: {
+  files: { path: string; changeType: string }[];
+  onFileClick?: (path: string) => void;
+}) {
+  const added = files.filter((file) => /add|new|create|新增/i.test(file.changeType)).length;
+  // 最多列 6 个：再多就把这一行撑成第二段正文，反而没人看完。
+  const shown = files.slice(0, 6);
+  const rest = files.length - shown.length;
+  return (
+    <div className="mt-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
+      <span className="font-mono text-[11px] text-faint">产物</span>
+      <span className="font-mono text-[11px] text-muted">
+        {files.length} 个文件{added > 0 ? ` · ${added} 新增` : ""}
+      </span>
+      {shown.map((file) => (
+        <button
+          key={file.path}
+          type="button"
+          onClick={() => onFileClick?.(file.path)}
+          title={`${file.changeType} · ${file.path}`}
+          className="max-w-[14rem] truncate rounded border border-line bg-surface px-1.5 py-0.5 font-mono text-[11px] text-muted transition-colors hover:border-line-strong hover:text-text"
+        >
+          {file.path.split(/[\\/]/).pop()}
+        </button>
+      ))}
+      {rest > 0 && <span className="font-mono text-[11px] text-faint">+{rest}</span>}
+    </div>
+  );
+}
+
 export function ApprovalCard({
   approval,
   onDecide,
@@ -526,6 +559,13 @@ export function TurnView(props: TurnViewProps) {
 
           {!props.streaming && props.reply && (
             <MarkdownView text={props.reply} files={paths} onFileClick={jumpToFile} />
+          )}
+
+          {/* 产物条：一轮说"改好了"，用户第一反应是"东西在哪"。
+              原来只有展开"过程"或开右侧面板才看得见，等于让他自己找。
+              这里给一行：几个文件、几个新增、可点的文件名。 */}
+          {!running && props.files.length > 0 && (
+            <ArtifactStrip files={props.files} onFileClick={jumpToFile} />
           )}
 
           {/* 等审批时不算"在思考"。running 把 waiting_approval 也算在跑（输入框该显示

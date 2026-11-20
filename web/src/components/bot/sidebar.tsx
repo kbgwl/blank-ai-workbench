@@ -312,9 +312,25 @@ export function Sidebar(props: SidebarProps) {
 
         {groups.map((group) => {
           const stamps = disambiguate(group.items);
+          // 分组标题带一句聚合：同时跑五个任务时，用户要的是"哪个在等我"，
+          // 而不是把五条会话逐条点开看状态点。只数需要人动手的和已失败的。
+          const waiting = group.items.filter((item) => item.lastTurnStatus === "waiting_approval").length;
+          const broken = group.items.filter((item) => item.lastTurnStatus === "failed").length;
           return (
           <div key={group.bucket} className="mb-2">
-            <p className="px-2 py-1 text-[11px] font-medium text-faint">{group.label}</p>
+            <div className="flex items-baseline gap-1.5 px-2 py-1">
+              <p className="text-[11px] font-medium text-faint">{group.label}</p>
+              {waiting > 0 && (
+                <span className="font-mono text-[10px] text-warn" title="这些会话停下来等你点一下">
+                  {waiting} 个等你处理
+                </span>
+              )}
+              {broken > 0 && (
+                <span className="font-mono text-[10px] text-danger" title="这些会话上一轮失败了">
+                  {broken} 个失败
+                </span>
+              )}
+            </div>
             <div className="space-y-0.5">
               {group.items.map((thread) => {
                 const active = thread.id === props.activeId;
