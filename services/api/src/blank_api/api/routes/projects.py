@@ -1,3 +1,4 @@
+import re
 import uuid
 
 from fastapi import APIRouter, Depends
@@ -28,6 +29,7 @@ from blank_api.services.plugins_defs import (
     discover_plugins,
     user_plugins_dir,
 )
+from blank_api.services.memory import MAX_MEMORY_CHARS, MemoryStore, _kind_of
 from blank_api.services.settings import SettingsStore
 from blank_api.services.uploads import UploadStore
 from blank_api.services.workspace import mask_path, validate_workspace_path
@@ -93,6 +95,69 @@ async def create_project(payload: ProjectCreate, db: DbSession) -> ProjectOut:
 @router.get("/{project_id}", response_model=ProjectOut)
 async def get_project(project_id: str, db: DbSession) -> ProjectOut:
     return project_out(await load_project(db, project_id))
+
+
+@router.get("/{project_id}/memory")
+async def get_project_memory(project_id: str, db: DbSession) -> dict:
+    """这个工作区的长期记忆：它到底记住过什么。
+
+    记忆只有"写"没有"看"的时候，用户没法判断该不该信任它——他会看到助手"像是
+    记得"，却不知道记的是哪一句、什么时候记的、要不要删。这里把原文交出去，
+    界面按段落列成条目。
+
+    ``entries`` 是解析结果而不是让前端自己切：段落格式（``## 日期 · 标题``
+    加 ``- [类型] 正文``）是存储层的约定，两边各写一份正则，哪天格式变了就会出现
+    "原文里有、列表里没有"。解析不出来时 ``entries`` 为空、``text`` 仍然完整，
+    界面据此退回原文视图，而不是显示一片空白。
+    """
+    project = await load_project(db, project_id)
+    workspace = project.active_workspace
+    if workspace is None:
+        return {"exists": False, "path": "", "chars": 0, "limit": MAX_MEMORY_CHARS, "entries": [], "text": ""}
+
+    store = MemoryStore()
+    path = store.path_for(workspace.path)
+    text = store.load(workspace.path)
+    return {
+        "exists": bool(text),
+        "path": str(path),
+        "chars": len(text),
+        "limit": MAX_MEMORY_CHARS,
+        "entries": _memory_entries(text),
+        "text": text,
+    }
+
+
+def _memory_entries(text: str) -> list[dict]:
+    """把记忆文件切成一条一条。格式不对的行跳过，不猜。"""
+    entries: list[dict] = []
+    section = ""
+    for line in (text or "").splitlines():
+        if line.startswith("## "):
+            section = line[3:].strip()
+            continue
+        if not line.startswith("- "):
+            continue
+        body = line[2:].strip()
+        if not body:
+            continue
+        match = re.match(r"^\[(user|feedback|project|reference)\]\s+(.+)$", body, re.IGNORECASE)
+        kind = match.group(1).lower() if match else ""
+        content = match.group(2).strip() if match else body
+        if not content:
+            continue
+        # 老条目没有 ``[类型]`` 标记，但它们开头都有一句「结果：」「验证命令：」——
+        # 那套前缀的解释权在存储层（``_kind_of``），前端不该各写一份正则。
+        # 两个字段都给：kind 是机器可判的类型（可能为空），label 是给人看的。
+        entries.append(
+            {
+                "section": section,
+                "kind": kind,
+                "label": _kind_of(content) if not kind else kind,
+                "text": content,
+            }
+        )
+    return entries
 
 
 @router.get("/{project_id}/commands")

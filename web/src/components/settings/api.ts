@@ -434,6 +434,32 @@ export type ProjectPlugins = {
   projectDir: string;
 };
 
+/**
+ * 一条长期记忆。
+ *
+ * `kind` 是机器可判的类型（user / feedback / project / reference），
+ * 旧条目没有这个标记所以为空——那是"没打标"，不是"类型未知"。
+ * `label` 是给人看的：有标记时等于 kind，没标记时由存储层按开头那句
+ * 「结果：」「验证命令：」认出来。
+ */
+export type MemoryEntry = { section: string; kind: string; label: string; text: string };
+
+export type ProjectMemory = {
+  exists: boolean;
+  /** 记忆文件落在哪。给用户一个能自己打开看的位置。 */
+  path: string;
+  chars: number;
+  /** 上限：写满会按最旧的段落开始丢，看到接近上限就该清理。 */
+  limit: number;
+  entries: MemoryEntry[];
+  /** 原文。解析不出来时界面退回它，而不是显示一片空白。 */
+  text: string;
+};
+
+export function fetchProjectMemory(projectId: string): Promise<ProjectMemory> {
+  return request<ProjectMemory>(`${api}/projects/${projectId}/memory`, { cache: "no-store" });
+}
+
 export function fetchProjectPlugins(projectId: string): Promise<ProjectPlugins> {
   return request<ProjectPlugins>(`${api}/projects/${projectId}/plugins`, { cache: "no-store" });
 }

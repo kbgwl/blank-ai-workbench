@@ -9,13 +9,14 @@ import { AgentRuntimePanel } from "./agent-runtime-panel";
 import { ChannelsPanel } from "./channels-panel";
 import { FeatureFlagsPanel } from "./feature-flags-panel";
 import { McpPanel } from "./mcp-panel";
+import { MemoryPanel } from "./memory-panel";
 import { PluginsPanel } from "./plugins-panel";
 import { ProvidersView } from "./providers-view";
 import { RoleModelSettings } from "./role-model-settings";
 import { RoutingEvidencePanel } from "./routing-evidence-panel";
 import { SafetyPanel } from "./safety-panel";
 
-type SectionKey = "models" | "safety" | "runtime" | "channels" | "tools" | "utilities" | "advanced";
+type SectionKey = "models" | "safety" | "runtime" | "memory" | "channels" | "tools" | "utilities" | "advanced";
 
 type Section = {
   key: SectionKey;
@@ -76,6 +77,20 @@ const SECTIONS: Section[] = [
       <svg {...iconProps}>
         <rect x="4" y="4" width="16" height="16" rx="2" />
         <path d="M9 9h6v6H9zM9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2" />
+      </svg>
+    ),
+  },
+  {
+    key: "memory",
+    label: "记忆",
+    hint: "它记住了什么",
+    description:
+      "长期记忆只有写、没有看的时候，用户查不到记的是哪一句、什么时候记的，于是对它只有两种态度——完全信任，或者干脆关掉。这里把每一条摊开，包括文件位置和用了多少容量：写满之后最旧的段落会被挤掉，这件事必须写在用之前。",
+    status: "实时读取",
+    icon: (
+      <svg {...iconProps}>
+        <path d="M12 4a4 4 0 0 0-4 4v1a3 3 0 0 0 0 6v1a4 4 0 0 0 8 0v-1a3 3 0 0 0 0-6V8a4 4 0 0 0-4-4Z" />
+        <path d="M12 4v16" />
       </svg>
     ),
   },
@@ -164,6 +179,8 @@ function SectionBody({ active }: { active: SectionKey }) {
       return <SafetyPanel />;
     case "runtime":
       return <AgentRuntimePanel />;
+    case "memory":
+      return <MemoryPanel />;
     case "channels":
       return <ChannelsPanel />;
     case "tools":
