@@ -44,3 +44,35 @@ def test_graph_captures_the_request_and_rewinds_the_plan():
     assert '"plan.rewound"' in source, "打回没有留事件，事后查不到"
     # 打回必须给模型一句可据以行动的指令，否则模型只会原样重试。
     assert "plan.rewound" in source and "从这一步重做" in source
+
+
+# ── 行为判据：打回到底有没有重开计划 ──────────────────────────────────────
+# 之前只有源码字符串断言，抓不到「算出来了但被后面的初始化覆盖」。
+
+
+def test_rewind_produces_a_state_patch_that_reopens_the_steps():
+    from blank_api.services.agent.graph import rewind_plan_for_gate
+
+    state = {
+        "plan_steps": [
+            {"id": "s1", "step": "调研", "status": "completed", "evidence": "读了 3 个文件"},
+            {"id": "s2", "step": "实现", "status": "completed", "evidence": "改了 a.py"},
+            {"id": "s3", "step": "测试", "status": "completed", "evidence": "跑了 pytest"},
+        ],
+        "plan_manifest": {"plan_id": "p1", "revision": 2},
+    }
+    patch = rewind_plan_for_gate(state, "s2")
+
+    assert patch["index"] == 1
+    assert [s["status"] for s in patch["steps"]] == ["completed", "pending", "pending"]
+    assert patch["steps"][1]["evidence"] == ""
+    assert patch["manifest"]["revision"] == 3
+    assert "第 2 步" in patch["directive"]
+
+
+def test_rewind_patch_is_empty_when_the_step_is_unknown():
+    from blank_api.services.agent.graph import rewind_plan_for_gate
+
+    state = {"plan_steps": [{"id": "s1", "step": "调研", "status": "completed"}]}
+    assert rewind_plan_for_gate(state, "nope") == {}
+    assert rewind_plan_for_gate(state, "") == {}

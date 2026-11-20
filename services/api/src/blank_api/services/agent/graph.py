@@ -11,7 +11,7 @@ import random
 import re
 import time
 from datetime import datetime, timedelta, timezone
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, TypedDict
@@ -5226,33 +5226,23 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     # 下一次模型调用（不进用户历史）。放在审批门之后做，是因为审批门要重放安全：
     # 中断恢复会整节重放，改计划状态的动作不能落在里面，否则重放一次改一次。
     rewind_step = str(getattr(session, "rewind_request", "") or "")
+    rewind_update: list[dict] | None = None
     rewind_manifest = None
     if rewind_step:
         session.rewind_request = ""
-        rewound, rewind_index = rewind_to_step(list(state.get("plan_steps") or []), rewind_step)
-        if rewind_index >= 0:
-            plan_update = rewound
-            target_title = str(rewound[rewind_index].get("step") or "").strip()
+        patch = rewind_plan_for_gate(state, rewind_step)
+        if patch:
+            # 存独立变量：本函数后半段会 `plan_update = None` 重新初始化，
+            # 直接写 plan_update 会被无声覆盖，打回等于没发生（复评实测）。
+            rewind_update = patch["steps"]
+            rewind_manifest = patch["manifest"]
             session.hook_context.append(
-                {
-                    "event": "plan.rewound",
-                    "tool": "",
-                    "text": (
-                        f"用户把任务打回到第 {rewind_index + 1} 步「{target_title}」："
-                        "从这一步重做，之后原本已完成的步骤需要重新走一遍；"
-                        "先看这一步的产物是否还在，再决定改什么。"
-                    ),
-                }
+                {"event": "plan.rewound", "tool": "", "text": patch["directive"]}
             )
-            rewind_manifest = {
-                **dict(state.get("plan_manifest") or {}),
-                "revision": int((state.get("plan_manifest") or {}).get("revision") or 0) + 1,
-                "revision_reason": f"用户打回到第 {rewind_index + 1} 步",
-            }
             await session.recorder.add(
                 "plan.rewound",
                 node,
-                {"step_id": rewind_step, "index": rewind_index, "steps": rewound},
+                {"step_id": rewind_step, "index": patch["index"], "steps": patch["steps"]},
             )
 
     # 第一段：串行决策。事件按模型给出的顺序落，与执行顺序解耦。
@@ -5718,6 +5708,12 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
             },
         )
         session.trim_events = []
+
+    # 打回是本批最后一次用户决定，优先于同批模型自己提交的 update_plan：
+    # 模型在收到驳回后会立刻重发一份「全是 completed」的计划，让那份覆盖打回，
+    # 用户看到的就是"点了打回但进度条没退"。
+    if rewind_update is not None:
+        plan_update = rewind_update
 
     plan_patch: dict = {}
     if plan_update:
@@ -6945,7 +6941,12 @@ def _change_facts(state: AgentState) -> tuple[list[str], int]:
     return list(hunks_by_path), sum(hunks_by_path.values())
 
 
-def _changes_after_validation(validation: dict, state: AgentState, root: str | None = None) -> bool:
+def _changes_after_validation(
+    validation: dict,
+    state: AgentState,
+    root: str | None = None,
+    ignored: Iterable[str] = (),
+) -> bool:
     """校验记录之后还有没有写动作，或它覆盖的文件是不是已经变了。
 
     三道判据，任一命中就算过期：
@@ -6979,14 +6980,42 @@ def _changes_after_validation(validation: dict, state: AgentState, root: str | N
         current = _fingerprints(root, list(fingerprint.keys()))
         for name, digest in fingerprint.items():
             now = current.get(name)
-            if now is None or now == "missing":
-                # 文件没了：不算「改过」。收尾会把 scratch 自测脚本移出工作区
-                # （_quarantine_scratch / 状态外移），那是 harness 自己的动作，
-                # 不是 agent 在校验之后又改了代码。真正的删除走写动作计数那一路。
+            if now is None:
+                # 这一路根本没取到（路径被 harness 自有目录过滤掉）——无从判断，跳过。
                 continue
+            if now == "missing":
+                # 文件真没了。两种可能：收尾把它挪走了（harness 动作，不算改动），
+                # 或者校验后被人删了（算改动）。知道挪走了哪些，才谈得上区分。
+                if name in ignored:
+                    continue
+                return True
             if now != digest:
                 return True
     return False
+
+
+def rewind_plan_for_gate(state: AgentState, step_id: str) -> dict:
+    """把「人工闸门打回到第几步」算成一次状态补丁。
+
+    返回 ``{"steps", "manifest", "directive", "index"}``；step_id 对不上时返回空 dict
+    （什么都不改，避免凭空把计划改坏）。
+
+    单独抽出来是为了能被判据直接测：这段逻辑埋在 700 行的执行节点里时，
+    只能靠字符串断言"代码里有没有这个词"，抓不到"到底重开了没有"。
+    """
+    steps, index = rewind_to_step(list(state.get("plan_steps") or []), step_id)
+    if index < 0:
+        return {}
+    manifest = dict(state.get("plan_manifest") or {})
+    manifest["revision"] = int(manifest.get("revision") or 0) + 1
+    manifest["revision_reason"] = f"用户打回到第 {index + 1} 步"
+    title = str(steps[index].get("step") or "").strip()
+    directive = (
+        f"用户把任务打回到第 {index + 1} 步「{title}」："
+        "从这一步重做，之后原本已完成的步骤需要重新走一遍；"
+        "先看这一步的产物是否还在，再决定改什么。"
+    )
+    return {"steps": steps, "manifest": manifest, "directive": directive, "index": index}
 
 
 def _workspace_root(session: AgentSession | None) -> str | None:
@@ -6995,7 +7024,12 @@ def _workspace_root(session: AgentSession | None) -> str | None:
     return str(root) if root else None
 
 
-def _delivery_facts(report: str, state: AgentState, root: str | None = None) -> DeliveryFacts:
+def _delivery_facts(
+    report: str,
+    state: AgentState,
+    root: str | None = None,
+    ignored: Iterable[str] = (),
+) -> DeliveryFacts:
     """四行交付的事实来源：结论取模型段落首句，改动与验证取记录。
 
     只在这里拼一次，文本与结构化负载共用同一份事实——两处各拼一遍就会出现
@@ -7015,7 +7049,7 @@ def _delivery_facts(report: str, state: AgentState, root: str | None = None) -> 
             exit_code = raw_exit
         # 校验之后又改了代码：这条记录已经不能代表最终状态。按未验证交付，
         # 否则「先跑测试再编辑」的任务会打印一行看起来合格的验证。
-        if _changes_after_validation(validation, state, root):
+        if _changes_after_validation(validation, state, root, ignored):
             command = ""
             exit_code = None
             verify_stale = True
@@ -7049,7 +7083,9 @@ def _delivery_text(report: str, state: AgentState, session: AgentSession) -> str
     模型没法在这里塞「已验证」——它那句原本就可能不实，而 ``验证`` 这一行只有真的
     跑过、且退出码已知时才会出现。
     """
-    facts = _delivery_facts(report, state, _workspace_root(session))
+    facts = _delivery_facts(
+        report, state, _workspace_root(session), getattr(session, "quarantined_paths", ())
+    )
     # 没改动、也没真跑过校验的任务（只读分析、纯回答）不进四行格式：那类交付的价值
     # 就在正文本身，压成"一句话结论"等于把答案截掉。四行是给"有产物的工作"用的。
     if facts.changed_files == 0 and facts.verify_exit is None:
@@ -7063,7 +7099,9 @@ def _delivery_payload(
     report: str, state: AgentState, mode: str, text: str, session: AgentSession | None = None
 ) -> dict:
     """结构化交付负载：和正文同源，前端不必回头解析那四行。"""
-    payload = delivery_dict(_delivery_facts(report, state, _workspace_root(session)))
+    payload = delivery_dict(
+        _delivery_facts(report, state, _workspace_root(session), getattr(session, "quarantined_paths", ()))
+    )
     payload["mode"] = mode
     payload["chars"] = len(text)
     return payload
@@ -7233,6 +7271,9 @@ async def _quarantine_scratch(state: AgentState, session: AgentSession, node: st
         {"moved": [{"path": rel, "to": str(dest)} for rel, dest in moved]},
     )
     moved_paths = {rel for rel, _ in moved}
+    # 交付判定要区分"文件被 harness 挪走"（不算改动）与"文件被人删了"（算改动）。
+    # 不记下来的话，两者在指纹里都是 missing，只能二选一地猜。
+    session.quarantined_paths = set(getattr(session, "quarantined_paths", set())) | moved_paths
     return {
         **state,
         "tool_results": [

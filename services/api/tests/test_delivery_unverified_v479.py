@@ -238,8 +238,24 @@ def test_a_moved_scratch_script_is_not_a_late_change(tmp_path):
 
     assert graph._changes_after_validation(validation, state, str(tmp_path)) is False
 
-    (tmp_path / "_selftest.js").unlink()  # 被移出工作区（隔离/外移）
-    assert graph._changes_after_validation(validation, state, str(tmp_path)) is False
+    # 被 harness 挪走（收尾隔离）：知道它去哪了，不算改动。
+    (tmp_path / "_selftest.js").unlink()
+    assert graph._changes_after_validation(
+        validation, state, str(tmp_path), ignored={"_selftest.js"}
+    ) is False
+
+
+def test_a_deleted_covered_file_still_counts_as_a_change(tmp_path):
+    """但"没人说挪走了"的文件不见了 = 校验后有人删了它，仍然算改动。"""
+    from blank_api.services.agent import graph
+
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    fingerprint = graph._fingerprints(str(tmp_path), ["a.py"])
+    validation = {"status": "ok", "covered_mutations": 1, "covered_fingerprint": fingerprint}
+    state = {"tool_results": [_MUTATION]}
+
+    (tmp_path / "a.py").unlink()  # shell rm
+    assert graph._changes_after_validation(validation, state, str(tmp_path)) is True
 
 
 def test_scratchpad_paths_never_enter_the_fingerprint(tmp_path):
