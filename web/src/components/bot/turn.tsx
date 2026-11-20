@@ -7,6 +7,7 @@ import { formatDuration } from "../tasks/format";
 import { guardianReviewLabel } from "../tasks/status";
 import { approvalGrantOptions } from "../tasks/api";
 import { ApprovalOptions, approvalQuestion } from "../tasks/approval";
+import { approvalApproveLabel, isPlanGate } from "../tasks/approval-copy";
 import { explainFailure, failureMeta, failureOriginal } from "../tasks/error-copy";
 import type { FailureCopy } from "../tasks/error-copy";
 import type { AnswerValues, AttachmentRef, PendingApproval, PendingQuestion } from "../tasks/api";
@@ -169,7 +170,12 @@ export function ApprovalCard({
   busy: boolean;
 }) {
   const command = String(approval.args.command ?? approval.args.path ?? "");
-  const grants = approvalGrantOptions(approval);
+  // 计划门的按钮要改说法：「允许这一次」放在"按这份计划开始改"上说不通。
+  const grants = approvalGrantOptions(approval).map((option) => ({
+    ...option,
+    label: approvalApproveLabel(approval.tool, option.scope, option.label),
+  }));
+  const planGate = isPlanGate(approval.tool);
   const reviewNote = guardianReviewLabel(approval.guardian);
   // 审查结论压成一个短徽标放在标题行。原来是一整行灰字铺在卡片里，读起来像脚注，
   // 眼睛会直接跳过——而"这条有人先看过"恰恰是用户要的信息。全文进 title。
@@ -212,6 +218,20 @@ export function ApprovalCard({
           {command}
         </pre>
       )}
+      {/* 计划门：要批的是计划本身，不是"执行 exit_plan_mode"这个动作。
+          不摆出来的后果是用户只能盲批，或者凭这一轮对话里读到的片段猜。 */}
+      {planGate &&
+        (approval.planPreview ? (
+          <div className="mt-1.5 max-h-64 overflow-auto rounded-md border border-line bg-surface px-2.5 py-2">
+            <MarkdownView text={approval.planPreview} />
+          </div>
+        ) : (
+          // 空计划也能走到这张卡上（审批发生在工具执行之前）。批了它只会在
+          // 下一步原地失败一次，所以先说清楚，而不是让用户批完再看到红字。
+          <p className="mt-1.5 rounded-md border border-warn/35 bg-warn/[0.06] px-2.5 py-1.5 text-[12px] leading-relaxed text-warn">
+            它还没把计划写出来。这一步批了也交不出东西，会在原地再失败一次——先让它把计划写清楚。
+          </p>
+        ))}
       {/* 过期卡不写「高风险操作等待人工审批」：它说的是"有人在等你"，而这里
           恰恰是没人来、卡已经作废。留着这句会和下面"已经过期"直接打架。
           同理，"等待人工审批"这类和问句重复的模板话也不再铺一遍——标题已经在问

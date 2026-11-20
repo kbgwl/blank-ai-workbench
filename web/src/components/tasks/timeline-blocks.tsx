@@ -656,6 +656,13 @@ function ApprovalCard({
           {reviewNote}
         </p>
       )}
+      {/* 计划门：把要批的那份计划摆出来。args 里通常没有它（模型写在计划文件里），
+          所以只读 planPreview；空的时候不占位，任务详情页不必重复对话页那句警告。 */}
+      {block.planPreview && (
+        <pre className="max-h-64 overflow-auto rounded-md border border-line bg-surface px-2.5 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap text-text/85">
+          {block.planPreview}
+        </pre>
+      )}
       <JsonBlock value={block.args} />
       <ApprovalOptions
         grants={grants}

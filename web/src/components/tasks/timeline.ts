@@ -106,6 +106,8 @@ export type Block =
       toolName: string;
       /** 独立审查的意见。undefined=这张卡早于审查进载荷，null=审查关着，对象=审查员说了话。 */
       guardian?: GuardianVerdictInfo | null;
+      /** 计划模式那道门要批的那份计划；别的工具为空串。 */
+      planPreview: string;
     }
   | {
       kind: "result";
@@ -740,6 +742,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
         args: eventToolArgs({ ...event, payload: source }),
         risk: textOf(source, "risk_level", "risk", "level"),
         message: textOf(source, "message", "reason", "approval_state"),
+        planPreview: textOf(source, "plan_preview"),
         prefix: textOf(source, "suggested_prefix", "prefix"),
         approvalId: textOf(source, "approval_id"),
         argumentsHash: textOf(source, "arguments_hash"),

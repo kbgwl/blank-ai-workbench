@@ -4531,6 +4531,23 @@ async def _approval_gate(
                 "hook_ask": hook_ask,
                 "guardian": verdict.as_dict() if session.guardian.enabled else None,
                 "expires_at": expires_at,
+                # 计划模式那道门：卡片上必须摆出计划本身。
+                #
+                # `exit_plan_mode` 的 arguments 常常是空的——模型按工具说明把计划写进
+                # 计划文件，让工具自己去读。于是卡片只能显示「要让它执行
+                # exit_plan_mode 吗」，用户被要求批准一份他看不见的计划；他要么
+                # 盲批，要么凭这轮对话里读到的片段猜。这里把最终要提交的那一份
+                # 读出来带上，卡片才有东西可摆。
+                #
+                # 只在名字对得上时求值：给每张审批卡都读一次计划文件是白费的。
+                "plan_preview": (
+                    (
+                        str(arguments.get("plan") or "").strip()
+                        or plan_mode.read_plan(session.context.root, session.context.task_id)
+                    )[: plan_mode.MAX_PLAN_CHARS]
+                    if name == "exit_plan_mode"
+                    else ""
+                ),
             }
         )
         granted, scope = parse_decision(answer)

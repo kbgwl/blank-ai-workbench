@@ -808,6 +808,15 @@ export type PendingApproval = {
   expired: boolean;
   /** 过期时间（ISO）。过期时用来告诉用户"等了多久"，没过期时为空。 */
   expiresAt: string;
+  /**
+   * 计划模式那道门要批的那份计划。
+   *
+   * `exit_plan_mode` 的 arguments 常常是空的（模型把计划写在计划文件里，让工具
+   * 自己去读），卡片本来只能显示「要让它执行 exit_plan_mode 吗」——用户在被要求
+   * 批准一份看不见的计划。后端现在把最终要提交的那一份读出来放在这里。
+   * 别的工具一律是空串。
+   */
+  planPreview: string;
   /** 独立审查员的话。undefined=这张卡是"审查进载荷之前"的老任务；null=记过了、当时审查关着。 */
   guardian?: GuardianVerdictInfo | null;
 };
@@ -1399,6 +1408,7 @@ function normalizeApprovals(container: unknown): PendingApproval[] {
           boolOf(item, "expired", "is_expired") === true ||
           textOf(item, "approval_state") === "已过期",
         expiresAt: textOf(item, "expires_at"),
+        planPreview: textOf(item, "plan_preview"),
         ...(guardian === undefined ? {} : { guardian }),
       };
     });
