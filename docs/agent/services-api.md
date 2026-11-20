@@ -72,7 +72,18 @@
 | 覆盖/删除前担心丢内容 | `sandbox/snapshot.py` 的快照（`data/snapshots`） | 快照存在且能从它还原 |
 | 需要隔离目录做实验性改动 | 工具 `enter_worktree` / `exit_worktree`（`registry.py:89`） | 退出后主工作区 `git status` 干净 |
 | 并行任务互相写文件 | `task_isolation.py`（默认关） | 打开后越界读取必须 `PermissionError` |
+| 两个任务进同一棵 worktree | `worktree_session.claim_owner()`（写者唯一） | 第二个任务必须被拒；持有者释放后才能进 |
 | 后台任务被 detach | run 记录留在任务事件流；`/tasks/{id}` 读终态 | 终态与事件流一致 |
+
+**写者唯一**（2026-11-21 起）：`enter_worktree(path=...)` 允许进入任何已注册的工作树，
+所以两个任务可能同时写一棵树——它们各自的 diff 与验证结论都会建立在对方随时会改的
+树上。认领文件落在**工作树自己的 git 目录**（`<repo>/.git/worktrees/<name>/blank-owner.json`），
+不落在工作树里：写进工作树会让 `git status` 多一个未跟踪文件，我们自己的 remove 闸门
+会把它算成"还有未提交改动"，用户就永远删不掉那棵树。
+
+四种认领结果，`unavailable` 不能当成 `owned`：读不到 git 目录时流程照走，但事件里
+`owner_status` 会如实写 `unavailable`——不许写成"看起来独占了"。持有者死在本进程里
+（会话没了、文件还在）按 `reclaimed` 自愈，否则一次崩溃会永久锁住那棵树。
 
 **已知不一致**：任务停在 `waiting_approval` 时若服务中断，`agent_runs` 可能停在
 `waiting_approval` 而 `tasks` 已是 `failed`。界面看 task，所以不影响用户，但不要

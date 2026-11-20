@@ -19,12 +19,14 @@ Claude Code 的两个工具在这里落成同一份数据：任务当前在哪�
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
 import threading
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Claude 的命名约束：按 / 分段，每段只允许字母、数字、点、下划线、短横线，总计 64 字符。
@@ -38,6 +40,26 @@ BASE_REFS: tuple[str, ...] = ("fresh", "head")
 DEFAULT_BRANCH_CANDIDATES: tuple[str, ...] = ("main", "master")
 GIT_TIMEOUT = 120.0
 MAX_REPORTED_ENTRIES = 20
+
+# ── 写者唯一（worktree owner）─────────────────────────────────────────────
+# 移植自 qwen-code 的 ``worktree-owner-state.ts``（见
+# ``docs/external-qwen-code-2026-11.md`` 可移植清单第 4 项）。理由不是"对齐"，是
+# 这里真的会两个写者：``enter_worktree(path=...)`` 允许进入任何已注册的工作树，
+# 于是任务 A 在里面干活时，任务 B 也能进去改同一批文件——两边的 diff、验证结论
+# 都建立在对方随时会改的树上，最后的"改完了"谁都不算数。
+#
+# 落点选工作树自己的 git 目录（``git rev-parse --absolute-git-dir``，实际是
+# ``<repo>/.git/worktrees/<name>``）：它天然按工作树分目录，跨进程共享，而且
+# **不在工作树里**——写进工作树根会让 ``git status`` 多一个未跟踪文件，
+# 我们自己的 ``_dirty_entries`` 会把它算成"有未提交改动"，remove 直接被自己拦住。
+OWNER_FILENAME = "blank-owner.json"
+# 认领结果。``unavailable`` 不是失败，是"读不到/写不进 git 目录"——那种时候
+# 不能假装拿到了锁，调用方要按"不知道"处理而不是按"独占"处理。
+OWNER_OWNED = "owned"
+OWNER_OTHER = "owned_by_another_task"
+OWNER_UNAVAILABLE = "unavailable"
+OWNER_RECLAIMED = "reclaimed"
+
 
 
 @dataclass
@@ -53,6 +75,10 @@ class WorktreeSession:
     base_ref: str
     # 本任务用 name 创建的才是 True；path 进入的为 False，remove 会被拒绝。
     owned: bool
+    # 写者认领的结果（OWNER_*）。默认 owned 只是为了让不使用认领的老调用点
+    # 构造得出来；真实值由 enter() 写。unavailable 时事件里必须如实说"没守住"，
+    # 不能因为流程走通了就当成独占。
+    owner_status: str = OWNER_OWNED
 
     @property
     def display(self) -> str:
@@ -74,6 +100,7 @@ class WorktreeSession:
             "base_commit": self.base_commit,
             "base_ref": self.base_ref,
             "owned": self.owned,
+            "owner_status": self.owner_status,
         }
 
     def tool_data(self) -> dict:
@@ -122,6 +149,100 @@ def _run_git(args: list[str], cwd: Path, timeout: float = GIT_TIMEOUT) -> _GitRe
     except (OSError, subprocess.TimeoutExpired) as exc:
         return _GitResult(1, err=f"git 执行失败：{exc.__class__.__name__}")
     return _GitResult(completed.returncode, completed.stdout or "", completed.stderr or "")
+
+
+def _owner_file(root: Path) -> Path | None:
+    """工作树的认领文件位置。
+
+    用 ``--absolute-git-dir`` 而不是 ``root / ".git"``：工作树里 ``.git`` 是个
+    指向 ``<repo>/.git/worktrees/<name>`` 的**文件**，认领信息要落在那个私有目录里
+    ——它是按工作树分的，跨进程共享，且不进工作树（写进去会让 ``git status`` 多
+    一个未跟踪文件，我们自己的 remove 闸门会因此拒绝删除）。
+    """
+    result = _run_git(["rev-parse", "--absolute-git-dir"], root)
+    if result.code != 0:
+        return None
+    first = next((line.strip() for line in result.out.splitlines() if line.strip()), "")
+    if not first:
+        return None
+    return Path(first) / OWNER_FILENAME
+
+
+def read_owner(root: Path) -> dict:
+    """读当前认领。读不到/形状不对一律当"没有认领"——脏文件不该挡住干活。"""
+    path = _owner_file(root)
+    if path is None or not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        "task_id": str(payload.get("task_id") or ""),
+        "pid": int(payload.get("pid") or 0),
+        "claim_id": str(payload.get("claim_id") or ""),
+        "at": str(payload.get("at") or ""),
+    }
+
+
+def claim_owner(root: Path, task_id: str) -> tuple[str, dict]:
+    """认领这棵工作树，返回 ``(状态, 认领信息)``。
+
+    四种结果，调用方按它决定"要不要拒绝"：
+
+    * ``owned``：本任务拿到了（或本来就持有）；
+    * ``reclaimed``：上一个持有者是**本进程里已经结束/消失的任务**——文件还在、
+      会话没了，说明它没走到正常释放（进程被杀、异常退出），可以接手；
+    * ``owned_by_another_task``：另一个还在干活的持有者，拒绝进入；
+    * ``unavailable``：读不到 git 目录或写不进去。**不能当成拿到了**——那样
+      等于静默放弃唯一性；调用方要么拒绝，要么如实标注"没守住"。
+
+    跨进程时只认"pid 不同即他人所有"：拿不到可靠的进程存活信号（Windows 上
+    ``os.kill(pid, 0)`` 不可用），宁可保守拒绝——多拒绝一次可以换一个名字，
+    错误地放行则是两棵树同时在写。
+    """
+    path = _owner_file(root)
+    if path is None:
+        return OWNER_UNAVAILABLE, {}
+    current = read_owner(root)
+    if current and current.get("task_id") != task_id:
+        same_process = int(current.get("pid") or 0) == os.getpid()
+        alive = same_process and str(current.get("task_id") or "") in _SESSIONS
+        if alive:
+            return OWNER_OTHER, current
+    record = {
+        "task_id": str(task_id),
+        "pid": os.getpid(),
+        "claim_id": uuid.uuid4().hex[:12],
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        # 先写临时文件再替换：跨进程读到半个 JSON 会让另一个任务误判成"没有认领"。
+        temp = path.with_suffix(".tmp")
+        temp.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        temp.replace(path)
+    except OSError:
+        return OWNER_UNAVAILABLE, current
+    status = OWNER_RECLAIMED if current else OWNER_OWNED
+    return status, record
+
+
+def release_owner(root: Path, task_id: str) -> None:
+    """松手。只有持有者能删——别的任务的认领不能被路过的人清掉。"""
+    current = read_owner(root)
+    if not current or current.get("task_id") != task_id:
+        return
+    path = _owner_file(root)
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except OSError:
+        # 删不掉不影响正确性：下次认领会看到"持有者在自己进程里但会话已没了"，
+        # 按 reclaimed 接手。
+        pass
 
 
 def _error_text(result: _GitResult, fallback: str) -> str:
@@ -299,9 +420,18 @@ def active_root(task_id: str) -> Path | None:
 
 
 def release(task_id: str) -> None:
-    """任务结束：只摘记录，工作树留在盘上。"""
+    """任务结束：摘记录、松开写者认领，工作树留在盘上。
+
+    松手要在这里做而不是只在 exit：任务收尾、取消、崩溃恢复都会走到这儿，
+    漏了它，那棵树的认领会一直挂着"别人的任务"，下一个任务永远进不去
+    （文件里的 pid 是同一个进程，但会话已经没了 → 会被判 reclaimed，能用，
+    但那是在靠自愈逻辑兜底，不该当成正常路径）。
+    """
+    key = str(task_id or "")
     with _LOCK:
-        _SESSIONS.pop(str(task_id or ""), None)
+        session = _SESSIONS.pop(key, None)
+    if session is not None:
+        release_owner(session.root, key)
 
 
 def _validate_name(name: str) -> str:
@@ -443,6 +573,17 @@ def enter(
             )
         session = _create(origin_root, task_id, name, base_ref=base_ref)
 
+    # 认领必须在记账之前：拿不到独占就不要把这个任务记成"在这棵树里"，
+    # 否则它后续的写入会绕过下面 exit 时的归属检查。
+    status, owner = claim_owner(session.root, task_id)
+    session.owner_status = status
+    if status == OWNER_OTHER:
+        raise ValueError(
+            f"这个 worktree（{session.display}）正被任务 {str(owner.get('task_id') or '')[:8]} "
+            "使用，同一棵工作树不能有两个写者：两边会互相覆盖对方的改动，"
+            "最后的验证结论对谁都不成立。请用 name 新建一棵，或等那个任务结束。"
+        )
+
     with _LOCK:
         _SESSIONS[task_id] = session
     return session
@@ -480,6 +621,17 @@ def exit_session(task_id: str, *, action: str, discard_changes: bool = False) ->
         raise ValueError(
             "worktree 里还有工作没落地，拒绝删除：" + "；".join(parts)
             + "。确认丢弃请传 discard_changes=true，或者先提交/合并。"
+        )
+
+    # 删除前的归属检查：本任务没持有这棵树的认领时，说明是别人在写——
+    # 这时候删掉等于把对方正在做的工作从盘上抽走（它下一次写入会落到空路径）。
+    # 只在"有认领且不是自己"时拦；没有认领文件（手动建的树、老版本留下的）照旧处理。
+    owner = read_owner(session.root)
+    owner_task = str(owner.get("task_id") or "")
+    if owner_task and owner_task != task_id:
+        raise ValueError(
+            f"这棵 worktree 现在归任务 {owner_task[:8]} 使用，不能由本任务删除。"
+            '先用 action="keep" 退出；确实要删请等那个任务结束。'
         )
 
     result = _run_git(["worktree", "remove", "--force", str(session.root)], session.repo)
