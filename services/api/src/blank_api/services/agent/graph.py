@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import subprocess
 from pathlib import Path
 import json
 import os
@@ -39,6 +40,7 @@ from blank_api.services.agent.scenarios import (
 )
 from blank_api.services.agent import governance
 from blank_api.services.agent import remediation
+from blank_api.services.agent import closure as closure_mod
 from blank_api.services.agent import workflow as workflow_module
 from blank_api.services.agent.live import OutputRelay
 from blank_api.services.agent.progress import ProgressSentinel
@@ -7111,6 +7113,50 @@ def _workspace_root(session: AgentSession | None) -> str | None:
     return str(root) if root else None
 
 
+def _deleted_paths(root: str | None, ignored: Iterable[str] = ()) -> list[str]:
+    """工作区里被删掉的文件。
+
+    工具结果只记"写过哪个文件"，``rm x.py`` 这种 shell 删除在里面一条都没有——
+    于是交付里"改动 2 个文件"会漏掉那个真的消失了的文件。这里从 ``git status``
+    的 D 状态补：只读一次，拿不到（不是仓库、git 不在）就返回空，不猜。
+    """
+    if not root:
+        return []
+    try:
+        done = subprocess.run(  # noqa: S603 - 参数由本模块构造
+            ["git", "-c", "core.quotePath=false", "status", "--porcelain", "-z", "-uall"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if done.returncode != 0:
+        return []
+    skip = {str(name) for name in ignored}
+    deleted: list[str] = []
+    parts = done.stdout.split("\0")
+    index = 0
+    while index < len(parts):
+        entry = parts[index]
+        index += 1
+        if len(entry) < 4:
+            continue
+        status, relative = entry[:2], entry[3:]
+        if "R" in status or "C" in status:
+            index += 1
+        if "D" not in status:
+            continue
+        if relative in skip or _in_scratchpad(relative):
+            continue
+        if relative not in deleted:
+            deleted.append(relative)
+    return deleted
+
+
 def _delivery_facts(
     report: str,
     state: AgentState,
@@ -7149,9 +7195,21 @@ def _delivery_facts(
         # 跳过校验时把原因带进交付行：只写"没跑"而不说为什么，下一轮还是不知道怎么补。
         verify_note = str(validation.get("skipped_reason") or "").strip()
     files, hunks = _change_facts(state)
+    # 改动边界要与校验盖戳同源：``covered_fingerprint`` 是"校验那一刻算过内容指纹的
+    # 那几个文件"，shell 里新建/改动的文件也在里面，而工具结果里可能没有它们。
+    # 只按工具结果算，交付里就会出现"总结说 3 个、证据说 4 个"——两处各拼一遍的老问题。
+    paths = list(files)
+    for name in sorted(str(item) for item in (validation.get("covered_fingerprint") or {})):
+        if name and name not in paths:
+            paths.append(name)
+    # 删除也要算进边界：shell 里 rm 掉的文件不在工具结果里，只靠上面两路会漏。
+    # 拿不到 git（不是仓库/没装）时这一路为空，边界就退化成"工具写过的那些"。
+    for name in _deleted_paths(root, ignored):
+        if name not in paths:
+            paths.append(name)
     return DeliveryFacts(
         completed=conclusion,
-        changed_files=len(files),
+        changed_files=len(paths),
         diff_count=hunks,
         verify_command=command,
         verify_exit=exit_code,
@@ -7159,8 +7217,60 @@ def _delivery_facts(
         verify_note=verify_note,
         verify_stale=verify_stale,
         verify_files=verify_files,
-        files=tuple(files),
+        files=tuple(paths),
+        changed_paths=tuple(paths),
     )
+
+
+async def _write_closure(
+    session: AgentSession,
+    state: AgentState,
+    report: str,
+    results: list[dict] | None = None,
+    *,
+    node: str = "summarize_result",
+) -> None:
+    """任务收尾写一份闭合记录：revision + 改动路径 + 校验结论 + 验收位（空着等人签）。
+
+    为什么在交付这一刻写：这是"这一版结果定稿"的唯一时间点——再晚一点工作区可能已经
+    被下一轮改动，revision 就对不上了；再早一点校验结论还没出来。
+    验收决定不在这里做：模型说"完成"不是验收，本地测试通过也不是（都属于改动验证）。
+    记录里 ``decision`` 留 ``pending``，等人或项目策略按当前 revision 签。
+    """
+    root = _workspace_root(session)
+    if not root:
+        return
+    facts = _delivery_facts(
+        report, state, root, getattr(session, "quarantined_paths", ())
+    )
+    payload = delivery_dict(facts)
+    # 只读回答没有可闭合的交付：写一条没有改动的闭合记录只会让台账里多出噪音，
+    # 还会把"闭过"这件事稀释成"每轮都写了点什么"。
+    if not payload.get("changed_paths") and (payload.get("verify") or {}).get("exit") is None:
+        return
+    try:
+        record = closure_mod.build(
+            task_id=str(getattr(session.context, "task_id", "") or ""),
+            root=root,
+            changed_paths=tuple(payload.get("changed_paths") or ()),
+            verify_command=str((payload.get("verify") or {}).get("command") or ""),
+            verify_exit=(payload.get("verify") or {}).get("exit"),
+            verify_covers=tuple((payload.get("verify") or {}).get("covers") or ()),
+        )
+        path = closure_mod.write(root, record)
+    except (OSError, ValueError) as exc:
+        # 写不下来要如实说，不能让"闭合记录"变成一种口头承诺。
+        await session.recorder.add(
+            "task.closure_failed", node, {"reason": exc.__class__.__name__, "message": str(exc)[:200]}
+        )
+        return
+    data = record.as_dict()
+    data["path"] = str(path)
+    data["acceptance"] = [
+        {"criterion": str(item.get("criterion") or ""), "covered": bool(item.get("covered"))}
+        for item in (results or [])
+    ]
+    await session.recorder.add("task.closure", node, data)
 
 
 def _delivery_text(report: str, state: AgentState, session: AgentSession) -> str:
@@ -7545,6 +7655,7 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
                 )
             text = _delivery_text(report, delivery_state, session)
             await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, "report", text, session))
+            await _write_closure(session, delivery_state, report, results, node=node)
             return {
                 "summary": _enforce_no_false_claim(
                     _validation_note(
@@ -7566,6 +7677,7 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
             report = as_report(raw)
             text = _delivery_text(report, delivery_state, session)
             await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, "fallback", text, session))
+            await _write_closure(session, delivery_state, report, results, node=node)
             return {
                 "summary": _enforce_no_false_claim(
                     _validation_note(
@@ -7591,6 +7703,7 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
         mode = "fallback"
     text = _delivery_text(report, delivery_state, session)
     await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, mode, text, session))
+    await _write_closure(session, delivery_state, report, node=node)
     return {
         "summary": _enforce_no_false_claim(
             _validation_note(

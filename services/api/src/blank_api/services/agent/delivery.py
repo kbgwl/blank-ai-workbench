@@ -60,6 +60,10 @@ class DeliveryFacts:
     verify_files: tuple[str, ...] = ()
     # 文件名按第一次出现的顺序；只放计数不留名字，用户就没法按「文件结构」验收。
     files: tuple[str, ...] = ()
+    # 本轮改动的路径集合（工作区相对路径），与校验盖戳的 covered_fingerprint 同源。
+    # ``files`` 是给人看的那几个名字，这个是给机器核的边界：任务页的改动卡片、
+    # 回滚清单、闭合记录都应该读它，而不是回头去信模型总结。
+    changed_paths: tuple[str, ...] = ()
 
 
 def _one_line(text: str, *, limit: int = _MAX_COMPLETED) -> str:
@@ -128,6 +132,10 @@ def as_dict(facts: DeliveryFacts) -> dict:
         "changed_files": int(facts.changed_files or 0),
         "diff_count": int(facts.diff_count or 0),
         "files": [str(name) for name in facts.files],
+        # 可核对的改动边界：前端按它画改动卡片，不再由总结文本决定"改了哪些文件"。
+        "changed_paths": [
+            str(name) for name in (facts.changed_paths or facts.files) if str(name).strip()
+        ],
         "entry": entrypoint(tuple(str(name) for name in facts.files)),
         "verify": {
             "command": str(facts.verify_command or "").strip(),

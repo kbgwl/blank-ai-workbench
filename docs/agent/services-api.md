@@ -73,6 +73,8 @@
 | 需要隔离目录做实验性改动 | 工具 `enter_worktree` / `exit_worktree`（`registry.py:89`） | 退出后主工作区 `git status` 干净 |
 | 并行任务互相写文件 | `task_isolation.py`（默认关） | 打开后越界读取必须 `PermissionError` |
 | 两个任务进同一棵 worktree | `worktree_session.claim_owner()`（写者唯一） | 第二个任务必须被拒；持有者释放后才能进 |
+| 这一轮改错了要退回去 | 工具 `restore_worktree`（`action=plan|restore`） | 回滚后 `git status` 干净，`HEAD` 回到 `baseline` |
+| 交付算不算被验收 | `POST /api/tasks/{id}/closure` + `.blank/closures/` | 台账里的 `revision` 与当前 `HEAD` 一致 |
 | 后台任务被 detach | run 记录留在任务事件流；`/tasks/{id}` 读终态 | 终态与事件流一致 |
 
 **写者唯一**（2026-11-21 起）：`enter_worktree(path=...)` 允许进入任何已注册的工作树，
@@ -96,6 +98,37 @@
    `LEASE_SECONDS`（30 分钟）未续即视为失效，下一个任务按 `reclaimed` 接手。
    取 30 分钟是因为单次工具调用本身可能跑很久；租约短于一次工具调用，正常任务会在
    自己干活时被人接手。判断不了死活且没有时间戳的老认领保守拒绝（放行 = 两个写者）。
+
+**基准线与按任务回滚**（2026-11-21 补）：隔离只解决"别把主工作区改坏"，不回答
+"改错了怎么退回去"。`enter()` 现在记两样东西：
+
+1. `baseline`——新建的树取建树基准，`path` 进入的树取进树那一刻的 `HEAD`；
+   写进认领记录（`blank-owner.json`），同时另存 `blank-baseline.json`。
+   **`release()` 只松认领，不删基准**：任务收尾之后用户才发现改错了，那正是最需要它的时候。
+2. `untracked`——进树时已存在的未跟踪文件。回滚只删"基准之后新增的"，
+   别人的草稿不是本任务改的，不碰。
+
+回滚入口是工具 `restore_worktree`（`action=plan|restore`）：`plan` 只读，列出相对基准
+的改动路径；`restore` 才真退，整棵退会把已提交的改动一并退掉（`git reset --hard`），
+退完用 `git status` 实测是否干净，`clean` 是实测值不是推断。三种情况拒绝而不是猜：
+被另一个**还活着的任务**持有、没有基准线记录、路径越出工作树根。`plan` 的风险是
+`low`、`restore` 是 `high`——批准一次 `restore` 不能记成"以后都免问"（见 `ARGUMENT_SCOPED_TOOLS`）。
+
+**闭合记录与验收**（2026-11-21 补）：任务收尾（`deliver`）写
+`.blank/closures/<task_id>.json`：`revision`（当前 `HEAD`）+ `changed_paths` +
+校验结论 + `decision=pending`。三样绑在同一个 revision 上，这是"改完并且被验收"
+能作为一条事实被查到的前提。
+
+- 验收不是模型自评：本地测试与"已完成"都归改动验证（`models/agent-work-loop.md`）。
+  所以记录默认 `pending`，等人或项目策略签。
+- `GET /api/tasks/{id}/closure` 读记录；`POST /api/tasks/{id}/closure`
+  （`{decision: accepted|rejected, decided_by, note}`）签字，追加
+  `acceptance/ledger.jsonl` 一行。**revision 变了返回 409**：验收针对的是一份具体结果，
+  把旧决定挂到新提交上，台账会显示"这一版被验收过"而实际看的是上一版。
+
+交付事实里的 `changedPaths` 与校验的 `covered_fingerprint` 同源，并补上
+`git status` 的删除项（`shell rm` 不会出现在工具结果里）；任务页的改动卡读它，
+不再由总结文本决定"改了哪些文件"。
 
 **已知不一致**：任务停在 `waiting_approval` 时若服务中断，`agent_runs` 可能停在
 `waiting_approval` 而 `tasks` 已是 `failed`。界面看 task，所以不影响用户，但不要
@@ -159,7 +192,7 @@
 ```bash
 cd services/api && .venv/Scripts/python.exe -m pytest tests/<相关文件> -q
 cd services/api && .venv/Scripts/python.exe -m pytest -q      # 全量，约 18 分钟
-cd web && E:/env/node/node-v24.20.0-win-x64/node.exe --test "src/**/*.test.ts"
+cd web && E:/env/node/node-v24.20.0-win-x64/node.exe --test --import ./test-bootstrap.mjs "src/**/*.test.ts"
 bash check.sh                                                  # 跨端门禁，约 1 分钟
 ```
 

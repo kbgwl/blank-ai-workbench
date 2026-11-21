@@ -742,6 +742,48 @@ function ChangeCard({ block, onHighlight }: { block: Extract<Block, { kind: "cha
   );
 }
 
+function ChangesCard({ block }: { block: Extract<Block, { kind: "changes" }> }) {
+  const shown = block.paths.slice(0, 8);
+  const more = block.paths.length - shown.length;
+  const covered = block.covers.length;
+  const tone = block.missing
+    ? "border-warn/40 text-warn"
+    : covered > 0
+      ? "border-line text-muted"
+      : "border-line text-faint";
+  return (
+    <div className="rounded-lg border border-line bg-surface px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-text/80">
+          <BlockIcon kind="change" />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[12px] text-text/90">
+          本轮改动 {block.paths.length} 个文件
+          <span className="ml-1 text-[11px] text-faint">（来自交付事实，不是总结）</span>
+        </span>
+        {block.missing ? (
+          <span className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${tone}`}>
+            未跑校验
+          </span>
+        ) : covered > 0 ? (
+          <span className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${tone}`}>
+            校验覆盖 {covered}/{block.paths.length}
+          </span>
+        ) : null}
+        <span className="shrink-0 font-mono text-[11px] text-faint">{formatClock(block.at)}</span>
+      </div>
+      <ul className="mt-1.5 space-y-0.5">
+        {shown.map((path) => (
+          <li key={path} className="truncate font-mono text-[11px] text-muted" title={path}>
+            {path}
+          </li>
+        ))}
+        {more > 0 && <li className="font-mono text-[11px] text-faint">…还有 {more} 个</li>}
+      </ul>
+    </div>
+  );
+}
+
 function SystemRow({ block }: { block: Extract<Block, { kind: "system" }> }) {
   const tone =
     block.tone === "danger"
@@ -842,6 +884,8 @@ export function TimelineBlock({
       return <BoundaryCard block={block} />;
     case "change":
       return <ChangeCard block={block} onHighlight={onHighlight} />;
+    case "changes":
+      return <ChangesCard block={block} />;
     case "hop":
       return <HopRow block={block} />;
     default:

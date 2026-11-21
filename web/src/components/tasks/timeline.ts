@@ -129,6 +129,21 @@ export type Block =
       diff: string;
     }
   | {
+      /**
+       * 本轮改动的边界，读的是交付事实里的 ``changed_paths``（与校验盖戳同源），
+       * 不是把模型那句总结再解析一遍。逐文件事件会漏掉 shell 新建的文件，
+       * 这张卡不会——它和"这条校验盖了哪些文件"用的是同一份记录。
+       */
+      kind: "changes";
+      key: string;
+      seq: number;
+      at: string;
+      paths: string[];
+      /** 校验覆盖到的文件；空数组表示这次没有真跑过的校验。 */
+      covers: string[];
+      missing: boolean;
+    }
+  | {
       kind: "boundary";
       key: string;
       seq: number;
@@ -378,7 +393,6 @@ function describeSystem(event: AgentEvent): { title: string; detail: string; ton
     type.startsWith("intent.") ||
     type.startsWith("answer.") ||
     type === "result.delivered" ||
-    type === "delivery.recorded" ||
     type === "task.created" ||
     type === "snapshot.created"
   ) {
@@ -627,6 +641,29 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
     const isDiff = rawType.startsWith("diff") || rawType.includes("file.changed") || rawType.includes("file_change");
     const isResult =
       rawType.startsWith("result") || rawType.startsWith("task.completed") || rawType.startsWith("task.failed") || rawType.startsWith("task.cancelled") || rawType.startsWith("task.canceled") || rawType.startsWith("error");
+
+    // 交付事实里的改动边界。逐文件事件（file.changed）只记经过文件工具的写入，
+    // shell 里生成的、格式化器改的都不在里面；这里读的是与校验盖戳同源的那份集合。
+    if (rawType === "delivery.recorded") {
+      const paths = arrayOf(event.payload, "changed_paths")
+        .map((item) => String(item))
+        .filter(Boolean);
+      if (paths.length === 0) return;
+      const verify = recordOf(event.payload, "verify");
+      const covers = arrayOf(verify, "covers")
+        .map((item) => String(item))
+        .filter(Boolean);
+      push({
+        kind: "changes",
+        key,
+        seq: event.seq,
+        at: event.createdAt,
+        paths,
+        covers,
+        missing: boolOf(verify, "missing") === true,
+      });
+      return;
+    }
 
     // 压缩边界是一张卡：`context.compacted` 一次任务只发生几回，
     // 但它标记的正是"从这里往前看，历史已经不是原文"。

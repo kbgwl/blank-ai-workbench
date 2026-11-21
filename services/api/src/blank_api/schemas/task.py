@@ -244,3 +244,15 @@ class TaskPlanOut(BaseModel):
     milestones: list[dict] = Field(default_factory=list)
     progress: PlanProgressOut
     revision: int = 0
+
+
+class TaskClosureIn(BaseModel):
+    """验收决定。revision 由服务端按当前工作区核对，不接受调用方自报。
+
+    验收不是"模型说完成"，所以必须有 decision 与 decided_by 两样；两者缺一都返回
+    校验错误，而不是默默记成通过。
+    """
+
+    decision: Literal["accepted", "rejected"]
+    decided_by: str = Field(min_length=1, max_length=120)
+    note: str = Field(default="", max_length=2000)

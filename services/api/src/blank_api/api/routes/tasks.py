@@ -29,6 +29,7 @@ from blank_api.models.run import AgentRun
 from blank_api.models.trigger import AgentTrigger
 from blank_api.models.skill import Skill
 from blank_api.schemas.task import (
+    TaskClosureIn,
     EventOut,
     GoalUpdateIn,
     PlanProgressOut,
@@ -61,6 +62,7 @@ from blank_api.services.agent.background_policy import (
     resolve_background,
 )
 from blank_api.services.agent.events import EventRecorder
+from blank_api.services.agent import closure
 from blank_api.services.agent import notify
 from blank_api.services.settings import SettingsStore, quiet_hours_active
 from blank_api.services.agent.live import LiveFeed
@@ -1750,6 +1752,52 @@ async def task_diff(task_id: str, db: DbSession) -> dict:
         "diff": evidence["changes"]["diff"],
         "reversible": evidence["changes"]["reversible"],
     }
+
+
+@router.get("/tasks/{task_id}/closure")
+async def read_task_closure(task_id: str, db: DbSession) -> dict:
+    """读闭合记录：改了什么、校验结论、验收位签了没有。
+
+    返回里带 ``revision`` 与 ``closed``：界面上"改完了"和"被验收了"必须是两个状态，
+    合成一句话就又回到了"模型自评即验收"。
+    """
+    task = await load_task(db, task_id)
+    project = await load_project(db, task.project_id)
+    record = closure.read(project.path, task_id)
+    rows = [row for row in closure.ledger(project.path) if str(row.get("task_id") or "") == task_id]
+    return {
+        "task_id": task_id,
+        "closure": record,
+        "decisions": rows,
+        "revision_now": closure.revision_of(project.path),
+        "closed": bool(record.get("closed")),
+    }
+
+
+@router.post("/tasks/{task_id}/closure")
+async def decide_task_closure(task_id: str, payload: TaskClosureIn, db: DbSession) -> dict:
+    """记一次验收决定，绑当前 revision。revision 变了返回 409。
+
+    不做"顺手更新到最新版"：验收针对的是一份具体结果，把旧决定挂到新提交上会让
+    台账显示"这一版被验收过"，而被看的其实是上一版。
+    """
+    task = await load_task(db, task_id)
+    project = await load_project(db, task.project_id)
+    try:
+        record = closure.decide(
+            project.path,
+            task_id,
+            decision=payload.decision,
+            decided_by=payload.decided_by,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        raise ApiError(
+            code="closure_not_bindable",
+            message=str(exc),
+            status_code=409,
+        ) from exc
+    return {"task_id": task_id, "closure": record}
 
 
 @router.post("/tasks/{task_id}/approval")

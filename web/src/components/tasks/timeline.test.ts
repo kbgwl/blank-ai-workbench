@@ -453,3 +453,36 @@ test("打回没生效时留一行解释，而不是让计划默默不变", () =>
   assert.match(block.detail, /2 步/);
   assert.match(block.detail, /没有重开/);
 });
+
+test("交付事实里的改动边界单独成一张卡", () => {
+  // 逐文件事件只记经过文件工具的写入；shell 里新建的文件只能从交付事实里拿到。
+  const event: AgentEvent = {
+    seq: 7,
+    node: "deliver",
+    type: "delivery.recorded",
+    payload: {
+      mode: "report",
+      changed_files: 2,
+      changed_paths: ["src/a.ts", "gen/schema.ts"],
+      verify: { command: "npm test", exit: 0, missing: false, stale: false, covers: ["src/a.ts"] },
+    },
+    createdAt: "2026-11-21T00:00:00+00:00",
+  };
+  const block = buildBlocks([event]).find((item) => item.kind === "changes");
+  assert.ok(block);
+  if (block.kind !== "changes") throw new Error("unexpected block");
+  assert.deepEqual(block.paths, ["src/a.ts", "gen/schema.ts"]);
+  assert.deepEqual(block.covers, ["src/a.ts"]);
+  assert.equal(block.missing, false);
+});
+
+test("没有改动路径的交付事件不占一行", () => {
+  const event: AgentEvent = {
+    seq: 8,
+    node: "deliver",
+    type: "delivery.recorded",
+    payload: { mode: "answer", chars: 120 },
+    createdAt: "2026-11-21T00:00:01+00:00",
+  };
+  assert.equal(buildBlocks([event]).length, 0);
+});

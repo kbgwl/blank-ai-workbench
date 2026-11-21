@@ -51,6 +51,8 @@ const FILTERS: { key: Block["kind"] | "all"; label: string }[] = [
   { key: "terminal", label: "终端" },
   { key: "question", label: "提问" },
   { key: "approval", label: "审批" },
+  // 「改动」是本轮改动的边界（交付事实），逐文件的 Diff 卡还在「全部」里。
+  { key: "changes", label: "改动" },
   { key: "result", label: "结果" },
 ];
 
