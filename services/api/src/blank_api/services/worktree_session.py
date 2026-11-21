@@ -60,6 +60,18 @@ OWNER_OTHER = "owned_by_another_task"
 OWNER_UNAVAILABLE = "unavailable"
 OWNER_RECLAIMED = "reclaimed"
 
+# 认领的租约。跨进程判断原先只认「pid 不同即他人所有」，代价是别的进程崩溃之后
+# 留下的认领会把整棵树永远锁住——用户在界面上看到「正被某个任务使用」，而那个
+# 任务其实早就没了。于是加一条续约：持有者每次用到这棵树就刷新 ``heartbeat_at``，
+# 超过 ``LEASE_SECONDS`` 没续即视为失效，下一个任务可以接手。
+#
+# 取 30 分钟而不是几分钟：续约点是「每次工具调用」，而单次工具调用本身可能跑很久
+# （全量测试、构建）。租约若短于最长的一次工具调用，正常任务会在自己干活时被
+# 别人接手——那比锁死更糟。真正崩溃的进程不需要等租约：pid 探测直接判定已死。
+LEASE_SECONDS = 1800.0
+# 续约节流：每次工具调用都写一次文件没有收益，租约的 1/3 内不重复写。
+RENEW_INTERVAL = LEASE_SECONDS / 3
+
 
 
 @dataclass
@@ -79,6 +91,9 @@ class WorktreeSession:
     # 构造得出来；真实值由 enter() 写。unavailable 时事件里必须如实说"没守住"，
     # 不能因为流程走通了就当成独占。
     owner_status: str = OWNER_OWNED
+    # 认领文件的位置。进树时算一次存下来：续约是每次工具调用都做的事，
+    # 每次都跑一遍 ``git rev-parse --absolute-git-dir`` 是白花的时间。
+    owner_file: Path | None = None
 
     @property
     def display(self) -> str:
@@ -174,7 +189,13 @@ def _owner_file(root: Path) -> Path | None:
 def read_owner(root: Path) -> dict:
     """读当前认领。读不到/形状不对一律当"没有认领"——脏文件不该挡住干活。"""
     path = _owner_file(root)
-    if path is None or not path.is_file():
+    if path is None:
+        return {}
+    return _read_owner_file(path)
+
+
+def _read_owner_file(path: Path) -> dict:
+    if not path.is_file():
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -187,58 +208,180 @@ def read_owner(root: Path) -> dict:
         "pid": int(payload.get("pid") or 0),
         "claim_id": str(payload.get("claim_id") or ""),
         "at": str(payload.get("at") or ""),
+        # 老版本写下的认领没有 heartbeat_at：退回 at 当心跳，租约照常算得出。
+        "heartbeat_at": str(payload.get("heartbeat_at") or payload.get("at") or ""),
     }
 
 
-def claim_owner(root: Path, task_id: str) -> tuple[str, dict]:
+def _parse_stamp(raw: str) -> datetime | None:
+    """认领里的时间戳。认不出就返回 None（= 不知道年龄，按"还新鲜"处理）。"""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        # 只有旧记录可能没有时区；项目里写的一律是 UTC。
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _lease_age(record: dict, *, now: datetime | None = None) -> float | None:
+    """距上次心跳多少秒。None = 认不出时间戳（不能据此判失效）。"""
+    stamp = _parse_stamp(str(record.get("heartbeat_at") or record.get("at") or ""))
+    if stamp is None:
+        return None
+    current = now or datetime.now(timezone.utc)
+    return max(0.0, (current - stamp).total_seconds())
+
+
+def _pid_alive(pid: int) -> bool | None:
+    """进程还在不在。``None`` 表示判断不了——那不等于"活着"，也不等于"死了"。
+
+    Windows 上 ``os.kill(pid, 0)`` 会把 0 当成 CTRL_C_EVENT 发给目标进程（真能把
+    人家打断），所以按平台分开：Windows 用 ``OpenProcess`` 拿句柄，
+    拿得到就是活着；``ERROR_INVALID_PARAMETER``（87）说明 pid 不存在。
+    权限不足（5）说明进程存在但归别人——那也是活着。
+    """
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        # 259 = STILL_ACTIVE。退出码恰好是 259 的进程会被误判成活着，这种情况
+        # 只会让它多占一会儿树（保守拒绝），比反过来放两个写者进去便宜。
+        still_active = 259
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(process_query_limited_information, False, int(pid))
+        if not handle:
+            error = int(kernel32.GetLastError())
+            if error == 87:  # ERROR_INVALID_PARAMETER：没有这个 pid
+                return False
+            if error == 5:  # ERROR_ACCESS_DENIED：有，但不归我管
+                return True
+            return None
+        try:
+            # 拿到句柄不等于进程还在：Windows 的进程对象要等所有句柄关掉才消失，
+            # 一个已经崩溃、但还有别的进程握着句柄的 pid 会被 OpenProcess 打开。
+            # 所以再看退出码——这一层是"崩溃留下的锁能不能收回"的关键。
+            code = ctypes.c_ulong()
+            got = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+            if got and int(code.value) != still_active:
+                return False
+            return True
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
+
+
+def _still_held(current: dict, *, now: datetime | None = None) -> bool:
+    """别人留下的认领还算不算"有人在用"。
+
+    同进程以内存会话为准（比文件可靠）；跨进程先看 pid 死活，再用租约兜底：
+    进程已经不在 → 立刻可以接手，不用等租约；活着或判断不了 → 新鲜就拒绝、
+    过期才接手。判断不了且没有时间戳时保守拒绝——放行的代价是两个写者。
+    """
+    pid = int(current.get("pid") or 0)
+    if pid == os.getpid():
+        return str(current.get("task_id") or "") in _SESSIONS
+    alive = _pid_alive(pid)
+    if alive is False:
+        return False
+    age = _lease_age(current, now=now)
+    if age is None:
+        return True
+    return age <= LEASE_SECONDS
+
+
+def _write_owner(path: Path, record: dict) -> bool:
+    """先写临时文件再替换：跨进程读到半个 JSON 会让另一个任务误判成"没有认领"。"""
+    try:
+        temp = path.with_suffix(".tmp")
+        temp.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        temp.replace(path)
+    except OSError:
+        return False
+    return True
+
+
+def claim_owner(root: Path, task_id: str, *, path: Path | None = None) -> tuple[str, dict]:
     """认领这棵工作树，返回 ``(状态, 认领信息)``。
 
     四种结果，调用方按它决定"要不要拒绝"：
 
     * ``owned``：本任务拿到了（或本来就持有）；
-    * ``reclaimed``：上一个持有者是**本进程里已经结束/消失的任务**——文件还在、
-      会话没了，说明它没走到正常释放（进程被杀、异常退出），可以接手；
+    * ``reclaimed``：上一个持有者已经不在（进程没了，或超过租约没续）——文件还在、
+      人没了，说明它没走到正常释放（崩溃、被杀、异常退出），可以接手；
     * ``owned_by_another_task``：另一个还在干活的持有者，拒绝进入；
     * ``unavailable``：读不到 git 目录或写不进去。**不能当成拿到了**——那样
       等于静默放弃唯一性；调用方要么拒绝，要么如实标注"没守住"。
-
-    跨进程时只认"pid 不同即他人所有"：拿不到可靠的进程存活信号（Windows 上
-    ``os.kill(pid, 0)`` 不可用），宁可保守拒绝——多拒绝一次可以换一个名字，
-    错误地放行则是两棵树同时在写。
     """
-    path = _owner_file(root)
+    if path is None:
+        path = _owner_file(root)
     if path is None:
         return OWNER_UNAVAILABLE, {}
-    current = read_owner(root)
+    current = _read_owner_file(path)
+    reclaimed = False
     if current and current.get("task_id") != task_id:
-        same_process = int(current.get("pid") or 0) == os.getpid()
-        alive = same_process and str(current.get("task_id") or "") in _SESSIONS
-        if alive:
+        if _still_held(current):
             return OWNER_OTHER, current
+        reclaimed = True
+    stamp = datetime.now(timezone.utc).isoformat()
     record = {
         "task_id": str(task_id),
         "pid": os.getpid(),
         "claim_id": uuid.uuid4().hex[:12],
-        "at": datetime.now(timezone.utc).isoformat(),
+        "at": stamp,
+        "heartbeat_at": stamp,
     }
-    try:
-        # 先写临时文件再替换：跨进程读到半个 JSON 会让另一个任务误判成"没有认领"。
-        temp = path.with_suffix(".tmp")
-        temp.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
-        temp.replace(path)
-    except OSError:
+    if not _write_owner(path, record):
         return OWNER_UNAVAILABLE, current
-    status = OWNER_RECLAIMED if current else OWNER_OWNED
-    return status, record
+    return (OWNER_RECLAIMED if reclaimed else OWNER_OWNED), record
 
 
-def release_owner(root: Path, task_id: str) -> None:
-    """松手。只有持有者能删——别的任务的认领不能被路过的人清掉。"""
-    current = read_owner(root)
-    if not current or current.get("task_id") != task_id:
-        return
-    path = _owner_file(root)
+def renew_owner(
+    root: Path, task_id: str, *, path: Path | None = None, interval: float = RENEW_INTERVAL
+) -> bool:
+    """给认领续一口气。只续自己的；别人的认领一个字节都不动。
+
+    节流到 ``interval`` 秒：每次工具调用都写盘没有收益，而写盘本身会失败
+    （目录只读、文件被占用），失败一次不该让工具调用变红。
+    """
     if path is None:
+        path = _owner_file(root)
+    if path is None:
+        return False
+    current = _read_owner_file(path)
+    if current.get("task_id") != task_id:
+        return False
+    age = _lease_age(current)
+    if age is not None and age < interval:
+        return True
+    stamp = datetime.now(timezone.utc).isoformat()
+    record = {**current, "pid": os.getpid(), "heartbeat_at": stamp}
+    record.setdefault("at", stamp)
+    return _write_owner(path, record)
+
+
+def release_owner(root: Path, task_id: str, *, path: Path | None = None) -> None:
+    """松手。只有持有者能删——别的任务的认领不能被路过的人清掉。"""
+    if path is None:
+        path = _owner_file(root)
+        if path is None:
+            return
+    current = _read_owner_file(path)
+    if not current or current.get("task_id") != task_id:
         return
     try:
         path.unlink()
@@ -412,13 +555,18 @@ def get(task_id: str) -> WorktreeSession | None:
 
 
 def active_root(task_id: str) -> Path | None:
-    """任务当前的根；没有会话或目录已经不在时返回 None（调用方退回原工作区）。"""
+    """任务当前的根；没有会话或目录已经不在时返回 None（调用方退回原工作区）。
+
+    顺便续一次租约：这个函数就是"这个任务正要在这棵树里干活"的信号，比任何
+    定时器都准。不续的话，一个跑得久但一直在干活的进程会被当成失效而被人接手。
+    """
     session = get(task_id)
     if session is None:
         return None
     if not session.root.is_dir():
         release(task_id)
         return None
+    renew_owner(session.root, task_id, path=session.owner_file)
     return session.root
 
 
@@ -434,7 +582,7 @@ def release(task_id: str) -> None:
     with _LOCK:
         session = _SESSIONS.pop(key, None)
     if session is not None:
-        release_owner(session.root, key)
+        release_owner(session.root, key, path=session.owner_file)
 
 
 def _validate_name(name: str) -> str:
@@ -578,8 +726,10 @@ def enter(
 
     # 认领必须在记账之前：拿不到独占就不要把这个任务记成"在这棵树里"，
     # 否则它后续的写入会绕过下面 exit 时的归属检查。
-    status, owner = claim_owner(session.root, task_id)
+    owner_path = _owner_file(session.root)
+    status, owner = claim_owner(session.root, task_id, path=owner_path)
     session.owner_status = status
+    session.owner_file = owner_path
     if status == OWNER_OTHER:
         raise ValueError(
             f"这个 worktree（{session.display}）正被任务 {str(owner.get('task_id') or '')[:8]} "

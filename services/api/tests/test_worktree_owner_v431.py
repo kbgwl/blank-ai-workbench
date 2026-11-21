@@ -95,7 +95,10 @@ def test_a_claim_left_by_a_dead_task_is_reclaimed(repo: Path):  # noqa: F811
     assert owner["task_id"] == "task-b"
 
     fresh = worktree_session.enter(repo, "task-b", path=str(first.root))
-    assert fresh.owner_status == worktree_session.OWNER_RECLAIMED
+    # 第二次认领读到的是 task-b 自己的记录（上一步已经接手了），所以是 owned 而不是
+    # reclaimed——"reclaimed"只该在真的从别人手里接过来时出现，否则模型会以为
+    # 有人刚被它挤走。enter 路径上的 reclaimed 由 test_worktree_lease_v484 覆盖。
+    assert fresh.owner_status == worktree_session.OWNER_OWNED
     assert worktree_session.read_owner(fresh.root)["task_id"] == "task-b"
 
 
@@ -142,7 +145,7 @@ async def test_the_model_is_told_when_exclusivity_could_not_be_registered(
     monkeypatch.setattr(
         worktree_session,
         "claim_owner",
-        lambda root, task_id: (worktree_session.OWNER_UNAVAILABLE, {}),
+        lambda root, task_id, **_kwargs: (worktree_session.OWNER_UNAVAILABLE, {}),
     )
 
     from tests.test_worktree_tools_v32 import _context
