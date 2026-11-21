@@ -23,7 +23,7 @@ import type { HistoryRef } from "./status";
 import { ReplyView } from "./reply";
 import { describeTool, type ToolFact } from "./tool-display";
 import type { Block, TermLine } from "./timeline";
-import { hopCode, hopCopy, hopRepeat } from "./transition-copy";
+import { hopCopy, hopLine, hopRepeat } from "./transition-copy";
 import { approvalGrantOptions, type AnswerValues, type ApprovalScope } from "./api";
 import { groupByMilestone, statusLabel, statusMark } from "./plan";
 import { BlockIcon } from "./bits";
@@ -773,20 +773,19 @@ function SystemRow({ block }: { block: Extract<Block, { kind: "system" }> }) {
  */
 function HopRow({ block }: { block: Extract<Block, { kind: "hop" }> }) {
   const copy = hopCopy(block.rule);
+  const line = hopLine(block.rule, block.why);
   const repeat = hopRepeat(block);
   const tone =
-    copy.tone === "warn" ? "text-warn" : copy.tone === "accent" ? "text-accent" : "text-muted";
-  const code = hopCode(block.rule);
+    line.tone === "warn" ? "text-warn" : line.tone === "accent" ? "text-accent" : "text-muted";
   return (
     <div
       className="flex items-center gap-2 px-1 py-0.5"
-      title={`${nodeLabel(block.from)} → ${nodeLabel(block.to)}（${block.from} → ${block.to}）`}
+      title={`${copy.label} · ${nodeLabel(block.from)} → ${nodeLabel(block.to)}（${block.from} → ${block.to}）`}
     >
-      <span className={`size-1.5 shrink-0 rounded-full ${copy.tone === "muted" ? "bg-line-strong" : "bg-current"} ${tone}`} />
-      <span className={`shrink-0 font-mono text-[12px] ${tone}`}>{copy.label}</span>
+      <span className={`size-1.5 shrink-0 rounded-full ${line.tone === "muted" ? "bg-line-strong" : "bg-current"} ${tone}`} />
+      <span className={`min-w-0 flex-1 truncate font-mono text-[12px] ${tone}`}>{line.text}</span>
+      {line.code && <span className="shrink-0 font-mono text-[10px] text-warn">{line.code} · {block.from}→{block.to}</span>}
       {repeat && <span className="shrink-0 rounded border border-line px-1 font-mono text-[10px] text-faint">{repeat}</span>}
-      {code && <span className="shrink-0 font-mono text-[10px] text-warn">{code} · {block.from}→{block.to}</span>}
-      {block.why && <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{block.why}</span>}
       <span className="shrink-0 font-mono text-[11px] text-faint">{formatClock(block.at)}</span>
     </div>
   );

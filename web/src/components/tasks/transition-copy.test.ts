@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 
 import { buildBlocks } from "./timeline.ts";
-import { hopCode, hopCopy, hopRepeat } from "./transition-copy.ts";
+import { hopCode, hopCopy, hopLine, hopRepeat } from "./transition-copy.ts";
 
 /**
  * 判据都钉在"拿掉实现就红"的位置：
@@ -64,6 +64,21 @@ test("中间隔了动作的同一条跳转不折叠，但标出是第几次", ()
   assert.equal(hopRepeat(hops[0]), "");
   assert.equal(hops[1].occurrence, 2);
   assert.equal(hopRepeat(hops[1]), "第 2 次");
+});
+
+test("一行只印一句话：有后端那句就印它，标签不当第二遍说", () => {
+  // 两句一起印（「还有待办，继续执行」+「还有 1 项待办，继续执行」）在界面上
+  // 就是同一件事说两遍，读起来像 bug。后端那句更精确，优先。
+  assert.equal(
+    hopLine("steps_remaining", "还有 1 项待办，继续执行").text,
+    "还有 1 项待办，继续执行",
+  );
+  // 后端没给话（老事件）时退回标签，不留空行。
+  assert.equal(hopLine("steps_remaining", "").text, "还有待办，继续执行");
+  // 认不出时既不编也不接后端那句——它对应的是另一条跳转。
+  const unknown = hopLine("some_future_rule", "随便什么");
+  assert.equal(unknown.text, "跳转原因没登记");
+  assert.equal(unknown.code, "some_future_rule");
 });
 
 test("没登记的 rule 不编理由：标黄、把原始码露出来", () => {

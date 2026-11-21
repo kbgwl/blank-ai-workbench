@@ -88,6 +88,26 @@ export function hopCode(rule: string): string {
 }
 
 /**
+ * 这一行到底印哪句话。
+ *
+ * 后端那句 `why` 更精确（带"还有 1 项待办""已用 2/3 轮修复"这类数字），
+ * 标签只是它的摘要——两句一起印就成了同一件事说两遍。所以：
+ *
+ * - 有 `why` → 印 `why`；标签退到悬停提示里（分类仍看得见）；
+ * - 没有 `why`（老事件、或后端没给话）→ 印标签，别留一行空白；
+ * - 认不出的 `rule` → 印"没登记"+原始码，`why` 一律不猜。
+ */
+export function hopLine(
+  rule: string,
+  why: string,
+): { text: string; tone: HopTone; code: string } {
+  const copy = hopCopy(rule);
+  if (!copy.registered) return { text: copy.label, tone: copy.tone, code: hopCode(rule) };
+  const detail = String(why ?? "").trim();
+  return { text: detail || copy.label, tone: copy.tone, code: "" };
+}
+
+/**
  * 同一段回路重复了几次，怎么写在标签后面。
  *
  * 两种重复要分开说：``repeat`` 是连着的（中间没有任何动作块），
