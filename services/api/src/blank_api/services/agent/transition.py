@@ -143,6 +143,15 @@ def explain(
                 f"校验没通过（{status}），但修复已经没有新证据可依（同一处反复失败），交给审查定性",
                 validation=status, repair_rounds=rounds, max_repair=max_repair,
             )
+        if status != "passed":
+            # 没跑过校验（validation 为空）也会走到这里：路由没有失败证据就不该再修，
+            # 但这不等于"验过了所以通过"。旧版本在这里落了 validation_passed，
+            # 时间线上写"校验通过（通过）"——用户会以为有人验过。
+            return _result(
+                frm, to, "validation_not_observed",
+                "这一步没有校验结果（没跑过，或结果没回来），没有失败证据，直接进审查",
+                validation=status,
+            )
         return _result(
             frm, to, "validation_passed", f"校验通过（{status or '通过'}），进入审查",
             validation=status,
