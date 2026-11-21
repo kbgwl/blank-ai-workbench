@@ -85,6 +85,18 @@
 `owner_status` 会如实写 `unavailable`——不许写成"看起来独占了"。持有者死在本进程里
 （会话没了、文件还在）按 `reclaimed` 自愈，否则一次崩溃会永久锁住那棵树。
 
+**租约与存活探测**（2026-11-21 补）：跨进程原先只认「pid 不同即他人所有」，于是别的
+进程被杀之后那棵树会一直被记成"正被某个任务使用"，直到有人手去删 `blank-owner.json`。
+现在两层判定（`_still_held`）：
+
+1. **pid 死活**。Windows 上不能用 `os.kill(pid, 0)`（0 会被当成 CTRL_C_EVENT 真发出去），
+   改走 `OpenProcess` + `GetExitCodeProcess`；只看 `OpenProcess` 成败不够——进程对象要等
+   所有句柄关掉才消失，崩溃留下的 pid 仍能被打开。死 → 立刻可接手，不用等租约。
+2. **租约**。`heartbeat_at` 由 `active_root()`（每次工具调用都走它）续，超过
+   `LEASE_SECONDS`（30 分钟）未续即视为失效，下一个任务按 `reclaimed` 接手。
+   取 30 分钟是因为单次工具调用本身可能跑很久；租约短于一次工具调用，正常任务会在
+   自己干活时被人接手。判断不了死活且没有时间戳的老认领保守拒绝（放行 = 两个写者）。
+
 **已知不一致**：任务停在 `waiting_approval` 时若服务中断，`agent_runs` 可能停在
 `waiting_approval` 而 `tasks` 已是 `failed`。界面看 task，所以不影响用户，但不要
 据此推断 run 状态。TTL 巡检只管 `task.status == waiting_approval` 的任务。
@@ -117,7 +129,30 @@
 `task.cancelled`，而且 `_finish` 看到已有终态会跳过自己那条——所以终态码必须在
 这三处各自带上，漏一处，用户看到的恰好就是没码的那条。
 
-## 改完怎么验
+## 这一轮为什么又跑一轮：跳转解释与它的界面（2026-11-21 起）
+
+每次节点跳转记一条 `agent.transition`：`{from, to, rule, why, ...facts}`。`rule` 是机读码，
+`why` 是只吃 state 字段（校验状态、修复轮次、待办条数）推出的那句话，不调模型
+（`services/agent/transition.py`）。三条性质：
+
+1. **判定顺序必须与 `graph.route_after_*` 逐条一致**。这是一份刻意的重复实现：路由
+   返回字符串，解释返回一句话。判据不是 22 条手写样本，而是按字段取值做笛卡尔积、
+   以真实路由为真值（`tests/test_transition_exhaustive_v485.py`）：路由怎么走，解释就
+   必须怎么说，且不许退化成 `unexplained`。这一层抓出过一个真缺陷：`validation` 为空
+   （没跑过校验）时路由照样进审查，旧解释却写"校验通过（通过）"。
+2. **认不出就不编**。没登记的跳转标 `unexplained`、`why` 留空，`emit_transition` 见到
+   `to` 对不上自己就丢弃整条——宁可少一行，也不要一行错的理由。
+3. **界面是消费方，不是第二份账**。任务页「执行过程」区读 `agent.transition`，
+   `rule → 短句` 的映射在 `web/src/components/tasks/transition-copy.ts`（与
+   `error-copy.ts` 同目录同口径）；数字仍用后端那句 `why`，前端不重算。连着同一条
+   折叠成「连续 N 次」，隔开出现的标「第 N 次」——后者就是"为什么又跑一轮"的答案。
+   认不出的 rule 标黄并露出原始码与 `from→to`。后端加分支而前端没登记，判据会红
+   （`transition-copy.test.ts` 直接读 `transition.py` 的 `_result` 字面量）。
+
+对照表式的一致性是上一版（`test_transition_explain_v432.py`）的遗留，仍然保留：
+它带着"期望的机读码"，与穷举那条互为二重口径（一个防漂移，一个防两边一起算错）。
+
+
 
 最小集（按改动范围挑，别一上来跑全量 18 分钟）：
 

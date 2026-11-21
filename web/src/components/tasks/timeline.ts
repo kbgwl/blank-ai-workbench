@@ -162,6 +162,28 @@ export type Block =
       title: string;
       detail: string;
       tone: "muted" | "warn" | "danger" | "accent";
+    }
+  | {
+      /**
+       * 一次节点跳转：`agent.transition` 折成一行。它回答的是"为什么又跑一轮"——
+       * 计划拆好、待办没做完、校验没过在修、审查驳回退回，四种完全不同的原因，
+       * 以前在界面上长得一模一样（都是"工具卡片又刷了一遍"）。
+       */
+      kind: "hop";
+      key: string;
+      seq: number;
+      at: string;
+      /** 从哪个节点跳到哪个节点。认不出 rule 时靠它反查。 */
+      from: string;
+      to: string;
+      /** 后端机读码；空串表示老事件/字段缺失，按"没登记"显示。 */
+      rule: string;
+      /** 后端由事实推出的那句中文（带数字），前端不重算。 */
+      why: string;
+      /** 连续同一条跳转折进这一行了几次。1 = 没折叠。 */
+      repeat: number;
+      /** 这一轮里同一跳转第几次出现——`第 3 次` 就是"为什么又跑一轮"的答案。 */
+      occurrence: number;
     };
 
 const START_WORDS = ["started", "requested", "call", "invoked", "pending", "begin"];
@@ -588,6 +610,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
   const blocks: Block[] = [];
   const openToolIndex = new Map<string, number>();
   const openApprovalIndex = new Map<string, number>();
+  const hopSeen = new Map<string, number>();
   let lastTerminalIndex: number | null = null;
 
   const push = (block: Block): number => {
@@ -886,6 +909,38 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
       };
       if (block.status === "running") openToolIndex.set(name, push(block));
       else push(block);
+      return;
+    }
+
+    // 节点跳转：一行说清"为什么又跑一轮"。
+    // 放在这里（而不是 describeSystem 里）是因为它要折叠：连续同一条跳转合成一行，
+    // 隔开出现的同一条则标成「第 N 次」——两种都在回答同一个问题，措辞不能一样。
+    if (rawType === "agent.transition") {
+      const from = textOf(event.payload, "from");
+      const to = textOf(event.payload, "to");
+      const rule = textOf(event.payload, "rule");
+      const why = textOf(event.payload, "why");
+      const token = `${rule}|${from}|${to}`;
+      const occurrence = (hopSeen.get(token) ?? 0) + 1;
+      hopSeen.set(token, occurrence);
+      const prev = blocks[blocks.length - 1];
+      // 只有紧挨着（中间没有任何动作块）才算「连续」：中间隔了工具调用就是另一轮了。
+      if (prev?.kind === "hop" && prev.rule === rule && prev.from === from && prev.to === to) {
+        blocks[blocks.length - 1] = { ...prev, repeat: prev.repeat + 1, why: why || prev.why, occurrence };
+        return;
+      }
+      push({
+        kind: "hop",
+        key,
+        seq: event.seq,
+        at: event.createdAt,
+        from,
+        to,
+        rule,
+        why,
+        repeat: 1,
+        occurrence,
+      });
       return;
     }
 

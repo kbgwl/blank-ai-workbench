@@ -44,6 +44,8 @@ type Props = {
 
 const FILTERS: { key: Block["kind"] | "all"; label: string }[] = [
   { key: "all", label: "全部" },
+  // 「跳转」默认在「全部」里可见：一行一句，回答"为什么又跑一轮"。
+  { key: "hop", label: "跳转" },
   { key: "plan", label: "计划" },
   { key: "tool", label: "工具调用" },
   { key: "terminal", label: "终端" },

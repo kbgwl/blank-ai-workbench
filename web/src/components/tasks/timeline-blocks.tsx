@@ -23,6 +23,7 @@ import type { HistoryRef } from "./status";
 import { ReplyView } from "./reply";
 import { describeTool, type ToolFact } from "./tool-display";
 import type { Block, TermLine } from "./timeline";
+import { hopCode, hopCopy, hopRepeat } from "./transition-copy";
 import { approvalGrantOptions, type AnswerValues, type ApprovalScope } from "./api";
 import { groupByMilestone, statusLabel, statusMark } from "./plan";
 import { BlockIcon } from "./bits";
@@ -760,6 +761,37 @@ function SystemRow({ block }: { block: Extract<Block, { kind: "system" }> }) {
   );
 }
 
+/**
+ * 一次节点跳转：一行，回答"为什么又跑一轮"。
+ *
+ * 左边那句短话来自 `rule`（机读码翻出来的），右边那半句是后端由事实推出的原句
+ * （"校验没通过（failed），回执行修（已用 2/3 轮修复）"）——数字不在这里重算，
+ * 免得界面和事件里的账对不上。
+ *
+ * 认不出的 `rule` 不静默吞掉：标黄、把原始码和 from→to 一起放出来。时间线上
+ * 出现一行"看起来合理"的错解释，比没有解释更糟。
+ */
+function HopRow({ block }: { block: Extract<Block, { kind: "hop" }> }) {
+  const copy = hopCopy(block.rule);
+  const repeat = hopRepeat(block);
+  const tone =
+    copy.tone === "warn" ? "text-warn" : copy.tone === "accent" ? "text-accent" : "text-muted";
+  const code = hopCode(block.rule);
+  return (
+    <div
+      className="flex items-center gap-2 px-1 py-0.5"
+      title={`${nodeLabel(block.from)} → ${nodeLabel(block.to)}（${block.from} → ${block.to}）`}
+    >
+      <span className={`size-1.5 shrink-0 rounded-full ${copy.tone === "muted" ? "bg-line-strong" : "bg-current"} ${tone}`} />
+      <span className={`shrink-0 font-mono text-[12px] ${tone}`}>{copy.label}</span>
+      {repeat && <span className="shrink-0 rounded border border-line px-1 font-mono text-[10px] text-faint">{repeat}</span>}
+      {code && <span className="shrink-0 font-mono text-[10px] text-warn">{code} · {block.from}→{block.to}</span>}
+      {block.why && <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{block.why}</span>}
+      <span className="shrink-0 font-mono text-[11px] text-faint">{formatClock(block.at)}</span>
+    </div>
+  );
+}
+
 export function TimelineBlock({
   block,
   busyApprovalKey,
@@ -811,6 +843,8 @@ export function TimelineBlock({
       return <BoundaryCard block={block} />;
     case "change":
       return <ChangeCard block={block} onHighlight={onHighlight} />;
+    case "hop":
+      return <HopRow block={block} />;
     default:
       return <SystemRow block={block} />;
   }
