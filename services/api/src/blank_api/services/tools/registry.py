@@ -88,6 +88,7 @@ DEFERRED_TOOLS = frozenset(
         # 工作树会话只在用户明确要求隔离时用；常驻会把"要不要开一棵树"塞进每轮菜单。
         "enter_worktree",
         "exit_worktree",
+        "restore_worktree",
         # 工作流脚本只在用户明确要求多代理编排时才该出现；默认收着，靠 tool_search 拉。
         "workflow",
         # 监控是"盯住一个还在输出的东西"的专门能力，不是每轮都要用的常驻工具。
@@ -236,6 +237,7 @@ ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "enter_worktree": ("worktree", "工作树", "隔离目录", "新分支", "enter worktree"),
     "exit_worktree": ("worktree", "工作树", "退出工作树", "合并工作树", "exit worktree", "keep", "remove"),
+    "restore_worktree": ("worktree", "工作树", "回滚", "撤销改动", "恢复基准", "restore", "rollback", "revert"),
     "enter_plan_mode": ("计划模式", "先调研", "只读", "plan mode", "enter plan"),
     "exit_plan_mode": ("退出计划", "开始执行", "确认计划", "exit plan", "plan approved"),
     "cron_create": (

@@ -192,11 +192,14 @@ async def test_enter_creates_branch_tree_and_moves_the_root(repo: Path) -> None:
         "branch": "blank/worktree-feat",
         # 这个仓库没有远端跟踪分支：fresh 默认回落本地 HEAD。
         "base_ref": "HEAD",
+        # 回滚的基准：进树时那一版，事件与工具结果里都要能核对。
+        "baseline": data["baseline"],
         "path": ".blank-worktrees/feat",
         "owned": True,
         # 写者认领的结果也要回给模型：unavailable 时它得知道自己没有独占。
         "owner_status": "owned",
     }
+    assert len(data["baseline"]) == 40
     assert _git(repo, "rev-parse", "--verify", "refs/heads/blank/worktree-feat").returncode == 0
     assert len(recorder.events) == 1
     event, node, payload = recorder.events[0]

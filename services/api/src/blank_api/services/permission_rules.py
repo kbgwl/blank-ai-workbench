@@ -102,6 +102,7 @@ LOCAL_TOOL_NAMES: frozenset[str] = frozenset(
         "browser_check",
         "apply_patch", "cron_create", "cron_delete", "cron_list", "edit_file",
         "enter_plan_mode", "enter_worktree", "exit_plan_mode", "exit_worktree",
+        "restore_worktree",
         "git", "glob", "list_agents", "list_files", "list_mcp_resources", "lsp",
         "memory_search", "memory_write", "monitor", "notebook_edit", "propose_goal",
         "propose_skills", "read_file", "read_mcp_resource", "read_mcp_resource_dir",

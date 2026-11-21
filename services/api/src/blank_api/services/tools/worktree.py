@@ -21,6 +21,11 @@ def _exit_risk(arguments: dict) -> str:
     return "high" if str(arguments.get("action") or "") == "remove" else "medium"
 
 
+def _restore_risk(arguments: dict) -> str:
+    # 只看不动：低。真回滚会退掉提交与未提交改动：高。
+    return "high" if str(arguments.get("action") or "") == "restore" else "low"
+
+
 def _switch_root(context: ToolContext, root: Path) -> None:
     """把任务根切到 root。
 
@@ -147,6 +152,114 @@ async def _exit_worktree(context: ToolContext, arguments: dict) -> ToolOutcome:
     )
 
 
+async def _restore_worktree(context: ToolContext, arguments: dict) -> ToolOutcome:
+    """回滚到进树时的基准：先看清改了什么（plan），再退（restore）。
+
+    分两步不是为了好看：``restore`` 会退掉已提交的改动，属于不可逆动作，
+    调用方得先看到那份改动清单再决定。``plan`` 只读。
+    """
+    action = str(arguments.get("action") or "").strip()
+    if action not in ("plan", "restore"):
+        return fail("error", "action 只能是 plan 或 restore")
+    raw_paths = arguments.get("paths")
+    if raw_paths is None:
+        paths: list[str] | None = None
+    elif isinstance(raw_paths, list):
+        paths = [str(item) for item in raw_paths]
+    else:
+        return fail("error", "paths 必须是路径数组；整棵回滚不传这个参数")
+    name = str(arguments.get("worktree") or "").strip()
+
+    try:
+        if action == "plan":
+            report = await asyncio.to_thread(
+                worktree_session.plan_restore,
+                context.task_id,
+                name=name,
+                search=Path(context.root),
+            )
+        else:
+            report = await asyncio.to_thread(
+                worktree_session.restore,
+                context.task_id,
+                paths=paths,
+                name=name,
+                search=Path(context.root),
+            )
+    except ValueError as exc:
+        return fail("error", str(exc))
+
+    if action == "plan":
+        if not report.changed:
+            return ok(
+                f"相对基准 {report.baseline[:8]} 没有改动，无需回滚。",
+                baseline=report.baseline,
+                changed=[],
+                clean=report.clean,
+                action=action,
+            )
+        listed = "\n".join(f"- {item}" for item in report.changed[:40])
+        more = "" if len(report.changed) <= 40 else f"\n…（共 {len(report.changed)} 个）"
+        return ok(
+            f"相对基准 {report.baseline[:8]} 有 {len(report.changed)} 个路径被改动：\n"
+            f"{listed}{more}\n"
+            '确认要回滚就再调用一次 action="restore"；只退其中几个用 paths 指定。',
+            baseline=report.baseline,
+            changed=report.changed,
+            clean=report.clean,
+            revision=report.revision,
+            action=action,
+        )
+
+    session = worktree_session.get(context.task_id)
+    if session is not None:
+        # 盘上的内容已经变了：文件读缓存必须作废，否则下一次读取拿到的还是旧版本。
+        _switch_root(context, session.root)
+    await _record(
+        context,
+        "worktree.restored",
+        {
+            "action": action,
+            "baseline": report.baseline,
+            "changed": report.changed,
+            "restored": report.restored,
+            "removed": report.removed,
+            "commits_dropped": report.commits_dropped,
+            "dirty_after": report.dirty_after,
+            "revision": report.revision,
+            "clean": report.clean,
+        },
+    )
+
+    parts = [f"已回滚到基准 {report.baseline[:8]}"]
+    if report.restored:
+        parts.append(f"恢复 {len(report.restored)} 个文件")
+    if report.removed:
+        parts.append(f"删除 {len(report.removed)} 个基准之后新建的文件")
+    if report.commits_dropped:
+        parts.append(f"退掉 {report.commits_dropped} 个提交")
+    text = "，".join(parts) + "。"
+    if report.clean:
+        text += "工作树已干净。"
+    else:
+        text += (
+            f"但仍有 {len(report.dirty_after)} 个路径有改动（可能是基准之前就存在的未跟踪文件）："
+            + "、".join(report.dirty_after[:5])
+        )
+    return ok(
+        text,
+        baseline=report.baseline,
+        changed=report.changed,
+        restored=report.restored,
+        removed=report.removed,
+        commits_dropped=report.commits_dropped,
+        dirty_after=report.dirty_after,
+        revision=report.revision,
+        clean=report.clean,
+        action=action,
+    )
+
+
 def worktree_tools() -> list[ToolDefinition]:
     return [
         ToolDefinition(
@@ -200,6 +313,39 @@ def worktree_tools() -> list[ToolDefinition]:
             risk_level="medium",
             risk_for=_exit_risk,
             handler=_exit_worktree,
+            timeout_seconds=180.0,
+        ),
+        ToolDefinition(
+            name="restore_worktree",
+            description=(
+                "把工作树回滚到 enter_worktree 时记下的基准。action=\"plan\" 先列相对基准"
+                "改动的路径（含提交过的与 shell 新建的），action=\"restore\" 才真的回滚——"
+                "整棵回滚会退掉本任务在这棵树里做的提交。只退部分文件用 paths 指定。"
+                "没有基准线的树（老版本或手动建的）会拒绝，不做猜测性回滚。"
+            ),
+            input_schema={
+                "type": "object",
+                "required": ["action"],
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["plan", "restore"],
+                        "description": "plan 只看改动清单；restore 真的回滚",
+                    },
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "只回滚这些路径（工作树内相对路径）；不传表示整棵回滚",
+                    },
+                    "worktree": {
+                        "type": "string",
+                        "description": "不在会话里时，用 .blank-worktrees/ 下的目录名指定那棵树",
+                    },
+                },
+            },
+            risk_level="high",
+            risk_for=_restore_risk,
+            handler=_restore_worktree,
             timeout_seconds=180.0,
         ),
     ]

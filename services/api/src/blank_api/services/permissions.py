@@ -99,6 +99,8 @@ ARGUMENT_SCOPED_TOOLS = frozenset(
         "notebook_edit",
         "spawn_agents",
         "exit_worktree",
+        # restore_worktree 的风险同样由 action 算：plan 只读、restore 会退提交。
+        "restore_worktree",
     }
 )
 

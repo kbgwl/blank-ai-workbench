@@ -25,9 +25,10 @@ import re
 import subprocess
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
 # Claude 的命名约束：按 / 分段，每段只允许字母、数字、点、下划线、短横线，总计 64 字符。
 # 我们不允许分段：工作树目录名就是标签，嵌一层只会让退出时的定位更绕。
@@ -53,6 +54,10 @@ MAX_REPORTED_ENTRIES = 20
 # **不在工作树里**——写进工作树根会让 ``git status`` 多一个未跟踪文件，
 # 我们自己的 ``_dirty_entries`` 会把它算成"有未提交改动"，remove 直接被自己拦住。
 OWNER_FILENAME = "blank-owner.json"
+# 基准线记录（baseline）。和认领文件放在同一个 git 目录，但**生命周期不同**：
+# 认领随任务结束就松开（否则下一棵树永远进不去），基准线要留到回滚做完——
+# 任务收尾之后用户才发现改错了，这时候恰恰最需要它。合成一个文件就只能二选一。
+BASELINE_FILENAME = "blank-baseline.json"
 # 认领结果。``unavailable`` 不是失败，是"读不到/写不进 git 目录"——那种时候
 # 不能假装拿到了锁，调用方要按"不知道"处理而不是按"独占"处理。
 OWNER_OWNED = "owned"
@@ -113,6 +118,8 @@ class WorktreeSession:
             "repo": str(self.repo),
             "branch": self.branch,
             "base_commit": self.base_commit,
+            # 回滚的基准就是这一格：事件里带上它，事后能直接 git diff 复核。
+            "baseline": self.base_commit,
             "base_ref": self.base_ref,
             "owned": self.owned,
             "owner_status": self.owner_status,
@@ -124,6 +131,7 @@ class WorktreeSession:
             "name": self.name,
             "branch": self.branch,
             "base_ref": self.base_ref,
+            "baseline": self.base_commit,
             "path": self.display,
             "owned": self.owned,
             # 写者唯一的结果也要给模型看：unavailable 时它照常能干活，但得知道
@@ -194,6 +202,14 @@ def read_owner(root: Path) -> dict:
     return _read_owner_file(path)
 
 
+def _baseline_file(root: Path, owner_path: Path | None = None) -> Path | None:
+    """基准线记录的位置：与认领文件同一个 git 目录（按工作树分、不进工作树）。"""
+    anchor = owner_path or _owner_file(root)
+    if anchor is None:
+        return None
+    return anchor.parent / BASELINE_FILENAME
+
+
 def _read_owner_file(path: Path) -> dict:
     if not path.is_file():
         return {}
@@ -210,6 +226,8 @@ def _read_owner_file(path: Path) -> dict:
         "at": str(payload.get("at") or ""),
         # 老版本写下的认领没有 heartbeat_at：退回 at 当心跳，租约照常算得出。
         "heartbeat_at": str(payload.get("heartbeat_at") or payload.get("at") or ""),
+        # 基准线：老记录没有这个键，回滚时会退回 blank-baseline.json。
+        "baseline": str(payload.get("baseline") or ""),
     }
 
 
@@ -315,7 +333,9 @@ def _write_owner(path: Path, record: dict) -> bool:
     return True
 
 
-def claim_owner(root: Path, task_id: str, *, path: Path | None = None) -> tuple[str, dict]:
+def claim_owner(
+    root: Path, task_id: str, *, path: Path | None = None, baseline: str = ""
+) -> tuple[str, dict]:
     """认领这棵工作树，返回 ``(状态, 认领信息)``。
 
     四种结果，调用方按它决定"要不要拒绝"：
@@ -345,6 +365,10 @@ def claim_owner(root: Path, task_id: str, *, path: Path | None = None) -> tuple[
         "at": stamp,
         "heartbeat_at": stamp,
     }
+    # 基准线写进认领记录（用户要求"进 blank-owner.json"）：它同时说明"这个任务从哪一版
+    # 开始改的"，审计时不用再去找第二个文件。持久的副本另存在 blank-baseline.json。
+    if baseline:
+        record["baseline"] = str(baseline)
     if not _write_owner(path, record):
         return OWNER_UNAVAILABLE, current
     return (OWNER_RECLAIMED if reclaimed else OWNER_OWNED), record
@@ -389,6 +413,334 @@ def release_owner(root: Path, task_id: str, *, path: Path | None = None) -> None
         # 删不掉不影响正确性：下次认领会看到"持有者在自己进程里但会话已没了"，
         # 按 reclaimed 接手。
         pass
+
+
+# ── 基准线与回滚 ────────────────────────────────────────────────────────
+# 隔离做得再好，也只解决"别把主工作区改坏"；它不回答"改错了怎么退回去"。
+# 提交之后发现问题，靠人手动 revert 是唯一出路——而人往往不记得这一轮到底碰过
+# 哪几个文件。所以进树时记一次基准（sha + 当时的未跟踪文件集），回滚按这份记录算
+# 改动集合：工具改的、shell 改的、提交过的都算，因为它们都相对同一个基准。
+
+
+@dataclass
+class RestoreReport:
+    """回滚结果。``clean`` 是回滚后的实测值，不是"我以为干净了"。"""
+
+    root: Path
+    baseline: str
+    changed: list[str] = field(default_factory=list)
+    restored: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+    commits_dropped: int = 0
+    dirty_after: list[str] = field(default_factory=list)
+    revision: str = ""
+
+    @property
+    def clean(self) -> bool:
+        return not self.dirty_after
+
+    def as_dict(self) -> dict:
+        return {
+            "root": str(self.root),
+            "baseline": self.baseline,
+            "changed": list(self.changed),
+            "restored": list(self.restored),
+            "removed": list(self.removed),
+            "commits_dropped": int(self.commits_dropped),
+            "dirty_after": list(self.dirty_after),
+            "revision": self.revision,
+            "clean": self.clean,
+        }
+
+
+def write_baseline(
+    root: Path,
+    task_id: str,
+    *,
+    baseline: str,
+    base_ref: str = "",
+    branch: str = "",
+    untracked: list[str] | None = None,
+    path: Path | None = None,
+) -> Path | None:
+    """记一次基准线。写不进去返回 None（调用方要如实说"回滚没底"）。
+
+    ``untracked`` 是进树那一刻就已经存在的未跟踪文件。回滚只删"基准之后新增的"，
+    不碰它们——path 进入的树里可能有别人没提交的草稿，那不是本任务改的。
+    """
+    target = _baseline_file(root, path)
+    if target is None:
+        return None
+    record = {
+        "task_id": str(task_id),
+        "baseline": str(baseline),
+        "base_ref": str(base_ref or ""),
+        "branch": str(branch or ""),
+        "untracked": sorted(str(name) for name in (untracked or [])),
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return target if _write_owner(target, record) else None
+
+
+def read_baseline(root: Path, *, path: Path | None = None) -> dict:
+    """读基准线。没有记录返回空 dict——"不知道基准"必须与"基准就是当前"分开。"""
+    target = _baseline_file(root, path)
+    if target is None or not target.is_file():
+        return {}
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        "task_id": str(payload.get("task_id") or ""),
+        "baseline": str(payload.get("baseline") or ""),
+        "base_ref": str(payload.get("base_ref") or ""),
+        "branch": str(payload.get("branch") or ""),
+        "untracked": [str(name) for name in (payload.get("untracked") or []) if str(name).strip()],
+        "at": str(payload.get("at") or ""),
+    }
+
+
+def _status_entries(path: Path) -> list[tuple[str, str]]:
+    """``(状态码, 相对路径)``。未跟踪与已暂存新增分开给：前者要删，后者要 checkout。"""
+    result = _run_git(["status", "--porcelain", "-z", "-uall"], path)
+    if result.code != 0:
+        return []
+    parts = result.out.split("\0")
+    entries: list[tuple[str, str]] = []
+    index = 0
+    while index < len(parts):
+        entry = parts[index]
+        index += 1
+        if len(entry) < 4:
+            continue
+        status, relative = entry[:2], entry[3:]
+        if "R" in status or "C" in status:
+            index += 1
+        entries.append((status, relative))
+    return entries
+
+
+def _untracked_entries(path: Path) -> list[str]:
+    return [name for status, name in _status_entries(path) if status == "??"]
+
+
+def changed_paths(root: Path, baseline: str, *, preexisting: Iterable[str] = ()) -> dict:
+    """相对基准改动的路径集合：已跟踪的（改/删/新增并暂存）+ 基准之后新建的未跟踪文件。
+
+    ``git diff`` 只看已跟踪的；shell 里新建的文件只能从 status 里拿。两路都要，
+    否则"回滚漏掉新建文件"——那恰好是最常见的改法（加一个模块）。
+    """
+    if not baseline:
+        return {"tracked": [], "added": [], "all": []}
+    tracked: list[str] = []
+    for args in (
+        ["diff", "--name-only", "--no-renames", baseline, "--"],
+        ["diff", "--name-only", "--no-renames", "--cached", baseline, "--"],
+    ):
+        result = _run_git(args, root)
+        if result.code != 0:
+            continue
+        for line in result.out.splitlines():
+            name = line.strip()
+            if name and name not in tracked:
+                tracked.append(name)
+    known = {str(name) for name in preexisting}
+    added = [name for name in _untracked_entries(root) if name not in known]
+    union: list[str] = []
+    for name in [*tracked, *added]:
+        if name not in union:
+            union.append(name)
+    return {"tracked": tracked, "added": added, "all": union}
+
+
+def _safe_relative(root: Path, names: Iterable[str]) -> tuple[list[str], list[str]]:
+    """把调用方给的路径折成工作树内相对路径；越界的单独返回（调用方拒绝）。"""
+    inside: list[str] = []
+    outside: list[str] = []
+    resolver = root.resolve()
+    for raw in names:
+        text = str(raw or "").strip().replace("\\", "/")
+        if not text:
+            continue
+        candidate = Path(text)
+        if candidate.is_absolute():
+            try:
+                text = candidate.resolve().relative_to(resolver).as_posix()
+            except (OSError, ValueError):
+                outside.append(str(raw))
+                continue
+        normalized = os.path.normpath(text).replace("\\", "/")
+        if normalized.startswith("../") or normalized == ".." or normalized.startswith("/"):
+            outside.append(str(raw))
+            continue
+        inside.append(normalized)
+    return inside, outside
+
+
+def _restore_target(
+    task_id: str, *,
+    name: str = "",
+    search: Path | str | None = None,
+) -> tuple[Path, str, dict, dict]:
+    """定位要回滚的树与它的基准，顺带查一遍归属。
+
+    返回 ``(root, baseline, baseline_record, owner)``。三种拒绝集中在这里，
+    免得 plan 与 restore 两边各写一份、再走偏成"plan 也悄悄回滚了"。
+    """
+    key = str(task_id or "")
+    session = get(key)
+    root: Path | None = session.root if session is not None else None
+    if root is None:
+        label = str(name or "").strip()
+        if not label:
+            raise ValueError(
+                "当前不在 worktree 会话里。请传 worktree 名字（.blank-worktrees/ 下的目录名）"
+                "指定要回滚哪一棵树。"
+            )
+        base = Path(search).resolve() if search is not None else Path.cwd()
+        # 用拥有它的主仓库当搜索根：search 很可能本身就是某棵工作树（调用方在树里），
+        # 直接拼 .blank-worktrees/ 会得到"树里套树"的路径。
+        repo = _owner_repo(base) or _repo_of(base)
+        if repo is None:
+            raise ValueError(f"找不到工作树「{label}」所属的仓库。")
+        candidate = repo / WORKTREE_DIRNAME / _validate_name(label)
+        if not candidate.is_dir():
+            raise ValueError(f"工作树「{label}」不存在：{candidate}")
+        root = candidate
+
+    owner = read_owner(root)
+    owner_task = str(owner.get("task_id") or "")
+    if owner_task and owner_task != key and _still_held(owner):
+        raise ValueError(
+            f"这棵 worktree 现在归任务 {owner_task[:8]} 使用，不能回滚："
+            "回滚会把对方正在写的改动一起退掉。等那个任务结束，或换一棵树。"
+        )
+
+    record = read_baseline(root)
+    baseline = str(record.get("baseline") or owner.get("baseline") or "")
+    if not baseline:
+        raise ValueError(
+            "这棵工作树没有基准线记录（可能是老版本建的树，或者手动 git worktree add 的）。"
+            "不知道退到哪一版时不做回滚——请手动 git reset --hard <目标提交>。"
+        )
+    return root, baseline, record, owner
+
+
+def plan_restore(
+    task_id: str, *,
+    name: str = "",
+    search: Path | str | None = None,
+) -> RestoreReport:
+    """只算"相对基准改了哪些路径"，一个字节都不动。
+
+    与 ``restore`` 共用定位与拒绝逻辑：两边口径一旦不一致，"先看一眼再决定"就没意义了。
+    """
+    root, baseline, record, _owner = _restore_target(task_id, name=name, search=search)
+    facts = changed_paths(root, baseline, preexisting=record.get("untracked") or [])
+    report = RestoreReport(
+        root=root,
+        baseline=baseline,
+        changed=list(facts["all"]),
+        revision=_head_commit(root),
+    )
+    return report
+
+
+def restore(
+    task_id: str,
+    *,
+    paths: Iterable[str] | None = None,
+    name: str = "",
+    search: Path | str | None = None,
+) -> RestoreReport:
+    """把工作树回滚到基准线：整棵回滚（不传 paths）或只回滚指定路径。
+
+    拒绝的三种情况都要说清，不能默默跳过：
+
+    * 这棵树正被**另一个还活着的任务**持有——回滚等于把对方正在写的东西抽走；
+    * 没有基准线记录（老树、手动建的树）——不知道退到哪一版，猜一个比拒绝更糟；
+    * 路径越出工作树根——那是别的任务的地盘。
+
+    整棵回滚会 ``git reset --hard <baseline>``：已提交的改动也一并退掉（这正是
+    "已提交的改动没有回去的路"要修的那条），所以它必须是显式请求，不能顺手做。
+    """
+    root, baseline, record, _owner = _restore_target(task_id, name=name, search=search)
+    facts = changed_paths(root, baseline, preexisting=record.get("untracked") or [])
+    selected = list(facts["all"])
+    if paths is not None:
+        wanted, outside = _safe_relative(root, paths)
+        if outside:
+            raise ValueError(
+                "这些路径不在工作树里，拒绝回滚：" + "、".join(outside[:5])
+            )
+        selected = [name for name in selected if name in set(wanted)]
+        missing = [name for name in wanted if name not in set(facts["all"])]
+        if missing:
+            raise ValueError(
+                "这些路径相对基准没有改动，无需回滚：" + "、".join(missing[:5])
+            )
+
+    report = RestoreReport(
+        root=root,
+        baseline=baseline,
+        changed=list(selected),
+        revision=_head_commit(root),
+    )
+    if not selected:
+        report.dirty_after = _untracked_entries(root) + [
+            name for status, name in _status_entries(root) if status != "??"
+        ]
+        report.revision = _head_commit(root)
+        return report
+
+    restored: list[str] = []
+    removed: list[str] = []
+    whole = paths is None
+    ahead = _commits_ahead(root, baseline)
+    if whole and ahead:
+        # 已提交的改动：只有整棵回滚才动历史。--hard 同时清掉工作区与索引，
+        # 之后再把"基准之后新建的文件"删掉（reset --hard 不删未跟踪文件）。
+        dropped = _run_git(["reset", "--hard", baseline], root)
+        if dropped.code != 0:
+            raise ValueError(f"回滚失败：{_error_text(dropped, 'git reset --hard 返回非零退出码')}")
+        report.commits_dropped = ahead
+
+    for name in selected:
+        if name in facts["added"]:
+            # 基准里没有这个文件：回滚的正确形态是"不存在"，不是"恢复成空文件"。
+            target = (root / name).resolve()
+            try:
+                target.relative_to(root.resolve())
+            except ValueError:
+                continue
+            try:
+                if target.is_file() or target.is_symlink():
+                    target.unlink()
+                    removed.append(name)
+            except OSError:
+                continue
+            continue
+        result = _run_git(["checkout", baseline, "--", name], root)
+        if result.code == 0:
+            restored.append(name)
+        else:
+            raise ValueError(f"回滚 {name} 失败：{_error_text(result, 'git checkout 返回非零退出码')}")
+
+    report.restored = restored
+    report.removed = removed
+    remaining = _status_entries(root)
+    # 基准之前就存在的未跟踪文件不算脏：它们不是本任务改的，回滚不该动它们。
+    known = set(record.get("untracked") or [])
+    report.dirty_after = [name for _status, name in remaining if name not in known]
+    report.revision = _head_commit(root)
+    return report
 
 
 def _error_text(result: _GitResult, fallback: str) -> str:
@@ -727,7 +1079,11 @@ def enter(
     # 认领必须在记账之前：拿不到独占就不要把这个任务记成"在这棵树里"，
     # 否则它后续的写入会绕过下面 exit 时的归属检查。
     owner_path = _owner_file(session.root)
-    status, owner = claim_owner(session.root, task_id, path=owner_path)
+    # 基准线：新建的树用建树时那条基准；path 进入的树用进树那一刻的 HEAD。
+    # 没有它就无从回答"这一轮相对哪一版改了什么"，回滚也就只能靠人。
+    baseline = session.base_commit or _head_commit(session.root)
+    preexisting = _untracked_entries(session.root)
+    status, owner = claim_owner(session.root, task_id, path=owner_path, baseline=baseline)
     session.owner_status = status
     session.owner_file = owner_path
     if status == OWNER_OTHER:
@@ -735,6 +1091,17 @@ def enter(
             f"这个 worktree（{session.display}）正被任务 {str(owner.get('task_id') or '')[:8]} "
             "使用，同一棵工作树不能有两个写者：两边会互相覆盖对方的改动，"
             "最后的验证结论对谁都不成立。请用 name 新建一棵，或等那个任务结束。"
+        )
+    if baseline:
+        session.base_commit = baseline
+        write_baseline(
+            session.root,
+            task_id,
+            baseline=baseline,
+            base_ref=session.base_ref,
+            branch=session.branch,
+            untracked=preexisting,
+            path=owner_path,
         )
 
     with _LOCK:
