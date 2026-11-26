@@ -14,7 +14,7 @@ import {
   type Project,
   type Task,
 } from "@/components/tasks/api";
-import { criteriaText, evidenceDigest, hasEvidence, type EvidenceDigest } from "./format";
+import { criteriaChipText, criteriaText, evidenceDigest, hasEvidence, type EvidenceDigest } from "./format";
 
 const STATUS_LABEL: Record<string, string> = {
   draft: "草稿",
@@ -255,7 +255,7 @@ function DigestChips({ digest }: { digest: EvidenceDigest }) {
   return (
     <span className="hidden shrink-0 items-center gap-1 md:flex">
       <span className="rounded border border-line bg-surface-2 px-1 py-0.5 font-mono text-[9px] text-muted">
-        {digest.covered}/{digest.criteriaTotal} 验收
+        {criteriaChipText(digest)}
       </span>
       <span className="rounded border border-line bg-surface-2 px-1 py-0.5 font-mono text-[9px] text-muted">
         {digest.files} 文件

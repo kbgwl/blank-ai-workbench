@@ -50,7 +50,7 @@ jobs:
       # 1 与 2 一律拦住发布——「今天没法判」绝不允许伪装成「通过」；dry-run 也过闸，读数不掺水。
       # 阈值 0.938 的实测出处写在 evals/gate_config.json。本 job 从未在 GitHub runner 上真跑过；
       # 本地等价复现：node scripts/local_ci.mjs --job eval-gate --with-eval-run。
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: 门禁 · 后端依赖与隔离库
         run: |
           uv sync
@@ -64,6 +64,7 @@ jobs:
           BLANK_SETTINGS_FILE=/tmp/eval_gate_settings.json \
           BLANK_SECRET_KEY_FILE=/tmp/eval_gate_secret.key \
           BLANK_SANDBOX_ENABLED=false \
+          BLANK_RATE_LIMIT_RPM=0 \
           uv run uvicorn blank_api.app:app --host 127.0.0.1 --port 8050 > /tmp/api.log 2>&1 &
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:8050/api/v1/health | grep -q connected && exit 0

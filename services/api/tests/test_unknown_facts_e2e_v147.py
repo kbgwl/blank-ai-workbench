@@ -21,6 +21,7 @@ from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
     create_provider,
     create_task,
     env,
+    settle,
 )
 
 PHONE = "138-1234-5678"
@@ -83,10 +84,14 @@ async def test_the_homepage_waits_for_the_phone_number(env, workspace):  # noqa:
             f"{API}/tasks/{task_id}/approval",
             json={"approve": True, "provider_id": provider_id, "scope": "once"},
         )
-        assert approved.status_code == 200, approved.text
-        after = approved.json()
+        assert approved.status_code == 202, approved.text
+        # 202 只是入队；等后台恢复跑完再读任务与产物。
+        await settle()
 
-    assert after["task"]["status"] != "waiting_approval", after["task"]
+    # 两个分支的响应形状不同：answer 是 {task, evidence}，任务 GET 是 TaskOut。
+    # 统一从 GET 取终态，避免"没走审批分支"时读 after["status"] 直接 KeyError。
+    final = (await env.client.get(f"{API}/tasks/{task_id}")).json()
+    assert final["status"] != "waiting_approval", final
     written = (workspace / "index.html").read_text(encoding="utf-8")
     assert AFTER in written
 
@@ -127,11 +132,11 @@ async def test_leaving_it_blank_never_writes_the_invented_number(env, workspace)
     assert answered.status_code == 200, answered.text
     body = answered.json()
     if body["task"]["status"] == "waiting_approval" and body["evidence"]["pending_approvals"]:
-        body = (
-            await env.client.post(
-                f"{API}/tasks/{task_id}/approval",
-                json={"approve": True, "provider_id": provider_id, "scope": "once"},
-            )
-        ).json()
+        queued = await env.client.post(
+            f"{API}/tasks/{task_id}/approval",
+            json={"approve": True, "provider_id": provider_id, "scope": "once"},
+        )
+        assert queued.status_code == 202, queued.text
+        await settle()
 
     assert PHONE not in (workspace / "index.html").read_text(encoding="utf-8")

@@ -10,10 +10,12 @@ import { ApprovalOptions, approvalQuestion } from "../tasks/approval";
 import { approvalApproveLabel, isPlanGate, type SendBackChoice } from "../tasks/approval-copy";
 import type { ApprovalDecision } from "../tasks/approval-payload";
 import { explainFailure, failureParts } from "../tasks/error-copy";
+import { planIsStale } from "../tasks/plan";
 import type { FailureCopy } from "../tasks/error-copy";
 import type { AnswerValues, AttachmentRef, PendingApproval, PendingQuestion } from "../tasks/api";
 import { MarkdownView } from "./markdown-view";
 import { StepView } from "./steps";
+import { outcomeParts, turnOutcome } from "./outcome";
 import type { BotStep, PlanView, StepFilter } from "./turns";
 import { filterSteps, turnEvidence, collapseRepeatedNotes, thinkVerb } from "./turns";
 import { uploadUrl } from "./uploads";
@@ -46,6 +48,13 @@ function parseMoment(value: string): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
+function outcomeToneClass(tone: string): string {
+  if (tone === "danger") return "text-danger";
+  if (tone === "warn") return "text-warn";
+  if (tone === "accent") return "text-accent";
+  return "text-muted";
+}
+
 /**
  * 「在想怎么做…」跑 30 秒和跑 3 分钟原本长得一模一样，用户分不清它是在想、
  * 还是已经卡死——这时候人只会做一件事：按停止。给它两个可验证的量（换了哪个
@@ -56,9 +65,13 @@ function ThinkingLine({ createdAt }: { createdAt: string }) {
   // 首帧不取 Date.now()：服务端与浏览器的时间不同，取当前时间会造成 hydration 不一致。
   const [now, setNow] = useState(() => startedAt ?? 0);
   useEffect(() => {
-    setNow(Date.now());
+    // 首帧之后再对齐真实时间：在 effect 体内同步 setState 会触发级联渲染。
+    const start = window.setTimeout(() => setNow(Date.now()), 0);
     const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
+    return () => {
+      window.clearTimeout(start);
+      window.clearInterval(id);
+    };
   }, []);
   // 词由开始时间定死：同一轮无论重渲染多少次都是同一个词，不会每帧跳。
   const verb = thinkVerb(startedAt);
@@ -284,7 +297,7 @@ export function ApprovalCard({
           .filter((option) => option.warning)
           .map((option) => (
             <p key={option.scope} className="mt-1 text-[12px] leading-relaxed text-muted">
-              {option.scope === "tool" ? "工具档：" : "本会话档："}
+              {option.scope === "tool" ? "工具档：" : option.scope === "session" ? "会话档：" : "命令档："}
               {option.warning}
             </p>
           ))}
@@ -567,6 +580,8 @@ export function TurnView(props: TurnViewProps) {
   const expanded = openSteps ?? running;
   const [filter, setFilter] = useState<StepFilter>("all");
   const evidence = turnEvidence(steps);
+  const outcome = turnOutcome(props.status, running);
+  const outcomeRows = outcomeParts(evidence, props.stepCount);
   const paths = props.files.map((file) => file.path);
   // 相同的话连说两遍：合并成一条再算筛选与计数，否则「全部 3」里有一半是复读。
   const collapsed = collapseRepeatedNotes(steps);
@@ -680,7 +695,13 @@ export function TurnView(props: TurnViewProps) {
 
         {/* 计划：用户最想先知道"它打算做什么、做到哪了"，所以放在正文之上，
             且不折叠。之前它在折叠的过程明细里，等于没显示。 */}
-        {props.plan && <PlanCard plan={props.plan} waiting={props.status === "waiting_approval"} />}
+        {props.plan && (
+          <PlanCard
+            plan={props.plan}
+            waiting={props.status === "waiting_approval"}
+            stale={planIsStale(props.plan, props.status)}
+          />
+        )}
 
         {/* 依据条：一行数字回答"它到底做了什么"，正文因此不必再复述过程。
             每个数字都能点开落到具体的行，这就是"回复短但不丢溯源"的地方。 */}
@@ -702,12 +723,17 @@ export function TurnView(props: TurnViewProps) {
               >
                 <path d="m9 6 6 6-6 6" />
               </svg>
-              {running && <span className="shrink-0 text-brand">正在做</span>}
-              {evidence.looked > 0 && <span className="shrink-0">看了 {evidence.looked}</span>}
-              {evidence.files > 0 && <span className="shrink-0">· 改了 {evidence.files} 个文件</span>}
-              {evidence.commandCount > 0 && <span className="shrink-0">· 跑了 {evidence.commandCount} 条命令</span>}
-              {evidence.calls === 0 && <span className="shrink-0">{props.stepCount} 步</span>}
-              {evidence.failed > 0 && <span className="shrink-0 font-medium text-danger">· {evidence.failed} 次失败</span>}
+              <span className={`shrink-0 font-medium ${outcomeToneClass(outcome.tone)}`}>
+                {outcome.label}
+              </span>
+              {outcomeRows.map((part, index) => (
+                <span
+                  key={`${index}-${part.text}`}
+                  className={`shrink-0 ${part.tone === "danger" ? "font-medium text-danger" : ""}`}
+                >
+                  · {part.text}
+                </span>
+              ))}
               {/* 耗时单独成列并对齐：它原来跟在数字串尾巴上，位数一变
                   （9 秒 → 1 分 20 秒）整行就跟着左右跳，多轮排在一起扫不出规律。 */}
               {evidence.durationMs > 0 && (
@@ -869,7 +895,15 @@ export function TurnView(props: TurnViewProps) {
 /** 计划超过这个条数就折尾。短计划（3–5 步，绝大多数）完全不受影响。 */
 const PLAN_LIMIT = 6;
 
-function PlanCard({ plan, waiting = false }: { plan: PlanView; waiting?: boolean }) {
+function PlanCard({
+  plan,
+  waiting = false,
+  stale = false,
+}: {
+  plan: PlanView;
+  waiting?: boolean;
+  stale?: boolean;
+}) {
   const percent = plan.total > 0 ? Math.round((plan.completed / plan.total) * 100) : 0;
   // 保持原顺序，只折尾部：计划是有先后次序的，把"进行中"排到前面会让
   // 第 3 步看起来像第 1 步。折叠掉的永远是最后几条，用户往下读的顺序不变。
@@ -886,7 +920,7 @@ function PlanCard({ plan, waiting = false }: { plan: PlanView; waiting?: boolean
       <div className="flex items-center gap-2">
         <span className="text-[12px] font-medium text-muted">计划</span>
         <span className="font-mono text-[11px] text-faint">
-          {plan.completed} / {plan.total}
+          {stale ? "计划未更新" : `${plan.completed} / ${plan.total}`}
         </span>
         {/* 有一步坏了就写出来。只在标题行说"3/5"会让人以为剩下两步在路上。 */}
         {plan.failed > 0 && (
@@ -895,10 +929,17 @@ function PlanCard({ plan, waiting = false }: { plan: PlanView; waiting?: boolean
         {waiting && firstOpen >= 0 && (
           <span className="font-mono text-[11px] text-warn">停在第 {firstOpen + 1} 步等你批准</span>
         )}
-        <div className="ml-auto h-1 w-20 overflow-hidden rounded-full bg-surface-3" aria-hidden>
-          <div className="h-full rounded-full bg-brand transition-[width] duration-300" style={{ width: `${percent}%` }} />
-        </div>
+        {!stale && (
+          <div className="ml-auto h-1 w-20 overflow-hidden rounded-full bg-surface-3" aria-hidden>
+            <div className="h-full rounded-full bg-brand transition-[width] duration-300" style={{ width: `${percent}%` }} />
+          </div>
+        )}
       </div>
+      {stale && (
+        <p className="mt-1 text-[12px] leading-relaxed text-muted">
+          任务已完成，但模型没有回写计划的完成状态；下面是计划快照，以实际步骤为准。
+        </p>
+      )}
       <ol className="mt-1.5 flex flex-col gap-1">
         {shown.map((item, index) => {
           const done = item.status === "completed";

@@ -21,6 +21,8 @@ export type Provider = {
   total_params_b: number;
   /** 激活参数（十亿）。决定算力与单价，稠密模型等于总参数，0 表示未填。 */
   active_params_b: number;
+  /** 设置页锁定的默认供应商；列表里最多一个为 true。 */
+  is_default?: boolean;
 };
 
 export type ProviderCreate = {
@@ -158,6 +160,20 @@ export type SafetySettings = {
   denied_commands: string[];
 };
 
+export type PriceRow = {
+  input: number;
+  cached_input: number;
+  output: number;
+};
+
+export type PricingTable = Record<string, PriceRow>;
+
+/** 金额闸：0 = 不限；没有价目表时不估价，闸门不生效。 */
+export type BudgetSettings = {
+  cost_limit: number;
+  pricing: PricingTable;
+};
+
 export type AgentSettings = {
   guardian: { mode: string; timeout_seconds: number };
   compaction: { trigger_ratio: number; reserve_tokens: number };
@@ -176,6 +192,7 @@ export type AgentSettings = {
     default_model_policy: string;
     automation_mode: string;
   };
+  budget: BudgetSettings;
   /** 当前选中的输出样式名（.blank/output-styles）；"default" 表示不带样式提示。 */
   output_style: string;
   path: string;
@@ -191,6 +208,7 @@ export type AgentSettings = {
     automation_modes?: string[];
     automation_mode_labels?: Record<string, string>;
     background?: Record<string, unknown>;
+    cost_limit?: { min: number; max: number; default: number };
   };
 };
 
@@ -210,6 +228,7 @@ export type AgentSettingsPatch = {
     token_budget?: number;
     auto_recoveries?: number;
   };
+  budget?: { cost_limit?: number; pricing?: PricingTable };
   output_style?: string;
 };
 
@@ -277,6 +296,15 @@ export function fetchPresets(): Promise<PresetsResponse> {
 
 export function fetchProviders(): Promise<Provider[]> {
   return request<Provider[]>(`${api}/providers`, { cache: "no-store" });
+}
+
+/** 设置「默认模型」用哪一家；空串表示回到「有 Key 的第一家」。 */
+export function setDefaultProvider(providerId: string): Promise<{ default_provider: string }> {
+  return request<{ default_provider: string }>(`${api}/providers/default`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider_id: providerId }),
+  });
 }
 
 export function createProvider(input: ProviderCreate): Promise<Provider> {

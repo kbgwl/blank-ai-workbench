@@ -6,6 +6,7 @@ import { chatProvider } from "@/components/settings/api";
 import { PageBody, PageHeader } from "@/components/page";
 import { createTask, fetchProjects, fetchProviders, type Project, type Provider, type Task } from "@/components/tasks/api";
 import { SelectPopover } from "@/components/ui/select-popover";
+import { configuredProviders } from "@/components/configured-providers";
 
 type Idea = { name: string; summary: string; upside: string; downside: string; effort: string };
 
@@ -138,7 +139,7 @@ export default function BrainstormPage() {
               );
             })}
             <SelectPopover size="compact" ariaLabel="选择模型" value={providerId}
-              options={[{ value: "", label: "本地模板" }, ...providers.filter((provider) => provider.enabled).map((provider) => ({ value: provider.id, label: `${provider.name} · ${provider.model}` }))]}
+              options={[{ value: "", label: "本地模板" }, ...configuredProviders(providers).map((provider) => ({ value: provider.id, label: `${provider.name} · ${provider.model}` }))]}
               onChange={setProviderId} menuMinWidth={220} />
           </div>
           <button type="button" onClick={start} disabled={busy || !question.trim()} className="rounded-md bg-brand px-3 py-1.5 text-[12px] font-medium text-on-brand hover:bg-brand/85 disabled:cursor-not-allowed disabled:opacity-40">{busy ? "处理中…" : "开始发散"}</button>

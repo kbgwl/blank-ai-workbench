@@ -479,31 +479,25 @@ def ask_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="request_user_input",
             description=(
-                "向用户提出 1-4 个问题并等待回答（对齐 Claude 的 AskUserQuestion）。"
-                "交付物依赖只有用户才知道的信息时（名字、给谁看、要哪些栏目、联系方式、"
-                "接哪个服务、放哪个目录）用它问清，不要拿占位值顶替——猜错的代价通常是整段重做。"
-                "只问「要什么」，不问「怎么做」：技术方案与实现细节自己定，"
-                "读一遍工作区能查到的也自己查；显而易见的确认不要问。\n"
+                "向用户提出 1-4 个问题并等待回答（对齐 Claude AskUserQuestion）。"
+                "交付物依赖只有用户才知道的信息（名字、给谁看、栏目、联系方式、接哪个服务、"
+                "放哪个目录）时用它问清，不要拿占位值顶替。只问「要什么」，不问「怎么做」；"
+                "能自己查、自己定的不要问。\n"
                 "每题给 header（≤12 字）与 2-4 个选项；选项 = label + description，"
-                "需要展示示意图/对比表时给 preview（一段 HTML/Markdown 片段，不要整页文档、"
-                "不要脚本样式）。用户要选多个时把 multiSelect 设为 true（此时不要给 preview）。\n"
-                "偏好类问题请给推荐项：把最合适的那一项标 recommended=true（单选每题最多一个；"
-                "多选可以标多个），用户不答就按它继续，你会被记一笔「替你定的」并在交付里说明。"
-                "事实类问题（真实电话、邮箱、具体地址）不要标 recommended——"
-                "它们没有默认值，用户不答的含义是「这处留空」。"
+                "需要示意/对比时给 preview（HTML/Markdown 片段，不要整页文档、脚本或样式）。"
+                "多选用 multiSelect=true（此时不要 preview）。\n"
+                "偏好题给推荐项 recommended=true（单选每题最多一个，多选可多个）；"
+                "事实题（电话、邮箱、地址）不要标 recommended。"
             ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "question": {"type": "string", "description": "单个问题的正文"},
                     "header": {"type": "string", "description": "问题的短标签，最多 12 个字符"},
-                    "multiSelect": {
-                        "type": "boolean",
-                        "description": "true 时用户可以选多个选项；多选不支持 preview",
-                    },
+                    "multiSelect": {"type": "boolean", "description": "true 时可选多个；多选不支持 preview"},
                     "options": {
                         "type": "array",
-                        "description": "可选项；给出 2-4 个时用户点一下就能回答",
+                        "description": "2-4 个选项时用户点一下就能回答",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -511,14 +505,11 @@ def ask_tools() -> list[ToolDefinition]:
                                 "description": {"type": "string"},
                                 "preview": {
                                     "type": "string",
-                                    "description": (
-                                        "选中时展示给用户的 HTML/Markdown 片段；"
-                                        "不要整页文档、脚本或样式；多选不支持"
-                                    ),
+                                    "description": "选中时展示的 HTML/Markdown 片段；不要整页文档或脚本样式；多选不支持",
                                 },
                                 "recommended": {
                                     "type": "boolean",
-                                    "description": "偏好题里最合适的那一项；用户不答就按它继续。单选每题最多一个",
+                                    "description": "偏好题最合适的一项；用户不答就按它继续；单选每题最多一个",
                                 },
                             },
                             "required": ["label"],
@@ -526,7 +517,7 @@ def ask_tools() -> list[ToolDefinition]:
                     },
                     "default": {
                         "type": "string",
-                        "description": "问题级默认值，写某个选项的 label；多选用逗号分隔多个 label",
+                        "description": "问题级默认值，写选项 label；多选用逗号分隔",
                     },
                     "allow_free_text": {"type": "boolean", "description": "是否允许自由输入，默认 true"},
                     "questions": {

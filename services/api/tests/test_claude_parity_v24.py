@@ -426,6 +426,32 @@ async def test_read_then_edit_then_edit_again_without_rereading(tmp_path, monkey
 
     assert first.ok and second.ok
     assert (tmp_path / "a.py").read_text(encoding="utf-8") == "a = 3\n"
+    # 回执只带计数，不再把整段 diff 塞进工具结果；完整 diff 仍在 FileChange 里。
+    assert "diff" not in first.data
+    assert first.data["added"] == 1 and first.data["removed"] == 1
+    assert first.data["hunks"] == 1
+
+
+async def test_write_outcome_is_a_receipt_without_full_diff(tmp_path, monkeypatch):
+    """新建文件不把全文 diff 回吐给模型：只给路径、行数与 hunk 计数。"""
+    monkeypatch.setenv("BLANK_FEATURE_FS_BROKER", "0")
+
+    async def fake_record_change(context, relative, change_type, diff, backup_rel):
+        return "change-1"
+
+    monkeypatch.setattr(editing, "_record_change", fake_record_change)
+    context = ToolContext(
+        root=tmp_path, task_id="task-1", session_factory=None, file_state=FileStateCache()
+    )
+
+    outcome = await _write_file_tool(context, {"path": "new.py", "content": "a\nb\n"})
+
+    assert outcome.ok
+    assert outcome.output.startswith("已写入文件：new.py")
+    assert "diff" not in outcome.data
+    assert outcome.data["added"] == 2
+    assert outcome.data["removed"] == 0
+    assert outcome.data["hunks"] == 1
 
 
 async def test_three_chained_edits_after_one_read(tmp_path, monkeypatch):
@@ -521,6 +547,17 @@ def test_parallel_read_tools_is_stable_and_on_by_default(monkeypatch, tmp_path):
     assert registry.resolve("parallel_read_tools", {}) == (True, registry.SRC_DEFAULT)
 
 
+def test_parallel_write_tools_is_stable_and_on_by_default(monkeypatch, tmp_path):
+    monkeypatch.delenv("BLANK_FEATURE_PARALLEL_WRITE_TOOLS", raising=False)
+    monkeypatch.setenv("BLANK_SETTINGS_FILE", str(tmp_path / "settings.json"))
+
+    flag = registry.FEATURES["parallel_write_tools"]
+
+    assert flag.stage == registry.STABLE
+    assert flag.default is True
+    assert registry.resolve("parallel_write_tools", {}) == (True, registry.SRC_DEFAULT)
+
+
 def test_system_prompt_carries_the_ported_rules():
     prompt = graph.SYSTEM_PROMPT
 
@@ -530,6 +567,10 @@ def test_system_prompt_carries_the_ported_rules():
         "apply_patch",
         "写之前先读",
         "同一批里一起发",
+        "不同文件的写/改",
+        "直接用你写入的原文做 old_string",
+        "不要一个文件一轮",
+        "普通编程/文档/数据任务只查工作区",
         "路径:行号",
         "不要原样重试",
     ):

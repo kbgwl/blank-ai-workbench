@@ -70,6 +70,34 @@ def test_paths_outside_the_workspace_are_refused(workspace):
     assert url == "" and "工作区" in problem
 
 
+def test_a_file_url_inside_the_workspace_is_allowed(workspace):
+    (workspace / "demo").mkdir()
+    page = workspace / "demo" / "index.html"
+    page.write_text(CLEAN_PAGE, encoding="utf-8")
+
+    url, problem = resolve_target(workspace, page.as_uri())
+
+    assert problem == ""
+    assert url.startswith("file:///") and url.endswith("demo/index.html")
+
+
+def test_a_file_url_outside_the_workspace_is_refused(workspace):
+    outside = workspace.parent / "outside-secret.html"
+    outside.write_text("<html>secret</html>", encoding="utf-8")
+
+    url, problem = resolve_target(workspace, outside.as_uri())
+
+    assert url == ""
+    assert "工作区" in problem
+
+
+def test_a_file_url_with_a_remote_host_is_refused(workspace):
+    url, problem = resolve_target(workspace, "file://server/share/index.html")
+
+    assert url == ""
+    assert "本机文件" in problem
+
+
 def test_missing_page_says_so(workspace):
     url, problem = resolve_target(workspace, "nope/index.html")
 

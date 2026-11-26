@@ -58,6 +58,21 @@ class BackgroundSettings(BaseModel):
     automation_mode: str = "assist"
 
 
+class PriceRow(BaseModel):
+    """一档价目：每百万 token 的单价。"""
+
+    input: float = 0.0
+    cached_input: float = 0.0
+    output: float = 0.0
+
+
+class BudgetSettings(BaseModel):
+    """金额闸：0 = 不限；没有价目表时不估价，闸门不生效。"""
+
+    cost_limit: float = 0.0
+    pricing: dict[str, PriceRow] = Field(default_factory=dict)
+
+
 class AgentSettings(BaseModel):
     guardian: GuardianSettings = Field(default_factory=GuardianSettings)
     compaction: CompactionSettings = Field(default_factory=CompactionSettings)
@@ -65,6 +80,7 @@ class AgentSettings(BaseModel):
     tools: ToolSettings = Field(default_factory=ToolSettings)
     safety: SafetySettings = Field(default_factory=SafetySettings)
     background: BackgroundSettings = Field(default_factory=BackgroundSettings)
+    budget: BudgetSettings = Field(default_factory=BudgetSettings)
     # 当前选中的输出样式名；「default」＝不带样式提示。认不出的名字运行时静默回落。
     output_style: str = "default"
     # 设置文件位置与合法取值：前端用来画滑杆边界，顺便让"改到哪去了"可查
@@ -121,6 +137,11 @@ class BackgroundPatch(BaseModel):
     automation_mode: Literal["manual", "assist", "autonomous"] | None = None
 
 
+class BudgetPatch(BaseModel):
+    cost_limit: float | None = None
+    pricing: dict[str, PriceRow] | None = None
+
+
 class AgentSettingsPatch(BaseModel):
     guardian: GuardianPatch | None = None
     compaction: CompactionPatch | None = None
@@ -128,6 +149,7 @@ class AgentSettingsPatch(BaseModel):
     tools: ToolPatch | None = None
     safety: SafetyPatch | None = None
     background: BackgroundPatch | None = None
+    budget: BudgetPatch | None = None
     # 样式名不在这里做枚举校验：样式来自工作区文件，设置页也允许先存一个名字。
     # 空串/超长由 settings.normalize 回落成 default。
     output_style: str | None = None

@@ -76,6 +76,17 @@ export function criteriaText(digest: EvidenceDigest): string {
 }
 
 /**
+ * 列表行徽标上的验收摘要。
+ *
+ * `0/0 验收` 是一个会被读成「一条都没通过」的假数字：没有验收条件时，
+ * 用户真正需要知道的是「这次交付压根没有可核对的判据」，不是一个分数。
+ */
+export function criteriaChipText(digest: EvidenceDigest): string {
+  if (digest.criteriaTotal === 0) return "没有验收条件";
+  return `${digest.covered}/${digest.criteriaTotal} 验收`;
+}
+
+/**
  * 一条交付值不值得点开。
  *
  * 只按"有没有可看的东西"判：没有验收、没有改动、没跑测试、没用量的任务，

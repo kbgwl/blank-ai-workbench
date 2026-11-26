@@ -10,7 +10,7 @@ import { API_V1, jsonInit, request } from "@/lib/http";
 const api = API_V1;
 
 export type PermissionMode = "default" | "accept_edits" | "plan" | "bypass";
-export type ApprovalScope = "once" | "prefix" | "tool";
+export type ApprovalScope = "once" | "prefix" | "session" | "tool";
 
 export type TeamBot = {
   id: string;

@@ -41,6 +41,7 @@ from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
     create_provider,
     create_task,
     env,
+    settle,
 )
 
 SECRET = "sk-abcdefghijklmnop1234"
@@ -298,11 +299,13 @@ async def test_second_inline_body_asks_again_end_to_end(env, workspace: Path):  
         f"{API}/tasks/{task_id}/approval",
         json={"approve": True, "provider_id": provider_id, "scope": SCOPE_PREFIX},
     )
-    assert resp.status_code == 200, resp.text
-    again = resp.json()
+    assert resp.status_code == 202, resp.text
+    await settle()
+    again = (await env.client.get(f"{API}/tasks/{task_id}")).json()
+    again_evidence = (await env.client.get(f"{API}/tasks/{task_id}/evidence")).json()
     # 第二段正文不同：前缀记忆不该把它带过去
-    assert again["task"]["status"] == "waiting_approval", again["task"]
-    assert again["evidence"]["pending_approvals"][0]["arguments"]["command"] == second
+    assert again["status"] == "waiting_approval", again
+    assert again_evidence["pending_approvals"][0]["arguments"]["command"] == second
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
     granted = [event for event in events if event["type"] == "approval.granted"]
@@ -323,6 +326,7 @@ async def test_second_inline_body_asks_again_end_to_end(env, workspace: Path):  
         f"{API}/tasks/{task_id}/approval",
         json={"approve": True, "provider_id": provider_id, "scope": SCOPE_ONCE},
     )
-    assert resp.status_code == 200, resp.text
-    finished = resp.json()
-    assert finished["task"]["status"] != "waiting_approval", finished["task"]
+    assert resp.status_code == 202, resp.text
+    await settle()
+    finished = (await env.client.get(f"{API}/tasks/{task_id}")).json()
+    assert finished["status"] != "waiting_approval", finished

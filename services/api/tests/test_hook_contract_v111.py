@@ -75,6 +75,39 @@ async def test_exit_code_two_blocks_pre_tool_use_and_feeds_context_elsewhere(tmp
     assert "blocked by exit code 2" in failed[0].additional_context
 
 
+async def test_failed_blocking_hook_can_fail_closed(tmp_path):
+    script = tmp_path / "fail_open.py"
+    script.write_text("import sys\nsys.exit(1)\n", encoding="utf-8")
+    command = f'"{sys.executable}" "{script}"'
+
+    closed = HookRunner(
+        {"pre_tool_use": [HookSpec(command=command, on_failure="block")]}
+    )
+    blocked = await closed.run("pre_tool_use", "run_shell", {})
+    assert blocked[0].status == "failed"
+    assert blocked[0].decision == "deny"
+    assert "on_failure=block" in blocked[0].reason
+
+    default = HookRunner({"pre_tool_use": [HookSpec(command=command)]})
+    allowed = await default.run("pre_tool_use", "run_shell", {})
+    assert allowed[0].status == "failed"
+    assert allowed[0].decision == ""
+
+
+async def test_fail_closed_does_not_turn_non_blocking_failures_into_denials(tmp_path):
+    script = tmp_path / "fail_open.py"
+    script.write_text("import sys\nsys.exit(1)\n", encoding="utf-8")
+    command = f'"{sys.executable}" "{script}"'
+    runner = HookRunner(
+        {"post_tool_use": [HookSpec(command=command, on_failure="block")]}
+    )
+
+    result = await runner.run("post_tool_use", "run_shell", {})
+
+    assert result[0].status == "failed"
+    assert result[0].decision == ""
+
+
 def _fake_session(decide):
     gateway = SimpleNamespace(decide=decide)
     return SimpleNamespace(gateway=gateway, context=None)

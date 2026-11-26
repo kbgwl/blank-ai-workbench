@@ -35,6 +35,45 @@ class FileState:
     mtime_ns: int
     # 读到的内容哈希；读被截断时为空串（只有 stat 可比较）。
     sha256: str = ""
+    # 文本行数（二进制/超大文件为 0）与最近一次操作：快照里给模型一个可读的现状。
+    lines: int = 0
+    last_op: str = ""
+    # 快照里的内容摘要：第一行非空文本，够模型认出"这是哪个文件"而不必重读。
+    summary: str = ""
+    # 本次会话对这个文件的累计写次数与 +/- 行数（只统计能拿到计数的写工具）。
+    writes: int = 0
+    added: int = 0
+    removed: int = 0
+
+
+def _line_count(raw: bytes) -> int:
+    """文本行数按换行符数，末行没有换行也算一行；空文件为 0。"""
+    if not raw:
+        return 0
+    return raw.count(b"\n") + (0 if raw.endswith(b"\n") else 1)
+
+
+def content_summary(text: str, limit: int = 60) -> str:
+    """内容摘要：第一行非空文本，压成一行、去掉行尾空白并截断。
+
+    只做"认得出文件"这一件事：不猜语义、不总结正文。截断用省略号明示，
+    免得模型拿半句话当事实。
+    """
+    # maxsplit 限住分割量：512KB 的文件不必为一行摘要切出几万段。
+    for line in str(text or "").split("\n", 50)[:51]:
+        stripped = " ".join(line.split())
+        if stripped:
+            return stripped if len(stripped) <= limit else stripped[: limit - 1] + "…"
+    return ""
+
+
+def _summary_of_bytes(raw: bytes) -> str:
+    if not raw:
+        return ""
+    try:
+        return content_summary(raw.decode("utf-8", "replace"))
+    except (UnicodeDecodeError, ValueError):
+        return ""
 
 
 class FileStateCache:
@@ -51,15 +90,46 @@ class FileStateCache:
             text = text[2:]
         return text.strip("/")
 
-    def record_read(self, relative: str, *, size: int, mtime_ns: int, sha256: str = "") -> None:
+    def record_read(
+        self,
+        relative: str,
+        *,
+        size: int,
+        mtime_ns: int,
+        sha256: str = "",
+        lines: int = 0,
+        summary: str = "",
+    ) -> None:
         key = self._key(relative)
         if not key:
             return
         with self._lock:
-            self._states[key] = FileState(int(size), int(mtime_ns), str(sha256 or ""))
+            previous = self._states.get(key)
+            self._states[key] = FileState(
+                int(size),
+                int(mtime_ns),
+                str(sha256 or ""),
+                int(lines or 0),
+                "read",
+                str(summary or "") or (previous.summary if previous else ""),
+                previous.writes if previous else 0,
+                previous.added if previous else 0,
+                previous.removed if previous else 0,
+            )
 
-    def record_write(self, root: Path | str, relative: str) -> None:
-        """写成功后按磁盘现状重记一次：写过 = 知道内容，后续编辑不必再读。"""
+    def record_write(
+        self,
+        root: Path | str,
+        relative: str,
+        *,
+        added: int = 0,
+        removed: int = 0,
+    ) -> None:
+        """写成功后按磁盘现状重记一次：写过 = 知道内容，后续编辑不必再读。
+
+        ``added`` / ``removed`` 由写工具的回执计数带进来；拿不到计数的写工具
+        （notebook / patch）只加一次写入次数，不编造行数。
+        """
         key = self._key(relative)
         if not key:
             return
@@ -70,13 +140,29 @@ class FileStateCache:
             self.forget(relative)
             return
         digest = ""
+        lines = 0
+        summary = ""
         if stat.st_size <= MAX_HASH_BYTES:
             try:
-                digest = hashlib.sha256(target.read_bytes()).hexdigest()
+                raw = target.read_bytes()
+                digest = hashlib.sha256(raw).hexdigest()
+                lines = _line_count(raw)
+                summary = _summary_of_bytes(raw)
             except OSError:
                 digest = ""
         with self._lock:
-            self._states[key] = FileState(int(stat.st_size), int(stat.st_mtime_ns), digest)
+            previous = self._states.get(key)
+            self._states[key] = FileState(
+                int(stat.st_size),
+                int(stat.st_mtime_ns),
+                digest,
+                lines,
+                "write",
+                summary,
+                (previous.writes if previous else 0) + 1,
+                (previous.added if previous else 0) + max(0, int(added or 0)),
+                (previous.removed if previous else 0) + max(0, int(removed or 0)),
+            )
 
     def forget(self, relative: str) -> None:
         with self._lock:
@@ -101,9 +187,57 @@ class FileStateCache:
         """诊断用：当前记住了哪些文件、各自的大小与时间戳。"""
         with self._lock:
             return {
-                key: {"size": state.size, "mtime_ns": state.mtime_ns, "sha256": bool(state.sha256)}
+                key: {
+                    "size": state.size,
+                    "mtime_ns": state.mtime_ns,
+                    "sha256": bool(state.sha256),
+                    "lines": state.lines,
+                    "last_op": state.last_op,
+                    "summary": state.summary,
+                    "writes": state.writes,
+                    "added": state.added,
+                    "removed": state.removed,
+                }
                 for key, state in self._states.items()
             }
+
+    def render_snapshot(self, *, limit: int = 20, root: Path | str | None = None) -> str:
+        """把已访问文件压成一段可读状态，替代历史里反复重发的文件正文。
+
+        只给路径、行数/大小、最近一次读写与短指纹；需要原文时模型仍然可以
+        `read_file`。没有记录时返回空串，调用方据此避免注入空块。
+
+        ``root`` 非空时只列仍在磁盘上的文件：shell 删掉的文件不能继续作为
+        「当前状态」出现，它的旧读取结果也不该被折成指向快照的指针。
+        """
+        with self._lock:
+            items = list(self._states.items())
+        if root is not None:
+            base = Path(root)
+            items = [(path, state) for path, state in items if (base / path).is_file()]
+        if not items:
+            return ""
+        # 最近改过的文件排前面；mtime 相同再按路径，保证输出可复现。
+        items.sort(key=lambda item: (item[1].mtime_ns, item[0]), reverse=True)
+        lines = ["[文件状态快照] 较早的文件内容已折叠；需要原文时用 read_file 精确读取。"]
+        for path, state in items[:limit]:
+            bits = [path, f"{state.lines} 行" if state.lines else f"{state.size} 字节"]
+            if state.last_op == "write":
+                bits.append("最近写入")
+            elif state.last_op == "read":
+                bits.append("最近读取")
+            if state.writes:
+                # notebook / patch 拿不到行数：只报写入次数，不拿 +0/-0 冒充事实。
+                changes = f" +{state.added}/-{state.removed}" if state.added or state.removed else ""
+                bits.append(f"本次 {state.writes} 次写入{changes}")
+            if state.sha256:
+                bits.append(f"sha {state.sha256[:8]}")
+            if state.summary:
+                bits.append(f"摘要：{state.summary}")
+            lines.append("- " + "，".join(bits))
+        if len(items) > limit:
+            lines.append(f"…另有 {len(items) - limit} 个文件未列出；需要时用 read_file。")
+        return "\n".join(lines)
 
     def export(self) -> dict[str, dict]:
         """完整导出（含哈希）：跟着图状态一起进检查点，中断恢复后还能接着用。
@@ -114,7 +248,17 @@ class FileStateCache:
         """
         with self._lock:
             return {
-                key: {"size": state.size, "mtime_ns": state.mtime_ns, "sha256": state.sha256}
+                key: {
+                    "size": state.size,
+                    "mtime_ns": state.mtime_ns,
+                    "sha256": state.sha256,
+                    "lines": state.lines,
+                    "last_op": state.last_op,
+                    "summary": state.summary,
+                    "writes": state.writes,
+                    "added": state.added,
+                    "removed": state.removed,
+                }
                 for key, state in self._states.items()
             }
 
@@ -133,6 +277,12 @@ class FileStateCache:
                     int(value.get("size") or 0),
                     int(value.get("mtime_ns") or 0),
                     str(value.get("sha256") or ""),
+                    int(value.get("lines") or 0),
+                    str(value.get("last_op") or ""),
+                    str(value.get("summary") or ""),
+                    int(value.get("writes") or 0),
+                    int(value.get("added") or 0),
+                    int(value.get("removed") or 0),
                 )
 
 

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
@@ -90,6 +91,19 @@ async def test_second_turn_sees_the_first(client):
     assert "第 1 轮" in history[0]["content"]
     assert history[1]["role"] == "assistant"
     assert "3 个文件" in history[1]["content"]
+
+
+async def test_permanent_delete_removes_thread_and_turns(client):
+    project = await _project()
+    thread = await _thread(project.id)
+    task = await _turn(thread.id, project.id, goal="删掉这一轮", summary="做完了")
+
+    response = await client.delete(f"/api/v1/threads/{thread.id}/permanent")
+
+    assert response.status_code == 204, response.text
+    assert (await client.get(f"/api/v1/threads/{thread.id}")).status_code == 404
+    async with get_session_factory()() as session:
+        assert await session.get(Task, task.id) is None
 
 
 async def test_current_turn_is_not_its_own_history(client):
@@ -402,3 +416,124 @@ async def test_turn_keeps_its_images_for_replay(client, workspace):
     detail = (await client.get(f"/api/v1/threads/{thread['id']}")).json()
     assert detail["turns"][0]["attachments"][0]["name"] == "改前.png"
     assert detail["turns"][0]["attachments"][0]["mime"] == "image/png"
+
+
+# ------------------------------------------------------------------ 批量归档
+
+
+async def _set_updated_at(thread_id: str, when: datetime) -> None:
+    async with get_session_factory()() as session:
+        row = await session.get(Thread, thread_id)
+        assert row is not None
+        row.updated_at = when
+        await session.commit()
+
+
+async def test_thread_list_filters_by_status_before_limit(client):
+    """归档会话不能占住 50 条窗口。
+
+    先取最近 N 条再在前端过滤的话，归档得越多，活跃会话被挤出去得越多。
+    这里把归档的更新时间调得比活跃的新，limit=2 时只有"先过滤"才能拿回活跃会话。
+    """
+    project_id = await _api_project(client)
+    old_active = [
+        (await client.post(f"{API}/projects/{project_id}/threads", json={"title": f"活跃 {index}"})).json()
+        for index in range(2)
+    ]
+    archived = [
+        (await client.post(f"{API}/projects/{project_id}/threads", json={"title": f"归档 {index}"})).json()
+        for index in range(3)
+    ]
+    for thread in archived:
+        assert (await client.delete(f"{API}/threads/{thread['id']}")).status_code == 204
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for index, thread in enumerate(archived):
+        await _set_updated_at(thread["id"], now - timedelta(minutes=index))
+    # 两条活跃会话必须有不同 updated_at：SQLite 的 created_at 只到秒，同一秒
+    # 创建时 `ORDER BY updated_at DESC, created_at DESC` 退化成不稳定排序，
+    # 组合运行会随机翻转，断言顺序随之失败。
+    for index, thread in enumerate(old_active):
+        await _set_updated_at(thread["id"], now - timedelta(hours=1, minutes=index))
+
+    active_rows = (
+        await client.get(f"{API}/projects/{project_id}/threads?status=active&limit=2")
+    ).json()
+    assert [row["id"] for row in active_rows] == [item["id"] for item in old_active]
+    assert all(row["status"] == "active" for row in active_rows)
+
+    archived_rows = (
+        await client.get(f"{API}/projects/{project_id}/threads?status=archived")
+    ).json()
+    assert [row["id"] for row in archived_rows] == [item["id"] for item in archived]
+    assert all(row["status"] == "archived" for row in archived_rows)
+
+    all_rows = (await client.get(f"{API}/projects/{project_id}/threads?limit=2")).json()
+    assert [row["id"] for row in all_rows] == [item["id"] for item in archived[:2]]
+
+    global_active = (await client.get(f"{API}/threads?status=active")).json()
+    assert {row["id"] for row in global_active} == {item["id"] for item in old_active}
+
+
+async def test_batch_archive_splits_archived_unchanged_and_missing(client):
+    project_id = await _api_project(client)
+    first = (await client.post(f"{API}/projects/{project_id}/threads", json={"title": "这次归档"})).json()
+    second = (await client.post(f"{API}/projects/{project_id}/threads", json={"title": "早就归档"})).json()
+    assert (await client.delete(f"{API}/threads/{second['id']}")).status_code == 204
+    missing = str(uuid.uuid4())
+
+    response = await client.post(
+        f"{API}/threads/batch-archive",
+        json={"ids": [first["id"], second["id"], missing, first["id"]]},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["archived"] == [first["id"]]
+    assert body["unchanged"] == [second["id"]]
+    assert body["missing"] == [missing]
+
+    assert (await client.get(f"{API}/threads/{first['id']}")).json()["status"] == "archived"
+
+
+async def test_batch_archive_is_idempotent(client):
+    project_id = await _api_project(client)
+    thread = (await client.post(f"{API}/projects/{project_id}/threads", json={})).json()
+    payload = {"ids": [thread["id"]]}
+
+    first = (await client.post(f"{API}/threads/batch-archive", json=payload)).json()
+    second = (await client.post(f"{API}/threads/batch-archive", json=payload)).json()
+
+    assert first == {"archived": [thread["id"]], "unchanged": [], "missing": []}
+    assert second == {"archived": [], "unchanged": [thread["id"]], "missing": []}
+
+
+async def test_batch_archive_limits_and_duplicates(client):
+    project_id = await _api_project(client)
+    thread = (await client.post(f"{API}/projects/{project_id}/threads", json={})).json()
+
+    assert (await client.post(f"{API}/threads/batch-archive", json={"ids": []})).status_code == 422
+    too_many = {"ids": [str(uuid.uuid4()) for _ in range(51)]}
+    assert (await client.post(f"{API}/threads/batch-archive", json=too_many)).status_code == 422
+
+    body = (
+        await client.post(f"{API}/threads/batch-archive", json={"ids": [thread["id"], thread["id"]]})
+    ).json()
+    assert body == {"archived": [thread["id"]], "unchanged": [], "missing": []}
+
+
+async def test_batch_archive_does_not_stop_a_running_task(client):
+    project_id = await _api_project(client)
+    thread = (await client.post(f"{API}/projects/{project_id}/threads", json={})).json()
+    task = await _turn(thread["id"], project_id, goal="还在跑", index=1)
+    async with get_session_factory()() as session:
+        row = await session.get(Task, task.id)
+        assert row is not None
+        row.status = "running"
+        await session.commit()
+
+    response = await client.post(f"{API}/threads/batch-archive", json={"ids": [thread["id"]]})
+    assert response.status_code == 200, response.text
+
+    async with get_session_factory()() as session:
+        assert (await session.get(Task, task.id)).status == "running"
+        assert (await session.get(Thread, thread["id"])).status == "archived"

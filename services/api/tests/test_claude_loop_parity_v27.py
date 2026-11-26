@@ -33,6 +33,7 @@ from tests.test_agent_v04 import (  # noqa: F401  (env 是夹具，故意导入)
     create_provider,
     create_task,
     env,
+    settle,
 )
 
 CONTINUE_PROMPT = "请继续：如未完成请调用工具执行下一步；如已完成请输出中文总结。"
@@ -68,10 +69,11 @@ async def test_denied_write_is_marked_unexecuted_and_the_model_moves_on(env, wor
     resp = await env.client.post(
         f"{API}/tasks/{task_id}/approval", json={"approve": False, "provider_id": provider_id}
     )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
+    assert resp.status_code == 202, resp.text
+    await settle()
+    task_body = (await env.client.get(f"{API}/tasks/{task_id}")).json()
     assert not (workspace / ".env").exists(), "驳回后不得写入文件"
-    assert body["task"]["status"] == "succeeded", body["task"]
+    assert task_body["status"] == "succeeded", task_body
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
     types = [event["type"] for event in events]

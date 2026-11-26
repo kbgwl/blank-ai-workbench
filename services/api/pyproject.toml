@@ -15,6 +15,12 @@ dependencies = [
     "pydantic-settings>=2.12.0",
     "pypdf>=6.21.1",
     "pyyaml>=6.0.3",
+    # 文档类任务开箱即用：Word / Excel / PowerPoint 不再要求用户先装包。
+    # 三包都是纯 Python（lxml 为二进制轮子），随桌面运行时的 uv.lock 一起分发；
+    # 缺了任意一条，写 docx/xlsx/pptx 的任务就会退回"先装依赖"的探测循环。
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.0",
+    "python-pptx>=1.0.0",
     "sqlalchemy[asyncio]>=2.0.46",
     "uvicorn[standard]>=0.54.0",
     # 钉钉 Stream 长连接直接 import 这个包。以前只是 uvicorn[standard] 的传递依赖，

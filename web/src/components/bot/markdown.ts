@@ -23,6 +23,20 @@ export type MdBlock =
   | { kind: "quote"; spans: Inline[] }
   | { kind: "hr" };
 
+/**
+ * 只把明确安全的协议交给 <a href>。模型输出是外部输入：`[x](javascript:...)`
+ * 一旦原样进 DOM，点一下就在应用源上执行脚本。相对站内链接与锚点保留。
+ */
+export function safeLinkHref(href: string): string {
+  const raw = String(href ?? "").trim();
+  if (!raw) return "";
+  if (/^(https?:|mailto:)/i.test(raw)) return raw;
+  if (raw.startsWith("#")) return raw;
+  // 站内绝对路径；`//host` 与 `/\host`（浏览器会归一成 //host）都按外链拒绝。
+  if (raw.startsWith("/") && !raw.startsWith("//") && !raw.includes("\\")) return raw;
+  return "";
+}
+
 const INLINE_PATTERN = /`([^`]+)`|\*\*([^*]+)\*\*|\[([^\]]+)\]\(([^)\s]+)\)/g;
 
 export function parseInline(text: string): Inline[] {

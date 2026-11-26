@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 
 from blank_api.services.tools import build_default_tools
-from blank_api.services.tools.registry import SCHEMA_BUDGET_CHARS, ToolRegistry
+from blank_api.services.tools.registry import DOCS_ONLY_EXCLUDED, SCHEMA_BUDGET_CHARS, ToolRegistry
 
 
 def _cost(tool) -> int:
@@ -59,6 +59,18 @@ def test_deferred_families_are_still_reachable():
     for name in deferred:
         added = registry.activate([name])
         assert name in added, f"{name} 收起来之后拉不回来，等于删掉了"
+
+
+def test_docs_only_profile_keeps_core_and_drops_meta_tools():
+    """文档-only 任务仍要能读、改、跑；任务台账/子代理/浏览器等入口可以收掉。"""
+    registry = _registry()
+    removed = registry.exclude(DOCS_ONLY_EXCLUDED)
+    visible = set(registry.visible_names())
+
+    assert {"read_file", "write_file", "edit_file", "run_tests", "run_shell"} <= visible
+    for name in ("task_create", "list_agents", "browser_check", "notebook_edit", "repl"):
+        assert name not in visible, f"{name} 不该出现在文档-only 的首屏工具表"
+    assert "read_file" not in removed
 
 
 def test_a_normal_coding_turn_does_not_carry_scheduled_task_tools():

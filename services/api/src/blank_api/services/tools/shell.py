@@ -88,11 +88,14 @@ def build_env(policy: str | None = None, *, effort: str = "") -> dict[str, str]:
     ``effort`` 是本轮裁决出的思考强度：上游把它作为 ``CLAUDE_EFFORT`` 暴露给
     Bash 子进程，模型写的脚本里 ``$CLAUDE_EFFORT`` 读到的就是这一档。
     """
+    from blank_api.services.shell_env import apply_domestic_mirrors
     from blank_api.services.shell_env import apply_effort
+    from blank_api.services.shell_env import domestic_mirrors_enabled
     from blank_api.services.shell_env import filter_env
     from blank_api.services.shell_env import _policy_from_env
 
     env = filter_env(os.environ, policy=policy or _policy_from_env())
+    env = apply_domestic_mirrors(env, enabled=domestic_mirrors_enabled(os.environ))
     env["PYTHONIOENCODING"] = env.get("PYTHONIOENCODING", "utf-8")
     return apply_effort(env, effort)
 
@@ -863,15 +866,60 @@ async def _record_shell_started(context: ToolContext, record, command: str) -> N
         pass
 
 
+_BROAD_SCAN_ROOT = re.compile(
+    r"(?:c:\\+(?:users|windows)?|%systemdrive%|%systemroot%|%windir%|"
+    r"\$env:(?:systemdrive|systemroot|windir))(?=[\"'\s]|$)",
+    re.IGNORECASE,
+)
+
+
+def slow_scan_hint(command: str) -> str:
+    """整棵 C:\\Users / C:\\ / C:\\Windows / %SystemDrive% 的递归扫描必然超时，先劝换路。
+
+    真机：「帮我清理 C 盘」的 agent 用 `dir /s /a C:\\Users` 扫了 2 分钟被超时杀掉，
+    然后又试图把结果写到 `C:\\_scan_users.txt`。T09 文档任务还跑过
+    `dir /s /b "%SystemDrive%"`，超时后把系统缓存文件留在了工作区。这不是能力
+    问题，是扫描策略不对：系统盘点应先查固定缓存位置，或按子目录逐个统计并设时间上限。
+    这里只拦「整个盘/用户/Windows 根」；具体的系统子目录（如 C:\\Windows\\Temp）仍允许。
+    """
+    text = str(command or "")
+    low = text.lower()
+    if "dir /s" not in low and "-recurse" not in low:
+        return ""
+    if not _BROAD_SCAN_ROOT.search(low):
+        return ""
+    return (
+        "这条命令会递归扫描整个 C:\\Users / C:\\ / C:\\Windows / %SystemDrive%，"
+        "实测 2 分钟也扫不完，本次未执行。换一种扫法：先查固定位置（%TEMP%、"
+        "C:\\Windows\\Temp、回收站、Windows 更新缓存、WER、Package Cache），或按"
+        "用户/子目录逐个统计，单目录设 60 秒上限；结果直接输出到 stdout，"
+        "不要写 C 盘根目录。"
+    )
+
+
 async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
     blocked = policy_gate(context, "run_shell", arguments)
     if blocked is not None:
         return blocked
     command = str(arguments["command"]).strip()
+    scan_hint = slow_scan_hint(command)
+    if scan_hint:
+        return ToolOutcome(
+            ok=False,
+            status="skipped",
+            message=scan_hint,
+            data={"skip_code": "slow_scan"},
+        )
     timeout = float(arguments.get("timeout_seconds", 30))
     # coding-008：模型直接写 `python -m pytest` 时，把它换成工作区 venv 解释器，
     # 否则会落到系统解释器（可能没 pytest），把"跑不了测试"误判成"测试没过"。
-    command = normalize_python_command(command, context.root)
+    # 工作区没有 venv 时退回本应用的解释器（与 run_tests 的 python_test_command
+    # 同源）：Windows 上 `python` 常常根本不在 PATH，先报 9009 再 where/重试，
+    # 一次本来免费的核对要烧两三回模型调用。
+    # Docker 档里的命令在容器里执行，宿主 sys.executable 路径不可用；只在宿主/本地
+    # 沙箱回退，容器内仍交给镜像自己的 python。
+    fallback = "" if runs_in_docker(getattr(context, "sandbox_tier", "") or "") else sys.executable
+    command = normalize_python_command(command, context.root, fallback=fallback)
     from blank_api.services.sandbox.policy import host_bypass_enabled
     from blank_api.services.sandbox.tiers import host_bypass_requested
 
@@ -1064,12 +1112,23 @@ async def _run_shell(context: ToolContext, arguments: dict) -> ToolOutcome:
         # `;` 被 cmd 吞进参数也长得像「命令不存在 / 环境缺东西」，模型会去满盘找
         # Python（2026-11-16 coding-012 t1 真机烧掉整个窗口）。
         semicolon = cmd_semicolon_hint(command, combined)
+        pip = pip_missing_hint(command, combined)
+        posix_text = posix_text_tool_hint(command, combined)
         message = f"命令返回非零退出码：{result['exit_code']}"
-        if hint:
-            message = f"{message}。{hint}"
-        if semicolon:
-            message = f"{message}。{semicolon}"
-        data_hint = "windows_cmd_syntax" if hint else ("windows_cmd_semicolon" if semicolon else "")
+        for extra in (hint, semicolon, pip, posix_text):
+            if extra:
+                message = f"{message}。{extra}"
+        data_hint = (
+            "windows_cmd_syntax"
+            if hint
+            else "windows_cmd_semicolon"
+            if semicolon
+            else "python_pip_missing"
+            if pip
+            else "windows_posix_pipe_tools"
+            if posix_text
+            else ""
+        )
         return ToolOutcome(
             ok=False,
             status="failed",
@@ -1168,6 +1227,47 @@ def cmd_semicolon_hint(command: str, output: str) -> str:
     )
 
 
+# pip 缺失：应用自带运行时是精简版，没有 pip。真机台账：模型为装 python-docx
+# 连试十条命令，每条都败在「No module named pip」或它的变体上。
+_PIP_MISSING = re.compile(
+    r"(?i)no module named ['\"]?pip|没有名为 ['\"]?pip|pip.*不是内部或外部命令"
+)
+
+
+def pip_missing_hint(command: str, output: str) -> str:
+    """解释器没有 pip 时，直接告诉模型换解释器或换无依赖方案，别再重试。"""
+    if "pip" not in str(command or "").lower():
+        return ""
+    if not _PIP_MISSING.search(str(output or "")):
+        return ""
+    return (
+        "这个解释器没有 pip（应用自带的运行时是精简版），再用它重试装包结果不会变。"
+        "换系统解释器（如 `py -3 -m pip install ...`）或工作区里的 .venv；"
+        "如果只是写文档/处理数据，用标准库就能完成，不必装包。"
+    )
+
+
+# cmd.exe 里没有 head/tail。PATH 上若挂着 Git 的 usr/bin，会执行到 POSIX 版本
+# 并报「invalid trailing option」——模型会以为是命令写错了、换个写法再来一次。
+_POSIX_TEXT_ERR = re.compile(
+    r"(?i)\b(head|tail|grep|sed|awk)\b[^\r\n]*"
+    r"(invalid (trailing )?option|option used in invalid context|try '.*--help')"
+)
+
+
+def posix_text_tool_hint(command: str, output: str) -> str:
+    """cmd.exe 里误用 POSIX 文本工具时，给出 cmd 口径的替代做法。"""
+    if shell_dialect() != "cmd":
+        return ""
+    if not _POSIX_TEXT_ERR.search(str(output or "")):
+        return ""
+    return (
+        "cmd.exe 里不要用 `| head` / `| tail` / `grep` / `sed` / `awk`："
+        "PATH 里可能是 Git 附带的 POSIX 版本，参数规则与 cmd 不兼容。"
+        "把输出重定向到文件（> out.log 2>&1）再用 read_file 分批读，或直接缩小输出范围。"
+    )
+
+
 def shell_mismatch_hint(command: str, stderr: str) -> str:
     """命令失败是因为用错了 shell 方言时，给一句能立刻改对的提示。"""
     if shell_dialect() != "cmd":
@@ -1194,49 +1294,43 @@ def shell_tools() -> list[ToolDefinition]:
         if dialect == "cmd"
         else "当前 shell 是 sh：可以用 ls / cat / grep / pwd 等标准命令。"
     )
+    # `;` 在 cmd.exe 里不是分隔符，整段会被当成前一条命令的参数；旧文案却让模型
+    # 在"失败也无所谓"时用 `;`——真机里它写 `where python; where py; ...`，
+    # 得到的是一串「找不到 "python;"」，既浪费一轮又看不出是分隔符的问题。
+    chain_hint = (
+        "- 多条命令：互不依赖就并行发多个调用；有先后依赖用 && 串起来。"
+        "cmd.exe 不把 `;` 当分隔符，不要用 `;` 串联命令，也不要用换行分隔命令"
+        "（引号内的换行可以）。\n"
+        if dialect == "cmd"
+        else "- 多条命令：互不依赖就并行发多个调用；有先后依赖用 && 串起来；"
+        "只有「前一条失败也无所谓」时才用 `;`。不要用换行分隔命令（引号内的换行可以）。\n"
+    )
+    list_hint = "dir" if dialect == "cmd" else "ls"
     return [
         ToolDefinition(
             name="run_shell",
             description=(
                 f"在工作区根目录执行 Shell 命令，返回退出码与标准输出/错误。{syntax}"
                 "\n\n"
-                "不要用它做已经有专用工具的事。专用工具带权限、可审计、结果更好审：\n"
-                "- 找文件用 glob（不是 find / ls）\n"
-                "- 搜内容用 search_code（不是 grep / rg）\n"
-                "- 读文件用 read_file（不是 cat / head / tail）\n"
-                "- 改文件用 edit_file / apply_patch（不是 sed / awk）\n"
-                "- 写文件用 write_file（不是 echo > / cat <<EOF）\n"
-                "- 要跟用户说话就直接说（不是 echo / printf）\n"
-                "只有专用工具确实做不到时才回到 shell。\n"
+                "不要用它做专用工具的事：找文件 glob、搜内容 search_code、读文件 read_file、"
+                "改文件 edit_file / apply_patch、写文件 write_file、跟用户说话直接说。"
+                "只有专用工具确实做不到时才回到 shell。工作目录保留，shell 变量/函数/别名不保留。\n"
                 "\n"
-                "工作目录在多次调用之间保留，shell 状态（变量、函数、别名）不保留。\n"
+                "命令写法：路径含空格用双引号；少 cd；建目录/文件前先 "
+                f"{list_hint} 确认父目录；"
+                f"{chain_hint}"
+                "- 长输出重定向到工作区文件（> out.log 2>&1）再 read_file 分批读，"
+                "不要让几万行直接打在结果里。\n"
                 "\n"
-                "命令写法：\n"
-                "- 含空格的路径一律用双引号包起来。\n"
-                "- 尽量用绝对路径，少 cd；用户明确要求时才 cd。\n"
-                "- 建目录/建文件之前先 ls 确认父目录存在且位置对。\n"
-                "- 多条命令：互不依赖就并行发多个调用；有先后依赖用 && 串起来；"
-                "只有「前一条失败也无所谓」时才用 ;。不要用换行分隔命令（引号内的换行可以）。\n"
-                "- 输出很长时把结果重定向到工作区内的文件（> out.log 2>&1），再 read_file 分批读；"
-                "不要让一条命令把几万行打到结果里。\n"
+                "git：优先新建提交，不用 --amend；破坏性操作（reset --hard、push --force、"
+                "checkout --）先想更安全的替代；不跳过钩子/签名；不用交互式命令。\n"
                 "\n"
-                "git：\n"
-                "- 优先新建提交，不要 --amend。\n"
-                "- 破坏性操作（reset --hard、push --force、checkout --）先想更安全的替代。\n"
-                "- 不要跳过钩子（--no-verify）或绕过签名，除非用户明确要求；钩子失败要修根因。\n"
-                "- 不要用交互式命令（rebase -i、add -i、git commit 不带 -m）。\n"
+                "等待：不要在命令之间 sleep；长任务传 run_in_background=true，"
+                "用 task_output 取进度、task_stop 终止；失败命令不要 sleep 循环重试。\n"
                 "\n"
-                "等待：\n"
-                "- 能立刻跑的就立刻跑，不要在命令之间 sleep。\n"
-                "- 长任务传 run_in_background=true：立刻返回 shell_id，结束时你会收到系统通知；"
-                "进度与输出用 task_output(shell_id=...)，不要了用 task_stop(shell_id=...) 终止。\n"
-                "- 不要在 sleep 循环里重试失败的命令——去查根因。\n"
-                "\n"
-                "只有当沙箱导致命令无法完成、且确有必要时才传 sandbox=\"host\" 请求单次越界："
-                "该请求默认被拒绝，开启后也必须逐条人工批准，仅在宿主上执行这一次。"
-                "\n\n"
-                "工具结果可能被截断：截断时会明确告诉你保留了多少、总共多少。"
-                "看到截断就缩小范围重跑或改走文件，不要原样再执行一次。"
+                "只有沙箱导致命令无法完成、且确有必要时才传 sandbox=\"host\" 请求单次越界："
+                "默认被拒绝，开启后也必须逐条人工批准。\n"
+                "结果被截断时会明确说保留了多少、总共多少；看到截断就缩小范围重跑或改走文件。"
             ),
             input_schema={
                 "type": "object",
@@ -1310,13 +1404,55 @@ def python_test_command(root=None) -> list[str]:
 # 这个 `python` 解析到系统解释器（3.13，没装 pytest），于是"测试跑不了"被当成
 # "测试没过"（真实台账 coding-008：代码改对了，却因解释器没 pytest 被判失败）。
 # 工作区自己的 venv 才是知道项目依赖的解释器，优先用它。
-_BARE_PYTHON = ("python", "python3", "py")
+#
+# `py` 不在这里：它是 Windows Python Launcher，`py -3` / `py -0p` 是启动器自己的
+# 开关。把它换成普通解释器会得到「Unknown option: -3」这种**假错误**——模型据此
+# 以为机器上没有可用的 Python，又换写法重试（真实台账：一条写计划书的任务因此
+# 连试十条命令都没找到可装包的 Python）。只有 `py -m 模块` 的写法在 fix 里替换。
+_BARE_PYTHON = ("python", "python3")
+
+
+def _command_segments(text: str) -> list[tuple[int, int]]:
+    """按 shell 连接符切段，引号里的内容不算分隔符。
+
+    只认 ``&&`` / ``||`` / ``|`` / POSIX ``;``；**不认单个 ``&``**——`2>&1`、
+    后台 `start /b ... &` 里的 `&` 不是「下一段命令」的边界，按它切会把重定向拆坏。
+    cmd.exe 不把 ``;`` 当分隔符，所以 Windows 上不切它，避免把参数拆开。
+    返回的是 ``(start, end)`` 下标，保留原字符串和分隔符，便于原样拼回。
+    """
+    spans: list[tuple[int, int]] = []
+    start = 0
+    quote = ""
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == quote and (i == 0 or text[i - 1] != "\\"):
+                quote = ""
+            i += 1
+            continue
+        if ch in "\"'":
+            quote = ch
+            i += 1
+            continue
+        if text.startswith("&&", i) or text.startswith("||", i):
+            spans.append((start, i))
+            start = i + 2
+            i += 2
+            continue
+        # cmd.exe 不把 `;` 当命令分隔符，它是参数的一部分；只有 POSIX sh 才切。
+        if ch == "|" or (ch == ";" and os.name != "nt"):
+            spans.append((start, i))
+            start = i + 1
+        i += 1
+    spans.append((start, len(text)))
+    return spans
 
 
 def normalize_python_command(
     command: str | list[str], root, *, fallback: str = ""
 ) -> str | list[str]:
-    """把命令首段的裸 `python`/`python3`/`py` 换成工作区的 venv 解释器。
+    """把命令里裸 `python`/`python3`/`py` 换成工作区的 venv 解释器。
 
     只换**确实存在**的项目 venv，其余原样返回——没匹配上就不猜。用于处理模型直接
     写 `run_shell("python -m pytest …")` 而非走 `run_tests` 的情况：那一路不经过
@@ -1329,38 +1465,58 @@ def normalize_python_command(
     注意：这跟 `normalize_relative_executable` 是两件事。那个补的是
     `.venv/Scripts/python.exe` 这种相对路径首段；这个补的是裸 `python`。两条都
     在服务 `run_process` 之前，分别覆盖不同的写法。
+
+    **按段替换**：`set "PYTHONPATH=src" && python -c …`、`cd x && py -m pytest`
+    这类链式命令的第二段也必须换。T25 真机就是这样：首段是 `set`，旧实现只看
+    命令开头，`python` 没换掉，模型转而 `where py` 再重试，白烧两轮。
     """
     venv = project_python(root) or fallback
     if not venv:
         return command
 
-    def fix(token: str) -> str:
-        head = token.strip().strip('"').strip("'")
-        if head in _BARE_PYTHON:
+    def fix(head: str, rest: str) -> str:
+        bare = head.strip().strip('"').strip("'")
+        if bare in _BARE_PYTHON:
             return venv
-        return token
+        # `py -m pytest` 是"用默认 Python 跑模块"，替换成项目解释器语义不变；
+        # `py -3` / `py -0p` / `py -V` 是启动器自己的开关，原样留给它。
+        if bare == "py" and rest.strip().split(None, 1)[0] == "-m":
+            return venv
+        return head
 
     if isinstance(command, list):
         if not command:
             return command
-        return [fix(str(command[0])), *[str(part) for part in command[1:]]]
+        return [
+            fix(str(command[0]), " ".join(str(part) for part in command[1:])),
+            *[str(part) for part in command[1:]],
+        ]
 
     text = str(command)
-    stripped = text.lstrip()
-    if not stripped:
+    if not text.strip():
         return command
-    # 只取首个"词"（到第一个空白或引号为止）
-    match = re.match(r'\s*["\']?([^\s"\']+)', text)
-    if not match:
+    # 用户显式设置了 PATH（`set "PATH=..." && python` / `export PATH=...`）时，
+    # 他明确指定了要用哪个解释器；按段替换会把这份意图抢掉。PYTHONPATH 不算。
+    if re.search(r"(?i)(?<![A-Za-z0-9_])PATH(?:=|:)", text):
         return command
-    head = match.group(1)
-    tail = text[match.end():]
-    fixed = fix(head)
-    if fixed == head:
-        return command
-    # 绝对路径含空格时必须加引号（和 normalize_relative_executable 同样的原因）
-    rendered = f'"{fixed}"' if " " in fixed else fixed
-    return f"{rendered}{tail}"
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in _command_segments(text):
+        pieces.append(text[cursor:start])
+        segment = text[start:end]
+        stripped = segment.lstrip()
+        match = re.match(r'(["\']?)([^\s"\']+)\1', stripped)
+        if match:
+            head = match.group(2)
+            fixed = fix(head, stripped[match.end():])
+            if fixed != head:
+                # 绝对路径含空格时必须加引号（和 normalize_relative_executable 同样的原因）
+                rendered = f'"{fixed}"' if " " in fixed else fixed
+                segment = segment[: len(segment) - len(stripped)] + rendered + stripped[match.end():]
+        pieces.append(segment)
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces)
 
 
 # ── 临时验证脚本清理（v162 §7.3：coding-039）────────────────────────────────

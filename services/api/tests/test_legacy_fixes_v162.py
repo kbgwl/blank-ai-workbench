@@ -32,19 +32,33 @@ def test_bare_python_rewritten_to_project_venv(tmp_path):
     assert "pytest" in out
 
 
-def test_bare_python3_and_py_also_rewritten(tmp_path):
+def test_bare_python3_and_py_module_also_rewritten(tmp_path):
     _make_venv(tmp_path)
     assert shell.normalize_python_command("python3 -m pytest", tmp_path).startswith(
         str(tmp_path / ".venv")
     )
+    # `py -m 模块` 语义不变，替换成项目解释器；`py -3` 是启动器开关，必须原样保留
+    # （换成普通解释器会得到假的「Unknown option: -3」）。
     assert shell.normalize_python_command("py -m pytest", tmp_path).startswith(
         str(tmp_path / ".venv")
     )
+    assert shell.normalize_python_command("py -3 -c \"print(1)\"", tmp_path) == "py -3 -c \"print(1)\""
+    assert shell.normalize_python_command("py -0p", tmp_path) == "py -0p"
 
 
 def test_no_project_venv_leaves_command_untouched(tmp_path):
     out = shell.normalize_python_command("python -m pytest", tmp_path)
     assert out == "python -m pytest"
+
+
+def test_no_project_venv_uses_explicit_fallback(tmp_path):
+    # run_shell 不传 fallback 时保持原样；传了 sys.executable 时用于没 venv 的
+    # 工作区，避免 Windows 上 `python` 不在 PATH 直接 9009。
+    import sys
+
+    out = shell.normalize_python_command("python -c \"print(1)\"", tmp_path, fallback=sys.executable)
+    assert sys.executable in out
+    assert out.endswith('-c "print(1)"')
 
 
 def test_absolute_interpreter_not_double_written(tmp_path):
@@ -74,6 +88,55 @@ def test_space_in_venv_path_gets_quoted(tmp_path):
     (venv / "python.exe").write_text("")
     out = shell.normalize_python_command("python -m pytest", root)
     assert out.startswith('"')
+
+
+def test_chained_python_is_rewritten_not_only_the_first_segment(tmp_path):
+    # T25 真机：`set PYTHONPATH=... && python -c ...` 的第一段是 set，
+    # 旧实现只看命令开头，第二段的 python 没换掉，模型又去 where/重试。
+    _make_venv(tmp_path)
+    venv = str(tmp_path / ".venv" / "Scripts" / "python.exe")
+    out = shell.normalize_python_command(
+        'set "PYTHONPATH=src" && python -c "print(1)"', tmp_path
+    )
+    assert out.startswith('set "PYTHONPATH=src" && ')
+    assert venv in out
+    assert out.rstrip().endswith('print(1)"')
+
+
+def test_explicit_path_setting_is_not_overridden(tmp_path):
+    # 用户自己 set "PATH=..." 就是明确指定解释器，不能被链式替换抢掉；
+    # PYTHONPATH 不同，它不影响解释器选择。
+    _make_venv(tmp_path)
+    cmd = 'set "PATH=C:\\Python312;%PATH%" && python -m pytest -q'
+    assert shell.normalize_python_command(cmd, tmp_path) == cmd
+    py_cmd = 'set "PYTHONPATH=src" && python -m pytest -q'
+    assert str(tmp_path / ".venv" / "Scripts" / "python.exe") in shell.normalize_python_command(py_cmd, tmp_path)
+
+
+def test_quoted_separator_inside_argument_is_not_split(tmp_path):
+    _make_venv(tmp_path)
+    venv = str(tmp_path / ".venv" / "Scripts" / "python.exe")
+    out = shell.normalize_python_command(
+        'echo "a && b" && python -c "print(1)"', tmp_path
+    )
+    assert 'echo "a && b"' in out
+    assert venv in out
+
+
+def test_pipe_segment_python_is_rewritten(tmp_path):
+    _make_venv(tmp_path)
+    venv = str(tmp_path / ".venv" / "Scripts" / "python.exe")
+    out = shell.normalize_python_command('type data.txt | python -c "print(1)"', tmp_path)
+    assert venv in out
+    assert "type data.txt | " in out
+
+
+def test_single_ampersand_redirection_is_not_treated_as_separator(tmp_path):
+    _make_venv(tmp_path)
+    venv = str(tmp_path / ".venv" / "Scripts" / "python.exe")
+    out = shell.normalize_python_command('python -c "print(1)" 2>&1', tmp_path)
+    assert venv in out
+    assert out.endswith(" 2>&1")
 
 
 # ── coding-039：临时候选脚本清理 ──────────────────────────────────────────────

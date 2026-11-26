@@ -31,6 +31,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 HOOK_EVENTS = (
     "session_start",
@@ -301,6 +302,9 @@ class HookSpec:
     # （pre_tool_use / user_prompt_submit）例外：它的价值就在于"等结果再决定"，
     # 异步化等于放弃 veto。
     async_run: bool = False
+    # 失败策略：open（默认，坏钩子不拦任务）或 block（安全类钩子失败必须阻断）。
+    # 只对阻断型事件生效；非阻断事件没有"阻断"这个落点。
+    on_failure: str = "open"
     # 这条钩子从哪来：env（BLANK_HOOKS）还是 settings（settings.json 的 hooks）。
     # 只用于审计，不影响执行。
     source: str = "env"
@@ -325,6 +329,8 @@ class HookSpec:
         }
         if self.async_run:
             body["async"] = True
+        if self.on_failure != "open":
+            body["on_failure"] = self.on_failure
         if self.source != "env":
             body["source"] = self.source
         if self.url:
@@ -465,6 +471,14 @@ def _build_specs(event: str, items: list, *, source: str, warnings: list[str]) -
                     warnings.append(f"{event} 第 {index} 组的 mcp_tool 钩子缺少 server/tool，已跳过")
                     continue
                 primary = f"{server}/{tool}"
+            on_failure = str(
+                hook.get("on_failure") or hook.get("onFailure") or "open"
+            ).strip().lower()
+            if on_failure not in ("open", "block"):
+                warnings.append(
+                    f"{event} 第 {index} 组的 on_failure={on_failure!r} 无效，按 open 处理"
+                )
+                on_failure = "open"
             specs.append(
                 HookSpec(
                     kind=kind,
@@ -474,6 +488,7 @@ def _build_specs(event: str, items: list, *, source: str, warnings: list[str]) -
                     async_run=bool(
                         hook.get("async") or hook.get("asyncRun") or hook.get("background")
                     ),
+                    on_failure=on_failure,
                     source=source,
                     url=primary if kind == "http" else "",
                     prompt=primary if kind in ("prompt", "agent") else "",
@@ -1013,6 +1028,19 @@ class HookRunner:
                 self._spawn(spec, event, body, effort=effort)
                 continue
             result = await self._execute(spec, event, body, effort=effort)
+            if (
+                spec.on_failure == "block"
+                and event in BLOCKING_EVENTS
+                and result.status in ("failed", "timeout")
+                and not result.denied
+            ):
+                # 安全类钩子坏掉时不能静默放行：失败本身就是"无法确认安全"。
+                result.decision = "deny"
+                result.reason = (
+                    f"{result.reason}；钩子 on_failure=block，按失败阻断"
+                    if result.reason
+                    else "钩子 on_failure=block，按失败阻断"
+                )
             results.append(result)
             self.results.append(result)
             if event in BLOCKING_EVENTS and result.denied:
@@ -1192,8 +1220,12 @@ class HookRunner:
             return int((time.perf_counter() - started) * 1000)
 
         body = json.dumps(payload, ensure_ascii=False, default=str)
+        # 本机回环不走系统代理：某些环境里 HTTP_PROXY 会把 127.0.0.1 也拦走，
+        # 一个"连不上就非阻断失败"的钩子会变成 503，看起来像钩子服务坏了。
+        host = (urlparse(spec.url).hostname or "").lower()
+        trust_env = host not in ("127.0.0.1", "localhost", "::1")
         try:
-            async with httpx.AsyncClient(timeout=spec.timeout) as client:
+            async with httpx.AsyncClient(timeout=spec.timeout, trust_env=trust_env) as client:
                 response = await client.post(
                     spec.url,
                     content=body.encode("utf-8"),

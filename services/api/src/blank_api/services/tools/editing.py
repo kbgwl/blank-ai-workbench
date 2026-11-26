@@ -44,8 +44,37 @@ def _redacted_diff(original: str, updated: str, relative: str) -> str:
     return redact(diff) if contains_secret(diff) else diff
 
 
+def _diff_counts(diff: str) -> tuple[int, int, int]:
+    """从统一 diff 数出 (新增行, 删除行, hunk 数)。
+
+    工具回执不再带全文 diff，但交付/审查仍需要这三个事实；在写盘函数里
+    顺手算完，事件与检查点就只留计数。
+    """
+    added = removed = hunks = 0
+    for line in diff.splitlines():
+        if line.startswith("@@"):
+            hunks += 1
+        elif line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+    return added, removed, hunks
+
+
 def _changed_lines(diff: str) -> int:
-    return len([line for line in diff.split("\n") if line[:1] in {"+", "-"} and line[1:2] not in {"+", "-"}])
+    added, removed, _ = _diff_counts(diff)
+    return added + removed
+
+
+def _result_counts(result: dict) -> tuple[int, int, int]:
+    """写盘结果里的 (added, removed, hunks)：新结果自带，老/broker 结果从 diff 兜底。"""
+    diff = str(result.get("diff") or "")
+    added, removed, hunks = _diff_counts(diff)
+    return (
+        int(result.get("added", added) or 0),
+        int(result.get("removed", removed) or 0),
+        int(result.get("hunks", hunks) or 0),
+    )
 
 
 def _near_missing(text: str, needle: str) -> str:
@@ -247,19 +276,47 @@ def _edit_on_disk(root, task_id: str, arguments: dict, guard: dict | None = None
         handle.truncate()
         handle.write(payload)
     diff = _redacted_diff(original, updated, relative)
+    added, removed, hunks = _diff_counts(diff)
     return {
         "path": relative,
         "existed": True,
         "backup_path": backup_rel,
         "diff": diff,
-        "changed_lines": _changed_lines(diff),
+        "changed_lines": added + removed,
+        "added": added,
+        "removed": removed,
+        "hunks": hunks,
         "replacements": count,
         "matched": matched,
     }
 
 
+def _conform_append(text: str, original: str) -> str:
+    """把要追加的片段调成原文件的形态（换行与 BOM），再原样接在后面。
+
+    与 ``_conform_written`` 的区别：那是"整份新内容"，这是"只追加的一段"。
+    BOM 只属于文件开头，片段里的 BOM 必须去掉；原文件末尾没有换行时补一个，
+    否则两段会粘成一行。
+    """
+    fragment = text[1:] if text.startswith("\ufeff") else text
+    crlf = original.count("\r\n")
+    lf_only = original.count("\n") - crlf
+    normalized = fragment.replace("\r\n", "\n")
+    if crlf > lf_only:
+        normalized = normalized.replace("\n", "\r\n")
+    newline = "\r\n" if crlf > lf_only else "\n"
+    if (
+        original
+        and normalized
+        and not original.endswith(("\n", "\r"))
+        and not normalized.startswith(("\n", "\r"))
+    ):
+        normalized = newline + normalized
+    return normalized
+
+
 def _write_on_disk(root, task_id: str, arguments: dict, guard: dict | None = None) -> dict:
-    """Write 的磁盘侧全部动作：整文件写入，已存在则先备份。"""
+    """Write 的磁盘侧全部动作：整文件写入或追加，已存在则先备份。"""
     relative = str(arguments.get("path") or "").strip()
     if not relative:
         return {"missing_path": True}
@@ -267,6 +324,7 @@ def _write_on_disk(root, task_id: str, arguments: dict, guard: dict | None = Non
     if content is None:
         return {"missing_content": True, "path": relative}
     text = content if isinstance(content, str) else str(content)
+    append = bool(arguments.get("append"))
     target = resolve_for_write(root, relative)
     existed = target.exists()
     original = ""
@@ -286,10 +344,18 @@ def _write_on_disk(root, task_id: str, arguments: dict, guard: dict | None = Non
                 original = raw.decode("utf-8")
             except UnicodeDecodeError:
                 binary = True
+            if binary and append:
+                return {
+                    "guard_error": "这是二进制文件，不能追加文本；请换一个文本文件或改用整文件写入。",
+                    "path": relative,
+                }
             if not binary:
                 # 先按原文件形态归一再比：模型发的是 LF 内容、文件是 CRLF 时，
                 # 不归一就会把「没改」判成「全改」，白写一次还留一份备份。
-                text = _conform_written(text, original)
+                if append:
+                    text = original + _conform_append(text, original)
+                else:
+                    text = _conform_written(text, original)
                 if original == text:
                     return {"unchanged": True, "path": relative, "existed": True}
             backup_rel = write_backup(root, task_id, relative, raw)
@@ -304,12 +370,16 @@ def _write_on_disk(root, task_id: str, arguments: dict, guard: dict | None = Non
         with open_verified(root, relative, mode="wb", create=True) as handle:
             handle.write(payload)
     diff = "" if binary else _redacted_diff(original, text, relative)
+    added, removed, hunks = _diff_counts(diff)
     return {
         "path": relative,
         "existed": existed,
         "backup_path": backup_rel,
         "diff": diff,
-        "changed_lines": _changed_lines(diff),
+        "changed_lines": added + removed,
+        "added": added,
+        "removed": removed,
+        "hunks": hunks,
         "binary": binary,
     }
 
@@ -454,9 +524,12 @@ async def _edit_file(context: ToolContext, arguments: dict) -> ToolOutcome:
     change_id = await _record_change(
         context, relative, "modified", str(result["diff"]), str(result["backup_path"])
     )
-    if context.file_state is not None:
-        context.file_state.record_write(context.root, relative)
     matched = [item for item in (result.get("matched") or []) if item]
+    added, removed, hunks = _result_counts(result)
+    if context.file_state is not None:
+        context.file_state.record_write(
+            context.root, relative, added=added, removed=removed
+        )
     # 容错匹配必须说出来：不说，模型就以为自己的 old_string 是对的，下一处照旧发错的。
     how = f"；{'、'.join(dict.fromkeys(matched))}匹配" if matched else ""
     return ok(
@@ -467,7 +540,9 @@ async def _edit_file(context: ToolContext, arguments: dict) -> ToolOutcome:
         backup_path=str(result["backup_path"]),
         reversible=True,
         replacements=result["replacements"],
-        diff=str(result["diff"]),
+        added=added,
+        removed=removed,
+        hunks=hunks,
         matched=matched,
         **marker,
     )
@@ -500,22 +575,29 @@ async def _write_file(context: ToolContext, arguments: dict) -> ToolOutcome:
     change_id = await _record_change(
         context, relative, change_type, str(result["diff"]), str(result["backup_path"])
     )
-    if context.file_state is not None:
-        context.file_state.record_write(context.root, relative)
     # 覆盖一份已有文件、实际只动了几行——这一次的生成成本已经花掉了，提醒是为下一次：
     # 整份重写要模型把整个文件重新想一遍，而 edit_file 只发改动的那段。
+    append = bool(arguments.get("append"))
     hint = ""
-    if existed and int(result["changed_lines"]) <= 30:
+    if existed and not append and int(result["changed_lines"]) <= 30:
         hint = "\n（这次是整份覆盖；下次只改局部用 edit_file，不必把整份重新生成一遍。）"
+    action = "追加" if append and existed else ("覆盖" if existed else "新建")
+    added, removed, hunks = _result_counts(result)
+    if context.file_state is not None:
+        context.file_state.record_write(
+            context.root, relative, added=added, removed=removed
+        )
     return ok(
-        f"已写入文件：{relative}（{'覆盖' if existed else '新建'}，{result['changed_lines']} 行变更）{hint}",
+        f"已写入文件：{relative}（{action}，{result['changed_lines']} 行变更）{hint}",
         path=relative,
         change_type=change_type,
         change_id=change_id,
         backup_path=str(result["backup_path"]),
         reversible=existed,
         changed_lines=result["changed_lines"],
-        diff=str(result["diff"]),
+        added=added,
+        removed=removed,
+        hunks=hunks,
         **marker,
     )
 
@@ -525,40 +607,29 @@ def editing_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="edit_file",
             description=(
-                "对工作区内的文件做精确字符串替换。修改前必须先用 read_file 读过该文件，否则调用会失败。"
-                "old_string 必须与文件内容完全一致（包括缩进与空行），并且在文件中唯一，否则调用失败；"
-                "确需替换所有出现时把 replace_all 设为 true。old_string 与 new_string 相同时不会产生任何修改，"
-                "调用会失败。只改一处小内容时优先用它，不要整文件重写。"
-                "同一个文件要改多段时，用 edits 数组一次发出（按顺序应用），不要拆成多次调用。"
-                "写前会自动保存可回滚备份。"
+                "对工作区文件做精确字符串替换。修改前必须先用 read_file 读过，否则失败。"
+                "old_string 必须与原文完全一致（含缩进/空行）且唯一；要替换所有出现设 replace_all=true。"
+                "old_string 与 new_string 相同会失败。只改小段用它，别整文件重写；"
+                "同一文件多段用 edits 数组一次发。写前自动备份。"
             ),
             input_schema={
                 "type": "object",
                 "required": ["path"],
                 "properties": {
-                    "path": {"type": "string", "description": "工作区相对文件路径"},
-                    "old_string": {"type": "string", "description": "要被替换的确切原文"},
+                    "path": {"type": "string", "description": "工作区相对路径"},
+                    "old_string": {"type": "string", "description": "要替换的确切原文"},
                     "new_string": {"type": "string", "description": "替换后的内容"},
-                    "replace_all": {
-                        "type": "boolean",
-                        "description": "为 true 时替换所有出现；默认只允许唯一匹配",
-                    },
+                    "replace_all": {"type": "boolean", "description": "true 时替换所有出现；默认唯一匹配"},
                     "edits": {
                         "type": "array",
-                        "description": (
-                            "一次改多处时用：每项是一段 old_string/new_string，按数组顺序依次应用。"
-                            "传了 edits 就不要再传 old_string/new_string。"
-                        ),
+                        "description": "一次改多处：每项 old_string/new_string，按顺序应用；传了它就别再传顶层 old_string/new_string。",
                         "items": {
                             "type": "object",
                             "required": ["old_string", "new_string"],
                             "properties": {
-                                "old_string": {"type": "string", "description": "要被替换的确切原文"},
-                                "new_string": {"type": "string", "description": "替换后的内容"},
-                                "replace_all": {
-                                    "type": "boolean",
-                                    "description": "为 true 时替换所有出现；默认只允许唯一匹配",
-                                },
+                                "old_string": {"type": "string"},
+                                "new_string": {"type": "string"},
+                                "replace_all": {"type": "boolean"},
                             },
                         },
                     },
@@ -575,18 +646,21 @@ def editing_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="write_file",
             description=(
-                "把整个文件写成给定内容（新建或整体覆盖）。只在两种情况下用它：新建文件，"
-                "或者整篇内容都要重写。改已有文件里的局部，用 edit_file——它只发改动的那一段，"
-                "不必把整份文件重新生成一遍。覆盖已有文件前必须先用 read_file 读过它，"
-                "文件在读过之后又被改过时会失败，需要重新读。新建文件不需要先读。"
-                "写前会自动保存可回滚备份。"
+                "把整个文件写成给定内容；append=true 时追加到已有文件末尾（不存在则新建）。"
+                "新建、整篇重写或长文分段用它，只改局部用 edit_file。覆盖前必须先用 read_file "
+                "读过，读过之后文件又被改过会失败；新建不需要先读，写前自动备份。"
+                "内容很长时分节写、用 append 追加，避免一次参数流断掉导致整次写入失败。"
             ),
             input_schema={
                 "type": "object",
                 "required": ["path", "content"],
                 "properties": {
                     "path": {"type": "string", "description": "工作区相对文件路径"},
-                    "content": {"type": "string", "description": "要写入的完整文件内容"},
+                    "content": {"type": "string", "description": "完整文件内容；append 时为追加片段"},
+                    "append": {
+                        "type": "boolean",
+                        "description": "为 true 时追加到已有文件末尾（不存在则新建）",
+                    },
                 },
             },
             risk_level="medium",

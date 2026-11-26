@@ -66,20 +66,49 @@ export async function loadBoot(): Promise<Boot> {
 }
 
 /** 会话按最近活动排。后端顺序不保证，这里再排一次——列表第一项必须是"刚才那条"。 */
+function sortByRecent(rows: Thread[]): Thread[] {
+  return [...rows].sort((a, b) => {
+    const left = Date.parse(b.updatedAt || b.createdAt);
+    const right = Date.parse(a.updatedAt || a.createdAt);
+    return (Number.isNaN(left) ? 0 : left) - (Number.isNaN(right) ? 0 : right);
+  });
+}
+
+export type ConversationList = {
+  /** 活跃会话与已归档会话合并后的清单，按最近活动倒序。侧栏按 status 分区。 */
+  threads: Thread[];
+  /** 已归档列表单独读取失败。活跃列表仍然可用，侧栏只在已归档组位置报错。 */
+  archivedError: boolean;
+};
+
 /**
  * 全部项目的会话，不按当前工作区过滤。
  *
  * 工作区决定"在哪个目录里干活"，不决定"有哪些历史对话"。之前按 projectId 查，
  * 一换工作区左侧就换一批、和设置页的任务数也对不上；现在统一成全局清单，
  * 切页面、切工作区都不变。
+ *
+ * 活跃与已归档并行取：活跃 50 条是首屏，已归档 200 条只进折叠组。
+ * 已归档失败不能让整个侧栏变空——它是次要数据，单独用 archivedError 报。
  */
-export async function loadConversations(): Promise<Thread[]> {
-  const rows = await fetchAllThreads();
-  return [...rows].sort((a, b) => {
-    const left = Date.parse(b.updatedAt || b.createdAt);
-    const right = Date.parse(a.updatedAt || a.createdAt);
-    return (Number.isNaN(left) ? 0 : left) - (Number.isNaN(right) ? 0 : right);
-  });
+export async function loadConversations(): Promise<ConversationList> {
+  const [active, archived] = await Promise.allSettled([
+    fetchAllThreads({ limit: 50, status: "active" }),
+    fetchAllThreads({ limit: 200, status: "archived" }),
+  ]);
+  if (active.status === "rejected") throw active.reason;
+  const archivedRows = archived.status === "fulfilled" ? archived.value : [];
+  const seen = new Set<string>();
+  const merged: Thread[] = [];
+  for (const thread of [...active.value, ...archivedRows]) {
+    if (seen.has(thread.id)) continue;
+    seen.add(thread.id);
+    merged.push(thread);
+  }
+  return {
+    threads: sortByRecent(merged),
+    archivedError: archived.status === "rejected",
+  };
 }
 
 async function turnEvents(taskId: string): Promise<{ events: AgentEvent[]; loaded: boolean }> {
@@ -134,6 +163,8 @@ export async function sendMessage(input: {
   providerId?: string;
   scenario?: string;
   memoryOptIn?: boolean;
+  /** 纯聊天：这个对话没有选目录；只直接回答，禁用文件/命令工具。 */
+  chatOnly?: boolean;
   /** 发送栏的权限档（v0.10.1 §4）：随任务快照固定，start 兜底时也带同一份。 */
   permissionMode?: string;
   attachments?: AttachmentRef[];
@@ -167,6 +198,7 @@ export async function sendMessage(input: {
       // 判定并就地启动——后端会直接返回 queued/running，下面的兜底不再触发。
       permissionMode: input.permissionMode,
       memoryOptIn: input.memoryOptIn,
+      chatOnly: input.chatOnly,
       attachments,
     });
   } catch (error) {

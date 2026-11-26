@@ -48,6 +48,16 @@ class TaskCreate(BaseModel):
     permission_mode: Literal["", "default", "accept_edits", "plan", "bypass"] = ""
     # 仅日常场景有效（与 TaskRunIn.memory_opt_in 同口径）。
     memory_opt_in: bool = False
+    # 纯聊天：这一轮没有工作目录，只直接回答，不给文件/命令工具。
+    # 前端在新对话未选目录时置 True；项目本身没有 workspace 时也按纯聊天处理。
+    chat_only: bool = False
+    # 用户明确要求这一轮不要碰工具（只回复/不要读取/不要调用工具）。
+    # 与 chat_only 的区别：可以有工作目录，只是不许调用任何文件/命令工具。
+    no_tools: bool = False
+    # 用户明确要求不要修改/不要执行，但可以读。工具表保留，只读闸门硬拒写操作。
+    read_only: bool = False
+    # 用户只要文件/目录清单：只给 list_files / glob，不读文件内容。
+    list_only: bool = False
 
 
 class TaskOut(BaseModel):
@@ -60,6 +70,9 @@ class TaskOut(BaseModel):
     # 派发快照（v162，dispatch.py）。空 dict = 这条任务不是按快照派的。
     # 原样带出去而不是只给摘要：证据页要能回答「当时按什么权限跑的」。
     dispatch_snapshot: dict = Field(default_factory=dict)
+    # UP-04：创建响应里告知沙箱**当前默认档位**实际强制了什么。
+    # 只在创建时填充；其余读取路径为空 dict，运行时事实以 evidence.boundaries 为准。
+    sandbox_constraints: dict = Field(default_factory=dict)
     # goal 的来历（斜杠命令展开）。原样带出去：证据页要能回答"这段提示词是怎么来的"，
     # 提交钩子的载荷也从这里读，两处必须是同一份未打码的值。
     expansion: dict = Field(default_factory=dict)
@@ -144,8 +157,8 @@ class TaskApprovalIn(BaseModel):
     arguments_hash: str = Field(default="", max_length=128)
     # 四元匹配的第四元：带上就一起校验；老客户端不带时不改变既有行为。
     tool_name: str = Field(default="", max_length=64)
-    # 批准作用域：仅本次 / 本会话该命令前缀 / 本会话该工具。
-    scope: Literal["once", "prefix", "tool"] = "once"
+    # 批准作用域：仅本次 / 本会话该命令前缀 / 本会话这类动作 / 本会话该工具。
+    scope: Literal["once", "prefix", "session", "tool"] = "once"
     # 驳回时"打回到第几步"（计划步骤 id）。空串表示普通驳回——只否掉这次调用，
     # 计划不动。带上就表示整段退回重做：该步及其之后全部重开成 pending。
     send_back_step_id: str = Field(default="", max_length=64)

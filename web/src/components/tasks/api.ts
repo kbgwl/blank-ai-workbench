@@ -9,6 +9,7 @@ import {
   request,
   toApiError,
 } from "@/lib/http";
+import { readJson } from "@/lib/safe-storage";
 
 export { ApiError, errorCode, errorMessage };
 
@@ -219,6 +220,8 @@ export type TaskDraft = {
   permissionMode?: string;
   /** 仅日常场景有意义的记忆开关；创建时就带上，不必再靠 start 请求补发。 */
   memoryOptIn?: boolean;
+  /** 纯聊天：这个对话没有选目录，只直接回答，禁用文件/命令工具。 */
+  chatOnly?: boolean;
   /** 显式要求（或禁止）后端立即启动。缺省 = 交给后端监督者判定。 */
   autoStart?: boolean;
   /** 这一轮随消息一起给的图片。只传 id 与名字：文件本体已经上传过了。 */
@@ -331,22 +334,46 @@ export function normalizeThreadDetail(source: unknown): ThreadDetail | null {
   return { ...base, turns };
 }
 
+/** 会话列表的状态筛选。默认 all，老调用方行为不变。 */
+export type ThreadStatusFilter = "all" | "active" | "archived";
+
+function threadListQuery(options: { limit?: number; status?: ThreadStatusFilter }): string {
+  const params = new URLSearchParams({ limit: String(options.limit ?? 50) });
+  // all 是默认值，不发它：后端行为与筛选上线前完全一致。
+  if (options.status && options.status !== "all") params.set("status", options.status);
+  return params.toString();
+}
+
+function normalizeThreadList(rows: unknown): Thread[] {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => normalizeThread(row))
+    .filter((thread): thread is Thread => thread !== null);
+}
+
 /**
  * 全部项目的会话，按最近活动排序。
  *
  * 侧栏要跨页面保持同一份清单：首页如果只按当前项目查，而设置页左栏查的是全部任务，
  * 两个数字就对不上，用户看到的是"对话记录不同步"。首页与全站左栏都读这一个接口。
+ *
+ * 状态过滤在服务端先做再 limit：归档会话同样占 50 条窗口，只在返回后过滤会把
+ * 真正活跃的会话挤出侧栏。
  */
-export function fetchAllThreads(limit = 50): Promise<Thread[]> {
-  return request<unknown[]>(`${api}/threads?limit=${limit}`, { cache: "no-store" }).then((rows) =>
-    (Array.isArray(rows) ? rows : []).map((row) => normalizeThread(row)).filter((thread): thread is Thread => thread !== null),
+export function fetchAllThreads(
+  options: { limit?: number; status?: ThreadStatusFilter } = {},
+): Promise<Thread[]> {
+  return request<unknown[]>(`${api}/threads?${threadListQuery(options)}`, { cache: "no-store" }).then(
+    normalizeThreadList,
   );
 }
 
-export function fetchThreads(projectId: string): Promise<Thread[]> {
-  return request<unknown[]>(`${api}/projects/${projectId}/threads`, { cache: "no-store" }).then((rows) =>
-    (Array.isArray(rows) ? rows : []).map((row) => normalizeThread(row)).filter((thread): thread is Thread => thread !== null),
-  );
+export function fetchThreads(
+  projectId: string,
+  options: { limit?: number; status?: ThreadStatusFilter } = {},
+): Promise<Thread[]> {
+  return request<unknown[]>(`${api}/projects/${projectId}/threads?${threadListQuery(options)}`, {
+    cache: "no-store",
+  }).then(normalizeThreadList);
 }
 
 export function fetchThread(threadId: string): Promise<ThreadDetail | null> {
@@ -418,6 +445,7 @@ export function createTurn(threadId: string, draft: TaskDraft): Promise<Task> {
   // v0.10.1 §4：权限档与记忆开关在创建时刻入快照；auto_start 交给后端就地启动。
   if (draft.permissionMode) body.permission_mode = draft.permissionMode;
   if (draft.memoryOptIn !== undefined) body.memory_opt_in = draft.memoryOptIn;
+  if (draft.chatOnly) body.chat_only = true;
   if (draft.autoStart !== undefined) body.auto_start = draft.autoStart;
   return request<unknown>(`${api}/threads/${threadId}/turns`, {
     method: "POST",
@@ -443,20 +471,53 @@ export function forkThread(threadId: string, title = ""): Promise<Thread> {
   });
 }
 
-/** 归档，不是删除：删会话会把那些轮次任务的 thread_id 置空，它们就再也串不回去了。 */
-export function archiveThread(threadId: string): Promise<void> {
-  return request<void>(`${api}/threads/${threadId}`, { method: "DELETE" });
+/**
+ * 批量归档的结果。三个桶互斥：
+ * - archived：这次从 active 变成 archived；
+ * - unchanged：本来就是 archived（别的窗口先归档了）；
+ * - missing：不存在或已永久删除。
+ */
+export type BatchArchiveResult = {
+  archived: string[];
+  unchanged: string[];
+  missing: string[];
+};
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
 }
 
-/** 更新会话的 title 或 status（取消归档等）. */
+/** 一次归档多条会话。与单条归档同一语义：PATCH 改 status，不停止任务、不删轮次。 */
+export function archiveThreads(ids: string[]): Promise<BatchArchiveResult> {
+  return request<unknown>(`${api}/threads/batch-archive`, {
+    method: "POST",
+    ...jsonInit,
+    body: JSON.stringify({ ids }),
+  }).then((payload) => {
+    const record = (payload ?? {}) as Record<string, unknown>;
+    return {
+      archived: stringList(record.archived),
+      unchanged: stringList(record.unchanged),
+      missing: stringList(record.missing),
+    };
+  });
+}
+
+/** 归档，不是删除：只改 status，轮次与任务全部保留，之后还能取消归档。 */
+export function archiveThread(threadId: string): Promise<void> {
+  return updateThread(threadId, { status: "archived" }).then(() => undefined);
+}
+
 /** 物理删除会话及其所有关联任务。不可恢复。 */
 export function deleteThread(threadId: string): Promise<void> {
   return request<void>(`${api}/threads/${threadId}/permanent`, { method: "DELETE" });
 }
 
+/** 更新会话的 title 或 status（取消归档等）。 */
 export function updateThread(threadId: string, fields: { title?: string; status?: string }): Promise<unknown> {
   return request<unknown>(`${api}/threads/${threadId}`, {
     method: "PATCH",
+    ...jsonInit,
     body: JSON.stringify(fields),
   });
 }
@@ -775,8 +836,8 @@ export type UsageInfo = {
   delegatedTokens: number | null;
   delegatedCalls: number | null;
 };
-/** 审批作用域：仅本次 / 本会话该命令前缀 / 本会话该工具。 */
-export type ApprovalScope = "once" | "prefix" | "tool";
+/** 审批作用域：仅本次 / 本会话该命令前缀 / 本会话这类动作 / 本会话该工具。 */
+export type ApprovalScope = "once" | "prefix" | "session" | "tool";
 
 /** 一档批准：文案与"这一档到底免问多大一片"的说明，两者都来自后端。 */
 export type ApprovalGrant = { scope: ApprovalScope; label: string; warning: string };
@@ -799,7 +860,7 @@ export type PendingApproval = {
   /** 四元匹配的第四元。老卡没有这个字段（空串），提交时就不带，行为与从前一致。 */
   toolName: string;
   /**
-   * 这张卡是否已经过了有效期（后端 TTL，默认 30 分钟）。
+   * 这张卡是否已经过了有效期（后端 TTL，默认 24 小时，可用环境变量调短）。
    *
    * 过期后后端仍把它列在 pending 里（任务确实还没往下走），但提交一定 409。
    * 不把这个字段读出来的后果是：卡片照旧给三颗可点的钮，用户点下去拿到一句
@@ -1350,6 +1411,7 @@ export function approvalGrantOptions(approval: {
 
 function scopeFallbackLabel(scope: ApprovalScope, prefix?: string): string {
   if (scope === "prefix") return `本会话总是允许 ${prefix ?? "这类操作"}`;
+  if (scope === "session") return "本会话允许这类动作";
   if (scope === "tool") return "本会话总是允许该工具";
   return "允许这一次";
 }
@@ -1812,6 +1874,8 @@ export type Provider = {
    * 全列出来会让用户以为配好了，选完发消息才发现不能用。
    */
   api_key_hint?: string;
+  /** 后端按设置页锁定的默认供应商；列表里最多一个为 true。 */
+  is_default?: boolean;
 };
 
 /** 供应商列表拿不到时，模型选择器退化为「跟随默认供应商」。 */
@@ -1962,6 +2026,7 @@ export function createTask(projectId: string, draft: TaskDraft): Promise<Task> {
   if (draft.scenario) body.scenario = draft.scenario;
   if (draft.permissionMode) body.permission_mode = draft.permissionMode;
   if (draft.memoryOptIn !== undefined) body.memory_opt_in = draft.memoryOptIn;
+  if (draft.chatOnly) body.chat_only = true;
   if (draft.autoStart !== undefined) body.auto_start = draft.autoStart;
   return request<unknown>(`${api}/projects/${projectId}/tasks`, {
     method: "POST",
@@ -1985,14 +2050,8 @@ export function runTask(
   if (input.memoryOptIn !== undefined) body.memory_opt_in = input.memoryOptIn;
   // 权限档：补发时仍以发送栏的选择为准（与任务快照一致），不悄悄落回全局默认。
   if (input.permissionMode) body.permission_mode = input.permissionMode;
-  if (typeof window !== "undefined") {
-    try {
-      const roles = JSON.parse(window.localStorage.getItem("blank.model.roles") ?? "{}") as Record<string, string>;
-      if (Object.keys(roles).length > 0) body.role_provider_ids = roles;
-    } catch {
-      // Ignore malformed local preferences and use the primary model.
-    }
-  }
+  const roles = readJson<Record<string, string>>("blank.model.roles", {});
+  if (Object.keys(roles).length > 0) body.role_provider_ids = roles;
   return request<unknown>(`${api}/tasks/${taskId}/start`, { method: "POST", ...jsonInit, body: JSON.stringify(body) });
 }
 
@@ -2155,6 +2214,10 @@ export type StreamHandlers = {
   /** 实时增量：模型正在说的话，允许丢，不进时间线。 */
   onDelta?: (delta: LiveDelta) => void;
   onDone?: () => void;
+  /** 任何帧到达（含 ping / keep-alive）：重连看门狗据此判断连接还活着。 */
+  onActivity?: () => void;
+  /** 已经收到的最大事件 seq：断线重连时从它之后续传。 */
+  lastSeq?: number;
   signal: AbortSignal;
 };
 
@@ -2183,6 +2246,7 @@ function emitFrame(data: string, onEvent: StreamHandlers["onEvent"]): void {
 
 /** 一帧 SSE：增量走 onDelta，其余当持久事件处理。 */
 function emitChunk(frame: { event: string; data: string }, handlers: StreamHandlers): void {
+  handlers.onActivity?.();
   if (frame.event === "done" || frame.event === "keepalive" || frame.event === "ping") return;
   if (frame.event === "delta") {
     const delta = parseDelta(frame.data);
@@ -2197,11 +2261,16 @@ function emitChunk(frame: { event: string; data: string }, handlers: StreamHandl
  * 由 useTaskEvents 退回轮询；抛出的错误消息直接来自后端的中文错误信封。
  */
 export async function streamTaskEvents(taskId: string, handlers: StreamHandlers): Promise<void> {
+  const cursor = Number.isFinite(handlers.lastSeq) && (handlers.lastSeq ?? 0) > 0 ? handlers.lastSeq : 0;
+  const query = cursor ? `?after_seq=${cursor}` : "";
   let response: Response;
   try {
-    response = await fetch(`${api}/tasks/${taskId}/events/stream`, {
+    response = await fetch(`${api}/tasks/${taskId}/events/stream${query}`, {
       method: "GET",
-      headers: { accept: "text/event-stream" },
+      headers: {
+        accept: "text/event-stream",
+        ...(cursor ? { "Last-Event-ID": String(cursor) } : {}),
+      },
       cache: "no-store",
       signal: handlers.signal,
     });

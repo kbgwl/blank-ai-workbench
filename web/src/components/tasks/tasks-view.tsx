@@ -214,7 +214,8 @@ export function TasksView({ initialTaskId = null }: Props) {
   );
 
   /** 审批：POST /tasks/{id}/approval，批准会从断点继续，驳回会保留已完成的步骤并置为 paused。
-   *  scope 决定这次批准记多久：once 仅本次、prefix 记住该命令前缀、tool 记住整个工具。
+   *  scope 决定这次批准记多久：once 仅本次、prefix 记住该命令前缀、
+   *  session 记住这类动作（本会话同类不再逐条问）、tool 记住整个工具。
    *
    *  入参是一整个 `ApprovalDecision`，不是位置参数：这条链上有四层转发，拆成位置参数
    *  时少传一个 `tsc` 不会报，用户写的驳回理由就这样被静默丢过一版。 */

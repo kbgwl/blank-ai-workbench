@@ -1,18 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { fetchAllThreads, fetchProjects, type Project, type Thread } from "@/components/tasks/api";
 import { HealthPill } from "@/components/health-pill";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { isNavActive } from "@/components/bot/nav";
 import { PALETTE_SHORTCUT, shortcutHint } from "@/lib/shortcuts";
+import { readString, writeString } from "@/lib/safe-storage";
 import { dayBucket } from "@/components/bot/turns";
 import { StatusDot } from "@/components/bot/status-dot";
 
 /**
- * 全站唯一的左栏。默认展开（图标 + 文字，200px），可一键收窄成 52px 图标栏。
+ * 全站唯一的左栏。默认展开（图标 + 文字，240px），可一键收窄成 52px 图标栏。
  *
  * 之前是固定 52px 纯图标栏——用户反馈"设置页左侧还是收窄的、看不出是什么"。
  * 收窄可以是功能，但不该是默认值：常驻栏要让人一眼看懂有哪些地方可去。
@@ -31,18 +31,45 @@ const DAY_LABEL: Record<ReturnType<typeof dayBucket>, string> = {
 };
 const DAY_ORDER: ReturnType<typeof dayBucket>[] = ["today", "yesterday", "week", "earlier"];
 
+// 侧栏收窄状态同样走 useSyncExternalStore：localStorage 是跨启动真源，
+// effect 里同步 setState 既会闪一下，也会被 react-hooks/set-state-in-effect 拦。
+const RAIL_EVENT = "blank:rail-change";
+
+function subscribeRail(onChange: () => void): () => void {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(RAIL_EVENT, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(RAIL_EVENT, onChange);
+  };
+}
+
+function railCollapsed(): boolean {
+  return readString(RAIL_KEY) === "1";
+}
+
+function setRailCollapsed(next: boolean): void {
+  writeString(RAIL_KEY, next ? "1" : "0");
+  window.dispatchEvent(new Event(RAIL_EVENT));
+}
+
 export function AppRail() {
   const pathname = usePathname();
+  const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
   const [threads, setThreads] = useState<Thread[] | null>(null);
   const [projectsError, setProjectsError] = useState(false);
   const [threadsError, setThreadsError] = useState(false);
-  const [flyout, setFlyout] = useState<Flyout>(null);
+  // 浮层记住"它是在哪个路径打开的"：切页后旧路径的浮层自动失效，
+  // 不需要 effect 里 setState(null) 去关它。
+  const [flyout, setFlyout] = useState<{ name: Flyout; path: string } | null>(null);
   // 默认展开；只有用户显式收窄过才记住 collapsed=true。
-  const [collapsed, setCollapsed] = useState(false);
+  const collapsed = useSyncExternalStore(subscribeRail, railCollapsed, () => false);
+  const openFlyout = flyout && flyout.path === pathname ? flyout.name : null;
 
+  // 初次挂载时拉一次项目与会话；两者互不阻塞，谁先回来谁先显示。
+  // 这里只在 Promise 回调里 setState，不在 effect 体内同步 setState。
   useEffect(() => {
-    setCollapsed(window.localStorage.getItem(RAIL_KEY) === "1");
     fetchProjects()
       .then((rows) => {
         setProjects(rows);
@@ -53,7 +80,8 @@ export function AppRail() {
         setProjectsError(true);
       });
     // 会话列表与首页同源：同一个 /threads 接口，切页面条数不变。
-    fetchAllThreads()
+    // 只取活跃会话：全站左栏是"最近在聊什么"，归档会话不该占这里的 12 条窗口。
+    fetchAllThreads({ limit: 12, status: "active" })
       .then((rows) => setThreads(rows.slice(0, 12)))
       .catch(() => {
         setThreads([]);
@@ -61,17 +89,7 @@ export function AppRail() {
       });
   }, []);
 
-  const toggleCollapsed = () => {
-    setCollapsed((current) => {
-      window.localStorage.setItem(RAIL_KEY, current ? "0" : "1");
-      return !current;
-    });
-  };
-
-  // 切页后收起浮层，避免它盖在新页面上。
-  useEffect(() => {
-    setFlyout(null);
-  }, [pathname]);
+  const toggleCollapsed = () => setRailCollapsed(!collapsed);
 
   const openPalette = () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true, cancelable: true }));
@@ -103,24 +121,29 @@ export function AppRail() {
     }));
   }, [threads]);
 
-  const toggle = (next: Exclude<Flyout, null>) => setFlyout((current) => (current === next ? null : next));
+  const toggle = (next: Exclude<Flyout, null>) =>
+    setFlyout((current) =>
+      current && current.path === pathname && current.name === next
+        ? null
+        : { name: next, path: pathname },
+    );
 
   if (collapsed) {
     return (
-      <aside className="relative z-20 flex w-[52px] shrink-0 flex-col items-center gap-1 border-r border-line bg-sidebar py-3">
+      <aside className="glass-side relative z-20 flex w-[52px] shrink-0 flex-col items-center gap-1 py-3">
         <RailButton title="展开侧栏" onClick={toggleCollapsed} active={false}>
           <ExpandIcon />
         </RailButton>
         <Link
           href="/"
           title="空白格 · 回到工作台"
-          className="grid size-8 place-items-center rounded-lg transition-colors hover:bg-surface-2"
+          className="grid size-8 place-items-center rounded-lg transition-colors hover:bg-surface-hover"
         >
           <span className="grid size-6 place-items-center rounded-md bg-logo-bg">
             <span className="size-2 rounded-[2px] bg-logo-accent" />
           </span>
         </Link>
-        <RailButton title="新的任务" onClick={() => (window.location.href = "/")} active={false}>
+        <RailButton title="新的任务" onClick={() => router.push("/")} active={false}>
           <PlusIcon />
         </RailButton>
         <RailButton title={`搜索（${shortcutHint(PALETTE_SHORTCUT)}）`} onClick={openPalette} active={false}>
@@ -128,10 +151,10 @@ export function AppRail() {
         </RailButton>
         <span className="my-1 h-px w-6 bg-line" />
         <div className="relative">
-          <RailButton title="工作区" onClick={() => toggle("workspaces")} active={flyout === "workspaces"}>
+          <RailButton title="工作区" onClick={() => toggle("workspaces")} active={openFlyout === "workspaces"}>
             <FolderIcon />
           </RailButton>
-          {flyout === "workspaces" && (
+          {openFlyout === "workspaces" && (
             <FlyoutPanel title="工作区" onClose={() => setFlyout(null)}>
               {projectsError && <FlyoutLine tone="danger">工作区读取失败，去项目页重试</FlyoutLine>}
               {!projectsError && workspaces.length === 0 && <FlyoutLine>还没有工作区</FlyoutLine>}
@@ -143,10 +166,10 @@ export function AppRail() {
           )}
         </div>
         <div className="relative">
-          <RailButton title="最近对话" onClick={() => toggle("tasks")} active={flyout === "tasks"}>
+          <RailButton title="最近对话" onClick={() => toggle("tasks")} active={openFlyout === "tasks"}>
             <ClockIcon />
           </RailButton>
-          {flyout === "tasks" && (
+          {openFlyout === "tasks" && (
             <FlyoutPanel title="最近对话" onClose={() => setFlyout(null)}>
               {threads === null && <FlyoutLine>读取中…</FlyoutLine>}
               {threads !== null && threadsError && <FlyoutLine tone="danger">会话读取失败</FlyoutLine>}
@@ -161,7 +184,6 @@ export function AppRail() {
         <div className="mt-auto flex flex-col items-center gap-1">
           <span className="my-1 h-px w-6 bg-line" />
           <RailLink href="/settings" title="设置" icon={<GearIcon />} active={isNavActive(pathname, "/settings")} />
-          <ThemeToggle compact />
           <HealthPill compact />
         </div>
       </aside>
@@ -171,21 +193,21 @@ export function AppRail() {
   return (
     // 240px 是全站统一的左栏宽度：首页会话栏、任务列表都对齐这一档，
     // 切换页面时左边缘不动。之前 200/308/308 三套宽度，一切页就跳。
-    <aside className="relative z-20 flex w-[240px] shrink-0 flex-col gap-1 border-r border-line bg-sidebar px-2 py-3">
+    <aside className="glass-side relative z-20 flex w-[240px] shrink-0 flex-col gap-1 px-2 py-3">
       {/* 品牌 + 收窄按钮 */}
       <div className="flex items-center gap-2 px-1 pb-1">
-        <Link href="/" title="空白格 · 回到工作台" className="grid size-7 shrink-0 place-items-center rounded-lg transition-colors hover:bg-surface-2">
+        <Link href="/" title="空白格 · 回到工作台" className="grid size-7 shrink-0 place-items-center rounded-lg transition-colors hover:bg-surface-hover">
           <span className="grid size-6 place-items-center rounded-md bg-logo-bg">
             <span className="size-2 rounded-[2px] bg-logo-accent" />
           </span>
         </Link>
         <Link href="/" className="min-w-0 flex-1 truncate text-[13px] font-semibold tracking-tight hover:text-brand">空白格</Link>
-        <button type="button" onClick={toggleCollapsed} title="收窄侧栏" aria-label="收窄侧栏" className="grid size-7 shrink-0 place-items-center rounded-md text-faint transition-colors hover:bg-surface-2 hover:text-text">
+        <button type="button" onClick={toggleCollapsed} title="收窄侧栏" aria-label="收窄侧栏" className="grid size-7 shrink-0 place-items-center rounded-md text-faint transition-colors hover:bg-surface-hover hover:text-text">
           <CollapseIcon />
         </button>
       </div>
 
-      <WideButton icon={<PlusIcon />} label="新的任务" onClick={() => (window.location.href = "/")} />
+      <WideButton icon={<PlusIcon />} label="新的任务" onClick={() => router.push("/")} />
       <WideButton icon={<SearchIcon />} label={`搜索（${shortcutHint(PALETTE_SHORTCUT)}）`} onClick={openPalette} />
 
       <span className="my-1 h-px bg-line" />
@@ -206,7 +228,7 @@ export function AppRail() {
                 key={thread.id}
                 href={`/?thread=${encodeURIComponent(thread.id)}`}
                 title={thread.title}
-                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface-2 hover:text-text"
+                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface-hover hover:text-text"
               >
                 <StatusDot status={thread.lastTurnStatus} />
                 <span className="min-w-0 flex-1 truncate">{thread.title || "未命名对话"}</span>
@@ -222,8 +244,7 @@ export function AppRail() {
       <div className="mt-auto flex flex-col gap-1 border-t border-line pt-2">
         <WideLink icon={<TeamIcon />} label="Bot 团队" href="/team" active={isNavActive(pathname, "/team")} />
         <WideLink icon={<GearIcon />} label="设置" href="/settings" active={isNavActive(pathname, "/settings")} />
-        <div className="flex items-center justify-between px-1 pt-0.5">
-          <ThemeToggle compact />
+        <div className="flex items-center justify-end px-1 pt-0.5">
           <HealthPill compact />
         </div>
       </div>
@@ -234,7 +255,7 @@ export function AppRail() {
 function RailButton({ title, onClick, active, children }: { title: string; onClick: () => void; active: boolean; children: ReactNode }) {
   return (
     <button type="button" onClick={onClick} title={title} aria-label={title}
-      className={`grid size-8 place-items-center rounded-lg transition-colors hover:bg-surface-2 hover:text-text ${active ? "bg-surface-3 text-text" : "text-muted"}`}>
+      className={`grid size-8 place-items-center rounded-lg transition-colors hover:bg-surface-hover hover:text-text ${active ? "bg-surface-selected text-text" : "text-muted"}`}>
       {children}
     </button>
   );
@@ -243,7 +264,7 @@ function RailButton({ title, onClick, active, children }: { title: string; onCli
 function RailLink({ href, title, icon, active }: { href: string; title: string; icon: ReactNode; active: boolean }) {
   return (
     <Link href={href} title={title} aria-label={title}
-      className={`grid size-8 place-items-center rounded-lg transition-colors hover:bg-surface-2 hover:text-text ${active ? "bg-surface-3 text-text" : "text-muted"}`}>
+      className={`grid size-8 place-items-center rounded-lg transition-colors hover:bg-surface-hover hover:text-text ${active ? "bg-surface-selected text-text" : "text-muted"}`}>
       {icon}
     </Link>
   );
@@ -252,7 +273,7 @@ function RailLink({ href, title, icon, active }: { href: string; title: string; 
 function WideButton({ icon, label, onClick }: { icon: ReactNode; label: string; onClick: () => void }) {
   return (
     <button type="button" onClick={onClick} title={label}
-      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface-2 hover:text-text">
+      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface-hover hover:text-text">
       <span className="text-faint">{icon}</span>
       <span className="min-w-0 flex-1 truncate text-left">{label}</span>
     </button>
@@ -262,7 +283,7 @@ function WideButton({ icon, label, onClick }: { icon: ReactNode; label: string; 
 function WideLink({ icon, label, href, active }: { icon: ReactNode; label: string; href: string; active: boolean }) {
   return (
     <Link href={href} title={label}
-      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] transition-colors hover:bg-surface-2 hover:text-text ${active ? "bg-surface-3 font-medium text-text" : "text-muted"}`}>
+      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] transition-colors hover:bg-surface-hover hover:text-text ${active ? "bg-surface-selected font-medium text-text" : "text-muted"}`}>
       <span className={active ? "text-text" : "text-faint"}>{icon}</span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
     </Link>
@@ -271,10 +292,10 @@ function WideLink({ icon, label, href, active }: { icon: ReactNode; label: strin
 
 function FlyoutPanel({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
-    <div className="absolute top-0 left-full z-30 ml-2 w-60 rounded-xl border border-line bg-surface p-2 shadow-[var(--shadow-lg)]">
+    <div className="glass-soft absolute top-0 left-full z-30 ml-2 w-60 rounded-[var(--radius-lg)] p-2">
       <div className="flex items-center justify-between px-2.5 pb-1.5">
         <span className="text-[13px] font-medium">{title}</span>
-        <button type="button" onClick={onClose} aria-label="关闭" className="grid size-5 place-items-center rounded text-faint hover:bg-surface-2 hover:text-text">
+        <button type="button" onClick={onClose} aria-label="关闭" className="grid size-5 place-items-center rounded text-faint hover:bg-surface-hover hover:text-text">
           <svg viewBox="0 0 24 24" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden>
             <path d="M6 6l12 12M18 6 6 18" />
           </svg>
@@ -287,7 +308,7 @@ function FlyoutPanel({ title, onClose, children }: { title: string; onClose: () 
 
 function FlyoutRow({ href, title, label, badge, dot }: { href: string; title?: string; label: string; badge?: string; dot?: "danger" | "brand" | "done" | "muted" }) {
   return (
-    <Link href={href} title={title} className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface-2 hover:text-text">
+    <Link href={href} title={title} className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-surface-hover hover:text-text">
       {dot && <span className={`size-1.5 shrink-0 rounded-full ${dot === "danger" ? "bg-danger" : dot === "brand" ? "bg-brand animate-pulse" : dot === "done" ? "bg-accent" : "bg-line-strong"}`} />}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {badge && <span className="shrink-0 font-mono text-[11px] text-faint">{badge}</span>}

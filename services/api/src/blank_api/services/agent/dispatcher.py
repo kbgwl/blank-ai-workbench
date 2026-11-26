@@ -36,6 +36,7 @@ def decide_dispatch(
     automation_mode: str = "assist",
     permission_mode: str = "default",
     has_workspace: bool = True,
+    chat_only: bool = False,
     risk_known: bool = True,
     has_clarification: bool = False,
     has_active_task: bool = False,
@@ -55,7 +56,11 @@ def decide_dispatch(
     conditions = {
         "goal_clear": bool(j.get("needs_task", True))
         and (bool(j.get("intent")) or bool(j.get("reason"))),
-        "workspace_bound": bool(project_id) and has_workspace,
+        # 只有「不执行」的纯聊天才不需要工作区。没有目录却要求动手（做一个官网、
+        # 修 bug）必须 wait_user，不能借 chat_only 直接开跑再失败——这正是
+        # v165 §5.1 反例要拦住的情况。
+        "workspace_bound": bool(project_id)
+        and (has_workspace or (chat_only and not j.get("needs_execution"))),
         "scenario_set": bool(scenario),
         "permission_known": bool(permission_mode),
         "risk_assessable": risk_known,
@@ -88,7 +93,8 @@ def decide_dispatch(
 
     return _result(
         "immediate", True, priority, conditions,
-        reasons + [f"{mode} 模式：条件齐备，自动下发"], j, scenario, mode, permission_mode,
+        reasons + ["纯聊天：没有目录也可以直接作答" if chat_only else f"{mode} 模式：条件齐备，自动下发"],
+        j, scenario, mode, permission_mode,
     )
 
 

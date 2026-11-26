@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { Provider } from "../tasks/api.ts";
-import { providerLabel, usableProviderId } from "./provider-choice.ts";
+import {
+  defaultModelLabel,
+  defaultProviderId,
+  providerLabel,
+  usableProviderId,
+} from "./provider-choice.ts";
 
 function provider(overrides: Partial<Provider> & { id: string }): Provider {
   return {
@@ -77,4 +82,36 @@ test("选中了一家已停用的：文案里说出来，也要报警", () => {
   );
   assert.match(text, /已停用/);
   assert.equal(warn, true);
+});
+
+test("默认模型名跟后端标出的 is_default 走，不按列表第一项猜", () => {
+  const providers = [
+    provider({ id: "p-ds", name: "deepseek", model: "deepseek-flash" }),
+    provider({ id: "p-spark", name: "讯飞星火", model: "spark-x2.6", is_default: true }),
+  ];
+  assert.equal(defaultModelLabel(providers), "spark-x2.6");
+  // 用户显式选了一家：显示它，不是默认那家。
+  assert.equal(defaultModelLabel(providers, "p-ds"), "deepseek-flash");
+});
+
+test("默认模型名不会选到没 Key 的供应商", () => {
+  const providers = [
+    provider({ id: "p-off", name: "未配置", model: "nope", api_key_hint: "", is_default: true }),
+    provider({ id: "p-ds", name: "deepseek", model: "deepseek-flash" }),
+  ];
+  assert.equal(defaultModelLabel(providers), "deepseek-flash");
+});
+
+test("全站默认供应商跳过没 Key 的，并优先后端标出的 is_default", () => {
+  const providers = [
+    provider({ id: "p-anthropic", name: "anthropic", model: "claude", api_key_hint: "" }),
+    provider({ id: "p-ds", name: "deepseek", model: "deepseek-flash" }),
+    provider({ id: "p-spark", name: "讯飞星火", model: "spark-x2.6", is_default: true }),
+  ];
+  assert.equal(defaultProviderId(providers), "p-spark");
+  // 全都没 Key：不编一个 id，交给界面显示「未配置模型」。
+  assert.equal(
+    defaultProviderId([provider({ id: "p-x", api_key_hint: "" })]),
+    "",
+  );
 });

@@ -20,6 +20,7 @@ const {
   buildTrayMenuModel,
   decideWindowClose,
   describeShortcutRegistration,
+  isPathInside,
   normalizeHotkey,
   planHotkeyToggle,
   planSecondInstanceReveal,
@@ -168,6 +169,16 @@ test("trayUpdateLabel 覆盖四种决策形态", () => {
   assert.match(trayUpdateLabel({ action: "unavailable" }), /不可用/);
   assert.match(trayUpdateLabel({ action: "available", version: "0.9.0" }), /0\.9\.0/);
   assert.match(trayUpdateLabel(null), /未检查/);
+});
+
+test("静态资源边界按路径分隔符对齐，web-evil 不算 web 内", () => {
+  const base = path.resolve("blank-static-root");
+  assert.equal(isPathInside(base, path.join(base, "index.html")), true);
+  assert.equal(isPathInside(base, base), true);
+  assert.equal(isPathInside(base, `${base}-evil/index.html`), false);
+  assert.equal(isPathInside(base, path.join(base, "..", "backend", "python.exe")), false);
+  const root = path.parse(base).root;
+  assert.equal(isPathInside(root, path.join(root, "anything")), true, "根目录不能因前缀多一个分隔符判错");
 });
 
 // ── 可测性前提 ──────────────────────────────────────────────────────────────

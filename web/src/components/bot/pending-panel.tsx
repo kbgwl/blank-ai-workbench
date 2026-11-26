@@ -51,7 +51,7 @@ export function PendingPanel({
     const shown = approvals.slice(0, 2);
     const rest = approvals.length - shown.length;
     return (
-      <div className="bg-canvas px-4 pt-1">
+      <div className="bg-transparent px-4 pt-1">
        <div className="mx-auto w-full max-w-3xl">
         {shown.map((approval) => (
           <ApprovalCard
@@ -76,7 +76,7 @@ export function PendingPanel({
   // 状态说在等审批，却拿不到请求详情。不说"等你批准"就完了——那等于把用户
   // 关在门外还不告诉他门在哪。
   return (
-    <div className="bg-canvas px-4 pt-1">
+    <div className="bg-transparent px-4 pt-1">
       <div className="mx-auto w-full max-w-3xl">
         <div className="my-2 rounded-xl border border-warn/35 bg-warn/[0.04] p-3">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">

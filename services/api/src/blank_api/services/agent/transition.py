@@ -98,11 +98,23 @@ def explain(
     if key == ("execute_action", "execute_action"):
         if state.get("gap_continue"):
             return _result(frm, to, "environment_gap", "环境缺口还没补上，继续执行去装/去找，不把「需要你装」当交付")
+        if state.get("act_continue"):
+            return _result(
+                frm, to, "plan_incomplete",
+                "计划里有要做的事却只看不动手，推回执行要求直接完成",
+                round=int(state.get("act_nudges") or 0),
+            )
         count = _pending_count(state)
         return _result(frm, to, "steps_remaining", f"还有 {count} 项待办，继续执行", pending=count)
 
     if key == ("execute_action", "run_validation"):
         return _result(frm, to, "steps_done", "没有待办步骤了，进入校验")
+
+    if key == ("execute_action", "summarize_result"):
+        return _result(
+            frm, to, "list_only",
+            "只要文件/目录清单：已拿到 list_files/glob 回执，直接按回执出列表",
+        )
 
     if key == ("run_validation", "summarize_result"):
         if readonly:
@@ -116,6 +128,16 @@ def explain(
     if key == ("run_validation", "execute_action"):
         validation = state.get("validation") or {}
         status = str(validation.get("status") or "") if isinstance(validation, dict) else ""
+        if (
+            state.get("budget_exhausted")
+            and str(validation.get("command") or "") == "ui_check"
+            and status == "failed"
+        ):
+            return _result(
+                frm, to, "ui_repair_reserve",
+                "前端自检未过、预算已尽，保留一次 UI 修复",
+                validation=status,
+            )
         rounds = int(state.get("repair_rounds") or 0)
         return _result(
             frm, to, "validation_failed_retry",

@@ -22,7 +22,7 @@ const {
   shell,
   Tray,
 } = require("electron");
-const { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
+const { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } = require("node:fs");
 const { readFile, writeFile } = require("node:fs/promises");
 const { spawn } = require("node:child_process");
 const { createHash } = require("node:crypto");
@@ -46,6 +46,7 @@ const {
   decideWindowClose,
   describeShortcutRegistration,
   extractFeedEntries,
+  isPathInside,
   normalizeHotkey,
   parseUpdateFeedUrl,
   pickInterpreterOrder,
@@ -296,7 +297,14 @@ function phase(name, detail = "") {
 // ── 静态资源协议 ────────────────────────────────────────────────────────────
 
 function resolveStaticFile(urlPath) {
-  const clean = decodeURIComponent(urlPath || "/").replace(/\\/g, "/");
+  let clean;
+  try {
+    clean = decodeURIComponent(urlPath || "/").replace(/\\/g, "/");
+  } catch {
+    // 非法百分号编码：当作不存在，而不是把异常抛进协议处理器。
+    return null;
+  }
+  if (clean.includes("\0")) return null;
   const rel = clean.replace(/^\/+/, "");
   const candidates = [];
   if (!rel) {
@@ -310,8 +318,8 @@ function resolveStaticFile(urlPath) {
   }
   for (const candidate of candidates) {
     const full = path.resolve(STATIC_ROOT, candidate);
-    // 防目录穿越：解析结果必须仍在静态根下
-    if (!full.startsWith(STATIC_ROOT)) continue;
+    // 防目录穿越：按路径分隔符对齐，`web-evil` 不算 `web` 的子路径。
+    if (!isPathInside(STATIC_ROOT, full)) continue;
     if (existsSync(full) && path.extname(full)) return full;
   }
   const notFound = path.join(STATIC_ROOT, "404.html");
@@ -325,12 +333,22 @@ function registerAppProtocol() {
     if (!file) {
       return new Response("静态资源缺失，请先执行桌面构建（BLANK_DESKTOP_BUILD=1 pnpm -C web build）", {
         status: 404,
-        headers: { "content-type": "text/plain; charset=utf-8" },
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY",
+          "referrer-policy": "no-referrer",
+        },
       });
     }
     const body = await readFile(file);
     return new Response(body, {
-      headers: { "content-type": MIME[path.extname(file).toLowerCase()] ?? "application/octet-stream" },
+      headers: {
+        "content-type": MIME[path.extname(file).toLowerCase()] ?? "application/octet-stream",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "referrer-policy": "no-referrer",
+      },
     });
   });
 }
@@ -403,12 +421,31 @@ function findOnPath(name) {
  *   5. 本机 python（需已装依赖）
  * 打包态缺 2/3 时会退到 4/5 —— 只能算内测可用，零依赖分发仍需补上第 2 项。
  */
+/**
+ * 本机 E 盘绑定：后端子进程（uvicorn / alembic / shell 工具）的临时目录与 uv
+ * 缓存不再落 C 盘。只在 Windows 且 E 盘存在时生效；BLANK_TEMP_ROOT 可覆盖落点。
+ * 建目录失败时保持原样——启动不该因为一个临时目录挂掉。
+ */
+function bindRuntimeTempToEDrive(env) {
+  if (process.platform !== "win32" || !existsSync("E:\\")) return;
+  const tempRoot = process.env.BLANK_TEMP_ROOT || "E:\\env\\blank-tmp";
+  try {
+    mkdirSync(tempRoot, { recursive: true });
+    env.TEMP = tempRoot;
+    env.TMP = tempRoot;
+  } catch {
+    /* 退回系统默认 */
+  }
+  env.UV_CACHE_DIR ??= "E:\\env\\uv-cache";
+}
+
 function resolveBackendCommand() {
   const env = {
     ...process.env,
     BLANK_BACKEND_PORT: PORT,
     BLANK_SANDBOX_ENABLED: process.env.BLANK_SANDBOX_ENABLED ?? "false",
   };
+  bindRuntimeTempToEDrive(env);
 
   if (app.isPackaged) {
     mkdirSync(DATA_DIR, { recursive: true });
@@ -653,7 +690,15 @@ ipcMain.on("blank:api-base", (event) => {
 ipcMain.handle("blank:open-path", async (_event, payload) => {
   const target = typeof payload?.path === "string" ? payload.path.trim() : "";
   if (!target) return { ok: false, reason: "路径为空" };
-  if (!existsSync(target)) return { ok: false, reason: "目录不存在，可能已被移动或删除" };
+  // 只允许目录：shell.openPath 对 .exe/.bat 是"执行"，渲染进程一旦被注入脚本，
+  // 这个桥就会变成任意程序启动器。界面这里本来就只用来"在文件管理器里看看"。
+  let stat;
+  try {
+    stat = statSync(target);
+  } catch {
+    return { ok: false, reason: "目录不存在，可能已被移动或删除" };
+  }
+  if (!stat.isDirectory()) return { ok: false, reason: "只能打开目录，不能打开文件" };
   const failure = await shell.openPath(target);
   return failure ? { ok: false, reason: failure } : { ok: true };
 });
@@ -910,6 +955,28 @@ function closeSplash() {
   }, stepMs);
 }
 
+/**
+ * 只把 http(s) 交给系统浏览器。
+ *
+ * 渲染进程可能被产物/README 里的链接带着调用 window.open；file:、ms-msdt:、
+ * 自定义协议这类交给 shell.openExternal 等于把本机执行入口暴露给页面。
+ */
+function openExternalIfSafe(raw) {
+  let parsed;
+  try {
+    parsed = new URL(String(raw ?? ""));
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    // 只记协议，不把整条 URL 落日志：外链查询串里可能有令牌。
+    console.warn(`[desktop] 已拒绝非 http(s) 外链：${parsed.protocol || "未知协议"}`);
+    return false;
+  }
+  void shell.openExternal(parsed.toString());
+  return true;
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     // 与启动屏共用同一组尺寸，别再各自硬编码。
@@ -976,8 +1043,19 @@ function createWindow() {
     console.error(`[desktop] 页面加载失败 ${code} ${desc} ${url}`);
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    if (url === APP_ORIGIN || url.startsWith(`${APP_ORIGIN}/`)) {
+      // 站内链接 target=_blank 不该被当成外链丢掉：留在同一个窗口里导航。
+      void win.loadURL(url);
+    } else {
+      openExternalIfSafe(url);
+    }
     return { action: "deny" };
+  });
+  // 主窗口只允许留在 app://bundle；外链交给系统浏览器，别的协议一律不动。
+  win.webContents.on("will-navigate", (event, url) => {
+    if (url === APP_ORIGIN || url.startsWith(`${APP_ORIGIN}/`)) return;
+    event.preventDefault();
+    openExternalIfSafe(url);
   });
 
   // BLANK_START_PATH 让自检能直接落在某一页（如 settings.html），不必先点导航。

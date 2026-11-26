@@ -2,6 +2,9 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { fetchProviders, type Provider } from "@/components/settings/api";
+import { defaultProviderId } from "@/components/bot/provider-choice";
+import { configuredProviders } from "@/components/configured-providers";
+import { readString, writeString } from "@/lib/safe-storage";
 import { SelectPopover } from "./ui/select-popover";
 
 /**
@@ -26,20 +29,25 @@ const ModelContext = createContext<ModelContextValue | null>(null);
 
 export function ModelProvider({ children }: { children: ReactNode }) {
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [modelId, setModelIdState] = useState(() => typeof window === "undefined" ? "" : window.localStorage.getItem(MODEL_STORAGE_KEY) ?? "");
+  const [modelId, setModelIdState] = useState(() => readString(MODEL_STORAGE_KEY));
   useEffect(() => {
-    const saved = window.localStorage.getItem(MODEL_STORAGE_KEY) ?? "";
+    const saved = readString(MODEL_STORAGE_KEY);
     void fetchProviders().then((next) => {
-      const enabled = next.filter((provider) => provider.enabled);
-      setProviders(enabled);
-      if (!saved || !enabled.some((provider) => provider.id === saved)) {
-        setModelIdState(enabled[0]?.id ?? "");
+      // 只把「有 Key」的供应商放进切换器：没 Key 的选中也是 401。
+      // 一家都没配时保持空列表，显示「未配置模型」，不再把没 Key 的模板厂商
+      // 塞回下拉里——用户在设置页补好 Key 后这里会自动出现。
+      const visible = configuredProviders(next);
+      setProviders(visible);
+      // 存过的选择已失效（删除/停用/没 Key）就回到后端默认那一家，
+      // 而不是拿列表第一项顶替——那会显示 anthropic、实际跑 DeepSeek。
+      if (!saved || !visible.some((provider) => provider.id === saved)) {
+        setModelIdState(defaultProviderId(next) || visible[0]?.id || "");
       }
     }).catch(() => setProviders([]));
   }, []);
   function setModelId(id: string) {
     setModelIdState(id);
-    window.localStorage.setItem(MODEL_STORAGE_KEY, id);
+    writeString(MODEL_STORAGE_KEY, id);
   }
   return <ModelContext.Provider value={{ providers, modelId, setModelId }}>{children}</ModelContext.Provider>;
 }

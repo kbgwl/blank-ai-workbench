@@ -49,6 +49,7 @@ from blank_api.services.tools.gateway import ToolGateway
 from blank_api.services.tools.patch import patch_tools
 from blank_api.services.tools.shell import assess_risk
 
+from tests.conftest import _drain_active_runs
 from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
     API,
     call,
@@ -268,15 +269,22 @@ async def test_tool_scope_approval_still_asks_for_the_next_command(env, workspac
     assert len(pending) == 1
     assert _scopes(pending[0]["approval_options"]) == [SCOPE_ONCE, SCOPE_PREFIX]
 
+    async def approve(scope: str) -> dict:
+        """审批接口 202 入队；等恢复 run 收尾后再读最终证据。"""
+        resp = await env.client.post(
+            f"{API}/tasks/{task_id}/approval",
+            json={"approve": True, "provider_id": provider_id, "scope": scope},
+        )
+        assert resp.status_code == 202, resp.text
+        await _drain_active_runs()
+        evidence = await env.client.get(f"{API}/tasks/{task_id}/evidence")
+        assert evidence.status_code == 200, evidence.text
+        return evidence.json()
+
     # 旧版界面/安装包仍会传 scope=tool：卡上没有这颗钮，接口也不为它入账。
-    resp = await env.client.post(
-        f"{API}/tasks/{task_id}/approval",
-        json={"approve": True, "provider_id": provider_id, "scope": SCOPE_TOOL},
-    )
-    assert resp.status_code == 200, resp.text
-    again = resp.json()
+    again = await approve(SCOPE_TOOL)
     assert again["task"]["status"] == "waiting_approval", again["task"]
-    assert again["evidence"]["pending_approvals"][0]["arguments"]["command"] == SECOND
+    assert again["pending_approvals"][0]["arguments"]["command"] == SECOND
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
     granted = [event for event in events if event["type"] == "approval.granted"]
@@ -294,12 +302,8 @@ async def test_tool_scope_approval_still_asks_for_the_next_command(env, workspac
     for tools in snapshots:
         assert not [item for item in tools if str(item).endswith(":run_shell:.")], tools
 
-    resp = await env.client.post(
-        f"{API}/tasks/{task_id}/approval",
-        json={"approve": True, "provider_id": provider_id, "scope": SCOPE_ONCE},
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["task"]["status"] != "waiting_approval"
+    finished = await approve(SCOPE_ONCE)
+    assert finished["task"]["status"] != "waiting_approval"
 
 
 @pytest.mark.parametrize(

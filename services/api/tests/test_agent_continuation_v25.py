@@ -306,3 +306,55 @@ class TestPromptContract:
         assert "npm install" in SYSTEM_PROMPT
         assert "uv pip install" in SYSTEM_PROMPT
         assert "pip install -r requirements.txt" in SYSTEM_PROMPT
+
+
+# ── 6. 只看不动手：计划当回答交回来时推回执行 ────────────────────────
+
+EDIT_PLAN = {
+    "steps": [
+        {"id": "step-1", "title": "创建 整理/文本 目录", "kind": "edit"},
+        {"id": "step-2", "title": "复制文本文件并写整理说明", "kind": "edit"},
+    ]
+}
+
+
+async def test_advice_only_reply_is_pushed_back_to_action(seeded, tmp_path):
+    """真实失败样本：读了三个文件就交回「可以做。需要新建……」。
+
+    计划里明明有 edit 步骤，模型却一个都没执行；这种回复不能当交付，
+    要推回一轮并给出「直接调用工具」的系统指令。
+    """
+    session = _session(tmp_path, reply="可以做。需要新建 整理/文本/ 与 整理说明.md。", tool=_run_tests_tool({}))
+
+    result = await execute_action_node(_state(plan_manifest=EDIT_PLAN), session)
+
+    assert result["act_continue"] is True
+    assert result["act_nudges"] == 1
+    assert session.hook_context[-1]["event"] == "plan.incomplete"
+    assert "直接调用工具" in session.hook_context[-1]["text"]
+    assert "plan.incomplete" in await _event_types()
+
+
+async def test_real_action_does_not_trigger_the_push(seeded, tmp_path):
+    """已经写过文件/跑过命令就不再催：那是做了一半，交给校验回路。"""
+    session = _session(tmp_path, reply="已创建。", tool=_run_tests_tool({}))
+    state = _state(
+        plan_manifest=EDIT_PLAN,
+        tool_results=[{"tool": "write_file", "ok": True}],
+    )
+
+    result = await execute_action_node(state, session)
+
+    assert result["act_continue"] is False
+    assert result["act_nudges"] == 0
+
+
+async def test_push_is_capped_and_skipped_for_readonly(seeded, tmp_path):
+    """催两次仍不动手就允许收尾；只读任务永远不催。"""
+    session = _session(tmp_path, reply="可以做。", tool=_run_tests_tool({}))
+
+    capped = await execute_action_node(_state(plan_manifest=EDIT_PLAN, act_nudges=2), session)
+    readonly = await execute_action_node(_state(plan_manifest=EDIT_PLAN, readonly=True), session)
+
+    assert capped["act_continue"] is False
+    assert readonly["act_continue"] is False

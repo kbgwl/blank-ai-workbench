@@ -175,49 +175,32 @@ def review_tools() -> list[ToolDefinition]:
                         "items": {
                             "type": "object",
                             "properties": {
-                                "file": {
-                                    "type": "string",
-                                    "description": "发现所在的仓库相对路径",
-                                },
-                                "line": {
-                                    "type": "integer",
-                                    "description": "发现锚定的行号（从 1 开始）；无法定位时省略",
-                                },
-                                "summary": {
-                                    "type": "string",
-                                    "description": "一句话说明缺陷是什么",
-                                },
+                                "file": {"type": "string", "description": "仓库相对路径"},
+                                "line": {"type": "integer", "description": "锚定行号（从 1 开始）；定位不了就省略"},
+                                "summary": {"type": "string", "description": "缺陷一句话"},
                                 "short_summary": {
                                     "type": "string",
                                     "maxLength": MAX_SHORT_SUMMARY,
-                                    "description": (
-                                        "紧凑界面的标签（≤60 字符）：只写结论本身，"
-                                        "不要带理由或后果从句"
-                                    ),
+                                    "description": "紧凑标签（≤60 字符）：只写结论，不带理由/后果",
                                 },
                                 "failure_scenario": {
                                     "type": "string",
-                                    "description": "具体的输入/状态 → 错误输出或崩溃",
+                                    "description": "具体输入/状态 → 错误输出或崩溃",
                                 },
                                 "category": {
                                     "type": "string",
                                     "maxLength": MAX_CATEGORY,
-                                    "description": (
-                                        "短 kebab-case 类型，例如 correctness、simplification、"
-                                        "efficiency、test-coverage"
-                                    ),
+                                    "description": "短 kebab-case 类型，如 correctness、efficiency、test-coverage",
                                 },
                                 "verdict": {
                                     "type": "string",
                                     "enum": list(VERDICTS),
-                                    "description": "跑过复核时填写；只有内联审查时可以省略",
+                                    "description": "跑过复核时填；内联审查可省略",
                                 },
                                 "outcome": {
                                     "type": "string",
                                     "enum": list(OUTCOMES),
-                                    "description": (
-                                        "仅在应用修复后重新上报时填写：这条发现实际怎么处理了"
-                                    ),
+                                    "description": "仅在修复后重新上报时填：实际怎么处理",
                                 },
                             },
                             "required": list(REQUIRED_FIELDS),

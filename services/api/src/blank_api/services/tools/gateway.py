@@ -29,6 +29,7 @@ from blank_api.services.permissions import (
     approval_options,
     approve,
     deny,
+    session_grant_category,
     tool_grant_too_wide,
 )
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, approval_key, validate_arguments
@@ -457,7 +458,14 @@ class ToolGateway:
         context: ToolContext,
         node: str = "",
         inner: bool = False,
+        prefetched: ToolOutcome | None = None,
     ) -> dict:
+        """执行一次工具调用。
+
+        ``prefetched`` 是推测性只读执行的提前量（参数已经完全一致时才会被传进来）：
+        权限、场景、参数校验与记账仍全部照跑，只是不再调用 handler。审批路径
+        （ASK）不会使用它——用户还没点同意时，任何执行都不该发生。
+        """
         started = time.perf_counter()
         if name in self.excluded:
             # 场景禁用先于一切判定：approve_high_risk / 审批放行都救不回来。
@@ -615,13 +623,21 @@ class ToolGateway:
                         # 记账站在"下一次调用按什么判定"这一边：这是钩子给的一次性放行，
                         # 不写进会话批准记忆，下一次照样重新判。
                         decision = approve(decision.risk or risk, "hook:permission_request")
-                        outcome = await self._run(tool, arguments, context)
+                        outcome = (
+                            prefetched
+                            if prefetched is not None
+                            else await self._run(tool, arguments, context)
+                        )
                     else:
                         outcome = await self._awaiting_approval(
                             tool, arguments, risk, decision, context, node
                         )
             else:
-                outcome = await self._run(tool, arguments, context)
+                outcome = (
+                    prefetched
+                    if prefetched is not None
+                    else await self._run(tool, arguments, context)
+                )
         # decision.risk 可能被安全策略抬高（"每条命令都要确认"），台账要按最终口径记
         return await self._finish(
             name, arguments, outcome, context, node, decision.risk or risk, started, decision
@@ -797,11 +813,15 @@ class ToolGateway:
 
         deny 优先：一组钩子意见不一致时按"更严的那一侧"执行，和上游一致。
         """
+        category = session_grant_category(tool.name, arguments)
         suggestions = approval_options(
             tool.name,
             decision.memo,
             tool_scope=decision.tool_scope_allowed
             and not tool_grant_too_wide(tool.name, arguments),
+            category=category,
+            session_granted=category
+            in getattr(getattr(context, "permissions", None), "session_grants", set()),
         )
         results = await self._run_hook(
             context,
@@ -876,6 +896,7 @@ class ToolGateway:
                 },
                 node,
             )
+        category = session_grant_category(tool.name, arguments)
         return ToolOutcome(
             ok=False,
             status=APPROVAL_STATUS,
@@ -895,6 +916,9 @@ class ToolGateway:
                     memo,
                     tool_scope=(decision is None or decision.tool_scope_allowed)
                     and not tool_grant_too_wide(tool.name, arguments),
+                    category=category,
+                    session_granted=category
+                    in getattr(getattr(context, "permissions", None), "session_grants", set()),
                 ),
             },
         )

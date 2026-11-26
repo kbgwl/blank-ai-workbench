@@ -21,7 +21,10 @@ export function errorCode(error: unknown): string {
   return "";
 }
 
-type ErrorBody = { error?: { code?: unknown; message?: unknown } };
+type ErrorBody = {
+  error?: { code?: unknown; message?: unknown } | string;
+  message?: unknown;
+};
 
 export function parseJson(text: string): unknown {
   try {
@@ -31,12 +34,29 @@ export function parseJson(text: string): unknown {
   }
 }
 
-export function toApiError(status: number, body: unknown): ApiError {
+export function toApiError(status: number, body: unknown, context = ""): ApiError {
   const payload = body as ErrorBody | null;
   const detail = payload && typeof payload === "object" ? payload.error : undefined;
+  const nested = detail && typeof detail === "object" ? detail : undefined;
+  const legacyCode = typeof detail === "string" ? detail : "";
+  const legacyMessage = typeof payload?.message === "string" ? payload.message : "";
+  const suffix = context ? ` · ${context}` : "";
+  // 没有结构化错误体 = 这个 5xx 不是后端给的：开发态是 Next 的 rewrite 代理在
+  // 后端不可达时吐的 HTML 错误页（典型场景：后端正在重启）。说清楚"稍后重试"，
+  // 并把请求带上，用户截图就能定位到是哪一个调用。后端的 500 一定带 JSON 错误体，
+  // 走上面的 message 分支，不会被这句误导。
+  const proxy = status >= 500 && body === null;
   const message =
-    detail && typeof detail.message === "string" && detail.message ? detail.message : `请求失败（HTTP ${status}）`;
-  const code = detail && typeof detail.code === "string" ? detail.code : `http_${status}`;
+    nested && typeof nested.message === "string" && nested.message
+      ? nested.message
+      : legacyMessage ||
+        (proxy
+          ? `后端暂时不可用（HTTP ${status}），可能正在重启，请稍后重试${suffix}`
+          : `请求失败（HTTP ${status}）${suffix}`);
+  const code =
+    nested && typeof nested.code === "string" && nested.code
+      ? nested.code
+      : legacyCode || `http_${status}`;
   return new ApiError(message, code, status);
 }
 
@@ -79,7 +99,9 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   const text = await response.text();
   const body = text ? parseJson(text) : null;
-  if (!response.ok) throw toApiError(response.status, body);
+  if (!response.ok) {
+    throw toApiError(response.status, body, `${init?.method || "GET"} ${path}`);
+  }
   if (response.status === 204 || body === null) return undefined as T;
   return body as T;
 }

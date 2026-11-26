@@ -118,7 +118,10 @@ def test_v1_and_v2_give_byte_identical_decisions(rules_file: Path) -> None:
 
 
 def test_a_rule_never_covers_a_longer_token(rules_file: Path) -> None:
-    """`curl` 不许覆盖 `curlie`；`git push` 不许覆盖 `git status`。"""
+    """`curl` 不许覆盖 `curlie`；`git push` 不许覆盖 `git commit`。
+
+    `git status` 现在是只读白名单自动放行的命令，不再适合当「没被规则覆盖」的样本。
+    """
     assert approval_rules.add_rule("run_shell", ("curl",)) is True
     assert approval_rules.add_rule("run_shell", ("git", "push")) is True
     policy = PermissionPolicy(mode="default")
@@ -127,7 +130,7 @@ def test_a_rule_never_covers_a_longer_token(rules_file: Path) -> None:
     assert _decide(policy, "curl -s http://x").outcome != ASK
     assert _decide(policy, "curlie thing").outcome == ASK
     assert _decide(policy, "git push origin main").outcome != ASK
-    assert _decide(policy, "git status").outcome == ASK
+    assert _decide(policy, "git commit -m x").outcome == ASK
 
 
 def test_a_rule_that_cannot_roundtrip_is_refused(rules_file: Path) -> None:

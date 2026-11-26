@@ -17,8 +17,10 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+from blank_api.services.approvals import approval_key
 from blank_api.services.permissions import (
     ALLOW,
+    ASK,
     Decision,
     ask,
     approve,
@@ -104,6 +106,9 @@ def authorize(
 
     # ① 能力边界：这里拒绝的动作，就算人在审批卡上点了"允许"也不执行，
     #    所以它必须排在最前面——否则会变成"点了允许还是失败"。
+    safety_asks = False
+    safety_scope_write = False
+    safety_reason = ""
     safety = getattr(context, "safety", None)
     if safety is not None:
         verdict = safety.gate(tool.name, args, getattr(context, "root", ""), mode=mode)
@@ -111,12 +116,51 @@ def authorize(
             return _with_resources(deny(resolved, verdict.rule, verdict.reason, verdict.prefix), tool.name, args)
         # 「每条命令都要确认」不另造状态机：抬高风险即可，审批、会话记忆、
         # 前缀白名单全部复用同一套既有逻辑。
-        if verdict.asks and resolved not in ("high", "critical"):
+        safety_asks = bool(verdict.asks)
+        safety_scope_write = verdict.rule == "scope:outside_write"
+        safety_reason = str(verdict.reason or "")
+        if safety_asks and resolved not in ("high", "critical"):
             resolved = "high"
 
     # ② 策略：模式、规则、会话批准、前缀账、不可逆闸门都在这里判。
     if permissions is not None:
         decided = permissions.decide(tool, args, resolved)
+        # 只读命令的自动放行不能越过用户的安全设置「每条命令都先确认」：
+        # 那是比"这条命令没副作用"更强的显式要求。显式 allow 规则 / 会话前缀
+        # 仍按既有顺序先命中，不受这一条影响。
+        if safety_asks and decided.rule == "readonly:command":
+            decided = ask(
+                decided.risk,
+                "policy:confirm_all",
+                "安全设置要求每条命令都先确认。",
+                decided.prefix,
+            )
+        # 完全访问下的跨盘写操作：模式放行不能代替这一次确认。只认本人刚批过的
+        # 精确动作（审批卡记录在 approved_actions），或显式的 allow/前缀规则。
+        if safety_scope_write:
+            explicit = decided.outcome == ALLOW and decided.rule.startswith(
+                ("prefix:", "rule:allow", "session_grant:", "tool:", "action:approved")
+            )
+            approved = approval_key(tool.name, args) in getattr(
+                permissions, "approved_actions", set()
+            )
+            if approved:
+                # 用户刚在这张卡上批过这一次：不可逆闸门也放行这一个精确动作。
+                decided = approve(decided.risk, "action:approved", decided.prefix)
+            elif decided.outcome == ALLOW and not explicit:
+                decided = ask(
+                    decided.risk,
+                    "scope:outside_write",
+                    safety_reason or "跨出工作区的写操作需要确认一次。",
+                    decided.prefix,
+                )
+            elif decided.outcome == ASK:
+                decided = ask(
+                    decided.risk,
+                    "scope:outside_write",
+                    safety_reason or decided.reason,
+                    decided.prefix,
+                )
         return _with_resources(enforce_strict_review(decided, resolved, mode), tool.name, args)
 
     # ③ 没有任何策略对象时的旧口径（单测与外部集成会走到）：有没有人批过 → 风险兜底。

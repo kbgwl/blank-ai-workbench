@@ -20,7 +20,7 @@ import {
   saveTaskPlanAsTemplate,
   togglePlanStep,
 } from "./api";
-import { groupByMilestone, statusLabel } from "./plan";
+import { groupByMilestone, planIsStale, statusLabel } from "./plan";
 
 type Props = {
   task: Task;
@@ -60,6 +60,8 @@ export function PlanPanel({ task, onChanged }: Props) {
     const completed = steps.filter((step) => step.status === "completed").length;
     return { total, completed, percent: total ? Math.round((completed / total) * 100) : 0 };
   }, [steps]);
+  // 任务成功、计划却一步没回写：这句话必须说出来，否则 0/4 看起来像“什么都没做”。
+  const stale = planIsStale(progress, task.status);
 
   const groups = useMemo(() => groupByMilestone(steps, milestones), [steps, milestones]);
 
@@ -119,7 +121,7 @@ export function PlanPanel({ task, onChanged }: Props) {
         <div className="flex items-baseline gap-2">
           <span className="font-mono text-[11px] tracking-wide text-faint uppercase">执行计划</span>
           <span className="font-mono text-[11px] text-faint">
-            {progress.completed}/{progress.total}
+            {stale ? "计划未更新" : `${progress.completed}/${progress.total}`}
             {revision > 0 ? ` · 第 ${revision} 版` : ""}
           </span>
         </div>
@@ -133,7 +135,13 @@ export function PlanPanel({ task, onChanged }: Props) {
         </button>
       </div>
 
-      {progress.total > 0 && (
+      {stale && (
+        <p className="mb-2.5 rounded-md border border-warn/25 bg-warn/[0.04] px-2.5 py-2 text-[12px] leading-relaxed text-warn">
+          任务已完成，但模型没有回写计划的完成状态；下面是计划原样，以时间线里的实际执行为准，也可以手动勾选纠正。
+        </p>
+      )}
+
+      {progress.total > 0 && !stale && (
         <div className="mb-2.5 flex items-center gap-2">
           <div className="h-1 flex-1 overflow-hidden rounded-full bg-brand/15">
             <div

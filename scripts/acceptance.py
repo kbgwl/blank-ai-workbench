@@ -190,7 +190,8 @@ def main() -> int:
     if not page:
         return _fail("没有指定页面：用 --page 或写在 journey 的 page 字段里")
     if not Path(page).is_absolute() and not page.startswith(("http", "file://")):
-        page = str((journey_path.parent / page).resolve())
+        base = Path.cwd() if args.page else journey_path.parent
+        page = str((base / page).resolve())
 
     url = as_url(page)
     steps = list(journey["open"]) + list(journey["steps"])

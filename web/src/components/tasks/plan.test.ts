@@ -7,6 +7,8 @@ import {
   parseMilestones,
   parsePlanSteps,
   parseProgress,
+  planIsStale,
+  planProgressText,
 } from "./plan.ts";
 
 // 计划是用户唯一能看见的执行依据。解析错了不是"显示得不好看"：
@@ -69,6 +71,19 @@ test("没有进度载荷时退回本地计算，不会算出 NaN", () => {
 
 test("空计划不会除零", () => {
   assert.equal(computeProgress([]).percent, 0);
+});
+
+test("任务成功但计划一步没回写：说计划未更新，不摆 0/4", () => {
+  assert.equal(planIsStale({ total: 4, completed: 0 }, "succeeded"), true);
+  assert.equal(planIsStale({ total: 4, completed: 0 }, "completed"), true);
+  assert.equal(planProgressText({ total: 4, completed: 0 }, "succeeded"), "计划未更新");
+  // 失败/取消时 0/4 是有效信息，不能也改成一句说明。
+  assert.equal(planIsStale({ total: 4, completed: 0 }, "failed"), false);
+  assert.equal(planProgressText({ total: 4, completed: 0 }, "failed"), "0/4");
+  // 有回写就照实显示。
+  assert.equal(planProgressText({ total: 4, completed: 2 }, "succeeded"), "2/4");
+  // 空计划不占位。
+  assert.equal(planProgressText({ total: 0, completed: 0 }, "succeeded"), "");
 });
 
 test("步骤按里程碑分组，没归组的排最后", () => {

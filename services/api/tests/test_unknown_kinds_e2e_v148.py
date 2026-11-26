@@ -18,6 +18,7 @@ from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
     create_provider,
     create_task,
     env,
+    settle,
 )
 
 BEFORE = "<!-- hero -->"
@@ -90,17 +91,19 @@ async def test_skipping_a_preference_question_moves_on_with_the_default(
     assert answered.status_code == 200, answered.text
     after = answered.json()
     if after["task"]["status"] == "waiting_approval" and after["evidence"]["pending_approvals"]:
-        after = (
-            await env.client.post(
-                f"{API}/tasks/{task_id}/approval",
-                json={"approve": True, "provider_id": provider_id, "scope": "once"},
-            )
-        ).json()
+        queued = await env.client.post(
+            f"{API}/tasks/{task_id}/approval",
+            json={"approve": True, "provider_id": provider_id, "scope": "once"},
+        )
+        assert queued.status_code == 202, queued.text
+        # E13：审批只入队，恢复在后台跑；等这一轮收尾再读交付。
+        await settle()
 
     # 事情继续了：文件真的写下去了，用的是推荐项。
     assert "星河科技" in (workspace / "index.html").read_text(encoding="utf-8")
     # 而且交付里明说了这是替用户定的——不能让他以为那是自己的选择。
-    summary = str(after["task"].get("result_summary") or "")
+    final = (await env.client.get(f"{API}/tasks/{task_id}")).json()
+    summary = str(final.get("result_summary") or "")
     assert "替你定的" in summary, summary
     assert "星河科技" in summary
 

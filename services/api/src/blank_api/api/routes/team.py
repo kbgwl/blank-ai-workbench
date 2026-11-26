@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import delete, func, select
@@ -397,7 +397,7 @@ async def update_group(group_id: str, payload: TeamGroupUpdate, db: DbSession) -
             raise ApiError(code="team_group_busy", message="这一轮还没结束，暂不能调整成员", status_code=409)
         admin = await ensure_admin(db)
         await prepare_group_members(db, group, admin, payload.member_ids)
-    group.updated_at = datetime.utcnow()
+    group.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
     return await group_state(group_id)
 

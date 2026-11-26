@@ -143,10 +143,28 @@ def _created_html() -> dict:
     }
 
 
+def _browser_ok() -> dict:
+    """静态页面写完后的浏览器回执；前端交付闸门要求它出现在最后一次写之后。"""
+    return {
+        "tool": "browser_check",
+        "status": "ok",
+        "ok": True,
+        "data": {
+            "url": "file:///tmp/index.html",
+            "console": [],
+            "failed_requests": [],
+            "asserts": [{"selector": "title", "count": 1, "ok": True}],
+            "steps": [{"do": "reload", "ok": True}],
+        },
+    }
+
+
 def test_no_test_config_does_not_trigger_a_doomed_approval(tmp_path) -> None:
     (tmp_path / "index.html").write_text("<!doctype html><title>x</title>", encoding="utf-8")
 
-    update, session = _run({"tool_results": [_created_html()]}, tmp_path)
+    update, session = _run(
+        {"tool_results": [_created_html(), _browser_ok()]}, tmp_path
+    )
 
     # 关键：一行都不该执行。执行了就是又一张审批卡，用户点完才发现没测试可跑。
     assert session.gateway.calls == 0
@@ -200,7 +218,9 @@ def test_an_existing_test_config_still_goes_through_the_gate(tmp_path) -> None:
     (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
     (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
 
-    update, session = _run({"tool_results": [_created_html()]}, tmp_path)
+    update, session = _run(
+        {"tool_results": [_created_html(), _browser_ok()]}, tmp_path
+    )
 
     assert session.gateway.calls == 1
     assert update["validation"]["passed"] is True

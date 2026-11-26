@@ -133,3 +133,34 @@ async def test_the_image_never_enters_the_tool_message():
     image_message = messages[1]
     assert image_message["role"] == "user"
     assert image_message["images"][0]["data"] == b64, "图本身要完整过去"
+
+
+async def test_parallel_images_are_deferred_until_every_tool_message_is_written():
+    """并行调用时，带图 user 消息不能插在 tool 消息之间。
+
+    真机 f31d0504：三个 browser_check 并行，前两张截图各自插了一条 user 消息，
+    下一轮请求被 OpenAI 兼容网关整轮 400（assistant tool_calls 后必须紧跟每个
+    tool_call_id 的 tool 消息）。顺序必须是 tool, tool, …, user(image)…
+    """
+    b64 = _jpeg_b64(20)
+    payload = {
+        "ok": True,
+        "status": "ok",
+        "output": "控制台：0 条错误",
+        "data": {"url": "file:///x", "image": {"media_type": "image/jpeg", "data": b64, "path": "a.png"}},
+    }
+    session = types.SimpleNamespace(
+        supports_vision=True, output_seen={}, trimmed_chars=0, trim_events=[], run_id="r1"
+    )
+
+    deferred: list[dict] = []
+    messages: list[dict] = []
+    for index in (1, 2):
+        call = {"id": f"c{index}", "function": {"name": "browser_check", "arguments": "{}"}}
+        messages = await _append_tool_response(
+            messages, call, payload, session=session, step=index, deferred_images=deferred
+        )
+
+    assert [item["role"] for item in messages] == ["tool", "tool"]
+    messages.extend(deferred)
+    assert [item["role"] for item in messages] == ["tool", "tool", "user", "user"]

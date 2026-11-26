@@ -93,6 +93,17 @@ export function TaskConsole({
     return null;
   }, [events]);
 
+  // UP-04：网络没有被系统强制时，任务头部必须能一眼看到，别等翻证据页才发现。
+  const networkWarning = useMemo(() => {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event.type !== "sandbox.warning") continue;
+      const message = (event.payload as { message?: string } | null)?.message;
+      return message || "网络访问未受限";
+    }
+    return "";
+  }, [events]);
+
   if (!task) {
     return (
       <Panel title="任务详情" hint="未选择任务">
@@ -144,6 +155,14 @@ export function TaskConsole({
               <span className="truncate text-[14px] font-semibold tracking-tight">{task.title}</span>
               <StatusBadge status={task.status} />
               <LiveBadge mode={mode} />
+              {networkWarning && (
+                <span
+                  title={networkWarning}
+                  className="inline-flex items-center rounded-md bg-warn/10 px-1.5 py-0.5 text-[11px] font-medium text-warn ring-1 ring-warn/30"
+                >
+                  ⚠️ 网络未隔离
+                </span>
+              )}
             </div>
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-faint">
               <span title={task.id}>任务 {task.id.slice(0, 8)}</span>

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  archiveThread,
+  archiveThreads,
   deleteThread,
   updateThread,
   answerTask,
@@ -17,7 +17,7 @@ import {
   forkThread,
   steerTask,
   type AnswerValues,
-  type ApprovalScope,
+  type ChangeItem,
   type Evidence,
   type PendingApproval,
   type PendingQuestion,
@@ -36,14 +36,19 @@ import { suggestSkill } from "@/lib/skill-suggest";
 import { useTaskEvents } from "../tasks/use-task-events";
 import { NEW_CHAT_EVENT } from "@/lib/commands";
 import { canPickDirectory, pickDirectory } from "@/lib/desktop";
-import { activateWorkspace, bindWorkspace, updateProject } from "../projects/api";
+import { readJson, readString, removeString, writeJson, writeString } from "@/lib/safe-storage";
+import { activateWorkspace, bindWorkspace, revealWorkspacePath, updateProject } from "../projects/api";
+import { DirectoryPicker } from "../projects/directory-picker";
 import { loadBoot, loadConversation, loadConversations, sendMessage, stopTask, type BotTurn, type Conversation } from "./bot-api";
+import { summarizeBatchResult } from "./batch-archive";
 import { BackgroundList } from "./background-list";
 import { backgroundRowsFor, type BackgroundRow } from "./background";
 import { Composer } from "./composer";
+import { FirstScreen } from "./first-screen";
 import { GoalStatusBar } from "./goal-status-bar";
 import type { GoalStatusBarData } from "./goal-status";
-import { usableProviderId } from "./provider-choice";
+import { defaultModelLabel, usableProviderId } from "./provider-choice";
+import { configuredProviders } from "../configured-providers";
 import { TaskPanel } from "./panel";
 import { Sidebar } from "./sidebar";
 import { backgroundTaskTarget, visibleBackgroundTasks } from "./background";
@@ -62,49 +67,26 @@ import {
   type DraftAttachment,
 } from "./uploads";
 
-const SUGGESTIONS = [
-  "把这个仓库跑起来，缺什么补什么",
-  "找出最近一次失败的测试并修掉",
-  "给登录接口加上限流，写清为什么这么限",
-  "读一遍 README，指出和代码对不上的地方",
-];
-
-/** 首次使用的三档说法，与发送栏那三档是同一组值，不是另一套模式。 */
-const FIRST_MODES: { mode: string; label: string; detail: string }[] = [
-  { mode: "default", label: "危险操作先问我", detail: "读文件、改文件照做；删东西、跑高风险命令、联网会先弹卡等你点。" },
-  { mode: "plan", label: "先看不改", detail: "只做只读取证，调研完把计划交给你批准，批了才动手。" },
-  { mode: "bypass", label: "尽量别打断我", detail: "写文件与执行命令不再逐个问；装依赖首次会问一次，删除、发布、出工作区仍会拦下。" },
-];
-
 const PROVIDER_KEY = "blank.bot.provider";
 const SCENARIO_KEY = "blank.bot.scenario";
 const MEMORY_KEY = "blank.bot.memory";
 const PERMISSION_KEY = "blank.bot.permission";
-/** 首次使用的档位选择只问一次。选过、或者发过第一轮之后就不再出现。 */
-const MODE_CHOSEN_KEY = "blank.bot.mode-chosen";
+/** 侧栏收窄与结果面板开合是界面偏好，刷新/跨页都该保持，不用每次重新摆一遍。 */
+const SIDEBAR_COLLAPSED_KEY = "blank.bot.sidebar-collapsed";
+const PANEL_OPEN_KEY = "blank.bot.panel-open";
 
 /** 最近用过的工作区按项目记在本地：跨会话保留，但绝不进库（它只是偏好，不是数据）。 */
 const RECENT_WS_PREFIX = "blank.recent-workspaces.";
 
 function readRecentWorkspaces(projectId: string): string[] {
-  if (typeof window === "undefined" || !projectId) return [];
-  try {
-    const raw = window.localStorage.getItem(`${RECENT_WS_PREFIX}${projectId}`);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
-  } catch {
-    // 存坏了就当没有：这个列表只影响排序，不值得为它报错。
-    return [];
-  }
+  if (!projectId) return [];
+  const parsed = readJson<unknown>(`${RECENT_WS_PREFIX}${projectId}`, []);
+  return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
 }
 
 function rememberWorkspace(projectId: string, workspaceId: string): string[] {
   const next = [workspaceId, ...readRecentWorkspaces(projectId).filter((id) => id !== workspaceId)].slice(0, 5);
-  try {
-    window.localStorage.setItem(`${RECENT_WS_PREFIX}${projectId}`, JSON.stringify(next));
-  } catch {
-    /* 隐私模式下写不进去，排序退化成默认顺序即可 */
-  }
+  writeJson(`${RECENT_WS_PREFIX}${projectId}`, next);
   return next;
 }
 
@@ -134,15 +116,18 @@ export function BotApp() {
   // 场景与记忆开关：与模型选择同一套持久化套路——localStorage 里存用户的选择，
   // 清单读不到时保持开发场景，行为与没有场景系统时完全一致。
   const [scenarios, setScenarios] = useState<ScenarioInfo[]>([]);
-  const [scenarioKey, setScenarioKey] = useState("dev");
+  // 产品默认是「日常」：新用户第一句话就是通用任务，不必先理解编程场景。
+  // 存过的选择仍然优先；切到编程会写进 localStorage。
+  const [scenarioKey, setScenarioKey] = useState("daily");
   const [memoryOptIn, setMemoryOptIn] = useState(false);
   // v0.10.1 §4：发送栏的权限档。默认「询问」（= 后端 default 档）。
   // 界面文案是「询问 / 完全访问 / 计划」，内部映射回既有四档枚举。
   const [permissionMode, setPermissionMode] = useState("default");
-  const [modeChosen, setModeChosen] = useState(false);
 
   const [threads, setThreads] = useState<Thread[] | null>(null);
   const [threadsError, setThreadsError] = useState<string | null>(null);
+  /** 已归档列表单独读取失败：活跃列表照常显示，只在侧栏已归档组位置报错。 */
+  const [archivedError, setArchivedError] = useState(false);
   const [threadsNonce, setThreadsNonce] = useState(0);
   /** 后台任务：关窗后仍在跑的、停在审批上等人的、或者失败没处理的（v164 §2.4）。 */
   const [activeTasks, setActiveTasks] = useState<Task[]>([]);
@@ -178,7 +163,51 @@ export function BotApp() {
   // 收窄是功能不是默认值——高频的会话不该一进来就把入口藏起来让人找。
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
+  /** 浏览器环境的目录浏览器；桌面壳走原生目录框，不打开它。 */
+  const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
+  /** 目录浏览器从当前目录开始，而不是每次都退回盘符列表。 */
+  const [directoryPickerStart, setDirectoryPickerStart] = useState("");
+  /**
+   * 这个对话选中的目录。
+   *
+   * `null` = 新对话还没选；`undefined` = 打开已有对话，跟随项目当前目录。
+   * 新对话不继承项目的活动目录——用户明确选过之后，这个对话才算有目录。
+   */
+  const [conversationWorkspaceId, setConversationWorkspaceId] = useState<
+    string | null | undefined
+  >(null);
   const [evidence, setEvidence] = useState<Evidence | null>(null);
+  const [threadChanges, setThreadChanges] = useState<ChangeItem[]>([]);
+  const threadTurnKey = conv?.turns.map((turn) => turn.id).join("|") ?? "";
+
+  useEffect(() => {
+    let cancelled = false;
+    const ids = threadTurnKey ? threadTurnKey.split("|") : [];
+    if (ids.length === 0) return;
+    void Promise.all(
+      ids.map(async (taskId) => {
+        try {
+          const item = await fetchEvidence(taskId);
+          return item.changes;
+        } catch {
+          return [];
+        }
+      }),
+    ).then((groups) => {
+      if (cancelled) return;
+      const merged = new Map<string, ChangeItem>();
+      for (const group of groups) {
+        for (const change of group) {
+          const existing = merged.get(change.path);
+          if (!existing || (!existing.diff && change.diff)) merged.set(change.path, change);
+        }
+      }
+      setThreadChanges([...merged.values()]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [threadTurnKey]);
 
   /**
    * 清空草稿里的图并释放预览地址。
@@ -193,6 +222,12 @@ export function BotApp() {
 
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+  /** 每个会话上次读到哪。切走再切回来就回到原处，而不是被拽回最新一句。 */
+  const scrollMemory = useRef<Map<string, number>>(new Map());
+  const currentThreadId = useRef("");
+  /** 正在等某条会话加载完、好把滚动位置放回去。 */
+  const pendingScroll = useRef<{ threadId: string; top: number } | null>(null);
   /** 插话正在提交：挡住连按回车造成的重复排队（见 steer）。 */
   const steerBusy = useRef(false);
 
@@ -215,9 +250,33 @@ export function BotApp() {
     // recentVersion 只用来在"刚切过"之后重算一次，不参与计算。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProject?.workspaces, projectId, recentVersion]);
-  const canPickWorkspace = canPickDirectory();
+  const nativeDirectoryPicker = canPickDirectory();
+  // 桌面壳用原生目录框；网页环境走后端目录浏览器。两条路都能选目录。
+  const canPickWorkspace = true;
   /** 项目和目录是否已读回来。首屏为 false，此时"没有目录"只是还没读到。 */
   const workspaceReady = boot !== null;
+  /** 项目当前在用的目录。它只是选择框的起点，不代表新对话已经选中了目录。 */
+  const projectActiveWorkspace =
+    workspaces.find((item) => item.is_active) ?? workspaces[0] ?? null;
+  const activeWorkspace =
+    conversationWorkspaceId === undefined
+      ? projectActiveWorkspace
+      : conversationWorkspaceId
+        ? (workspaces.find((item) => item.id === conversationWorkspaceId) ?? null)
+        : null;
+
+  const changeScenario = useCallback(
+    (key: string) => {
+      setScenarioKey(key);
+      // 换到非日常场景时记忆开关一起收起（后端本来就不认非日常的 opt_in，
+      // 前端把状态也复位，界面和真实行为保持一致）。
+      const scenario = scenarios.find((item) => item.key === key);
+      if (!scenario?.memoryAllowed) setMemoryOptIn(false);
+      writeString(SCENARIO_KEY, key);
+      writeString(MEMORY_KEY, memoryOptIn && scenario?.memoryAllowed ? "on" : "off");
+    },
+    [scenarios, memoryOptIn],
+  );
 
   // ── 启动：项目与供应商 ────────────────────────────────────────────────
   useEffect(() => {
@@ -229,32 +288,26 @@ export function BotApp() {
         setProjectId((current) => current || data.projects[0]?.id || "");
         // 存过的模型选择在这里读：不在 useState 初始化里碰 localStorage，
         // 否则服务端渲染出空值、客户端渲染出选中值，hydration 会报不一致。
-        try {
-          // 供应商可能已经被删掉了：认不出来就当没选过，同时把本地记录擦掉，
-          // 免得下一轮又把同一个悬空 id 发下去（详见 provider-choice.ts）。
-          const saved = usableProviderId(
-            window.localStorage.getItem(PROVIDER_KEY) ?? "",
-            data.providers.map((provider) => provider.id),
-          );
-          if (saved) {
-            setProviderId(saved);
-          } else {
-            window.localStorage.removeItem(PROVIDER_KEY);
-          }
-          const savedScenario = window.localStorage.getItem(SCENARIO_KEY) ?? "";
-          if (savedScenario) setScenarioKey(savedScenario);
-          setMemoryOptIn(window.localStorage.getItem(MEMORY_KEY) === "on");
-          // 权限档只认四个合法值，脏值保持询问模式（后端会再兜一层）。
-          const savedPermission = window.localStorage.getItem(PERMISSION_KEY) ?? "";
-          if (["default", "accept_edits", "plan", "bypass"].includes(savedPermission)) {
-            setPermissionMode(savedPermission);
-          }
-          // 选过一次就不再问。读不到就当作没选过——首次使用时多问一次，
-          // 好过把档位藏在输入框工具条里让人永远不知道它是什么。
-          setModeChosen(window.localStorage.getItem(MODE_CHOSEN_KEY) === "1");
-        } catch {
-          // 隐私模式下 localStorage 会抛错，忽略即可，用默认模型照样能聊。
+        const saved = usableProviderId(
+          readString(PROVIDER_KEY),
+          configuredProviders(data.providers).map((provider) => provider.id),
+        );
+        if (saved) {
+          setProviderId(saved);
+        } else {
+          removeString(PROVIDER_KEY);
         }
+        const savedScenario = readString(SCENARIO_KEY);
+        if (savedScenario) setScenarioKey(savedScenario);
+        setMemoryOptIn(readString(MEMORY_KEY) === "on");
+        const savedPermission = readString(PERMISSION_KEY);
+        if (["default", "accept_edits", "plan", "bypass"].includes(savedPermission)) {
+          setPermissionMode(savedPermission);
+        }
+        // 界面偏好跟着启动数据一起读回：放在这里而不是 useState 初始化，
+        // 是为了让服务端首帧与客户端首帧一致，避免水合不一致。
+        setSidebarCollapsed(readString(SIDEBAR_COLLAPSED_KEY) === "1");
+        setPanelOpen(readString(PANEL_OPEN_KEY) !== "0");
       })
       .catch((error: unknown) => {
         if (alive) setBootError(errorMessage(error));
@@ -276,15 +329,17 @@ export function BotApp() {
     // 首帧 projectId 还没就绪就跳过，而依赖里又没有它 → 永远不重跑，左栏一直停在骨架。
     let alive = true;
     loadConversations()
-      .then((rows) => {
+      .then(({ threads: rows, archivedError: archivedFailed }) => {
         if (!alive) return;
         setThreads(rows);
         setThreadsError(null);
+        setArchivedError(archivedFailed);
       })
       .catch((error: unknown) => {
         if (!alive) return;
         setThreads([]);
         setThreadsError(`会话列表读取失败：${errorMessage(error)}`);
+        setArchivedError(false);
       });
     return () => {
       alive = false;
@@ -507,15 +562,60 @@ export function BotApp() {
   const onScroll = useCallback(() => {
     const node = scroller.current;
     if (!node) return;
-    stick.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+    const atBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+    stick.current = atBottom;
+    // 只在"贴底 / 离开底部"切换时 setState，避免每一帧滚动都触发重渲染。
+    setShowJump((current) => (current === !atBottom ? current : !atBottom));
+  }, []);
+
+  // 记住当前打开的会话 id，供 onScroll 记录位置时使用（onScroll 不该依赖 conv）。
+  useEffect(() => {
+    currentThreadId.current = conv?.thread.id ?? "";
+  }, [conv?.thread.id]);
+
+  // 切回一条读过的会话：等内容渲染完，把滚动位置放回离开时的地方。
+  // 原来在底部附近就继续贴底，避免"明明看的是最新消息却被丢回中间"。
+  useEffect(() => {
+    const node = scroller.current;
+    const pending = pendingScroll.current;
+    if (!node || !pending || conv?.thread.id !== pending.threadId) return;
+    pendingScroll.current = null;
+    const frame = requestAnimationFrame(() => {
+      const max = Math.max(0, node.scrollHeight - node.clientHeight);
+      const top = Math.min(Math.max(0, pending.top), max);
+      node.scrollTop = top;
+      const atBottom = max - top < 80;
+      stick.current = atBottom;
+      setShowJump(!atBottom && max > 200);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [conv]);
+
+  const jumpToBottom = useCallback(() => {
+    const node = scroller.current;
+    if (!node) return;
+    node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+    stick.current = true;
+    setShowJump(false);
   }, []);
 
   // ── 打开一条会话 ──────────────────────────────────────────────────────
   const openThread = useCallback((threadId: string) => {
-    stick.current = true;
+    // 离开前先把当前位置记在"离开的那条"名下：等新会话内容一渲染，
+    // 浏览器会把 scrollTop 夹到新内容的范围内并触发滚动事件，那时再记已经晚了。
+    const leaving = currentThreadId.current;
+    if (leaving && leaving !== threadId && scroller.current) {
+      scrollMemory.current.set(leaving, scroller.current.scrollTop);
+    }
+    // 读过的会话回到原处；没读过的（或新会话）照旧贴底，先看最新一句。
+    const remembered = scrollMemory.current.get(threadId);
+    pendingScroll.current = remembered === undefined ? null : { threadId, top: remembered };
+    stick.current = remembered === undefined;
+    setShowJump(false);
     setConvError(null);
     setLoadingConv(true);
     setEvidence(null);
+    setThreadChanges([]);
     setActiveTaskId(null);
     setLiveTask(null);
     // 地址栏跟着走：刷新页面能回到同一条对话，也能把链接直接发给别人。
@@ -533,6 +633,8 @@ export function BotApp() {
           return;
         }
         setConv(next);
+        // 已有对话跟随项目当前目录；新对话的“未选择”不会带到这里。
+        setConversationWorkspaceId(undefined);
         const last = next.turns[next.turns.length - 1];
         setActiveTaskId(last?.id ?? null);
       })
@@ -586,15 +688,24 @@ export function BotApp() {
   }, [activeTasks, conv, openThread]);
 
   const startNew = useCallback(() => {
+    // 和 openThread 一样：先把上一条读到哪记下来，再清空。
+    const leaving = currentThreadId.current;
+    if (leaving && scroller.current) {
+      scrollMemory.current.set(leaving, scroller.current.scrollTop);
+    }
     setConv(null);
     setConvError(null);
     setActiveTaskId(null);
     setLiveTask(null);
     setEvidence(null);
+    setThreadChanges([]);
     setSendError(null);
     setComposerHint(null);
+    // 新对话从“没有目录”开始：项目里绑过什么，不自动算到这个对话头上。
+    setConversationWorkspaceId(null);
     // 换会话/换项目时草稿里的图要一起清：它们属于上一个项目，跨项目带过去后端也认不出 id。
     clearImages();
+    pendingScroll.current = null;
     stick.current = true;
     // 清掉地址栏里的会话 id：否则刷新一下又跳回刚才那条。
     try {
@@ -612,6 +723,12 @@ export function BotApp() {
     window.addEventListener(NEW_CHAT_EVENT, onNew);
     return () => window.removeEventListener(NEW_CHAT_EVENT, onNew);
   }, [startNew]);
+
+  /** 结果面板开合用一次，同时记住偏好：刷新之后保持上次的样子。 */
+  const setPanelOpenSaved = useCallback((next: boolean) => {
+    setPanelOpen(next);
+    writeString(PANEL_OPEN_KEY, next ? "1" : "0");
+  }, []);
 
   // ── 工作区 ───────────────────────────────────────────────────────────
   /**
@@ -635,6 +752,10 @@ export function BotApp() {
       setActionError(null);
       try {
         await activateWorkspace(projectId, workspaceId);
+        // 这个对话从现在起才算有目录；首屏标题与发送闸门都看它。
+        setConversationWorkspaceId(workspaceId);
+        // 选完目录就把"还没选目录"的提示撤掉，别让红字留在输入框上。
+        setSendError(null);
         rememberWorkspace(projectId, workspaceId);
         setRecentVersion((version) => version + 1);
         await refreshProjects();
@@ -648,10 +769,10 @@ export function BotApp() {
   );
 
   /**
-   * 绑定一个目录并立刻切过去。
+   * 把目录选择框选中的目录绑定到当前项目并立刻切过去。
    *
-   * 单独抽出来是因为有两条入口：桌面版的系统目录框、以及"手动输入路径"
-   * （浏览器里拿不到原生目录框，没有这条入口就等于不能选本地目录）。
+   * 桌面壳用系统目录框，浏览器用后端目录浏览器；两条路都只返回已存在的目录，
+   * 不再提供手填路径。
    */
   const bindAndActivateWorkspace = useCallback(
     async (path: string) => {
@@ -664,11 +785,14 @@ export function BotApp() {
         // 刚选的目录就是用户想用的那个：绑完立刻切成活动，否则新绑的在界面上是灰的，
         // 用户会以为没成功（这也是旧版最难理解的一处）。
         await activateWorkspace(projectId, bound.id);
+        setConversationWorkspaceId(bound.id);
+        setSendError(null);
         rememberWorkspace(projectId, bound.id);
         setRecentVersion((version) => version + 1);
         await refreshProjects();
         // 只换目录，不动会话：Codex 也是 `-C` 换工作根，历史会话照旧在。
-        setComposerHint(`已切换目录：${picked}（下一轮在这里执行，会话不变）`);
+        // 只报目录名：完整主机路径不进默认界面，截图/投屏时才不会把目录结构带出去。
+        setComposerHint(`已切换目录：${bound.label}（下一轮在这里执行，会话不变）`);
       } catch (error: unknown) {
         setActionError(errorMessage(error));
       }
@@ -695,11 +819,27 @@ export function BotApp() {
   const pickWorkspace = useCallback(async () => {
     if (!projectId) return;
     setActionError(null);
+    if (!nativeDirectoryPicker) {
+      // 从当前目录开始：列表接口只给打码路径，这里按需单独取一次真实路径。
+      // 新对话还没选目录时，用项目上次的目录当起点；取不到就退回盘符列表。
+      const anchor = activeWorkspace ?? projectActiveWorkspace;
+      let start = "";
+      if (anchor) {
+        try {
+          start = await revealWorkspacePath(projectId, anchor.id);
+        } catch {
+          start = "";
+        }
+      }
+      setDirectoryPickerStart(start);
+      setDirectoryPickerOpen(true);
+      return;
+    }
     // 用户在系统对话框里点了"取消"会拿到空串——那是正常操作，不该报错。
     const picked = await pickDirectory();
     if (!picked) return;
     await bindAndActivateWorkspace(picked);
-  }, [projectId, bindAndActivateWorkspace]);
+  }, [projectId, nativeDirectoryPicker, activeWorkspace, projectActiveWorkspace, bindAndActivateWorkspace]);
 
   // ── 图片 ─────────────────────────────────────────────────────────────
   /**
@@ -793,16 +933,8 @@ export function BotApp() {
     const ready = images.filter((item) => item.id && !item.uploading && !item.error);
     // 只有图没有字是合法的；两样都空就不发——否则会建出一条没有目标的空轮次。
     if ((!text && ready.length === 0) || sending || !projectId) return;
-    // 没有工作目录就别把请求发出去。
-    //
-    // 后端会回 409「该项目尚未绑定工作区目录」，而那时任务已经建出来了：
-    // 界面上多一条永远停在 queued 的轮次，用户看到的是"发不出去、也说不清为什么"。
-    // 在本地拦住，顺手把系统目录框弹出来——这一步本来就是"选个目录"能解决的。
-    if (workspaceReady && workspaces.length === 0) {
-      setSendError("这个项目还没有工作目录。先选一个，它才知道在哪儿读代码、改文件。");
-      if (canPickWorkspace) void pickWorkspace();
-      return;
-    }
+    // 没有目录也能发：这一轮走纯聊天，后端禁用文件/命令工具。
+    // 只有选了目录，才把这一轮升级成可操作电脑。
     setSending(true);
     setSendError(null);
     setActionError(null);
@@ -816,6 +948,8 @@ export function BotApp() {
         scenario: scenarioKey,
         memoryOptIn,
         permissionMode,
+        // 这个对话没选目录 = 纯聊天；选了才允许操作电脑。
+        chatOnly: !activeWorkspace,
         attachments: ready,
       });
       const created: BotTurn = {
@@ -843,13 +977,6 @@ export function BotApp() {
       setEvidence(null);
       setDraft("");
       clearImages();
-      // 发出第一轮就当作已经用过：此时再在空态里问"按哪种方式做"已经没意义。
-      setModeChosen(true);
-      try {
-        window.localStorage.setItem(MODE_CHOSEN_KEY, "1");
-      } catch {
-        // 写不进去只影响下次是否再问一次，不影响这一轮的发送。
-      }
       stick.current = true;
       // 每次都刷新左侧：不只新会话要出现，老会话也要更新"几轮"和"最近活动时间"，
       // 否则左侧列表停在发消息之前的样子，看起来像没发出去。
@@ -868,7 +995,7 @@ export function BotApp() {
     } finally {
       setSending(false);
     }
-  }, [clearImages, conv, draft, images, memoryOptIn, permissionMode, projectId, providerId, scenarioKey, sending, workspaceReady, workspaces.length, canPickWorkspace, pickWorkspace]);
+  }, [clearImages, conv, draft, images, memoryOptIn, permissionMode, projectId, providerId, scenarioKey, sending, activeWorkspace]);
 
   const stop = useCallback(() => {
     if (!activeTaskId) return;
@@ -1034,7 +1161,7 @@ export function BotApp() {
     (thread: Thread) => {
       const ok = window.confirm(`归档「${thread.title}」？\n\n它不再接受新的一轮，已有的轮次全部保留。`);
       if (!ok) return;
-      archiveThread(thread.id)
+      updateThread(thread.id, { status: "archived" })
         .then(() => {
           if (conv?.thread.id === thread.id) startNew();
           setThreadsNonce((value) => value + 1);
@@ -1042,6 +1169,34 @@ export function BotApp() {
         .catch((error: unknown) => setActionError(errorMessage(error)));
     },
     [conv?.thread.id, startNew],
+  );
+
+  /**
+   * 批量归档：Sidebar 已经做过一次整批确认，这里只发一个请求。
+   *
+   * 失败必须把错误抛回去：Sidebar 靠它决定"留在管理态、保留选择"——
+   * 在这里吞掉错误会让一次失败看起来像成功，选择也被清空。
+   */
+  const openThreadId = conv?.thread.id ?? "";
+  const batchArchive = useCallback(
+    async (items: Thread[]) => {
+      const ids = items.map((thread) => thread.id);
+      setActionError(null);
+      try {
+        const result = await archiveThreads(ids);
+        // 当前正打开的这一条也在归档列表里：切到新对话，否则输入框对着一条
+        // 已归档会话，下一句一定 409。
+        if (openThreadId && ids.includes(openThreadId)) startNew();
+        setThreadsNonce((value) => value + 1);
+        setSendError(null);
+        // startNew 会清提示，所以成功文案放在它之后。
+        setComposerHint(summarizeBatchResult(result));
+      } catch (error: unknown) {
+        setActionError(errorMessage(error));
+        throw error;
+      }
+    },
+    [openThreadId, startNew],
   );
 
 
@@ -1117,6 +1272,18 @@ export function BotApp() {
 
   const lastTurn = currentTurnView[currentTurnView.length - 1] ?? null;
   const activeEvidence = running ? evidence : null;
+  // 普通对话没有产物时不占右侧：只有真的改过文件、跑出测试/验收，
+  // 或这条会话有工作区改动，面板才有可看的东西。会话本身仍在时间线里。
+  const panelHasContent = Boolean(
+    (lastTurn?.files?.length ?? 0) > 0 ||
+    (evidence?.changes?.length ?? 0) > 0 ||
+    (activeEvidence?.changes?.length ?? 0) > 0 ||
+    threadChanges.length > 0 ||
+    evidence?.test ||
+    activeEvidence?.test ||
+    (evidence?.acceptance?.length ?? 0) > 0 ||
+    (activeEvidence?.acceptance?.length ?? 0) > 0,
+  );
   // 不在当前这条会话里的后台任务。正在看的那条不该在横幅里再报一遍。
   // 没有 threadId 的历史孤儿任务**不能**被过滤掉：它们恰恰是最容易"关窗后找不到"
   // 的那批，横幅是唯一的兜底入口（v164 §2.3）。它们点开走任务详情，不走会话。
@@ -1154,7 +1321,7 @@ export function BotApp() {
   };
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-bg">
+    <div className="flex h-dvh overflow-hidden bg-transparent">
       <Sidebar
         projects={(boot?.projects ?? []).map((project) => ({ id: project.id, name: project.name }))}
         activeProjectId={projectId}
@@ -1181,11 +1348,17 @@ export function BotApp() {
         threads={threads}
         activeId={conv?.thread.id ?? null}
         error={threadsError}
+        archivedError={archivedError}
         collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed((value) => !value)}
+        onToggle={() => {
+          const next = !sidebarCollapsed;
+          setSidebarCollapsed(next);
+          writeString(SIDEBAR_COLLAPSED_KEY, next ? "1" : "0");
+        }}
         onNew={startNew}
         onSelect={openThread}
         onArchive={archive}
+        onBatchArchive={batchArchive}
         onRename={rename}
         onFork={(thread) => void forkThreadById(thread)}
         onUnarchive={unarchive}
@@ -1193,29 +1366,31 @@ export function BotApp() {
       />
 
       {/* 主内容与任务面板共用一块圆角卡片，和 Qoder 的“灰底 + 白卡”一致。 */}
-      <div className="flex min-w-0 flex-1 p-2">
-      <div className="flex min-w-0 flex-1 overflow-hidden rounded-xl border border-line bg-canvas shadow-[var(--shadow-sm)]">
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-4">
+      <div className="flex min-w-0 flex-1 p-3">
+      <div className="glass flex min-w-0 flex-1 overflow-hidden rounded-[var(--radius-lg)]">
+      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line/70 bg-transparent px-5">
           <h1 className="min-w-0 flex-1 truncate text-[14px] font-medium">
             {conv?.thread.title || "新对话"}
           </h1>
           {conv && (
             <span className="shrink-0 font-mono text-[11px] text-faint">{conv.turns.length} 轮</span>
           )}
-          <button
-            type="button"
-            onClick={() => setPanelOpen((value) => !value)}
-            title={panelOpen ? "收起任务面板" : "打开任务面板"}
-            className={`grid size-7 place-items-center rounded-md transition-colors hover:bg-surface-2 ${
-              panelOpen ? "text-text" : "text-faint"
-            }`}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-4" aria-hidden>
-              <rect x="3" y="4" width="18" height="16" rx="2" />
-              <path d="M15 4v16" />
-            </svg>
-          </button>
+          {panelHasContent && (
+            <button
+              type="button"
+              onClick={() => setPanelOpenSaved(!panelOpen)}
+              title={panelOpen ? "收起结果面板" : "打开结果面板"}
+              className={`grid size-7 place-items-center rounded-md transition-colors hover:bg-surface-2 ${
+                panelOpen ? "text-text" : "text-faint"
+              }`}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-4" aria-hidden>
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <path d="M15 4v16" />
+              </svg>
+            </button>
+          )}
         </header>
         {/* 后台任务收进状态条那一格（见 goal-status-bar）：同一件事原来在
             状态条和下面的橙色横幅各说一遍，两条整行告示互相抢注意力。 */}
@@ -1255,68 +1430,22 @@ export function BotApp() {
               </p>
             )}
             {currentTurnView.length === 0 && !loadingConv && (
-              // 空态不再撑满 56vh：那样它和底部输入框之间会空出一大块。
-              // 收到 36vh 后两者在视觉上成一组，和 Qoder 新会话页的密度一致。
-              <div className="flex min-h-[36vh] flex-col items-center justify-center text-center">
-                <span className="grid size-11 place-items-center rounded-xl bg-logo-bg">
-                  <span className="size-3.5 rounded-[3px] bg-logo-accent" />
-                </span>
-                <h2 className="mt-5 text-[17px] font-semibold tracking-tight">今天想做点什么？</h2>
-                <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-muted">
-                  说清楚要什么，它会先读代码再动手。改了什么、为什么改，都会留在对话里。
-                </p>
-                {!modeChosen && (
-                  <div className="mt-5">
-                    <p className="text-[12px] text-faint">这一轮按哪种方式做？</p>
-                    <div className="mt-1.5 flex flex-wrap justify-center gap-1.5">
-                      {FIRST_MODES.map((item) => (
-                        <button
-                          key={item.mode}
-                          type="button"
-                          onClick={() => {
-                            setPermissionMode(item.mode);
-                            setModeChosen(true);
-                            try {
-                              window.localStorage.setItem(PERMISSION_KEY, item.mode);
-                              window.localStorage.setItem(MODE_CHOSEN_KEY, "1");
-                            } catch {
-                              // 存不住也只是下次再问一次，不影响这一轮。
-                            }
-                            setFocusToken((value) => value + 1);
-                          }}
-                          title={item.detail}
-                          className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${
-                            permissionMode === item.mode
-                              ? "border-brand/50 bg-brand/[0.06] text-brand"
-                              : "border-line bg-surface text-muted hover:border-line-strong hover:text-text"
-                          }`}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <div className="mt-7 grid w-full max-w-xl gap-2 sm:grid-cols-2">
-                  {SUGGESTIONS.map((text) => (
-                    <button
-                      key={text}
-                      type="button"
-                      onClick={() => {
-                        setDraft(text);
-                        setFocusToken((value) => value + 1);
-                      }}
-                      className="rounded-lg border border-line bg-surface px-3.5 py-2.5 text-left text-[13px] leading-relaxed text-muted transition-colors hover:border-line-strong hover:bg-surface-2 hover:text-text"
-                    >
-                      {text}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <FirstScreen
+                workspaceLabel={activeWorkspace?.label ?? ""}
+                workspaceReady={workspaceReady}
+              />
             )}
 
             {loadingConv && currentTurnView.length === 0 && (
-              <p className="py-10 text-center font-mono text-[12px] text-faint">读取对话…</p>
+              <div className="space-y-3 py-10" aria-label="读取对话">
+                {[0, 1, 2].map((row) => (
+                  <div key={row} className="space-y-2 rounded-2xl border border-line/60 bg-surface-2/50 p-4">
+                    <div className="h-3 w-24 animate-pulse rounded-full bg-surface-3" />
+                    <div className="h-3 w-full animate-pulse rounded-full bg-surface-3" />
+                    <div className="h-3 w-3/4 animate-pulse rounded-full bg-surface-3" />
+                  </div>
+                ))}
+              </div>
             )}
 
             <div className="space-y-8">
@@ -1370,6 +1499,16 @@ export function BotApp() {
           </div>
         </div>
 
+        {showJump && (
+          <button
+            type="button"
+            onClick={jumpToBottom}
+            className="glass-soft absolute bottom-36 left-1/2 z-20 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] text-muted transition-colors hover:text-text"
+          >
+            回到底部 ↓
+          </button>
+        )}
+
         {/* 待你处理的卡挂在输入框上方，不放在聊天流里：卡片长在正文里时，
             长对话要往上翻才看得见，用户只会看到输入框突然不能用了。 */}
         <PendingPanel
@@ -1389,69 +1528,36 @@ export function BotApp() {
           providers={boot?.providers ?? []}
           providersReady={boot !== null}
           projectId={projectId}
-          onProjectChange={(id) => {
-            setProjectId(id);
-            setThreads(null);
-            startNew();
-          }}
           workspaces={workspaces}
           workspaceReady={workspaceReady}
+          activeWorkspaceId={activeWorkspace?.id ?? null}
           canPickWorkspace={canPickWorkspace}
           onActivateWorkspace={(id) => void activateWorkspaceById(id)}
-          onBindWorkspacePath={(path) => void bindAndActivateWorkspace(path)}
-          projectName={boot?.projects.find((project) => project.id === projectId)?.name ?? ""}
           onPickWorkspace={() => void pickWorkspace()}
           providerId={providerId}
           // 顶部状态条撤掉模型胶囊后，默认模型的名字改从这里显示——
           // 不然「默认模型」四个字看不出到底在跑哪个。
           defaultModelLabel={
-            // 只认"有 Key"的供应商：没 Key 的模型名显示出来等于骗人。
-            boot?.providers
-              .filter((item) => item.enabled && (item.api_key_hint ?? "") !== "")
-              .find((item) => item.id === providerId)?.model ||
-            boot?.providers.filter((item) => item.enabled && (item.api_key_hint ?? "") !== "")[0]?.model ||
-            ""
+            // 只认"有 Key"的供应商；用户没显式选时优先认后端标出的默认供应商，
+            // 而不是拿列表第一项猜（设置里锁的可能是另一家）。
+            defaultModelLabel(boot?.providers ?? [], providerId)
           }
           onProviderChange={(id) => {
             setProviderId(id);
-            try {
-              window.localStorage.setItem(PROVIDER_KEY, id);
-            } catch {
-              // 存不下就算了，下次用默认模型。
-            }
+            writeString(PROVIDER_KEY, id);
           }}
           scenarios={scenarios}
           scenarioKey={scenarioKey}
-          onScenarioChange={(key) => {
-            setScenarioKey(key);
-            // 换到非日常场景时记忆开关一起收起（后端本来就不认非日常的 opt_in，
-            // 前端把状态也复位，界面和真实行为保持一致）。
-            const scenario = scenarios.find((item) => item.key === key);
-            if (!scenario?.memoryAllowed) setMemoryOptIn(false);
-            try {
-              window.localStorage.setItem(SCENARIO_KEY, key);
-              window.localStorage.setItem(MEMORY_KEY, memoryOptIn && scenario?.memoryAllowed ? "on" : "off");
-            } catch {
-              // 存不下就算了：场景选择是会话内偏好，不是必须落盘的数据。
-            }
-          }}
+          onScenarioChange={changeScenario}
           memoryOptIn={memoryOptIn}
           onMemoryOptInChange={(value) => {
             setMemoryOptIn(value);
-            try {
-              window.localStorage.setItem(MEMORY_KEY, value ? "on" : "off");
-            } catch {
-              // 同上：落盘失败只影响下次打开时的默认值。
-            }
+            writeString(MEMORY_KEY, value ? "on" : "off");
           }}
           permissionMode={permissionMode}
           onPermissionChange={(value) => {
             setPermissionMode(value);
-            try {
-              window.localStorage.setItem(PERMISSION_KEY, value);
-            } catch {
-              // 同上：落盘失败只影响下次打开时的默认档。
-            }
+            writeString(PERMISSION_KEY, value);
           }}
           draft={draft}
           onDraftChange={setDraft}
@@ -1474,21 +1580,36 @@ export function BotApp() {
         />
       </main>
 
-      {panelOpen && lastTurn && (
+      {panelOpen && lastTurn && panelHasContent && (
         <TaskPanel
+          // 每个会话一套面板状态：文件标签/搜索/全屏都跟着会话走，
+          // 否则切到另一条会话时会残留上一条的文件标签，点开全是读取失败。
+          key={conv?.thread.id ?? ""}
           title={conv?.thread.title ?? ""}
           status={lastTurn.status}
           running={lastTurn.running}
           steps={lastTurn.steps}
           changes={activeEvidence?.changes ?? evidence?.changes ?? []}
+          workspaceChanges={threadChanges}
+          projectId={projectId}
           usage={activeEvidence?.usage ?? evidence?.usage ?? null}
           acceptance={activeEvidence?.acceptance ?? evidence?.acceptance ?? []}
           test={activeEvidence?.test ?? evidence?.test ?? null}
-          onClose={() => setPanelOpen(false)}
+          onClose={() => setPanelOpenSaved(false)}
         />
       )}
       </div>
       </div>
+      {directoryPickerOpen && (
+        <DirectoryPicker
+          initialPath={directoryPickerStart}
+          onClose={() => setDirectoryPickerOpen(false)}
+          onPick={(path) => {
+            setDirectoryPickerOpen(false);
+            void bindAndActivateWorkspace(path);
+          }}
+        />
+      )}
     </div>
   );
 }

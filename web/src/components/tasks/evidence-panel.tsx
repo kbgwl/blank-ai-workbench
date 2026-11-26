@@ -426,6 +426,8 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
   }
 
   const covered = evidence.acceptance.filter((item) => item.covered === true).length;
+  // 未判定不是“没覆盖”：验收结论没解析出来时，不能写成 0/4 让人以为四项都失败。
+  const unjudged = evidence.acceptance.filter((item) => item.covered === null).length;
   const test = evidence.test;
 
   return (
@@ -441,6 +443,7 @@ export function EvidencePanel({ taskId, evidence, error }: { taskId: string; evi
           {evidence.acceptance.length > 0 && (
             <span className="text-muted normal-case">
               已通过 {covered} / {evidence.acceptance.length}
+              {unjudged > 0 ? ` · ${unjudged} 条未判定` : ""}
             </span>
           )}
         </h4>

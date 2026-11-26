@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from dataclasses import replace as dc_replace
 from functools import partial
 from typing import Any, TypedDict
 
@@ -55,6 +56,7 @@ from blank_api.services.agent.verify_hook import (
 from blank_api.services.agent.stall import StallBreaker, signature as _stall_signature
 from blank_api.services.agent.terminal import cancelled_payload, paused_payload
 from blank_api.services.agent import transition as transition_mod
+from blank_api.services.agent.directives import READ_ONLY, directive_mode
 from blank_api.services.agent.intent import (
     ADVISE_INSTRUCTION,
     INTENT_ACT,
@@ -129,6 +131,7 @@ from blank_api.services.agent.planner import (
     repair_hint as build_repair_hint,
     revise_plan,
 )
+from blank_api.services.agent.verifier import run_done_checks
 from blank_api.services.permissions import (
     ASK,
     MODE_DEFAULT,
@@ -136,12 +139,14 @@ from blank_api.services.permissions import (
     READ_ONLY_TOOLS,
     SCOPE_ONCE,
     SCOPE_PREFIX,
+    SCOPE_SESSION,
     PermissionPolicy,
     approval_options,
     is_irreversible,
     memo_rule,
     parse_decision,
     render_rule,
+    session_grant_category,
     tool_grant_too_wide,
 )
 from blank_api.services.sandbox.tiers import host_bypass_requested
@@ -202,6 +207,10 @@ def think_overrun_note(deep_tokens: int) -> str:
 # 推回一轮并给出补齐顺序；第二次之后仍没有动作就允许如实收尾——断网、没权限这类
 # 真装不上也是一种结论，但必须带着试过什么、报错是什么（见 remediation.py）。
 MAX_REMEDIATION_ROUNDS = 2
+# 「只看不动手」推回执行的次数上限。模型把计划当回答交回来（例如读了几眼就说
+# 「可以做，需要新建……」）时，执行节点推回一轮要求它直接动手；两次仍不动手
+# 就允许收尾，避免把不配合的模型困在空转里。
+MAX_ACT_NUDGES = 2
 # 模型返回「既没有正文也没有工具调用」时补的这一句。放在 system 里而不是 user：
 # 它不是用户说的话，回放历史时也不该被当成一次人工追问。
 EMPTY_RESPONSE_NUDGE = (
@@ -358,6 +367,16 @@ CODING_INSTRUCTIONS = (
     "审计与回滚也都看不到它。单个文件的正文超过约 8000 字符时不要硬塞进一次 write_file："
     "先写骨架，再用 edit_file 按函数分几次追加/替换。流会在单次工具参数中途被网关截断"
     "（真机：write_file 参数 31009 字断在字符串中间），截断的调用会被拒绝重来，白花一轮。\n"
+    "· 前端交付不要做“通用 AI 仪表盘”：不用大面积渐变、每块都圆角+阴影、KPI 卡片墙、"
+    "emoji 图标和满屏胶囊按钮。先按真实工作流排布局（任务/结果/日志/设置），用密集网格、"
+    "细线分隔、等宽数字和单一克制的强调色；数值必须带单位。页面必须自带 favicon"
+    "（`<link rel=\"icon\" href=\"data:,\">` 也行），否则 `/favicon.ico` 404 会被"
+    "浏览器闸门算成控制台错误。交付前用 browser_check 走真实动作，控制台零错误，"
+    "关键数字不能是 undefined。验证节点会拦截：改了前端文件却没有在最新代码上跑过"
+    "browser_check，任务直接判失败并打回修复。\n"
+    "· 后端或脚本交付要带安全底线：静态文件防路径穿越、请求体上限、输入类型与长度校验、"
+    "对外 URL 只允许 http(s)、密钥不写明文也不回传；静态页加 CSP、nosniff、"
+    "frame-ancestors 等安全头，默认绑定回环地址。\n"
     "· 验证从最小范围开始：先跑受影响的那一条测试或那个文件，通过后再扩大范围；"
     "项目本来没有测试，就不要硬加测试框架或格式化器。\n"
     # Codex 原文：Once those pass, broaden or repeat testing only when new changes,
@@ -462,9 +481,31 @@ CODING_INSTRUCTIONS = (
 
 _SYSTEM_TAIL = (
     "做事规则：\n"
-    "1. 只能通过工具读写工作区，路径一律使用工作区相对路径，禁止绝对路径与 ..。\n"
+    "1. 只能通过工具读写工作区，路径一律使用工作区相对路径，禁止绝对路径与 ..。"
+    "工作区只覆盖当前目录；用户要求检查/清理工作区外的盘（例如 C 盘）时，先说明边界，"
+    "请他把目标盘加入允许列表或切换工作区，不要假装看过，也不要尝试绕过。"
+    "清理磁盘先只读盘点，列出将删除的项、大小与风险，得到明确同意后再逐项执行；"
+    "系统目录、用户目录和缓存不要自动删。检查电脑问题先说明实际范围（当前工作区 + "
+    "允许列表），只报实际读到的证据，工作区外的盘没授权就说没看。"
+    "系统盘点先查固定位置（%TEMP%、C:\\Windows\\Temp、回收站、Windows 更新缓存、"
+    "WER、Package Cache），不要一上来递归扫整个 C:\\Users；逐目录统计并设时间上限"
+    "（单目录 60 秒），超时就报已扫到的部分、换下一个，不重复同一条超时命令。"
+    "扫描结果直接输出到 stdout，临时脚本放工作区 .blank/scratchpad，不要为了汇总"
+    "在 C 盘根目录或 Public 目录写临时文件。系统目录需要管理员权限时如实说明，"
+    "继续能看的目录，不反复试同一路径。"
+    "普通编程/文档/数据任务只查工作区；找文件用 list_files/glob/search_code，"
+    "不要用 dir /s 或 rglob 扫 C:\\ / %SystemDrive% / %SystemRoot%。"
+    "只有用户明确说「修复电脑 / 检查整机 / 清理 C 盘」时才走上面的整机盘点流程，"
+    "且只查固定位置。\n"
     "2. 按已确认的步骤执行：互不依赖的调用放进同一批发出去，拿到这一批的结果再决定下一步。"
-    "有先后依赖的才分开走——不要把一个能一次问清的问题拆成几次问。\n"
+    "有先后依赖的才分开走——不要把一个能一次问清的问题拆成几次问。"
+    "列目录后把要读的文件一轮读完，不要分两批；需要临时样例时，样例文件和实现/测试"
+    "文件同一轮写出；验证脚本或工具时，成功用例、失败用例与退出码检查合并成一条命令"
+    "跑完，不要一个用例一轮。验证命令已经给出结果时，不要再读被验证的文件人工复核。"
+    "简单任务把总轮次压在 12 轮内：侦察一轮、实现一到两轮、验证一到两轮；"
+    "不要为进度汇报或自我确认单独花一轮。"
+    "多个文件各写/改一次能同一轮说完，就不要一个文件一轮；拿到写回执后直接进入验证，"
+    "不要为了确认再读文件。\n"
     "3. 改已有文件里的局部用 edit_file（只发改动的那一段，多段用 edits 一次发）；"
     "新建文件或整篇都要重写才用 write_file；notebook 用 notebook_edit，跨文件补同一处用 apply_patch。"
     "验证用 run_tests。\n"
@@ -475,9 +516,11 @@ _SYSTEM_TAIL = (
     "工具纪律：\n"
     "5. 每次调用都要对应一个一句话能说清的目的。说不出口的调用（「确认一下」「再看一眼」）不要发。"
     "互不依赖的只读调用可以放在同一批里一起发（并行读文件、搜索、列目录）；"
-    "写操作与需要审批的调用必须一次一个，等结果再走下一步。\n"
+    "同一轮里对多个不同文件的写/改，如果当前权限档会自动放行，也可以一次发出，"
+    "执行层会按顺序落盘；同一文件、需要审批或结果有依赖的调用仍一次一个。\n"
     "6. 写之前先读，这是硬闸门：没读过就改会被服务端拒绝；读过之后文件又被改过（stale）"
-    "也会被拒绝，重读再改。编辑成功后不要再读一遍验证——工具失败会直接报错，"
+    "也会被拒绝，重读再改。刚写过的文件，编辑时直接用你写入的原文做 old_string，"
+    "不要为了找锚点重读整个文件；编辑成功后也不要再读一遍验证——工具失败会直接报错，"
     "重读除了浪费一轮没有别的用。\n"
     "7. 失败不要原样重试。先看输出和报错，改了什么就说明改了什么；同一参数重发一遍只会拿到同一个错误。"
     "被拒绝同理：拒绝是结论，不是重试的信号，换一条路或把选择交给用户。\n"
@@ -489,7 +532,8 @@ _SYSTEM_TAIL = (
     "当成交付，也不要在没有新信息时反复确认同一件事。\n"
     "· 给推荐，不要罗列选项：有几种做法时直接说推荐哪一种、为什么、代价是什么；"
     "只有用户才能拍板的才交回用户。\n"
-    "· 计划用 update_plan 维护：同一时刻只有一个 in_progress，做完一步立刻标 completed。\n"
+    "· 计划用 update_plan 维护：同一时刻只有一个 in_progress，做完一步立刻标 completed。"
+    "维护计划和正在做的下一步同一轮发出，不要单独为 update_plan 占一轮。\n"
     "· 如果这件事背后有一个会跨好几轮的会话目标，用 propose_goal 把「什么算达成」写成"
     "一句可判定的条件交给用户确认；用户确认后它会在后续每一轮作为会话级约束注入。"
     "目标不是任务清单，也不要拿它替代本轮用户明确说的话。\n"
@@ -519,11 +563,14 @@ _SYSTEM_TAIL = (
     "回复纪律：\n"
     "9. 不写开场白（好的 / 当然 / 让我 / 首先），不复述用户的话，不解释你打算怎么做。\n"
     "10. 过程事实已经单独记录并展示：改了哪些文件、跑了哪些命令、输出是什么、花了多久。"
-    "正文一律不复述这些，也不列文件清单。\n"
+    "正文一律不复述这些，也不列文件清单——除非用户明确要求列出文件、目录或清单。\n"
     "11. 正文只写从过程里读不出来的东西：为什么这么改、哪条路被否了、还剩什么风险、需要用户做什么。\n"
     "12. 提到某处代码或改动，写成 路径:行号（如 src/app.py:42），不要跟在后面罗列整段。\n"
     "13. 默认三句以内。用户明确要清单或要详细说明时才展开，展开也只写短句。\n"
     "14. 闲聊、问概念、解释已有代码这类不需要动工作区的请求，直接回答，不要调用工具。\n"
+    "15. 用户明确要清单（文件、目录、步骤、选项）时，必须用 Markdown 列表："
+    "一项一行，文件/路径用反引号；不要用「、」或逗号把多项串成一段，"
+    "也不要把多个路径塞进同一行。需要分组时用二级列表或短小标题。\n"
     # 判据：去掉过程事实后还剩什么，剩下的就该是正文。
     "自检：写完后删掉所有「我做了什么」的句子，剩下的如果是空的，说明这一轮没什么要说的，不要硬写。"
 )
@@ -532,9 +579,9 @@ _SYSTEM_TAIL = (
 # 才由 compose_system_prompt 决定是否把编程纪律换掉。
 SYSTEM_PROMPT = _SYSTEM_HEAD + CODING_INSTRUCTIONS + _SYSTEM_TAIL
 
-# 表达风格。从 SYSTEM_PROMPT 里拆出来单独维护：规则层（做什么、不许做什么）改起来
-# 要格外谨慎，风格层（怎么说）可以随时调，两者混在同一个常量里时没人敢动前者。
-# 这里只讲措辞与篇幅，不重复上面第 9-14 条的行为约定——重复的规则等于两条都可以被忽略。
+# 表达与产出物风格。从 SYSTEM_PROMPT 里拆出来单独维护：规则层（做什么、不许做什么）
+# 改起来要格外谨慎，风格层（怎么说、产出长什么样）可以随时调，两者混在同一个常量里
+# 时没人敢动前者。这里不重复上面第 9-14 条的行为约定——重复的规则等于两条都可以被忽略。
 STYLE_PROMPT = (
     "表达风格：\n"
     "· 用中文，说人话。术语可以留英文原词（commit、token、schema），不要生造译名。\n"
@@ -555,7 +602,38 @@ STYLE_PROMPT = (
     "· 不加没被问到的免责与风险清单：可能存在的风险在具体决策点上说一句就够，"
     "不要为了周全在结尾堆一段「请注意这可能有风险」。\n"
     "· 不写「我不会做什么」：只说你做了什么、要做什么。"
-    "把没做的事逐条声明一遍，读的人只会以为你在推责任。"
+    "把没做的事逐条声明一遍，读的人只会以为你在推责任。\n"
+    # 以下针对**产出物本身**（文档 / 网页 / PPT / 报告），不只聊天回复。
+    # 用户要的是能直接拿去用的东西，不是一眼能看出模型写的模板。
+    "产出物风格（文档 / 网页 / PPT / 报告都适用，去 AI 味）：\n"
+    "· 先按内容定结构，不套「背景-意义-目标-挑战-方案-展望」模板；标题写具体的结论"
+    "或对象，不写「项目概况」「项目背景」「项目意义」「项目概述」「整体方案」"
+    "「实施路径」这类空标题。\n"
+    "· 不写空泛开场与套话：在当今…时代、随着…发展、众所周知、值得注意的是、"
+    "总的来说、综上所述、让我们一起、希望对你有帮助。\n"
+    "· 不堆流行词与自我评价：赋能、抓手、闭环、生态、显著提升、全面提升、打造、"
+    "助力、一站式、深度赋能。能用具体动作和数字就用具体动作和数字。\n"
+    "· 不编数据、案例、引用或用户没给过的事实；缺数据就留可填空位并注明，"
+    "不把猜测写成结论。\n"
+    "· 段落优先于列表：只有并列项、步骤或参数才用列表；不要每句话都拆成 bullet，"
+    "不要每段都加小标题，也不要每段用同一个句式开头。\n"
+    "· 中文排版：中英文之间不加空格，句末用句号；不用 emoji；感叹号能不用就不用。\n"
+    "· 网页按真实工作流排版，先内容层级再装饰：不用大面积渐变、玻璃拟态、"
+    "每块圆角+阴影、KPI 卡片墙、满屏胶囊按钮和 emoji 图标；数字带单位，"
+    "空值写「—」而不是 undefined/NaN。\n"
+    "· PPT 一页一个观点：标题写结论不写栏目名；每页文字控制在能读完的量；"
+    "少用三栏图标模板和满屏 bullet，图表只放真实数据。\n"
+    "· 图片和图表自己判断要不要加：能帮助理解的真实数据图、流程图、真实页面截图就加；"
+    "纯装饰的库存照片、通用插画、图标墙不加，也不要问用户「要不要加图」。\n"
+    "· 只用真实素材：用户给的图、真实运行页面的截图、按真实数据生成的图表；"
+    "不编造截图、不拿无关图片凑版面、不用 AI 生成图冒充现场记录。\n"
+    "· 数据图优先用真实数据生成（PPT 用 python-pptx 原生图表，文档用表格，"
+    "页面用真实数据渲染）；图注写清来源和口径；没有素材且不是必需时就省略，"
+    "不留「此处配图」占位。\n"
+    "· 文档与报告：开头直接给结论或用途，正文用事实、步骤、数字支撑；"
+    "结尾不另起总结段，不重复前文，不写「希望本文对你有所帮助」。\n"
+    "· 代码与注释只写为什么，不写「本函数用于…」这种复述式注释；"
+    "不留 TODO、空方法体或占位内容冒充完成。"
 )
 
 
@@ -595,7 +673,21 @@ DAILY_PROMPT = (
     # Final answer（L83-110）：正文只写最重要的信息，路径写成可点的链接，
     # 列表前留空行；图能帮助理解时才用（流程/因果/对比/随时间变化）。
     "· 最终答复只写用户需要知道的关键信息，不复述过程。"
-    "引用真实文件写成 [名字](绝对路径:行号)；清单前留空行。"
+    "引用真实文件写成 [名字](绝对路径:行号)；清单前留空行。\n"
+    "· 工作区只覆盖当前目录。检查/清理工作区外的盘（如 C 盘）时，先说明边界，"
+    "请用户把目标盘加入允许列表或切换工作区；不要声称已经检查过，也不要尝试绕过。"
+    "清理磁盘先只读盘点、列清将删除的项与风险，得到明确同意后再逐项执行，"
+    "系统目录、用户目录和缓存不自动删。检查电脑问题先说明实际范围（当前工作区 + "
+    "允许列表），只报实际读到的证据。\n"
+    "· 系统盘点先查固定位置（%TEMP%、C:\\Windows\\Temp、回收站、Windows 更新缓存、"
+    "WER、Package Cache），不要一上来递归扫整个 C:\\Users；逐目录统计并设时间上限"
+    "（单目录 60 秒），超时就报已扫到的部分、换下一个，不重复同一条超时命令。"
+    "扫描结果直接输出到 stdout，临时脚本放工作区 .blank/scratchpad，不要为了汇总"
+    "在 C 盘根目录或 Public 目录写临时文件。系统目录需要管理员权限时如实说明，"
+    "继续能看的目录，不反复试同一路径。"
+    "普通任务只查工作区；找文件用 list_files/glob/search_code，"
+    "不要用 dir /s 扫 C 盘或 %SystemDrive%。"
+    "只有用户明确要求「修复电脑 / 检查整机 / 清理 C 盘」时才走上面的整机盘点流程。"
     "流程、因果、对比、变化这类关系用图或表比大段文字清楚时就画图或表。\n"
     # Rules for getting work done（L112-126）：搜文件/内容优先 rg；
     # 独立调用并行；shell 当代码看、注意转义；不为低风险改动写镜像实现的测试；
@@ -674,6 +766,9 @@ def compose_system_prompt(output_style: dict | None = None, *, scene: str = "cod
 
 class AgentState(TypedDict, total=False):
     task_id: str
+    # 动手前的快照 id：放在图状态里而不是只挂会话对象上，审批恢复/节点重放后
+    # 收尾仍能拿它比对 shell 产生的改动。
+    snapshot_id: str
     messages: list[dict]
     plan: list[str]
     steps: int
@@ -683,6 +778,9 @@ class AgentState(TypedDict, total=False):
     # 这一轮催过几次"别想太久，动手"。上限在 MAX_THINK_NUDGES。
     think_nudges: int
     gap_continue: bool
+    # 计划里有要做的事，模型却只查看不动手：推回执行节点再催一轮。
+    act_continue: bool
+    act_nudges: int
     tool_results: list[dict]
     pending: list[dict]
     acceptance_results: list[dict]
@@ -695,6 +793,9 @@ class AgentState(TypedDict, total=False):
     error: dict
     # 步数预算已耗尽：此后只能取证与总结，不能再进入修复回路，否则图会空转到递归上限。
     budget_exhausted: bool
+    # 前端 UI 自检失败已经用掉几次「预算尽后的保留修复」。只保留一次：
+    # 不修 UI 是交付缺陷，但也不能拿无底洞预算去反复修同一个页面。
+    ui_repair_rounds: int
     # update_plan 写回的结构化计划（plan 保留为步骤文本，向后兼容）。
     plan_steps: list[dict]
     # 里程碑：[{id, title, status, step_ids}]。和 plan_steps 一起构成"做到哪了"的完整答案。
@@ -720,6 +821,9 @@ class AgentState(TypedDict, total=False):
     # 读后写闸门的读状态（路径 → size/mtime_ns/sha256）。放在图状态里跟着检查点走：
     # 审批/提问会结束这次运行，恢复时是新会话，读过的文件不能因此"没读过"。
     file_reads: dict
+    # 任务开始时的 HEAD：审查确定性范围（baseSha）以它为基。审批恢复沿用检查点，
+    # 不会被「恢复时已经是新 HEAD」悄悄改写。
+    base_sha: str
     # Stop 钩子这一轮是否被拦下、已经拦了几次。必须是声明的通道：langgraph 只合并
     # 状态里有的键，写在返回值里而没声明，第二次读到的就是"从没拦过"（stop_hook_active
     # 永远是 false，钩子会把自己的阻断当成第一次）。
@@ -788,6 +892,11 @@ class AgentSession:
     # 流式输出（特性开关 stream_output）。关着时 call_model 直接 bind_tools，
     # 与引入流式之前逐字节一致；开着时文字边到边推给实时通道。
     stream_output: bool = False
+    # 推测性只读执行（特性开关 speculative_tools）：模型还在流式生成参数时，
+    # 先把参数已完整落定的 read_file / glob / search_code 跑掉。只缓存 handler
+    # 的结果——不落库、不发事件；真到执行点仍由网关走同一套权限与记账，
+    # 参数对不上或没走到执行就丢弃。键是 工具名 + 参数指纹。
+    speculative: dict[str, asyncio.Task] = field(default_factory=dict)
     # 工具表按档位裁剪（特性开关 tiered_tools）。默认 False —— 关着时 registry
     # 恒为 full 档，与裁剪功能上线前逐字节一致。
     tiered_tools: bool = False
@@ -812,6 +921,12 @@ class AgentSession:
     token_budget: int = DEFAULT_TOKEN_BUDGET
     # 只读调研模式：由意图判定打开，整个执行回合只放行只读工具。
     readonly: bool = False
+    # 纯聊天：没有工作目录，也没有工具。create_plan 直接作答，不拆计划、不拍快照。
+    chat_only: bool = False
+    # 用户明确要求本轮不要调用工具：可能有工作目录，但同样直接作答。
+    no_tools: bool = False
+    # 用户只要文件/目录清单：工具表已在装配层收窄到 list_files/glob。
+    list_only: bool = False
     permissions: PermissionPolicy = field(default_factory=PermissionPolicy)
     # 本任务的沙箱档位（off / workspace / workspace-net）。审批模式与它正交：
     # 这里回答"跑在哪"，permissions.mode 回答"问不问"。两者都进 turn.context。
@@ -1507,14 +1622,29 @@ class AgentSession:
             messages, steps_since_compact=self.steps_since_compact, idle_seconds=idle_seconds
         ):
             await self._precompact_gate(node)
+        file_state = getattr(self.context, "file_state", None)
+        root = getattr(self.context, "root", None)
+        # 快照只列仍在磁盘上的文件；被 shell 删掉的路径不能继续作为「当前状态」，
+        # 它的旧读取结果也不该被折成指向快照的指针。
+        snapshot_paths = {
+            path
+            for path in (file_state.export() if file_state is not None else {})
+            if root is not None and (Path(root) / path).is_file()
+        }
         compacted = await self.compactor.build(
             messages,
             self.summarize_history,
             author_run_id=self.run_id,
             steps_since_compact=self.steps_since_compact,
             idle_seconds=idle_seconds,
+            snapshot_paths=snapshot_paths,
         )
         report = self.compactor.last_report
+        # 压缩真的动过文件历史才补快照；否则模型手里的最新回执就是现状。
+        if file_state is not None and (report.folded or report.micro.applied):
+            snapshot = file_state.render_snapshot(root=root)
+            if snapshot:
+                compacted = _insert_handoff(compacted, snapshot, run_id=self.run_id)
         self.context_tokens = report.tokens_after
         self.last_activity_at = time.monotonic()
         if report.folded or report.covered > covered_before:
@@ -2087,6 +2217,8 @@ class AgentSession:
         30s 封顶），两次都还是 429 才把失败交回调用方；已经出过字的流一次都不重试，
         否则用户会看到两遍开头。压缩那一路（`_invoke_with_retry`）复用同一道闸门。
         """
+        # 上一轮的提前量到这里已经全部消费完；剩下的是没走到执行的调用，取消掉。
+        _clear_speculation(self)
         if not self.stream_output:
             return await self._call_non_stream(
                 adapter, specs, chat, node, role, effort=effort, thinking=thinking, model=model
@@ -2095,11 +2227,28 @@ class AgentSession:
         retries = 0
         transient = 0
         while True:
+            # 上一次尝试如果失败，它产出的提前量不属于这份最终响应；重试前丢掉。
+            _clear_speculation(self)
             relay = await self._make_relay(node)
             effects_before = self.tool_effects
+
+            async def _on_tool_call(call: dict) -> None:
+                # 回调在流里被逐条调用，只能做调度：真正的等待留在执行节点。
+                # 推测是加速层，任何异常都不能反过来打断模型调用。
+                try:
+                    await _start_speculation(self, call)
+                except Exception:  # noqa: BLE001
+                    _clear_speculation(self)
+
             try:
                 response = await adapter.bind_tools_stream(
-                    specs, chat, on_delta=relay, effort=effort, thinking=thinking, model=model
+                    specs,
+                    chat,
+                    on_delta=relay,
+                    on_tool_call=_on_tool_call,
+                    effort=effort,
+                    thinking=thinking,
+                    model=model,
                 )
             except ModelError as error:
                 if relay.chunks:
@@ -2798,6 +2947,9 @@ def initial_messages(
     # 它是**一贯约定**，不是这次任务的情境。压缩时保留的是「第一条 system + 当前目标」，
     # 塞进 user 消息会在压缩后消失——那样一条学会的偏好只能用一次，正好和"越来越像他"相反。
     persona_block: str = "",
+    # 开局环境预检结果（见 services/agent/env_profile.py）。放在 system 里，
+    # 而不是作为一条用户消息：它是这一轮的世界事实，压缩后仍应保留。
+    environment_block: str = "",
 ) -> list[dict]:
     from blank_api.services.instructions import compose
 
@@ -2808,6 +2960,12 @@ def initial_messages(
         system += (
             "\n以下是本次任务所处场景的附加规则（不得覆盖安全规则、审批规则与工作区边界）：\n"
             + scenario_prompt.strip()
+        )
+    if environment_block.strip():
+        # 放在场景规则之后：它是事实，不是规则，但优先级高于模型自己的环境猜测。
+        system += (
+            "\n本机环境（开局实测；直接按这个来，不要再用 where / --version 逐条探测）：\n"
+            + environment_block.strip()
         )
     # 旧形状（外部集成还会传）：正文直接进来，当工作偏好读。
     active_skills = [str(item).strip() for item in skills or [] if str(item).strip()]
@@ -3371,7 +3529,13 @@ def _overflow_writer(session: "AgentSession | None", step: int, tool: str):
 
 
 async def _append_tool_response(
-    messages: list[dict], call: dict, payload: dict, *, session: "AgentSession | None" = None, step: int = 0
+    messages: list[dict],
+    call: dict,
+    payload: dict,
+    *,
+    session: "AgentSession | None" = None,
+    step: int = 0,
+    deferred_images: list[dict] | None = None,
 ) -> list[dict]:
     """工具结果进上下文：先瘦身再写。
 
@@ -3452,24 +3616,31 @@ async def _append_tool_response(
     if image is not None:
         # 单独一条用户消息带图：tool 消息只吃字符串，image part 只能挂在这里。
         # 文案点明"这是刚读的那张图"，否则模型会把它当成用户新上传的附件。
-        extra.append(
-            authored(
-                {
-                    "role": "user",
-                    "content": (
-                        f"上面 read_file 读到的图片（{image.get('path') or ''}）如下，"
-                        "请看图回答。"
-                    ),
-                    "images": [
-                        {
-                            "media_type": image.get("media_type", "image/png"),
-                            "data": image.get("data", ""),
-                        }
-                    ],
-                },
-                run_id,
-            )
+        image_message = authored(
+            {
+                "role": "user",
+                "content": (
+                    f"上面 {name} 读到的图片（{image.get('path') or ''}）如下，"
+                    "请看图回答。"
+                ),
+                "images": [
+                    {
+                        "media_type": image.get("media_type", "image/png"),
+                        "data": image.get("data", ""),
+                    }
+                ],
+            },
+            run_id,
         )
+        # 一批并行调用里不能把带图 user 消息插在两条 tool 消息之间：
+        # OpenAI 兼容网关要求 assistant(tool_calls) 后紧跟**每个** tool_call_id 的
+        # tool 消息，中间夹一条 user 会直接 400（真机 f31d0504：三个 browser_check
+        # 并行，前两张截图把消息序列打断，下一轮 400「insufficient tool messages」）。
+        # 所以先攒着，整批 tool 消息写完之后再统一追加。
+        if deferred_images is not None:
+            deferred_images.append(image_message)
+        else:
+            extra.append(image_message)
     return messages + extra
 
 
@@ -3519,6 +3690,23 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
     # 这个节点没有入边跳转（START 直接进来），所以不落 agent.transition：
     # "为什么开始这一轮"是用户那句话本身，记一条空的跳转只会污染时间线。
     await session.recorder.add("node.started", node, {"task_id": state.get("task_id", "")})
+    # 纯聊天：没有工作目录，也没有任何工具。一次模型调用直接作答，不拆计划、
+    # 不拍快照、不进校验/修复回路。边界由 runtime 清空工具表来兜底，
+    # 这里只负责把这一轮走成答案而不是执行任务。
+    if getattr(session, "chat_only", False) or getattr(session, "no_tools", False):
+        result = await session.ask(state, "", node)
+        text = normalize_answer(result["text"]) or "这一轮没有生成可见回答。"
+        await session.recorder.add("chat.answered", node, {"chars": len(text), "no_tools": True})
+        return {
+            "messages": result["messages"],
+            "plan": [],
+            "plan_steps": [],
+            "summary": text,
+            "usage": merge_usage(state.get("usage") or {}, result["usage"]),
+            "pending": [],
+            "status": "running",
+            "direct_answer": True,
+        }
     # 新一轮开始：清掉上一轮的 effort 裁决缓存。effort 是「这一轮」的属性，
     # 上一轮的 ultrathink 不能顺延到这一轮——否则用户换一句普通提问也会被抬到 xhigh。
     session.turn_effort = ""
@@ -3545,7 +3733,40 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
     )
     if override:
         quick = override
+    # 用户明确说「不要修改/不要执行」：这是硬边界，先于模型判定把只读开关打开。
+    # 只靠提示词里写一句「intent 必须是 advise」不够——真机里模型仍会判成 act，
+    # 一旦判成就拿回全部写工具。这里先收紧，模型再判 act 也执行不了写操作。
+    hard_directive = directive_mode(raw_goal)
+    if hard_directive == READ_ONLY:
+        # 只读执行不是“征求意见”：用户可能就是要列目录、查事实。intent 仍走
+        # act，但 readonly 硬闸门会把写/执行工具全部拒掉，交付也走正常总结。
+        quick = INTENT_ACT
+        session.readonly = True
+        session.max_steps = min(session.max_steps, READONLY_MAX_STEPS)
+    # 只要文件/目录清单：只列路径，不读内容。工具表已经收窄，这里把
+    # 意图钉成 act（列目录是执行动作），避免模型一次问答直接编。
+    list_only_task = bool(getattr(session, "list_only", False))
+    if list_only_task:
+        quick = INTENT_ACT
+        session.readonly = True
+        session.max_steps = min(session.max_steps, READONLY_MAX_STEPS)
     prompt = INTENT_INSTRUCTION
+    if hard_directive == READ_ONLY:
+        prompt += (
+            "\n注意：用户明确不要修改或执行；本轮 intent 仍为 act，但只能调用读工具，"
+            "不能写文件、跑命令或调用会改变系统的工具。"
+        )
+    if list_only_task:
+        prompt += (
+            "\n注意：用户只要文件/目录清单。只调用 list_files 或 glob，"
+            "不要读文件内容，不要分析用途；拿到路径后直接按 Markdown 列表回答。"
+        )
+    # 场景策略：日常场景不要求把简单任务拆成工程步骤；编程场景保持原有严格口径。
+    if resolve_scenario(getattr(session, "scenario", "dev")).policy.planning == "general":
+        prompt += (
+            "\n当前是日常场景：简单任务可以直接做，不必为了凑步骤而拆细；"
+            "只有多步骤任务才列计划。"
+        )
     if raw_goal and raw_goal != goal.strip():
         # 规则能剥掉前缀，但模型看到的是整段消息，同样会被前缀带跑。明说一次。
         prompt += (
@@ -3601,6 +3822,37 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
             {"from": intent or "direct", "to": INTENT_ACT, "goal": raw_goal[:200]},
         )
         intent = INTENT_ACT
+    # 只读硬指令优先于上面的催办兜底：用户已经明确说「不要修改/执行」，
+    # 模型判成 advise/answer 也要回到“只读执行”，否则会走成“给判断”而不是
+    # 完成用户要的列举/查事实。执行节点会按 readonly 拒掉非读工具。
+    if hard_directive == READ_ONLY and intent != INTENT_ACT:
+        await session.recorder.add(
+            "intent.overridden",
+            node,
+            {
+                "from": intent or "direct",
+                "to": INTENT_ACT,
+                "reason": "read_only_directive",
+                "goal": raw_goal[:200],
+            },
+        )
+        intent = INTENT_ACT
+        if not steps:
+            steps = ["查看相关文件"]
+    if list_only_task and intent != INTENT_ACT:
+        await session.recorder.add(
+            "intent.overridden",
+            node,
+            {
+                "from": intent or "direct",
+                "to": INTENT_ACT,
+                "reason": "list_only",
+                "goal": raw_goal[:200],
+            },
+        )
+        intent = INTENT_ACT
+        if not steps:
+            steps = ["列出工作区文件"]
     if intent == INTENT_ANSWER and not answer:
         # 模型没在 answer 字段里给答案：交给 derive_answer_fallback 决定——
         # 自然语言原文可用就用，只吐了判定 JSON 就给简洁兜底，绝不返回原始协议 JSON。
@@ -3707,7 +3959,11 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
 
     # 动作类任务：动手之前拍快照。放在这里而不是任务启动时，是因为这是
     # "知道要动工作区"的最早时刻——问答类走到上面那个 return 就结束了，不会拍。
-    await session.ensure_snapshot(node)
+    # 只读任务不会写工作区，拍整仓快照纯属浪费（大仓库几十秒）。
+    if getattr(session, "readonly", False):
+        await session.recorder.add("snapshot.skipped", node, {"reason": "readonly"})
+    else:
+        await session.ensure_snapshot(node)
 
     # 开局就把步骤转成结构化计划落进状态：后面 update_plan 才有"上一版"可以继承，
     # 收尾时也才有东西可落库——否则第一轮结束任务行上的 plan_steps 永远是空的。
@@ -3732,6 +3988,7 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
         )
     return {
         "messages": result["messages"],
+        "snapshot_id": str(getattr(session, "snapshot_id", "") or ""),
         "plan": steps,
         "plan_steps": initial_steps,
         "plan_manifest": manifest,
@@ -3741,6 +3998,8 @@ async def create_plan_node(state: AgentState, session: AgentSession) -> AgentSta
         "pending": result["tool_calls"],
         "status": "running",
         "direct_answer": False,
+        # 只读硬指令：后续执行/校验节点必须沿用同一个边界，不能只看意图。
+        "readonly": bool(getattr(session, "readonly", False)),
     }
 
 
@@ -4331,20 +4590,20 @@ def _call_identity(session: "AgentSession", call: dict, name: str, arguments: di
 
 
 def approval_ttl_seconds() -> int:
-    """审批卡的有效期。默认 30 分钟，夹在 60 秒 ~ 24 小时之间。
+    """审批卡的有效期。默认 24 小时，夹在 60 秒 ~ 24 小时之间。
 
-    原先是写死的 5 分钟。真实 GUI 验收里这条卡把任务坑死过三次：人离开工位
-    十几分钟回来，卡片还在、按钮还能点，点下去却是 409「审批请求已过期」，
-    而任务状态永远停在 waiting_approval——界面写「进行中」，既不会自己收敛，
-    也没有重试入口。5 分钟对"看一眼再批"尚可，对"我先去确认一下再回来"就不够。
-    宁可让用户自己决定挂多久（``BLANK_APPROVAL_TTL_SECONDS``），也不要替他把
-    活掐死在半路。
+    原先是写死的 5 分钟，后来放宽到 30 分钟。真实失败历史里仍有 14/26 条是
+    「审批卡过期，任务直接死」——人离开工位吃个饭、开个会回来，活已经没了。
+    审批卡不是定时炸弹：用户明确点过「完全访问」之后，高风险动作本来就少，
+    让它在一天内保持可批，比逼着人守在屏幕前更符合“自主完成”的承诺。
+    需要更严的部署可以用 ``BLANK_APPROVAL_TTL_SECONDS`` 调短（最小 60 秒）；
+    超过 24 小时不再放宽，避免一张卡挂到上下文和代码都过期。
     """
     raw = os.environ.get("BLANK_APPROVAL_TTL_SECONDS", "").strip()
     try:
-        value = int(raw) if raw else 1800
+        value = int(raw) if raw else 24 * 3600
     except ValueError:
-        value = 1800
+        value = 24 * 3600
     return max(60, min(value, 24 * 3600))
 
 
@@ -4494,10 +4753,13 @@ async def _approval_gate(
                 continue
         # 卡片上的建议档与钩子看到的必须是同一份：钩子按"人会看到什么"决定放不放，
         # 两边各算一遍迟早分叉。算一次，往下两处共用。
+        grant_category = session_grant_category(name, arguments)
         options = approval_options(
             name,
             decision.memo,
             tool_scope=decision.tool_scope_allowed and not tool_grant_too_wide(name, arguments),
+            category=grant_category,
+            session_granted=grant_category in session.permissions.session_grants,
         )
         if decision.asks:
             # PermissionRequest 是"卡片即将出现时问一次外部"——放在 guardian 之后、
@@ -4638,6 +4900,22 @@ async def _approval_gate(
         granted, scope = parse_decision(answer)
         if granted:
             session.permissions.remember(name, arguments, scope)
+            # 会话级授权：用户当面点了“这类动作本会话不再逐条问”。内存账本
+            # 让本轮立刻生效；落盘账本让同一 thread 的下一轮任务也认得。
+            session_category = (
+                session_grant_category(name, arguments) if scope == SCOPE_SESSION else ""
+            )
+            session_persisted = False
+            if scope == SCOPE_SESSION and session_category:
+                session.permissions.remember_session_grant(session_category)
+                if session.thread_ref:
+                    from blank_api.services.session_grants import grant as grant_session
+
+                    session_persisted = grant_session(
+                        session.thread_ref,
+                        session_category,
+                        source_task=str(session.context.task_id),
+                    )
             # 完全访问档下批过一次装依赖，本任务同类不再问。用动作类型记账而不是
             # 命令前缀：带管道的 pip 命令 memo_rule 故意不记，卡片上只有"仅本次"，
             # 用户被迫每条都点。这里补上白名单动作的会话级免问，真高危不在列。
@@ -4670,6 +4948,10 @@ async def _approval_gate(
                     # 装依赖批一次后本任务同类免问：界面可据此说明"为什么后面的
                     # pip install 没再弹卡"，而不是让用户以为授权被跳过了。
                     "action_kind_remembered": kind_remembered,
+                    # 会话级授权的类别与是否真的落盘。落盘失败不影响本次执行，
+                    # 但审计里必须看得见——否则下一轮又问会被误读成“授权没生效”。
+                    "session_grant_category": session_category,
+                    "session_grant_persisted": session_persisted,
                 },
             )
             # 前缀档落盘：换任务、重启进程之后仍认得这条签名。写盘失败只记事实，
@@ -4794,6 +5076,31 @@ def _parallel_ok(enabled: bool, item: _PlannedCall) -> bool:
     return enabled and item.mode == "execute" and item.name in PARALLEL_SAFE_TOOLS
 
 
+# 写/改并行只认「不同文件 + 完全访问档」：同文件会撞备份与读后写状态，
+# 默认档/接受编辑档可能弹审批，并行 gather 没法按顺序等同一张卡。
+_PARALLEL_WRITE_TOOLS = frozenset({"write_file", "edit_file"})
+
+
+def _write_path(item: _PlannedCall) -> str:
+    arguments = item.arguments if isinstance(item.arguments, dict) else {}
+    return (
+        str(arguments.get("path") or arguments.get("file_path") or "")
+        .replace("\\", "/")
+        .strip()
+        .lower()
+    )
+
+
+def _parallel_write_ok(session: "AgentSession", enabled: bool, item: _PlannedCall) -> bool:
+    return (
+        enabled
+        and item.mode == "execute"
+        and item.name in _PARALLEL_WRITE_TOOLS
+        and str(getattr(session, "permission_mode", "") or "") == "bypass"
+        and bool(_write_path(item))
+    )
+
+
 def _tool_schema(session: "AgentSession", name: str) -> dict | None:
     """取工具的入参 schema，给"缺参数"回执配一句"这个工具到底要什么"。
 
@@ -4882,6 +5189,147 @@ async def _settle_goal(session: "AgentSession", node: str, item: _PlannedCall) -
     )
 
 
+# 只推测这三类：没有副作用、结果与参数一一对应、重复执行也不会改变世界。
+_SPECULATIVE_TOOLS = frozenset({"read_file", "glob", "search_code"})
+
+
+def _speculation_key(name: str, arguments: dict) -> str:
+    payload = json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)
+    return f"{name}:{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]}"
+
+
+class _DeferredReads:
+    """推测执行期间先把「读过哪个文件」攒着，不直接落到会话状态里。
+
+    read_file 会把 (size, mtime, sha) 记进 file_state，写工具靠它判断「读过没有」。
+    如果这次推测最后被驳回、被钩子拦下、或被空转断路器拦住，那条记录不能让模型
+    凭空获得「看过文件」的资格——否则读后写闸门会被一次没交付的预读绕开。
+    真正交付时再在 _dispatch 里补记。
+    """
+
+    def __init__(self) -> None:
+        self.reads: list[dict] = []
+
+    def record_read(
+        self,
+        relative: str,
+        *,
+        size: int,
+        mtime_ns: int,
+        sha256: str = "",
+        lines: int = 0,
+        summary: str = "",
+    ) -> None:
+        self.reads.append(
+            {
+                "relative": str(relative),
+                "size": int(size),
+                "mtime_ns": int(mtime_ns),
+                "sha256": str(sha256 or ""),
+                "lines": int(lines or 0),
+                "summary": str(summary or ""),
+            }
+        )
+
+    def record_write(self, root, relative: str) -> None:  # 只读工具不会写
+        return None
+
+    def forget(self, relative: str) -> None:
+        return None
+
+    def guard(self, relative: str) -> dict:
+        return {
+            "path": str(relative),
+            "was_read": False,
+            "size": None,
+            "mtime_ns": None,
+            "sha256": "",
+        }
+
+
+async def _speculative_read(
+    session: "AgentSession", tool, arguments: dict
+) -> tuple[ToolOutcome, list[dict]] | None:
+    """提前把只读工具跑掉。失败不抛出：丢了缓存，真实执行会按原路给出准确结果。"""
+    context = session.context
+    deferred = _DeferredReads() if getattr(context, "file_state", None) is not None else None
+    if deferred is not None:
+        context = dc_replace(context, file_state=deferred)
+    try:
+        outcome = await asyncio.wait_for(
+            tool.handler(context, dict(arguments)), timeout=tool.timeout_seconds + 5
+        )
+    except Exception:  # noqa: BLE001 - 推测失败只是少了一次提前量，不能影响任务
+        return None
+    return outcome, (deferred.reads if deferred is not None else [])
+
+
+async def _start_speculation(session: "AgentSession", call: dict) -> None:
+    """流式参数刚落定时调用：只调度后台任务，绝不等待执行完。"""
+    if not feature_enabled("speculative_tools"):
+        return
+    # 只在一档完全访问模式做：那里不会弹审批，提前执行不会越过任何人的决定。
+    if str(getattr(session, "permission_mode", "") or "") != "bypass":
+        return
+    name = str(call.get("name") or "")
+    arguments = call.get("arguments")
+    if name not in _SPECULATIVE_TOOLS or not isinstance(arguments, dict):
+        return
+    # pre_tool_use 钩子可能拒绝或改写这次调用；在它裁决之前执行，会破坏
+    # 「被拦下的工具一定没跑过」这条契约。有钩子就放弃提前量，走正常链路。
+    hook_specs = (getattr(session.hooks, "hooks", {}) or {}).get("pre_tool_use") or ()
+    if any(getattr(spec, "applies", lambda _target: True)(name) for spec in hook_specs):
+        return
+    getter = getattr(session.gateway, "get", None)
+    tool = getter(name) if callable(getter) else None
+    if tool is None or validate_arguments(tool.input_schema, arguments) is not None:
+        return
+    # 测试里常用 object.__new__ 的轻量会话，只给 _call_adapter 需要的属性；
+    # 没有推测槽位就退化为不推测，不能反过来让模型调用失败。
+    slots = getattr(session, "speculative", None)
+    if not isinstance(slots, dict):
+        return
+    key = _speculation_key(name, arguments)
+    if key in slots:
+        return
+    slots[key] = asyncio.create_task(
+        _speculative_read(session, tool, arguments)
+    )
+
+
+async def _take_speculation(
+    session: "AgentSession", item: _PlannedCall
+) -> tuple[ToolOutcome, list[dict]] | None:
+    """执行点取回提前量；没有、跑失败或形状不对都返回 None（走正常执行）。"""
+    slots = getattr(session, "speculative", None)
+    if not isinstance(slots, dict):
+        return None
+    task = slots.pop(_speculation_key(item.name, item.arguments), None)
+    if task is None:
+        return None
+    try:
+        result = await task
+    except (asyncio.CancelledError, Exception):  # noqa: BLE001
+        return None
+    if (
+        not isinstance(result, tuple)
+        or len(result) != 2
+        or not isinstance(result[0], ToolOutcome)
+    ):
+        return None
+    return result[0], list(result[1] or ())
+
+
+def _clear_speculation(session: "AgentSession") -> None:
+    slots = getattr(session, "speculative", None)
+    if not isinstance(slots, dict):
+        return
+    for task in slots.values():
+        if not task.done():
+            task.cancel()
+    slots.clear()
+
+
 async def _dispatch(session: "AgentSession", node: str, item: _PlannedCall) -> dict:
     """把一条计划变成网关返回的 payload。三条分支都不执行写操作以外的东西。"""
     if item.mode == "question":
@@ -4931,7 +5379,21 @@ async def _dispatch(session: "AgentSession", node: str, item: _PlannedCall) -> d
         return await session.gateway.settle(
             item.name, item.arguments, outcome, session.context, node, rule="stall:blocked"
         )
-    payload = await session.gateway.execute(item.name, item.arguments, session.context, node)
+    spec = await _take_speculation(session, item)
+    if spec is not None:
+        prefetched, reads = spec
+        # 结果已经在流式期间跑完；这里仍然走网关：权限、场景、参数校验与记账
+        # 一步不少，只是不再调用 handler。参数对不上时缓存根本取不到。
+        # 读状态也是「真交付了才算」：推测期间只攒着，这里才补记。
+        file_state = getattr(session.context, "file_state", None)
+        if file_state is not None:
+            for read in reads:
+                file_state.record_read(**read)
+        payload = await session.gateway.execute(
+            item.name, item.arguments, session.context, node, prefetched=prefetched
+        )
+    else:
+        payload = await session.gateway.execute(item.name, item.arguments, session.context, node)
     # 真的执行了才 +1：这一条是"重试会不会把写操作跑两遍"的客观判据，
     # 所以驳回、拦截、重放一律不算——它们没有副作用。
     session.effects += 1
@@ -4941,29 +5403,52 @@ async def _dispatch(session: "AgentSession", node: str, item: _PlannedCall) -> d
 async def _execute_all(
     session: "AgentSession", node: str, planned: list[_PlannedCall]
 ) -> list[dict]:
-    """按「连续只读段」并发执行。
+    """按「连续只读段」与「不同文件的独立写/改」并发执行。
 
     不是把整批一起并发：A 读文件 → B 改文件 → C 读文件 是有顺序依赖的，
-    全并发会让 C 可能读到 B 改之前的版本。所以只把相邻的无依赖只读聚成一段
-    并发，碰到写操作或需要串行的就断开。
+    全并发会让 C 可能读到 B 改之前的版本。所以只把相邻的无依赖调用聚成一段：
+    只读段沿用 `parallel_read_tools`；写/改段只在完全访问档、不同文件时启用，
+    同文件会撞备份与读后写状态，需要审批的调用也不能并行等同一张卡。
     """
     payloads: list[dict] = []
-    enabled = feature_enabled("parallel_read_tools")
+    read_enabled = feature_enabled("parallel_read_tools")
+    write_enabled = feature_enabled("parallel_write_tools")
     index = 0
     while index < len(planned):
-        if not _parallel_ok(enabled, planned[index]):
-            payloads.append(await _dispatch(session, node, planned[index]))
-            index += 1
+        if _parallel_ok(read_enabled, planned[index]):
+            end = index
+            while end < len(planned) and _parallel_ok(read_enabled, planned[end]):
+                end += 1
+            batch = planned[index:end]
+            if len(batch) == 1:
+                payloads.append(await _dispatch(session, node, batch[0]))
+            else:
+                payloads.extend(
+                    await asyncio.gather(*(_dispatch(session, node, item) for item in batch))
+                )
+            index = end
             continue
-        end = index
-        while end < len(planned) and _parallel_ok(enabled, planned[end]):
-            end += 1
-        batch = planned[index:end]
-        if len(batch) == 1:
-            payloads.extend([await _dispatch(session, node, batch[0])])
-        else:
-            payloads.extend(await asyncio.gather(*(_dispatch(session, node, item) for item in batch)))
-        index = end
+        if _parallel_write_ok(session, write_enabled, planned[index]):
+            end = index + 1
+            paths = {_write_path(planned[index])}
+            while (
+                end < len(planned)
+                and _parallel_write_ok(session, write_enabled, planned[end])
+                and _write_path(planned[end]) not in paths
+            ):
+                paths.add(_write_path(planned[end]))
+                end += 1
+            batch = planned[index:end]
+            if len(batch) == 1:
+                payloads.append(await _dispatch(session, node, batch[0]))
+            else:
+                payloads.extend(
+                    await asyncio.gather(*(_dispatch(session, node, item) for item in batch))
+                )
+            index = end
+            continue
+        payloads.append(await _dispatch(session, node, planned[index]))
+        index += 1
     return payloads
 
 
@@ -5451,6 +5936,8 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     )
     live_planned = [item for item in planned if item.mode != "replay"]
     live_payloads = await _execute_all(session, node, live_planned)
+    # 没走到执行的推测（被驳回、被拦、参数被钩子改写）不该继续跑在后台。
+    _clear_speculation(session)
     # 用户在执行期间按了停止：这条命令是被中途杀掉的，不是自己跑完的。
     # 必须在这里就把整轮判成 cancelled 并交出去——继续往下走的后果是模型看到一段
     # 被截断的输出，然后开始"修复"一条本来没错的命令，而界面上已经是"已取消"。
@@ -5481,6 +5968,8 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     plan_update: list[dict] | None = None
     milestone_update: list[dict] | None = None
     goal_update: dict | None = None
+    # 并行调用里带图的 user 消息必须等这一批 tool 消息全部写完再追加。
+    deferred_images: list[dict] = []
     for item, payload in zip(planned, payloads):
         name = item.name
         if item.mode == "question":
@@ -5493,7 +5982,10 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                     "output": str(payload.get("output") or payload.get("message") or "")[-2000:],
                 }
             )
-            messages = await _append_tool_response(messages, item.call, payload, session=session, step=steps)
+            messages = await _append_tool_response(
+                messages, item.call, payload, session=session, step=steps,
+                deferred_images=deferred_images,
+            )
             # 答题这一路过去直接 continue，把工具完成事件整条跳过了：`tools` 台账里有那一行，
             # 但时间线——前端逐条渲染、审计逐条回放的那一份——上没有。于是「答案回到了模型
             # 上下文」这句话在证据里拿不出可对核对的实物（方言端到端第 61 步实测：答完题的
@@ -5597,6 +6089,9 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 goal_update = {
                     "objective": str(data.get("objective") or ""),
                     "done_when": list(data.get("done_when") or []),
+                    # 没有这一行时，模型自己写的可执行判据会被静默丢掉，
+                    # 验证节点只能看到一句人话——`file_min_chars` 就永远跑不到。
+                    "done_checks": list(data.get("done_checks") or []),
                     "constraints": list(data.get("constraints") or []),
                     "out_of_scope": list(data.get("out_of_scope") or []),
                 }
@@ -5656,7 +6151,14 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 "output": str(payload.get("output") or payload.get("message") or "")[-2000:],
             }
         )
-        messages = await _append_tool_response(messages, item.call, payload, session=session, step=steps)
+        messages = await _append_tool_response(
+            messages, item.call, payload, session=session, step=steps,
+            deferred_images=deferred_images,
+        )
+
+    if deferred_images:
+        # 所有 tool 消息都写完之后再放截图。顺序错了，下一轮请求会被网关整轮拒绝。
+        messages.extend(deferred_images)
 
     # 一批工具跑完之后再通知一次（上游 PostToolBatch）：逐条的 post_tool_use 看的是
     # 单次调用，钩子想按"这一批做了什么"判断（整批都失败、一次改了几个文件）只有这里。
@@ -5787,6 +6289,16 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
     tokens_out = spent >= token_limit
     cost_out = cost_cap > 0 and cost_amount >= cost_cap
     exhausted = steps_out or tokens_out or cost_out
+    # 预算耗尽后仍允许**一次**前端 UI 修复：上一轮 validation 已经判定
+    # 「改了前端但没跑 browser_check」。普通预算提示是"不要再调用任何工具"，
+    # 那会把这次保留修复变成一次纯总结——B8 真机就是这样，模型拿到修复提示
+    # 却因为预算提示而没有调用 browser_check。这里只对这一个修复回合开口。
+    reserved_ui_repair = (
+        exhausted
+        and not readonly
+        and int(state.get("ui_repair_rounds") or 0) == 1
+        and "browser_check" in str(state.get("repair_hint") or "")
+    )
     if exhausted:
         await session.recorder.add(
             "budget.exceeded",
@@ -5804,6 +6316,7 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 "cost_limit": cost_cap,
                 "cost_priced": bool(cost_self["priced"] or cost_delegated.get("priced")),
                 "cost_breakdown": cost_self.get("breakdown") or {},
+                "reserved_ui_repair": reserved_ui_repair,
                 "reason": (
                     "步数用完"
                     if steps_out
@@ -5813,7 +6326,15 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                 ),
             },
         )
-        if readonly:
+        if reserved_ui_repair:
+            prompt = (
+                "这是预算耗尽后保留的一次前端 UI 修复回合。只允许做交付前自检："
+                "用 browser_check 打开最新页面，按修复提示用 steps 点击关键交互并 reload，"
+                "确认控制台零错误、关键数字不是 undefined；需要本机服务时先用 run_shell "
+                "在后台启动。不要做新功能、不要扫全仓；发现问题就修，修完重跑 browser_check，"
+                "然后立即收尾。"
+            )
+        elif readonly:
             prompt = (
                 "调研预算已用完。不要再调用任何工具，"
                 "直接按你已经看到的内容给出判断；没看到的地方直说没看到，不要推测。"
@@ -5859,6 +6380,14 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         prompt = (
             "继续只读查看必要的地方（读文件、搜代码），不要改任何文件、不要跑命令。"
             "看够了就直接给判断：结论一句话，依据最多 3 条。"
+        )
+    elif state.get("act_continue"):
+        # 上一轮模型把计划当回答交回来了：这一轮只说一件事——动手。
+        # 工作区内的新建/写入由权限层按既有规则处理，不需要模型先征求同意。
+        prompt = (
+            "计划还没有执行完：不要总结、不要给建议、不要复述计划。"
+            "现在直接调用工具完成计划里的下一步（创建目录、写/复制文件或运行命令）；"
+            "工作区内的新建与写入由系统按既有规则处理，不需要先问用户。"
         )
     else:
         # 最后一条已经是工具回执时不再补一句合成的「请继续」：那批回执本身就是新一轮的
@@ -5939,6 +6468,54 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
                     "answer": str(result.get("text") or "")[:500],
                 },
             )
+    # 只看不动手：计划里有 edit/repair 步骤，模型却读了几个文件就交出「可以做……」。
+    # Codex 的体感是「说下一步就把下一步做掉」；这里不靠模型自觉，推回一轮要求动手。
+    # 已经动过工作区（写文件、跑命令）就不再催——那是另一类问题（做了一半停下），
+    # 交给校验与审查回路处理，不能靠同一句催办反复烧步数。
+    act_nudges = int(state.get("act_nudges") or 0)
+    act_continue = False
+    if (
+        not pending_calls
+        and not exhausted
+        and not readonly
+        and not gap_continue
+        and not getattr(session, "list_only", False)
+        and act_nudges < MAX_ACT_NUDGES
+    ):
+        plan_steps = [
+            item
+            for item in ((state.get("plan_manifest") or {}).get("steps") or ())
+            if isinstance(item, dict)
+        ]
+        actionable = [item for item in plan_steps if str(item.get("kind") or "") in ("edit", "repair")]
+        acted = any(
+            isinstance(item, dict)
+            and item.get("ok")
+            and str(item.get("tool") or "") in (MUTATING_TOOLS | {"run_shell", "run_tests"})
+            for item in results
+        )
+        if actionable and not acted:
+            act_nudges += 1
+            act_continue = True
+            instruction = (
+                "【系统：计划还没执行完】你刚才只做了查看，还没有产出任何交付物。"
+                "现在不要总结、不要给建议、不要复述计划；直接调用工具执行下一步"
+                "（创建目录、写/复制文件或运行命令），做完并核对后再收尾。"
+                "工作区内的新建与写入由权限层按既有规则处理，不需要先问用户。"
+            )
+            hook_notes = getattr(session, "hook_context", None)
+            if isinstance(hook_notes, list):
+                hook_notes.append({"event": "plan.incomplete", "tool": "", "text": instruction})
+            await session.recorder.add(
+                "plan.incomplete",
+                node,
+                {
+                    "round": act_nudges,
+                    "max_rounds": MAX_ACT_NUDGES,
+                    "steps": [str(item.get("title") or "") for item in actionable][:8],
+                    "answer": str(result.get("text") or "")[:300],
+                },
+            )
     return {
         "messages": result["messages"],
         "steps": steps,
@@ -5952,6 +6529,8 @@ async def execute_action_node(state: AgentState, session: AgentSession) -> Agent
         "remediation_rounds": remediation_rounds,
         "think_nudges": nudges,
         "gap_continue": gap_continue,
+        "act_continue": act_continue,
+        "act_nudges": act_nudges,
         **({"file_reads": file_state.export()} if file_state is not None else {}),
         **plan_patch,
     }
@@ -6299,7 +6878,7 @@ async def _ask_run_tests_approval(
     return granted, identity
 
 
-async def run_validation_node(state: AgentState, session: AgentSession) -> AgentState:
+async def _run_validation_body(state: AgentState, session: AgentSession) -> AgentState:
     node = "run_validation"
     await session.recorder.add("node.started", node, {})
     await emit_transition(session, node)
@@ -6331,7 +6910,17 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
         )
         await session.recorder.add("validation.completed", node, validation)
         return {"validation": validation}
-    if not executed and not changed:
+    # shell 里 copy/生成的文件不在工具回执里：不能因为它没进 changed 就说
+    # 「没有改动任何文件」。真机 daily-002 用 python-docx 生成 docx，交付里
+    # 却写着「本次没有改动任何文件」，自相矛盾。有成功 shell 就继续往下走，
+    # 让「没有测试配置」这类真实原因来收尾。
+    shell_ran = any(
+        isinstance(item, dict)
+        and item.get("ok")
+        and str(item.get("tool") or "") in ("run_shell", "monitor")
+        for item in results
+    )
+    if not executed and not changed and not shell_ran:
         # 纯问答/纯排查：没有可校验的产物，直接放行，不要凭空造一条失败
         validation = _skipped_validation(
             "本次没有改动任何文件，无需执行测试", skip_code="no_change"
@@ -6583,17 +7172,554 @@ async def run_validation_node(state: AgentState, session: AgentSession) -> Agent
     return update
 
 
-def _review_scope(state: AgentState) -> tuple[str, list[str]]:
-    """审查的输入边界：这一轮到底改了哪些文件、各变了几行。
+# 这些判据读的是磁盘事实，可以在验证节点当场跑；`page` 依赖 browser_check 的回执，
+# `command` 依赖本轮真跑过的命令，它们也由同一个只读函数核对。
+_MACHINE_CHECK_TYPES = frozenset(
+    {"path_exists", "file_contains", "command", "page", "file_min_chars"}
+)
 
-    原来审查的 prompt 只说"请审查工具结果、测试结论和验收条件"——边界全靠审查模型
-    自己从对话里翻。翻漏了就是"审了一遍什么也没看到"，翻多了就去挑无关文件的刺。
-    DeepSeek Harness 的做法是先产出一个**确定性范围**（change-scope：只输出路径，
-    不做语义判断），语义审查再交给 reviewer。这里抄同一层：范围由写类工具的回执算，
-    审查模型只在这份清单内说话。
 
-    返回 (给模型看的清单, 路径列表)。
+async def run_validation_node(state: AgentState, session: AgentSession) -> AgentState:
+    """既有验证流程 + 可执行验收判据 + 前端浏览器自检。
+
+    测试/超时/跳过仍由 ``_run_validation_body`` 判；之后再看目标里的
+    ``done_checks``。判据没过时把 validation 改成 failed，路由就会回到
+    execute_action，模型拿着 `repair.started` 的指令去补——这正是
+    「未过时自动回到执行节点补齐」的接线，而不是只把状态改成失败。
     """
+    update = await _run_validation_body(state, session)
+    update = await _apply_goal_checks(state, session, update)
+    return await _apply_ui_verification_gate(state, session, update)
+
+
+async def _apply_goal_checks(
+    state: AgentState, session: AgentSession, update: AgentState
+) -> AgentState:
+    """把 `file_min_chars` 等机器判据接进验证回路。
+
+    只在没有硬失败（测试已经 failed/timeout/error）时改写 validation：
+    那种情况既有修复回路已经会回执行节点，不需要再加一轮计数。
+    """
+    goal_spec = state.get("goal_spec") or {}
+    done_when = [
+        str(item).strip() for item in (goal_spec.get("done_when") or []) if str(item).strip()
+    ]
+    checks = list(goal_spec.get("done_checks") or [])
+    if not done_when or not any(
+        isinstance(item, dict) and str(item.get("type") or "") in _MACHINE_CHECK_TYPES
+        for item in checks
+    ):
+        return update
+    # 只读调研 / 纯问答没有交付物可核对，不能拿“文件不存在”去逼它写。
+    if (
+        state.get("readonly")
+        or getattr(session, "readonly", False)
+        or state.get("direct_answer")
+    ):
+        return update
+
+    validation = dict(update.get("validation") or {})
+    root = getattr(getattr(session, "context", None), "root", None)
+    results = run_done_checks(done_when, checks, state.get("tool_results") or [], root)
+    validation["goal_checks"] = results
+    update["validation"] = validation
+    failed = [item for item in results if item.get("status") == "failed"]
+    if not failed:
+        return update
+    if str(validation.get("status") or "") in ("failed", "timeout", "error"):
+        # 测试已经失败：既有修复回路会回执行节点；这里只把判据事实附上。
+        return update
+
+    detail = "；".join(
+        f"{item.get('text') or ''}（{item.get('evidence') or ''}）" for item in failed[:3]
+    )
+    validation["status"] = "failed"
+    validation["passed"] = False
+    validation["command"] = "goal_check"
+    validation["exit_code"] = None
+    validation["output_tail"] = ("验收判据没过：" + detail)[-2000:]
+    update["validation"] = validation
+    rounds = int(state.get("repair_rounds") or 0) + 1
+    update["repair_rounds"] = rounds
+    await session.recorder.add(
+        "goal.check_failed",
+        "run_validation",
+        {"round": rounds, "failed": failed[:5], "checks": results},
+    )
+    if rounds > MAX_REPAIR_ROUNDS:
+        return update
+    instruction = build_repair_hint({"kind": "goal_check_failed", "detail": detail}, rounds)
+    update["repair_hint"] = instruction
+    hook_notes = getattr(session, "hook_context", None)
+    if isinstance(hook_notes, list):
+        hook_notes.append({"event": "repair.started", "tool": "", "text": instruction})
+    await session.recorder.add(
+        "repair.started",
+        "run_validation",
+        {"round": rounds, "reason": detail, "kind": "goal_check_failed"},
+    )
+    return update
+
+
+# 改了这些扩展名，就等于改了用户会看见的东西。
+# .js/.mjs/.cjs 单列：它既可能是页面脚本，也可能是服务端。只有任务文本像前端，
+# 或它和 .html 同目录时才算前端，否则后端任务会被逼着开浏览器。
+_UI_EXTENSIONS = frozenset({".html", ".htm", ".css", ".jsx", ".tsx", ".vue", ".svelte"})
+_UI_SCRIPT_EXTENSIONS = frozenset({".js", ".mjs", ".cjs"})
+_UI_HINTS = (
+    "页面",
+    "前端",
+    "界面",
+    "网页",
+    "网站",
+    "视图",
+    "交互",
+    "按钮",
+    "样式",
+    "布局",
+    "看板",
+    "仪表盘",
+    "控制台",
+    "ui",
+    "ux",
+    "html",
+    "css",
+)
+_UI_IGNORED_PARTS = ("node_modules/", ".venv/", "dist/", "build/", "__pycache__/", ".blank/")
+
+
+def _norm_rel(path: str) -> str:
+    rel = str(path or "").replace("\\", "/").lower()
+    while rel.startswith("./"):
+        rel = rel[2:]
+    return rel.lstrip("/")
+
+
+def _same_rel(left: str, right: str) -> bool:
+    left, right = _norm_rel(left), _norm_rel(right)
+    return bool(left and right) and (left == right or left.endswith("/" + right))
+
+
+def _ui_changed_paths(
+    results: list[dict], root: Any, objective: str
+) -> list[str]:
+    """本轮改过的前端文件。判不出来就返回空列表，宁可不拦。
+
+    直接命中 .html/.css/.jsx/.tsx/.vue/.svelte 的改动一定是前端；纯 .js 只有在
+    任务文本带前端词，或同目录存在 .html 时才算。这样后端任务改一个 JS 不会被
+    要求开浏览器，而 shopbench 那种 ``public/app.js`` 逃不掉。
+    """
+    changed = [
+        path
+        for path in _changed_paths(results)
+        if not _in_scratchpad(path)
+        and not any(part in _norm_rel(path) for part in _UI_IGNORED_PARTS)
+    ]
+    direct = [path for path in changed if Path(_norm_rel(path)).suffix in _UI_EXTENSIONS]
+    if direct:
+        return direct
+    scripts = [path for path in changed if Path(_norm_rel(path)).suffix in _UI_SCRIPT_EXTENSIONS]
+    if not scripts:
+        return []
+    text = str(objective or "").lower()
+    if any(word in text for word in _UI_HINTS):
+        return scripts
+    base = Path(root) if root else None
+    if base is not None:
+        for rel in scripts:
+            try:
+                folder = (base / rel).parent
+                if folder.is_dir() and next(folder.glob("*.html"), None) is not None:
+                    return scripts
+            except OSError:
+                continue
+    return []
+
+
+def _browser_rows_after_last_ui_change(
+    results: list[dict], ui_paths: list[str]
+) -> list[dict]:
+    """最后一次前端写入之后的 browser_check 回执。
+
+    只有改完之后的检查才算数：先看一眼、再改坏，是「验过」最常见的假象。
+    """
+    last_ui_index = -1
+    for index, item in enumerate(results):
+        if not isinstance(item, dict) or not _is_mutation(item):
+            continue
+        data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        path = str(data.get("path") or "")
+        if any(_same_rel(path, ui) for ui in ui_paths):
+            last_ui_index = index
+    return [
+        item
+        for item in results[last_ui_index + 1 :]
+        if isinstance(item, dict) and str(item.get("tool") or "") == "browser_check"
+    ]
+
+
+# 浏览器起不来是环境问题，不是页面问题：和测试的 toolchain_missing 同口径，
+# 不能因为本机没装 Chrome 就把一个没验过的前端判成"页面坏了"。
+_BROWSER_UNAVAILABLE_MARKS = (
+    "没有找到 node",
+    "浏览器检查不可用",
+    "探针脚本缺失",
+    "浏览器没能启动",
+    "没有找到浏览器",
+)
+
+
+def _browser_unavailable(rows: list[dict]) -> str:
+    if not rows:
+        return ""
+    last = rows[-1]
+    if last.get("ok") or str(last.get("status") or "") != "error":
+        return ""
+    text = str(last.get("output") or last.get("message") or "")
+    if any(mark in text for mark in _BROWSER_UNAVAILABLE_MARKS):
+        return text[:300]
+    return ""
+
+
+def _ui_verification_problem(
+    browser_rows: list[dict], ui_paths: list[str]
+) -> tuple[str, dict]:
+    """前端自检有没有过。返回 (问题说明, 最后一条回执的数据)；空说明=通过。"""
+    if not browser_rows:
+        names = "、".join(ui_paths[:3]) + (" 等" if len(ui_paths) > 3 else "")
+        return (
+            f"本轮改了前端文件（{names}），但没有在最新代码上运行 browser_check。"
+            "交付前必须打开页面走一遍真实动作，确认控制台零错误、关键交互可用。",
+            {},
+        )
+    row = browser_rows[-1]
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    if not row.get("ok"):
+        reason = str(row.get("message") or row.get("output") or "").strip()
+        return (
+            "browser_check 报告页面仍有问题"
+            + (f"：{reason[:300]}" if reason else "（控制台报错、断言或动作不通过）"),
+            data,
+        )
+    errors = [
+        item
+        for item in (data.get("console") or [])
+        if isinstance(item, dict) and str(item.get("level") or "") == "error"
+    ]
+    if errors:
+        first = str(errors[0].get("text") or "")[:200]
+        return f"页面控制台还有 {len(errors)} 条错误：{first}", data
+    failed = list(data.get("failed_requests") or [])
+    if failed:
+        first = failed[0] if isinstance(failed[0], dict) else {"url": str(failed[0])}
+        return (
+            f"页面还有 {len(failed)} 个请求失败：{first.get('url') or ''}"
+            f"（{first.get('error') or '未知原因'}）",
+            data,
+        )
+    # 「打开没报错」不等于「页面有东西」，也不等于「用起来对」：
+    # 至少要有一次选择器断言（打开时有什么）和一次动作（点击/输入/刷新）。
+    asserts = [item for item in (data.get("asserts") or []) if isinstance(item, dict)]
+    if not asserts:
+        return "浏览器检查只打开了页面，没有断言任何选择器；先确认打开时页面上真有什么。", data
+    bad_asserts = [item for item in asserts if not item.get("ok")]
+    if bad_asserts:
+        first = bad_asserts[0]
+        return (
+            f"选择器 {first.get('selector') or ''} 断言不通过"
+            f"（实际 {first.get('count')} 个，要 ≥{first.get('min')} 个）",
+            data,
+        )
+    steps = [item for item in (data.get("steps") or []) if isinstance(item, dict)]
+    if not steps:
+        return (
+            "浏览器检查没有走任何动作；至少加一条 reload，有交互的页面再点一次关键按钮，"
+            "确认动作之后页面真的变了。",
+            data,
+        )
+    bad_steps = [item for item in steps if not item.get("ok")]
+    if bad_steps:
+        first = bad_steps[0]
+        return (
+            f"页面动作不通过：{first.get('text') or first.get('do') or '未知步骤'}"
+            f"（实际 {first.get('actual')}）",
+            data,
+        )
+    return "", data
+
+
+async def _apply_ui_verification_gate(
+    state: AgentState, session: AgentSession, update: AgentState
+) -> AgentState:
+    """前端交付必须带「最新代码上跑过且通过」的 browser_check 回执。
+
+    提示词里写了"交付前用 browser_check"不够——模型可以跳过，任务照样 succeeded。
+    这里把要求变成机器闸门：改了页面/前端文件却没有改完之后的检查，或检查报错，
+    验证判失败并回执行节点修复。它不依赖模型自己写 done_when；写歪了也逃不掉。
+    """
+    goal_spec = state.get("goal_spec") or {}
+    if state.get("readonly") or getattr(session, "readonly", False) or state.get("direct_answer"):
+        return update
+    validation = dict(update.get("validation") or {})
+    if str(validation.get("status") or "") in ("failed", "timeout", "error"):
+        # 测试/goal_check 已经判失败，既有回路会回执行节点，不重复计数。
+        return update
+    results = state.get("tool_results") or []
+    root = getattr(getattr(session, "context", None), "root", None)
+    objective = str(goal_spec.get("objective") or "")
+    ui_paths = _ui_changed_paths(results, root, objective)
+    if not ui_paths:
+        return update
+
+    browser_rows = _browser_rows_after_last_ui_change(results, ui_paths)
+    unavailable = _browser_unavailable(browser_rows)
+    if unavailable:
+        # 本机没有浏览器/node 时，这不是交付缺陷：如实记「未验」并保留自动化测试结论。
+        validation["ui_check"] = {"status": "unavailable", "reason": unavailable}
+        update["validation"] = validation
+        await session.recorder.add(
+            "ui.check_unavailable",
+            "run_validation",
+            {"files": ui_paths[:10], "reason": unavailable},
+        )
+        return update
+    if not browser_rows and root is not None:
+        # 模型完全没跑 browser_check：验证节点自己起一个最小服务做页面冒烟。
+        # 这是兜底，不是替代交互验收；失败仍按原闸门交回修复。
+        from blank_api.services.agent.ui_smoke import auto_ui_check
+
+        smoke = await auto_ui_check(Path(root))
+        if smoke.get("status") == "passed":
+            validation["ui_check"] = {
+                "status": "passed",
+                "auto": True,
+                "files": ui_paths[:10],
+                "url": str(smoke.get("url") or ""),
+                "asserts": int(smoke.get("asserts") or 0),
+                "steps": int(smoke.get("steps") or 0),
+            }
+            update["validation"] = validation
+            await session.recorder.add(
+                "ui.check_auto_passed",
+                "run_validation",
+                {
+                    "files": ui_paths[:10],
+                    "url": str(smoke.get("url") or ""),
+                    "asserts": int(smoke.get("asserts") or 0),
+                    "steps": int(smoke.get("steps") or 0),
+                },
+            )
+            return update
+    problem, data = _ui_verification_problem(browser_rows, ui_paths)
+    if not problem:
+        validation["ui_check"] = {
+            "status": "passed",
+            "files": ui_paths[:10],
+            "url": str(data.get("url") or ""),
+            "asserts": len(data.get("asserts") or []),
+            "steps": len(data.get("steps") or []),
+        }
+        update["validation"] = validation
+        await session.recorder.add(
+            "ui.check_passed",
+            "run_validation",
+            {
+                "files": ui_paths[:10],
+                "url": str(data.get("url") or ""),
+                "asserts": len(data.get("asserts") or []),
+                "steps": len(data.get("steps") or []),
+            },
+        )
+        return update
+
+    validation["status"] = "failed"
+    validation["passed"] = False
+    validation["command"] = "ui_check"
+    validation["exit_code"] = None
+    validation["output_tail"] = ("前端自检没过：" + problem)[-2000:]
+    update["validation"] = validation
+    rounds = int(state.get("repair_rounds") or 0) + 1
+    update["repair_rounds"] = rounds
+    update["ui_repair_rounds"] = int(state.get("ui_repair_rounds") or 0) + 1
+    await session.recorder.add(
+        "ui.check_failed",
+        "run_validation",
+        {"round": rounds, "files": ui_paths[:10], "detail": problem[:500]},
+    )
+    if rounds > MAX_REPAIR_ROUNDS:
+        return update
+    instruction = build_repair_hint({"kind": "ui_unverified", "detail": problem}, rounds)
+    update["repair_hint"] = instruction
+    hook_notes = getattr(session, "hook_context", None)
+    if isinstance(hook_notes, list):
+        hook_notes.append({"event": "repair.started", "tool": "", "text": instruction})
+    await session.recorder.add(
+        "repair.started",
+        "run_validation",
+        {"round": rounds, "reason": problem[:500], "kind": "ui_unverified"},
+    )
+    return update
+
+
+# 审查范围是每轮固定成本，路径只列前若干个；计数仍然完整。
+_REVIEW_PATHS_SHOWN = 25
+_REVIEW_SCOPE_LIMIT = 200
+
+
+def _git_text(root: str, *args: str) -> str:
+    """跑一条 git 只读命令并取单值输出；拿不到（非仓库/git 不可用）返回空串。"""
+    try:
+        done = subprocess.run(  # noqa: S603 - 参数由本模块构造
+            ["git", *args],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def _git_path_list(root: str, *args: str) -> list[str]:
+    """跑一条带 ``-z`` 的 git 路径命令，按 NUL 切；失败返回空列表（不猜）。"""
+    try:
+        done = subprocess.run(  # noqa: S603 - 参数由本模块构造
+            ["git", *args],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if done.returncode != 0:
+        return []
+    return [part for part in done.stdout.split("\0") if part.strip()]
+
+
+def _git_base_sha(root: str | None) -> str:
+    """任务开始时的 HEAD。审查范围里的 baseSha 用它，绝不在审查时现取。"""
+    if not root:
+        return ""
+    return _git_text(str(root), "rev-parse", "HEAD")
+
+
+def _scope_relative(path: str, prefix: str) -> str:
+    """把 git 输出的仓库相对路径换算成工作区相对路径，并排除 harness 自有目录。"""
+    rel = str(path or "").replace("\\", "/").strip()
+    while rel.startswith("./"):
+        rel = rel[2:]
+    if prefix:
+        if rel == prefix:
+            return ""
+        if not rel.startswith(prefix + "/"):
+            return ""
+        rel = rel[len(prefix) + 1 :]
+    if not rel or rel.startswith(".blank/") or _in_scratchpad(rel):
+        return ""
+    return rel
+
+
+def _review_git_facts(root: str | None, base_sha: str = "") -> dict:
+    """审查前的确定性范围：baseSha / headSha / mergeBaseSha + 四组路径。
+
+    对齐 DeepSeek Harness 的 ``change-scope``：只输出事实（sha 与路径），
+    不读 diff 内容、不做语义判断。committed 以任务开始时的 HEAD 为基，
+    这样模型在任务里自己提交过也能看见。
+    """
+    if not root:
+        return {}
+    base = Path(root)
+    try:
+        if not base.is_dir():
+            return {}
+    except (OSError, ValueError):
+        return {}
+    repo = _git_text(str(base), "rev-parse", "--show-toplevel")
+    if not repo:
+        return {}
+    try:
+        prefix = base.resolve().relative_to(Path(repo).resolve()).as_posix()
+    except (OSError, ValueError):
+        return {}
+    if prefix == ".":
+        prefix = ""
+    head = _git_text(repo, "rev-parse", "HEAD")
+    resolved_base = str(base_sha or "").strip() or head
+    merge_base = (
+        _git_text(repo, "merge-base", resolved_base, head)
+        if resolved_base and head
+        else ""
+    )
+    raw_groups = {
+        "committed": (
+            _git_path_list(repo, "diff", "--name-only", "-z", f"{resolved_base}..{head}")
+            if resolved_base and head and resolved_base != head
+            else []
+        ),
+        "staged": _git_path_list(repo, "diff", "--cached", "--name-only", "-z"),
+        "unstaged": _git_path_list(repo, "diff", "--name-only", "-z"),
+        "untracked": _git_path_list(repo, "ls-files", "--others", "--exclude-standard", "-z"),
+    }
+    groups: dict[str, list[str]] = {}
+    for name, paths in raw_groups.items():
+        kept: list[str] = []
+        for path in paths:
+            rel = _scope_relative(path, prefix)
+            if rel and rel not in kept:
+                kept.append(rel)
+            if len(kept) >= _REVIEW_SCOPE_LIMIT:
+                break
+        groups[name] = kept
+    return {
+        "repository_root": repo,
+        "base_sha": resolved_base,
+        "head_sha": head,
+        "merge_base_sha": merge_base,
+        "paths": groups,
+    }
+
+
+def _short_sha(value: str) -> str:
+    text = str(value or "").strip()
+    return text[:12] if text else "无"
+
+
+def _render_git_scope(facts: dict) -> str:
+    groups = facts.get("paths") or {}
+    lines = [
+        "确定性范围（git 硬事实，只给边界，不做语义判断）：",
+        f"仓库根：{facts.get('repository_root') or ''}",
+        (
+            f"baseSha: {_short_sha(facts.get('base_sha'))}  "
+            f"headSha: {_short_sha(facts.get('head_sha'))}  "
+            f"mergeBaseSha: {_short_sha(facts.get('merge_base_sha'))}"
+        ),
+    ]
+    for key, label in (
+        ("committed", "已提交"),
+        ("staged", "已暂存"),
+        ("unstaged", "未暂存"),
+        ("untracked", "未跟踪"),
+    ):
+        paths = list(groups.get(key) or [])
+        shown = paths[:_REVIEW_PATHS_SHOWN]
+        line = f"- {label}（{len(paths)}）：" + ("无" if not paths else "、".join(shown))
+        if len(paths) > len(shown):
+            line += f" …另有 {len(paths) - len(shown)} 个"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _review_scope_detail(
+    state: AgentState, root: str | None = None, base_sha: str = ""
+) -> tuple[str, list[str], dict]:
+    """审查的输入边界：工具回执口径 + git 四组路径的确定性范围。"""
     rows = [item for item in (state.get("tool_results") or []) if isinstance(item, dict)]
     files: dict[str, dict] = {}
     for row in rows:
@@ -6605,22 +7731,108 @@ def _review_scope(state: AgentState) -> tuple[str, list[str]]:
             continue
         kind = str(data.get("change_type") or "")
         diff = str(data.get("diff") or "")
-        if not kind and not diff:
+        has_counts = "added" in data or "removed" in data
+        if not kind and not diff and not has_counts:
             continue
-        added = sum(1 for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
-        removed = sum(1 for line in diff.splitlines() if line.startswith("-") and not line.startswith("---"))
+        if has_counts:
+            # 写类工具现在只回执计数，完整 diff 在 FileChange 里；老记录仍带 diff。
+            added = int(data.get("added") or 0)
+            removed = int(data.get("removed") or 0)
+        else:
+            added = sum(1 for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
+            removed = sum(1 for line in diff.splitlines() if line.startswith("-") and not line.startswith("---"))
         entry = files.setdefault(path, {"kind": kind, "added": 0, "removed": 0})
         entry["added"] += added
         entry["removed"] += removed
         if kind:
             entry["kind"] = kind
-    if not files:
-        return "本轮没有改动任何文件。", []
-    lines = [
-        f"- {path}（{info['kind'] or '修改'}，+{info['added']}/-{info['removed']} 行）"
-        for path, info in files.items()
+
+    facts = _review_git_facts(root, base_sha)
+    paths = list(files)
+    if facts:
+        for group in ("committed", "staged", "unstaged", "untracked"):
+            for path in (facts.get("paths") or {}).get(group) or []:
+                if path not in paths:
+                    paths.append(path)
+    blocks: list[str] = []
+    if facts:
+        blocks.append(_render_git_scope(facts))
+    if files:
+        lines = [
+            f"- {path}（{info['kind'] or '修改'}，+{info['added']}/-{info['removed']} 行）"
+            for path, info in files.items()
+        ]
+        blocks.append(
+            "本轮工具回执的改动（按写类工具回执统计，行数为 +新增/-删除）：\n"
+            + "\n".join(lines)
+        )
+    if not blocks:
+        return "本轮没有改动任何文件。", [], facts
+    text = "\n\n".join(blocks)
+    if paths:
+        text += "\n\n审查只评上面列出的路径；清单外的问题不阻塞本轮交付。"
+    return text, paths, facts
+
+
+def _review_scope(state: AgentState, root: str | None = None, base_sha: str = "") -> tuple[str, list[str]]:
+    """兼容入口：只要 (清单文本, 路径列表)；确定性范围的事实由 detail 版返回。"""
+    text, paths, _ = _review_scope_detail(state, root, base_sha)
+    return text, paths
+
+
+# 审查模型可能换语言写状态；判定只认结果，不认措辞是否统一。
+_DONE_MET = frozenset({"met", "passed", "covered", "satisfied", "满足", "通过"})
+
+
+def _same_criterion(left: str, right: str) -> bool:
+    """验收条件的文本对齐：先精确，再允许包含关系。只用于把审查条目对回原条件。"""
+    a = " ".join(str(left or "").split())
+    b = " ".join(str(right or "").split())
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return (len(a) >= 4 and a in b) or (len(b) >= 4 and b in a)
+
+
+def _review_done_when(criteria: list[str], raw: Any) -> tuple[list[dict], list[str]]:
+    """把审查模型的逐条判定对回 done_when，返回 (逐条结果, 未证明的条件)。
+
+    确定性纪律：只有 status=met 且 evidence 非空才算证明过。缺条目、状态含糊、
+    证据为空一律算未证明——这是交付判据，不按相似度替模型圆场，也不许用一句
+    「已实现」当证据。
+    """
+    results = [{"text": text, "status": "missing", "evidence": ""} for text in criteria]
+    assigned: set[int] = set()
+    if isinstance(raw, list):
+        for position, item in enumerate(raw):
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            status = str(item.get("status") or "").strip()
+            evidence = str(item.get("evidence") or "").strip()
+            index = -1
+            if text:
+                for candidate, criterion in enumerate(criteria):
+                    if candidate not in assigned and _same_criterion(text, criterion):
+                        index = candidate
+                        break
+            if index < 0 and not text and position < len(criteria) and position not in assigned:
+                index = position
+            if index < 0:
+                continue
+            assigned.add(index)
+            results[index] = {
+                "text": criteria[index],
+                "status": status or "missing",
+                "evidence": evidence[:300],
+            }
+    unproven = [
+        item["text"]
+        for item in results
+        if item["status"].strip().lower() not in _DONE_MET or not item["evidence"]
     ]
-    return "本轮改动的文件（这是审查的范围，范围外的不要评）：\n" + "\n".join(lines), list(files)
+    return results, unproven
 
 
 async def review_result_node(state: AgentState, session: AgentSession) -> AgentState:
@@ -6628,14 +7840,52 @@ async def review_result_node(state: AgentState, session: AgentSession) -> AgentS
     node = "review_result"
     await session.recorder.add("node.started", node, {})
     await emit_transition(session, node)
-    scope_text, scope_paths = _review_scope(state)
+    scope_text, scope_paths, scope_facts = _review_scope_detail(
+        state,
+        _workspace_root(session),
+        str(state.get("base_sha") or ""),
+    )
+    criteria = [
+        str(item).strip()
+        for item in ((state.get("goal_spec") or {}).get("done_when") or [])
+        if str(item).strip()
+    ]
+    criteria_text = ""
+    if criteria:
+        listed = "\n".join(f"{index}. {text}" for index, text in enumerate(criteria, start=1))
+        criteria_text = (
+            "\n\n验收条件（done_when，这是本轮交付判据，逐条判定）：\n"
+            f"{listed}\n"
+            "输出 JSON 必须额外带 done_when 数组，与上面条件一一对应："
+            '[{"text": "原条件", "status": "met|unmet|unverifiable", '
+            '"evidence": "工具结果/文件路径/命令输出"}]\n'
+            "只有 status=met 且 evidence 非空才算证明过；缺条目、缺证据、unmet、"
+            "unverifiable 都视为未证明，approved 必须为 false。"
+        )
     prompt = (
         "你是交付审查 Agent。请审查当前任务的工具结果、测试结论和验收条件，"
         "只输出 JSON：{\"approved\": true, \"findings\": [\"...\"], \"summary\": \"...\"}。"
         "如果发现实现缺陷、测试不足或验收条件未覆盖，approved 必须为 false，并给出可执行修复意见。\n\n"
         f"{scope_text}\n\n"
+        "确定性范围里的 sha 与四组路径来自 git 本身，是硬事实：结论不能与它矛盾"
+        "（例如清单里有改动却说没有改动；或对清单外的文件提出阻塞意见）。\n\n"
         "审查时以这份清单为准：只评清单里的文件，不要对没改过的文件提意见。"
-        "清单为空时，检查重点放在「结论是否与工具结果一致」上，而不是找代码问题。"
+        "清单为空时，检查重点放在「结论是否与工具结果一致」上，而不是找代码问题。\n\n"
+        "交付底线（命中任何一条都判 approved=false，并指出文件与修法）：\n"
+        "1. 前端像通用 AI 仪表盘：大面积渐变、每块圆角+阴影、KPI 卡片墙、emoji 图标、"
+        "满屏胶囊按钮；或数值没有单位、关键数字可能显示 undefined。\n"
+        "2. 前端改动没有在最新代码上跑过 browser_check，或检查里还有控制台错误、"
+        "失败请求、未通过的动作。只断言元素存在不算验过，要看打开时有什么、点一下变没变。\n"
+        "3. 安全问题：静态文件可路径穿越、请求体无上限、输入无类型/长度校验、"
+        "对外 URL 不是 http(s)、密钥明文落盘或回传、静态页缺 CSP/nosniff/frame-ancestors、"
+        "服务默认绑到 0.0.0.0。\n"
+        "4. 代码规范：命名/注释/错误处理与周边不一致；留 TODO、空方法体、假数据冒充完成；"
+        "为将来预留的抽象或未被要求的依赖。\n"
+        "5. 交付结论与工具事实不一致：测试失败说通过、没跑检查说验过、未完成说完成。\n"
+        "6. 文档、PPT 或页面像 AI 模板：空泛开场、背景-意义-目标-挑战-方案-展望套模板、"
+        "满篇 bullet、三栏图标、emoji、无数据支撑的宏大结论，或出现「赋能/抓手/闭环/"
+        "生态/显著提升」这类套话；或用无关图片/编造截图凑版面、留「此处配图」占位。"
+        f"{criteria_text}"
     )
     try:
         result = await session.ask(state, prompt, node)
@@ -6645,6 +7895,17 @@ async def review_result_node(state: AgentState, session: AgentSession) -> AgentS
             "findings": [str(item) for item in (parsed.get("findings") or [])][:12],
             "summary": str(parsed.get("summary") or ""),
         }
+        # done_when 是交付判据，不能只问一句「验收条件覆盖了吗」就算过：逐条对账，
+        # 任何一条没有明确证据都判死。机器判据在验证节点已经跑过；这里补的是人话判据。
+        done_rows, unproven = _review_done_when(criteria, parsed.get("done_when"))
+        if criteria:
+            review["done_when"] = done_rows
+        if unproven:
+            review["approved"] = False
+            review["findings"] = [
+                f"验收条件未证明：{text}" for text in unproven[:6]
+            ] + review["findings"]
+            review["findings"] = review["findings"][:12]
         rounds = int(state.get("review_rounds") or 0) + 1
         # 修复预算必须与验证回路共用同一个计数器：两个独立计数器会把"最多 3 轮自动修复"
         # 实际放大到 6~8 轮，既费钱也违背验收口径。
@@ -6671,6 +7932,7 @@ async def review_result_node(state: AgentState, session: AgentSession) -> AgentS
                 # 审查范围进事件：事后能回答"这次到底审了什么"，
                 # 而不是只有一句 approved。
                 "scope": scope_paths,
+                **({"scope_facts": scope_facts} if scope_facts else {}),
             },
         )
         return {
@@ -6690,6 +7952,43 @@ async def review_result_node(state: AgentState, session: AgentSession) -> AgentS
         # 被这条回路放大成 31 次执行 + 27 次审查、35 万 token，产出还是原样。
         #
         # 正确做法：审查失败当作"这次没有审查结论"，直接放行并在交付里写明没审成。
+        #
+        # 例外：有 done_when 时不能放行。判据一条都没被核对过，却按"没审成"交付，
+        # 等于用一个解析失败换一次伪成功——这正是质量底线要堵的形态。
+        if criteria:
+            rounds = int(state.get("review_rounds") or 0) + 1
+            total_repairs = int(state.get("repair_rounds") or 0) + 1
+            review = {
+                "approved": False,
+                "unavailable": True,
+                "findings": ["独立审查未完成，done_when 未核对，不能判通过"],
+                "summary": "",
+                "done_when": [
+                    {"text": text, "status": "missing", "evidence": ""} for text in criteria
+                ],
+            }
+            await session.recorder.add(
+                "review.unavailable",
+                node,
+                {"reason": str(exc)[:300], "looped": True, "done_when": True},
+            )
+            await session.recorder.add(
+                "review.completed",
+                node,
+                {
+                    **review,
+                    "round": rounds,
+                    "repair_rounds": total_repairs,
+                    "scope": scope_paths,
+                    **({"scope_facts": scope_facts} if scope_facts else {}),
+                },
+            )
+            return {
+                "review": review,
+                "review_rounds": rounds,
+                "repair_rounds": total_repairs,
+                "status": "failed" if total_repairs > MAX_REPAIR_ROUNDS else "running",
+            }
         await session.recorder.add(
             "review.unavailable", node, {"reason": str(exc)[:300], "looped": False}
         )
@@ -6905,7 +8204,47 @@ def _report_sections(report: str) -> tuple[str, str]:
             continue
         # 模型习惯在"下一步"里写「无」「暂无」：那不是待办，是"没有待办"。
         # 照抄会让交付固定多出一行「需要你：无」，§5 要求没有就整行隐藏。
+        # 同理，「无需处理 / 不影响使用」是说明不是交办：写进「需要你」等于
+        # 让用户去处理一件不用处理的事（daily-001 真机就被塞了这类句子）。
         if text.strip("。.；; ") in {"无", "没有", "暂无", "无需", "不需要", "无待办", "none", "n/a"}:
+            continue
+        if section in {"next", "unfinished"} and any(
+            mark in text
+            for mark in (
+                "无需处理",
+                "无需操作",
+                "无需后续操作",
+                "无后续操作",
+                "不用处理",
+                "无需理会",
+                "不影响使用",
+                "可以忽略",
+            )
+        ):
+            continue
+        # 生成文档/PPT 后让用户「打开看看排版」是可选项，不是接手任务。
+        # 把它写进「需要你」会让一个已经写完的文件被判成未完成。
+        if section in {"next", "unfinished"} and any(
+            mark in text
+            for mark in (
+                "打开文件看",
+                "打开看一遍",
+                "看一下排版",
+                "看一遍排版",
+                "看看排版",
+                "检查排版效果",
+                "看看效果",
+                "如需",
+                "若要",
+            )
+        ):
+            continue
+        # 「改脚本再重跑」也是可选维护动作，不是交付前置条件。
+        if (
+            section in {"next", "unfinished"}
+            and any(mark in text for mark in ("修改", "改脚本", "改文案"))
+            and any(mark in text for mark in ("重跑", "重新运行", "重新生成", "再跑"))
+        ):
             continue
         if section == "next" and not next_step:
             next_step = text
@@ -6951,9 +8290,14 @@ def _change_facts(state: AgentState) -> tuple[list[str], int]:
         if not path or _in_scratchpad(path):
             continue
         diff = str(data.get("diff") or "")
-        if not diff and not data.get("change_type"):
+        if not diff and not data.get("change_type") and data.get("hunks") is None:
             continue
-        hunks = sum(1 for line in diff.splitlines() if line.startswith("@@")) if diff else 0
+        # 新回执自带 hunk 数；老记录仍从 diff 数，交付口径不变。
+        hunks = (
+            int(data.get("hunks") or 0)
+            if data.get("hunks") is not None
+            else (sum(1 for line in diff.splitlines() if line.startswith("@@")) if diff else 0)
+        )
         hunks_by_path[path] = max(hunks_by_path.get(path, 0), hunks)
     return list(hunks_by_path), sum(hunks_by_path.values())
 
@@ -7113,6 +8457,58 @@ def _workspace_root(session: AgentSession | None) -> str | None:
     return str(root) if root else None
 
 
+async def _snapshot_changed_paths(state: AgentState, session: AgentSession) -> list[str]:
+    """shell 里产生的改动：拿动手前的快照比对一次工作区。
+
+    只在真跑过 shell 时做——纯文件工具任务的改动已经写在回执里，没必要遍历目录；
+    快照缺失/不可恢复时返回空，交付数字退回到工具回执的口径，不猜。
+    """
+    shell_ran = any(
+        isinstance(item, dict)
+        and item.get("ok")
+        and str(item.get("tool") or "") in ("run_shell", "monitor")
+        for item in state.get("tool_results") or ()
+    )
+    snapshot_id = str(state.get("snapshot_id") or "")
+    if not snapshot_id:
+        snapshot_id = str(getattr(session, "snapshot_id", "") or "")
+    root = _workspace_root(session)
+    if not shell_ran or not snapshot_id or not root:
+        await session.recorder.add(
+            "delivery.snapshot_diff",
+            "summarize_result",
+            {
+                "skipped": "no_shell" if not shell_ran else "no_snapshot" if not snapshot_id else "no_root",
+                "snapshot_id": snapshot_id,
+            },
+        )
+        return []
+    try:
+        from blank_api.services.sandbox import SnapshotStore
+
+        changed = await asyncio.to_thread(SnapshotStore().changed_since, snapshot_id, root)
+    except Exception as error:  # noqa: BLE001 - 比对失败只是少算，不能让收尾崩掉
+        await session.recorder.add(
+            "delivery.snapshot_diff",
+            "summarize_result",
+            {"snapshot_id": snapshot_id, "failed": f"{error.__class__.__name__}: {error}"[:200]},
+        )
+        return []
+    kept = [
+        str(path)
+        for path in changed
+        if str(path).strip()
+        and not _in_scratchpad(str(path))
+        and not str(path).replace("\\", "/").startswith(".blank/")
+    ]
+    await session.recorder.add(
+        "delivery.snapshot_diff",
+        "summarize_result",
+        {"snapshot_id": snapshot_id, "count": len(kept), "changed": kept[:50]},
+    )
+    return kept
+
+
 def _deleted_paths(root: str | None, ignored: Iterable[str] = ()) -> list[str]:
     """工作区里被删掉的文件。
 
@@ -7123,8 +8519,37 @@ def _deleted_paths(root: str | None, ignored: Iterable[str] = ()) -> list[str]:
     if not root:
         return []
     try:
+        top = subprocess.run(  # noqa: S603 - 参数由本模块构造
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+        if top.returncode != 0:
+            return []
+        repo_root = Path(top.stdout.strip()).resolve()
+        workspace = Path(root).resolve()
+        try:
+            prefix = workspace.relative_to(repo_root).as_posix()
+        except ValueError:
+            return []
+        if prefix == ".":
+            prefix = ""
         done = subprocess.run(  # noqa: S603 - 参数由本模块构造
-            ["git", "-c", "core.quotePath=false", "status", "--porcelain", "-z", "-uall"],
+            [
+                "git",
+                "-c",
+                "core.quotePath=false",
+                "status",
+                "--porcelain",
+                "-z",
+                "-uall",
+                "--",
+                ".",
+            ],
             cwd=str(root),
             capture_output=True,
             text=True,
@@ -7150,7 +8575,13 @@ def _deleted_paths(root: str | None, ignored: Iterable[str] = ()) -> list[str]:
             index += 1
         if "D" not in status:
             continue
-        if relative in skip or _in_scratchpad(relative):
+        # git status 在子目录里也回 repo 根相对路径：必须先把工作区前缀剥掉，
+        # 否则任务跑在仓库子目录时，会把仓库里别处的删除/改动算到它头上。
+        if prefix:
+            if relative != prefix and not relative.startswith(prefix + "/"):
+                continue
+            relative = relative[len(prefix) + 1 :]
+        if not relative or relative in skip or _in_scratchpad(relative):
             continue
         if relative not in deleted:
             deleted.append(relative)
@@ -7162,6 +8593,7 @@ def _delivery_facts(
     state: AgentState,
     root: str | None = None,
     ignored: Iterable[str] = (),
+    extra_paths: Iterable[str] = (),
 ) -> DeliveryFacts:
     """四行交付的事实来源：结论取模型段落首句，改动与验证取记录。
 
@@ -7194,6 +8626,19 @@ def _delivery_facts(
     elif validation:
         # 跳过校验时把原因带进交付行：只写"没跑"而不说为什么，下一轮还是不知道怎么补。
         verify_note = str(validation.get("skipped_reason") or "").strip()
+    # 前端自检是真实发生过的验证，不能因为没跑自动化测试就整句消失——
+    # 否则交付只剩「未跑校验」，用户会以为页面根本没验过。它不占用「验证：」前缀，
+    # 那一行仍然只给带退出码的自动化测试。
+    ui_check = validation.get("ui_check")
+    if isinstance(ui_check, dict) and str(ui_check.get("status") or "") == "passed":
+        url = str(ui_check.get("url") or "").strip()
+        asserts = int(ui_check.get("asserts") or 0)
+        steps = int(ui_check.get("steps") or 0)
+        detail = "，".join(
+            part for part in (url, f"{asserts} 个断言 / {steps} 个动作") if part
+        )
+        ui_note = "已做浏览器自检（browser_check 通过" + (f"：{detail}" if detail else "") + "）"
+        verify_note = f"{ui_note}；{verify_note}" if verify_note else ui_note
     files, hunks = _change_facts(state)
     # 改动边界要与校验盖戳同源：``covered_fingerprint`` 是"校验那一刻算过内容指纹的
     # 那几个文件"，shell 里新建/改动的文件也在里面，而工具结果里可能没有它们。
@@ -7207,6 +8652,11 @@ def _delivery_facts(
     for name in _deleted_paths(root, ignored):
         if name not in paths:
             paths.append(name)
+    # shell 里 copy / python 生成的文件：工具回执没有 diff，靠快照比对补上。
+    for name in extra_paths:
+        text = str(name).strip()
+        if text and text not in paths:
+            paths.append(text)
     return DeliveryFacts(
         completed=conclusion,
         changed_files=len(paths),
@@ -7229,6 +8679,7 @@ async def _write_closure(
     results: list[dict] | None = None,
     *,
     node: str = "summarize_result",
+    extra_paths: Iterable[str] = (),
 ) -> None:
     """任务收尾写一份闭合记录：revision + 改动路径 + 校验结论 + 验收位（空着等人签）。
 
@@ -7241,7 +8692,11 @@ async def _write_closure(
     if not root:
         return
     facts = _delivery_facts(
-        report, state, root, getattr(session, "quarantined_paths", ())
+        report,
+        state,
+        root,
+        getattr(session, "quarantined_paths", ()),
+        extra_paths=extra_paths,
     )
     payload = delivery_dict(facts)
     # 只读回答没有可闭合的交付：写一条没有改动的闭合记录只会让台账里多出噪音，
@@ -7273,7 +8728,12 @@ async def _write_closure(
     await session.recorder.add("task.closure", node, data)
 
 
-def _delivery_text(report: str, state: AgentState, session: AgentSession) -> str:
+def _delivery_text(
+    report: str,
+    state: AgentState,
+    session: AgentSession,
+    extra_paths: Iterable[str] = (),
+) -> str:
     """固定四行交付（任务书 §5）：完成 / 改动 / 验证 / 需要你，没有的项整行隐藏。
 
     四行全部由事实拼出来：结论取模型那一段的首句，改动与验证取工具结果与校验记录。
@@ -7281,7 +8741,11 @@ def _delivery_text(report: str, state: AgentState, session: AgentSession) -> str
     跑过、且退出码已知时才会出现。
     """
     facts = _delivery_facts(
-        report, state, _workspace_root(session), getattr(session, "quarantined_paths", ())
+        report,
+        state,
+        _workspace_root(session),
+        getattr(session, "quarantined_paths", ()),
+        extra_paths=extra_paths,
     )
     # 没改动、也没真跑过校验的任务（只读分析、纯回答）不进四行格式：那类交付的价值
     # 就在正文本身，压成"一句话结论"等于把答案截掉。四行是给"有产物的工作"用的。
@@ -7293,11 +8757,22 @@ def _delivery_text(report: str, state: AgentState, session: AgentSession) -> str
 
 
 def _delivery_payload(
-    report: str, state: AgentState, mode: str, text: str, session: AgentSession | None = None
+    report: str,
+    state: AgentState,
+    mode: str,
+    text: str,
+    session: AgentSession | None = None,
+    extra_paths: Iterable[str] = (),
 ) -> dict:
     """结构化交付负载：和正文同源，前端不必回头解析那四行。"""
     payload = delivery_dict(
-        _delivery_facts(report, state, _workspace_root(session), getattr(session, "quarantined_paths", ()))
+        _delivery_facts(
+            report,
+            state,
+            _workspace_root(session),
+            getattr(session, "quarantined_paths", ()),
+            extra_paths=extra_paths,
+        )
     )
     payload["mode"] = mode
     payload["chars"] = len(text)
@@ -7513,6 +8988,45 @@ async def _externalize_workspace_state(
     return outcome
 
 
+def _list_only_summary(state: AgentState) -> str:
+    """只列文件的任务：直接用工具回执拼清单，不再让模型改写一遍。
+
+    模型很容易把「列文件」写成「这个目录是做什么的」；工具已经拿到了准确
+    路径，收尾再让它总结只会多一次调用、还可能漏项。这里取最完整的一次
+    ``list_files``（没有就退到 ``glob``），按层级输出 Markdown 列表。
+    """
+    results = [item for item in (state.get("tool_results") or []) if isinstance(item, dict)]
+    best: list[dict] = []
+    for item in results:
+        if not item.get("ok") or str(item.get("tool") or "") != "list_files":
+            continue
+        files = (item.get("data") or {}).get("files") or []
+        if isinstance(files, list) and len(files) > len(best):
+            best = [entry for entry in files if isinstance(entry, dict)]
+    if best:
+        lines = ["工作区文件：", ""]
+        for entry in best:
+            path = str(entry.get("path") or entry.get("name") or "").replace("\\", "/")
+            name = str(entry.get("name") or path.rsplit("/", 1)[-1])
+            depth = max(0, path.count("/"))
+            suffix = "/" if entry.get("is_dir") else ""
+            size = entry.get("size")
+            size_note = f"（{size} 字节）" if isinstance(size, int) and size >= 0 and not suffix else ""
+            lines.append(f"{'  ' * depth}- `{name}{suffix}`{size_note}")
+        return "\n".join(lines)
+
+    paths: list[str] = []
+    for item in results:
+        if not item.get("ok") or str(item.get("tool") or "") != "glob":
+            continue
+        files = (item.get("data") or {}).get("files") or []
+        if isinstance(files, list) and len(files) > len(paths):
+            paths = [str(path) for path in files if str(path).strip()]
+    if paths:
+        return "工作区文件：\n\n" + "\n".join(f"- `{path}`" for path in paths)
+    return ""
+
+
 async def _summarize_result_body(state: AgentState, session: AgentSession) -> AgentState:
     node = "summarize_result"
     await session.recorder.add("node.started", node, {})
@@ -7524,6 +9038,14 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
     raw = str(state.get("summary") or "") or _last_assistant_text(state.get("messages") or [])
     if not state.get("tool_results") and not state.get("direct_answer"):
         raw = _first_answer_text(state.get("messages") or []) or raw
+
+    if getattr(session, "list_only", False):
+        text = _list_only_summary(state)
+        if text:
+            await session.recorder.add(
+                "delivery.recorded", node, {"mode": "list_only", "chars": len(text)}
+            )
+            return {"summary": text, "acceptance_results": []}
 
     if state.get("direct_answer"):
         # 已经在 intent 阶段答完了。这里不再拉模型改写——它只会把答案换成一段
@@ -7573,6 +9095,9 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
     # 有验收条件时把验收判断并进同一次调用，省一轮往返也省一次费用。
     delivery_state = await _quarantine_scratch(state, session, node)
     await _externalize_workspace_state(delivery_state, session, node)
+    # shell 里复制/生成的文件不在工具回执里，收尾前对快照比对一次；
+    # 文本、结构化负载与闭合记录共用这一份清单，三处不能各算一套。
+    extra_paths = await _snapshot_changed_paths(delivery_state, session)
     hint = raw.strip()[:1200]
     if session.acceptance_criteria:
         # 把计划进度一并给它：验收不通过时最常见的形态是"某一步压根没做"，
@@ -7627,57 +9152,50 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
             for item in session.acceptance_links
             if isinstance(item, dict)
         }
-        try:
-            ask = await session.ask(state, prompt, node)
-            parsed = _extract_json(ask["text"])
-            report = as_report(str(parsed.get("report") or parsed.get("summary") or ""))
-            returned = parsed.get("acceptance") or []
-            by_text = {
-                str(item.get("criterion") or "").strip(): item
-                for item in returned
-                if isinstance(item, dict)
-            }
-            for criterion in session.acceptance_criteria:
-                match = by_text.get(criterion.strip()) or next(
-                    (item for text, item in by_text.items() if criterion.strip() in text), None
-                )
-                link = link_by_criterion.get(criterion) or {}
-                results.append(
-                    {
-                        "criterion": criterion,
-                        "covered": bool(match and match.get("covered")),
-                        "evidence": str((match or {}).get("evidence") or ""),
-                        # 把引用带回去：验收没过时界面能直接指到"第 3 步"，而不是干巴巴一句失败。
-                        "criterion_id": str(link.get("id") or ""),
-                        "milestone_id": str(link.get("milestone_id") or ""),
-                        "step_ids": [str(sid) for sid in (link.get("step_ids") or [])],
-                    }
-                )
-            text = _delivery_text(report, delivery_state, session)
-            await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, "report", text, session))
-            await _write_closure(session, delivery_state, report, results, node=node)
-            return {
-                "summary": _enforce_no_false_claim(
-                    _validation_note(
-                        _with_subagent_note(
-                            _with_placeholder_note(text, session, state), settle_note
-                        ),
-                        state,
-                    ),
-                    state,
-                ),
-                "acceptance_results": results,
-                "usage": merge_usage(state.get("usage") or {}, ask["usage"]),
-            }
-        except (ModelError, ValueError, json.JSONDecodeError):
+        # 验收结论要的是 JSON；模型偶尔会回一段散文或 Markdown 围栏。旧实现
+        # 一次解析失败就把全部验收标成 covered=False——T02 真机就是这么从
+        # “能核对”掉成“四项全没覆盖”的。先按同一份内容重试一次（只换一句更硬的
+        # 格式要求），两次都拿不到才记为**未判定**，不冒充“没覆盖”。
+        retry_suffix = (
+            "\n上一次输出不是合法 JSON 或缺少 acceptance 字段。"
+            "这次只输出一个 JSON 对象，不要 Markdown 代码围栏、不要解释。"
+        )
+        parsed: dict | None = None
+        ask_usage: dict = {}
+        for attempt in range(2):
+            try:
+                ask = await session.ask(state, prompt + (retry_suffix if attempt else ""), node)
+                ask_usage = merge_usage(ask_usage, ask["usage"])
+                candidate = _extract_json(ask["text"])
+                if not isinstance(candidate, dict):
+                    raise ValueError("验收结论不是 JSON 对象")
+                if "acceptance" not in candidate:
+                    raise ValueError("验收结论缺少 acceptance 字段")
+                parsed = candidate
+                break
+            except (ModelError, ValueError, json.JSONDecodeError):
+                parsed = None
+                continue
+
+        if parsed is None:
             results = [
-                {"criterion": item, "covered": False, "evidence": "模型未返回可解析的验收结论"}
+                {
+                    "criterion": item,
+                    "covered": None,
+                    "evidence": "模型未返回可解析的验收结论，未判定",
+                }
                 for item in session.acceptance_criteria
             ]
             report = as_report(raw)
-            text = _delivery_text(report, delivery_state, session)
-            await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, "fallback", text, session))
-            await _write_closure(session, delivery_state, report, results, node=node)
+            text = _delivery_text(report, delivery_state, session, extra_paths)
+            await session.recorder.add(
+                "delivery.recorded",
+                node,
+                _delivery_payload(report, delivery_state, "fallback", text, session, extra_paths),
+            )
+            await _write_closure(
+                session, delivery_state, report, results, node=node, extra_paths=extra_paths
+            )
             return {
                 "summary": _enforce_no_false_claim(
                     _validation_note(
@@ -7689,7 +9207,54 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
                     state,
                 ),
                 "acceptance_results": results,
+                "usage": merge_usage(state.get("usage") or {}, ask_usage),
             }
+
+        report = as_report(str(parsed.get("report") or parsed.get("summary") or ""))
+        returned = parsed.get("acceptance") or []
+        by_text = {
+            str(item.get("criterion") or "").strip(): item
+            for item in returned
+            if isinstance(item, dict)
+        }
+        for criterion in session.acceptance_criteria:
+            match = by_text.get(criterion.strip()) or next(
+                (item for text, item in by_text.items() if criterion.strip() in text), None
+            )
+            link = link_by_criterion.get(criterion) or {}
+            results.append(
+                {
+                    "criterion": criterion,
+                    "covered": bool(match and match.get("covered")),
+                    "evidence": str((match or {}).get("evidence") or ""),
+                    # 把引用带回去：验收没过时界面能直接指到"第 3 步"，而不是干巴巴一句失败。
+                    "criterion_id": str(link.get("id") or ""),
+                    "milestone_id": str(link.get("milestone_id") or ""),
+                    "step_ids": [str(sid) for sid in (link.get("step_ids") or [])],
+                }
+            )
+        text = _delivery_text(report, delivery_state, session, extra_paths)
+        await session.recorder.add(
+            "delivery.recorded",
+            node,
+            _delivery_payload(report, delivery_state, "report", text, session, extra_paths),
+        )
+        await _write_closure(
+            session, delivery_state, report, results, node=node, extra_paths=extra_paths
+        )
+        return {
+            "summary": _enforce_no_false_claim(
+                _validation_note(
+                    _with_subagent_note(
+                        _with_placeholder_note(text, session, state), settle_note
+                    ),
+                    state,
+                ),
+                state,
+            ),
+            "acceptance_results": results,
+            "usage": merge_usage(state.get("usage") or {}, ask_usage),
+        }
 
     prompt = _report_prompt(state, hint) + (f"\n{settle_block}" if settle_block else "")
     try:
@@ -7701,9 +9266,13 @@ async def _summarize_result_body(state: AgentState, session: AgentSession) -> Ag
         report = as_report(raw)
         usage = state.get("usage") or {}
         mode = "fallback"
-    text = _delivery_text(report, delivery_state, session)
-    await session.recorder.add("delivery.recorded", node, _delivery_payload(report, delivery_state, mode, text, session))
-    await _write_closure(session, delivery_state, report, node=node)
+    text = _delivery_text(report, delivery_state, session, extra_paths)
+    await session.recorder.add(
+        "delivery.recorded",
+        node,
+        _delivery_payload(report, delivery_state, mode, text, session, extra_paths),
+    )
+    await _write_closure(session, delivery_state, report, node=node, extra_paths=extra_paths)
     return {
         "summary": _enforce_no_false_claim(
             _validation_note(
@@ -7728,9 +9297,20 @@ def route_after_plan(state: AgentState, session: AgentSession) -> str:
 def route_after_act(state: AgentState, session: AgentSession) -> str:
     if state.get("status") in ("cancelled", "paused") or state.get("error"):
         return "finish"
+    # 只要清单：拿到第一次 list_files/glob 回执就够了，不必再让模型多跑一轮
+    # “看看还缺什么”。收尾会用工具回执直接拼列表。
+    if getattr(session, "list_only", False):
+        for item in state.get("tool_results") or ():
+            if not isinstance(item, dict) or not item.get("ok"):
+                continue
+            if str(item.get("tool") or "") in ("list_files", "glob"):
+                return "summarize_result"
     # 环境缺口还没补：回执行节点真去装/找，而不是把「需要你装」当成交付。
     # 排在 pending 之前：两种都是"还有活没干"，原因写进事件里更清楚。
     if state.get("gap_continue"):
+        return "execute_action"
+    # 计划没执行完且还没动过工作区：回执行节点催它动手，不把计划当交付。
+    if state.get("act_continue"):
         return "execute_action"
     if state.get("pending"):
         return "execute_action"
@@ -7743,8 +9323,17 @@ def route_after_validation(state: AgentState, session: AgentSession) -> str:
     # 而且审查员看到没改文件，很可能要求它去改，正好违背用户"只是问问"的意思。
     if state.get("readonly") or session.readonly:
         return "summarize_result"
-    # 预算耗尽后不可能再修复，必须直接进审查，否则会在 validation ↔ execute 之间空转到递归上限。
+    # 预算耗尽后一般不能再修复，否则会在 validation ↔ execute 之间空转到递归上限。
+    # 但「前端改了、没跑 browser_check」是交付缺陷，且修法通常只差一条命令/一个
+    # 点击动作；保留**一次**预算外修复，避免 1.5M 预算刚好花完就把能交付的页面判死。
+    # 只对 ui_check 失败生效，且 ui_repair_rounds 只允许 1 次；第二次仍按预算收尾。
     if state.get("budget_exhausted"):
+        ui_failed = (
+            str(validation.get("command") or "") == "ui_check"
+            and str(validation.get("status") or "") == "failed"
+        )
+        if ui_failed and int(state.get("ui_repair_rounds") or 0) <= 1:
+            return "execute_action"
         return "review_result"
     # 只读任务（问答、排查、看代码）没有交付物可审，直接总结；
     # 硬拉模型去"审查"只会拿到一段散文，被判成不可解析，然后白白修复三轮。
@@ -7842,6 +9431,7 @@ def build_agent_graph(session: AgentSession, checkpointer: BaseCheckpointSaver |
         {
             "execute_action": "execute_action",
             "run_validation": "run_validation",
+            "summarize_result": "summarize_result",
             "finish": END,
         },
     )

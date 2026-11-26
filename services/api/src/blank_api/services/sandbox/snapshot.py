@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -38,6 +39,15 @@ class SnapshotNotRestorable(RuntimeError):
         self.reason = reason or "这份快照只记录了文件清单，没有复制文件内容"
 
 
+def _digest(path: Path) -> str:
+    """整文件 sha256：只在尺寸相同、mtime 不同时调用，用来排除元数据误差。"""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _ignored(part: str) -> bool:
     """忽略口径与搜索共用一份（workspace.ignored_name），否则两处会各漏一半。"""
     return ignored_name(part) or part == ".git"
@@ -51,7 +61,10 @@ def _prune(directory: str, names: list[str]) -> set[str]:
     """
     dropped: set[str] = set()
     for name in names:
-        if name in TREE_IGNORE or name == ".git":
+        if name in TREE_IGNORE or name == ".git" or name.lower() in _SYSTEM_CACHE_ROOTS:
+            dropped.add(name)
+            continue
+        if os.path.join(directory, name).replace("\\", "/").lower().endswith(_SYSTEM_CACHE_SUFFIX):
             dropped.add(name)
             continue
         try:
@@ -61,6 +74,27 @@ def _prune(directory: str, names: list[str]) -> set[str]:
         if is_dir and _ignored(name):
             dropped.add(name)
     return dropped
+
+
+# 系统缓存副本不是模型在工作区里的交付物。T09 真机：模型跑
+# `dir /s /b "%SystemDrive%"` 超时后，工作区里留下了字面名
+# `%SystemDrive%/ProgramData/Microsoft/Windows/Caches/*.db`；快照把它们当
+# 工作区文件复制、评分把它们算成"多余改动"，minimal 直接归零。
+# 只认系统盘根变量与 Windows 缓存目录这两个明确形状，不对普通文件名做猜测。
+_SYSTEM_CACHE_ROOTS = frozenset(
+    {"%systemdrive%", "%systemroot%", "%windir%", "$env:systemdrive", "$env:systemroot", "$env:windir"}
+)
+_SYSTEM_CACHE_SUFFIX = "programdata/microsoft/windows/caches"
+
+
+def _system_cache_path(relative: str) -> bool:
+    rel = str(relative or "").replace("\\", "/").strip().lower().lstrip("./")
+    if not rel:
+        return False
+    segments = [part for part in rel.split("/") if part]
+    if segments and segments[0] in _SYSTEM_CACHE_ROOTS:
+        return True
+    return _SYSTEM_CACHE_SUFFIX in rel
 
 
 class SnapshotStore:
@@ -135,14 +169,23 @@ class SnapshotStore:
         total = 0
         deadline = time.monotonic() + SCAN_BUDGET_SECONDS
         for directory, dirnames, filenames in os.walk(source):
-            dirnames[:] = sorted(name for name in dirnames if not _ignored(name))
+            parent = Path(directory)
+            dirnames[:] = sorted(
+                name
+                for name in dirnames
+                if not _ignored(name)
+                and name.lower() not in _SYSTEM_CACHE_ROOTS
+                and not (parent / name).as_posix().lower().endswith(_SYSTEM_CACHE_SUFFIX)
+            )
             for name in filenames:
                 if name in TREE_IGNORE:
                     continue
                 path = Path(directory) / name
                 try:
-                    total += path.stat().st_size
                     relative = path.relative_to(source)
+                    if _system_cache_path(str(relative)):
+                        continue
+                    total += path.stat().st_size
                 except (OSError, ValueError):
                     continue
                 files.append(str(relative).replace("\\", "/"))
@@ -157,6 +200,64 @@ class SnapshotStore:
         if not path.exists():
             raise FileNotFoundError(f"快照不存在：{snapshot_id}")
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def changed_since(self, snapshot_id: str, workspace: str) -> list[str]:
+        """相对快照的改动清单（新增 / 修改 / 删除，工作区相对路径）。
+
+        交付里的「改动：N 个文件」原先只读工具回执，shell 里复制/生成的文件
+        （``copy``、``python gen.py``）一条都不在，于是出现「结论说复制了 5 个、
+        改动只写 1 个」的自相矛盾。快照在动手前已拍过，这里直接对文件清单和
+        内容做一次比对；快照只留清单、没有副本时退化为只比新增/删除。
+
+        调用方负责放进线程：这会遍历工作区，同步调用会占住事件循环。
+        """
+        record = self.meta(snapshot_id)
+        # 只有「清单完整 + 有副本」时比对才可信：大工作区会截断扫描或只留清单，
+        # 拿截断清单当基线会把没扫到的文件全记成新增。
+        if not record.get("copied"):
+            return []
+        source = Path(workspace)
+        base = self.root / snapshot_id / "tree"
+        recorded = [
+            str(item).replace("\\", "/")
+            for item in record.get("files") or []
+            if not _system_cache_path(str(item))
+        ]
+        current, _, truncated = self._scan(source)
+        if truncated:
+            return []
+        current_set = set(current)
+        recorded_set = set(recorded)
+        changed: list[str] = []
+        for relative in current:
+            if relative not in recorded_set:
+                changed.append(relative)
+                continue
+            if not base.is_dir():
+                continue
+            new_path = source / relative
+            old_path = base / relative
+            try:
+                new_stat = new_path.stat()
+                old_stat = old_path.stat()
+            except OSError:
+                continue
+            if new_stat.st_size != old_stat.st_size:
+                changed.append(relative)
+                continue
+            if int(new_stat.st_mtime_ns) == int(old_stat.st_mtime_ns):
+                continue
+            # 大小相同、mtime 不同：copy2 的元数据精度在不同文件系统上会漂，
+            # 比一次内容才算数，避免把没改的文件记成改动。
+            try:
+                if _digest(new_path) != _digest(old_path):
+                    changed.append(relative)
+            except OSError:
+                changed.append(relative)
+        for relative in recorded:
+            if relative not in current_set:
+                changed.append(relative)
+        return [item for item in changed if not _system_cache_path(item)]
 
     def content(self, snapshot_id: str, relative: str) -> bytes:
         return (self.root / snapshot_id / "tree" / relative).read_bytes()

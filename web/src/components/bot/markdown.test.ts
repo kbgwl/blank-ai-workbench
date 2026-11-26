@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { parseInline, parseMarkdown } from "./markdown.ts";
+import { parseInline, parseMarkdown, safeLinkHref } from "./markdown.ts";
 
 test("行内的代码、粗体、链接各自成段，普通文字原样保留", () => {
   const spans = parseInline("先跑 `npm test`，**别跳过**，详见 [文档](https://x.dev/a)");
@@ -12,6 +12,23 @@ test("行内的代码、粗体、链接各自成段，普通文字原样保留",
   assert.equal(spans[1].kind === "code" && spans[1].text, "npm test");
   assert.equal(spans[3].kind === "bold" && spans[3].text, "别跳过");
   assert.equal(spans[5].kind === "link" && spans[5].href, "https://x.dev/a");
+});
+
+test("链接协议白名单：javascript:/data:/file: 一律不生成可点的链接", () => {
+  assert.equal(safeLinkHref("https://x.dev/a"), "https://x.dev/a");
+  assert.equal(safeLinkHref("HTTP://X.DEV"), "HTTP://X.DEV");
+  assert.equal(safeLinkHref("mailto:a@b.c"), "mailto:a@b.c");
+  assert.equal(safeLinkHref("/projects"), "/projects");
+  assert.equal(safeLinkHref("#section"), "#section");
+  for (const bad of [
+    "javascript:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "file:///C:/Windows/win.ini",
+    "//evil.example/x",
+    "/\\evil.example/x",
+  ]) {
+    assert.equal(safeLinkHref(bad), "", `${bad} 不该成为可点链接`);
+  }
 });
 
 test("代码块带语言，并且不把里面的星号当粗体", () => {

@@ -10,6 +10,7 @@ import {
   type MemoryCandidate,
 } from "@/components/skills/api";
 import { errorMessage } from "@/lib/http";
+import { readJson, writeJson } from "@/lib/safe-storage";
 
 export type Habit = { id: string; text: string; source: string; createdAt: string };
 const STORAGE_KEY = "blank.habits";
@@ -18,16 +19,13 @@ export { submitMemoryCandidate };
 export type { MemoryCandidate };
 
 export function readHabits(): Habit[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const value = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "[]") as unknown;
-    return Array.isArray(value) ? value.filter((item): item is Habit => Boolean(item) && typeof item === "object" && typeof (item as Habit).text === "string") : [];
-  } catch { return []; }
+  const value = readJson<unknown>(STORAGE_KEY, []);
+  return Array.isArray(value) ? value.filter((item): item is Habit => Boolean(item) && typeof item === "object" && typeof (item as Habit).text === "string") : [];
 }
 
 export function useHabits() {
   const [habits, setHabits] = useState<Habit[]>(readHabits);
-  const save = useCallback((next: Habit[]) => { setHabits(next); window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); }, []);
+  const save = useCallback((next: Habit[]) => { setHabits(next); writeJson(STORAGE_KEY, next); }, []);
   const remember = useCallback((text: string, source = "日常记录") => {
     const value = text.trim();
     if (!value) return;

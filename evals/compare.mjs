@@ -31,12 +31,25 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 // .blank_backups（下划线）是应用自己的可回滚备份目录，不是 agent 的产出，
 // 算进"最小改动"会让每次正经改动都被扣分。
-const IGNORED_DIRS = new Set(["node_modules", ".git", ".blank_backups", ".blank-backups", ".pytest_cache", "__pycache__", ".venv", "dist"]);
+// `.blank` 是本产品自己的闭包/工具回执目录，不是 agent 的交付物；
+// 不忽略会把我们自己的记账文件算成“多余改动”，无端扣最小改动分。
+const IGNORED_DIRS = new Set(["node_modules", ".git", ".blank", ".blank_backups", ".blank-backups", ".pytest_cache", "__pycache__", ".venv", "dist"]);
+// 系统缓存副本不是 agent 的交付物：T09 真机在工作区里留下过字面名
+// %SystemDrive%/ProgramData/Microsoft/Windows/Caches/*.db，评分把它们算成
+// "多余改动"，minimal 直接归零。系统盘根变量与 Windows 缓存目录一律不计。
+const SYSTEM_PATH = /^(?:%systemdrive%|%systemroot%|%windir%|\$env:(?:systemdrive|systemroot|windir))(?:\/|$)/i;
+function isSystemPath(rel) {
+  const text = String(rel || "").replaceAll("\\", "/");
+  return SYSTEM_PATH.test(text) || text.toLowerCase().includes("/programdata/microsoft/windows/caches/");
+}
 const TERMINAL = new Set(["succeeded", "failed", "cancelled", "paused"]);
 const PY = path.join(ROOT, "services", "api", ".venv", "Scripts", "python.exe");
 // 竞品 CLI 的安装位置。这台机器上都在 E:\env\bin（不是默认 npm 全局目录），
 // 而 cmd 不认 POSIX 形式的 PATH 项，所以这里直接拼绝对路径，别指望 PATH。
 const CLI_DIR = process.env.BLANK_CLI_DIR ?? "E:\\env\\bin";
+// 工作区放在仓库外：Claude/Codex 会向上找 CLAUDE.md / AGENTS.md，放在
+// evals/workspaces 里会把本项目的交付合同读进 fixture，比的就不是同一道题了。
+const WORKSPACE_ROOT = process.env.BLANK_BENCH_WORKSPACES ?? path.join(path.dirname(ROOT), "_bench_workspaces");
 
 function cli(name) {
   for (const candidate of [`${name}.cmd`, name]) {
@@ -110,7 +123,10 @@ function snapshotTree(dir, base = dir, out = new Map()) {
     if (IGNORED_DIRS.has(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) snapshotTree(full, base, out);
-    else if (statSync(full).size < 2_000_000) out.set(path.relative(base, full).replaceAll("\\", "/"), readFileSync(full));
+    else if (statSync(full).size < 2_000_000) {
+      const rel = path.relative(base, full).replaceAll("\\", "/");
+      if (!isSystemPath(rel)) out.set(rel, readFileSync(full));
+    }
   }
   return out;
 }
@@ -125,6 +141,11 @@ function changedFiles(before, after) {
   for (const rel of before.keys()) if (!after.has(rel)) changed.push(rel);
   return changed.sort();
 }
+
+// 校验进程固定 UTF-8：agent 的 run_tests 用 PYTHONIOENCODING=utf-8 跑子进程，
+// 校验若沿用中文 Windows 的 GBK 默认编码，会用「子进程输出解码失败」把一份
+// 自验全绿的交付判红（真机 T09 实测：6 passed 的测试在校验机上 2 failed）。
+const PYTHON_UTF8_ENV = { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" };
 
 function runCommand(command, cwd, timeoutMs, env = {}) {
   return new Promise((resolve) => {
@@ -225,7 +246,9 @@ async function runOurs(sample, workspace, args) {
 async function runClaude(sample, workspace, args) {
   const started = Date.now();
   const result = await runCommand(
-    `${cli("claude")} -p "${escapeShell(sample.prompt)}" --output-format json --permission-mode bypassPermissions`,
+    // --safe-mode 关掉用户级 CLAUDE.md / skills / hooks，避免把本机交付合同
+    // 带进 fixture；权限仍由 bypassPermissions 放行，和 ours/codex 同口径。
+    `${cli("claude")} -p "${escapeShell(sample.prompt)}" --output-format json --permission-mode bypassPermissions --safe-mode`,
     workspace,
     args.timeout * 1000,
   );
@@ -273,8 +296,13 @@ async function runClaude(sample, workspace, args) {
 
 async function runCodex(sample, workspace, args) {
   const started = Date.now();
+  // 非交互 exec 必须显式给可写沙箱：默认策略可能落在 read-only，题目要求写文件时
+  // 会把「不能写」误判成能力差。工作区本来就是一次性 fixture；这台机器的
+  // workspace-write 偶尔会让 apply_patch/子进程起不来，需要时可切 full：
+  // BLANK_CODEX_SANDBOX=danger-full-access。
+  const sandbox = process.env.BLANK_CODEX_SANDBOX ?? "workspace-write";
   const result = await runCommand(
-    `${cli("codex")} exec --json --skip-git-repo-check -C "${workspace}" "${escapeShell(sample.prompt)}" < nul`,
+    `${cli("codex")} exec --json --skip-git-repo-check -s ${sandbox} -C "${workspace}" "${escapeShell(sample.prompt)}" < nul`,
     workspace,
     args.timeout * 1000,
   );
@@ -283,6 +311,7 @@ async function runCodex(sample, workspace, args) {
   let tokens = 0;
   let turns = 0;
   let lastText = "";
+  const commands = [];
   for (const line of lines) {
     try {
       const event = JSON.parse(line);
@@ -291,19 +320,31 @@ async function runCodex(sample, workspace, args) {
         tokens = Number(usage.input_tokens ?? 0) + Number(usage.output_tokens ?? 0);
         turns = Number(usage.input_tokens ? turns + 1 : turns);
       }
-      if (event.type === "item.completed" && event.item?.text) lastText = event.item.text;
+      const item = event.item;
+      if (event.type === "item.completed" && item?.type === "agent_message" && item.text) lastText = item.text;
+      if (event.type === "item.completed" && item?.type === "command_execution" && item.command) {
+        commands.push(String(item.command));
+      }
     } catch {
       /* 非 JSON 行（横幅、警告）忽略 */
     }
   }
-  const unavailable = /unavailable|404 Not Found|Reconnecting/.test(result.stderr || result.stdout);
+  // stderr 只要有一行“Reading additional input from stdin...”就非空，不能用
+  // `stderr || stdout` 二选一；模型 404/402 通常在 stdout 的 JSON 事件里。
+  const combined = `${result.stderr || ""}\n${result.stdout || ""}`;
+  // 只把“模型/账号不可用”算 unavailable；一次 Reconnecting 后恢复成功的运行
+  // 仍然有效，不能因为出现过重连就把整题排除。
+  const unavailable = /unavailable|404 Not Found|402 Payment Required/i.test(combined);
+  const verify = String(sample.verify ?? "").split(" ")[0];
   return {
-    status: unavailable ? "unavailable" : tokens > 0 ? "succeeded" : "error",
+    status: unavailable ? "unavailable" : result.timedOut ? "timeout" : result.code === 0 ? "succeeded" : "error",
     tokens,
     turns,
     model: "codex-cli",
-    selfVerified: false,
-    transcript: (lastText || result.stderr || result.stdout).slice(0, 400),
+    // 只认它自己真的执行过的命令；没跑过验证就不给自证分。
+    selfVerified: Boolean(verify) && commands.some((command) => command.includes(verify)),
+    transcript: (lastText || combined).slice(0, 400),
+    commands,
     tools: [],
     wallMs,
     unavailable,
@@ -327,10 +368,13 @@ function score(record, sample, cheapestTokens) {
   // 这类必须给 0，否则"什么都不做"会拿到 60 分。
   const tests = record.verifyOk && record.changed.length > 0 ? 1 : 0;
   const expected = sample.expect_files ?? [];
+  // `tests/` 这种目录级期望要按前缀算命中；否则新增 tests/test_daily.py 会被
+  // 同时判成「没命中」和「多余改动」，正确交付反而被扣两次分。
+  const matches = (rel, changed) => (rel.endsWith("/") ? changed.some((item) => item.startsWith(rel)) : changed.includes(rel));
   const hit = expected.length
-    ? expected.filter((rel) => record.changed.includes(rel)).length / expected.length
+    ? expected.filter((rel) => matches(rel, record.changed)).length / expected.length
     : 1;
-  const extra = record.changed.filter((rel) => !expected.includes(rel)).length;
+  const extra = record.changed.filter((rel) => !expected.some((want) => matches(want, [rel]))).length;
   const minimal = extra === 0 ? 1 : extra === 1 ? 0.6 : extra === 2 ? 0.3 : 0;
   const self = record.selfVerified ? 1 : 0;
   const cost = record.tokens > 0 && cheapestTokens > 0 ? Math.min(1, cheapestTokens / record.tokens) : 0;
@@ -413,7 +457,7 @@ async function main() {
     for (const agent of args.agents) {
       const runner = RUNNERS[agent];
       if (!runner) throw new Error(`未知 agent：${agent}（可选 ${Object.keys(RUNNERS).join(", ")}）`);
-      const workspace = path.join(ROOT, "evals", "workspaces", `bench-${sample.id}-${agent}`);
+      const workspace = path.join(WORKSPACE_ROOT, `bench-${sample.id}-${agent}`);
       buildWorkspace(catalog.fixtures[sample.fixture], workspace);
       const before = snapshotTree(workspace);
       if (agent === args.agents[0]) {
@@ -421,7 +465,9 @@ async function main() {
         // 就是绿的（任务要求的是新增能力 + 新增测试），所以这个值只用于解释分数，
         // 不作为跳过条件——真正的区分在"有没有动到该动的文件"。
         const command = verifyCommand(sample);
-        const baseline = command ? await runCommand(command, workspace, 180_000) : { code: 1 };
+        const baseline = command
+          ? await runCommand(command, workspace, 180_000, PYTHON_UTF8_ENV)
+          : { code: 1 };
         row.baselineOk = baseline.code === 0;
       }
       process.stdout.write(`  ${sample.id} / ${agent} … `);
@@ -433,16 +479,32 @@ async function main() {
       }
       const after = snapshotTree(workspace);
       record.changed = changedFiles(before, after);
-      // 验证命令由我们（而不是 agent）跑：它自己说"全绿"不算数。
+      // 验收由我们（而不是 agent）跑：它自己说"全绿"不算数。样例可以带
+      // hidden_files（agent 看不到的验收测试）与 checks（验收命令）；有 checks
+      // 时以它为准，避免"只改 README 但既有测试本来就绿"也能拿正确性满分。
+      for (const [rel, content] of Object.entries(sample.hidden_files ?? {})) {
+        const file = path.join(workspace, rel);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, content, "utf8");
+      }
       const command = verifyCommand(sample);
-      if (command && record.status !== "unavailable") {
-        const verified = await runCommand(command, workspace, 180_000);
-        record.verifyOk = verified.code === 0;
-        record.verifyOutput = (verified.stdout || verified.stderr).slice(-600);
+      const checks = Array.isArray(sample.checks) && sample.checks.length
+        ? sample.checks.map((check) => verifyCommand({ verify: check }))
+        : command
+          ? [command]
+          : [];
+      record.checkResults = [];
+      if (checks.length && record.status !== "unavailable") {
+        for (const check of checks) {
+          const verified = await runCommand(check, workspace, 180_000, PYTHON_UTF8_ENV);
+          record.checkResults.push({ command: check, code: verified.code, output: (verified.stdout || verified.stderr).slice(-600) });
+        }
+        record.verifyOk = record.checkResults.every((item) => item.code === 0);
+        record.verifyOutput = record.checkResults.map((item) => item.output).join("\n").slice(-600);
       } else {
         record.verifyOk = false;
       }
-      record.verifyCommand = command ?? "";
+      record.verifyCommand = checks.join(" && ");
       row.runs[agent] = record;
       console.log(`分 ${record.tokens ? "" : ""}${record.verifyOk ? "测试通过" : "测试未过"} · ${fmtTokens(record.tokens)} token · ${record.changed.length} 个文件改动`);
       if (!args.keep) safeRemove(workspace);

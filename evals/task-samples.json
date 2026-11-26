@@ -48,7 +48,7 @@
       "README.md": "# broken-lib\n\n这个库的测试当前是失败的，需要修复。\n",
       "package.json": "{\n  \"name\": \"broken-lib\",\n  \"version\": \"0.1.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"node --test\"\n  }\n}\n",
       "src/mathy.js": "export function average(values) {\n  return sum(values) / values.length;\n}\n\nfunction sum(values) {\n  let acc = 0;\n  for (const v of values) acc += v;\n  return acc;\n}\n\nexport function pct(value, base) {\n  return (value / base) * 100;\n}\n",
-      "src/index.js": "export { average } from \"./mathy.js\";\nexport { pct as percent } from \"./mathy.js\";\n",
+      "src/index.js": "export { average } from \"./mathy.js\";\nexport { pct as percent } from \"./mathy\";\n",
       "test/mathy.test.js": "import test from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport { average, pct } from \"../src/mathy.js\";\n\ntest(\"average\", () => assert.equal(average([2, 4]), 3));\ntest(\"pct\", () => assert.equal(pct(1, 4), 25));\n",
       "test/index.test.js": "import test from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport * as api from \"../src/index.js\";\n\ntest(\"exports exist\", () => {\n  assert.equal(typeof api.average, \"function\");\n  assert.equal(typeof api.percent, \"function\");\n});\n"
     },
@@ -73,7 +73,7 @@
       "category": "新增功能",
       "fixture": "py-clib",
       "title": "为文本工具增加 truncate 函数",
-      "prompt": "在 src/cli_tools/text.py 增加 truncate(value: str, limit: int) -> str：超过 limit 时截断并追加省略号，未超过时原样返回。补单元测试。",
+      "prompt": "在 src/cli_tools/text.py 增加 truncate(value: str, limit: int) -> str：长度超过 limit 时保留前 limit 个字符并追加一个省略号 …（结果长度为 limit+1），未超过时原样返回；空串原样返回，limit<=0 时非空串返回 …。补单元测试。",
       "acceptance": [
         "truncate 存在且处理空串不报错",
         "超过长度返回以 … 结尾的字符串",
@@ -84,7 +84,13 @@
       "risk": "low",
       "expect_files": [
         "src/cli_tools/text.py",
-        "tests/test_text.py"
+        "tests/"
+      ],
+      "hidden_files": {
+        "tests/test_hidden_truncate.py": "from cli_tools.text import truncate\n\n\ndef test_short_string_unchanged():\n    assert truncate(\"abc\", 3) == \"abc\"\n    assert truncate(\"abc\", 10) == \"abc\"\n\n\ndef test_empty_string():\n    assert truncate(\"\", 0) == \"\"\n    assert truncate(\"\", 5) == \"\"\n\n\ndef test_long_string():\n    assert truncate(\"abcdef\", 3) == \"abc…\"\n    assert truncate(\"abcdef\", 0) == \"…\"\n"
+      },
+      "checks": [
+        "python -m pytest -q"
       ]
     },
     {
@@ -121,6 +127,12 @@
       "risk": "low",
       "expect_files": [
         "src/index.js"
+      ],
+      "hidden_files": {
+        "test/hidden-index.test.mjs": "import test from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport * as api from \"../src/index.js\";\n\ntest(\"hidden: index exports\", () => {\n  assert.equal(typeof api.average, \"function\");\n  assert.equal(typeof api.percent, \"function\");\n  assert.equal(api.percent(1, 4), 25);\n});\n"
+      },
+      "checks": [
+        "node --test"
       ]
     },
     {
@@ -183,7 +195,7 @@
       "category": "数据处理",
       "fixture": "data-pipeline",
       "title": "从 CSV 生成日报汇总",
-      "prompt": "增加 metrics/daily.py，读取 data/sales.csv 输出每天与总计的 summarize 结果，字段包含 count/total/avg，并补测试。",
+      "prompt": "增加 metrics/daily.py，提供 summarize(path: Path) -> dict：读取 CSV（列 day,amount），返回 {\"days\": {日期: {\"count\",\"total\",\"avg\"}}, \"total\": {\"count\",\"total\",\"avg\"}}；avg 为保留两位小数的 float。补测试。",
       "acceptance": [
         "能读取 fixture CSV",
         "输出包含 3 天与总计",
@@ -195,6 +207,12 @@
       "expect_files": [
         "metrics/daily.py",
         "tests/"
+      ],
+      "hidden_files": {
+        "tests/test_hidden_daily.py": "from pathlib import Path\n\nfrom metrics.daily import summarize\n\n\ndef test_daily_summary_reads_csv():\n    result = summarize(Path(\"data/sales.csv\"))\n    assert set(result[\"days\"]) == {\"2026-01-01\", \"2026-01-02\", \"2026-01-03\"}\n    assert result[\"days\"][\"2026-01-01\"] == {\"count\": 1, \"total\": 10, \"avg\": 10.0}\n    assert result[\"days\"][\"2026-01-03\"][\"avg\"] == 30.0\n    assert result[\"total\"] == {\"count\": 3, \"total\": 60, \"avg\": 20.0}\n"
+      },
+      "checks": [
+        "python -m pytest -q"
       ]
     },
     {
@@ -230,7 +248,7 @@
       "verify": "python -m pytest -q",
       "risk": "low",
       "expect_files": [
-        "tools/links.py",
+        "tools/",
         "tests/"
       ]
     },
@@ -501,7 +519,7 @@
       "category": "文档",
       "fixture": "py-clib",
       "title": "README 增加用法示例",
-      "prompt": "在 README 增加每个公开函数的中文用法示例与输出，不改动源码。",
+      "prompt": "在 README 增加 slugify / word_count / parse_minutes 三个公开函数的中文用法示例与输出（每个示例用代码块，至少包含 slugify(\"Hello Wide World\") 返回 \"hello-wide-world\"、word_count(\"a b c\") 返回 3、parse_minutes(\"90\") 返回 90），不改动源码。",
       "acceptance": [
         "每个函数有示例",
         "示例与实际输出一致",
@@ -511,6 +529,12 @@
       "risk": "low",
       "expect_files": [
         "README.md"
+      ],
+      "hidden_files": {
+        "tests/test_hidden_readme.py": "from pathlib import Path\n\n\ndef test_readme_has_chinese_usage_examples():\n    text = Path(\"README.md\").read_text(encoding=\"utf-8\")\n    for name in (\"slugify\", \"word_count\", \"parse_minutes\"):\n        assert name in text\n    assert \"hello-wide-world\" in text\n    assert \"90\" in text\n    assert text.count(\"```\") >= 6\n"
+      },
+      "checks": [
+        "python -m pytest -q"
       ]
     },
     {

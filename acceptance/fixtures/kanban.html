@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>任务看板 · 验收夹具</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 24px; color: #222; }
+  .board { display: flex; gap: 16px; }
+  .column { flex: 1; min-height: 200px; border: 1px solid #ddd; border-radius: 6px; padding: 12px; }
+  .column h2 { font-size: 15px; margin: 0 0 12px; }
+  .task-list { min-height: 120px; }
+  .task-item { background: #f4f7ff; border: 1px solid #ccd6f5; border-radius: 4px; padding: 8px; margin-bottom: 8px; cursor: grab; }
+  .empty-hint { color: #999; }
+  form { margin-bottom: 16px; }
+  #filter { margin-left: 12px; }
+</style>
+</head>
+<body>
+<h1>任务看板</h1>
+<form id="add-form">
+  <input id="new-task" placeholder="新任务" autocomplete="off">
+  <button type="submit">添加</button>
+  <input id="filter" placeholder="过滤" autocomplete="off">
+</form>
+<div class="board">
+  <section class="column" data-status="todo"><h2>待办</h2><div class="task-list"></div><p class="empty-hint" hidden>暂无任务</p></section>
+  <section class="column" data-status="doing"><h2>进行中</h2><div class="task-list"></div><p class="empty-hint" hidden>暂无任务</p></section>
+  <section class="column" data-status="done"><h2>已完成</h2><div class="task-list"></div><p class="empty-hint" hidden>暂无任务</p></section>
+</div>
+<script>
+(function () {
+  var KEY = "kanban-acceptance-tasks";
+  var seed = [
+    { id: "s1", title: "写周报", status: "todo" },
+    { id: "s2", title: "评审设计稿", status: "todo" },
+    { id: "s3", title: "修登录缺陷", status: "doing" }
+  ];
+  var saved;
+  try { saved = JSON.parse(sessionStorage.getItem(KEY) || "null"); } catch (e) { saved = null; }
+  var tasks = Array.isArray(saved) && saved.length ? saved : seed;
+  var seq = tasks.length + 1;
+  var filterText = "";
+
+  function persist() {
+    try { sessionStorage.setItem(KEY, JSON.stringify(tasks)); } catch (e) {}
+  }
+  function render() {
+    document.querySelectorAll(".column").forEach(function (col) {
+      var list = col.querySelector(".task-list");
+      list.innerHTML = "";
+      var empty = col.querySelector(".empty-hint");
+      var shown = tasks.filter(function (t) {
+        return t.status === col.dataset.status && t.title.indexOf(filterText) !== -1;
+      });
+      shown.forEach(function (t) {
+        var el = document.createElement("div");
+        el.className = "task-item";
+        el.dataset.status = t.status;
+        el.dataset.id = t.id;
+        el.draggable = true;
+        el.textContent = t.title;
+        el.addEventListener("dragstart", function (ev) {
+          ev.dataTransfer.setData("text/plain", t.id);
+          ev.dataTransfer.effectAllowed = "move";
+        });
+        list.appendChild(el);
+      });
+      empty.hidden = shown.length > 0;
+    });
+  }
+
+  document.getElementById("add-form").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var input = document.getElementById("new-task");
+    var title = input.value.trim();
+    if (!title) return;
+    tasks.push({ id: "t" + (seq++), title: title, status: "todo" });
+    input.value = "";
+    filterText = "";
+    document.getElementById("filter").value = "";
+    persist();
+    render();
+  });
+
+  document.getElementById("filter").addEventListener("input", function (ev) {
+    filterText = ev.target.value;
+    render();
+  });
+
+  document.querySelectorAll(".column").forEach(function (col) {
+    var list = col.querySelector(".task-list");
+    list.addEventListener("dragover", function (ev) { ev.preventDefault(); });
+    list.addEventListener("drop", function (ev) {
+      ev.preventDefault();
+      var id = ev.dataTransfer.getData("text/plain");
+      var task = tasks.filter(function (t) { return t.id === id; })[0];
+      if (!task) return;
+      task.status = col.dataset.status;
+      filterText = "";
+      document.getElementById("filter").value = "";
+      persist();
+      render();
+    });
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

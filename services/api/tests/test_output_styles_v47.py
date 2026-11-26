@@ -326,11 +326,17 @@ def test_default_composition_is_byte_identical_to_the_old_prompt() -> None:
     # 哈希会随提示词的有意扩充而变（本批加入 OWASP/输出编码、scratchpad，
     # Claude Doing tasks 段的最少代码与 UI 真跑规则、玻璃题的四条前端纪律，
     # 事故台题的五条前端纪律，玻璃题第二轮的五条，以及运维控制台题的六条前端纪律，
-    # v401 再加 Codex 的授权持久/审批后置两条与写作铁律五条）；
+    # v401 再加 Codex 的授权持久/审批后置两条与写作铁律五条；
+    # 2026-11-21 再加前端反 AI 模板三条与后端安全底线三条，以及「前端不跑
+    # browser_check 会被验证节点拦截」一句；2026-11-22 B4 再加清单必须纵向
+    # 列表一条，并允许用户明确要清单时复述文件/目录；B8 再加“页面必须自带
+    # favicon，否则 /favicon.ico 404 会被浏览器闸门算成控制台错误”）；
+    # v5 1c 再加“列目录后一轮读完、样例与实现同轮写、验证合并成一条命令、
+    # 验证出结果后不再读文件复核、update_plan 不单独占一轮、简单任务 12 轮预算”；
     # 它钉的是「默认组合就是 SYSTEM_PROMPT + STYLE_PROMPT，没有别处再拼一遍」。
     assert (
         hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()
-        == "6da2a4eb503381d6493854548f6c6b5e466962b65389ed8e8dc38c895bc10b1e"
+        == "6c8ff6af3c7857bafbc96543c68f9d1f7742ebadc457176855f5d323bf96314c"
     )
     # 空正文的样式与没选样式等价：不能因为选中了一个空文件就把纪律句弄丢。
     assert compose_system_prompt({"name": "x", "prompt": "  ", "keep_coding_instructions": False}) == baseline

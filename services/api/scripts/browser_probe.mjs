@@ -29,6 +29,10 @@ const URL_ARG = opt("url");
 const SHOT = opt("shot");
 const WAIT_MS = Number(opt("wait", "800"));
 const TIMEOUT_MS = Number(opt("timeout", "20000"));
+// 点击/输入/按键之后先让页面喘一口气：真实页面的分析/聊天几乎都是异步请求，
+// 模型写的 steps 很容易"点完立刻断言"；browser_check 不应该靠模型记得每一步
+// 都补 wait。默认 600ms，可用 --settle 覆盖。
+const SETTLE_MS = Math.max(0, Number(opt("settle", "600")));
 const VIEWPORT = opt("viewport", "1280x800");
 const EXPECT = argv.reduce((acc, item, i) => {
   if (item === "--expect") acc.push(argv[i + 1]);
@@ -172,6 +176,9 @@ async function centerOf(client, selector) {
     `(() => {
       const el = document.querySelector(${JSON.stringify(selector)});
       if (!el) return null;
+      // 长页面上的按钮常常在首屏之外；不先滚进视口，CDP 的点击坐标会落在
+      // 视口外或错误元素上，表现为“动作通过、断言仍为 0”。先滚到中间再取坐标。
+      el.scrollIntoView({ block: "center", inline: "center" });
       const r = el.getBoundingClientRect();
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     })()`,
@@ -221,10 +228,22 @@ async function runSteps(client, steps) {
     const rec = { index: i + 1, do: action, text: String(step.text || ""), ok: true, actual: null };
     try {
       if (action === "assert") {
-        const value = await pageEval(client, String(step.expr || "false"));
         const min = step.min === undefined ? null : Number(step.min);
-        rec.ok = min === null ? Boolean(value) : Number(value) >= min;
-        rec.actual = value;
+        // 与工具 schema 对齐：assert 也支持 {selector, min} 统计匹配元素数量。
+        // 之前只读 expr，模型写 selector+min 时永远按 false 处理，误报整页失败。
+        if (step.selector && !step.expr) {
+          const count = await pageEval(
+            client,
+            `document.querySelectorAll(${JSON.stringify(String(step.selector))}).length`,
+          );
+          const target = min === null ? 1 : min;
+          rec.ok = Number(count) >= target;
+          rec.actual = count;
+        } else {
+          const value = await pageEval(client, String(step.expr || "false"));
+          rec.ok = min === null ? Boolean(value) : Number(value) >= min;
+          rec.actual = value;
+        }
       } else if (action === "eval") {
         // 只跑不留判：用来记基准值（window.__x = ...），后面的断言就能写成
         // "比刚才多 1 张"而不是"等于 4 张"——绝对数字会把用例焊死在初始状态上。
@@ -232,21 +251,25 @@ async function runSteps(client, steps) {
       } else if (action === "click") {
         const at = await centerOf(client, String(step.selector || ""));
         await clickAt(client, at.x, at.y);
+        if (SETTLE_MS) await sleep(SETTLE_MS);
         rec.actual = "已点击";
       } else if (action === "type") {
         const at = await centerOf(client, String(step.selector || ""));
         await clickAt(client, at.x, at.y);
         await client.send("Input.insertText", { text: String(step.value ?? "") });
+        if (SETTLE_MS) await sleep(SETTLE_MS);
         rec.actual = String(step.value ?? "");
       } else if (action === "press") {
         const key = String(step.key || "Enter");
         const code = key === "Enter" ? 13 : key === "Tab" ? 9 : key === "Escape" ? 27 : 0;
         await client.send("Input.dispatchKeyEvent", { type: "keyDown", key, code: key, windowsVirtualKeyCode: code });
         await client.send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key, windowsVirtualKeyCode: code });
+        if (SETTLE_MS) await sleep(SETTLE_MS);
         rec.actual = key;
       } else if (action === "drag") {
         const problem = await dragBetween(client, String(step.from || ""), String(step.to || ""));
         rec.ok = !problem;
+        if (SETTLE_MS) await sleep(SETTLE_MS);
         rec.actual = problem || "已拖放";
       } else if (action === "reload") {
         await client.send("Page.reload", {});

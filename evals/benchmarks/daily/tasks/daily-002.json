@@ -1,0 +1,14 @@
+{
+  "id": "daily-002",
+  "category": "daily_document",
+  "workspace": "fixture",
+  "scenario": "daily",
+  "goal": "在当前目录创建 项目说明.docx，用 python-docx 生成：大标题「数据智能分析平台」，正文包含三节小标题：背景、目标、里程碑；每节至少 30 个汉字。写完后用 python 读回该文件确认能打开。",
+  "acceptance": [
+    "项目说明.docx 能被 python-docx 打开",
+    "标题与三节小标题齐全，正文内容够量"
+  ],
+  "expectedFiles": ["项目说明.docx"],
+  "testCommand": "python -X utf8 -m pytest -q test_check.py",
+  "expectedStatus": "succeeded"
+}

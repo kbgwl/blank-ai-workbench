@@ -37,6 +37,7 @@ from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
     create_provider,
     create_task,
     env,
+    settle,
 )
 
 RULE_INLINE = ("python", "-c", "print(1)")
@@ -290,7 +291,8 @@ async def test_prefix_grant_persists_and_a_new_task_auto_approves(env, workspace
         f"{API}/tasks/{first_task}/approval",
         json={"approve": True, "provider_id": provider_id, "scope": SCOPE_PREFIX},
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
+    await settle()
 
     events = (await env.client.get(f"{API}/tasks/{first_task}/events")).json()
     persisted = _persisted_events(events)
@@ -350,7 +352,8 @@ async def test_tool_scope_is_never_persisted(env, workspace: Path):  # noqa: F81
         f"{API}/tasks/{task_id}/approval",
         json={"approve": True, "provider_id": provider_id, "scope": SCOPE_TOOL},
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
+    await settle()
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
     assert _persisted_events(events) == []

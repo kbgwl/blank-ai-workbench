@@ -48,6 +48,13 @@ MINIMAL_KEYS = (
     "PYTHONPATH",
     "NODE_OPTIONS",
     "VIRTUAL_ENV",
+    # 国内包镜像与开关：用户显式配过的镜像必须能穿过 allowlist，
+    # 否则会被"补默认值"覆盖成清华源（见 apply_domestic_mirrors）。
+    "PIP_INDEX_URL",
+    "UV_INDEX_URL",
+    "UV_DEFAULT_INDEX",
+    "npm_config_registry",
+    "BLANK_DOMESTIC_MIRRORS",
 )
 
 # strict：只要 PATH 与语言运行时必需项，不继承任何用户自定义变量。
@@ -102,6 +109,35 @@ def filter_env(env: dict[str, str], *, policy: str = POLICY_MINIMAL) -> dict[str
     }
 
 
+# 国内包镜像：pip / uv / npm 默认走境内源，装包不再卡在 pypi.org。
+# 只补**缺省值**——用户或运维显式设置过的变量一律不动；BLANK_DOMESTIC_MIRRORS=0 可关闭。
+# 这是"适配国内应用"的一部分：子进程里的包管理器不开箱即用，任务第一步就会超时。
+DOMESTIC_MIRRORS = {
+    "PIP_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple",
+    "UV_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple",
+    "UV_DEFAULT_INDEX": "https://pypi.tuna.tsinghua.edu.cn/simple",
+    "npm_config_registry": "https://registry.npmmirror.com",
+}
+
+
+def domestic_mirrors_enabled(env: dict[str, str] | None = None) -> bool:
+    raw = str((env or os.environ).get("BLANK_DOMESTIC_MIRRORS") or "1").strip().lower()
+    return raw not in ("0", "false", "off", "no")
+
+
+def apply_domestic_mirrors(env: dict[str, str], *, enabled: bool | None = None) -> dict[str, str]:
+    """给子进程补国内包镜像；已有值不覆盖，显式关闭时原样返回。"""
+    if enabled is None:
+        enabled = domestic_mirrors_enabled(env)
+    if not enabled:
+        return env
+    out = dict(env)
+    for key, value in DOMESTIC_MIRRORS.items():
+        if not out.get(key):
+            out[key] = value
+    return out
+
+
 def detect_venv(root: Path) -> str:
     """Return the interpreter path of a project virtualenv, or ''."""
     for relative in (
@@ -150,6 +186,7 @@ class ShellSnapshot:
         env = dict(self.env)
         if chosen != self.policy:
             env = filter_env({**self.env, **os.environ}, policy=chosen)
+            env = apply_domestic_mirrors(env, enabled=domestic_mirrors_enabled())
         return env
 
     def as_dict(self) -> dict:
@@ -185,6 +222,7 @@ def capture(
     workspace = Path(root).resolve()
     venv = detect_venv(workspace)
     filtered = filter_env(source, policy=chosen)
+    filtered = apply_domestic_mirrors(filtered, enabled=domestic_mirrors_enabled(source))
 
     pinned = False
     bindir = venv_bin_dir(venv)

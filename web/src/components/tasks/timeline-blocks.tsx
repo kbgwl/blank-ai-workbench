@@ -24,7 +24,7 @@ import { ReplyView } from "./reply";
 import { describeTool, type ToolFact } from "./tool-display";
 import type { Block, TermLine } from "./timeline";
 import { hopCopy, hopLine, hopRepeat } from "./transition-copy";
-import { approvalGrantOptions, type AnswerValues, type ApprovalScope } from "./api";
+import { approvalGrantOptions, type AnswerValues } from "./api";
 import { groupByMilestone, statusLabel, statusMark } from "./plan";
 import { BlockIcon } from "./bits";
 
@@ -677,7 +677,7 @@ function ApprovalCard({
         .filter((option) => option.warning)
         .map((option) => (
           <p key={option.scope} className="mt-1.5 text-[12px] leading-relaxed text-muted">
-            {option.scope === "tool" ? "工具档：" : "本会话档："}
+            {option.scope === "tool" ? "工具档：" : option.scope === "session" ? "会话档：" : "命令档："}
             {option.warning}
           </p>
         ))}

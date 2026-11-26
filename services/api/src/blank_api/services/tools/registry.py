@@ -116,6 +116,12 @@ DEFERRED_TOOLS = frozenset(
         "team_add_member",
         "team_remove_member",
         "team_assign_task",
+        # Skill 市场与提案：只有用户明确要装技能、找技能或沉淀做法时才用；
+        # 普通编程任务不必每轮背这近 2k 字符的 schema，tool_search 能拉回来。
+        "propose_skills",
+        "find_skills",
+        "install_market_skill",
+        "list_curated_skills",
         # 任务台账 / notebook / REPL / report_findings 刻意**不**收进来：
         # 它们各自有测试钉着「常驻但不算核心」（不在 CORE、但在 full 视图里可见）。
         # 那是有意的产品判断——report_findings 藏在 tool_search 后面，模型就不会
@@ -134,13 +140,46 @@ DEFERRED_TOOLS = frozenset(
 # （report_findings 藏在 tool_search 后面，模型交付时就不会用它）。
 # 现在只收 cron 与团队两族（1,735 + 1,685 字符）：可见 44→34、25,355→21,935 字符。
 # 留 22,500 的余量：新增工具要能被看见，但每加一个都得先想清楚它配不配常驻。
+# B10 给 browser_check 增加 settle_ms（动作后自动等待）约 +100 字符；
+# 这是交付可靠性的一部分，预算调到 22,700，仍低于收敛前的 25,355。
+# v4 1a（2026-11-25）：Skill 市场四工具改为按需，并压缩 run_shell /
+# request_user_input / search_code / edit_file / update_plan / set_goal /
+# task_update / propose_skills / report_findings 的重复文案；可见 34→30、
+# 22,694→约 19,457 字符。预算跟着收到 20,000，新增常驻工具仍要单独论证。
 # 判据见 `tests/test_tool_budget_v427.py`，超了会红。
-SCHEMA_BUDGET_CHARS = 22_500
+SCHEMA_BUDGET_CHARS = 20_000
 
 # 外部工具的命名空间前缀（MCP）。它们数量不固定、schema 由别人的服务端决定，
 # 一律先收着，靠 tool_search 拉——否则接三个服务端就能把每轮的提示词撑爆，
 # 而且下面的"未登记的默认常驻"规则会静默把它们全放进来。
 DEFERRED_PREFIXES = ("mcp__",)
+
+# 文档-only 任务不需要的入口：任务台账、子代理、技能发现、浏览器、notebook/REPL、
+# 计划模式与审查上报。它们不是被删除，而是这一轮**不装配**——README 任务不该
+# 每一步都为 34 个工具说明书付 token（T25 真机：首调 17,250 token，其中工具
+# 说明 22,467 字符）。write_file/edit_file/read_file/run_tests/run_shell 仍保留。
+DOCS_ONLY_EXCLUDED = frozenset(
+    {
+        "task_create",
+        "task_get",
+        "task_update",
+        "task_list",
+        "task_output",
+        "task_stop",
+        "list_agents",
+        "propose_goal",
+        "propose_skills",
+        "find_skills",
+        "install_market_skill",
+        "list_curated_skills",
+        "report_findings",
+        "notebook_edit",
+        "repl",
+        "browser_check",
+        "enter_plan_mode",
+        "exit_plan_mode",
+    }
+)
 
 # 搜索别名：模型说"跑测试""提交""查资料"时也要命中，不能只认英文名
 ALIASES: dict[str, tuple[str, ...]] = {

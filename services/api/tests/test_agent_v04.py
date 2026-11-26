@@ -158,6 +158,18 @@ async def create_task(env: Env, project_id: str, criteria: list[str], **kwargs) 
     return resp.json()["id"]
 
 
+async def settle(timeout: float = 60.0) -> None:
+    """等后台 run 收尾（E13 起审批恢复是异步的）。
+
+    审批接口返回 202 只代表决定已落库、run 已入队；文件/事件要等 runner 真正
+    跑完才可见。用例紧接着断言时必须先等这一轮结束，不能把「已提交」当成
+    「已执行完」。
+    """
+    from tests.conftest import _drain_active_runs
+
+    await _drain_active_runs(timeout)
+
+
 def call(name: str, arguments: dict) -> dict:
     return {
         "id": f"call_{uuid.uuid4().hex[:8]}",
@@ -171,6 +183,25 @@ def add_tests_dir(root: Path) -> None:
     tests = root / "tests"
     tests.mkdir(exist_ok=True)
     (tests / "test_demo.py").write_text("def test_demo():\n    assert True\n", encoding="utf-8")
+
+
+async def test_write_file_receipt_is_a_summary_not_the_content(env: Env, workspace: Path):
+    """UP-01：写工具回执只给路径/行数；100 行文件不能把全文再塞回模型上下文。"""
+    project_id = await create_project(env, workspace)
+    task_id = await create_task(env, project_id, ["写一个长文件"])
+    gateway = env.gateway()
+    context = env.context(task_id, workspace)
+    content = "\n".join(f"line {index}" for index in range(100)) + "\n"
+
+    payload = await gateway.execute(
+        "write_file", {"path": "big.txt", "content": content}, context, "execute_action"
+    )
+
+    assert payload["ok"] is True, payload
+    assert len(str(payload["output"])) < 100, payload["output"]
+    assert content not in str(payload.get("data") or {})
+    data = payload.get("data") or {}
+    assert "diff" not in data and data.get("added") == 100
 
 
 async def test_read_file_and_search_code_stay_inside_workspace(env: Env, workspace: Path):

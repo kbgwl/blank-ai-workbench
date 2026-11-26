@@ -84,7 +84,7 @@ async def _update_plan(context: ToolContext, arguments: dict) -> ToolOutcome:
             "\n\n计划里有几处还不能独立验证（这次已写入，但失败时会定位不到是哪块）：\n"
             + "\n".join(head)
             + (f"\n  · …还有 {rest} 处" if rest > 0 else "")
-            + "\n每步写清 output（交出什么）和 check（怎么验：path_exists/file_contains/command/page）。"
+            + "\n每步写清 output（交出什么）和 check（怎么验：path_exists/file_contains/command/page/file_min_chars）。"
         )
 
     return ok(
@@ -262,28 +262,16 @@ def plan_tools() -> list[ToolDefinition]:
                         "items": {
                             "type": "object",
                             "properties": {
-                                "id": {
-                                    "type": "string",
-                                    "description": "沿用旧 id 保引用；新建可省略",
-                                },
+                                "id": {"type": "string", "description": "沿用旧 id；新建可省"},
                                 "step": {"type": "string"},
                                 "status": {"type": "string", "enum": list(PLAN_STATUSES)},
-                                "milestone_id": {
-                                    "type": "string",
-                                    "description": "归到哪个里程碑 id",
-                                },
+                                "milestone_id": {"type": "string", "description": "所属里程碑 id"},
                                 "evidence": {
                                     "type": "string",
-                                    "description": "标 completed 时说明凭什么：改了哪个文件、跑了什么命令",
+                                    "description": "标 completed 的证据：改了哪个文件/跑了什么命令",
                                 },
-                                "output": {
-                                    "type": "string",
-                                    "description": "交出什么（文件/结果/结论），写不出就该拆",
-                                },
-                                "check": {
-                                    "type": "object",
-                                    "description": "怎么验，同 done_when 的 check",
-                                },
+                                "output": {"type": "string", "description": "交付物（文件/结果/结论）"},
+                                "check": {"type": "object", "description": "验收检查，同 done_when.check"},
                             },
                             "required": ["step"],
                         },
@@ -291,7 +279,7 @@ def plan_tools() -> list[ToolDefinition]:
                     "milestones": {
                         "type": "array",
                         "maxItems": 6,
-                        "description": "阶段性目标。省略则沿用上一版。",
+                        "description": "阶段性目标；省略沿用上一版",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -301,7 +289,7 @@ def plan_tools() -> list[ToolDefinition]:
                                 "step_ids": {
                                     "type": "array",
                                     "items": {"type": "string"},
-                                    "description": "也可以不写，改由步骤的 milestone_id 指过来",
+                                    "description": "可省略，由步骤 milestone_id 指过来",
                                 },
                             },
                             "required": ["title"],
@@ -317,21 +305,20 @@ def plan_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="set_goal",
             description=(
-                "把目标结构化：objective（要达成什么）、done_when（怎么算做完）、"
-                "constraints（必须遵守的限制）、out_of_scope（明确不做什么）。"
-                "多步骤任务先调它再给 update_plan；验收会逐条判定 done_when。"
-                "用户原话别改写，objective 用自己的话概括。"
+                "结构化目标：objective（要达成什么）、done_when（怎么算做完）、"
+                "constraints、out_of_scope。多步骤任务先调它再给 update_plan；验收会逐条核对。"
             ),
             input_schema={
                 "type": "object",
                 "properties": {
-                    "objective": {"type": "string", "description": "一句话说清要达成什么"},
+                    "objective": {"type": "string", "description": "要达成什么，一句话"},
                     "done_when": {
                         "type": "array",
                         # 两种写法都收：一句话（给人看），或 {text, check}（能自动核对）。
-                        # check 只认四种，全部由验收器只读事实核对：文件在不在、
+                        # check 认五种，全部由验收器只读事实核对：文件在不在、
                         # 文件里有没有那段字、某条命令这轮跑过且退出码为 0、
-                        # 页面打开时这个选择器有几个。第四种不新增字段名，选择器复用 text。
+                        # 页面打开时这个选择器有几个、文件至少有多少字符。
+                        # page 不新增字段名，选择器复用 text。
                         "items": {
                             "anyOf": [
                                 {"type": "string"},
@@ -344,11 +331,18 @@ def plan_tools() -> list[ToolDefinition]:
                                             "properties": {
                                                 "type": {
                                                     "type": "string",
-                                                    "enum": ["path_exists", "file_contains", "command", "page"],
+                                                    "enum": [
+                                                        "path_exists",
+                                                        "file_contains",
+                                                        "command",
+                                                        "page",
+                                                        "file_min_chars",
+                                                    ],
                                                 },
                                                 "path": {"type": "string", "description": "工作区相对路径"},
-                                                "text": {"type": "string", "description": "file_contains 找的字；page 写「选择器[:个数]」，如 .task-item:3"},
-                                                "cmd": {"type": "string", "description": "command 要跑的命令，须与本轮实际执行一致"},
+                                                "text": {"type": "string", "description": "file_contains 找的字；page 选择器[:个数]"},
+                                                "cmd": {"type": "string", "description": "本轮跑过的命令"},
+                                                "min": {"type": "number", "description": "最少字符数"},
                                             },
                                             "required": ["type"],
                                         },
@@ -358,20 +352,19 @@ def plan_tools() -> list[ToolDefinition]:
                             ]
                         },
                         "description": (
-                            "可判定的完成标准。能写成检查的写成对象，验收时逐条核对；"
-                            "写不成（如「体验好」）用字符串，标为无法自动核对。"
-                            "交页面必须写 page，否则空壳也能过。"
+                            "可判定的完成标准：能检查的写成对象，否则字符串；"
+                            "页面必须 page，字数门槛必须 file_min_chars。"
                         ),
                     },
                     "constraints": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "技术选型、不许改的文件、兼容性要求等",
+                        "description": "技术选型、不许改的文件、兼容性等",
                     },
                     "out_of_scope": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "这次明确不做的部分，防止范围蔓延",
+                        "description": "这次明确不做的部分",
                     },
                 },
                 "required": ["objective"],

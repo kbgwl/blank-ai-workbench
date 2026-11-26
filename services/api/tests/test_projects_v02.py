@@ -81,6 +81,11 @@ async def test_read_text_and_binary(client, workspace):
     assert binary.json()["content"] == ""
     assert "二进制" in binary.json()["message"]
 
+    raw = await client.get(f"/api/v1/projects/{pid}/file/raw", params={"path": "logo.png"})
+    assert raw.status_code == 200
+    assert raw.headers["content-type"] == "image/png"
+    assert raw.content == (workspace / "logo.png").read_bytes()
+
 
 async def test_unbound_project_tree_conflict(client):
     pid = (await _create_project(client))["id"]

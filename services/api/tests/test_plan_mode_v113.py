@@ -40,6 +40,7 @@ from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
     create_provider,
     create_task,
     env,
+    settle,
 )
 
 
@@ -192,7 +193,9 @@ async def test_exit_plan_mode_asks_then_unlocks_writes(env, workspace: Path) -> 
         f"{API}/tasks/{task_id}/approval",
         json={"approve": True, "provider_id": provider_id, "scope": "once"},
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
+    # E13：审批只入队；等恢复跑完再验「批准后按默认模式执行」。
+    await settle()
     # 批准后计划文本进了模型上下文，写操作按默认模式执行
     assert "patched" in (workspace / "main.py").read_text(encoding="utf-8")
 

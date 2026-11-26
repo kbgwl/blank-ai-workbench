@@ -386,12 +386,15 @@ async def test_a_bad_regex_fails_with_the_host_message_not_a_second_wording(
     # 同一份实现也保住"坏正则不毒 broker"：坏的是参数
     ok = await _search_code(context, {"pattern": r"VALUE\s*=\s*\d", "mode": "regex"})
     assert ok.ok is True, ok.message
-    # 二进制拒读的文案也一致（read_text_file 在同一份实现里判二进制）
+    # 二进制拒读的文案也一致（read_text_file 在同一份实现里判二进制）。
+    # 用 .bin 而不是 logo.png：图片走的是 _read_image 那条"交给模型看"的路，
+    # 拿它来测文本拒读等于把两条不同的语义当成同一条。
+    (workspace / "blob.bin").write_bytes(b"\x00\x01binary")
     host_binary = None
     _enable(monkeypatch, False)
-    host_binary = await _read_file(context, {"path": "logo.png"})
+    host_binary = await _read_file(context, {"path": "blob.bin"})
     _enable(monkeypatch, True)
-    broker_binary = await _read_file(context, {"path": "logo.png"})
+    broker_binary = await _read_file(context, {"path": "blob.bin"})
     assert host_binary.message == broker_binary.message
     assert "二进制" in broker_binary.message
 

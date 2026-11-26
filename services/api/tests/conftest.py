@@ -8,6 +8,12 @@ from pathlib import Path
 # （团队编排、子代理）与请求处理并发时事务会互相踩。文件库每条会话拿独立连接，
 # 与生产同构；路径随测试临时目录清理。
 _TEST_DB = (Path(tempfile.mkdtemp(prefix="blank-db-")) / "test.db").as_posix()
+# 测试临时目录必须与宿主仓库隔离：当 TEMP 落在仓库里（例如 .tmp-test/）时，
+# 所有「非 git 目录」用例都会被 git 向上找到项目自己的 .git —— worktree 走错分支、
+# 隔离判定变成 owned、LSP 的 git-ignore 过滤把所有临时工作区文件都判成 ignored。
+# GIT_CEILING_DIRECTORIES 让 git 到了这一层就停止向上搜索；用例自己 git init 的
+# 仓库仍在 ceiling 之下，照常工作。TEMP 在仓库外时这条不改变任何行为。
+os.environ.setdefault("GIT_CEILING_DIRECTORIES", tempfile.gettempdir())
 # 自学习的两个库默认落在「相对 cwd 的 data/experience」。测试跑在仓库里，于是夹具造的
 # 经验（"改动 main.py 之后用 …"）会写进真实库——`data/experience/` 下那两个
 # `repo-*.jsonl` 就是这么来的。整批指到临时目录；用例自己 monkeypatch 的仍然优先。

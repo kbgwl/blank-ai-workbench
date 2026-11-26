@@ -12,6 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from blank_api.services.tools.base import ToolContext, ToolDefinition, ToolOutcome, fail, ok
+from blank_api.services.tools.file_state import content_summary
 from blank_api.services.tools.paths import (
     MAX_SCAN_FILES,
     MAX_SCAN_SECONDS,
@@ -188,6 +189,8 @@ async def _read_file(context: ToolContext, arguments: dict) -> ToolOutcome:
             size=payload["size"],
             mtime_ns=int(payload.get("mtime_ns") or 0),
             sha256=str(payload.get("sha256") or ""),
+            lines=int(payload.get("total_lines") or 0),
+            summary=content_summary(str(payload.get("content") or "")),
         )
     fields = {
         "path": payload["path"],
@@ -679,10 +682,9 @@ def filesystem_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="search_code",
             description=(
-                "在工作区内按文本或正则搜索代码，返回文件、行号与命中行。"
-                "path 可以是子目录，也可以直接写某个文件（如 index.html）。"
-                "只想知道哪些文件命中用 output_mode=files_with_matches，要每个文件的命中数用 count。"
-                "用 glob / type 收窄范围；context 给命中行带上前后文。"
+                "在工作区内按文本或正则搜代码，返回文件、行号与命中行。"
+                "path 可指子目录或单个文件；只看哪些文件命中用 output_mode=files_with_matches，"
+                "按文件计数用 count；用 glob / type 收窄范围。"
             ),
             input_schema={
                 "type": "object",
@@ -691,35 +693,23 @@ def filesystem_tools() -> list[ToolDefinition]:
                     "pattern": {"type": "string", "description": "搜索文本或正则表达式"},
                     "mode": {"type": "string", "enum": ["literal", "regex"]},
                     "path": {"type": "string", "description": "限定的子目录或单个文件"},
-                    "glob": {
-                        "type": "string",
-                        "description": "只搜匹配该 glob 的文件，例如 *.py 或 src/**/*.ts",
-                    },
-                    "type": {
-                        "type": "string",
-                        "description": "只搜某种语言的文件：py / ts / tsx / js / go / rust / java / md …",
-                    },
+                    "glob": {"type": "string", "description": "只搜匹配该 glob 的文件，如 *.py、src/**/*.ts"},
+                    "type": {"type": "string", "description": "只搜某种语言：py/ts/tsx/js/go/rust/java/md…"},
                     "output_mode": {
                         "type": "string",
                         "enum": ["content", "files_with_matches", "count"],
-                        "description": "content=命中行（默认），files_with_matches=只列文件，count=按文件计数",
+                        "description": "content=命中行（默认）；files_with_matches=只列文件；count=按文件计数",
                     },
-                    "multiline": {
-                        "type": "boolean",
-                        "description": "让 . 匹配换行，用于跨行模式；literal 模式下也会按整段文本匹配",
-                    },
+                    "multiline": {"type": "boolean", "description": "让 . 匹配换行；literal 模式按整段文本匹配"},
                     "-i": {"type": "boolean", "description": "忽略大小写"},
                     "-n": {"type": "boolean", "description": "是否显示行号，默认 true"},
-                    "-A": {"type": "integer", "description": "每条命中后附带的上下文行数"},
-                    "-B": {"type": "integer", "description": "每条命中前附带的上下文行数"},
-                    "-C": {"type": "integer", "description": "前后各附带多少行上下文"},
-                    "-o": {"type": "boolean", "description": "只输出命中的那一段文本"},
+                    "-A": {"type": "integer", "description": "命中后附带的上下文行数"},
+                    "-B": {"type": "integer", "description": "命中前附带的上下文行数"},
+                    "-C": {"type": "integer", "description": "前后各附带多少行"},
+                    "-o": {"type": "boolean", "description": "只输出命中的那一段"},
                     "head_limit": {"type": "integer", "description": "最多返回多少个结果，0=不限"},
-                    "offset": {"type": "integer", "description": "跳过前多少个结果（先于 head_limit 生效）"},
-                    "max_matches": {
-                        "type": "integer",
-                        "description": "最多返回多少条命中（content 模式的旧参数，等价于 head_limit）",
-                    },
+                    "offset": {"type": "integer", "description": "跳过前多少个结果（先于 head_limit）"},
+                    "max_matches": {"type": "integer", "description": "旧参数，等价于 head_limit"},
                 },
             },
             risk_level="low",

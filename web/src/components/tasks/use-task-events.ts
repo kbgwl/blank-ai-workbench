@@ -17,6 +17,11 @@ export type TaskEventsState = {
 
 const POLL_INTERVAL_MS = 1500;
 
+/** 断线重连退避：1s、2s、4s、8s、16s 封顶；最多 5 次后改轮询。 */
+export function reconnectDelay(attempt: number): number {
+  return Math.min(16_000, 1_000 * 2 ** Math.max(0, attempt));
+}
+
 const TERMINAL_EVENT_HINTS = [
   "task.completed",
   "task.failed",
@@ -48,8 +53,9 @@ function sortBySeq(events: AgentEvent[]): AgentEvent[] {
 type Store = { taskId: string; events: AgentEvent[]; notice: string | null; revision: number };
 
 /**
- * 先尝试 SSE（GET /tasks/{id}/stream）；端点缺失、返回不是 event-stream 或连接中断时，
- * 自动退回 1.5 秒轮询 GET /tasks/{id}/events，任务进入终态后停止。
+ * 先尝试 SSE（GET /tasks/{id}/events/stream）；断线按 1s→2s→4s→8s→16s 退避重连，
+ * 用 `Last-Event-ID` 从最后一个 seq 之后续传；30s 没有任何帧由看门狗主动断开重连。
+ * 连续 5 次重连失败才退回 1.5 秒轮询 GET /tasks/{id}/events，任务进入终态后停止。
  * 挂载时总会拉一次完整事件快照，所以刷新页面后时间线可以完整恢复。
  */
 export function useTaskEvents(taskId: string | null, status: string | null): TaskEventsState {
@@ -59,6 +65,8 @@ export function useTaskEvents(taskId: string | null, status: string | null): Tas
   const [streaming, setStreaming] = useState<{ taskId: string; text: string } | null>(null);
   const [nonce, setNonce] = useState(0);
   const seenRef = useRef<{ taskId: string; keys: Set<string> }>({ taskId: "", keys: new Set() });
+  // 断线重连游标：已经收到的最大 seq。切换任务时归零，避免把上一条会话的序号带过去。
+  const lastSeqRef = useRef<{ taskId: string; seq: number }>({ taskId: "", seq: 0 });
 
   const terminal = isTerminalStatus(status);
 
@@ -70,10 +78,12 @@ export function useTaskEvents(taskId: string | null, status: string | null): Tas
     (target: string, incoming: AgentEvent[]): number => {
       if (incoming.length === 0) return 0;
       if (seenRef.current.taskId !== target) seenRef.current = { taskId: target, keys: new Set() };
+      if (lastSeqRef.current.taskId !== target) lastSeqRef.current = { taskId: target, seq: 0 };
       const keys = seenRef.current.keys;
       const added = incoming.filter((event) => !keys.has(eventKey(event)));
       if (added.length === 0) return 0;
       added.forEach((event) => keys.add(eventKey(event)));
+      lastSeqRef.current.seq = Math.max(lastSeqRef.current.seq, ...added.map((event) => event.seq));
       patch(target, (current) => ({
         ...current,
         events: sortBySeq([...current.events, ...added]),
@@ -90,12 +100,22 @@ export function useTaskEvents(taskId: string | null, status: string | null): Tas
     const target = taskId;
     let ignore = false;
     let stopped = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
-    const controller = new AbortController();
+    let finished = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let watchdog: ReturnType<typeof setInterval> | null = null;
+    let active: AbortController | null = null;
+    let attempts = 0;
+    let lastActivity = Date.now();
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
 
     const applySnapshot = (rows: AgentEvent[]) => {
       if (ignore) return;
       seenRef.current = { taskId: target, keys: new Set(rows.map(eventKey)) };
+      lastSeqRef.current = {
+        taskId: target,
+        seq: rows.reduce((max, event) => Math.max(max, event.seq), 0),
+      };
+      finished = finished || hasTerminalEvent(rows);
       setStore({ taskId: target, events: sortBySeq(rows), notice: null, revision: rows.length });
     };
 
@@ -117,15 +137,31 @@ export function useTaskEvents(taskId: string | null, status: string | null): Tas
       };
     }
 
+    const stopLive = () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (watchdog) {
+        clearInterval(watchdog);
+        watchdog = null;
+      }
+      active?.abort();
+      active = null;
+    };
+
     const poll = () => {
       fetchEvents(target)
         .then((rows) => {
           if (stopped) return;
           const added = merge(target, rows);
           if (added > 0) patch(target, (current) => ({ ...current, notice: null }));
-          if (hasTerminalEvent(rows) && timer) {
-            clearInterval(timer);
-            timer = null;
+          if (hasTerminalEvent(rows)) {
+            finished = true;
+            if (pollTimer) {
+              clearInterval(pollTimer);
+              pollTimer = null;
+            }
           }
         })
         .catch((error: unknown) => {
@@ -134,40 +170,89 @@ export function useTaskEvents(taskId: string | null, status: string | null): Tas
     };
 
     const startPolling = (reason: string | null) => {
-      if (stopped || timer) return;
+      if (stopped || pollTimer) return;
+      stopLive();
       setLive({ taskId: target, kind: "polling" });
       if (reason) patch(target, (current) => ({ ...current, notice: reason }));
       poll();
-      timer = setInterval(poll, POLL_INTERVAL_MS);
+      pollTimer = setInterval(poll, POLL_INTERVAL_MS);
     };
 
-    streamTaskEvents(target, {
-      signal: controller.signal,
-      onEvent: (event) => {
-        if (stopped) return;
-        setLive({ taskId: target, kind: "sse" });
-        merge(target, [event]);
-      },
-      onDelta: (delta) => {
-        if (stopped) return;
-        // 每帧都是"到目前为止的尾巴"，直接替换即可——不拼接，所以丢帧也不会拼错。
-        // done 表示这一屏说完了：清空，让位给紧随其后的持久事件。
-        setStreaming({ taskId: target, text: delta.done ? "" : delta.text });
-      },
-    })
-      .then(() => {
-        if (!stopped) startPolling(null);
+    const scheduleReconnect = (reason: string | null) => {
+      if (stopped || finished || pollTimer) return;
+      if (reason) patch(target, (current) => ({ ...current, notice: reason }));
+      if (attempts >= 5) {
+        startPolling("实时事件流多次重连失败，已改用 1.5 秒轮询");
+        return;
+      }
+      const delay = reconnectDelay(attempts);
+      attempts += 1;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
+    };
+
+    const connect = () => {
+      if (stopped || finished) return;
+      active?.abort();
+      const controller = new AbortController();
+      active = controller;
+      lastActivity = Date.now();
+      streamTaskEvents(target, {
+        signal: controller.signal,
+        lastSeq: lastSeqRef.current.taskId === target ? lastSeqRef.current.seq : 0,
+        onActivity: () => {
+          lastActivity = Date.now();
+          // 收到过数据就重置退避：断线是偶发，不是"这条流一直是坏的"。
+          attempts = 0;
+        },
+        onEvent: (event) => {
+          if (stopped) return;
+          setLive({ taskId: target, kind: "sse" });
+          merge(target, [event]);
+          if (hasTerminalEvent([event])) {
+            finished = true;
+            stopLive();
+          }
+        },
+        onDelta: (delta) => {
+          if (stopped) return;
+          // 每帧都是"到目前为止的尾巴"，直接替换即可——不拼接，所以丢帧也不会拼错。
+          // done 表示这一屏说完了：清空，让位给紧随其后的持久事件。
+          setStreaming({ taskId: target, text: delta.done ? "" : delta.text });
+        },
       })
-      .catch((error: unknown) => {
-        if (stopped || ignore) return;
-        startPolling(`实时事件流不可用（${errorMessage(error)}），已自动改用 1.5 秒轮询`);
-      });
+        .then(() => {
+          if (!stopped && !finished) scheduleReconnect("实时事件流中断，正在重连");
+        })
+        .catch((error: unknown) => {
+          if (stopped || ignore) return;
+          if ((error as Error).name === "AbortError") {
+            scheduleReconnect(null);
+            return;
+          }
+          scheduleReconnect(`实时事件流不可用（${errorMessage(error)}），正在重连`);
+        });
+    };
+
+    // 看门狗：服务端每 15s 至少发一帧（事件 / delta / ping）。30s 没有任何帧
+    // 说明连接可能被中间层静默掐断，主动断开走重连，而不是让界面永远“连接中”。
+    watchdog = setInterval(() => {
+      if (stopped || finished) return;
+      if (Date.now() - lastActivity > 30_000) {
+        lastActivity = Date.now();
+        active?.abort();
+      }
+    }, 5_000);
+
+    connect();
 
     return () => {
       ignore = true;
       stopped = true;
-      controller.abort();
-      if (timer) clearInterval(timer);
+      stopLive();
+      if (pollTimer) clearInterval(pollTimer);
     };
   }, [taskId, terminal, nonce, merge, patch]);
 

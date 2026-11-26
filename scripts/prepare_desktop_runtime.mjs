@@ -34,9 +34,13 @@ const API_DIR = path.join(ROOT, "services", "api");
 const DEFAULT_OUT = path.join(ROOT, "desktop", "build", "runtime");
 const PYTHON_VERSION = process.env.BLANK_RUNTIME_PYTHON || "3.12";
 const PTH_CONTENT = "../../../api/src";
-// 装完必须能 import 的几包：覆盖「Web 框架 / ORM / 图引擎 / 迁移 / 加密」五条主干。
-// 少任何一条，包里都会表现为「应用起不来但打包成功」。
-const SMOKE_IMPORTS = ["fastapi", "uvicorn", "sqlalchemy", "alembic", "aiosqlite", "langgraph", "cryptography"];
+// 装完必须能 import 的几包：覆盖「Web 框架 / ORM / 图引擎 / 迁移 / 加密」五条主干，
+// 外加三个文档库——文档任务开箱即用要靠它们随包带过去。少任何一条，
+// 包里都会表现为「应用起不来或写不了文档，但打包成功」。
+const SMOKE_IMPORTS = [
+  "fastapi", "uvicorn", "sqlalchemy", "alembic", "aiosqlite", "langgraph", "cryptography",
+  "docx", "openpyxl", "pptx",
+];
 
 function arg(name, fallback = null) {
   const i = process.argv.indexOf(name);

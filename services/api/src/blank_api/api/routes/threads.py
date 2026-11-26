@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
@@ -35,6 +36,7 @@ from blank_api.models.thread import Thread
 from blank_api.schemas.goal import GoalOut
 from blank_api.schemas.task import TaskOut, TaskRunIn
 from blank_api.schemas.thread import (
+    ThreadBatchArchiveIn,
     ThreadCreate,
     ThreadDetailOut,
     ThreadOut,
@@ -50,6 +52,7 @@ from blank_api.services.agent.automation import (
     effective_policy,
     resolve_mode as resolve_automation_mode,
 )
+from blank_api.services.agent.directives import listing_only
 from blank_api.services.agent.dispatcher import (
     decide_dispatch,
     dispatch_snapshot,
@@ -151,19 +154,23 @@ async def create_thread(project_id: str, payload: ThreadCreate, db: DbSession) -
 async def list_all_threads(
     db: DbSession,
     limit: int = Query(default=50, ge=1, le=200),
+    status: Literal["all", "active", "archived"] = Query(default="all"),
 ) -> list[ThreadOut]:
     """全部项目的会话，按最近活动排序。
 
     侧栏必须在所有页面显示同一份清单：首页过去只查"当前项目"的会话，而设置页左栏查的是
     全部任务，两个数字对不上，用户看到的就是"对话记录不同步"。这里给一个全局入口，
     两侧都读它，切页不再变数据。
+
+    ``status`` 必须先过滤再 limit：归档会话同样占着 50 条窗口，只在返回后按状态
+    过滤会把真正活跃的会话挤出侧栏。
     """
+    statement = select(Thread).where(Thread.kind == "chat")
+    if status != "all":
+        statement = statement.where(Thread.status == status)
     rows = (
         await db.execute(
-            select(Thread)
-            .where(Thread.kind == "chat")
-            .order_by(Thread.updated_at.desc(), Thread.created_at.desc())
-            .limit(limit)
+            statement.order_by(Thread.updated_at.desc(), Thread.created_at.desc()).limit(limit)
         )
     ).scalars().all()
     latest = await _latest_turn_status(db, [row.id for row in rows])
@@ -178,14 +185,15 @@ async def list_threads(
     project_id: str,
     db: DbSession,
     limit: int = Query(default=50, ge=1, le=200),
+    status: Literal["all", "active", "archived"] = Query(default="all"),
 ) -> list[ThreadOut]:
     await load_project(db, project_id)
+    statement = select(Thread).where(Thread.project_id == project_id, Thread.kind == "chat")
+    if status != "all":
+        statement = statement.where(Thread.status == status)
     rows = (
         await db.execute(
-            select(Thread)
-            .where(Thread.project_id == project_id, Thread.kind == "chat")
-            .order_by(Thread.updated_at.desc(), Thread.created_at.desc())
-            .limit(limit)
+            statement.order_by(Thread.updated_at.desc(), Thread.created_at.desc()).limit(limit)
         )
     ).scalars().all()
     latest = await _latest_turn_status(db, [row.id for row in rows])
@@ -193,6 +201,38 @@ async def list_threads(
         ThreadOut.model_validate(row).model_copy(update={"last_turn_status": latest.get(row.id, "")})
         for row in rows
     ]
+
+
+@router.post("/threads/batch-archive")
+async def batch_archive_threads(payload: ThreadBatchArchiveIn, db: DbSession) -> dict[str, list[str]]:
+    """一次归档多条会话，语义与 ``PATCH /threads/{id}`` 改 ``status=archived`` 一致。
+
+    只改 ``status``：不停止任务、不写事件、不删任何行。一次查询、一次提交，
+    避免前端循环发 50 个请求撞上限流。结果按三个桶返回，调用方据此
+    区分"这次归档了"、"本来就是归档"和"已经不存在"。
+
+    物理删除是另一条路：``DELETE /threads/{id}/permanent``；本接口不删行。
+    """
+    ids = list(dict.fromkeys(payload.ids))  # 去重且保留请求顺序
+    rows = (
+        await db.execute(select(Thread).where(Thread.id.in_(ids)))
+    ).scalars().all()
+    by_id = {row.id: row for row in rows}
+    archived: list[str] = []
+    unchanged: list[str] = []
+    missing: list[str] = []
+    for thread_id in ids:
+        thread = by_id.get(thread_id)
+        if thread is None:
+            missing.append(thread_id)
+        elif thread.status == "archived":
+            unchanged.append(thread_id)
+        else:
+            thread.status = "archived"
+            archived.append(thread_id)
+    if archived:
+        await db.commit()
+    return {"archived": archived, "unchanged": unchanged, "missing": missing}
 
 
 @router.get("/threads/{thread_id}", response_model=ThreadDetailOut)
@@ -383,9 +423,18 @@ async def create_turn(
     # 监督者的判断读用户原话（`/deploy prod` 就是用户想做的事），真正入任务的
     # goal 换成命令正文——模型看到的是展开后的提示词，标题/目标名仍是原话。
     workspace = project.active_workspace
+    # 纯聊天：没有选目录，或者项目本身没有目录。即使项目有活动目录，只要
+    # 这个对话没选，就不沿用——否则「只是聊两句」会悄悄动到上次的仓库。
+    chat_only = bool(payload.chat_only) or workspace is None
+    no_tools = bool(payload.no_tools) or bool(judgement.no_tools)
+    read_only = bool(payload.read_only) or bool(getattr(judgement, "read_only", False))
+    list_only = bool(payload.list_only) or listing_only(text)
+    command_root = (
+        workspace.path if (workspace is not None and not chat_only and not no_tools) else None
+    )
     expanded_goal, command_info = expand_user_input(
         payload.goal,
-        root=workspace.path if workspace is not None else None,
+        root=command_root,
         session_id=thread_id,
     )
     budget_left = not (
@@ -399,6 +448,7 @@ async def create_turn(
         automation_mode=automation_mode,
         permission_mode=permission_mode,
         has_workspace=project.active_workspace is not None,
+        chat_only=chat_only,
         has_clarification=judgement.needs_clarification,
         has_active_task=last_status in ("queued", "running", "waiting_approval"),
         budget_left=budget_left,
@@ -416,6 +466,10 @@ async def create_turn(
             scenario=payload.scenario,
             max_steps=payload.max_steps,
             attachments=payload.attachments,
+            chat_only=chat_only,
+            no_tools=no_tools,
+            read_only=read_only,
+            list_only=list_only,
         ),
         thread_id=thread_id,
         turn_index=next_turn,
@@ -498,7 +552,14 @@ async def create_turn(
     # 监控/定时类的判定是 needs_execution=False（「现在别动手」），但它不能就
     # 这么停着——那句话的意义是「等事件」，所以也要进 defer 分支登记一条待触发。
     # 只判 needs_execution 会让「盯着 X，有变化就告诉我」变成一句什么都不发生的话。
-    if auto_start and (judgement.needs_execution or _defer_intent(task)):
+    if auto_start and (
+        judgement.needs_execution
+        or chat_only
+        or no_tools
+        or read_only
+        or list_only
+        or _defer_intent(task)
+    ):
         # rollback/commit 都会过期 ORM 实例；id 先取成普通值，except 里才不会
         # 触发同步懒加载（MissingGreenlet）。
         auto_task_id = task.id
@@ -590,8 +651,10 @@ async def delete_thread(thread_id: str, db: DbSession):
     由外键 CASCADE 联动删除。不可恢复，前端须弹出二次确认。
     """
     from sqlalchemy import delete as sa_delete
-    from blank_api.models.run import AgentRun, AgentEvent, AgentCheckpoint
-    from blank_api.models.search import ChatMessage
+    from blank_api.models.checkpoint import AgentCheckpoint
+    from blank_api.models.run import AgentRun
+    from blank_api.models.search import SearchDoc
+    from blank_api.models.task import AgentEvent
 
     thread = await thread_or_404(db, thread_id)
 
@@ -600,11 +663,15 @@ async def delete_thread(thread_id: str, db: DbSession):
         await db.execute(sa_delete(AgentEvent).where(AgentEvent.task_id == task.id))
         await db.execute(sa_delete(AgentRun).where(AgentRun.task_id == task.id))
         await db.execute(sa_delete(AgentCheckpoint).where(AgentCheckpoint.task_id == task.id))
-        await db.execute(sa_delete(ChatMessage).where(ChatMessage.thread_id == thread_id))
         await db.delete(task)
+    await db.execute(sa_delete(SearchDoc).where(SearchDoc.thread_id == thread_id))
 
     await db.delete(thread)
     await db.commit()
+    # 会话都没了，它的人工授权也不该留到过期；清不掉不影响正确性（读侧按 TTL 过滤）。
+    from blank_api.services.session_grants import purge_thread
+
+    purge_thread(thread_id)
     return None
 
 
@@ -758,3 +825,37 @@ async def rewind_thread(thread_id: str, payload: ThreadRewindIn, db: DbSession) 
         skipped_reason=skipped_reason,
         atomic=False,
     )
+
+
+# --------------------------------------------------------------------------- #
+# 会话级审批授权（T-A2）：看得见，也撤得掉
+# --------------------------------------------------------------------------- #
+
+@router.get("/threads/{thread_id}/grants")
+async def list_thread_grants(thread_id: str, db: DbSession) -> dict:
+    """本会话当前有效的授权类别。过期条目由存储层过滤，不在这里再判一次。"""
+    await thread_or_404(db, thread_id)
+    from blank_api.services import session_grants
+    from blank_api.services.permissions import SESSION_GRANT_LABELS
+
+    rows = []
+    for item in session_grants.list_grants(thread_id):
+        category = str(item.get("category") or "")
+        rows.append({**item, "label": SESSION_GRANT_LABELS.get(category, category)})
+    return {"grants": rows}
+
+
+@router.delete("/threads/{thread_id}/grants/{category}")
+async def revoke_thread_grant(thread_id: str, category: str, db: DbSession) -> dict:
+    await thread_or_404(db, thread_id)
+    from blank_api.services import session_grants
+
+    return {"revoked": session_grants.revoke(thread_id, category), "category": category}
+
+
+@router.delete("/threads/{thread_id}/grants")
+async def revoke_all_thread_grants(thread_id: str, db: DbSession) -> dict:
+    await thread_or_404(db, thread_id)
+    from blank_api.services import session_grants
+
+    return {"revoked": session_grants.revoke_all(thread_id)}

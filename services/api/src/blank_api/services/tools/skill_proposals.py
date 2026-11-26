@@ -224,15 +224,11 @@ def skill_proposal_tools() -> list[ToolDefinition]:
         ToolDefinition(
             name="propose_skills",
             description=(
-                "把值得沉淀成 Skill 的做法写成提案，交给用户审阅（对齐 Claude 的 ProposeSkills）。"
-                "一次 1-3 条；用户采用之前提案不会生效，也不会进入系统提示的技能清单。\n"
-                "kind=new 是新建；kind=improvement 必须给 target（已有 Skill 的准确名字），"
-                "并且先用 skill 工具加载过它的正文再据实写。\n"
-                "name 是 kebab-case（小写字母/数字/连字符）；description 是一句话（目标 200 字以内）；"
-                "skillMd 必须以 --- frontmatter 开头、有闭合的 --- 和一段正文——保存时正文就是全部说明，"
-                "name/description 取自本工具字段，frontmatter 里的其他键不保留。\n"
-                "证据只放在 evidence 里（引用文件、命令输出、用户原话），不要写进正文。"
-                "提交后继续下一阶段，不要等用户回复。"
+                "把值得沉淀成 Skill 的做法写成提案交用户审阅。一次 1-3 条；采用前不生效。\n"
+                "kind=new 新建；improvement 必须给 target 且先用 skill 加载过正文。\n"
+                "name 用 kebab-case；description 一句话（≤200 字）；skillMd 必须含 --- frontmatter "
+                "和正文；frontmatter 的其他键不保留。证据只放 evidence（文件/命令输出/用户原话），"
+                "不要写进正文。提交后继续下一阶段，不要等回复。"
             ),
             input_schema={
                 "type": "object",

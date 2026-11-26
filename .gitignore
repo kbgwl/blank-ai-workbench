@@ -28,6 +28,13 @@ services/api/.tmp-test-temp*/
 evals/workspaces/
 evals/results/
 evals/regression/*.json
+# 日常基准的 Codex 对照现场：工作区副本、事件流与截图，全部是本机临时产物
+evals/benchmarks/daily/codex-runs/
+# 评测工作区固定落 E 盘（见 run.mjs 的 WORK_ROOT），不进仓库
+.bench-tmp/
+# 本机测试/运行临时目录（TEMP/TMP 指向这里），不进仓库
+.tmp/
+.tmp-test/
 # 团队端到端门禁的隔离库、日志与截图，全部是本机产物
 evals/team_e2e/.work/
 web/.team-e2e-next/

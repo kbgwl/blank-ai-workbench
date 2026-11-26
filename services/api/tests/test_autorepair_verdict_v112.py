@@ -290,7 +290,7 @@ def test_validation_gate_still_skips_when_the_config_never_existed():
     update, _ = _run(
         {
             "tool_results": [
-                _write("a.css"),
+                _write("a.py"),
                 _test("error", output="未识别到测试命令：工作区中没有 pytest 配置"),
             ]
         }

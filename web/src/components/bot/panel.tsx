@@ -1,79 +1,62 @@
-"use client";
+﻿"use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import Image from "next/image";
+import { readString, writeString } from "@/lib/safe-storage";
 import type { AcceptanceItem, ChangeItem, TestInfo, UsageInfo } from "../tasks/api";
-import { formatDuration } from "../tasks/format";
-import { TEST_LABEL, testState } from "../evidence/format";
-import { activityRows, TONE_CLASS } from "./panel-activity";
+import { diffStats } from "../tasks/format";
+import { errorMessage, fetchFile, fetchFileRaw, fetchTree, type FileContent, type TreeEntry } from "../projects/api";
+import { artifactsExport, groupArtifacts } from "./artifacts";
+import { FilePreview } from "./file-preview";
+import { previewExpiry, previewHeadline, previewIsolation } from "./preview-copy";
+import { fetchPreview, startPreview, stopPreview, type PreviewState } from "./preview-api";
+import { CodeChangeView } from "./change-view";
 import { RailEmpty } from "../rail-empty";
 import type { BotStep } from "./turns";
-import { turnEvidence } from "./turns";
 
-/**
- * 空态用的小图标：只画轮廓，不填色。
- *
- * 不引图标库：这个仓库至今零图标依赖，为了四个空态拉一个包不划算，
- * 也让首屏多一份要加载的代码。
- */
-function RailIcon({ d }: { d: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
-      <path d={d} />
-    </svg>
-  );
+const PANEL_WIDTH_KEY = "blank:bot-panel-width";
+const PANEL_WIDTH_DEFAULT = 620;
+const PANEL_WIDTH_MIN = 420;
+const PANEL_WIDTH_MAX = 900;
+
+function isImagePath(path: string): boolean {
+  return /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i.test(path);
 }
 
-function DiffText({ diff }: { diff: string }) {
-  const lines = diff.split("\n").slice(0, 400);
-  return (
-    <pre className="max-h-80 overflow-auto rounded-md border border-line bg-surface font-mono text-[12px] leading-[1.55]">
-      {lines.map((line, index) => {
-        const tone = line.startsWith("+++") || line.startsWith("---")
-          ? "text-faint"
-          : line.startsWith("@@")
-            ? "text-brand bg-brand/[0.05]"
-            : line.startsWith("+")
-              ? "text-accent bg-accent/[0.06]"
-              : line.startsWith("-")
-                ? "text-danger bg-danger/[0.05]"
-                : "text-muted";
-        return (
-          <div key={index} className={`px-2 whitespace-pre-wrap ${tone}`}>
-            {line || " "}
-          </div>
-        );
-      })}
-    </pre>
-  );
+function clampPanelWidth(width: number): number {
+  const viewportMax = typeof window === "undefined" ? PANEL_WIDTH_MAX : Math.max(PANEL_WIDTH_MIN, window.innerWidth - 320);
+  return Math.min(Math.min(PANEL_WIDTH_MAX, viewportMax), Math.max(PANEL_WIDTH_MIN, width));
 }
 
-const CHANGE_TONE: Record<string, string> = {
-  created: "text-accent",
-  modified: "text-warn",
-  deleted: "text-danger",
-};
-const CHANGE_LABEL: Record<string, string> = { created: "新增", modified: "修改", deleted: "删除" };
-
-/**
- * 同一个文件改多次只留一行。
- *
- * 后端的改动记录按"每次写入"记一条，一个文件被改四轮就有四条。把四条原样铺出来，
- * 右键面板显示的数是 11，而对话里依据条按去重算是 6——两处数字对不上，用户没有理由
- * 相信任何一个；更实际的问题是同一个文件名重复四遍，点哪一条都像是点错了。
- */
 function uniqueChanges(rows: ChangeItem[]): ChangeItem[] {
   const merged = new Map<string, ChangeItem>();
   for (const row of rows) {
     const existing = merged.get(row.path);
-    if (!existing) {
-      merged.set(row.path, row);
-      continue;
-    }
-    // 先建的记录说 created，后面又改过：对用户来说它就是"这一轮动过的文件"。
-    // 差异保留第一次出现的类型（新增仍是新增），diff 取第一个非空的。
-    merged.set(row.path, { ...existing, diff: existing.diff || row.diff });
+    if (!existing || (!existing.diff && row.diff)) merged.set(row.path, row);
   }
   return [...merged.values()];
+}
+
+function changesFromSteps(steps: BotStep[]): ChangeItem[] {
+  return steps
+    .filter((step): step is Extract<BotStep, { kind: "change" }> => step.kind === "change")
+    .reduce<ChangeItem[]>((rows, step) => {
+      if (!rows.some((row) => row.path === step.path)) {
+        rows.push({ path: step.path, diff: "", changeType: step.changeType });
+      }
+      return rows;
+    }, []);
+}
+
+function statusOf(status: string, running: boolean): { label: string; badge: string; dot: string } {
+  if (status === "approval_expired") return { label: "审批已过期", badge: "bg-warn/[0.12] text-warn", dot: "bg-warn" };
+  if (status === "waiting_approval") return { label: "等你批准", badge: "bg-warn/[0.12] text-warn", dot: "bg-warn" };
+  if (status === "paused") return { label: "已暂停", badge: "bg-warn/[0.12] text-warn", dot: "bg-warn" };
+  if (running) return { label: "进行中", badge: "bg-brand/[0.1] text-brand", dot: "bg-brand" };
+  if (status === "failed" || status === "cancelled") {
+    return { label: status === "failed" ? "失败" : "已停止", badge: "bg-danger/[0.1] text-danger", dot: "bg-danger" };
+  }
+  return { label: "完成", badge: "bg-accent/[0.1] text-accent", dot: "bg-accent" };
 }
 
 export type TaskPanelProps = {
@@ -82,314 +65,673 @@ export type TaskPanelProps = {
   running: boolean;
   steps: BotStep[];
   changes: ChangeItem[];
+  workspaceChanges?: ChangeItem[];
   usage: UsageInfo | null;
-  /** 验收条件与测试结论。缺省表示这一轮没有证据（老任务、或还没跑到验证）。 */
+  projectId: string;
   acceptance?: AcceptanceItem[];
   test?: TestInfo | null;
   onClose: () => void;
 };
 
-type PanelTab = "changes" | "evidence" | "activity";
+type ResultView = "artifacts" | "files" | "changes" | "preview";
+type OpenTab = { id: string; view: ResultView | "file"; label: string; path?: string };
 
-/**
- * 右侧面板：变更 / 证据 / 活动，三件事分三栏看。
- *
- * 合在一起时最长的那一栏（改动文件）会把另外两项挤到看不见，用户于是永远只看到
- * "改了什么"，看不到"凭什么说改对了"。分栏之后每一项都有固定入口。
- *
- * 概览那四格留在栏外：它回答"这一轮花了多少"，三个栏都要用到。
- */
+const VIEW_LABELS: Record<ResultView, string> = {
+  artifacts: "产物",
+  files: "文件",
+  changes: "改动",
+  preview: "预览",
+};
+
+const VIEW_ICON: Record<ResultView, string> = {
+  artifacts: "m12 3 8 4-8 4-8-4zM4 12l8 4 8-4M4 17l8 4 8-4",
+  files: "M3 7h7l2 2h9v9H3z",
+  changes: "m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14",
+  preview: "M3 5h18v12H3zM8 21h8M12 17v4",
+};
+
 export function TaskPanel(props: TaskPanelProps) {
-  const [openPath, setOpenPath] = useState<string | null>(null);
-  const [tab, setTab] = useState<PanelTab>("changes");
-  // 和对话里那条依据条用同一个函数算。两处数字必须同源——左边说改了 3 个文件、
-  // 右边说 4 个，用户就没有理由相信任何一个。耗时优先用模型侧统计，缺了回落到
-  // 工具耗时之和（离线跑、老事件里没有 usage 时就是这种情形）。
-  const evidence = turnEvidence(props.steps);
-  const files = props.changes.length > 0
-    ? uniqueChanges(props.changes)
-    : props.steps
-        .filter((step): step is Extract<BotStep, { kind: "change" }> => step.kind === "change")
-        .reduce<ChangeItem[]>((rows, step) => {
-          if (!rows.some((row) => row.path === step.path)) rows.push({ path: step.path, diff: "", changeType: step.changeType });
-          return rows;
-        }, []);
-  const latency = props.usage?.latencyMs || evidence.durationMs;
+  const [openTabs, setOpenTabs] = useState<OpenTab[]>([
+    { id: "changes", view: "changes", label: "改动" },
+    { id: "files", view: "files", label: "文件" },
+  ]);
+  const [activeTabId, setActiveTabId] = useState("changes");
+  const [artifactQuery, setArtifactQuery] = useState("");
+  const [copiedPath, setCopiedPath] = useState("");
+  const [previewState, setPreviewState] = useState<PreviewState | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [fullscreen, setFullscreen] = useState(false);
+  /** 面板宽度：窄的时候顶部标签只留图标与名称，避免把中文挤成竖排。 */
+  const [panelWidth, setPanelWidth] = useState(PANEL_WIDTH_DEFAULT);
+  const [treeEntries, setTreeEntries] = useState<TreeEntry[]>([]);
+  const [fileContents, setFileContents] = useState<Record<string, FileContent>>({});
+  const [fileImages, setFileImages] = useState<Record<string, string>>({});
+  const [fileLoadingPath, setFileLoadingPath] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const savedWidth = useRef("");
+  const fileImagesRef = useRef<Record<string, string>>({});
+  const activeTab = openTabs.find((item) => item.id === activeTabId) ?? openTabs[0] ?? null;
+  const activeView = activeTab?.view ?? "changes";
+  const fileTabs = openTabs.filter((item) => item.view === "file");
 
-  const acceptance = props.acceptance ?? [];
-  const testInfo = props.test ?? null;
-  const testRow = testState(testInfo);
-  const activity = activityRows(props.steps);
-  // 计数写在标签上：不点开也知道哪一栏有东西，避免"点进去才发现是空的"。
-  const tabs: { key: PanelTab; label: string; count: number }[] = [
-    { key: "changes", label: "变更", count: files.length },
-    { key: "evidence", label: "证据", count: acceptance.length + (testRow === "none" ? 0 : 1) },
-    { key: "activity", label: "活动", count: activity.length },
-  ];
+  useEffect(() => {
+    const stored = Number(readString(PANEL_WIDTH_KEY));
+    const width = Number.isFinite(stored) && stored > 0 ? clampPanelWidth(stored) : PANEL_WIDTH_DEFAULT;
+    if (panelRef.current && !fullscreen) panelRef.current.style.width = `${width}px`;
+  }, [fullscreen]);
+
+  useEffect(() => {
+    const node = panelRef.current;
+    if (!node) return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 0;
+      if (width > 0) setPanelWidth(width);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  const compact = !fullscreen && panelWidth < 640;
+  const narrow = !fullscreen && panelWidth < 420;
+
+  useEffect(() => {
+    fileImagesRef.current = fileImages;
+  }, [fileImages]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(fileImagesRef.current).forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeView !== "files" || !props.projectId) return;
+    let cancelled = false;
+    void fetchTree(props.projectId, "", 4)
+      .then((response) => {
+        if (!cancelled) setTreeEntries(response.entries);
+      })
+      .catch(() => {
+        if (!cancelled) setTreeEntries([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, props.projectId]);
+
+  useEffect(() => {
+    if (activeView !== "preview" || !props.projectId) return;
+    let cancelled = false;
+    void fetchPreview(props.projectId)
+      .then((state) => {
+        if (!cancelled) setPreviewState(state);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, props.projectId]);
+
+  const setWidth = (width: number): number => {
+    const next = clampPanelWidth(width);
+    if (panelRef.current && !fullscreen) panelRef.current.style.width = `${next}px`;
+    return next;
+  };
+  const persistWidth = (): void => {
+    writeString(PANEL_WIDTH_KEY, String(Math.round(panelRef.current?.getBoundingClientRect().width ?? PANEL_WIDTH_DEFAULT)));
+  };
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (fullscreen) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = panelRef.current?.getBoundingClientRect().width ?? PANEL_WIDTH_DEFAULT;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    const move = (next: PointerEvent): void => {
+      setWidth(startWidth + startX - next.clientX);
+    };
+    const stop = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      persistWidth();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  };
+  const resizeWithKeyboard = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (fullscreen) return;
+    const current = panelRef.current?.getBoundingClientRect().width ?? PANEL_WIDTH_DEFAULT;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setWidth(current + 24);
+      persistWidth();
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setWidth(current - 24);
+      persistWidth();
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setWidth(PANEL_WIDTH_DEFAULT);
+      persistWidth();
+    }
+  };
+  const toggleFullscreen = (): void => {
+    if (!panelRef.current) return;
+    if (!fullscreen) {
+      savedWidth.current = panelRef.current.style.width;
+      panelRef.current.style.width = "";
+    } else {
+      panelRef.current.style.width = savedWidth.current || `${PANEL_WIDTH_DEFAULT}px`;
+    }
+    setFullscreen(!fullscreen);
+  };
+  const openView = (view: ResultView): void => {
+    const id = view;
+    setOpenTabs((current) => (current.some((item) => item.id === id) ? current : [...current, { id, view, label: VIEW_LABELS[view] }]));
+    setActiveTabId(id);
+  };
+  const openFileTab = (path: string, label?: string): void => {
+    if (!props.projectId) return;
+    const id = `file:${path}`;
+    const name = label || path.split("/").pop() || path;
+    setOpenTabs((current) => (current.some((item) => item.id === id) ? current : [...current, { id, view: "file", label: name, path }]));
+    setActiveTabId(id);
+    if (fileContents[path] || fileImages[path] || fileLoadingPath === path) return;
+    setFileLoadingPath(path);
+    if (isImagePath(path)) {
+      void fetchFileRaw(props.projectId, path)
+        .then((blob) => {
+          const url = URL.createObjectURL(blob);
+          setFileImages((current) => ({ ...current, [path]: url }));
+        })
+        .catch(() => undefined)
+        .finally(() => setFileLoadingPath((current) => (current === path ? null : current)));
+      return;
+    }
+    void fetchFile(props.projectId, path)
+      .then((content) => setFileContents((current) => ({ ...current, [path]: content })))
+      .catch(() => undefined)
+      .finally(() => setFileLoadingPath((current) => (current === path ? null : current)));
+  };
+  const closeTab = (id: string): void => {
+    const index = openTabs.findIndex((item) => item.id === id);
+    const next = openTabs.filter((item) => item.id !== id);
+    setOpenTabs(next);
+    if (activeTabId === id) setActiveTabId(next[Math.min(index, next.length - 1)]?.id ?? "");
+  };
+  const shareActive = (): void => {
+    const value = activeTab?.path ?? props.title;
+    void navigator.clipboard?.writeText(value).catch(() => undefined);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  };
+  const copyArtifactPath = (path: string): void => {
+    void navigator.clipboard?.writeText(path).catch(() => undefined);
+    setCopiedPath(path);
+    window.setTimeout(() => setCopiedPath((current) => (current === path ? "" : current)), 1600);
+  };
+  const downloadArtifacts = (format: "json" | "markdown"): void => {
+    if (!artifacts.length) return;
+    const text = artifactsExport(artifacts, format);
+    const blob = new Blob([text], {
+      type: format === "json" ? "application/json;charset=utf-8" : "text/markdown;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `artifacts-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.${format === "json" ? "json" : "md"}`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+  const beginPreview = (): void => {
+    if (!props.projectId) return;
+    setPreviewBusy(true);
+    setPreviewError("");
+    void startPreview(props.projectId)
+      .then((state) => setPreviewState(state))
+      .catch((error: unknown) => setPreviewError(errorMessage(error)))
+      .finally(() => setPreviewBusy(false));
+  };
+  const endPreview = (): void => {
+    if (!props.projectId) return;
+    setPreviewBusy(true);
+    setPreviewError("");
+    void stopPreview(props.projectId)
+      .then((state) => setPreviewState(state))
+      .catch((error: unknown) => setPreviewError(errorMessage(error)))
+      .finally(() => setPreviewBusy(false));
+  };
+
+  const stepChanges = changesFromSteps(props.steps);
+  const files = uniqueChanges([...props.changes, ...(props.workspaceChanges ?? []), ...stepChanges]);
+  const artifacts = files.filter((change) => change.changeType === "created" || change.diff.startsWith("diff --git"));
+  const artifactGroups = groupArtifacts(artifacts, artifactQuery);
+  const status = statusOf(props.status, props.running);
+  const viewCounts: Record<ResultView, number> = {
+    artifacts: artifacts.length,
+    files: treeEntries.length,
+    changes: files.length,
+    preview: 0,
+  };
+  const activeFileContent = activeTab?.path ? fileContents[activeTab.path] ?? null : null;
+  const activeImageUrl = activeTab?.path ? fileImages[activeTab.path] ?? null : null;
 
   return (
-    <aside className="flex w-[320px] shrink-0 flex-col border-l border-line bg-canvas">
-      <header className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <span className="text-[13px] font-medium">最新一轮</span>
-        <span
-          className={`rounded-full px-1.5 py-0.5 text-[11px] font-medium ${
-            props.status === "waiting_approval"
-              ? "bg-warn/[0.12] text-warn"
-              : props.running
-                ? "bg-brand/[0.08] text-brand"
-                : props.status === "failed"
-                  ? "bg-danger/[0.08] text-danger"
-                  : "bg-surface-2 text-muted"
-          }`}
+    <aside
+      ref={panelRef}
+      className={
+        fullscreen
+          ? "glass fixed inset-0 z-50 flex w-screen flex-col"
+          : "glass relative flex w-[620px] shrink-0 flex-col"
+      }
+    >
+      {!fullscreen && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整面板宽度，双击恢复默认"
+          tabIndex={0}
+          onPointerDown={startResize}
+          onDoubleClick={() => {
+            setWidth(PANEL_WIDTH_DEFAULT);
+            persistWidth();
+          }}
+          onKeyDown={resizeWithKeyboard}
+          className="group absolute -left-1 top-0 z-30 h-full w-2 cursor-col-resize outline-none"
         >
-          {/* 等审批也要如实说：显示"进行中"会让人以为它在自己往下走，
-              实际是卡在一个等他点的按钮上。过期同理——那时候按钮点了也是 409。 */}
-          {props.status === "approval_expired"
-            ? "审批已过期"
-            : props.status === "waiting_approval"
-              ? "等你批准"
-              : props.status === "paused"
-                ? "已暂停"
-                : props.running
-                  ? "进行中"
-                  : props.status === "failed"
-                    ? "失败"
-                    : props.status === "cancelled"
-                      ? "已停止"
-                      : "完成"}
-        </span>
-        <button
-          type="button"
-          onClick={props.onClose}
-          title="收起面板"
-          className="ml-auto grid size-6 place-items-center rounded-md text-faint transition-colors hover:bg-surface-2 hover:text-text"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="size-3.5" aria-hidden>
-            <path d="m14 6-6 6 6 6" />
+          <span className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-brand/60 group-focus-visible:bg-brand/80" />
+        </div>
+      )}
+
+      <div className="relative flex h-12 shrink-0 items-center gap-2 border-b border-line/70 bg-transparent px-3">
+        <span className="grid size-6 shrink-0 place-items-center rounded-lg bg-brand/10 text-brand">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3.5" aria-hidden>
+            <path d="m12 3 8 4-8 4-8-4zM4 12l8 4 8-4M4 17l8 4 8-4" />
           </svg>
-        </button>
-      </header>
+        </span>
+        <span className="shrink-0 text-[12px] font-semibold tracking-[-0.01em]">结果</span>
 
-      <div role="tablist" aria-label="本轮详情" className="flex shrink-0 items-center gap-0.5 border-b border-line px-2 py-1.5">
-        {tabs.map((item) => {
-          const active = tab === item.key;
-          return (
-            <button
-              key={item.key}
-              type="button"
-              aria-selected={active}
-              role="tab"
-              onClick={() => setTab(item.key)}
-              className={`flex items-center gap-1 rounded-md px-2 py-1 text-[12px] transition-colors ${
-                active ? "bg-surface-3 font-medium text-text" : "text-muted hover:bg-surface-2 hover:text-text"
-              }`}
-            >
-              {item.label}
-              <span className="font-mono text-[9px] text-faint">{item.count}</span>
-            </button>
-          );
-        })}
-      </div>
+        <div className="ml-2 flex min-w-0 items-center gap-0.5 overflow-x-auto rounded-lg bg-surface-2/70 p-0.5">
+          {(["artifacts", "changes", "files", "preview"] as ResultView[]).map((view) => {
+            const active = activeView === view;
+            return (
+              <button
+                key={view}
+                type="button"
+                onClick={() => openView(view)}
+                title={`${VIEW_LABELS[view]} · ${viewCounts[view]}`}
+                className={`flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-[11px] transition-colors ${
+                  active ? "bg-surface text-text shadow-[var(--shadow-sm)]" : "text-muted hover:text-text"
+                }`}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3.5 shrink-0" aria-hidden>
+                  <path d={VIEW_ICON[view]} />
+                </svg>
+                {/* 按面板实际宽度取舍：先掉数量，再掉文字。此前按视口 lg 判断，
+                    面板被拖窄后四个中文标签仍全显示，字被挤成竖排。 */}
+                {!narrow && <span>{VIEW_LABELS[view]}</span>}
+                {!compact && <span className="font-mono text-[9px] text-faint">{viewCounts[view]}</span>}
+              </button>
+            );
+          })}
+        </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {/* 用 flex 列而不是 space-y：空态要能 flex-1 撑满剩余高度并垂直居中。
-            贴在顶部时整栏下半截是白的，看着像只加载了一半。 */}
-        <div className="flex min-h-full flex-col gap-4">
-        <section>
-          {/* 这一轮的标题不再抄一遍：顶栏已经是它，左栏也是它，右栏再来第三次
-              只会让人怀疑三处说的是不是同一件事。这里直接从账本开始。 */}
-          {/* 这一轮的账本收成一行。
-              原来四个 8px 小标签各自一块灰底格子，占掉右栏最上面 90px，
-              而右栏其余部分是空的——四个"0"反而成了这一栏最显眼的东西。
-              一行读完：用了什么、动了什么、花了多久。 */}
-          <dl className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1">
-            <div className="flex items-baseline gap-1">
-              <dd className="font-mono text-[12px] text-text">{evidence.calls}</dd>
-              <dt className="font-mono text-[11px] text-faint">工具</dt>
-              {evidence.failed > 0 && (
-                <span className="font-mono text-[11px] text-danger">({evidence.failed} 失败)</span>
-              )}
-            </div>
-            <div className="flex items-baseline gap-1">
-              <dd className="font-mono text-[12px] text-text">{files.length}</dd>
-              <dt className="font-mono text-[11px] text-faint">文件</dt>
-              {evidence.commandCount > 0 && (
-                <span className="font-mono text-[11px] text-faint">/ {evidence.commandCount} 命令</span>
-              )}
-            </div>
-            {/* 耗时与 token 没有值时不占位。原来没数据也渲染一个「—」，页面上
-                并排两个破折号（"— 耗时 — token"），读起来像这一栏坏了，
-                而不是"这一轮还没有数据"。0 工具/0 文件是真值，照常显示。 */}
-            {latency > 0 && (
-              <div className="flex items-baseline gap-1">
-                <dd className="font-mono text-[12px] text-text">{formatDuration(latency)}</dd>
-                <dt className="font-mono text-[11px] text-faint">耗时</dt>
-              </div>
-            )}
-            {props.usage?.totalTokens ? (
-              <div className="flex items-baseline gap-1">
-                <dd className="font-mono text-[12px] text-text">{props.usage.totalTokens.toLocaleString()}</dd>
-                <dt className="font-mono text-[11px] text-faint">token</dt>
-              </div>
-            ) : null}
-          </dl>
-        </section>
-
-        {tab === "changes" &&
-          (files.length === 0 ? (
-            // 空态不再是一句「这一轮没有改文件。」：那句话和加载失败长得一样，
-            // 也说不清这一栏本来会出现什么。
-            <RailEmpty
-              compact
-              fill
-              icon={<RailIcon d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" />}
-              title="这一轮还没有改动文件"
-              body="Agent 改文件后，这里会按文件列出路径、改动类型和 diff。"
-            />
-          ) : (
-            <section>
-              <p className="mb-1.5 font-mono text-[11px] tracking-wide text-faint uppercase">改动的文件</p>
-              <div className="space-y-1">
-                {files.map((file) => {
-                  const open = openPath === file.path;
-                  return (
-                    <div key={file.path} className="overflow-hidden rounded-lg border border-line bg-surface">
-                      {/* 没有 diff 也要能点开：以前这里 disabled，行看着是按钮，
-                          点下去一点反应都没有，用户只会怀疑整个面板坏了。
-                          现在点开至少说明"这一轮没有记录 diff"。 */}
-                      <button
-                        type="button"
-                        aria-expanded={open}
-                        onClick={() => setOpenPath(open ? null : file.path)}
-                        title={file.diff ? "展开看改动" : "这一轮没有记录 diff"}
-                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
-                      >
-                        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-text" title={file.path}>
-                          {file.path}
-                        </span>
-                        <span className={`shrink-0 font-mono text-[9px] ${CHANGE_TONE[file.changeType] ?? "text-muted"}`}>
-                          {CHANGE_LABEL[file.changeType] ?? file.changeType}
-                        </span>
-                      </button>
-                      {open && (
-                        <div className="border-t border-line p-1.5">
-                          {file.diff ? (
-                            <DiffText diff={file.diff} />
-                          ) : (
-                            <p className="px-1 py-1 text-[12px] text-faint">
-                              这一轮只记录了文件路径，没有留下 diff（历史轮次或改动未落盘）。
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          ))}
-
-        {tab === "evidence" &&
-          (acceptance.length === 0 && testRow === "none" ? (
-            // 两项都空时合成一块空态：原来会连着摆两句「没有验收条件」「没有跑测试」，
-            // 读起来像两次报错。
-            <RailEmpty
-              compact
-              fill
-              icon={<RailIcon d="M9 11l2.5 2.5L16 8M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z" />}
-              title="这一轮还没有证据"
-              body="验收条件和测试结论会出现在这里，回答「凭什么说改对了」。"
-            />
-          ) : (
-            <section className="space-y-3">
-              <div>
-                <p className="mb-1.5 font-mono text-[11px] tracking-wide text-faint uppercase">验收条件</p>
-                {acceptance.length === 0 && <p className="px-1 py-2 text-[12px] text-muted">这一轮没有验收条件。</p>}
-                <ul className="space-y-1">
-                  {acceptance.map((item, index) => (
-                    <li key={index} className="flex items-start gap-1.5 text-[12px] leading-relaxed">
-                      <span
-                        className={
-                          item.covered === true ? "text-accent" : item.covered === false ? "text-danger" : "text-faint"
-                        }
-                        title={item.covered === true ? "已覆盖" : item.covered === false ? "没覆盖" : "未判定"}
-                      >
-                        {item.covered === true ? "✓" : item.covered === false ? "✗" : "?"}
-                      </span>
-                      <span className="min-w-0 flex-1 text-muted">
-                        {item.criterion}
-                        {item.note && <span className="text-faint"> · {item.note}</span>}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div>
-                <p className="mb-1.5 font-mono text-[11px] tracking-wide text-faint uppercase">测试</p>
-                {testRow === "none" ? (
-                  <p className="px-1 py-2 text-[12px] text-muted">这一轮没有跑测试。</p>
-                ) : (
-                  <div className="rounded-lg border border-line bg-surface px-2 py-1.5">
-                    <p
-                      className={`text-[12px] ${
-                        testRow === "passed" ? "text-accent" : testRow === "failed" ? "text-danger" : "text-muted"
-                      }`}
-                    >
-                      {testInfo?.skippedReason
-                        ? `${TEST_LABEL[testRow]}：${testInfo.skippedReason}`
-                        : TEST_LABEL[testRow]}
-                    </p>
-                    {testInfo?.command && (
-                      <p className="mt-1 truncate font-mono text-[11px] text-faint" title={testInfo.command}>
-                        $ {testInfo.command}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-            </section>
-          ))}
-
-        {tab === "activity" &&
-          (activity.length === 0 ? (
-            // 正在跑却一条都没有，是「刚开始」而不是「没干活」——两种情形标题不同，
-            // 否则用户会以为这一轮什么都没做。
-            <RailEmpty
-              compact
-              fill
-              icon={<RailIcon d="M4 6h16M4 12h16M4 18h10" />}
-              title={props.running ? "正在开始" : "这一轮还没有记录"}
-              body={
-                props.running
-                  ? "它刚开始动，第一条工具调用出现后就会记在这里。"
-                  : "每一次工具调用和判定都会按顺序记在这里。"
-              }
-            />
-          ) : (
-            <section>
-              <p className="mb-1.5 font-mono text-[11px] tracking-wide text-faint uppercase">这一轮做了什么</p>
-              <ol className="space-y-1">
-                {activity.map((row) => (
-                  <li key={row.key} className="flex items-start gap-2">
-                    <span className={`mt-1 size-1.5 shrink-0 rounded-full ${TONE_CLASS[row.tone]}`} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[12px] text-text" title={row.label}>
-                        {row.label}
-                      </span>
-                      {row.detail && (
-                        <span className="block truncate font-mono text-[11px] text-faint" title={row.detail}>
-                          {row.detail}
-                        </span>
-                      )}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            </section>
-          ))}
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            title={fullscreen ? "退出全屏" : "全屏查看结果"}
+            className="grid size-7 place-items-center rounded-md text-faint transition-colors hover:bg-surface-hover hover:text-text"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="size-3.5" aria-hidden>
+              {fullscreen ? <path d="M9 3v6H3M15 21v-6h6M15 3v6h6M9 21v-6H3" /> : <path d="M3 9V3h6M21 9V3h-6M3 15v6h6M21 15v6h-6" />}
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={props.onClose}
+            title="收起面板"
+            className="grid size-7 place-items-center rounded-md text-faint transition-colors hover:bg-surface-hover hover:text-text"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="size-3.5" aria-hidden>
+              <path d="m14 6-6 6 6 6" />
+            </svg>
+          </button>
         </div>
       </div>
+
+      {fileTabs.length > 0 && (
+        <div className="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-line/70 px-2">
+          {fileTabs.map((tab) => {
+            const active = tab.id === activeTabId;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTabId(tab.id)}
+                title={tab.path || tab.label}
+                className={`group flex h-7 max-w-[220px] shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] transition-colors ${
+                  active ? "bg-surface text-text shadow-[var(--shadow-sm)]" : "text-muted hover:bg-surface-hover hover:text-text"
+                }`}
+              >
+                <span className="min-w-0 truncate">{tab.label}</span>
+                <span
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    closeTab(tab.id);
+                  }}
+                  className="grid size-3.5 shrink-0 place-items-center rounded text-faint hover:bg-surface-3 hover:text-text"
+                  title="关闭"
+                >
+                  ×
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 「改动」视图直接从文件条开始：标题/搜索/范围/证据/活动这一整块已去掉，
+          只保留顶部四个视图切换。其他视图仍需要标签标题、状态与复制路径。 */}
+      {activeView !== "changes" && (
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line/70 bg-transparent px-3">
+          <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-text" title={activeTab?.path || activeTab?.label || "结果"}>
+            {activeTab?.label || "结果"}
+          </span>
+          {activeTab?.path && (
+            <span className="hidden min-w-0 max-w-[240px] truncate font-mono text-[10px] text-faint sm:block" title={activeTab.path}>
+              {activeTab.path}
+            </span>
+          )}
+          <span className={`hidden rounded-full px-2 py-0.5 text-[10px] font-medium sm:inline-flex ${status.badge}`}>{status.label}</span>
+          <button
+            type="button"
+            onClick={shareActive}
+            title={copied ? "已复制" : "复制当前路径"}
+            className="grid size-7 shrink-0 place-items-center rounded-md text-faint transition-colors hover:bg-surface-hover hover:text-text"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="size-3.5" aria-hidden>
+              {copied ? <path d="m5 13 4 4L19 7" /> : <path d="M9 9h10v10H9zM5 15V5h10" />}
+            </svg>
+          </button>
+        </div>
+      )}
+
+      <div className={activeView === "file" ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-hidden px-3 pb-3 pt-2"}>
+        {activeView === "changes" && (
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <CodeChangeView changes={files} scopeLabel="本会话" treeMode={false} />
+          </div>
+        )}
+
+        {activeView === "artifacts" && (
+          <div className="flex h-full flex-col rounded-[var(--radius-md)] border border-line bg-surface">
+            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+              <input
+                type="text"
+                value={artifactQuery}
+                onChange={(event) => setArtifactQuery(event.target.value)}
+                placeholder="搜索产物路径"
+                aria-label="搜索产物路径"
+                className="field min-w-0 flex-1 rounded-md px-2 py-1 text-[12px] outline-none"
+              />
+              <span className="shrink-0 font-mono text-[11px] text-faint">
+                {artifactGroups.reduce((sum, group) => sum + group.items.length, 0)} / {artifacts.length}
+              </span>
+              <button
+                type="button"
+                disabled={!artifacts.length}
+                onClick={() => downloadArtifacts("markdown")}
+                className="rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-muted hover:border-line-strong disabled:opacity-40"
+              >
+                导出 MD
+              </button>
+              <button
+                type="button"
+                disabled={!artifacts.length}
+                onClick={() => downloadArtifacts("json")}
+                className="rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-muted hover:border-line-strong disabled:opacity-40"
+              >
+                JSON
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              {artifacts.length === 0 ? (
+                <RailEmpty
+                  compact
+                  fill
+                  icon={<RailIcon d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z" />}
+                  title="还没有产物"
+                  body="任务生成或新写入的文件会出现在这里。"
+                />
+              ) : artifactGroups.length === 0 ? (
+                <RailEmpty
+                  compact
+                  fill
+                  icon={<RailIcon d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />}
+                  title="没有匹配的产物"
+                  body={`没有路径包含「${artifactQuery.trim()}」；清空搜索可看全部 ${artifacts.length} 个。`}
+                />
+              ) : (
+                <div className="flex flex-col gap-4">
+                  {artifactGroups.map((group) => (
+                    <section key={group.kind}>
+                      <div className="mb-2 flex items-center gap-2">
+                        <h3 className="text-[12px] font-medium text-text">{group.label}</h3>
+                        <span className="font-mono text-[10px] text-faint">{group.items.length}</span>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {group.items.map((change) => {
+                          const stats = diffStats(change.diff);
+                          return (
+                            <div
+                              key={change.path}
+                              className="rounded-[var(--radius-md)] border border-line bg-surface-2 p-3 transition-colors hover:border-brand/40"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => openFileTab(change.path)}
+                                className="block w-full text-left"
+                              >
+                                <span className="block truncate font-mono text-[12px] text-text" title={change.path}>{change.path}</span>
+                                <span className="mt-2 flex items-center gap-2 font-mono text-[10px]">
+                                  <span className="text-accent">+{stats.added}</span>
+                                  <span className="text-danger">−{stats.removed}</span>
+                                  <span className="text-faint">{change.changeType || "modified"}</span>
+                                </span>
+                              </button>
+                              <div className="mt-2 flex items-center justify-between gap-2 border-t border-line pt-2">
+                                <span className="min-w-0 truncate font-mono text-[10px] text-faint">
+                                  {copiedPath === change.path ? "已复制路径" : ""}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => copyArtifactPath(change.path)}
+                                  className="shrink-0 rounded border border-line bg-surface px-2 py-0.5 text-[10px] text-muted hover:border-line-strong"
+                                >
+                                  复制路径
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeView === "files" && (
+          <div className="flex h-full overflow-hidden rounded-[var(--radius-md)] border border-line bg-surface">
+            <div className="w-[210px] shrink-0 overflow-y-auto border-r border-line/70 bg-transparent p-1.5">
+              {!props.projectId ? (
+                <p className="px-2 py-3 text-[11px] leading-relaxed text-faint">当前没有选择项目，无法浏览工作区文件。</p>
+              ) : treeEntries.length === 0 ? (
+                <p className="px-2 py-3 text-[11px] leading-relaxed text-faint">工作区里还没有可显示的文件。</p>
+              ) : (
+                treeEntries.map((entry) => (
+                  <button
+                    key={entry.path}
+                    type="button"
+                    disabled={entry.is_dir}
+                    onClick={() => openFileTab(entry.path, entry.name)}
+                    className={`flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left transition-colors ${
+                      entry.is_dir ? "text-muted" : "text-text hover:bg-surface-hover"
+                    }`}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-3.5 shrink-0" aria-hidden>
+                      {entry.is_dir ? <path d="M3 7h7l2 2h9v9H3z" /> : <path d="M6 3h8l4 4v14H6zM14 3v4h4" />}
+                    </svg>
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px]" title={entry.path}>{entry.name}</span>
+                  </button>
+                ))
+              )}
+            </div>
+            <div className="grid min-w-0 flex-1 place-items-center px-4 text-center">
+              <p className="text-[11px] leading-relaxed text-faint">从左侧选择文件，会打开为新标签页。</p>
+            </div>
+          </div>
+        )}
+
+        {activeView === "file" && (
+          <div className="h-full bg-transparent">
+            {fileLoadingPath === activeTab?.path ? (
+              <div className="grid h-full place-items-center">
+                <div className="text-center">
+                  <div className="mx-auto size-8 animate-spin rounded-full border-2 border-line border-t-brand" />
+                  <p className="mt-3 text-[11px] text-faint">页面加载中</p>
+                </div>
+              </div>
+            ) : activeImageUrl ? (
+              <div className="relative h-full">
+                <Image
+                  unoptimized
+                  fill
+                  src={activeImageUrl}
+                  alt={activeTab?.label || "图片预览"}
+                  sizes="(max-width: 768px) 100vw, 50vw"
+                  className="object-contain p-4"
+                />
+              </div>
+            ) : activeFileContent ? (
+              <FilePreview
+                path={activeTab?.path ?? ""}
+                content={activeFileContent}
+                files={files.map((change) => change.path)}
+                onFileClick={openFileTab}
+              />
+            ) : (
+              <div className="grid h-full place-items-center px-4 text-center">
+                <p className="text-[11px] leading-relaxed text-danger">文件读取失败。</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeView === "preview" && (
+          <div className="flex h-full flex-col rounded-[var(--radius-md)] border border-line bg-surface">
+            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+              <span className="min-w-0 flex-1 truncate text-[12px] text-text">
+                {previewHeadline(previewState)}
+              </span>
+              {previewState?.status === "running" ? (
+                <>
+                  <span className="font-mono text-[10px] text-faint">{previewIsolation(previewState)}</span>
+                  <span className="font-mono text-[10px] text-faint">{previewExpiry(previewState)}</span>
+                  {previewState.url && (
+                    <a
+                      href={previewState.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-muted hover:border-line-strong"
+                    >
+                      新标签打开
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    disabled={previewBusy}
+                    onClick={() => endPreview()}
+                    className="rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-muted hover:border-line-strong disabled:opacity-40"
+                  >
+                    停止
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  disabled={previewBusy || !props.projectId}
+                  onClick={() => beginPreview()}
+                  className="rounded-md bg-brand px-2.5 py-1 text-[11px] font-medium text-on-brand hover:bg-brand-hover disabled:opacity-40"
+                >
+                  {previewBusy ? "启动中…" : "启动预览"}
+                </button>
+              )}
+            </div>
+            {previewError && (
+              <p className="border-b border-line px-3 py-2 text-[11px] leading-relaxed text-danger">{previewError}</p>
+            )}
+            <div className="min-h-0 flex-1">
+              {!props.projectId ? (
+                <div className="grid h-full place-items-center px-4 text-center">
+                  <p className="text-[11px] leading-relaxed text-faint">当前没有选择项目，无法启动预览。</p>
+                </div>
+              ) : previewState?.status === "running" && previewState.url ? (
+                <iframe
+                  title="应用预览"
+                  src={previewState.url}
+                  sandbox="allow-scripts allow-same-origin allow-forms"
+                  referrerPolicy="no-referrer"
+                  className="h-full w-full border-0 bg-white"
+                />
+              ) : (
+                <div className="grid h-full place-items-center px-4 text-center">
+                  <div className="max-w-[380px]">
+                    <div className="mx-auto grid size-10 place-items-center rounded-md bg-brand/[0.08] text-brand">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-5" aria-hidden>
+                        <path d="M3 5h18v12H3zM8 21h8M12 17v4" />
+                      </svg>
+                    </div>
+                    <p className="mt-3 text-[13px] font-semibold text-text">应用预览</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-faint">
+                      只支持 <code className="font-mono">package.json</code> 的 <code className="font-mono">scripts.start</code> 为
+                      <code className="font-mono"> node &lt;文件&gt;</code> 的项目；不执行 npm。
+                      服务只绑 127.0.0.1，10 分钟后自动停止。
+                    </p>
+                    {previewState?.log_tail && (
+                      <pre className="mt-3 max-h-40 overflow-auto rounded-md border border-line bg-surface-2 p-2 text-left font-mono text-[10px] leading-relaxed text-muted">
+                        {previewState.log_tail}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+            {previewState?.notes?.length ? (
+              <div className="shrink-0 border-t border-line px-3 py-2">
+                {previewState.notes.map((note, index) => (
+                  <p key={`${index}-${note}`} className="text-[10px] leading-relaxed text-faint">{note}</p>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        )}
+      </div>
     </aside>
+  );
+}
+
+function RailIcon({ d }: { d: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+      <path d={d} />
+    </svg>
   );
 }

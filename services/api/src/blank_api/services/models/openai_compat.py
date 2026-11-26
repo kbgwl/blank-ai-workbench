@@ -19,6 +19,7 @@ from blank_api.services.models.base import (
     data_payload,
     openai_content,
     retry_after_seconds,
+    _ready_tool_call,
 )
 from blank_api.services.models.streaming import ToolCallAccumulator, invalid_tool_arguments
 from blank_api.services.effort import rank
@@ -179,7 +180,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                     if content := delta.get("content"):
                         yield content
 
-    async def bind_tools_stream(self, tools, messages, *, on_delta=None, effort: str = "", model: str = "", **kwargs) -> ModelResponse:
+    async def bind_tools_stream(self, tools, messages, *, on_delta=None, on_tool_call=None, effort: str = "", model: str = "", **kwargs) -> ModelResponse:
         """带工具调用的流式调用。
 
         三件必须做对的事：
@@ -213,6 +214,8 @@ class OpenAICompatibleAdapter(ModelAdapter):
         # 同一段思考再跑一遍（对方在整个思考期一个字节都不发）。
         reasoning_events = 0
         reasoning_chars = 0
+        # 每条调用的参数第一次拼完整时回调一次；推测性执行据此提前跑只读工具。
+        speculated: set[int] = set()
 
         async with self._client() as client:
             async with client.stream(
@@ -259,12 +262,19 @@ class OpenAICompatibleAdapter(ModelAdapter):
                             if on_delta is not None:
                                 await on_delta(content)
                         for item in delta.get("tool_calls") or []:
+                            call_index = int(item.get("index") or 0)
                             calls.add(
-                                int(item.get("index") or 0),
+                                call_index,
                                 call_id=str(item.get("id") or ""),
                                 name=str((item.get("function") or {}).get("name") or ""),
                                 arguments=str((item.get("function") or {}).get("arguments") or ""),
                             )
+                            if on_tool_call is not None and call_index not in speculated:
+                                ready = calls.complete(call_index)
+                                if ready is not None:
+                                    speculated.add(call_index)
+                                    # 回调只负责调度后台任务，绝不能在这里等工具跑完。
+                                    await on_tool_call(ready)
                         finish_reason = choice.get("finish_reason") or finish_reason
 
         if not text and not len(calls):
@@ -282,6 +292,11 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 # 整包也要推一次，否则界面等到最后才蹦出全文，流式就白开了
                 if on_delta is not None and response.text:
                     await on_delta(response.text)
+                if on_tool_call is not None:
+                    for call in response.tool_calls or ():
+                        ready = _ready_tool_call(call)
+                        if ready is not None:
+                            await on_tool_call(ready)
                 # 整包形态下思考在 `message.reasoning_content` 里，不在 delta 里；
                 # 不补这一段，上层会把"只想不说"误判成"网关不认流"。
                 if not response.reasoning_chars:

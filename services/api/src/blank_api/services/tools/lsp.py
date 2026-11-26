@@ -371,10 +371,18 @@ def _norm(path: str) -> str:
 
 
 async def _git_ignored(paths: list[str], root: Path) -> set[str]:
-    """批量问 git 哪些文件被忽略；不是仓库 / 没装 git 时返回空集（不过滤）。"""
+    """批量问 git 哪些文件被忽略；不是仓库 / 没装 git 时返回空集（不过滤）。
+
+    工作区自己就被上层仓库忽略时（例如测试临时目录、把 build 目录当工作区打开），
+    上层 .gitignore 会把工作区里的**每个**文件都判成 ignored，LSP 结果会被整批丢光。
+    这种嵌套场景按"无法判断工作区自己的 ignore 语义"处理：不过滤。
+    """
     ignored: set[str] = set()
+    root_arg = Path(root).as_posix()
+    root_key = _norm(root_arg)
     for start in range(0, len(paths), IGNORE_BATCH):
-        batch = paths[start:start + IGNORE_BATCH]
+        # 把工作区根一起送进去：一次进程就能分清"根被忽略"与"只有个别文件被忽略"。
+        batch = [root_arg, *paths[start:start + IGNORE_BATCH]]
         try:
             process = await asyncio.create_subprocess_exec(
                 "git",
@@ -395,9 +403,14 @@ async def _git_ignored(paths: list[str], root: Path) -> set[str]:
                 pass
             continue
         if process.returncode == 0 and stdout:
-            for line in stdout.decode("utf-8", "replace").splitlines():
-                if line.strip():
-                    ignored.add(_norm(line.strip()))
+            lines = {
+                _norm(line.strip())
+                for line in stdout.decode("utf-8", "replace").splitlines()
+                if line.strip()
+            }
+            if root_key in lines:
+                return set()
+            ignored.update(lines)
     return ignored
 
 

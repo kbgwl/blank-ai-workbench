@@ -10,6 +10,7 @@ import {
   fetchPresets,
   fetchProviders,
   fetchUsage,
+  setDefaultProvider,
   testProvider,
   type Ledger,
   type PresetsResponse,
@@ -51,6 +52,8 @@ export function ProvidersView() {
   const [creating, setCreating] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [tests, setTests] = useState<Record<string, TestState>>({});
+  const [defaultBusy, setDefaultBusy] = useState(false);
+  const [defaultError, setDefaultError] = useState<string | null>(null);
 
   const refreshLedger = useCallback(
     (days: number) => {
@@ -83,7 +86,11 @@ export function ProvidersView() {
         setProviders(rows);
         setListError(null);
         setSelectedId((current) =>
-          current !== null && rows.some((provider) => provider.id === current) ? current : (rows[0]?.id ?? null),
+          current !== null && rows.some((provider) => provider.id === current)
+            ? current
+            // 首次进入先落在默认供应商上：列表按名字排序，第一项常是没配 Key 的
+            // 模板厂商，看到的是"配置 anthropic"，而实际默认跑的是 DeepSeek。
+            : (rows.find((provider) => provider.is_default)?.id ?? rows[0]?.id ?? null),
         );
       })
       .catch((caught: unknown) => {
@@ -136,6 +143,29 @@ export function ProvidersView() {
     [refresh, refreshUsage],
   );
 
+  const changeDefault = useCallback(
+    async (providerId: string) => {
+      setDefaultBusy(true);
+      setDefaultError(null);
+      try {
+        await setDefaultProvider(providerId);
+        await refresh();
+      } catch (caught) {
+        setDefaultError(errorMessage(caught));
+      } finally {
+        setDefaultBusy(false);
+      }
+    },
+    [refresh],
+  );
+
+  const defaultProvider = providers?.find((provider) => provider.is_default) ?? null;
+  const defaultOptions = (providers ?? [])
+    .filter((provider) => provider.enabled && provider.api_key_hint)
+    .map((provider) => ({
+      value: provider.id,
+      label: `${PROVIDER_NAMES[provider.name] ?? provider.name} · ${provider.model}`,
+    }));
   const selected = providers?.find((provider) => provider.id === selectedId) ?? null;
   const selectedTest = selected ? tests[selected.id] : undefined;
   // 只数在用的：列表里那三个停用的不该算进「共 N 个」。
@@ -166,6 +196,30 @@ export function ProvidersView() {
               还没有可用模型：这些都没填 API Key，发消息会直接失败。在下面填一个 Key 即可。
             </Notice>
           )}
+
+          {/* 默认模型：不显式选模型时，任务由这里决定用哪一家。
+              以前只能手改 settings.json，界面上「默认模型」显示的和实际跑的
+              可能是两家（真机撞到过：写 deepseek-flash、跑星火）。 */}
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface-2/60 px-3 py-2">
+            <span className="shrink-0 text-[12px] font-medium text-text">默认模型</span>
+            <SelectPopover
+              size="compact"
+              ariaLabel="选择默认模型"
+              value={defaultProvider?.id ?? ""}
+              options={[
+                { value: "", label: "自动（有 Key 的第一家）" },
+                ...defaultOptions,
+              ]}
+              onChange={(value) => void changeDefault(value)}
+              disabled={defaultBusy || providers === null}
+              triggerClassName="min-w-[16rem]"
+              menuMinWidth={280}
+            />
+            <span className="text-[11px] leading-relaxed text-faint">
+              新任务不单独选模型时使用；只列启用且填了 Key 的供应商
+            </span>
+            {defaultError && <span className="text-[11px] text-danger">{defaultError}</span>}
+          </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <SelectPopover

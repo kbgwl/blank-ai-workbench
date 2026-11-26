@@ -54,6 +54,7 @@ from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
     create_provider,
     create_task,
     env,
+    settle,
 )
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src" / "blank_api"
@@ -223,12 +224,18 @@ def test_memorized_powershell_command_does_not_exempt_other_payloads() -> None:
     assert approval_rules.add_rule("run_shell", rule) is True
     durable.persistent_prefixes = approval_rules.load_prefix_rules()
 
-    escapes = [PS_IEX, PS_FILE_IEX, PS_PIPE_OUTSIDE, PS_PCT, CMD_COMSPEC, PS_STRAY_QUOTE, ENC_PWSH, PS_BACKTICK, 'pwsh -Command "Get-ChildItem"']
+    swaps_shell = 'pwsh -Command "Get-ChildItem"'
+    escapes = [PS_IEX, PS_FILE_IEX, PS_PIPE_OUTSIDE, PS_PCT, CMD_COMSPEC, PS_STRAY_QUOTE, ENC_PWSH, PS_BACKTICK, swaps_shell]
     for command in escapes:
         assert covered_by_rules(command, [rule]) is None, f"{PS_PLAIN} 免问了 {command}"
         for policy, shape in ((session, "会话档"), (durable, "落盘档")):
             verdict = _decide(policy, command)
-            assert verdict.outcome == ASK, f"{shape}：{PS_PLAIN} 免问了 {command} -> {verdict.as_dict()}"
+            if command == swaps_shell:
+                # 换壳后记忆规则不覆盖；但只读命令本身有一条独立的自动放行规则，
+                # 这不是"被记忆免问"，属产品既有口径。
+                assert verdict.rule == "readonly:command", verdict.as_dict()
+            else:
+                assert verdict.outcome == ASK, f"{shape}：{PS_PLAIN} 免问了 {command} -> {verdict.as_dict()}"
             assert not verdict.rule.startswith("prefix:"), verdict.as_dict()
 
     # 对照格（必须真的能免问，否则上面的"不免问"就是空断言）
@@ -485,6 +492,7 @@ async def test_graph_card_site_passes_tool_scope_at_runtime(env, workspace: Path
     """图发卡点（``agent/graph.py:1623``）运行时实参对账：``tool_scope`` 必须是关键字且为 False。
 
     run_shell 带命令，:func:`tool_grant_too_wide` 判宽，工具档给不起——卡上就只能有两档。
+    命令必须本身需要审批：只读命令有独立的自动放行规则，不会发卡。
     """
     import blank_api.services.agent.graph as graph_module
 
@@ -501,8 +509,8 @@ async def test_graph_card_site_passes_tool_scope_at_runtime(env, workspace: Path
     task_id = await create_task(env, project_id, ["跑一条 PowerShell 命令"])
     env.mock.reset(
         [
-            {"content": "执行计划：\n1. 列目录"},
-            {"content": "列目录", "tool_calls": [call("run_shell", {"command": PS_PLAIN})]},
+            {"content": "执行计划：\n1. 执行动态表达式"},
+            {"content": "执行", "tool_calls": [call("run_shell", {"command": PS_IEX})]},
             {"content": "已完成"},
             {"content": "已完成"},
         ]
@@ -514,7 +522,8 @@ async def test_graph_card_site_passes_tool_scope_at_runtime(env, workspace: Path
     pending = body["evidence"]["pending_approvals"][0]
     assert recorded, "图发卡点没有调用 approval_options，这条对账是空的"
     assert [item["tool"] for item in recorded] == ["run_shell"], recorded
-    assert recorded[-1]["memo"] == pending["suggested_prefix"] == "powershell -Command Get-ChildItem"
+    memo = 'powershell -Command "Get-ChildItem | Invoke-Expression"'
+    assert recorded[-1]["memo"] == pending["suggested_prefix"] == memo
     assert recorded[-1]["tool_scope"] is False, recorded[-1]
     assert _scopes(pending["approval_options"]) == [SCOPE_ONCE, SCOPE_PREFIX]
     assert pending["approval_options"][1]["label"] == f"本会话总是允许 {pending['suggested_prefix']}"
@@ -572,9 +581,10 @@ async def test_card_prefix_survives_the_whole_ledger_chain(env, workspace: Path)
         f"{API}/tasks/{first_task}/approval",
         json={"approve": True, "provider_id": provider_id, "scope": SCOPE_PREFIX},
     )
-    assert resp.status_code == 200, resp.text
-    resumed = resp.json()
-    assert resumed["task"]["status"] != "waiting_approval", resumed["task"]
+    assert resp.status_code == 202, resp.text
+    await settle()
+    resumed = (await env.client.get(f"{API}/tasks/{first_task}")).json()
+    assert resumed["status"] != "waiting_approval", resumed
 
     events = (await env.client.get(f"{API}/tasks/{first_task}/events")).json()
     granted = [event for event in events if event["type"] == "approval.granted"]

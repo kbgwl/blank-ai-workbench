@@ -25,6 +25,7 @@ from tests.test_agent_v04 import (  # noqa: F401
     create_provider,
     create_task,
     env,
+    settle,
 )
 
 SECRET = "SyntheticNotARealKey0001"  # 合成值，不是凭据
@@ -104,7 +105,8 @@ async def test_the_evidence_package_hides_the_key_while_the_file_keeps_it(env, w
     resp = await env.client.post(
         f"{API}/tasks/{task_id}/approval", json={"approve": True, "provider_id": provider_id}
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
+    await settle()
     # 执行用的是检查点里那份参数，不是事件里打码后的副本——批准了就得写真东西
     assert (workspace / "probe_secret.txt").read_text(encoding="utf-8").count(SECRET) == 1
 

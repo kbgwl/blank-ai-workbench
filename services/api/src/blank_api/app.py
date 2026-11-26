@@ -11,7 +11,7 @@ from blank_api.api.auth import require_token
 from blank_api.api.exception_handlers import register_error_handlers
 from blank_api.api.routes import api_router
 from blank_api.config import get_settings
-from blank_api.helpers.middleware import RateLimitMiddleware
+from blank_api.helpers.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from blank_api.services.agent.manager import run_manager
 from blank_api.services.channels.stream import StreamSupervisor
 
@@ -30,6 +30,14 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
         pass
 
     await recover_pending_runs()
+    # E13：审批接口是「先落 approval.decided，再入队」。两步之间进程被杀时，
+    # 用户看到已批准、任务却停在 waiting_approval。启动时按事件账补一次入队。
+    try:
+        from blank_api.api.routes.tasks import recover_orphan_approvals
+
+        await recover_orphan_approvals()
+    except Exception:
+        pass
     # durable=false 的定时任务与 ScheduleWakeup 的循环只活在进程里：上个进程没了，
     # 它们没有"下一次"可续。启动时作废，避免重启后突然补跑一条谁也说不清来由的任务。
     try:
@@ -142,6 +150,10 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
         if orchestrator is not None:
             await orchestrator.shutdown()
         await run_manager.shutdown()
+        # 预览服务也是我们起的子进程：退出前收掉，别留孤儿 node。
+        from blank_api.services.preview import preview_manager
+
+        await preview_manager.shutdown()
         # 外部工具服务端是我们起的子进程：不在这里收掉，退出后会留下孤儿进程
         from blank_api.services.mcp import manager as mcp_manager
 
@@ -288,6 +300,8 @@ def create_app() -> FastAPI:
     # 0/负数 = 关掉，只该用在受控的批处理实例上；产品默认值一个字没动。
     if settings.rate_limit_rpm > 0:
         app.add_middleware(RateLimitMiddleware, rpm=settings.rate_limit_rpm)
+    # 最后加 = 最外层：限流/错误响应也带安全头。
+    app.add_middleware(SecurityHeadersMiddleware)
     app.include_router(api_router, prefix="/api/v1")
     if guarded:
         _mount_guarded_docs(app)

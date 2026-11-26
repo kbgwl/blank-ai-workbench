@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from blank_api.services import session_grants
 from blank_api.services.permissions import (
     ALLOW,
     ASK,
@@ -23,6 +24,7 @@ from blank_api.services.permissions import (
     MODE_PLAN,
     SCOPE_ONCE,
     SCOPE_PREFIX,
+    SCOPE_SESSION,
     SCOPE_TOOL,
     PermissionPolicy,
     approval_options,
@@ -36,6 +38,8 @@ from blank_api.services.permissions import (
 )
 from blank_api.services.tools.base import ToolDefinition, ok
 from blank_api.services.tools.gateway import ToolGateway
+
+from tests.conftest import _drain_active_runs
 
 from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
     API,
@@ -364,13 +368,17 @@ async def test_gateway_marks_irreversible_even_in_bypass(env, workspace: Path): 
     result = await gateway.execute(
         "run_shell", {"command": "rm -rf /tmp/x"}, context, "execute_action"
     )
-    # 不可逆命令即便全放行也转为待审批；`rm` 不是可记忆前缀，命令类工具又不给工具档，
-    # 所以这张卡上只剩"仅本次允许"一颗钮（#82）。
+    # 不可逆命令即便全放行也转为待审批；`rm` 不是可记忆前缀，命令类工具又不给工具档。
+    # 卡上给「仅本次」与「本会话允许这类动作（不可逆删除）」两档：后者是一次
+    # 当面批准，批准后本会话同类不再逐条问，仍可按会话过期与撤销。
     assert result["status"] == "awaiting_approval"
     assert result["data"]["permission_rule"] == "irreversible"
     assert result["data"]["command_prefix"] == "rm"
     assert result["data"]["suggested_prefix"] == ""
-    assert [item["scope"] for item in result["data"]["approval_options"]] == [SCOPE_ONCE]
+    assert [item["scope"] for item in result["data"]["approval_options"]] == [
+        SCOPE_ONCE,
+        SCOPE_SESSION,
+    ]
     assert not (workspace / "ran.txt").exists()
 
 
@@ -404,6 +412,20 @@ async def _waiting_push_task(env, workspace: Path, mode: str = ""):  # noqa: F81
     return task_id, provider_id, resp.json()
 
 
+async def _approve_and_wait(env, task_id: str, provider_id: str, scope: str) -> dict:
+    """审批接口 202 入队，等后台恢复收尾后再读最终证据。"""
+    resp = await env.client.post(
+        f"{API}/tasks/{task_id}/approval",
+        json={"approve": True, "provider_id": provider_id, "scope": scope},
+    )
+    assert resp.status_code == 202, resp.text
+    # 全量负载下恢复可能要跑两条 git push + 两轮模型，15s 会读到尚未执行完的账。
+    await _drain_active_runs(timeout=60.0)
+    evidence = await env.client.get(f"{API}/tasks/{task_id}/evidence")
+    assert evidence.status_code == 200, evidence.text
+    return evidence.json()
+
+
 async def test_prefix_scope_approval_survives_the_resume(env, workspace: Path):  # noqa: F811
     task_id, provider_id, body = await _waiting_push_task(env, workspace)
     assert body["task"]["status"] == "waiting_approval"
@@ -411,21 +433,17 @@ async def test_prefix_scope_approval_survives_the_resume(env, workspace: Path): 
     assert len(approvals) == 1
     assert approvals[0]["suggested_prefix"] == "git push"
     assert approvals[0]["permission_mode"] == MODE_DEFAULT
-    # 命令类工具的卡上没有工具档（#82）：能按下去的只有"本次"与"这一条命令"
+    # 命令类工具的卡上没有工具档（#82）：本次 / 这一条命令 / 这类动作本会话。
     assert [item["scope"] for item in approvals[0]["approval_options"]] == [
         SCOPE_ONCE,
         SCOPE_PREFIX,
+        SCOPE_SESSION,
     ]
 
-    resp = await env.client.post(
-        f"{API}/tasks/{task_id}/approval",
-        json={"approve": True, "provider_id": provider_id, "scope": SCOPE_PREFIX},
-    )
-    assert resp.status_code == 200, resp.text
-    finished = resp.json()
+    finished = await _approve_and_wait(env, task_id, provider_id, SCOPE_PREFIX)
     # 第二段 git push 同前缀：不该再产生新的待审批
     assert finished["task"]["status"] != "waiting_approval", finished["task"]
-    assert finished["evidence"]["pending_approvals"] == []
+    assert finished["pending_approvals"] == []
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
     granted = [event for event in events if event["type"] == "approval.granted"]
@@ -451,19 +469,45 @@ async def test_prefix_scope_approval_survives_the_resume(env, workspace: Path): 
     assert rules == ["action:approved", "prefix:git push"], rules
 
 
+async def test_session_scope_covers_the_same_category_without_asking_again(
+    env, workspace: Path, tmp_path: Path, monkeypatch
+):  # noqa: F811
+    monkeypatch.setenv("BLANK_SESSION_GRANTS_FILE", str(tmp_path / "session-grants.json"))
+    task_id, provider_id, body = await _waiting_push_task(env, workspace)
+    assert body["task"]["status"] == "waiting_approval"
+
+    finished = await _approve_and_wait(env, task_id, provider_id, SCOPE_SESSION)
+    # 第二条 git push 与第一条同类：会话级授权应当直接放行，不再挂第二张卡。
+    assert finished["task"]["status"] != "waiting_approval", finished["task"]
+    assert finished["pending_approvals"] == []
+
+    events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
+    granted = [event for event in events if event["type"] == "approval.granted"]
+    assert len(granted) == 1, granted
+    assert granted[0]["payload"]["scope"] == SCOPE_SESSION
+    assert granted[0]["payload"]["session_grant_category"] == "git_push"
+    assert granted[0]["payload"]["session_grant_persisted"] is True
+    # 落盘账按会话隔离：这一轮的 thread 认得，另一条会话不认得。
+    thread_id = str(body["task"]["thread_id"])
+    assert session_grants.load_categories(thread_id) == {"git_push"}
+    assert session_grants.load_categories("another-thread") == set()
+
+    rules = [
+        (event["payload"].get("permission") or {}).get("rule")
+        for event in events
+        if event["type"] == "tool.completed" and event["payload"].get("tool") == "run_shell"
+    ]
+    assert rules == ["session_grant:git_push", "session_grant:git_push"], rules
+
+
 async def test_once_scope_asks_again_for_the_next_command(env, workspace: Path):  # noqa: F811
     task_id, provider_id, body = await _waiting_push_task(env, workspace)
     assert body["task"]["status"] == "waiting_approval"
 
-    resp = await env.client.post(
-        f"{API}/tasks/{task_id}/approval",
-        json={"approve": True, "provider_id": provider_id, "scope": SCOPE_ONCE},
-    )
-    assert resp.status_code == 200, resp.text
-    again = resp.json()
+    again = await _approve_and_wait(env, task_id, provider_id, SCOPE_ONCE)
     # 仅本次批准只放行刚才那条命令，第二条 git push origin dev 必须再次打断
     assert again["task"]["status"] == "waiting_approval"
-    assert again["evidence"]["pending_approvals"][0]["arguments"]["command"] == "git push origin dev"
+    assert again["pending_approvals"][0]["arguments"]["command"] == "git push origin dev"
 
 
 async def test_plan_mode_blocks_writes_end_to_end(env, workspace: Path):  # noqa: F811

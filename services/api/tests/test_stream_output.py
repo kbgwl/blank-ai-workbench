@@ -87,6 +87,21 @@ def test_call_without_a_name_is_dropped():
     assert len(calls) == 1  # 但"收到过碎片"这件事要能看见
 
 
+def test_complete_only_returns_when_arguments_parse():
+    """推测执行只认拼完整的参数：半截 JSON 进了执行层会改错地方。"""
+    calls = ToolCallAccumulator()
+    calls.add(0, call_id="a", name="read_file", arguments='{"path": "a')
+    assert calls.complete(0) is None
+
+    calls.add(0, arguments='.py"}')
+    assert calls.complete(0) == {
+        "id": "a",
+        "name": "read_file",
+        "arguments": {"path": "a.py"},
+    }
+    assert calls.complete(1) is None
+
+
 # --------------------------------------------------- 供应商各自的 SSE 方言
 
 

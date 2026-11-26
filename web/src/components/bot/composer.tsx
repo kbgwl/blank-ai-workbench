@@ -10,6 +10,7 @@ import { NEW_CHAT_EVENT } from "@/lib/commands";
 import { DraftImageChips } from "./image-chips";
 import { insertReference } from "./picker";
 import { providerLabel } from "./provider-choice";
+import { configuredProviders } from "../configured-providers";
 import { composerAction } from "./turns";
 import { ReferenceChips } from "./reference-chips";
 import { referencesIn } from "./references";
@@ -26,7 +27,6 @@ export type ComposerProps = {
    */
   providersReady?: boolean;
   projectId: string;
-  onProjectChange: (id: string) => void;
   /** 当前项目已绑定的目录。空数组表示还没绑——这时候一眼就能看出来"没地方干活"。 */
   workspaces: Workspace[];
   /**
@@ -37,13 +37,15 @@ export type ComposerProps = {
    * 数据回来又改口——用户看到的是自己的目录被否认了一次。
    */
   workspaceReady?: boolean;
+  /**
+   * 这个对话选中的目录；`null` = 新对话还没选。
+   *
+   * 不能在这里回落到 `workspaces[0]`：项目里绑过目录，不代表新对话已经选了。
+   */
+  activeWorkspaceId: string | null;
   /** 切到另一个已绑定的目录（不换项目、不换会话）。 */
   onActivateWorkspace: (id: string) => void;
-  /** 手动输入一个本地目录：绑定到当前项目并立刻切过去。 */
-  onBindWorkspacePath: (path: string) => void;
-  /** 当前项目名。Codex 桌面版在输入框上方就这么标：`项目 | Local | 分支`。 */
-  projectName: string;
-  /** 弹目录选择框并绑定。桌面壳里才有系统对话框，浏览器里由上层决定怎么降级。 */
+  /** 弹目录选择框并绑定。桌面壳用系统目录框，浏览器用目录浏览器。 */
   onPickWorkspace: () => void;
   /** 是否具备"挑一个新目录"的能力（桌面壳）。没有就不渲染那个选项。 */
   canPickWorkspace: boolean;
@@ -111,9 +113,6 @@ export function Composer(props: ComposerProps) {
   // 相框那个是十年前的写法，主流产品早就不用单独的图片按钮了。
   const [attachOpen, setAttachOpen] = useState(false);
   const attachRef = useRef<HTMLDivElement>(null);
-  // 手动输入本地目录：浏览器里没有原生目录框，这是唯一能选任意目录的入口。
-  // null = 收起；空串 = 刚打开还没填。
-  const [pathEntry, setPathEntry] = useState<string | null>(null);
   // 斜杠面板的光标。面板不抢焦点，键盘事件仍由 textarea 收。
   const [slashIndex, setSlashIndex] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -186,12 +185,7 @@ export function Composer(props: ComposerProps) {
    * 之前把 7 家供应商全列出来，而它们默认 enabled 却没 Key——用户看到一长串、
    * 选完发消息才发现不能用。选择器只该出现"现在就能发出去的"。
    */
-  const usableProviders = props.providers.filter(
-    (provider) => provider.enabled && (provider.api_key_hint ?? "") !== "",
-  );
-  const unconfigured = props.providers.filter(
-    (provider) => provider.enabled && (provider.api_key_hint ?? "") === "",
-  );
+  const usableProviders = configuredProviders(props.providers);
   // 空 id 只是"没显式选"，后端会按角色分工挑默认供应商——不能画成红色报错。
   const providerInfo = providerLabel(props.providerId, props.providers, props.providersReady ?? true);
 
@@ -203,8 +197,11 @@ export function Composer(props: ComposerProps) {
     (props.draft.trim().length > 0 || readyImages.length > 0) && !props.disabled && !uploading;
   const action = composerAction(props.running, canSend);
 
-  // 后端在没有 is_active 时会回落到第一个，这里保持一致：显示的那个必须就是真正会用的那个。
-  const activeWorkspace = props.workspaces.find((item) => item.is_active) ?? props.workspaces[0] ?? null;
+  // 只认这个对话显式选中的目录。项目里有没有活动目录是另一回事：
+  // 新对话默认没有目录，用户选了才算数。
+  const activeWorkspace = props.activeWorkspaceId
+    ? (props.workspaces.find((item) => item.id === props.activeWorkspaceId) ?? null)
+    : null;
   /**
    * 「在哪儿干活」= 选一个本地目录。
    *
@@ -215,11 +212,11 @@ export function Composer(props: ComposerProps) {
    * 所以这里只列**当前项目**的目录；换目录不换项目、不换会话。
    */
   const workspaceOptions: SelectOption[] = [
-    // 桌面版能开系统目录框；浏览器里没有原生框，所以第二条永远存在。
+    // 只通过目录选择框新增目录；不再提供手填路径——路径写错时后端只能回 422，
+    // 用户看不出是哪一段错了。
     ...(props.canPickWorkspace
-      ? [{ value: "__pick__", label: "选择另一个目录…", description: "打开系统目录选择框" }]
+      ? [{ value: "__pick__", label: "选择目录…", description: "打开目录选择框" }]
       : []),
-    { value: "__path__", label: "输入本地目录路径…", description: "例如 E:/projects/demo" },
     ...props.workspaces.map((workspace) => ({
       value: `ws:${workspace.id}`,
       label: workspace.label,
@@ -229,8 +226,8 @@ export function Composer(props: ComposerProps) {
     })),
   ];
 
-  /** 永远可点：至少还有「输入本地目录路径…」这条入口，不然浏览器里等于不能换目录。 */
-  const workspaceSelectable = true;
+  // 有目录可切、或者能打开目录选择框时，下拉才有意义。
+  const workspaceSelectable = props.canPickWorkspace || props.workspaces.length > 0;
 
   // 场景联动（任务书 §8.2）：换场景时输入框提示词跟着换；记忆开关只在日常场景出现。
   const activeScenario = props.scenarios.find((item) => item.key === props.scenarioKey);
@@ -249,7 +246,7 @@ export function Composer(props: ComposerProps) {
       value: "bypass",
       label: "完全访问",
       description: "工作区内自动读写文件、跑测试、自动修复",
-      warning: "首次装依赖会问一次（本任务之后不再问）；大量删除、工作区外路径、发布、git push、数据库迁移、不可逆操作仍需逐次确认",
+      warning: "首次装依赖会问一次；删除、git push、部署、数据库迁移也会各问一次，批准后本会话同类不再逐条问（默认 24 小时过期，每次执行仍进时间线）。完全访问下，工作区外只读盘点会自动放行；写/删工作区外路径会逐次弹确认，不会自动清理。",
     },
     {
       value: "plan",
@@ -260,7 +257,7 @@ export function Composer(props: ComposerProps) {
   ];
 
   return (
-    <div className="bg-canvas px-4 pt-3 pb-3.5">
+    <div className="bg-transparent px-4 pt-3 pb-3.5">
       <div className="mx-auto w-full max-w-3xl">
         {props.error && (
           <p className="mb-2 rounded-lg border border-danger/25 bg-danger/[0.04] px-2.5 py-1.5 text-[12px] text-danger">
@@ -276,7 +273,7 @@ export function Composer(props: ComposerProps) {
         {/* 没有分隔线，靠边框 + 一点投影把卡片从白底上托起来：页面和白卡同色，
             只留一条线的话线一去掉盒子就"化"进背景里了。 */}
         <div
-          className={`relative rounded-xl border bg-surface shadow-sm transition-colors focus-within:border-brand/45 focus-within:shadow-md ${
+          className={`glass-soft relative rounded-xl transition-colors focus-within:border-brand/45 focus-within:shadow-md ${
             dragging ? "border-brand/60 ring-2 ring-brand/15" : "border-line-strong"
           }`}
           onDragEnter={(event) => {
@@ -380,8 +377,8 @@ export function Composer(props: ComposerProps) {
                 ? "先选一个项目"
                 : props.workspaceReady === false
                   ? "正在读取项目…"
-                  : props.workspaces.length === 0
-                    ? "还没有工作目录：点下面的「未绑定目录」选一个，它才知道在哪儿干活"
+                  : !props.activeWorkspaceId
+                    ? "纯聊天：说点什么，或者贴张图…（要操作电脑，点下面的「选择目录」）"
                     : props.waiting
                       ? "它在等你点一下——批不批上面那张卡，由你定"
                       : props.running
@@ -394,44 +391,6 @@ export function Composer(props: ComposerProps) {
           {/* 工具条：左边是"在哪儿干活、按什么规矩"，右边是"用哪个模型、发不发"。
               以前全部挤在一行且允许收缩，窗口一窄文字类控件就被压成竖排（"不/记/住"）；
               现在整条允许换行，右边整组（开关/模型/发送）作为一块整体换到下一行靠右。 */}
-          {pathEntry !== null && (
-            <div className="mb-1 flex flex-wrap items-center gap-1.5 border-t border-line px-2.5 pt-2">
-              <input
-                autoFocus
-                value={pathEntry}
-                onChange={(event) => setPathEntry(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && pathEntry.trim()) {
-                    props.onBindWorkspacePath(pathEntry.trim());
-                    setPathEntry(null);
-                  }
-                  if (event.key === "Escape") setPathEntry(null);
-                }}
-                placeholder="本地目录的完整路径，例如 E:////projects////demo"
-                aria-label="本地目录路径"
-                className="min-w-[14rem] flex-1 rounded-md border border-line bg-surface px-2 py-1.5 font-mono text-[12px] text-text placeholder:text-faint focus:outline-none"
-              />
-              <button
-                type="button"
-                disabled={pathEntry.trim() === ""}
-                onClick={() => {
-                  props.onBindWorkspacePath(pathEntry.trim());
-                  setPathEntry(null);
-                }}
-                className="rounded-md border border-brand/40 bg-brand/10 px-2 py-1 text-[12px] text-brand transition-colors hover:bg-brand/15 disabled:opacity-50"
-              >
-                绑定并切换
-              </button>
-              <button
-                type="button"
-                onClick={() => setPathEntry(null)}
-                className="rounded-md border border-line px-2 py-1 text-[12px] text-muted transition-colors hover:text-text"
-              >
-                取消
-              </button>
-            </div>
-          )}
-
           <div className="flex flex-wrap items-center gap-x-1 gap-y-1 px-2.5 pt-1 pb-2.5">
             {/* 附件只剩一个「+」。以前是 @ 和相框两个图标并排：相框是十年前
                 图片上传的写法，现在的 agent 都把附件收进一个入口，输入框更干净。 */}
@@ -514,7 +473,7 @@ export function Composer(props: ComposerProps) {
             {/* 一条竖线把"操作按钮"和"上下文下拉"分开：之前它们长得一样、挨得也近。 */}
             <span className="mx-0.5 h-4 w-px shrink-0 bg-line" aria-hidden />
 
-            {/* 工作目录：菜单里直接列目录（含别的项目），选它就是切项目。 */}
+            {/* 工作目录：菜单里列当前项目的目录；换目录不换项目、不换会话。 */}
             {workspaceSelectable ? (
               <SelectPopover
                 size="compact"
@@ -526,24 +485,20 @@ export function Composer(props: ComposerProps) {
                     props.onPickWorkspace();
                     return;
                   }
-                  if (next === "__path__") {
-                    setPathEntry("");
-                    return;
-                  }
                   if (!next.startsWith("ws:")) return;
                   props.onActivateWorkspace(next.slice(3));
                 }}
                 renderValue={() => (
                   <span className="flex min-w-0 items-center gap-1">
                     <FolderIcon />
-                    <span className="truncate">{activeWorkspace?.label ?? "未绑定目录"}</span>
+                    <span className="truncate">{activeWorkspace?.label ?? "选择目录"}</span>
                   </span>
                 )}
-                triggerClassName={`max-w-[176px] min-w-[88px] ${activeWorkspace ? "" : "text-danger"}`}
+                triggerClassName="max-w-[176px] min-w-[88px]"
                 menuMinWidth={280}
               />
             ) : activeWorkspace ? (
-              // 不能选目录的环境（CLI 静态站）里，已绑定的目录要如实显示名字，
+              // 不能选目录的环境里，已绑定的目录要如实显示名字，
               // 不能因为"改不了"就冒充"没绑定"——那会把用户赶去项目页白跑一趟。
               <span
                 title={activeWorkspace.path || "在哪个目录里干活（桌面版可切换）"}
@@ -554,14 +509,14 @@ export function Composer(props: ComposerProps) {
               </span>
             ) : (
               <span
-                title="这个项目还没绑定目录，去「项目」页绑一个"
-                className="rounded-lg px-2 py-1.5 text-[13px] text-danger"
+                title="这个对话还没有选择目录"
+                className="rounded-lg px-2 py-1.5 text-[13px] text-faint"
               >
-                未绑定目录
+                未选择目录
               </span>
             )}
 
-            {/* 场景选择器（§8.1 顶部唯一入口）：决定这轮在哪个场景跑。
+            {/* 场景选择器（§8.1 工具条唯一入口）：决定这轮在哪个场景跑。
                 目录为空说明清单还没读到，隐藏而不是渲染一个空下拉。 */}
             {props.scenarios.length > 0 && (
               <SelectPopover
@@ -605,13 +560,6 @@ export function Composer(props: ComposerProps) {
                         ...usableProviders.map((provider) => ({
                           value: provider.id,
                           label: provider.model ? `${provider.name} · ${provider.model}` : provider.name,
-                        })),
-                        // 没配 Key 的不当作可选项，但列出来说明"为什么它不在上面"。
-                        ...unconfigured.map((provider) => ({
-                          value: provider.id,
-                          label: provider.name,
-                          description: "未配置 API Key——去设置里填了才可用",
-                          disabled: true,
                         })),
                       ]
                 }
@@ -672,7 +620,7 @@ export function Composer(props: ComposerProps) {
                 disabled={action === "disabled"}
                 title={action === "stop" ? "停止这一轮（想插一句话直接按 Enter）" : "发送（Enter）"}
                 aria-label={action === "stop" ? "停止这一轮" : "发送"}
-                className="grid size-8 shrink-0 place-items-center rounded-full bg-brand text-on-brand transition-opacity hover:opacity-90 disabled:opacity-30"
+                className="brand-glass grid size-8 shrink-0 place-items-center rounded-full bg-brand text-on-brand transition-opacity hover:opacity-90 disabled:opacity-30"
               >
                 {action === "stop" ? (
                   <span className="size-2.5 rounded-[2px] bg-current" />
@@ -703,7 +651,7 @@ export function Composer(props: ComposerProps) {
               <div className="absolute bottom-full left-2 right-2 z-30 mb-1 flex items-start gap-2 rounded-xl border border-warn/30 bg-warn/[0.05] px-3 py-2 shadow-[var(--shadow-lg)]">
                 <span className="mt-[1px] shrink-0 text-[12px] text-warn">@</span>
                 <span className="min-w-0 flex-1 text-[12px] leading-relaxed text-muted">
-                  还没有绑定工作区，引用不了文件。先在下面的「未绑定目录」里选一个目录。
+                  这个对话还没有选择目录，引用不了文件。先点下面的「选择目录」选一个。
                 </span>
                 <button
                   type="button"
@@ -719,7 +667,9 @@ export function Composer(props: ComposerProps) {
         {/* 场景与权限的边界要写在用户看得见的地方（v164 §4.3 / v0.10.1 §4）。
             只在提示词里写"别改代码"等于没说：用户点开发送才发现做不了。 */}
         <p className="mt-2 text-center text-[12px] text-faint">
-          {props.permissionMode === "plan"
+          {!props.activeWorkspaceId
+            ? "当前是纯聊天：不会读写文件、不会执行命令。要操作电脑，先点下面的「选择目录」；单个目录只覆盖该目录，检查整机需选盘根或把盘加入允许列表。"
+            : props.permissionMode === "plan"
             ? "计划模式：只读分析和出建议，不改文件、不执行命令。要动手请切回「询问」或「完全访问」。"
             : activeScenario && !activeScenario.allowWrite
               ? `「${activeScenario.label}」场景只读：不修改文件、不执行命令。要动手请切换到开发场景。`
@@ -728,7 +678,7 @@ export function Composer(props: ComposerProps) {
                     .slice(0, 4)
                     .join(" / ")}${activeScenario.writeExtensions.length > 4 ? " 等文档" : ""}；改代码请切换到开发场景。`
                 : props.permissionMode === "bypass"
-                  ? "完全访问：工作区内自动读写和测试；装依赖首次会问一次，删除、工作区外路径、发布仍会先确认。"
+                  ? "完全访问：工作区内自动读写和测试；工作区外只读盘点自动放行；写/删工作区外路径会逐次弹确认，不会自动清理。首次装依赖、内联脚本（如 python -c）、删除、推送、部署、迁移仍会各问一次，批准后本会话同类不再逐条问。"
                   : "它会读你的代码、改文件、跑命令；高风险操作会先问你。"}
         </p>
       </div>

@@ -54,6 +54,7 @@ from blank_api.services.sandbox.tiers import (
 from blank_api.services.tools import build_default_tools
 from blank_api.services.tools.shell import _run_shell, execute_command
 
+from tests.conftest import _drain_active_runs
 from tests.test_agent_v04 import (  # noqa: F401  (env 是夹具，故意导入)
     API,
     call,
@@ -540,9 +541,11 @@ async def test_approved_bypass_runs_once_then_asks_again(env, workspace: Path, l
         f"{API}/tasks/{task_id}/approval",
         json={"approve": True, "provider_id": provider_id, "scope": "once"},
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
+    await _drain_active_runs()
     # 第一次执行完后模型又发起同一条调用，第二次必须重新挂卡。
-    assert resp.json()["task"]["status"] == "waiting_approval", resp.json()["task"]
+    approved_evidence = (await env.client.get(f"{API}/tasks/{task_id}/evidence")).json()
+    assert approved_evidence["task"]["status"] == "waiting_approval", approved_evidence["task"]
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
     completed = [
@@ -564,7 +567,8 @@ async def test_approved_bypass_runs_once_then_asks_again(env, workspace: Path, l
         f"{API}/tasks/{task_id}/approval",
         json={"approve": False, "provider_id": provider_id, "scope": "once"},
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
+    await _drain_active_runs()
 
     evidence = (await env.client.get(f"{API}/tasks/{task_id}/evidence")).json()
     bypass = evidence["boundaries"]["sandbox_bypass"]

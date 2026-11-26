@@ -90,6 +90,8 @@ function buildElectronStub({ lock, trayMode, hotkeyMode, userData }) {
   // 通知一律记账：谁弹出去了、标题正文是什么、点没点得到——这三件事都要能在
   // 测试里直接断言，而不是靠日志里那句"弹通知"自我证明。
   const notifications = [];
+  const external = [];
+  const ipcHandlers = new Map();
   let appUserModelId = "";
 
   /**
@@ -170,7 +172,9 @@ function buildElectronStub({ lock, trayMode, hotkeyMode, userData }) {
       this.webContents = {
         once: (name, fn) => this._onWc(name, fn),
         on: (name, fn) => this._onWc(name, fn),
-        setWindowOpenHandler() {},
+        setWindowOpenHandler: (handler) => {
+          this.openHandler = handler;
+        },
         executeJavaScript: async () => 0,
         capturePage: async () => ({ toPNG: () => Buffer.alloc(0) }),
         // 通知跳转前要读当前 URL 判断"是不是已经在看这一条"。
@@ -340,13 +344,34 @@ function buildElectronStub({ lock, trayMode, hotkeyMode, userData }) {
         return { response: 2 };
       },
     },
-    shell: { openPath: async () => "", openExternal: async () => {} },
-    ipcMain: { on() {}, handle() {} },
+    shell: {
+      openPath: async () => "",
+      openExternal: async (url) => {
+        external.push(url);
+      },
+    },
+    ipcMain: {
+      on() {},
+      handle(name, fn) {
+        ipcHandlers.set(name, fn);
+      },
+    },
     protocol: { registerSchemesAsPrivileged() {}, handle() {} },
     clipboard: { writeText() {} },
   };
 
-  return { electron, windows, app, trayRecords, shortcut, dialogs, notifications, getAumid: () => appUserModelId };
+  return {
+    electron,
+    windows,
+    app,
+    trayRecords,
+    shortcut,
+    dialogs,
+    notifications,
+    external,
+    ipcHandlers,
+    getAumid: () => appUserModelId,
+  };
 }
 
 async function waitFor(predicate, label, timeoutMs = 8000) {
@@ -580,6 +605,8 @@ async function bootShell(options = {}) {
     requests,
     stub,
     spawnCalls,
+    external: stub.external,
+    ipc: stub.ipcHandlers,
     windows: stub.windows,
     app: stub.app,
     tray: stub.trayRecords,
@@ -850,6 +877,78 @@ test("启动接线：复用已有后端、托盘就绪、更新走完检查→�
     assert.ok(shell.logIncludes("更新包已就绪"), "下载并通过校验后要留下可追溯的一行");
     assert.ok(shell.logIncludes("更新决策 action=available"));
   } finally {
+    await shell.cleanup();
+  }
+});
+
+test("外链只放行 http(s)：file:/自定义协议不进系统浏览器，主窗口也不导航出去", async () => {
+  const shell = await bootShell();
+  try {
+    const win = shell.win;
+    assert.equal(typeof win.openHandler, "function", "必须注册 window.open 处理器");
+
+    const externalOpen = win.openHandler({ url: "https://example.com/doc" });
+    assert.equal(externalOpen.action, "deny", "新窗口一律 deny，交给系统浏览器");
+    assert.deepEqual(shell.external, ["https://example.com/doc"]);
+
+    win.openHandler({ url: "file:///C:/Windows/win.ini" });
+    win.openHandler({ url: "ms-msdt:/id" });
+    assert.deepEqual(
+      shell.external,
+      ["https://example.com/doc"],
+      "file:/自定义协议绝不能交给 shell.openExternal",
+    );
+
+    win.openHandler({ url: "app://bundle/tasks" });
+    assert.equal(win.loadedUrl, "app://bundle/tasks", "站内 target=_blank 应在当前窗口导航");
+    assert.deepEqual(shell.external, ["https://example.com/doc"]);
+
+    const blocked = {
+      defaultPrevented: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+    };
+    win._emitWc("will-navigate", blocked, "https://example.com/next");
+    assert.equal(blocked.defaultPrevented, true, "主窗口不许导航到外站");
+    assert.deepEqual(shell.external, [
+      "https://example.com/doc",
+      "https://example.com/next",
+    ]);
+
+    const internal = {
+      defaultPrevented: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+    };
+    win._emitWc("will-navigate", internal, "app://bundle/index.html");
+    assert.equal(internal.defaultPrevented, false, "app://bundle 内部页面必须放行");
+  } finally {
+    await shell.cleanup();
+  }
+});
+
+test("打开路径只接受目录：文件不交给 shell.openPath", async () => {
+  const shell = await bootShell();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "blank-open-dir-"));
+  try {
+    const file = path.join(dir, "note.txt");
+    fs.writeFileSync(file, "x");
+    const handler = shell.ipc.get("blank:open-path");
+    assert.equal(typeof handler, "function", "必须注册 blank:open-path");
+
+    assert.deepEqual(await handler({}, { path: file }), {
+      ok: false,
+      reason: "只能打开目录，不能打开文件",
+    });
+    assert.deepEqual(await handler({}, { path: path.join(dir, "missing") }), {
+      ok: false,
+      reason: "目录不存在，可能已被移动或删除",
+    });
+    assert.deepEqual(await handler({}, { path: dir }), { ok: true });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
     await shell.cleanup();
   }
 });

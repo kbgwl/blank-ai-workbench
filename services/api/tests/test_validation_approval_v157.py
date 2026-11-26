@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import _drain_active_runs
 from tests.test_agent_v04 import (
     API,
     MockModel,
@@ -103,16 +104,17 @@ async def test_validation_channel_approval_executes_run_tests(
     resp = await env.client.post(
         f"{API}/tasks/{task_id}/approval", json={"approve": True, "provider_id": provider_id, "scope": "once"}
     )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
+    assert resp.status_code == 202, resp.text
+    await _drain_active_runs()
+    body = (await env.client.get(f"{API}/tasks/{task_id}/evidence")).json()
     assert body["task"]["status"] == "succeeded", body
     # 批准后测试真的跑了：validation 必须有 pytest 的结论，而不是一句 skipped。
-    assert body["evidence"]["validation"]["passed"] is True, body["evidence"]["validation"]
-    assert "pytest" in body["evidence"]["validation"]["command"]
-    assert body["evidence"]["pending_approvals"] == []
+    assert body["validation"]["passed"] is True, body["validation"]
+    assert "pytest" in body["validation"]["command"]
+    assert body["pending_approvals"] == []
     assert not any(
-        "待审批" in risk or "未获批准" in risk for risk in body["evidence"]["unverified_risks"]
-    ), body["evidence"]["unverified_risks"]
+        "待审批" in risk or "未获批准" in risk for risk in body["unverified_risks"]
+    ), body["unverified_risks"]
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
     types = [event["type"] for event in events]
@@ -137,18 +139,19 @@ async def test_validation_channel_denial_keeps_honest_records(
     resp = await env.client.post(
         f"{API}/tasks/{task_id}/approval", json={"approve": False, "provider_id": provider_id, "scope": "once"}
     )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
+    assert resp.status_code == 202, resp.text
+    await _drain_active_runs()
+    body = (await env.client.get(f"{API}/tasks/{task_id}/evidence")).json()
     # 驳回不是失败：代码没问题，是命令没获批。任务照常收尾，但账要如实。
     assert body["task"]["status"] == "succeeded", body
-    validation = body["evidence"]["validation"]
+    validation = body["validation"]
     assert validation["passed"] is None and validation["status"] == "skipped", validation
     assert "未获授权" in validation["skipped_reason"], validation
     assert any(
-        "未获授权" in risk or "未做自动化校验" in risk for risk in body["evidence"]["unverified_risks"]
-    ), body["evidence"]["unverified_risks"]
-    assert not any("待审批" in risk for risk in body["evidence"]["unverified_risks"])
-    assert body["evidence"]["pending_approvals"] == []
+        "未获授权" in risk or "未做自动化校验" in risk for risk in body["unverified_risks"]
+    ), body["unverified_risks"]
+    assert not any("待审批" in risk for risk in body["unverified_risks"])
+    assert body["pending_approvals"] == []
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
     types = [event["type"] for event in events]

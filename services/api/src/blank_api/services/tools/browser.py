@@ -100,7 +100,29 @@ def resolve_target(root: Path, url: str) -> tuple[str, str]:
             )
         return value, ""
     if value.startswith("file://"):
-        return value, ""
+        # file:// 也必须落在工作区内。只放行前缀等于 "" 或 localhost 的本机文件：
+        # 放过 file:///C:/Users/... 等于把浏览器变成任意本地文件的读取器。
+        from urllib.parse import unquote, urlparse
+
+        parsed = urlparse(value)
+        if (parsed.netloc or "").lower() not in ("", "localhost"):
+            return "", f"file:// 只能打开本机文件，拒绝 {parsed.netloc}"
+        raw = unquote(parsed.path or "")
+        # Windows 的路径在 URL 里长这样：/C:/work/index.html
+        if os.name == "nt" and len(raw) >= 3 and raw[0] == "/" and raw[2] == ":":
+            raw = raw[1:]
+        try:
+            target = Path(raw).resolve()
+            root_path = Path(root).resolve()
+        except OSError as exc:
+            return "", f"文件路径无法解析：{exc}"
+        if target != root_path and root_path not in target.parents:
+            return "", "file:// 只能打开工作区内的文件"
+        if target.is_dir():
+            target = target / "index.html"
+        if not target.is_file():
+            return "", f"页面不存在：{value}"
+        return "file:///" + quote(target.as_posix(), safe="/:"), ""
     # 当作工作区相对路径：允许目录形式（自动补 index.html）。
     from blank_api.services.workspace import resolve_inside
 
@@ -226,6 +248,8 @@ async def _browser_check(context: ToolContext, arguments: dict) -> ToolOutcome:
         str(int(arguments.get("wait_ms") or 800)),
         "--timeout",
         str(int(arguments.get("timeout_ms") or 20000)),
+        "--settle",
+        str(int(arguments.get("settle_ms") or 600)),
         "--viewport",
         viewport,
         "--shot",
@@ -306,7 +330,8 @@ def browser_tools() -> list[ToolDefinition]:
             name="browser_check",
             description=(
                 "无头打开页面，回控制台错误、选择器断言、动作结果、截图（首屏+末态）。"
-                "写完前端必用它自检。expect 写选择器可带数量，如 canvas:1。"
+                "写完前端必用它自检。expect 写选择器可带数量，如 canvas:1；"
+                "只放打开时元素，点击后元素放 steps 的 assert。"
                 "steps 传动作数组，项形如 {do,selector,expr,min,value,from,to}；"
                 "只断言元素存在不算验过——交付前至少验：打开有什么、点一下变没变、刷新还在不在。"
             ),
@@ -324,6 +349,10 @@ def browser_tools() -> list[ToolDefinition]:
                         "description": "选择器，可写成 canvas:1",
                     },
                     "wait_ms": {"type": "integer", "description": "默认 800"},
+                    "settle_ms": {
+                        "type": "integer",
+                        "description": "click/type/press/drag 后自动等待，默认 600；长请求再加 wait",
+                    },
                     "viewport": {"type": "string", "description": "如 1280x800"},
                     "eval": {"type": "string", "description": "页面里求值的 JS"},
                     "steps": {

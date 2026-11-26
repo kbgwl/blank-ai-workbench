@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { parseInline, parseMarkdown, type Inline } from "./markdown";
+import { parseInline, parseMarkdown, safeLinkHref, type Inline } from "./markdown";
 import { resolveTouchedPath } from "./turns";
 import { HighlightedCode } from "./syntax";
 
@@ -47,10 +47,19 @@ function InlineView({ spans, files, onFileClick }: { spans: Inline[] } & AnchorP
           );
         }
         if (span.kind === "link") {
+          const href = safeLinkHref(span.href);
+          if (!href) {
+            // 不安全的链接不当链接渲染：javascript:/data:/file: 一点就执行。
+            return (
+              <span key={index} className="whitespace-pre-wrap">
+                {span.text}
+              </span>
+            );
+          }
           return (
             <a
               key={index}
-              href={span.href}
+              href={href}
               target="_blank"
               rel="noreferrer noopener"
               className="text-brand underline decoration-brand/30 underline-offset-2 hover:decoration-brand"

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { PageBody, PageHeader } from "@/components/page";
+import { readJson, removeString, writeJson } from "@/lib/safe-storage";
 
 type Feature = {
   id: string;
@@ -23,16 +24,13 @@ const DEFAULT_FEATURES: Feature[] = [
 const STORAGE_KEY = "blank.features";
 
 function initialFeatures(): Feature[] {
-  if (typeof window === "undefined") return DEFAULT_FEATURES;
-  const saved = window.localStorage.getItem(STORAGE_KEY);
-  if (!saved) return DEFAULT_FEATURES;
-  try {
-    const ids = new Set(JSON.parse(saved) as string[]);
-    return DEFAULT_FEATURES.map((feature): Feature => ({ ...feature, status: feature.status === "core" ? "core" : ids.has(feature.id) ? "installed" : "available" }));
-  } catch {
-    window.localStorage.removeItem(STORAGE_KEY);
+  const saved = readJson<unknown>(STORAGE_KEY, null);
+  if (!Array.isArray(saved) || !saved.every((item) => typeof item === "string")) {
+    if (saved !== null) removeString(STORAGE_KEY);
     return DEFAULT_FEATURES;
   }
+  const ids = new Set<string>(saved);
+  return DEFAULT_FEATURES.map((feature): Feature => ({ ...feature, status: feature.status === "core" ? "core" : ids.has(feature.id) ? "installed" : "available" }));
 }
 
 export default function FeaturesPage() {
@@ -41,7 +39,7 @@ export default function FeaturesPage() {
   function toggle(id: string) {
     setFeatures((current) => {
       const next: Feature[] = current.map((feature) => feature.id === id && feature.status !== "core" ? { ...feature, status: feature.status === "installed" ? "available" : "installed" } : feature);
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next.filter((feature) => feature.status === "installed" || feature.status === "core").map((feature) => feature.id)));
+      writeJson(STORAGE_KEY, next.filter((feature) => feature.status === "installed" || feature.status === "core").map((feature) => feature.id));
       return next;
     });
   }

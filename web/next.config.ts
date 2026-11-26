@@ -13,10 +13,16 @@ const distDir = process.env.BLANK_WEB_DIST_DIR ?? ".next";
 
 const nextConfig: NextConfig = {
   distDir,
+  // 审批接口是同步恢复：批准后要跑完 guardian 审查 + 这次工具 + 模型下一跳，
+  // 直到下一个断点或任务结束才返回。真机一次只读盘点用了 52 秒，而 Next 的
+  // rewrite 代理默认 30 秒就掐断，前端只拿到一张 HTML 500，误报「后端不可用」，
+  // 实际决定已落库、命令也已执行。放宽到 15 分钟，覆盖 600 秒单命令上限
+  // 加上审查与模型调用的开销。
+  experimental: { proxyTimeout: 900_000 },
   // 桌面式窗口里左下角常驻栏是导航区，开发浮标会盖住「设置」等入口。
   devIndicators: false,
   // 本机常用 127.0.0.1 打开，不放行会导致 dev 资源被跨源拦截。
-  allowedDevOrigins: ["127.0.0.1", "localhost"],
+  allowedDevOrigins: ["127.0.0.1", "localhost", "192.168.2.111"],
   turbopack: {
     rules: {
       "*.css": {
@@ -35,6 +41,17 @@ if (desktopBuild) {
     {
       source: "/api/:path*",
       destination: `${process.env.API_PROXY_TARGET ?? "http://localhost:8000"}/api/:path*`,
+    },
+  ];
+  // 静态导出不支持 headers()；桌面壳那边在 app:// 协议响应里补同一组。
+  nextConfig.headers = async () => [
+    {
+      source: "/(.*)",
+      headers: [
+        { key: "X-Content-Type-Options", value: "nosniff" },
+        { key: "X-Frame-Options", value: "DENY" },
+        { key: "Referrer-Policy", value: "no-referrer" },
+      ],
     },
   ];
 }

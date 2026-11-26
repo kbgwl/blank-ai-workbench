@@ -56,6 +56,33 @@ class ToolCallAccumulator:
     def __bool__(self) -> bool:
         return bool(self._order)
 
+    def complete(self, index: int) -> dict | None:
+        """某条调用的参数已经拼成完整 JSON 时返回它。
+
+        只给「推测性只读执行」用：模型还在吐后面的调用时，先把已经落定的
+        read_file / glob / search_code 跑起来。参数拼不完整就返回 None，
+        绝不让半截 JSON 进入执行层。
+        """
+        slot = self._items.get(index)
+        if slot is None or not slot.name:
+            return None
+        raw = slot.arguments.strip()
+        # 一个参数碎片都没到就还不算完整：名字先到、参数后到是常态，
+        # 这时按 {} 执行会跑一次参数错误的调用。JSON 对象一定以 } 结尾。
+        if not raw or not raw.endswith("}"):
+            return None
+        try:
+            arguments = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(arguments, dict):
+            return None
+        return {
+            "id": slot.call_id or f"call_{index}",
+            "name": slot.name,
+            "arguments": arguments,
+        }
+
     def as_list(self) -> list[dict]:
         """转成调用链认识的 OpenAI 形状。
 

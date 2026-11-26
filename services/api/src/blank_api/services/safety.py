@@ -3,8 +3,10 @@
 这里刻意分成两个层次，因为混在一起时用户会被自己的配置困住：
 
 * **能力边界（本模块）** —— 硬规则。能不能执行命令、能不能联网、能不能碰工作区
-  以外的路径、哪些命令前缀一律禁止。命中即拒绝，人工审批也不能放行；要放行只能
-  先去设置页改。这是给「客户」的那一层：管理员说不许，就真的不许。
+  以外的路径、哪些命令前缀一律禁止。默认/计划/接受编辑模式下命中即拒绝，人工
+  审批也不能放行；要放行只能先去设置页改。**完全访问是用户显式选择的例外**：
+  工作区外只读盘点自动放行；写/删工作区外路径仍要一张审批卡（不是自动清理），
+  用户逐次确认后才执行。
 * **审批节奏（permissions.py）** —— 软规则。这条命令要不要先问一遍、问过要不要记住。
   改的是节奏，不是边界。
 
@@ -356,6 +358,18 @@ class SafetyPolicy:
                 # 引号包起来的绝对路径就成了绕过「仅限工作区」的后门。
                 outside = self._outside_paths(command, workspace)
                 if outside:
+                    if mode == "bypass":
+                        from blank_api.services.permissions import is_read_only_command
+
+                        # 完全访问下允许只读跨盘盘点（用户明确选了这个档）；真正写/删
+                        # 仍要一张审批卡，且不能靠会话前缀或动作类别自动放行。
+                        if is_read_only_command(command, allow_absolute_paths=True):
+                            return allow("scope:outside_read")
+                        return ask(
+                            "scope:outside_write",
+                            f"命令要访问工作区外的路径：{outside}。完全访问下，跨工作区写操作仍需确认一次。",
+                            prefix,
+                        )
                     return deny(
                         "capability:path_escape",
                         f"命令访问了工作区以外的路径：{outside}。把该目录加入允许列表，或关闭「仅限工作区」后再试。",

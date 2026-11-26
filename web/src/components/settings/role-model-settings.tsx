@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { readJson, writeJson } from "@/lib/safe-storage";
 import { SelectPopover } from "../ui/select-popover";
 import { fetchProviders, type Provider } from "./api";
+import { configuredProviders } from "../configured-providers";
 
 const STORAGE_KEY = "blank.model.roles";
 const ROLES = [
@@ -13,19 +15,16 @@ const ROLES = [
 
 export function RoleModelSettings() {
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [roles, setRoles] = useState<Record<string, string>>(() => {
-    if (typeof window === "undefined") return {};
-    try { return JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<string, string>; } catch { return {}; }
-  });
+  const [roles, setRoles] = useState<Record<string, string>>(() => readJson<Record<string, string>>(STORAGE_KEY, {}));
   useEffect(() => {
-    void fetchProviders().then((rows) => setProviders(rows.filter((provider) => provider.enabled))).catch(() => setProviders([]));
+    void fetchProviders().then((rows) => setProviders(configuredProviders(rows))).catch(() => setProviders([]));
   }, []);
   function update(role: string, providerId: string) {
     const next = { ...roles };
     if (providerId) next[role] = providerId;
     else delete next[role];
     setRoles(next);
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    writeJson(STORAGE_KEY, next);
   }
   return <div className="mt-3 grid gap-2 sm:grid-cols-3">
     {ROLES.map(([role, label]) => <label key={role} className="flex flex-col gap-1 text-[12px] text-muted">

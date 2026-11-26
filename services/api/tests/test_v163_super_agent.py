@@ -404,13 +404,13 @@ def test_approval_ttl_is_configurable_and_clamped(monkeypatch):
     from blank_api.services.agent.graph import approval_ttl_seconds
 
     monkeypatch.delenv("BLANK_APPROVAL_TTL_SECONDS", raising=False)
-    assert approval_ttl_seconds() == 1800, "默认给够半小时，别逼着人守在屏幕前"
+    assert approval_ttl_seconds() == 86400, "默认给够一天，人离开工位也不该把活掐死"
     monkeypatch.setenv("BLANK_APPROVAL_TTL_SECONDS", "60")
     assert approval_ttl_seconds() == 60
     monkeypatch.setenv("BLANK_APPROVAL_TTL_SECONDS", "999999")
     assert approval_ttl_seconds() == 86400, "再长也不能超过一天"
     monkeypatch.setenv("BLANK_APPROVAL_TTL_SECONDS", "不是数字")
-    assert approval_ttl_seconds() == 1800, "读不懂就回默认，不能抛"
+    assert approval_ttl_seconds() == 86400, "读不懂就回默认，不能抛"
 
 
 async def test_expire_stale_approvals_fails_only_the_expired(monkeypatch):

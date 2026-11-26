@@ -12,12 +12,14 @@ from sqlalchemy import select
 
 from blank_api.db import get_session_factory
 from blank_api.models.task import AgentEvent, Task
+from blank_api.services.agent.dispatch import route
 from blank_api.services.agent.scenarios import (
     BRAINSTORM,
     DEV,
     DOCS,
     DAILY,
     REVERSE,
+    ScenarioPolicy,
     WRITE_TOOLS,
     excluded_tools,
     list_scenarios,
@@ -81,7 +83,10 @@ def test_only_daily_can_opt_into_memory():
     assert "memory_write" in system_prompt(
         resolve("daily"), memory_opt_in=True
     )
-    assert system_prompt(DEV, memory_opt_in=True) == ""
+    # 编程场景有自己的纪律段（对照 Claude Code），但绝不带记忆写入段。
+    dev_prompt = system_prompt(DEV, memory_opt_in=True)
+    assert "Claude Code" in dev_prompt
+    assert "记住习惯" not in dev_prompt
 
 
 def test_readonly_scenarios_deny_write_tools():
@@ -92,11 +97,64 @@ def test_readonly_scenarios_deny_write_tools():
     assert {"apply_patch", "run_shell", "run_tests", "git"} <= denied
 
 
+def test_scenario_policies_are_distinct_but_keep_the_safety_floor():
+    # 编程：代码规划 + 代码验证 + 满预算；日常：简洁规划 + 通用验证 + 收紧预算。
+    assert DEV.policy.planning == "code"
+    assert DEV.policy.verification == "code"
+    assert DEV.policy.budget_scale == 1.0
+    assert DAILY.policy.planning == "general"
+    assert DAILY.policy.verification == "general"
+    assert DAILY.policy.budget_scale < 1.0
+    # 日常的“通用验证”不是不验证：涉及代码/页面仍要真跑，安全下限不降。
+    assert "真跑验证" in system_prompt(DAILY)
+
+    items = {item["key"]: item for item in list_scenarios()}
+    assert items["dev"]["planning"] == "code"
+    assert items["daily"]["planning"] == "general"
+    assert items["daily"]["budget_scale"] < items["dev"]["budget_scale"]
+
+
+def test_scenario_budget_scale_actually_shrinks_daily_budget():
+    dev = route("实现一个功能", scenario="dev")
+    daily = route("实现一个功能", scenario="daily")
+
+    assert daily.budget.max_steps < dev.budget.max_steps
+    assert daily.budget.max_seconds < dev.budget.max_seconds
+
+
+def test_scenario_policy_rejects_invalid_values():
+    for kwargs in ({"planning": "guess"}, {"verification": "vibes"}, {"budget_scale": 1.5}):
+        try:
+            ScenarioPolicy(**kwargs)
+        except ValueError:
+            continue
+        raise AssertionError(f"应当拒绝非法策略：{kwargs}")
+
+
+def test_daily_prompt_keeps_the_codex_style_discipline():
+    """日常对标 Codex 的四条：少问、最简做法、做完核对、先给结论。
+
+    这四条是「会聊天但不动手」与 Codex 日常体感最明显的分界；钉在提示词里，
+    以后改措辞不能悄悄丢。
+    """
+    prompt = DAILY.system_prompt
+    assert "直接动手" in prompt
+    assert "一次只问一个" in prompt
+    assert "标准库" in prompt
+    assert "做完必须核对结果" in prompt
+    assert "先给结论" in prompt
+    assert "简体中文" in prompt
+
+
 def test_scenario_catalog_is_stable():
     items = list_scenarios()
     # 产品只开两个场景：编程与日常。文档 / 头脑风暴 / 逆向仍留在 SCENARIOS 里
     # 供老任务跑完，但不再出现在选择器里，也不接受新建。
     assert [item["key"] for item in items] == ["dev", "daily"]
+    assert [item["label"] for item in items] == ["编程", "日常"]
+    # 编程对照 Claude Code 的纪律，日常对照 Codex 的通用 agent 口径。
+    assert "Claude Code" in DEV.system_prompt
+    assert "Codex" in DAILY.system_prompt
     # 只有日常场景带记忆开关——前端按这个字段决定显示与否。
     assert [item["key"] for item in items if item["memory_allowed"]] == ["daily"]
 
@@ -239,9 +297,10 @@ async def test_memory_lifecycle_accept_then_delete(env):  # noqa: F811
 
 def test_scenario_acceptance_matrix_followup153():
     """§6 验收矩阵：五个场景的权限与提示词规则逐条钉死。"""
-    # 开发：读写代码 + 跑测试全开；记忆仍禁（日常习惯不进开发会话）。
+    # 编程：读写代码 + 跑测试全开；记忆仍禁（日常习惯不进编程会话）。
     assert excluded_tools(DEV) == frozenset({"memory_write"})
-    assert not DEV.system_prompt
+    assert "Claude Code" in DEV.system_prompt
+    assert "最小必要" in DEV.system_prompt
 
     # 文档：能落文档文件（allow_write 保持开），但提示词约束「先提纲、不重构代码」。
     # v164：权限细化到文件类型——写文档要保留 apply_patch，跑命令/跑测试/git 拿掉，

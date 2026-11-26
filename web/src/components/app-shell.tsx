@@ -64,11 +64,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-bg">
+    <div className="flex h-dvh overflow-hidden bg-transparent">
       <AppRail />
-      <div className="flex min-w-0 flex-1 flex-col p-2">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-canvas shadow-[var(--shadow-sm)]">
-          <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-6">
+      <div className="flex min-w-0 flex-1 flex-col p-3">
+        <div className="glass flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-lg)]">
+          <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line/70 bg-transparent px-5">
             <Link
               href="/"
               title="返回工作台（Esc）"
@@ -78,7 +78,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <path d="m14 6-6 6 6 6" />
               </svg>
             </Link>
-            <span className="min-w-0 truncate text-[14px] font-medium">{title || "空白格"}</span>
+            <span className="size-1.5 shrink-0 rounded-full bg-brand" aria-hidden />
+            <span className="min-w-0 truncate text-[15px] font-semibold tracking-[-0.01em]">{title || "空白格"}</span>
 
             <div className="ml-auto flex shrink-0 items-center gap-2.5">
               <kbd className="hidden items-center gap-1 rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-faint lg:flex">

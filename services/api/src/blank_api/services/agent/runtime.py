@@ -33,6 +33,7 @@ from blank_api.services.agent.goals import GoalTracker
 from blank_api.services.agent.graph import (
     AgentSession,
     _changed_paths,
+    _git_base_sha,
     _last_assistant_text,
     _with_delivery_notes,
     assumption_ledger,
@@ -62,6 +63,7 @@ from blank_api.services.agent.scenarios import (
 )
 from blank_api.services.agent.store import SerializedSessionFactory
 from blank_api.services.approval_rules import load_prefix_rules
+from blank_api.services.session_grants import load_categories as load_session_grants
 from blank_api.services.approvals import approval_key
 from blank_api.services.permission_rules import (
     load_ruleset,
@@ -96,7 +98,13 @@ from blank_api.services.shell_env import capture as capture_shell
 from blank_api.services.subagent import DEFAULT_STEPS, SubAgentRequest, SubAgentRunner
 from blank_api.services.threads import history_for, session_goal_for, summarize_history
 from blank_api.services.models.base import ModelAdapter, ModelError
-from blank_api.services.permissions import MODE_ACCEPT_EDITS, MODE_DEFAULT, MODE_PLAN, PermissionPolicy
+from blank_api.services.permissions import (
+    MODE_ACCEPT_EDITS,
+    MODE_DEFAULT,
+    MODE_PLAN,
+    SCOPE_SESSION,
+    PermissionPolicy,
+)
 from blank_api.services.tools import TEAM_ADMIN_TOOL_NAMES, SkillCatalog, build_default_tools
 from blank_api.services.tools.base import ToolContext
 from blank_api.services.tools.file_state import FileStateCache
@@ -252,6 +260,12 @@ class RunRequest:
     provider_name: str
     adapter: ModelAdapter
     root: str | Path
+    # 纯聊天：没有工作目录，不暴露任何文件/命令工具，直接作答。
+    chat_only: bool = False
+    # 用户明确要求本轮不要调用工具：可以有工作目录，但工具表必须为空。
+    no_tools: bool = False
+    # 用户只要文件/目录清单：只给 list_files / glob，不读文件内容。
+    list_only: bool = False
     run_id: str = ""
     # 发起轮：引起这一整棵任务树的那一轮。空=这次运行自己就是发起轮（记录器里退回 run_id）。
     # 只有跨任务的链上它才和 run_id 不同：一轮群聊里每个发言成员各有自己的 run_id。
@@ -320,6 +334,10 @@ class RunRequest:
     memory_source: str = ""
     # 团队 Bot 的每条任务都会另存一条群消息；关掉任务级索引，避免搜索里出现两份。
     index_summary: bool = True
+    # 审批决定的恢复载荷（E13）。只在「审批 → 入队 → worker 认领」这条内部链路上
+    # 从 ``agent_runs.request_payload`` 重建，不进入公开 API schema。None 表示这条
+    # run 不是审批恢复；``_execute_claimed_run`` 据此分流 resume / resume_crash。
+    resume_decision: dict | None = None
 
 
 @dataclass
@@ -420,6 +438,12 @@ class AgentRuntime:
                 permissions.approved_actions.discard(key or approval_key(tool, arguments))
             elif row.type == "approval.granted":
                 permissions.remember(tool, arguments, scope)
+                # 会话级授权即使落盘失败，也要靠事件回放活过本次恢复；
+                # 事件里的类别是批准当时算出来的，不按打码后的参数重算。
+                if scope == SCOPE_SESSION:
+                    permissions.remember_session_grant(
+                        str(payload.get("session_grant_category") or "")
+                    )
             else:
                 permissions.forget(tool, arguments, scope)
 
@@ -554,6 +578,9 @@ class AgentRuntime:
             ) from None
 
     async def _prepare(self, request: RunRequest, thread_id: str) -> _RunScope:
+        chat_only = bool(request.chat_only)
+        no_tools = chat_only or bool(request.no_tools)
+        list_only = bool(request.list_only)
         store = SerializedSessionFactory(self.session_factory)
         # 一次执行必须有一个轮 id：入口给了就用入口的（那是 run 台账里那一行，能和
         # AgentRun 对上），没给就退回这条线程的 attempt 键。留空等于账本上出现一批
@@ -596,6 +623,19 @@ class AgentRuntime:
                 message=sandbox.notice,
                 status_code=409,
             )
+        # UP-04：网络在本机后端不由系统强制时，任务一启动就把这条事实推给界面。
+        # 只提示不阻断：用户仍可用，但不能以为命令已经被禁网。
+        if not sandbox.network_enforced and not no_tools:
+            await recorder.add(
+                "sandbox.warning",
+                "receive_task",
+                {
+                    "message": "本机模式下网络访问未受限，Agent 执行的命令可访问外网",
+                    "level": "warning",
+                    "tier": sandbox.tier,
+                    "backend": sandbox.backend,
+                },
+            )
         # 设置页可以关掉按需加载：关掉后所有工具每轮都下发，tool_search 也就没有意义了。
         # 走特性注册表，老字段 tools.search 仍然作为回落值生效。
         tool_search_enabled = is_enabled("tool_search", settings)
@@ -610,18 +650,40 @@ class AgentRuntime:
         # 那个服务端自己——半份工具表也远好过起不来任务。
         # 用原始工作区根而不是任务隔离副本：`.mcp.json` 跟着仓库走，
         # 副本是本次任务的写根，里面不该凭空多出一份 MCP 配置。
-        mcp_bundle = await mcp_manager().bundle(request.root)
-        tools = [*tools, *mcp_bundle.tools]
+        if no_tools or list_only:
+            # 纯聊天/明确不要工具/只要清单：不连接任何外部工具。MCP 也会按
+            # 用户级配置起进程/联网，这一轮不该有这种副作用。
+            from blank_api.services.mcp.bridge import MCPBundle
+
+            mcp_bundle = MCPBundle()
+        else:
+            mcp_bundle = await mcp_manager().bundle(request.root)
+            tools = [*tools, *mcp_bundle.tools]
         # 场景装配（scenarios.py）：只影响系统提示附加段与工具可用性，
         # 不向用户 prompt 拼前缀。被禁工具在注册表里消失、在网关执行处硬拦。
         scenario = resolve_scenario(request.scenario)
         scenario_excluded = excluded_tools(scenario, memory_opt_in=request.memory_opt_in)
+        # 纯聊天没有工作目录，也不该有任何能碰电脑的入口。工具表在装配层清空，
+        # 模型连工具 schema 都看不到；下面建网关仍走同一条路，只是池子为空。
+        if no_tools:
+            tools = []
+        elif list_only:
+            # 只要清单：读文件内容这一步本身就该被挡在装配层，而不是等模型
+            # 读了一堆文件再靠提示词劝它“别读”。
+            from blank_api.services.agent.chat import LIST_ONLY_TOOLS
+
+            tools = [tool for tool in tools if tool.name in LIST_ONLY_TOOLS]
         # J3 任务级隔离：每个任务一个独立可写根 + 一个只属于它的 AppContainer 包。
         # 逆向场景的写根已经单独切到分析区（下一步），不再套一层副本；其余场景打开开关
         # 就整任务迁移到副本里跑，AC 建不起来直接拒绝——不偷偷退回共享根。
         # 续跑/恢复复用同一个任务的根：换一个新克隆会把审批前做的改动丢掉。
         isolation = None
-        if sandbox.policy.task_isolation and scenario.key != "reverse":
+        if (
+            sandbox.policy.task_isolation
+            and scenario.key != "reverse"
+            and not no_tools
+            and not list_only
+        ):
             from blank_api.services.sandbox import task_isolation
 
             isolation = task_isolation.get(request.task_id)
@@ -648,7 +710,9 @@ class AgentRuntime:
         run_root = Path(isolation.path) if isolation is not None else Path(request.root)
         # 上一轮最后停在 worktree 里：恢复后的任务仍然在那棵树上，而不是悄悄退回主工作区。
         # 会话记录按 task_id 存活（审批恢复会重建 ToolContext），目录不在时这里返回 None。
-        worktree_root = worktree_session.active_root(request.task_id)
+        worktree_root = (
+            None if (no_tools or list_only) else worktree_session.active_root(request.task_id)
+        )
         if worktree_root is not None:
             run_root = worktree_root
         # 文件型子代理定义：在最终运行根上发现一次（用户级 agents 目录 + 项目
@@ -726,6 +790,22 @@ class AgentRuntime:
             write_root=write_root,
         )
         gateway.registry.exclude(scenario_excluded)
+        # 文档-only：只改 README/文档、不动源码。把任务台账、子代理、技能发现、
+        # 浏览器、notebook/REPL、计划模式与审查上报收掉；每轮少发约 10K 字符的
+        # schema，且不会让模型看到一堆和这次任务无关的入口。tool_search 仍能
+        # 拉回未被排除的能力（git/web 等）。
+        from blank_api.services.agent.directives import DOC_ONLY_INSTRUCTION, documentation_only
+        from blank_api.services.tools.registry import DOCS_ONLY_EXCLUDED
+
+        docs_only = documentation_only(request.goal, request.acceptance_criteria)
+        if docs_only:
+            removed = gateway.registry.exclude(DOCS_ONLY_EXCLUDED)
+            if removed:
+                await recorder.add(
+                    "tools.excluded",
+                    "receive_task",
+                    {"profile": "docs_only", "tools": removed},
+                )
         allowed = set(request.approved_tools or set())
         approved_actions = set(request.approved_actions or set())
         if request.approve_high_risk:
@@ -746,6 +826,9 @@ class AgentRuntime:
         # 落盘的前缀规则：重启/换任务后仍认得用户以前批准过的命令签名。
         # 读不出来（文件缺失/损坏）就是空集——fail-closed，多问一次而不是少问一次。
         permissions.persistent_prefixes = load_prefix_rules()
+        # 会话级授权按 thread_ref 读：同一会话的下一轮任务仍记得“这类动作
+        # 不再逐条问”。独立任务（thread_ref 为空）没有这一层，行为不变。
+        permissions.session_grants = load_session_grants(request.thread_ref)
         # 计划文件路径随任务固定：计划模式里它是唯一的可写目标，退出后又是"计划在
         # 哪儿"的答案。审批恢复起的新会话必须重新拿到它，否则继承下来的 plan 模式
         # 会变成"连计划都写不了"的死锁。
@@ -862,11 +945,17 @@ class AgentRuntime:
             provider_id=request.provider_id,
             provider_name=request.provider_name,
             trace_id=thread_id,
+            chat_only=chat_only,
+            no_tools=no_tools,
+            list_only=list_only,
             goal=request.goal or request.title,
             skill_instructions=[str(item) for item in request.skill_instructions],
             skill_catalog=skills.listing(),
             agent_catalog=agents.listing(),
-            system_instructions=[str(item) for item in request.system_instructions],
+            system_instructions=[
+                *[str(item) for item in request.system_instructions],
+                *([DOC_ONLY_INSTRUCTION] if docs_only else []),
+            ],
             acceptance_criteria=[str(item) for item in request.acceptance_criteria or ()],
             goal_spec=dict(request.goal_spec or {}),
             acceptance_links=[dict(item) for item in request.acceptance_links or () if isinstance(item, dict)],
@@ -880,7 +969,8 @@ class AgentRuntime:
             token_budget=_token_budget(),
             permissions=permissions,
             # 快照判成只读时，这一整回合就不许写：闸门在这里，不在提示词里。
-            readonly=bool(request.readonly),
+            # 只要清单的任务也按只读跑。
+            readonly=bool(request.readonly) or list_only,
             role_adapters=request.role_adapters or {},
             role_provider_ids=request.role_provider_ids or {},
             router=router,
@@ -1317,9 +1407,16 @@ class AgentRuntime:
                 "provider": request.provider_name,
                 "model": request.adapter.config.model,
                 "scenario": scope.scenario_key,
+                # 场景策略是执行事实，不只写在提示词里：预算/规划口径都按它跑。
+                "scenario_policy": {
+                    "planning": resolve_scenario(scope.scenario_key).policy.planning,
+                    "verification": resolve_scenario(scope.scenario_key).policy.verification,
+                    "budget_scale": resolve_scenario(scope.scenario_key).policy.budget_scale,
+                },
                 # 派发快照（v162）：执行侧按它收紧，事后审计读它——不再靠场景配置反推。
                 "dispatch": dict(request.dispatch or {}),
-                "readonly": bool(request.readonly),
+                "readonly": bool(request.readonly) or bool(request.list_only),
+                "list_only": bool(request.list_only),
                 "memory_opt_in": bool(request.memory_opt_in),
                 "max_steps": session.max_steps,
                 "permission_mode": session.permission_mode,
@@ -1518,6 +1615,20 @@ class AgentRuntime:
         if curated.text:
             await recorder.add("context.curated", "receive_task", curated.as_dict())
         system_rules = list(session.system_instructions)
+        if request.chat_only:
+            # 纯聊天的硬边界：没有目录、没有工具，任何"我改好了/我跑过了"都是谎报。
+            from blank_api.services.agent.chat import CHAT_ONLY_SYSTEM_RULE
+
+            system_rules.append(CHAT_ONLY_SYSTEM_RULE)
+        elif request.list_only:
+            from blank_api.services.agent.chat import LIST_ONLY_SYSTEM_RULE
+
+            system_rules.append(LIST_ONLY_SYSTEM_RULE)
+        elif request.no_tools:
+            # 有目录没关系，但这一轮用户明确不要工具；同样不许声称执行过。
+            from blank_api.services.agent.chat import NO_TOOLS_SYSTEM_RULE
+
+            system_rules.append(NO_TOOLS_SYSTEM_RULE)
         if curated.text:
             system_rules.append(
                 "以下是上下文管家为本次任务挑选的背景资料（可能过时；引用前先核对，"
@@ -1611,6 +1722,27 @@ class AgentRuntime:
         except Exception:  # noqa: BLE001 - 学人失败不该让任务起不来
             persona_block = ""
 
+        # 开局环境预检：把「这台机器有什么解释器、有没有 pip/node/git」一次问清，
+        # 放进系统提示。真实台账里模型为找可装包的 Python 烧掉了十条命令，全是
+        # 信息缺失造成的空转；预检每条进程 3 秒封顶，失败也不影响任务开跑。
+        environment_block = ""
+        if not getattr(session, "no_tools", False):
+            try:
+                from blank_api.services.agent.env_profile import profile_async, render_block
+
+                shell_snapshot = getattr(session, "shell", None)
+                shell_env = shell_snapshot.env_for() if shell_snapshot is not None else None
+                if shell_env is None:
+                    # 没有环境快照时不要探测：空 PATH 下会把「没装」写成事实。
+                    environment_block = ""
+                else:
+                    env_info = await profile_async(str(session.context.root), shell_env)
+                    environment_block = render_block(env_info)
+                    await recorder.add("environment.profiled", "initial", env_info)
+            except Exception:  # noqa: BLE001 - 预检失败不该让任务起不来
+                log.warning("环境预检失败 task=%s", request.task_id, exc_info=True)
+                environment_block = ""
+
         state: dict[str, Any] = {
             "task_id": request.task_id,
             "messages": initial_messages(
@@ -1643,10 +1775,13 @@ class AgentRuntime:
                 initial_user_message=initial_user_message,
                 recalled_experience=recalled_experience,
                 persona_block=persona_block,
+                environment_block=environment_block,
             ),
             "plan": [],
             "steps": 0,
             "repair_rounds": 0,
+            # 审查确定性范围的 baseSha：开局取一次，审批恢复沿用检查点。
+            "base_sha": await asyncio.to_thread(_git_base_sha, str(session.context.root)),
             "tool_results": [],
             "pending": [],
             "acceptance_results": [],
@@ -1725,6 +1860,7 @@ class AgentRuntime:
         scope = await self._prepare(request, thread_id)
         await self._rehydrate(request.task_id, scope.session.permissions)
         await self._set_status(scope, "running")
+        await self._revive_goal(request.task_id)
         payload = {
             "thread_id": thread_id,
             "permission_mode": scope.session.permission_mode,
@@ -1780,6 +1916,29 @@ class AgentRuntime:
         )
         await self._close_hooks(scope)
         return await self._finalize(request, scope, result, interrupts)
+
+    async def _revive_goal(self, task_id: str) -> None:
+        """审批/提问恢复后把目标从 waiting_approval 拉回 executing。
+
+        真机：用户答完问题，任务已经继续跑，状态条却整轮写着「等你批准」——
+        目标的 waiting_approval 是中断那一刻写下的，恢复路径没人改回来。
+        这里只改 waiting_approval，别的状态一律不动。
+        """
+        try:
+            async with self.session_factory() as session:
+                task = await session.get(Task, task_id)
+                if task is None:
+                    return
+                goal_id = _goal_id_of(task.goal_spec)
+                if not goal_id:
+                    return
+                goal = await session.get(Goal, goal_id)
+                if goal is None or str(goal.status or "") != "waiting_approval":
+                    return
+                GoalTracker.transition(goal, "executing", next_action="")
+                await session.commit()
+        except Exception:  # noqa: BLE001 - 状态条一致性不该让恢复本身失败
+            log.warning("恢复时目标状态回写失败 task=%s", task_id, exc_info=True)
 
     async def _finalize(
         self,

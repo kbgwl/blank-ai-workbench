@@ -1,111 +1,81 @@
 @import "tailwindcss";
 
-/* 皮肤：雾白（默认）/ 深渊蓝（data-theme="dark"）。
-   组件只认语义令牌，换肤不改组件。想换品牌色，只改下面 --brand-color 一行：
-   其余派生值（soft / logo / 选区）都从它算出来。
+/* 全站只有一套皮肤：浅色液态玻璃。
+   组件只认语义令牌；想换品牌色，只改下面 --brand-color 一行。
 
-   视觉规范（对齐 Qoder 的克制口径）：
-   - 平面画布：不做渐变背景、不做网格底纹，层次只靠 1px 边框和极轻阴影；
-   - 面板实色：surface 是实色卡片，贴在 canvas 上，不再用半透明磨砂；
-   - 圆角克制：大面 12px、控件 8px、小件 6px，不用胶囊化大圆角；
-   - 字阶固定：正文 13px、辅助 11–12px、标题 13–15px；数字用等宽。
+   液态玻璃的质感来自四层，不是单靠「半透明」：
+   1. 背景：高饱和的极光渐变，玻璃后面必须有颜色可透、有明暗可折射；
+   2. 磨砂：大半径 blur + 高 saturate + 轻微提亮；
+   3. 镜面：顶部 1px 内高光 + 左上角斜向反光，模拟玻璃厚度；
+   4. 边界：亮描边 + 外圈极细暗边 + 大而软的投影，把玻璃从背景上「托」起来。
 
-   ⚠️ --accent 是「在线 / 成功 / 通过」的语义绿（health-pill、succeeded 徽标、
-   covered=true 都用它），不是品牌色。别把它改成品牌蓝，也别和 --ok 拆开。 */
+   ⚠️ --accent 是「在线 / 成功 / 通过」的语义绿，不是品牌色。 */
 :root {
-  /* 近黑主色：参考窗口里没有任何饱和色按钮，实心按钮就是黑底白字。 */
-  --brand-color: #1f1f1f;
+  --brand-color: #6366f1;
 
-  /* 窗口、侧栏、主卡片三层按参考图像素取色：
-     窗口 #e6e6e6、侧栏 #f6f6f6、卡片 #ffffff；侧栏比窗口亮一档，卡片再亮。 */
-  --bg: #e6e6e6;
-  --canvas: #ffffff;
-  --sidebar: #f6f6f6;
-  --surface: #ffffff;
-  --surface-2: #ededed;
-  --surface-3: #e3e3e3;
-  --line: #e2e2e2;
-  --line-strong: #d3d3d3;
-  --text: #1d1d1f;
-  --muted: #5a5a5d;
-  --faint: #8b8b8f;
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
-  --shadow-md: 0 4px 16px -8px rgba(16, 24, 40, 0.14);
-  --shadow-lg: 0 18px 48px -20px rgba(16, 24, 40, 0.22);
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --bg: #e9edff;
+  --canvas: rgba(255, 255, 255, 0.3);
+  --sidebar: rgba(255, 255, 255, 0.24);
+  --surface: rgba(255, 255, 255, 0.46);
+  --surface-2: rgba(255, 255, 255, 0.34);
+  --surface-3: rgba(255, 255, 255, 0.24);
+  --surface-hover: rgba(255, 255, 255, 0.7);
+  --surface-selected: rgba(99, 102, 241, 0.16);
+  --line: rgba(76, 92, 140, 0.14);
+  --line-strong: rgba(76, 92, 140, 0.28);
+  --text: #1b2238;
+  --muted: #4a5575;
+  --faint: #6f7b9a;
+  --shadow-sm: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 10px 30px -20px rgba(58, 74, 140, 0.38);
+  --shadow-md: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 18px 48px -24px rgba(58, 74, 140, 0.42);
+  --shadow-lg: inset 0 1px 0 rgba(255, 255, 255, 0.95), 0 30px 80px -32px rgba(58, 74, 140, 0.46);
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 26px;
 
-  /* 表单控件单独一档底色：
-     浅色皮肤用纯白 + 描边，才读得出「这里可以打字」；
-     跟着 surface-2 用灰填充时，输入框和只读卡片长得一样，会被当成禁用态。 */
-  /* 输入框：底色保持纯白（不做灰填充——灰填充会被读成"禁用"），
-     靠描边与卡片区分。--field-line 要比 --line(#e2e2e2) 深一档：
-     表单在白色卡片里时，两者只差 6 级灰度会糊成一片，看不出哪块能编辑。 */
-  --field-bg: #ffffff;
-  --field-line: #cfcfcf;
-  --field-line-hover: #b4b4b4;
+  --field-bg: rgba(255, 255, 255, 0.52);
+  --field-line: rgba(110, 128, 180, 0.2);
+  --field-line-hover: rgba(110, 128, 180, 0.36);
 
-  --accent: #15803d;
-  --accent-dim: #166534;
-  --accent-soft: #edf7f0;
-  --ok: #15803d;
-  --ok-soft: #eef8f0;
-  --warn: #a16207;
-  --warn-soft: #fdf6e8;
-  --danger: #b42318;
-  --danger-soft: #fdeeed;
+  --accent: #0f9f6e;
+  --accent-dim: #0b7f57;
+  --accent-soft: rgba(15, 159, 110, 0.12);
+  --ok: #0f9f6e;
+  --ok-soft: rgba(15, 159, 110, 0.12);
+  --warn: #b26a00;
+  --warn-soft: rgba(178, 106, 0, 0.12);
+  --danger: #c0263d;
+  --danger-soft: rgba(192, 38, 61, 0.12);
 
   --brand: var(--brand-color);
   --brand-2: var(--brand-color);
-  --brand-soft: color-mix(in srgb, var(--brand-color) 8%, transparent);
-  --logo-bg: var(--brand-color);
+  --brand-hover: color-mix(in srgb, var(--brand-color) 88%, #000000);
+  --brand-soft: color-mix(in srgb, var(--brand-color) 12%, transparent);
+  --ring: color-mix(in srgb, var(--brand-color) 50%, transparent);
+  --logo-bg: #6366f1;
   --logo-accent: #ffffff;
-  /* 品牌底上的文字：浅色皮肤配白，深色皮肤的浅蓝底配近黑，两边都过对比度。 */
   --on-brand: #ffffff;
+
+  /* 玻璃：更透、更亮、更厚。 */
+  --glass-bg: rgba(255, 255, 255, 0.32);
+  --glass-line: rgba(255, 255, 255, 0.95);
+  --glass-highlight: rgba(255, 255, 255, 1);
+  --glass-shadow: rgba(58, 74, 140, 0.42);
+  --glass-sheen: rgba(255, 255, 255, 0.55);
+  --glass-edge: rgba(96, 116, 176, 0.14);
+
+  /* 极光：玻璃后面的颜色必须够足，否则磨砂只会变成一层灰。 */
+  --aurora-base: #eef1ff;
+  --aurora-1: rgba(124, 120, 255, 0.65);
+  --aurora-2: rgba(46, 220, 255, 0.5);
+  --aurora-3: rgba(255, 120, 196, 0.42);
+
+  /* 玻璃里的细颗粒：没有它，大块半透明面会像塑料膜。 */
+  --noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
 
   --z-dropdown: 20;
   --z-overlay: 30;
   --z-modal: 50;
-}
-
-/* 暗色：同一套语义令牌反转，色相不变。深渊蓝是「可选」皮肤，不是系统默认。 */
-[data-theme="dark"] {
-  --brand-color: #7b90ff;
-
-  --bg: #0f0f11;
-  --canvas: #151517;
-  --sidebar: #111113;
-  --surface: #1a1a1d;
-  --surface-2: #232327;
-  --surface-3: #2c2c31;
-  --line: #29292e;
-  --line-strong: #3a3a41;
-  --text: #ededf1;
-  --muted: #a3a5ad;
-  --faint: #6c6e77;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 6px 20px -10px rgba(0, 0, 0, 0.6);
-  --shadow-lg: 0 20px 52px -24px rgba(0, 0, 0, 0.7);
-
-  /* 深色下输入框比画布再暗一档（内凹），靠描边区分边界，不用灰填充。 */
-  --field-bg: #101012;
-  --field-line: #34343b;
-  --field-line-hover: #4a4a53;
-
-  --accent: #3fb950;
-  --accent-dim: #46954a;
-  --accent-soft: #0f2416;
-  --ok: #3fb950;
-  --ok-soft: #0f2416;
-  --warn: #d29922;
-  --warn-soft: #201a0a;
-  --danger: #f0645c;
-  --danger-soft: #2a1111;
-  --logo-accent: #ffffff;
-  --on-brand: #0f0f11;
-
-  --brand-soft: color-mix(in srgb, var(--brand-color) 14%, transparent);
 }
 
 @theme inline {
@@ -115,6 +85,8 @@
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
   --color-surface-3: var(--surface-3);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-selected: var(--surface-selected);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
   --color-text: var(--text);
@@ -131,7 +103,9 @@
   --color-danger-soft: var(--danger-soft);
   --color-brand: var(--brand);
   --color-brand-2: var(--brand-2);
+  --color-brand-hover: var(--brand-hover);
   --color-brand-soft: var(--brand-soft);
+  --color-ring: var(--ring);
   --color-logo-bg: var(--logo-bg);
   --color-logo-accent: var(--logo-accent);
   --color-on-brand: var(--on-brand);
@@ -169,18 +143,76 @@
 }
 
 html { color-scheme: light; }
-html[data-theme="dark"] { color-scheme: dark; }
 html, body { height: 100%; }
 
 body {
   background-color: var(--bg);
+  background-image:
+    radial-gradient(1100px 800px at 4% -12%, var(--aurora-1), transparent 60%),
+    radial-gradient(900px 720px at 102% 0%, var(--aurora-2), transparent 62%),
+    radial-gradient(1000px 820px at 48% 116%, var(--aurora-3), transparent 64%),
+    radial-gradient(900px 680px at 54% 42%, rgba(150, 162, 255, 0.55), transparent 68%),
+    radial-gradient(120% 100% at 50% 50%, transparent 58%, rgba(86, 98, 170, 0.12) 100%),
+    linear-gradient(155deg, #fbfcff, #e9edff 46%, #f6efff);
+  background-attachment: fixed;
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.55;
+  font-feature-settings: "tnum" 1, "cv11" 1;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  transition: background-color 0.2s ease, color 0.2s ease;
+  transition: background-color 0.3s ease, color 0.2s ease;
+}
+
+/* 背景里两团缓慢漂移的光晕。只画在 body 的伪元素上，不参与布局； */
+/* body 的直接子节点抬到上层，避免被光晕盖住点击。 */
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: 999px;
+  filter: blur(72px);
+  opacity: 0.9;
+  will-change: transform;
+}
+body::before {
+  width: 46vw;
+  height: 46vw;
+  min-width: 420px;
+  min-height: 420px;
+  top: -14vw;
+  left: -10vw;
+  background: radial-gradient(circle, var(--aurora-1), transparent 68%);
+  animation: aurora-drift 26s ease-in-out infinite alternate;
+}
+body::after {
+  width: 52vw;
+  height: 52vw;
+  min-width: 480px;
+  min-height: 480px;
+  right: -14vw;
+  bottom: -20vw;
+  background: radial-gradient(circle, var(--aurora-3), transparent 68%);
+  animation: aurora-drift 32s ease-in-out infinite alternate-reverse;
+}
+@keyframes aurora-drift {
+  from { transform: translate3d(-2%, -1%, 0) scale(1); }
+  to { transform: translate3d(3%, 2%, 0) scale(1.06); }
+}
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+main {
+  animation: page-in 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  body::after { animation: none; }
+  main { animation: none; }
 }
 
 /*
@@ -237,10 +269,124 @@ optgroup {
  * 处理会把它当成未使用的自定义类整段删掉（编译产物里只剩变量、没有规则），
  * 页面上表现为输入框完全没有边框和底色。改用官方自定义 utility 语法后才会保留。
  */
+/* 液态玻璃的主面板：半透明底 + 磨砂 + 内侧高光 + 外投影。 */
+@utility glass {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--glass-bg);
+  background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.55), rgba(196, 208, 255, 0.16) 46%, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--glass-line);
+  box-shadow:
+    inset 0 1px 0 0 var(--glass-highlight),
+    inset 18px 18px 40px -24px rgba(255, 255, 255, 0.85),
+    inset -24px -24px 50px -34px rgba(120, 140, 255, 0.18),
+    inset 0 -18px 30px -26px rgba(90, 110, 180, 0.18),
+    0 0 0 1px var(--glass-edge),
+    0 44px 120px -52px rgba(70, 86, 170, 0.5),
+    0 24px 70px -28px var(--glass-shadow),
+    0 2px 8px rgba(60, 80, 150, 0.08);
+  backdrop-filter: blur(34px) saturate(190%) brightness(1.04);
+  -webkit-backdrop-filter: blur(34px) saturate(190%) brightness(1.04);
+
+  /* 左上角镜面反光：液态玻璃的「湿感」主要来自这一层。 */
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background:
+      radial-gradient(120% 72% at 12% -12%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 56%),
+      linear-gradient(140deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0) 38%);
+    opacity: 0.75;
+  }
+
+  /* 细颗粒叠在最上层，低透明度 + soft-light；只做质感，不挡内容。 */
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background-image: var(--noise);
+    background-size: 160px 160px;
+    opacity: 0.12;
+    mix-blend-mode: soft-light;
+  }
+}
+
+/* 次级玻璃：面板、卡片、浮层。blur 小一档，避免整页几十个元素一起磨砂。 */
+@utility glass-soft {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--surface);
+  background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.5), rgba(200, 212, 255, 0.12) 52%, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--glass-line);
+  box-shadow:
+    inset 0 1px 0 0 var(--glass-highlight),
+    inset 12px 12px 30px -22px rgba(255, 255, 255, 0.8),
+    inset -18px -18px 40px -30px rgba(120, 140, 255, 0.14),
+    0 0 0 1px var(--glass-edge),
+    0 26px 70px -40px rgba(70, 86, 170, 0.35),
+    0 16px 44px -26px var(--glass-shadow),
+    0 2px 6px rgba(60, 80, 150, 0.06);
+  backdrop-filter: blur(22px) saturate(170%) brightness(1.03);
+  -webkit-backdrop-filter: blur(22px) saturate(170%) brightness(1.03);
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: radial-gradient(120% 70% at 10% -10%, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0) 58%);
+    opacity: 0.6;
+  }
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background-image: var(--noise);
+    background-size: 160px 160px;
+    opacity: 0.09;
+    mix-blend-mode: soft-light;
+  }
+}
+
+/* 侧栏玻璃：不用噪点、底色更实，保证 11–13px 的小字清楚。 */
+@utility glass-side {
+  background-color: rgba(255, 255, 255, 0.62);
+  border-right: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow:
+    inset -1px 0 0 rgba(96, 116, 176, 0.1),
+    10px 0 40px -30px rgba(70, 86, 170, 0.35);
+  backdrop-filter: blur(26px) saturate(160%);
+  -webkit-backdrop-filter: blur(26px) saturate(160%);
+}
+
+/* 主操作按钮：玻璃上的一层「彩色釉」，有内高光和一束投影。 */
+@utility brand-glass {
+  background-image: linear-gradient(135deg, #6d6bff 0%, #7c6cff 46%, #4cc9f0 100%);
+  border-color: rgba(255, 255, 255, 0.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 10px 26px -12px rgba(99, 102, 241, 0.7);
+}
+
 @utility field {
   background-color: var(--field-bg);
   border: 1px solid var(--field-line);
   color: var(--text);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), inset 0 -1px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(20px) saturate(170%) brightness(1.03);
+  -webkit-backdrop-filter: blur(20px) saturate(170%) brightness(1.03);
   transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
 
   &::placeholder {
@@ -273,15 +419,25 @@ optgroup {
 
 
 
-::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--text) 16%, transparent);
+  background: color-mix(in srgb, var(--text) 14%, transparent);
   border: 3px solid transparent;
   background-clip: padding-box;
   border-radius: 999px;
 }
-::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--text) 26%, transparent); background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--text) 24%, transparent); background-clip: padding-box; }
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--text) 18%, transparent) transparent; }
+
+/* 玻璃面板里的按钮/输入框：按下时轻微下沉，给点击一点物理反馈。 */
+button:not(:disabled),
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+button:not(:disabled):active {
+  transform: translateY(0.5px) scale(0.995);
+}
 
 /* 终端块在两套皮肤里都保持深色，保证命令输出的高对比。 */
 .term-block { background: #11161d; color: #c7d1dc; }

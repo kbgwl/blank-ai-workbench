@@ -109,6 +109,27 @@ def test_no_changes_and_no_tests_is_skipped_not_failed() -> None:
     assert resolve_status({"validation": update["validation"]}) == "succeeded"
 
 
+def test_shell_generated_files_are_not_reported_as_no_changes(tmp_path) -> None:
+    """run_shell 生成了 docx，工具回执里没有 diff，但绝不能说「没有改动任何文件」。"""
+    session = _Session()
+    session.context = type("_Context", (), {"root": tmp_path})()
+    state = {
+        "tool_results": [
+            {
+                "tool": "run_shell",
+                "ok": True,
+                "status": "ok",
+                "output": "DONE",
+                "data": {"command": "python make.py"},
+            }
+        ]
+    }
+    update = asyncio.run(run_validation_node(state, session))
+    reason = update["validation"]["skipped_reason"]
+    assert "没有改动任何文件" not in reason
+    assert update["validation"]["skip_code"] == "no_test_config"
+
+
 def test_skipped_never_enters_the_repair_loop() -> None:
     """跳过校验的四种原因都不能把任务拽回 execute_action。
 

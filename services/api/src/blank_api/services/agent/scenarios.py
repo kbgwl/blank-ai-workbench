@@ -21,8 +21,33 @@ agent 方法论跑。差别在提示词风格与默认定位，不在能力—�
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
+
+PLANNING_STYLES = ("code", "general")
+VERIFICATION_STYLES = ("code", "general")
+
+
+@dataclass(frozen=True)
+class ScenarioPolicy:
+    """场景的执行策略，不只是提示词。
+
+    ``planning`` / ``verification`` 是给运行时的显式口径；``budget_scale`` 直接
+    收缩这类任务的默认步数与时长。两个场景共享同一套安全与审批下限，策略只
+    在“怎么做事”这一层不同——不能拿场景当放宽权限的开关。
+    """
+
+    planning: str = "code"
+    verification: str = "code"
+    budget_scale: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.planning not in PLANNING_STYLES:
+            raise ValueError(f"未知规划风格：{self.planning}")
+        if self.verification not in VERIFICATION_STYLES:
+            raise ValueError(f"未知验证风格：{self.verification}")
+        if not 0.25 <= float(self.budget_scale) <= 1.0:
+            raise ValueError(f"预算比例越界：{self.budget_scale}")
 
 
 @dataclass(frozen=True)
@@ -50,13 +75,28 @@ class Scenario:
     memory_allowed: bool = False
     # 输入框占位提示（前端联动用，不进模型）。
     input_hint: str = ""
+    # 执行策略：规划/验证口径与预算比例。默认值 = 代码场景的严格口径。
+    policy: ScenarioPolicy = field(default_factory=ScenarioPolicy)
 
 
 DEV = Scenario(
     key="dev",
-    label="开发",
-    summary="读写代码、跑测试、修到通过为止的完整执行场景",
+    label="编程",
+    summary="读写代码、跑测试、修到通过；改动前先读，交付前必须真验",
+    system_prompt=(
+        "当前场景：编程（主场景）。按 Claude Code 级的编程纪律执行：\n"
+        "· 改动前先读相关代码与现有测试，只做最小必要 diff，不顺手重构无关文件。\n"
+        "· 改完必须真跑受影响的测试；没跑、没跑通、或环境不允许，都要如实写出来。\n"
+        "· 不把未完成说成完成，不用注释、占位或“下一步”掩盖缺口。\n"
+        "· 交付文档：代码仓库里的说明/README 用 Markdown；面向同事的计划书、报告、"
+        "方案默认 .docx（WPS/Office 可直接打开），用户明确要 PDF/PPT 时再换格式。\n"
+        "· 不要为生成文档反复安装第三方包：能用标准库或无依赖方案就用；"
+        "装依赖失败两次就停，改用无依赖方案或把缺什么写进交付。\n"
+        "· 长文件分段落盘：单次 write_file 的内容超过约 4000 字时，先写第一节，"
+        "再用 write_file(append=true) 追加后续；不要把整份长文塞进一次调用。\n"
+    ),
     input_hint="说出目标：改什么、怎么算完成…",
+    policy=ScenarioPolicy(planning="code", verification="code", budget_scale=1.0),
 )
 
 DOCS = Scenario(
@@ -80,19 +120,34 @@ DOCS = Scenario(
 DAILY = Scenario(
     key="daily",
     label="日常",
-    summary="Codex 式通用 agent：读写文件、跑命令、把事情做到完；只有这里提供记忆开关",
+    summary="通用任务：读写文件、跑命令、把事情做到完；可记住你的习惯",
     # 日常场景按 Codex 通用 agent 的口径跑：能读写、能跑命令、做事做到完，
     # 与编程场景（Claude 编程纪律）的差别在方法论与措辞，不在能力。
     # "先问再干"的授权边界仍由权限层管，场景段不碰它。
+    #
+    # 2026-11-23 对标 Codex 收紧四条：直接动手少问、先最简单做法、做完核对结果、
+    # 交付先给结论。这四条是 Codex 日常体感与"会聊天但不动手"之间最明显的分界。
     system_prompt=(
-        "当前场景：日常。你是通用 agent：先判断用户的意图，能自己查到的自己查、"
-        "能自己定的自己定，把事情做到真正完成再收尾——不要停在「接下来我会……」。\n"
+        "当前场景：日常（主场景）。你是对照 Codex 的通用 agent：先判断用户意图，"
+        "能自己查到的自己查、能自己定的自己定，把事情做到真正完成再收尾。\n"
+        "· 直接动手，少问：缺关键信息（对象、目录、权限）或要做不可逆操作时才问，"
+        "一次只问一个；其余情况按最合理的默认值先做，并在结果里说明假设。\n"
+        "· 先用最简单可靠的做法：能直接读写文件就不写脚本；需要脚本时优先标准库；"
+        "不要为一次性任务安装依赖，装包失败两次就改用无依赖方案。\n"
+        "· 做完必须核对结果：文件写没写进去、命令退出码是不是 0、产物能不能打开；"
+        "没验证的部分在交付里明说，不把未完成写成完成。\n"
+        "· 交付先给结论，再给必要的改动清单与验证结果；不复述思考过程，不写客套话。"
+        "涉及代码或页面时仍要真跑验证，不因为「日常」降低验证下限。\n"
+        "· 默认用简体中文交付，用户明确要其他语言时除外。\n"
         "· 用户允许记忆时，只记跨会话仍有用的偏好（称呼、格式、常用位置），"
         "电话、住址、证件号这类敏感事实一律不记。\n"
     ),
     allow_write=True,
     memory_allowed=True,
     input_hint="说点什么，或让 AI 帮你把一件事做完…",
+    # 日常场景不做“为了凑步骤而拆细”的工程表演；预算也略收紧，
+    # 但代码/页面的验证下限不降（见 system_prompt 的验证段）。
+    policy=ScenarioPolicy(planning="general", verification="general", budget_scale=0.8),
 )
 
 BRAINSTORM = Scenario(
@@ -184,6 +239,21 @@ def write_allowed(scenario: Scenario, relative_path: str) -> bool:
 def system_prompt(scenario: Scenario, *, memory_opt_in: bool = False) -> str:
     """系统提示的场景段。开发场景返回空串（行为与从前完全一致）。"""
     parts = [scenario.system_prompt]
+    if scenario.policy.planning == "general":
+        parts.append(
+            "执行方式：简单任务直接做，不必为了凑步骤而拆细；"
+            "只有多步骤、需要跨文件或跨命令的任务才先列计划。\n"
+        )
+    if scenario.policy.verification == "code":
+        parts.append(
+            "验证口径：涉及代码必须真跑受影响的测试；涉及页面必须在最新代码上"
+            "用 browser_check 验过，没跑通就如实说，不把未验证写成完成。\n"
+        )
+    else:
+        parts.append(
+            "验证口径：如实说明做了什么、结果如何；涉及代码或页面时仍要真跑验证，"
+            "不把未验证写成完成。\n"
+        )
     if scenario.memory_allowed and memory_opt_in:
         parts.append(
             "用户选择了「记住习惯」：遇到明确的偏好（输出长短、常用工具、"
@@ -196,8 +266,8 @@ def system_prompt(scenario: Scenario, *, memory_opt_in: bool = False) -> str:
 def list_scenarios() -> list[dict]:
     """给前端选择器的清单（保持固定顺序）。
 
-    只列编程与日常两个。``SCENARIOS`` 里另外三个（文档 / 头脑风暴 / 逆向）留给
-    已有任务按原场景跑完——它们不出现在选择器里，也就不会再被新建出来。
+    只列编程（主）与日常（辅）两个。``SCENARIOS`` 里另外三个（文档 / 头脑风暴 /
+    逆向）留给已有任务按原场景跑完——它们不出现在选择器里，也就不会再被新建出来。
     """
     return [
         {
@@ -210,6 +280,10 @@ def list_scenarios() -> list[dict]:
             # 这个场景能落盘的文件类型；空表示"不限"（只有开发场景是这样）。
             # 文档场景按扩展名授权：写 README.md 是本职，改 .py 不是。
             "write_extensions": sorted(item.write_extensions),
+            # 执行策略也带出去：界面/证据页不用再自己猜“两个场景到底差在哪”。
+            "planning": item.policy.planning,
+            "verification": item.policy.verification,
+            "budget_scale": item.policy.budget_scale,
         }
         for item in (DEV, DAILY)
     ]

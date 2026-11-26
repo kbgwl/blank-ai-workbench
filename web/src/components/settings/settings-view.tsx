@@ -11,6 +11,7 @@ import { ChannelsPanel } from "./channels-panel";
 import { FeatureFlagsPanel } from "./feature-flags-panel";
 import { McpPanel } from "./mcp-panel";
 import { MemoryPanel } from "./memory-panel";
+import { LearningPanel } from "./learning-panel";
 import { PluginsPanel } from "./plugins-panel";
 import { ProvidersView } from "./providers-view";
 import { RoleModelSettings } from "./role-model-settings";
@@ -182,7 +183,12 @@ function SectionBody({ active }: { active: SectionKey }) {
     case "runtime":
       return <AgentRuntimePanel />;
     case "memory":
-      return <MemoryPanel />;
+      return (
+        <div className="flex flex-col gap-4">
+          <MemoryPanel />
+          <LearningPanel />
+        </div>
+      );
     case "channels":
       return <ChannelsPanel />;
     case "tools":

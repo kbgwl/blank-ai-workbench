@@ -36,6 +36,15 @@ class ThreadTurnIn(BaseModel):
     # 仅日常场景生效：True=记住习惯，False=不记住。与 TaskRunIn.memory_opt_in 同义，
     # 创建时带上就不必再靠 start 请求补发。
     memory_opt_in: bool = False
+    # 纯聊天：这个对话没有选目录。只直接回答，禁用文件/命令工具；
+    # 项目有 workspace 也不沿用（用户没为本对话选过）。
+    chat_only: bool = False
+    # 用户明确要求这一轮不要调用工具（只回复/不要读取/不要调用工具）。
+    no_tools: bool = False
+    # 用户明确要求不要修改/不要执行，但可以读。
+    read_only: bool = False
+    # 用户只要文件/目录清单：只给 list_files / glob，不读文件内容。
+    list_only: bool = False
 
 
 class ThreadOut(BaseModel):
@@ -88,6 +97,12 @@ class ThreadUpdate(BaseModel):
 
     title: str | None = Field(default=None, max_length=200)
     status: str | None = None  # "active" | "archived"
+
+
+class ThreadBatchArchiveIn(BaseModel):
+    """一次归档多条会话。上限 50 与列表接口的单页上限一致。"""
+
+    ids: list[str] = Field(min_length=1, max_length=50)
 
 
 class ThreadRewindIn(BaseModel):

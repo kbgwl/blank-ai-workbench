@@ -32,6 +32,7 @@ from blank_api.services.permissions import (
     MODE_BYPASS,
     MODE_PLAN,
     PermissionPolicy,
+    is_read_only_command,
     prefix_rule,
 )
 from blank_api.services.tools.base import ToolDefinition
@@ -69,6 +70,44 @@ def _policy(text: str, mode: str = "default") -> PermissionPolicy:
     policy = PermissionPolicy(mode=mode)
     policy.ruleset = ruleset
     return policy
+
+
+def test_read_only_commands_are_auto_approved_in_default_mode():
+    """日常真机 4 张卡里 3 张是只读命令；只读命令不该每条都问。"""
+    policy = _policy("")
+    for command in (
+        "dir /b",
+        'dir /b "整理\\文本" && dir /b "整理\\图片" && fc /b a.txt b.txt && echo OK',
+        "cd",
+        "git status",
+        "git diff --stat",
+        "python --version",
+        "Get-ChildItem -Force",
+    ):
+        assert is_read_only_command(command) is True, command
+        decision = _decide(policy, command)
+        assert decision.outcome == ALLOW, command
+        assert decision.rule == "readonly:command", command
+
+
+def test_mutating_or_risky_commands_still_ask():
+    policy = _policy("")
+    for command in (
+        "mkdir x",
+        "copy a.txt b.txt",
+        "dir > out.txt",
+        "echo hi && del x",
+        "git push",
+        'type C:\\Windows\\win.ini',
+        "dir %USERPROFILE%",
+        "type \\Windows\\win.ini",
+        "type /etc/passwd",
+        "C:\\Windows\\System32\\dir.exe /b",
+        ".\\dir.exe /b",
+        'python -c "open(\'x\', \'w\')"',
+    ):
+        assert is_read_only_command(command) is False, command
+        assert _decide(policy, command).outcome == ASK, command
 
 
 @pytest.fixture
@@ -218,8 +257,11 @@ def test_allow_runs_high_risk_shell_only_when_every_segment_is_covered() -> None
 
     # 第二段没被任何规则覆盖 ⇒ 不能搭顺风车
     assert _decide(policy, "git status && rm -rf src").outcome == ASK
-    # 另一个子命令也不算
-    assert _decide(policy, "git diff").outcome == ASK
+    # 只读子命令由独立的白名单放行（不是 allow 规则泄漏）；写命令仍逐条问。
+    read_only = _decide(policy, "git diff")
+    assert read_only.outcome == ALLOW
+    assert read_only.rule == "readonly:command"
+    assert _decide(policy, "git push").outcome == ASK
 
 
 def test_allow_cannot_override_irreversible_or_session_denial() -> None:

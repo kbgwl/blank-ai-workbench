@@ -200,6 +200,11 @@ def pooled_client_count() -> int:
 # 也应当是同一节奏，而不是把模型读得快、把回调堆在后台队列里。
 DeltaHandler = Callable[[str], Awaitable[None]]
 
+# 单条工具调用参数拼完整时的回调（推测性执行用）。形状与 OpenAI 的 tool_call 一致：
+# {"id", "name", "arguments"}。实现方**不得**在回调里阻塞等待工具执行完，否则
+# 流式读会被拖慢，推测反而变成串行；正确做法是立刻调度后台任务。
+ToolCallHandler = Callable[[dict], Awaitable[None]]
+
 
 @dataclass
 class ChatMessage:
@@ -449,6 +454,7 @@ class ModelAdapter(ABC):
         messages: Sequence[ChatMessage],
         *,
         on_delta: DeltaHandler | None = None,
+        on_tool_call: ToolCallHandler | None = None,
         **kwargs,
     ) -> ModelResponse:
         """流式版 bind_tools：文字边到边回调，返回聚合后的完整响应。
@@ -463,7 +469,38 @@ class ModelAdapter(ABC):
         response = await self.invoke(messages, tools=tools, **kwargs)
         if on_delta is not None and response.text:
             await on_delta(response.text)
+        if on_tool_call is not None:
+            # 退路拿到的响应已经完整：逐条回调只是保持一致，省不了等待。
+            for call in response.tool_calls or ():
+                ready = _ready_tool_call(call)
+                if ready is not None:
+                    await on_tool_call(ready)
         return response
+
+
+def _ready_tool_call(call: dict) -> dict | None:
+    """把一条完整的工具调用换算成推测执行认识的形状；参数不完整返回 None。"""
+    function = call.get("function") if isinstance(call, dict) else None
+    if not isinstance(function, dict):
+        return None
+    name = str(function.get("name") or "").strip()
+    if not name:
+        return None
+    raw = function.get("arguments")
+    if isinstance(raw, dict):
+        arguments = raw
+    else:
+        try:
+            arguments = json.loads(str(raw or "{}"))
+        except (json.JSONDecodeError, ValueError):
+            return None
+    if not isinstance(arguments, dict):
+        return None
+    return {
+        "id": str(call.get("id") or ""),
+        "name": name,
+        "arguments": arguments,
+    }
 
 
 def _parse_json_object(text: str) -> dict:

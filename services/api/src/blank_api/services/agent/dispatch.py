@@ -28,6 +28,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Mapping
 
 from blank_api.limits import DEFAULT_MAX_STEPS, DEFAULT_TOKEN_BUDGET
+from blank_api.services.agent.directives import NO_TOOLS, READ_ONLY, directive_mode, listing_only
 from blank_api.services.agent.intent import INTENT_ACT, INTENT_ADVISE, guess_intent, unwrap_goal
 from blank_api.services.agent.scenarios import resolve as resolve_scenario
 
@@ -389,6 +390,16 @@ def classify(goal: str, *, scenario: str = "dev") -> tuple[str, tuple[str, ...]]
     if not text.strip():
         return INTENT_ASK_USER, ("没有可执行的目标，先问清楚",)
 
+    # 用户明确写的工具边界优先于动作词：否定句里的「读取/修改」不能把
+    # 「只回复 / 不要碰文件」判成执行任务。
+    mode = directive_mode(text)
+    if mode == NO_TOOLS:
+        return INTENT_ANSWER, ("用户明确要求本轮不调用任何工具",)
+    if mode == READ_ONLY:
+        return INTENT_EXECUTE, ("用户明确不要修改或执行，只做只读",)
+    if listing_only(text):
+        return INTENT_EXECUTE, ("用户只要文件/目录清单，列目录即可",)
+
     # 顺序：定时 / 监控 > 头脑风暴 > 意图判定。前两类说的是"什么时候做"，
     # 拿意图去判会把"每天帮我跑一次测试"判成 execute，于是当场就跑一遍。
     if _has(text, _SCHEDULE_HINTS):
@@ -462,16 +473,20 @@ def route(
     sandbox_tier: str = "workspace",
 ) -> ExecutionSnapshot:
     """生成一份执行快照。同样的入参永远得到同样的快照（含 id）。"""
-    scenario_key = resolve_scenario(scenario).key
+    scenario_obj = resolve_scenario(scenario)
+    scenario_key = scenario_obj.key
     intent, notes = classify(goal, scenario=scenario_key)
     text = unwrap_goal(str(goal or ""))
     quick = guess_intent(text) if text.strip() else None
     priority_key = _one_of(priority, PRIORITIES, PRIORITY_NORMAL)
     risk_summary, high_risk = _risk(intent, text)
     budget_default = BUDGET_BY_INTENT[intent]
+    # 场景策略在这里真正生效：日常场景的默认预算按比例收紧。
+    # 比例只往下收（ScenarioPolicy 校验 0.25..1.0），不能借场景放宽。
+    scale = float(scenario_obj.policy.budget_scale)
     budget = Budget(
-        max_steps=int(budget_default["max_steps"]),
-        max_seconds=int(budget_default["max_seconds"]),
+        max_steps=max(1, int(int(budget_default["max_steps"]) * scale)),
+        max_seconds=max(1, int(int(budget_default["max_seconds"]) * scale)),
         max_recoveries=int(budget_default["max_recoveries"]),
         token_budget=DEFAULT_TOKEN_BUDGET,
     )

@@ -38,4 +38,20 @@ if (result.error) {
   process.exit(1);
 }
 
+if (result.status === 0) {
+  // 两种产物都按页面内联脚本算哈希，把严格 CSP 写进 HTML：
+  // - out/ 给桌面 static export（没有服务器，headers() 不生效）；
+  // - .next/server/app|pages 给 next start 直接读的预渲染 HTML。
+  const csp = spawnSync(process.execPath, [path.join(here, "csp.mjs")], {
+    cwd: webRoot,
+    env,
+    stdio: "inherit",
+  });
+  if (csp.error) {
+    console.error(csp.error);
+    process.exit(1);
+  }
+  if (csp.status !== 0) process.exit(csp.status ?? 1);
+}
+
 process.exit(result.status ?? 1);

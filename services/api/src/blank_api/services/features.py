@@ -102,6 +102,25 @@ _REGISTRY: tuple[FeatureFlag, ...] = (
         summary="只读工具并行执行：同一轮里多个无副作用的工具并发跑，写操作与审批仍严格串行。",
     ),
     FeatureFlag(
+        name="parallel_write_tools",
+        stage=STABLE,
+        default=True,
+        summary=(
+            "不同文件的独立写/改在完全访问档并行落盘；同文件、需要审批或结果有依赖的调用仍串行。"
+            "只在 permission_mode=bypass 且路径互不相同时生效。"
+        ),
+    ),
+    FeatureFlag(
+        name="speculative_tools",
+        stage=STABLE,
+        default=True,
+        summary=(
+            "推测性只读执行：模型还在流式生成参数时，先把参数已完整落定的 "
+            "read_file/glob/search_code 跑掉，缩短单轮延迟。只在 permission_mode=bypass "
+            "生效；执行点仍走网关的权限、参数校验与记账，参数不一致就丢弃重跑。"
+        ),
+    ),
+    FeatureFlag(
         name="adaptive_effort",
         stage=STABLE,
         default=True,

@@ -44,6 +44,17 @@ test("路径框得住的工具照旧下发三档，界面原样端出来", () =>
   assert.deepEqual(scopesOf(options), ["once", "prefix", "tool"]);
 });
 
+test("会话级授权档原样通过：前端不发明，也不丢弃", () => {
+  const options = approvalGrantOptions({
+    scopes: [
+      { scope: "once", label: "仅本次允许" },
+      { scope: "session", label: "本会话允许这类动作（删除文件）" },
+    ],
+  });
+  assert.deepEqual(scopesOf(options), ["once", "session"]);
+  assert.deepEqual(labelsOf(options), ["仅本次允许", "本会话允许这类动作（删除文件）"]);
+});
+
 test("老载荷没有档位表时，只补前端确定存在过的档位，绝不补工具档", () => {
   assert.deepEqual(scopesOf(approvalGrantOptions({ prefix: "git push" })), ["once", "prefix"]);
   assert.deepEqual(labelsOf(approvalGrantOptions({ prefix: "git push" })), [

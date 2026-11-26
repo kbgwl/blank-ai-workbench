@@ -10,18 +10,10 @@ export const metadata: Metadata = {
   description: "说清楚要什么，它读代码、改代码、跑命令——每一步都留在对话里",
 };
 
-// 首帧之前把已保存的皮肤写回 <html>，避免深色用户先闪一屏白。
-// 与 theme-toggle.tsx 的 THEME_STORAGE_KEY 必须一致；静态导出时这段会原样进每个页面。
-const THEME_BOOTSTRAP = `try{if(localStorage.getItem('blank.theme')==='dark')document.documentElement.dataset.theme='dark'}catch(e){}`;
-
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    // 皮肤引导脚本会在水合前改写 <html data-theme>，服务端 HTML 里没有这个属性。
-    // 不加 suppressHydrationWarning，React 会把这一处差异报成 hydration error，
-    // Next 开发浮标上常驻「1 Issue」压住左栏底部入口。
-    <html lang="zh-CN" suppressHydrationWarning>
+    <html lang="zh-CN">
       <body className="h-dvh overflow-hidden bg-bg text-text">
-        <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
         <ModelProvider>
           <AppShell>{children}</AppShell>
         </ModelProvider>

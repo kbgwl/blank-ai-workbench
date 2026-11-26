@@ -52,5 +52,8 @@ async def read_upload(project_id: str, upload_id: str, db: DbSession) -> FileRes
     ref = UploadStore().find(project_id, upload_id)
     if ref is None:
         raise ApiError(code="upload_not_found", message="附件不存在或已被清理", status_code=404)
+    # 文本类一律以 text/plain 回：附件里允许 .html/.js，直接按原 MIME inline
+    # 会在 API 源上执行脚本。图片保持原 MIME，PDF 保持 application/pdf。
+    media_type = "text/plain; charset=utf-8" if ref.kind == "text" else ref.mime
     # inline：这是给界面上 <img> 直接用的，不是下载链接。
-    return FileResponse(ref.path, media_type=ref.mime, filename=ref.name, content_disposition_type="inline")
+    return FileResponse(ref.path, media_type=media_type, filename=ref.name, content_disposition_type="inline")

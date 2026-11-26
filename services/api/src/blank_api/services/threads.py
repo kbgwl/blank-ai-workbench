@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -89,7 +89,7 @@ async def rewind_to_turn(session: AsyncSession, thread: Thread, turn: int) -> tu
             status_code=409,
         )
     doomed = [item for item in turns if int(item.turn_index or 0) > turn]
-    stamp = datetime.utcnow()
+    stamp = datetime.now(timezone.utc).replace(tzinfo=None)
     for item in doomed:
         item.rewound_at = stamp
     thread.turn_count = turn

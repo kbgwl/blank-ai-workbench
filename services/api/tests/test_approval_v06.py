@@ -19,6 +19,7 @@ from tests.test_agent_v04 import (
     create_provider,
     create_task,
     env,  # noqa: F401  (复用阶段3 的夹具)
+    settle,
 )
 
 
@@ -50,11 +51,15 @@ async def test_approval_endpoint_continues_from_the_same_node(env, workspace: Pa
     resp = await env.client.post(
         f"{API}/tasks/{task_id}/approval", json={"approve": True, "provider_id": provider_id}
     )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
+    # E13：审批只返回 202 queued，恢复在后台跑；等它收尾再断言文件与事件。
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["status"] == "queued", resp.text
+    await settle()
     assert (workspace / ".env").read_text(encoding="utf-8") == "TOKEN=plain"
-    assert body["task"]["status"] != "waiting_approval"
-    assert body["evidence"]["pending_approvals"] == []
+    task_body = (await env.client.get(f"{API}/tasks/{task_id}")).json()
+    assert task_body["status"] != "waiting_approval"
+    evidence = (await env.client.get(f"{API}/tasks/{task_id}/evidence")).json()
+    assert evidence["pending_approvals"] == []
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
     types = [event["type"] for event in events]
@@ -78,7 +83,8 @@ async def test_second_approval_call_is_rejected_as_idempotent(env, workspace: Pa
     first = await env.client.post(
         f"{API}/tasks/{task_id}/approval", json={"approve": True, "provider_id": provider_id}
     )
-    assert first.status_code == 200, first.text
+    assert first.status_code == 202, first.text
+    await settle()
 
     second = await env.client.post(
         f"{API}/tasks/{task_id}/approval", json={"approve": True, "provider_id": provider_id}
@@ -100,11 +106,13 @@ async def test_rejection_leaves_the_step_unexecuted_and_the_loop_continues(env, 
     resp = await env.client.post(
         f"{API}/tasks/{task_id}/approval", json={"approve": False, "provider_id": provider_id}
     )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
+    assert resp.status_code == 202, resp.text
+    await settle()
+    task_body = (await env.client.get(f"{API}/tasks/{task_id}")).json()
     assert not (workspace / ".env").exists(), "驳回后不得写入文件"
-    assert body["task"]["status"] == "succeeded", body["task"]
-    assert body["evidence"]["pending_approvals"] == []
+    assert task_body["status"] == "succeeded", task_body
+    evidence = (await env.client.get(f"{API}/tasks/{task_id}/evidence")).json()
+    assert evidence["pending_approvals"] == []
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
     types = [event["type"] for event in events]
@@ -118,7 +126,8 @@ async def test_restarted_runtime_resumes_a_waiting_task(env, workspace: Path):  
     resp = await env.client.post(
         f"{API}/tasks/{task_id}/approval", json={"approve": True, "provider_id": provider_id}
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
+    await settle()
     assert (workspace / ".env").exists()
 
 

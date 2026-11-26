@@ -83,12 +83,31 @@ _INCOMPLETE_MARKS = (
     # 真机 9eac5bed：交付写「完成：工作区仍为空，三个文件均未创建，功能尚未实现」，
     # 旧词表没有覆盖「未实现/仍为空」，整轮被判 succeeded 且零个文件。
     "未实现", "仍为空", "没有任何改动", "未做任何改动",
+    # 真机 e08fc1db（2026-11-21 大文件写入验证）：交付写「完成：…正文约 6291 字，
+    # 未达 9000 字门槛」，任务仍判 succeeded。数值门槛没达到也是没完成，不能只认
+    # 叙事性的「未完成」。词表只收明确的“没达到”表述，不收裸「不足」——
+    # 「不足已解决」这类句子会被误伤。
+    "未达", "未达到", "未达标", "未满足", "不满足", "尚未达到",
+    "还差", "少于", "字数不足", "长度不足", "内容不足", "未写够", "没写够",
+    # 真机 7ce98397（2026-11-21 shopbench 复跑）：交付写「前端导航点击无反应，
+    # 五个视图进不去」，任务仍判 succeeded。功能“不工作”也是没完成，不能只认
+    # “未完成/未实现”这类叙事词。
+    "无反应", "没反应", "进不去", "打不开", "无法打开", "不工作",
+    "不显示", "未显示", "未生效", "没生效",
 )
 # 「需要你：」里要求用户**重做/恢复/修复工作**，才是没做完的证据。
 # 清理验证残留、补装工具链这类收尾交接不算：真机 coding-012/028/035 测试退出码
 # 都是 0、文件都改对了，只因写了「需要你：手动删除验证残留」被判失败——那些残留
 # 是模型自证时留下的，删除被执行域不可逆闸门拦下，是闸门的正确行为，不是交付物。
-_HANDOFF_MARKS = ("恢复", "重做", "重新落", "修复")
+_HANDOFF_MARKS = (
+    "恢复", "重做", "重新落", "修复",
+    # 同一条真机：交付写「需要你：补足正文至 9000 字以上」。这是把未完成的
+    # 工作交回用户，不是清理残留；不收它，状态又会判 succeeded。
+    "补足", "补全", "补齐", "补写", "补上", "继续补", "手动补",
+    # 真机 7ce98397：「需要你：给 switchView 的 history.replaceState 包 try/catch，
+    # 重跑浏览器点击确认视图切换」——把验证/修复工作交回用户，也是没做完。
+    "重跑", "重新跑", "再跑一遍", "手动确认", "手工确认",
+)
 # 校验通道把「本轮把测试配置改坏」误写成 skipped 时用；见 graph.run_validation_node。
 _UNTESTABLE_STATUSES = frozenset({"skipped", "error"})
 # 这些 skipped 原因只说明「这次没跑」，不说明「本轮把配置改坏」：审批没过、
@@ -278,7 +297,7 @@ def _page_asserted(
     return "unknown", f"本轮没打开过 {want}"
 
 
-def _run_done_checks(
+def run_done_checks(
     done_when: list[str], checks: list[Any], rows: list[dict[str, Any]], root: Any
 ) -> list[dict[str, Any]]:
     """逐条核对完成判据。没有可执行检查的条目记 `unverifiable`，不算失败。
@@ -320,6 +339,26 @@ def _run_done_checks(
                 continue
             if kind == "path_exists":
                 out.append({"text": text, "status": "passed", "evidence": f"{rel} 存在"})
+                continue
+            # file_min_chars：按 Unicode 字符数，不按字节。中文一个字算一个字，
+            # 与用户说的「9000 字」同一口径。
+            if kind == "file_min_chars":
+                try:
+                    need = int(check.get("min") or 0)
+                except (TypeError, ValueError):
+                    out.append(
+                        {"text": text, "status": "unknown", "evidence": "判据里的 min 不是数字"}
+                    )
+                    continue
+                body = target.read_text(encoding="utf-8", errors="strict")
+                count = len(body)
+                out.append(
+                    {
+                        "text": text,
+                        "status": "passed" if count >= need else "failed",
+                        "evidence": f"{rel} 共 {count} 字符（要 ≥{need}）",
+                    }
+                )
                 continue
             # file_contains：只在文本文件上做，读不动就 unknown（二进制/编码问题不是"没写对"）
             body = target.read_text(encoding="utf-8", errors="strict")
@@ -497,7 +536,7 @@ def verify(
 
     # ⑩ 逐条核对 done_when（有可执行判据的那几条）。
     # 这里只摆事实、不改 verdict：判据是模型写的，写歪了不该把好交付判死。
-    done_results = _run_done_checks(
+    done_results = run_done_checks(
         done_when, list((goal_spec or {}).get("done_checks") or []), rows, root
     )
     checked = [item for item in done_results if item["status"] in ("passed", "failed")]

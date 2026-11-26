@@ -40,6 +40,8 @@ export function FilePanel({ project }: { project: Project | null }) {
   // 但"这个东西长什么样"必须在同一个面板里能立刻回答（原来只能看源码，
   // 要自己去找文件双击）。
   const [renderHtml, setRenderHtml] = useState(false);
+  // 预览只对"当前这个文件"生效：换文件后源码视图自动回来，不必在 effect 里清状态。
+  const [renderHtmlFor, setRenderHtmlFor] = useState("");
   const [result, setResult] = useState<FileResult>(null);
   const projectId = project?.id ?? null;
   const workspaceId = project?.workspaces.find((item) => item.is_active)?.id ?? project?.workspaces[0]?.id ?? "";
@@ -98,9 +100,9 @@ export function FilePanel({ project }: { project: Project | null }) {
 
   const path = openFile?.path ?? null;
   const requestKey = projectId && path ? `${projectId}:${workspaceId}:${path}` : null;
+  const htmlView = renderHtml && renderHtmlFor === requestKey;
   useEffect(() => {
     if (!projectId || !path || !requestKey) return;
-    setRenderHtml(false);
     let ignore = false;
     fetchFile(projectId, path)
       .then((data) => {
@@ -236,9 +238,12 @@ export function FilePanel({ project }: { project: Project | null }) {
                       <button
                         key={label}
                         type="button"
-                        onClick={() => setRenderHtml(value)}
+                        onClick={() => {
+                          setRenderHtml(value);
+                          setRenderHtmlFor(requestKey ?? "");
+                        }}
                         className={`px-2 py-0.5 transition-colors ${
-                          renderHtml === value ? "bg-surface text-text" : "text-muted hover:text-text"
+                          htmlView === value ? "bg-surface text-text" : "text-muted hover:text-text"
                         }`}
                       >
                         {label}
@@ -260,7 +265,7 @@ export function FilePanel({ project }: { project: Project | null }) {
                     {settled.data.message || "文件过大，内容已截断"}
                   </div>
                 )}
-                {renderHtml && isHtml ? (
+                {htmlView && isHtml ? (
                   <iframe
                     title="产物预览"
                     srcDoc={settled.data.content}

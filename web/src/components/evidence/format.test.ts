@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { criteriaText, evidenceDigest, hasEvidence, testState } from "./format.ts";
+import { criteriaChipText, criteriaText, evidenceDigest, hasEvidence, testState } from "./format.ts";
 import type { Evidence } from "../tasks/api.ts";
 
 const emptyEvidence = (over: Partial<Evidence> = {}): Evidence =>
@@ -70,7 +70,22 @@ test("同一文件改多次算一个文件", () => {
 });
 
 test("没有验收条件时说实话，不写 0/0 覆盖", () => {
-  assert.equal(criteriaText(evidenceDigest(emptyEvidence())), "没有验收条件");
+  const digest = evidenceDigest(emptyEvidence());
+  assert.equal(criteriaText(digest), "没有验收条件");
+  // 列表行徽标同样不能写 0/0——那会被读成“一条都没通过”。
+  assert.equal(criteriaChipText(digest), "没有验收条件");
+});
+
+test("有验收条件时徽标照实写覆盖数", () => {
+  const digest = evidenceDigest(
+    emptyEvidence({
+      acceptance: [
+        { criterion: "a", covered: true, note: "" },
+        { criterion: "b", covered: false, note: "" },
+      ],
+    }),
+  );
+  assert.equal(criteriaChipText(digest), "1/2 验收");
 });
 
 test("四项全空的任务不算有证据：展开只会得到一张空面板", () => {

@@ -5,11 +5,14 @@ from blank_api.api.auth import require_token
 from blank_api.api.routes import (
     channels,
     files,
+    fs,
+    learning,
     maintenance,
     monitor,
     notifications,
     observability,
     plan_templates,
+    preview,
     projects,
     providers,
     reverse_lab,
@@ -54,8 +57,13 @@ async def scenarios() -> list[dict]:
 
 
 api_router.include_router(projects.router)
+# 工作区应用预览（B3c）：按需启动 node 服务，只绑回环端口，TTL 回收。
+api_router.include_router(preview.router)
+# 自学习（K1）：经验/偏好可见与可撤销；不改变自动生效策略。
+api_router.include_router(learning.router)
 api_router.include_router(uploads.router)
 api_router.include_router(files.router)
+api_router.include_router(fs.router)
 api_router.include_router(providers.router)
 api_router.include_router(tasks.router)
 api_router.include_router(plan_templates.router)

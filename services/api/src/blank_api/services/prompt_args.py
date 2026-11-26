@@ -20,6 +20,7 @@ text first, so a prompt cannot smuggle them in.
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import shutil
@@ -142,17 +143,40 @@ _SHELL_BLOCK = re.compile(r"^!(.+)$", re.MULTILINE)
 _SHELL_CHOICES = ("bash", "powershell")
 
 
+def _is_windowsapps_stub(path: str) -> bool:
+    """WindowsApps 里的 bash.exe 是 WSL 启动器，不是可用的 bash。
+
+    实测它会把 ``bash -c`` 挂住等 WSL 发行版，既不报错也不返回——执行层只能
+    等到超时。宁可当作不可用、回落到 host shell，也不要让每条 ``!`` 块等 10 秒。
+    """
+    return os.name == "nt" and "\\windowsapps\\" in os.path.normcase(path)
+
+
+def _find_bash() -> str:
+    path = shutil.which("bash")
+    if path and not _is_windowsapps_stub(path):
+        return path
+    if os.name != "nt":
+        return ""
+    # 跳过 WSL 启动器后继续扫 PATH：Git Bash / MSYS2 是常用的可用实现。
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = os.path.join(directory, "bash.exe")
+        if os.path.isfile(candidate) and not _is_windowsapps_stub(candidate):
+            return candidate
+    return ""
+
+
 def _resolve_shell_command(shell: str) -> list[str] | None:
     """把声明的 shell 解析成 ``argv 前缀``；未声明/不可用返回 ``None``。
 
-    ``bash`` 优先找 PATH 上的 bash，``powershell`` 先试 ``pwsh`` 再试
-    ``powershell``（上游插件侧检查的也是这两个）。找不到二进制时返回
-    ``None``，调用方回落到 host shell——上游同样"回落 bash"，只是它的默认
-    本来就是 bash。
+    ``bash`` 优先找 PATH 上真正可用的 bash（跳过 WindowsApps 的 WSL 启动器），
+    ``powershell`` 先试 ``pwsh`` 再试 ``powershell``（上游插件侧检查的也是这两个）。
+    找不到二进制时返回 ``None``，调用方回落到 host shell——上游同样"回落 bash"，
+    只是它的默认本来就是 bash。
     """
     name = str(shell or "").strip().lower()
     if name == "bash":
-        path = shutil.which("bash")
+        path = _find_bash()
         return [path, "-c"] if path else None
     if name == "powershell":
         path = shutil.which("pwsh") or shutil.which("powershell")

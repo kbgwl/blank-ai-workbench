@@ -33,6 +33,7 @@ from blank_api.models.run import AgentRun
 from blank_api.models.task import AgentEvent, Task
 from blank_api.services.agent import triggers as trg
 
+from tests.conftest import _drain_active_runs
 from tests.test_agent_v04 import (  # noqa: F401  (复用端到端夹具)
     API,
     PATCH,
@@ -304,7 +305,8 @@ async def test_status_shows_the_pending_approval_and_clears_it_after_decision(
         f"{API}/tasks/{task_id}/approval",
         json={"provider_id": provider_id, "approve": True, "scope": "once"},
     )
-    assert decided.status_code == 200, decided.text
+    assert decided.status_code == 202, decided.text
+    await _drain_active_runs()
 
     after = (await env.client.get(f"{API}/tasks/{task_id}/status")).json()
     assert after["approval"] is None, "审批下完之后状态里不许还挂着旧卡片"

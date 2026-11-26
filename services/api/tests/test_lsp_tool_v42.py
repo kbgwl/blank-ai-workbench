@@ -83,7 +83,9 @@ def _config(
     mode: str = "normal",
     log: Path | None = None,
     ext: str = ".fake",
-    timeout: float = 5.0,
+    # 默认给足 15s：全量套件跑在负载高的机器上时，5s 启动+应答会把调度抖动
+    # 误报成 LSP 失败。超时语义另有 timeout=1.0 的专用用例。
+    timeout: float = 15.0,
     entry: dict | None = None,
 ) -> Path:
     body = {
@@ -262,7 +264,7 @@ async def test_second_request_syncs_new_file_text_with_did_change(tmp_path):
 async def test_server_initiated_configuration_request_is_answered(tmp_path):
     root = _workspace(tmp_path)
     log = tmp_path / "wire.log"
-    manager = _manager(tmp_path, root, mode="server_request", log=log, timeout=5.0)
+    manager = _manager(tmp_path, root, mode="server_request", log=log, timeout=15.0)
     try:
         outcome = await _call(manager, root, **_definition_args(root))
     finally:
@@ -818,7 +820,7 @@ async def test_runtime_injects_a_per_run_lsp_manager(tmp_path: Path, workspace: 
                         "command": sys.executable,
                         "args": [str(SERVER), "normal", ""],
                         "extensionToLanguage": {".py": "python"},
-                        "timeout": 5,
+                        "timeout": 15,
                     }
                 }
             }

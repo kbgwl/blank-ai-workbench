@@ -20,6 +20,7 @@ from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
     create_provider,
     create_task,
     env,
+    settle,
 )
 
 PATCH = "--- a/main.py\n+++ b/main.py\n@@ -1,1 +1,2 @@\n-print('hi')\n+print('hi')\n+print('patched')\n"
@@ -212,7 +213,9 @@ async def test_steer_is_applied_on_the_next_model_call(env: Env, workspace: Path
         f"{API}/tasks/{task_id}/approval",
         json={"approve": True, "provider_id": provider_id},
     )
-    assert approved.status_code == 200, approved.text
+    assert approved.status_code == 202, approved.text
+    # E13：审批只入队，恢复在后台跑；断言恢复后的报文前必须等这一轮收尾。
+    await settle()
 
     joined = "\n".join(
         str(item.get("content") or "") for item in env.mock.requests[before]["messages"]
@@ -240,7 +243,8 @@ async def test_steer_is_not_replayed_in_a_later_run(env: Env, workspace: Path) -
         f"{API}/tasks/{task_id}/approval",
         json={"approve": True, "provider_id": provider_id},
     )
-    assert approved.status_code == 200, approved.text
+    assert approved.status_code == 202, approved.text
+    await settle()
 
     events = (await env.client.get(f"{API}/tasks/{task_id}/events")).json()
     assert [event for event in events if event["type"] == "steer.applied"]

@@ -9,7 +9,7 @@ DSH 的做法是先产出确定性范围（change-scope 只输出路径，不做
 
 from __future__ import annotations
 
-from blank_api.services.agent.graph import _review_scope
+from blank_api.services.agent.graph import _review_done_when, _review_scope, _scope_relative
 
 
 def _state(*rows: dict) -> dict:
@@ -77,3 +77,55 @@ def test_the_same_file_touched_twice_is_merged():
     assert paths == ["a.py"]
     assert text.count("a.py") == 1
     assert "+3/-0" in text
+
+
+# --------------------------------------------------------------------------- #
+# 任务 3：done_when 是交付判据，必须逐条有证据
+# --------------------------------------------------------------------------- #
+def test_done_when_requires_met_with_evidence():
+    """说 met 但证据为空不算证明：这正是「没跑校验却声称通过」的形态。"""
+    rows, unproven = _review_done_when(
+        ["页面能打开", "测试通过"],
+        [
+            {"text": "页面能打开", "status": "met", "evidence": "browser_check 无控制台错误"},
+            {"text": "测试通过", "status": "met", "evidence": ""},
+        ],
+    )
+
+    assert [row["status"] for row in rows] == ["met", "met"]
+    assert unproven == ["测试通过"]
+
+
+def test_done_when_missing_or_not_met_is_unproven():
+    """缺条目、unverifiable、unmet 都算未证明；不能靠相似度替模型圆场。"""
+    criteria = ["接口返回 200", "README 更新"]
+    rows, unproven = _review_done_when(
+        criteria,
+        [{"text": "接口返回 200", "status": "unverifiable", "evidence": "没法直连"}],
+    )
+
+    assert unproven == ["接口返回 200", "README 更新"]
+    assert rows[0]["status"] == "unverifiable"
+    assert rows[1]["status"] == "missing"
+
+
+def test_done_when_accepts_positional_answer_without_text():
+    """审查模型只给同序数组时按位置对回，不因为少了 text 就整批判死。"""
+    rows, unproven = _review_done_when(
+        ["a", "b"],
+        [
+            {"status": "met", "evidence": "文件存在"},
+            {"status": "met", "evidence": "命令通过"},
+        ],
+    )
+
+    assert unproven == []
+    assert [row["text"] for row in rows] == ["a", "b"]
+
+
+def test_scope_relative_strips_prefix_and_drops_harness_paths():
+    """git 输出是仓库相对路径；审查范围要回到工作区口径，并排除 harness 目录。"""
+    assert _scope_relative("repo/sub/a.py", "repo/sub") == "a.py"
+    assert _scope_relative("repo/other/a.py", "repo/sub") == ""
+    assert _scope_relative("repo/sub/.blank/plans/p.md", "repo/sub") == ""
+    assert _scope_relative("repo/sub/.blank/scratchpad/t.js", "repo/sub") == ""

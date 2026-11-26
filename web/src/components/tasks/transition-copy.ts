@@ -42,12 +42,15 @@ const BY_RULE: Record<string, { label: string; tone: HopTone }> = {
   paused: { label: "被暂停，先收尾", tone: "warn" },
   errored: { label: "执行出错，不再进修复回路", tone: "warn" },
   environment_gap: { label: "环境缺口还没补，继续装/找", tone: "muted" },
+  plan_incomplete: { label: "计划里有事没做，推回执行", tone: "muted" },
   steps_remaining: { label: "还有待办，继续执行", tone: "muted" },
   steps_done: { label: "待办清空，进入校验", tone: "muted" },
+  list_only: { label: "只要清单，直接按工具回执出列表", tone: "accent" },
 
   // ── run_validation ─────────────────────────────────────────────────────
   readonly_no_artifact: { label: "只读任务，没有交付物可校验", tone: "accent" },
   validation_skipped: { label: "没有可跑的校验命令，直接总结", tone: "muted" },
+  ui_repair_reserve: { label: "预算已尽，保留一次界面修复", tone: "warn" },
   validation_failed_retry: { label: "校验没过，回执行修", tone: "warn" },
   validation_passed: { label: "校验通过，进入审查", tone: "accent" },
   validation_not_observed: { label: "没有校验结果，没有失败证据，进入审查", tone: "muted" },

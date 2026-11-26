@@ -1,0 +1,21 @@
+{
+  "id": "daily-001",
+  "category": "daily_file_organize",
+  "workspace": "fixture",
+  "scenario": "daily",
+  "goal": "整理当前目录：把文本类文件（.txt / .md）复制到 整理/文本/，图片（.png / .jpg）复制到 整理/图片/，原文件保留不删；再写 整理说明.md，逐行记录「原文件 → 目标位置」。完成后读回整理说明确认。",
+  "acceptance": [
+    "目标目录下存在对应副本，原文件保留",
+    "整理说明.md 记录每个文件的去向"
+  ],
+  "expectedFiles": [
+    "整理/文本/发票-一月.txt",
+    "整理/文本/发票-二月.txt",
+    "整理/文本/合同-甲.txt",
+    "整理/文本/会议纪要.md",
+    "整理/图片/logo.png",
+    "整理说明.md"
+  ],
+  "testCommand": "python -X utf8 -m pytest -q test_check.py",
+  "expectedStatus": "succeeded"
+}

@@ -22,6 +22,13 @@ from __future__ import annotations
 import json
 import re
 
+from blank_api.services.agent.directives import (
+    NO_TOOLS,
+    READ_ONLY,
+    directive_mode,
+    listing_only,
+)
+
 INTENT_ANSWER = "answer"
 INTENT_ACT = "act"
 INTENT_ADVISE = "advise"
@@ -143,6 +150,19 @@ def guess_intent(goal: str) -> str | None:
     text = (goal or "").strip()
     if not text:
         return INTENT_ANSWER
+    # 否定式硬指令优先于动作词：「只回复 OK，不要读取或修改任何文件」里
+    # 也有「读取/修改」，先按用户明确说的边界判，不能判成 act。
+    # 只看用户原话：界面包装里也有「只输出…」这类词，拿它判界等于把
+    # 所有带包装的问题都判成纯回答（见 test_intent_and_reply 的回归）。
+    mode = directive_mode(unwrap_goal(text))
+    if mode == NO_TOOLS:
+        return INTENT_ANSWER
+    if mode == READ_ONLY:
+        # 只读执行：可以读、可以列举，但不能写/跑命令。不是“征求意见”。
+        return INTENT_ACT
+    if listing_only(unwrap_goal(text)):
+        # 只要文件/目录清单：列目录属于执行动作，不能一次问答直接编。
+        return INTENT_ACT
     if _CHITCHAT.match(text):
         return INTENT_ANSWER
     # 催办排在最前：「为什么你看到没有后你不想办法自己装呢」里的「你看到」
@@ -192,8 +212,13 @@ REPORT_INSTRUCTION = (
     "- 最多 2 条，每条不超过 40 字。写**结果**，不写动作。\n"
     "  好：登录令牌改成 30 天有效\n"
     "  不好：修改 auth.py、更新 config.py、运行测试\n"
+    "  有统计或数量结果时，第一条必须写出关键数字（条数、合计、均值等），"
+    "不要只写「已生成 / 已完成」；用户要看的正是这些数。\n"
     "下一步\n"
-    "- 只有用户确实需要接着做点什么才写，最多 2 条；不需要就整段不要写。\n"
+    "- 只有不写任务就无法继续的事才写，最多 2 条；不需要就整段不要写。\n"
+    "  可选的改进建议、锦上添花的做法不要写——没人问就不用提。\n"
+    "  让用户「打开文件看看排版/效果」、修改文案后改脚本重跑，都属于可选项，"
+    "不要写；产物能不能打开、内容是否落盘应在结论里用实际核对结果说明。\n"
     "如果还有没验证的、或者你知道哪儿可能有风险，就并进结论里一句话说完，不要单开一段。\n"
     "硬要求：总共不超过 6 行；不出现「我」「作为」「本次任务」这类自述；不列文件清单、不复述命令；"
     "没做完的事不许写成做完了。\n"
@@ -205,6 +230,8 @@ REPORT_INSTRUCTION = (
 ANSWER_INSTRUCTION = (
     "直接回答用户。要求：不超过 5 行；不要开场白，不要「好的」「当然」「让我」；"
     "不要复述用户的问题；不要介绍你自己能做什么，除非用户问的就是这个。"
+    "用户明确要清单时不受 5 行限制：用 Markdown 列表一项一行，"
+    "文件/路径用反引号，不要用「、」把多项串成一段。"
 )
 
 # 只读调研之后的判断。和 answer 的区别是它手里有刚读到的东西，所以可以具体；

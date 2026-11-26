@@ -540,15 +540,12 @@ _GET_DESCRIPTION = (
 
 _UPDATE_DESCRIPTION = (
     "更新任务清单里的一个任务。\n\n"
-    "标记完成：做完了、不再需要或被别的方案替代时，把 status 改成 completed；"
-    "做完一个就立刻标一个，然后 TaskList 看下一个。只有**完全**做完才能标 completed——"
-    "测试还红、实现只做了一半、有未解决的错误、缺文件或缺依赖时，保持 in_progress。"
-    "被卡住时新建一个任务写清需要解决什么。\n\n"
-    "删除：status 设为 deleted 会永久移除该任务，并清掉其它任务里对它的引用。\n\n"
-    "可更新字段：status（pending → in_progress → completed，或 deleted）、subject、"
-    "description、activeForm、owner、metadata（按键合并，置 null 删除该键）、"
-    "addBlocks（本任务做完前谁不能开始）、addBlockedBy（谁做完本任务才能开始）。\n\n"
-    "更新前先用 TaskGet 读最新状态，避免拿旧快照覆盖别人的改动。"
+    "标记完成：做完、不再需要或被替代时 status=completed；只有完全做完才标 completed——"
+    "测试红、只做一半、有未解决错误、缺文件/依赖时保持 in_progress。"
+    "卡住就新建任务写清要解决什么。\n\n"
+    "删除：status=deleted 永久移除并清掉其它任务对它的引用。\n\n"
+    "可更新 status/subject/description/activeForm/owner/metadata（按键合并，置 null 删键）/"
+    "addBlocks/addBlockedBy。更新前先 TaskGet 读最新状态，避免拿旧快照覆盖。"
 )
 
 _LIST_DESCRIPTION = (

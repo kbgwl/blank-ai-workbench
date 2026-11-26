@@ -1,3 +1,6 @@
+RATE_LIMIT_CODE = "rate_limit_exceeded"
+
+
 class ApiError(Exception):
     """Domain error rendered as {"error": {"code", "message"}}."""
 

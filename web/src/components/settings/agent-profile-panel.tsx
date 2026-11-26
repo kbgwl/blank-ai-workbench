@@ -18,6 +18,8 @@ export function AgentProfilePanel() {
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [projectId, setProjectId] = useState("");
   const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
+  // 档案属于哪个项目：切项目后旧档案自动视为未就绪，不需要在 effect 里同步清空。
+  const [catalogFor, setCatalogFor] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -40,14 +42,17 @@ export function AgentProfilePanel() {
   useEffect(() => {
     if (!projectId) return;
     let alive = true;
-    setCatalog(null);
-    setError("");
     fetchProjectAgents(projectId)
       .then((data) => {
-        if (alive) setCatalog(data);
+        if (!alive) return;
+        setCatalog(data);
+        setCatalogFor(projectId);
+        setError("");
       })
       .catch((err) => {
-        if (alive) setError(errorMessage(err));
+        if (!alive) return;
+        setCatalogFor(projectId);
+        setError(errorMessage(err));
       });
     return () => {
       alive = false;
@@ -55,7 +60,8 @@ export function AgentProfilePanel() {
   }, [projectId]);
 
   const bound = (projects ?? []).filter((item) => item.workspaces.length > 0);
-  const agents = catalog ? orderAgents(catalog.agents) : [];
+  const catalogReady = Boolean(projectId) && catalogFor === projectId;
+  const agents = catalogReady && catalog ? orderAgents(catalog.agents) : [];
 
   return (
     <Panel
@@ -72,10 +78,10 @@ export function AgentProfilePanel() {
         ) : undefined
       }
     >
-      {error && <p className="text-[13px] text-danger">读取失败：{error}</p>}
-      {!catalog && !error && <p className="font-mono text-[12px] text-faint">读取助手档案…</p>}
+      {catalogReady && error && <p className="text-[13px] text-danger">读取失败：{error}</p>}
+      {!catalogReady && <p className="font-mono text-[12px] text-faint">读取助手档案…</p>}
 
-      {catalog && catalog.errors.length > 0 && (
+      {catalogReady && catalog && catalog.errors.length > 0 && (
         <div className="mb-2 rounded-md border border-danger/30 bg-danger/[0.05] px-2.5 py-2">
           <p className="text-[12px] font-medium text-danger">有 {catalog.errors.length} 份定义没加载起来</p>
           {catalog.errors.map((line, index) => (
@@ -86,7 +92,7 @@ export function AgentProfilePanel() {
         </div>
       )}
 
-      {agents.length > 0 && (
+      {catalogReady && agents.length > 0 && (
         <ul className="flex flex-col gap-2">
           {agents.map((agent) => (
             <li key={agent.name} className="rounded-lg border border-line bg-surface px-2.5 py-2">

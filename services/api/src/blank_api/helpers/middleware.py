@@ -1,7 +1,46 @@
+import json
 import time
 import logging
 
+from starlette.datastructures import MutableHeaders
+
+from blank_api.api.errors import RATE_LIMIT_CODE, error_body
+
 logger = logging.getLogger(__name__)
+
+
+class SecurityHeadersMiddleware:
+    """给每个 HTTP 响应补最小安全头。
+
+    本机服务也值得有：浏览器可能被诱导直接打开 ``/api/...`` 下的附件或工作区文件，
+    没有 ``nosniff`` 时一个 ``text/html`` 附件就可能在 API 源上执行脚本。
+    ``frame-ancestors`` 同时挡住点击劫持；CSP 只写这一条，避免把 /docs 弄坏。
+    """
+
+    _HEADERS = (
+        ("x-content-type-options", "nosniff"),
+        ("x-frame-options", "DENY"),
+        ("referrer-policy", "no-referrer"),
+        ("cross-origin-resource-policy", "same-origin"),
+        ("content-security-policy", "frame-ancestors 'none'"),
+    )
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for key, value in self._HEADERS:
+                    headers.setdefault(key, value)
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 # 探针与文档不进限流窗口。
@@ -54,7 +93,10 @@ class RateLimitMiddleware:
             })
             await send({
                 "type": "http.response.body",
-                "body": b'{"error":"rate_limit_exceeded","message":"Too many requests"}',
+                "body": json.dumps(
+                    error_body(RATE_LIMIT_CODE, "请求过于频繁，请稍后再试"),
+                    ensure_ascii=False,
+                ).encode("utf-8"),
             })
             return
 

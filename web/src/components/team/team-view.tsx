@@ -545,8 +545,8 @@ export function TeamView() {
   }
 
   return (
-    <div className="flex h-full min-h-0 bg-bg">
-      <aside className="flex w-[240px] shrink-0 flex-col border-r border-line bg-sidebar">
+    <div className="flex h-full min-h-0 bg-transparent">
+      <aside className="glass-side flex w-[240px] shrink-0 flex-col">
         <div className="mx-3 mt-3 mb-2 grid grid-cols-2 gap-1 rounded-lg bg-surface-2 p-1">
           {(["chat", "bots"] as Tab[]).map((item) => (
             <button

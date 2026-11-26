@@ -31,6 +31,7 @@ from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
     create_provider,
     create_task,
     env,
+    settle,
 )
 
 ENV_PATCH = "--- a/.env\n+++ b/.env\n@@ -0,0 +1,1 @@\n+TOKEN=plain\n"
@@ -188,7 +189,8 @@ async def test_matching_identity_executes_and_grants(env, workspace):  # noqa: F
             "arguments_hash": card["arguments_hash"],
         },
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
+    await settle()
     assert (workspace / ".env").read_text(encoding="utf-8") == "TOKEN=plain"
 
     granted = await _events(env, task_id, "approval.granted")
@@ -209,7 +211,8 @@ async def test_repeat_click_returns_already_decided_not_error(env, workspace):  
     }
 
     first = await env.client.post(f"{API}/tasks/{task_id}/approval", json=body)
-    assert first.status_code == 200, first.text
+    assert first.status_code == 202, first.text
+    await settle()
     content_after_first = (workspace / ".env").read_text(encoding="utf-8")
 
     second = await env.client.post(f"{API}/tasks/{task_id}/approval", json=body)
@@ -229,7 +232,8 @@ async def test_decided_event_carries_identity(env, workspace):  # noqa: F811
         f"{API}/tasks/{task_id}/approval",
         json={"approve": True, "approval_id": card["approval_id"]},
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
+    await settle()
     decided = await _events(env, task_id, "approval.decided")
     assert decided, "没有 approval.decided 事件"
     assert decided[-1]["approval_id"] == card["approval_id"]
@@ -250,7 +254,8 @@ async def test_granted_is_followed_by_a_tool_execution_with_the_same_identity(en
         f"{API}/tasks/{task_id}/approval",
         json={"approve": True, "approval_id": card["approval_id"]},
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
+    await settle()
 
     # 后面还有校验通道的 run_tests 请求（那次没走审批，自然不带身份）。
     # 按工具名挑出被批准的那次调用，别拿时间线上最后一条当它。

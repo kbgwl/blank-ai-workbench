@@ -57,8 +57,11 @@ def shell_policy() -> str:
 
 SCOPE_ONCE = "once"
 SCOPE_PREFIX = "prefix"
+# 会话级授权：用户当面点过“这类动作本会话不再逐条问”。它比命令前缀宽、
+# 比整个工具窄，按固定动作类别记账；bypass 档本身不会生成本档。
+SCOPE_SESSION = "session"
 SCOPE_TOOL = "tool"
-SCOPES = (SCOPE_ONCE, SCOPE_PREFIX, SCOPE_TOOL)
+SCOPES = (SCOPE_ONCE, SCOPE_PREFIX, SCOPE_SESSION, SCOPE_TOOL)
 
 
 def _action_kind_key(action: str) -> str:
@@ -209,6 +212,337 @@ _RULE_METACHARS = frozenset(";&|<>")
 
 def is_irreversible(command: str) -> bool:
     return bool(IRREVERSIBLE.search(command))
+
+
+# 只读命令的白名单。对标 Codex 的 workspace-write 体感：列目录、看文件、比内容
+# 这类动作不该每一条都挂审批卡。日常真机一次文件整理挂了 4 张卡，其中 3 张是
+# `dir` / `fc` / `cd`——用户设了「完全访问」仍被反复打扰，问题不在权限判定，
+# 在于所有 run_shell 一律按 high 处理。
+#
+# 白名单刻意窄且可解释：只认命令位置上的只读可执行文件；任何重定向、变量展开、
+# 绝对路径/盘符路径都不放行（沙箱的文件边界不是内核强制的，读系统文件仍要人看）。
+_READ_ONLY_EXES = frozenset(
+    {
+        "dir",
+        "tree",
+        "type",
+        "more",
+        "fc",
+        "comp",
+        "find",
+        "findstr",
+        "sort",
+        "cd",
+        "chdir",
+        "echo",
+        "where",
+        "which",
+        "ls",
+        "cat",
+        "pwd",
+        "get-childitem",
+        "get-content",
+        "get-item",
+        "get-itemproperty",
+        "get-location",
+        "get-psdrive",
+        "get-volume",
+        "get-disk",
+        "get-process",
+        "get-service",
+        "get-ciminstance",
+        "get-wmiobject",
+        "get-filehash",
+        "get-acl",
+        "select-string",
+        "select-object",
+        "sort-object",
+        "format-table",
+        "format-list",
+        "out-string",
+        "convertto-json",
+        "test-path",
+        "resolve-path",
+        "measure-object",
+    }
+)
+_READ_ONLY_GIT_SUBCOMMANDS = frozenset(
+    {"status", "diff", "log", "show", "rev-parse", "ls-files", "remote", "describe", "blame", "shortlog"}
+)
+_VERSION_PROBES = frozenset({"python", "python3", "py", "node", "npm", "pnpm", "pip", "pip3", "uv", "git"})
+_ABSOLUTE_HINT = re.compile(r"(^[A-Za-z]:|[\\/]{2}|(?:^|[\\/])\.\.(?:[\\/]|$))")
+
+
+def is_read_only_command(command: str, *, allow_absolute_paths: bool = False) -> bool:
+    """整条命令是否只读：每段都在白名单里，且没有重定向/变量。
+
+    ``allow_absolute_paths`` 只给「完全访问下跨盘只读扫描」用：普通自动放行仍
+    拒绝绝对路径/盘符/上级目录，避免读到工作区外的敏感文件。
+    """
+    text = str(command or "").strip()
+    if not text:
+        return False
+    # 重定向会写文件；反引号/$(...)/%VAR% 能在执行时拼出另一条命令。
+    if any(mark in text for mark in (">", "<", "`", "$(", "%", "$")):
+        return False
+    segments = split_segments(text)
+    if not segments:
+        return False
+    for segment in segments:
+        tokens = tokenize(segment)
+        while tokens and _basename(tokens[0]).lower() in ("sudo", "env", "command"):
+            tokens = tokens[1:]
+        if not tokens:
+            continue
+        # 命令位置必须是裸名字：绝对路径 / 相对路径 / `.\x.exe` 都可能是工作区里
+        # 放的同名程序，不能靠文件名把它当成系统自带的只读命令。
+        if any(mark in tokens[0] for mark in ("/", "\\", ":")) or tokens[0].startswith("."):
+            return False
+        exe = _basename(tokens[0]).lower()
+        if exe.endswith(".exe"):
+            exe = exe[:-4]
+        # 包一层壳再跑只读命令（`powershell -Command "Get-ChildItem ... | Measure-Object"`）
+        # 也按内层判；写命令（Remove-Item / del）内层不是只读，整条拒绝。
+        if exe in ("cmd", "powershell", "pwsh"):
+            payload = unwrap_payload(tokens)
+            if not payload or not is_read_only_command(
+                payload, allow_absolute_paths=allow_absolute_paths
+            ):
+                return False
+            continue
+        # `python --version` 这类探针只回版本号，不执行用户代码。
+        if exe in _VERSION_PROBES and len(tokens) <= 2 and tokens[1].lower() in (
+            "--version",
+            "-version",
+            "-v",
+            "-V",
+        ):
+            continue
+        if exe == "git":
+            rest = [token.lower() for token in tokens[1:] if not token.startswith("-")]
+            if not rest or rest[0] not in _READ_ONLY_GIT_SUBCOMMANDS:
+                return False
+        elif exe not in _READ_ONLY_EXES:
+            return False
+        if not allow_absolute_paths:
+            # 沙箱边界不是内核强制的：绝对路径/盘符/上级目录/根相对路径一律不自动放行。
+            # `/b`、`/s` 这类短开关放行；`/etc/passwd`、`\Windows\win.ini` 这类路径拒绝。
+            if any(_ABSOLUTE_HINT.search(token) for token in tokens[1:]):
+                return False
+            if any(
+                token.startswith("\\") or (token.startswith("/") and len(token) > 3)
+                for token in tokens[1:]
+            ):
+                return False
+    return True
+
+
+# 会话级审批授权只认这几类用户点过名的动作。类别必须比“整个工具”窄：
+# 批准一次 `git push` 不能连带放行 `git push --force`，批准一次工作区内的
+# `rm -rf build` 不能连带放行 `rm -rf /`——两者各自单独挂卡、单独授权。
+# 通用不可逆命令（shutdown / format / mkfs 等）不在这里，仍然逐条确认；
+# 越界执行（host_bypass）也不在：它是沙箱能力边界，只能一条一条批。
+SESSION_GRANT_LABELS = {
+    "install_dependency": "安装依赖",
+    "delete_file": "删除文件",
+    "delete_irreversible": "不可逆删除",
+    "git_push": "推送代码",
+    "git_push_force": "强制推送",
+    "db_migration": "数据库迁移",
+    "db_destructive": "破坏性数据库操作",
+    "deploy": "部署",
+}
+
+
+# 复合命令里允许混进来的“无害尾巴”：它们只读、只回显或只写日志，不带别的高风险动作。
+# `find` / `xargs` / `awk` / `sed` 故意不在列——它们都能再执行命令。
+_GRANT_HARMLESS_EXES = frozenset(
+    {
+        "tee",
+        "cat",
+        "head",
+        "tail",
+        "grep",
+        "sort",
+        "uniq",
+        "wc",
+        "more",
+        "less",
+        "cut",
+        "tr",
+        "echo",
+        "printf",
+        "pwd",
+        "cd",
+        "ls",
+        "dir",
+        "true",
+        "false",
+        "test",
+        "[",
+        "sleep",
+    }
+)
+# 装依赖的包管理器与子命令。只认“命令位置”的形状，不认正文里出现过的单词——
+# `git commit -m "migrate"` 不该被当成数据库迁移。
+_GRANT_INSTALL_SUBCOMMANDS = {
+    "pip": {"install"},
+    "pip3": {"install"},
+    "npm": {"i", "install", "add"},
+    "pnpm": {"add", "install"},
+    "yarn": {"add", "install"},
+    "poetry": {"add"},
+    "cargo": {"add"},
+    "go": {"get"},
+    "gem": {"install"},
+    "composer": {"require"},
+}
+
+
+def _grant_tokens(segment: str) -> list[str]:
+    """切词并跳过环境变量赋值与 `sudo` / `env` 这类不改语义的前缀。"""
+    tokens = tokenize(segment)
+    while tokens:
+        first = _basename(tokens[0]).lower()
+        if first in ("sudo", "env", "time", "nice", "nohup", "command"):
+            tokens = tokens[1:]
+            continue
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[0]):
+            tokens = tokens[1:]
+            continue
+        break
+    return tokens
+
+
+def _grant_segment_category(segment: str) -> str:
+    """单段命令 → 可授权的动作类别。认不出的一律空串（宁可多问一次）。"""
+    tokens = _grant_tokens(segment)
+    if not tokens:
+        return ""
+    exe = _basename(tokens[0]).lower()
+    rest = [token.lower() for token in tokens[1:]]
+    words = [exe] + rest
+
+    # 装依赖：命令位置必须是包管理器，子命令必须是 install/add/get 一类。
+    if exe in ("python", "python3", "py"):
+        for index in range(len(rest) - 2):
+            if (
+                rest[index] == "-m"
+                and rest[index + 1] in ("pip", "pip3")
+                and rest[index + 2] == "install"
+            ):
+                return "install_dependency"
+    if exe == "uv":
+        if rest[:1] == ["add"] or rest[:2] == ["pip", "install"]:
+            return "install_dependency"
+    if exe in _GRANT_INSTALL_SUBCOMMANDS and rest:
+        if rest[0] in _GRANT_INSTALL_SUBCOMMANDS[exe]:
+            return "install_dependency"
+
+    # 推送：git 的全局选项（-C / --git-dir / --work-tree）先跳过，再看子命令。
+    if exe == "git":
+        index = 0
+        while index < len(rest):
+            token = rest[index]
+            if token in ("-c", "--git-dir", "--work-tree"):
+                index += 2
+                continue
+            if token.startswith("-c") and len(token) > 2:
+                index += 1
+                continue
+            if token == "push":
+                return "git_push"
+            if not token.startswith("-"):
+                break
+            index += 1
+
+    # 删除：只认命令位置的删除动词。
+    if exe in ("rm", "del", "erase", "rd", "rmdir", "remove-item", "ri"):
+        return "delete_file"
+
+    # 破坏性数据库操作：drop/truncate + table/database/schema 必须相邻出现在命令位置。
+    for index in range(len(words) - 1):
+        if words[index] == "drop" and words[index + 1] in ("table", "database", "schema"):
+            return "db_destructive"
+        if words[index] == "truncate" and words[index + 1] == "table":
+            return "db_destructive"
+
+    # 普通迁移：工具子命令里出现 migrate/upgrade，或 manage.py migrate。
+    if exe in ("alembic", "flyway", "liquibase", "dbmate"):
+        if any("migrat" in token or token == "upgrade" for token in rest):
+            return "db_migration"
+    if exe in ("knex", "sequelize", "prisma") and any("migrat" in token for token in rest):
+        return "db_migration"
+    if exe in ("python", "python3", "py") and any(
+        token.endswith("manage.py") for token in rest
+    ) and "migrate" in rest:
+        return "db_migration"
+    if exe in ("npm", "pnpm", "yarn") and "migrate" in rest:
+        return "db_migration"
+
+    # 部署：命令位置的 deploy，或常见部署工具的子命令。
+    if exe == "deploy":
+        return "deploy"
+    if exe in ("vercel", "netlify", "fly", "heroku") and "deploy" in rest:
+        return "deploy"
+    if exe in ("kubectl", "terraform") and "apply" in rest:
+        return "deploy"
+    if exe == "docker" and "push" in rest:
+        return "deploy"
+    if exe in ("npm", "pnpm", "yarn") and "deploy" in rest:
+        return "deploy"
+    return ""
+
+
+def session_grant_category(tool: str, arguments: dict | None = None) -> str:
+    """把一次调用映射成可做会话级授权的动作类别；空串表示不提供这一档。
+
+    只认**命令位置**的形状，不用 ``classify_action`` 的子串匹配：后者是给审批
+    矩阵做粗判的，``git commit -m "migrate"`` 会被它认成数据库迁移。会话授权
+    会跨任务轮次生效，不能建立在“正文里出现过某个词”上。
+
+    复合命令要求**每一段同类或无害**：`pip install x | tee log` 给装依赖档，
+    `pip install x && rm -rf build` 什么都不给（两段不同类，宁可逐条问）。
+    删除与推送按“是否不可逆”拆类，越界执行只在整条命令没有别的高危动作时
+    才给会话档。
+    """
+    if tool == "delete_file":
+        return "delete_file"
+    if tool not in ("run_shell", "monitor"):
+        return ""
+    args = dict(arguments or {})
+    command = str(args.get("command") or "")
+    segments = [segment for segment in split_segments(command) if segment.strip()]
+    if not segments:
+        return ""
+    categories = [_grant_segment_category(segment) for segment in segments]
+    known = [category for category in categories if category]
+
+    if host_bypass_requested(tool, args):
+        # 越界执行永远不提供会话档：它只能一条一条批。工作区外执行是沙箱的
+        # 能力边界，不是审批节奏；"本会话都允许出界"会把这道边界整个拿掉。
+        return ""
+
+    if not known:
+        return ""
+    first = known[0]
+    if any(category and category != first for category in categories):
+        return ""
+    for segment, category in zip(segments, categories):
+        if category:
+            continue
+        tokens = _grant_tokens(segment)
+        exe = _basename(tokens[0]).lower() if tokens else ""
+        if exe not in _GRANT_HARMLESS_EXES:
+            return ""
+
+    if first == "delete_file" and is_irreversible(command):
+        return "delete_irreversible"
+    if first == "git_push" and is_irreversible(command):
+        return "git_push_force"
+    if first == "db_migration" and is_irreversible(command):
+        return "db_destructive"
+    return first
 
 
 # --------------------------------------------------------------------------- #
@@ -650,8 +984,15 @@ def deny(risk: str, rule: str, reason: str, prefix: str = "", memo: str = "") ->
     return Decision(DENY, risk=risk, rule=rule, reason=reason, prefix=prefix, memo=memo)
 
 
-def approval_options(tool_name: str, memo: str = "", *, tool_scope: bool) -> list[dict]:
-    """审批卡上的按钮数据：本次 / 这条命令（仅 run_shell 且粒度够细时）/ 该工具本会话。
+def approval_options(
+    tool_name: str,
+    memo: str = "",
+    *,
+    tool_scope: bool,
+    category: str = "",
+    session_granted: bool = False,
+) -> list[dict]:
+    """审批卡上的按钮数据：本次 / 这条命令 / 这类动作本会话 / 该工具本会话。
 
     ``memo`` 传的是 :func:`memo_rule` 算出来的那一串，不是命令本身的首段——
     卡片上写的"总是允许 X"必须与真正写进会话账本的那条规则逐字一致，
@@ -673,6 +1014,18 @@ def approval_options(tool_name: str, memo: str = "", *, tool_scope: bool) -> lis
                 "scope": SCOPE_PREFIX,
                 "label": f"本会话总是允许 {memo}",
                 "warning": "只免问这一条命令：换正文、换参数、换模块或换脚本路径都会重新挂卡",
+            }
+        )
+    label = SESSION_GRANT_LABELS.get(category, "")
+    if label and not session_granted:
+        options.append(
+            {
+                "scope": SCOPE_SESSION,
+                "label": f"本会话允许这类动作（{label}）",
+                "warning": (
+                    "批准后本会话内同类动作不再逐条询问；类别内的其它文件或命令也会一并放行。"
+                    "换会话、过期或换成另一类动作仍需重新确认，每次执行仍进时间线。"
+                ),
             }
         )
     if tool_scope:
@@ -962,6 +1315,9 @@ class PermissionPolicy:
     # 审批的免问范围是任务级事实，必须跟着 turn.context 一起被快照。
     sandbox_tier: str = DEFAULT_TIER
     approved_actions: set[str] = field(default_factory=set)
+    # 会话级授权按固定动作类别记账（见 SESSION_GRANT_LABELS）。它从会话级
+    # 存储按 thread_ref 读进来，跨任务轮次生效；不是 bypass 档的副产品。
+    session_grants: set[str] = field(default_factory=set)
     approved_prefixes: set[tuple[str, ...]] = field(default_factory=set)
     # 落盘的前缀规则（跨任务、跨重启）。与会话内那一档分开存：追踪里要说得清
     # 这次放行是"这次会话刚批的"还是"以前记在 approvals.json 里的"。
@@ -1044,6 +1400,13 @@ class PermissionPolicy:
             if rule:
                 self.approved_prefixes.add(rule)
 
+    def remember_session_grant(self, category: str) -> bool:
+        """记住“这类动作本会话不再逐条问”。只认固定类别，未知类别不入账。"""
+        if category not in SESSION_GRANT_LABELS:
+            return False
+        self.session_grants.add(category)
+        return True
+
     def remember_action_kind(self, action: str) -> bool:
         """批过一次搭环境类动作后，本任务内同类不再问。
 
@@ -1091,6 +1454,8 @@ class PermissionPolicy:
             "tool_scope": "tier+tool+target_path_prefix",
             "approved_tools": sorted(render_tool_grant(grant) for grant in self.approved_tools),
             "approved_prefixes": sorted(render_rule(rule) for rule in self.approved_prefixes),
+            # 会话级授权也进快照：用户要能解释“为什么这条删除没再问”。
+            "session_grants": sorted(self.session_grants),
             "persistent_prefixes": sorted(render_rule(rule) for rule in self.persistent_prefixes),
             "denied_prefixes": sorted(render_rule(rule) for rule in self.denied_prefixes),
             # 手写规则也进快照：规则文件坏了/被改过，是事后解释"当时为什么没问"
@@ -1185,6 +1550,20 @@ class PermissionPolicy:
                 command_prefix(command),
                 tool_scope_allowed=False,
             )
+
+        # 用户明确点过“不允许”的那一次，必须排在所有“要不要问”的分支之前。
+        # 旧顺序把它放在不可逆/越界闸门之后，于是驳回 `rm -rf build` 之后模型
+        # 再提同一调用，界面还会反复问——这不是“更安全”，是把一次否定当成没发生。
+        key = approval_key(name, arguments)
+        if key in self.denied_actions:
+            return deny(risk, "action:denied", f"该操作已在本次会话中被拒绝：{name}")
+
+        # 会话级授权：用户在本会话里当面点过“这类动作不再逐条问”。
+        # 它不是 bypass 档的自动产物——bypass 只省低风险；这一档必须经人工批准，
+        # 且只覆盖 SESSION_GRANT_LABELS 里的固定类别，通用不可逆命令仍逐条确认。
+        category = session_grant_category(name, arguments)
+        if category and category in self.session_grants:
+            return approve(risk, f"session_grant:{category}", command_prefix(command))
 
         # 单次越界宿主执行：部署开关已开时也必须逐条人工批准。
         # 它排在计划模式闸门之后（计划模式不允许执行命令）、不可逆闸门之前：
@@ -1305,6 +1684,18 @@ class PermissionPolicy:
         if name in ("run_shell", "monitor") and command and shell_policy() == SHELL_POLICY_ALLOWLIST:
             return ask(risk, "policy:shell_allowlist", command_prefix(command), memo=memo)
 
+        # 只读命令走自动放行：列目录/看文件/比内容不该每条都挂卡。只处理原本
+        # 会被当成 high/critical 的 shell 调用；low/medium 本来就走 risk:auto，
+        # 不必改归因。放在显式 ask / 不可逆 / 越界 / allowlist 策略之后，
+        # 任何一条更严的规则都仍然优先。
+        if (
+            name in ("run_shell", "monitor")
+            and command
+            and risk in ("high", "critical")
+            and is_read_only_command(command)
+        ):
+            return approve(risk, "readonly:command", command_prefix(command))
+
         if risk not in ("high", "critical"):
             return approve(risk, "risk:auto", command_prefix(command))
 
@@ -1338,6 +1729,7 @@ __all__ = [
     "covered_by_rules",
     "deny",
     "is_irreversible",
+    "is_read_only_command",
     "memoizable_prefix",
     "parse_decision",
     "prefix_rule",

@@ -421,7 +421,7 @@ async def create_user_round(
                 status="sent",
             )
         )
-    group.updated_at = datetime.utcnow()
+    group.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await session.commit()
     return message, round_row
 

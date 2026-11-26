@@ -36,6 +36,8 @@ export function TriggerPanel() {
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [projectId, setProjectId] = useState("");
   const [rows, setRows] = useState<Trigger[] | null>(null);
+  // 这一批记录属于哪个「项目 + 刷新轮次」：切换或刷新时旧记录自动视为未就绪。
+  const [rowsFor, setRowsFor] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [reload, setReload] = useState(0);
@@ -60,14 +62,18 @@ export function TriggerPanel() {
   useEffect(() => {
     if (!projectId) return;
     let alive = true;
-    setRows(null);
-    setError("");
+    const key = `${projectId}:${reload}`;
     fetchTriggers(projectId)
       .then((list) => {
-        if (alive) setRows(list);
+        if (!alive) return;
+        setRows(list);
+        setRowsFor(key);
+        setError("");
       })
       .catch((err) => {
-        if (alive) setError(errorMessage(err));
+        if (!alive) return;
+        setRowsFor(key);
+        setError(errorMessage(err));
       });
     return () => {
       alive = false;
@@ -75,6 +81,7 @@ export function TriggerPanel() {
   }, [projectId, reload]);
 
   const bound = (projects ?? []).filter((item) => item.workspaces.length > 0);
+  const rowsReady = rowsFor === `${projectId}:${reload}`;
 
   async function act(row: Trigger, action: "fire" | "pause" | "resume" | "cancel") {
     setBusy(row.id);
@@ -106,14 +113,14 @@ export function TriggerPanel() {
         ) : undefined
       }
     >
-      {error && <p className="text-[13px] text-danger">读取失败：{error}</p>}
-      {!rows && !error && <p className="font-mono text-[12px] text-faint">读取触发记录…</p>}
-      {rows && rows.length === 0 && (
+      {rowsReady && error && <p className="text-[13px] text-danger">读取失败：{error}</p>}
+      {!rowsReady && <p className="font-mono text-[12px] text-faint">读取触发记录…</p>}
+      {rowsReady && rows && rows.length === 0 && (
         <p className="text-[13px] leading-relaxed text-muted">
           还没有排过任何事。在对话里说「过一会儿……」「每天……」时，它才会登记到这里。
         </p>
       )}
-      {rows && rows.length > 0 && (
+      {rowsReady && rows && rows.length > 0 && (
         <ul className="flex flex-col gap-2">
           {rows.map((row) => {
             const status = triggerStatus(row.status);

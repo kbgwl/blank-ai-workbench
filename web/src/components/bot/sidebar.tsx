@@ -5,7 +5,15 @@ import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Thread } from "../tasks/api";
-import { ThemeToggle } from "../theme-toggle";
+import {
+  ARCHIVED_FETCH_LIMIT,
+  archiveConfirmMessage,
+  countUnfinished,
+  isArchivable,
+  partitionThreads,
+  selectAllVisible,
+  toggleSelected,
+} from "./batch-archive";
 import { isNavActive, NAV_ITEMS, type NavId } from "./nav";
 import { StatusDot } from "./status-dot";
 import { dayBucket, splitTitleStamp } from "./turns";
@@ -84,6 +92,10 @@ export type SidebarProps = {
   onSelect: (id: string) => void;
   onNew: () => void;
   onArchive: (thread: Thread) => void;
+  /** 批量归档：只发一次请求。失败时抛错，侧栏据此留在管理态并保留选择。 */
+  onBatchArchive: (threads: Thread[]) => Promise<void>;
+  /** 已归档列表单独读取失败：只影响已归档组，不能拖垮活跃列表。 */
+  archivedError?: boolean;
   /** 分叉：带着上下文另开一条线（Codex 的 thread/fork）。 */
   onFork: (thread: Thread) => void;
   onRename: (thread: Thread) => void;
@@ -95,14 +107,45 @@ export type SidebarProps = {
 
 export function Sidebar(props: SidebarProps) {
   const [query, setQuery] = useState("");
+  // 管理态不持久化：刷新页面就退出，避免用户下次打开还停在一个"点哪都是选择"的列表。
+  const [managing, setManaging] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  // 已归档组默认收起；搜索词非空时由派生值强制展开，清空搜索后回到这里记的状态。
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const pathname = usePathname();
 
+  const trimmedQuery = query.trim().toLowerCase();
+
+  const { active: allActive, archived: allArchived } = useMemo(
+    () => partitionThreads(props.threads ?? []),
+    [props.threads],
+  );
+  const visibleActive = useMemo(
+    () =>
+      allActive.filter((thread) =>
+        trimmedQuery ? thread.title.toLowerCase().includes(trimmedQuery) : true,
+      ),
+    [allActive, trimmedQuery],
+  );
+  const visibleArchived = useMemo(
+    () =>
+      allArchived.filter((thread) =>
+        trimmedQuery ? thread.title.toLowerCase().includes(trimmedQuery) : true,
+      ),
+    [allArchived, trimmedQuery],
+  );
+  // 已选以当前列表为准动态计算：刷新后不存在的、已被归档的 id 自动不计入。
+  const selectedThreads = useMemo(
+    () => allActive.filter((thread) => selected.has(thread.id)),
+    [allActive, selected],
+  );
+  const selectedCount = selectedThreads.length;
+  const archivedExpanded = trimmedQuery !== "" || archivedOpen;
+
   const groups = useMemo(() => {
-    const rows = (props.threads ?? []).filter((thread) =>
-      query.trim() ? thread.title.toLowerCase().includes(query.trim().toLowerCase()) : true,
-    );
     const buckets = new Map<ReturnType<typeof dayBucket>, Thread[]>();
-    for (const thread of rows) {
+    for (const thread of visibleActive) {
       const bucket = dayBucket(thread.updatedAt || thread.createdAt);
       buckets.set(bucket, [...(buckets.get(bucket) ?? []), thread]);
     }
@@ -111,14 +154,59 @@ export function Sidebar(props: SidebarProps) {
       label: GROUP_LABEL[bucket],
       items: buckets.get(bucket) ?? [],
     }));
-  }, [props.threads, query]);
+  }, [visibleActive]);
+
+  const leaveManaging = () => {
+    setManaging(false);
+    setSelected(new Set());
+  };
+
+  // 收起/展开都退出管理态：栏一收起，复选框和操作条就不可见，
+  // 留着选择状态等用户重新展开，等于埋了一次"看不见的选中"。
+  const toggleSidebar = () => {
+    if (managing) leaveManaging();
+    props.onToggle();
+  };
+
+  // Escape 退出管理态。事件处理器里 setState 不触发 set-state-in-effect 规则。
+  useEffect(() => {
+    if (!managing) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setManaging(false);
+      setSelected(new Set());
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [managing]);
+
+  const toggleThread = (thread: Thread) => {
+    if (!isArchivable(thread)) return;
+    setSelected((current) => toggleSelected(current, thread.id));
+  };
+
+  const archiveSelected = async () => {
+    if (batchBusy || selectedThreads.length === 0) return;
+    const items = selectedThreads;
+    if (!window.confirm(archiveConfirmMessage(items.length, countUnfinished(items)))) return;
+    setBatchBusy(true);
+    try {
+      await props.onBatchArchive(items);
+      // 只有真的成功才退出：失败时上层已经报了错，这里保留选择让用户重试。
+      leaveManaging();
+    } catch {
+      // 错误由上层显示（真实错误文案），不谎称成功。
+    } finally {
+      setBatchBusy(false);
+    }
+  };
 
   if (props.collapsed) {
     return (
-      <aside className="flex w-[52px] shrink-0 flex-col items-center gap-2 border-r border-line bg-sidebar py-3">
+      <aside className="glass-side flex w-[52px] shrink-0 flex-col items-center gap-2 py-3">
         <button
           type="button"
-          onClick={props.onToggle}
+          onClick={toggleSidebar}
           title="展开会话列表"
           className="grid size-8 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-text"
         >
@@ -169,13 +257,12 @@ export function Sidebar(props: SidebarProps) {
             <path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8" />
           </svg>
         </Link>
-        <ThemeToggle compact />
       </aside>
     );
   }
 
   return (
-    <aside className="flex w-[240px] shrink-0 flex-col border-r border-line bg-sidebar">
+    <aside className="glass-side flex w-[240px] shrink-0 flex-col">
       <div className="flex items-center gap-2 px-3 pt-3 pb-2.5">
         <span className="grid size-6 shrink-0 place-items-center rounded-md bg-logo-bg">
           <span className="size-2 rounded-[2px] bg-logo-accent" />
@@ -186,7 +273,7 @@ export function Sidebar(props: SidebarProps) {
         </span>
         <button
           type="button"
-          onClick={props.onToggle}
+          onClick={toggleSidebar}
           title="收起会话列表"
           className="ml-auto grid size-7 place-items-center rounded-md text-faint transition-colors hover:bg-surface-2 hover:text-text"
         >
@@ -216,7 +303,11 @@ export function Sidebar(props: SidebarProps) {
           </svg>
           <input
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              // 搜索词一变就清空选择：否则"选了 5 条，搜索后看不见却仍被归档"。
+              if (selected.size > 0) setSelected(new Set());
+            }}
             placeholder="搜索对话"
             className="w-full bg-transparent text-[13px] text-text placeholder:text-faint focus:outline-none"
           />
@@ -292,7 +383,20 @@ export function Sidebar(props: SidebarProps) {
           </p>
         )}
 
-        <div className="px-2 pb-1 pt-2 text-[11px] font-medium tracking-wide text-faint">最近</div>
+        <div className="flex items-baseline justify-between px-2 pb-1 pt-2">
+          <span className="text-[11px] font-medium tracking-wide text-faint">最近</span>
+          {!managing && (
+            <button
+              type="button"
+              onClick={() => setManaging(true)}
+              disabled={allActive.length === 0}
+              title={allActive.length === 0 ? "没有可归档的会话" : "批量选择并归档会话"}
+              className="rounded px-1 text-[11px] text-faint transition-colors hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              管理
+            </button>
+          )}
+        </div>
 
         {props.threads === null && !props.error && (
           <div className="space-y-1.5 px-1 pt-2">
@@ -307,6 +411,12 @@ export function Sidebar(props: SidebarProps) {
             还没有对话。
             <br />
             说一句就开始。
+          </p>
+        )}
+
+        {props.threads !== null && props.threads.length > 0 && allActive.length === 0 && (
+          <p className="px-2 py-3 text-center text-[12px] leading-relaxed text-faint">
+            没有活跃会话，可从下方「已归档」找回。
           </p>
         )}
 
@@ -337,13 +447,31 @@ export function Sidebar(props: SidebarProps) {
                 // 标题里自带的时间拆到右列：整列 18 行「雷罡 21:51:06」读起来是一堵墙。
                 const { base, stamp: titleStamp } = splitTitleStamp(thread.title);
                 const stamp = titleStamp || stamps.get(thread.id) || "";
+                const selectable = managing && isArchivable(thread);
+                const checked = selectable && selected.has(thread.id);
                 return (
-                  <div key={thread.id} className="group/item relative">
+                  <div key={thread.id} className="group/item relative flex items-center">
+                    {selectable && (
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleThread(thread)}
+                        aria-label={`选择「${base}」`}
+                        className="ml-1.5 size-3.5 shrink-0 cursor-pointer accent-brand"
+                      />
+                    )}
                     <button
                       type="button"
-                      onClick={() => props.onSelect(thread.id)}
-                      className={`flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 pr-8 text-left transition-colors ${
-                        active ? "bg-surface-3 text-text" : "text-muted hover:bg-surface-2 hover:text-text"
+                      onClick={() => (selectable ? toggleThread(thread) : props.onSelect(thread.id))}
+                      aria-pressed={selectable ? checked : undefined}
+                      className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-left transition-colors ${
+                        managing ? "pr-2" : "pr-8"
+                      } ${
+                        active
+                          ? "bg-surface-3 text-text"
+                          : checked
+                            ? "bg-surface-2 text-text"
+                            : "text-muted hover:bg-surface-2 hover:text-text"
                       }`}
                     >
                       {/* 留一个固定宽度的槽：点不画的时候标题也不能左右跳。 */}
@@ -360,14 +488,18 @@ export function Sidebar(props: SidebarProps) {
                     </button>
                     {/* 操作收进一个「⋯」：三个图标并排会吃掉窄侧栏一截标题，而且它们
                         只在悬停时 display:flex，键盘根本 Tab 不到。菜单本身挂到 body 上，
-                        侧栏列表是 overflow-y-auto，挂在行里会被裁掉半截。 */}
-                    <ThreadMenu
-                      thread={thread}
-                      onRename={props.onRename}
-                      onArchive={props.onArchive}
-                      onDelete={props.onDelete}
-                      onFork={props.onFork}
-                    />
+                        侧栏列表是 overflow-y-auto，挂在行里会被裁掉半截。
+                        管理态隐藏菜单：这一段里点哪都是在选，留一个弹菜单的入口只会误触。 */}
+                    {!managing && (
+                      <ThreadMenu
+                        thread={thread}
+                        onRename={props.onRename}
+                        onArchive={props.onArchive}
+                        onUnarchive={props.onUnarchive}
+                        onDelete={props.onDelete}
+                        onFork={props.onFork}
+                      />
+                    )}
                   </div>
                 );
               })}
@@ -375,7 +507,126 @@ export function Sidebar(props: SidebarProps) {
           </div>
           );
         })}
+
+        {props.archivedError && (
+          <p className="mx-1 mt-2 rounded-md border border-danger/25 bg-danger/[0.04] px-2 py-1.5 text-[12px] text-danger">
+            已归档列表读取失败
+          </p>
+        )}
+
+        {allArchived.length > 0 && (
+          <div className="mb-2">
+            <button
+              type="button"
+              onClick={() => setArchivedOpen((value) => !value)}
+              aria-expanded={archivedExpanded}
+              aria-label="已归档会话"
+              className="flex w-full items-center gap-1 rounded px-2 py-1 text-left text-[11px] font-medium text-faint transition-colors hover:text-text"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                className={`size-3 shrink-0 transition-transform ${archivedExpanded ? "rotate-90" : ""}`}
+                aria-hidden
+              >
+                <path d="m9 6 6 6-6 6" />
+              </svg>
+              已归档 {allArchived.length}
+            </button>
+            {allArchived.length >= ARCHIVED_FETCH_LIMIT && (
+              <p className="px-2 pb-1 text-[11px] leading-relaxed text-faint">
+                仅显示最近 {ARCHIVED_FETCH_LIMIT} 条已归档会话。
+              </p>
+            )}
+            {archivedExpanded && (
+              <div className="mt-0.5 space-y-0.5">
+                {visibleArchived.map((thread) => {
+                  const active = thread.id === props.activeId;
+                  const { base, stamp: titleStamp } = splitTitleStamp(thread.title);
+                  return (
+                    <div key={thread.id} className="group/item relative flex items-center">
+                      <button
+                        type="button"
+                        onClick={() => props.onSelect(thread.id)}
+                        className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 pr-8 text-left transition-colors ${
+                          active
+                            ? "bg-surface-3 text-text"
+                            : "text-faint hover:bg-surface-2 hover:text-text"
+                        }`}
+                      >
+                        <span className="grid w-1.5 shrink-0 place-items-center">
+                          <StatusDot status={thread.lastTurnStatus} quietDone />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-[13px]" title={thread.title}>
+                          {base}
+                        </span>
+                        {titleStamp && (
+                          <span className="shrink-0 font-mono text-[10px] tabular-nums text-faint">
+                            {titleStamp}
+                          </span>
+                        )}
+                      </button>
+                      {!managing && (
+                        <ThreadMenu
+                          thread={thread}
+                          onRename={props.onRename}
+                          onArchive={props.onArchive}
+                          onUnarchive={props.onUnarchive}
+                          onDelete={props.onDelete}
+                          onFork={props.onFork}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+                {trimmedQuery !== "" && visibleArchived.length === 0 && (
+                  <p className="px-2 py-1.5 text-[12px] text-faint">没有匹配的已归档会话</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      {managing && (
+        <div className="border-t border-line p-2">
+          <div className="flex items-center justify-between px-1 pb-1.5">
+            <span className="text-[12px] text-muted">已选 {selectedCount} 条</span>
+            <button
+              type="button"
+              onClick={() => setSelected(selectAllVisible(visibleActive, selected))}
+              disabled={batchBusy || visibleActive.length === 0}
+              title="选中当前搜索下可见的活跃会话（不含已归档）"
+              aria-label="全选当前可见的活跃会话"
+              className="rounded px-1 text-[12px] text-muted transition-colors hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              全选
+            </button>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={leaveManaging}
+              disabled={batchBusy}
+              aria-label="取消管理"
+              className="flex-1 rounded-md border border-line px-2 py-1.5 text-[12px] text-muted transition-colors hover:bg-surface-2 hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={() => void archiveSelected()}
+              disabled={batchBusy || selectedCount === 0}
+              aria-label="归档所选"
+              className="flex-1 rounded-md bg-text px-2 py-1.5 text-[12px] font-medium whitespace-nowrap text-bg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {batchBusy ? "归档中…" : `归档所选（${selectedCount}）`}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="border-t border-line p-2">
         {/* 监控/证据库/技能/连接器已收进设置页，侧栏底部只留团队与设置。 */}
@@ -399,7 +650,6 @@ export function Sidebar(props: SidebarProps) {
           </svg>
           设置
         </Link>
-        <ThemeToggle />
         <p className="px-2 pt-1 font-mono text-[9px] text-faint">空白格 bot</p>
       </div>
     </aside>
@@ -444,6 +694,7 @@ function ThreadMenu(props: {
   thread: Thread;
   onRename: (thread: Thread) => void;
   onArchive: (thread: Thread) => void;
+  onUnarchive: (thread: Thread) => void;
   onDelete: (thread: Thread) => void;
   onFork: (thread: Thread) => void;
 }) {
@@ -571,17 +822,31 @@ function ThreadMenu(props: {
             >
               重命名
             </ThreadMenuItem>
-            <ThreadMenuItem
-              onPick={() => pick(props.onArchive)}
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-4" aria-hidden>
-                  <path d="M3 8h18v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8Z" />
-                  <path d="M2 4h20v4H2zM9.5 12h5" />
-                </svg>
-              }
-            >
-              归档
-            </ThreadMenuItem>
+            {props.thread.status === "archived" ? (
+              <ThreadMenuItem
+                onPick={() => pick(props.onUnarchive)}
+                icon={
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-4" aria-hidden>
+                    <path d="M3 8h18v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8Z" />
+                    <path d="M2 4h20v4H2zM12 11v6M9.5 14.5 12 17l2.5-2.5" />
+                  </svg>
+                }
+              >
+                取消归档
+              </ThreadMenuItem>
+            ) : (
+              <ThreadMenuItem
+                onPick={() => pick(props.onArchive)}
+                icon={
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-4" aria-hidden>
+                    <path d="M3 8h18v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8Z" />
+                    <path d="M2 4h20v4H2zM9.5 12h5" />
+                  </svg>
+                }
+              >
+                归档
+              </ThreadMenuItem>
+            )}
             <ThreadMenuItem
               danger
               onPick={() => pick(props.onDelete)}

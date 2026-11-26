@@ -19,7 +19,13 @@ from blank_api.models.model_provider import (
     ModelProvider,
     ModelUsage,
 )
-from blank_api.schemas.model import ChatIn, ProviderCreate, ProviderOut, ProviderUpdate
+from blank_api.schemas.model import (
+    ChatIn,
+    ProviderCreate,
+    ProviderDefaultIn,
+    ProviderOut,
+    ProviderUpdate,
+)
 from blank_api.services.crypto import decrypt_secret, encrypt_secret, key_hint
 from blank_api.services.models.base import ChatMessage, ModelError
 from blank_api.services.models.pricing import estimate_cost
@@ -97,7 +103,18 @@ async def presets() -> dict:
 @router.get("/providers", response_model=list[ProviderOut])
 async def list_providers(db: DbSession) -> list[ProviderOut]:
     rows = (await db.execute(select(ModelProvider).order_by(ModelProvider.name))).scalars()
-    return [_out(p) for p in rows]
+    from blank_api.services.settings import SettingsStore
+
+    default_id = str(
+        (SettingsStore().read().get("model") or {}).get("default_provider") or ""
+    ).strip()
+    result: list[ProviderOut] = []
+    for provider in rows:
+        item = _out(provider)
+        if default_id and provider.id == default_id:
+            item.is_default = True
+        result.append(item)
+    return result
 
 
 @router.post("/providers", response_model=ProviderOut, status_code=201)
@@ -129,6 +146,26 @@ async def create_provider(payload: ProviderCreate, db: DbSession) -> ProviderOut
     db.add(provider)
     await db.commit()
     return _out(provider)
+
+
+@router.put("/providers/default")
+async def set_default_provider(payload: ProviderDefaultIn, db: DbSession) -> dict:
+    """设置「默认模型」用哪一家；空串表示清掉，回到「有 Key 的第一家」。
+
+    只允许指向启用且填了 Key 的供应商：把没 Key 的设为默认，用户发第一条消息
+    就是 401，却看不出是设置里选错了。
+    """
+    from blank_api.services.settings import SettingsStore
+
+    provider_id = payload.provider_id.strip()
+    if provider_id:
+        provider = await _get_provider(db, provider_id)
+        if not provider.enabled:
+            raise ApiError(code="provider_disabled", message="该供应商已停用，不能设为默认", status_code=409)
+        if not provider.api_key_encrypted:
+            raise ApiError(code="provider_no_key", message="该供应商还没有 API Key，不能设为默认", status_code=409)
+    SettingsStore().update({"model": {"default_provider": provider_id}})
+    return {"default_provider": provider_id}
 
 
 @router.get("/providers/{provider_id}", response_model=ProviderOut)

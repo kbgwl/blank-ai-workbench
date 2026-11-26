@@ -18,7 +18,7 @@ Linux / CI 上用 `pnpm test:api`（内部是 `uv run pytest -q`）。
 `where node` / `dir node_modules\.bin` 这类探测一条都问不出来。直接用绝对路径的 node：
 
 ```bash
-cd web && E:/env/node/node-v24.20.0-win-x64/node.exe --test "src/**/*.test.ts"
+cd web && E:/env/node/node-v24.20.0-win-x64/node.exe --test --import ./test-bootstrap.mjs "src/**/*.test.ts"
 cd web && E:/env/node/node-v24.20.0-win-x64/node.exe ./node_modules/typescript/bin/tsc --noEmit
 ```
 
@@ -32,10 +32,20 @@ cd web && E:/env/node/node-v24.20.0-win-x64/node.exe ./node_modules/typescript/b
 | 改了哪里 | 跑什么 | 失败先看 |
 |---|---|---|
 | `services/api/src/**` | `cd services/api && .venv/Scripts/python.exe -m pytest tests/<相关文件> -q` | 末尾 traceback 第一处 `E ` |
-| `web/src/**` | `cd web && node --test --import ./test-bootstrap.mjs "src/**/*.test.ts"`，再 `tsc --noEmit` | 第一条失败用例名；tsc 首个 `文件:行` |
-| 跨端 / 准备交付 | `bash check.sh`（tsc + 前端单测 + 冒烟 17 项） | 第一处 `[FAIL]` |
+| `web/src/**` | `cd web && E:/env/node/node-v24.20.0-win-x64/node.exe --test --import ./test-bootstrap.mjs "src/**/*.test.ts"`，再 `E:/env/node/node-v24.20.0-win-x64/node.exe ./node_modules/typescript/bin/tsc --noEmit` | 第一条失败用例名；tsc 首个 `文件:行` |
+| 跨端 / 准备交付 | `bash check.sh`（tsc + 前端单测 + 执行式界面验收 journey + 可跳过的冒烟） | 第一处 `[FAIL]` |
 | `desktop/**` | `node desktop/verify-package.cjs` | 失败项编号 |
 | `evals/**` | `node evals/run_evals.mjs` | 分项名 |
+
+执行式界面验收 journey 的项目级权威入口是宿主对应的 Skill/Command：
+Qoder 用 `.qoder/skills/acceptance-journey/SKILL.md` 与 `.qoder/commands/check-journey.md`；
+Claude Code 用 `.claude/skills/acceptance-journey/SKILL.md` 与 `.claude/commands/check-journey.md`，
+入口文件为 `CLAUDE.md`，规则冲突仍以本文件为准。涉及 `web/src/**`、`scripts/acceptance.py`、
+`acceptance/**`、`check.sh`、CI 工作流或准备交付时，先走 `/check-journey`，不要临时拼命令；
+完整交付门禁仍走 `bash check.sh`。
+
+交付前还要由宿主对应的 `acceptance-reviewer` Agent（`.qoder/agents/` 或 `.claude/agents/`）
+复核 `docs/validation/acceptance-2026-11-21.md` 中的留存记录；没有晚于最后改动的通过记录，不得声称已验收。
 
 **最后一次改动之后必须再跑一次覆盖它的检查**；改动之前跑过的不算数。
 真跑不了就照实写「未跑校验：为什么」，不要静默略过——静默和谎报是一回事。
@@ -53,10 +63,12 @@ cd web && E:/env/node/node-v24.20.0-win-x64/node.exe ./node_modules/typescript/b
 
 这三条**直接写在这里**，不要只放在文档里等人去翻：
 
-1. **不可逆动作永不越过闸门**。`permissions.py` 的 `IRREVERSIBLE` 在放行链任何一环之前生效，
-   `bypass` 也不例外；放开它等于允许删库。
-2. **只有装依赖按动作类型记账**（`_REMEMBERABLE_ACTION_KINDS`）。删除、`git push`、部署、迁移、
-   越界一律逐条确认；带管道的安装命令故意不记账（后半段不可控）。
+1. **不可逆动作的第一次出现永不越过闸门**。`bypass` 档本身不产生任何会话级授权；
+   只有用户当面点过「本会话允许这类动作」才生效，且按类别隔离（批准 `git push` 不放行
+   `git push --force`，批准工作区内删除不放行 `rm -rf /`）、默认 24 小时过期、每次执行
+   仍进时间线。`IRREVERSIBLE` 仍先于前缀账、工具档、`approve_high_risk` 与 `bypass` 生效。
+2. **自动记账只免装依赖一类**（`_REMEMBERABLE_ACTION_KINDS`）。删除、`git push`、部署、迁移、
+   越界要用户当面批准一次会话级类别后才免问；带管道的安装命令不落前缀账，但会话级类别仍覆盖它。
 3. **沙箱后端不可用时不降级**。要么整任务拒绝，要么如实标注只强制了文件边界
    （`measured_file_boundary_only`），不许写成"看起来隔离了"。
 

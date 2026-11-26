@@ -25,7 +25,7 @@ from sqlalchemy import select
 from blank_api.db import get_session_factory
 from blank_api.models.task import Task
 from blank_api.services.hooks import HookRunner, HookSpec, parse_hook_output
-from tests.test_agent_v04 import API, call, create_project, create_provider, create_task, env  # noqa: F401
+from tests.test_agent_v04 import API, call, create_project, create_provider, create_task, env, settle  # noqa: F401
 
 MARKER = "青龙石机密-原文标记"
 REPLACEMENT = "按工作区里已有的资料给出结论，不要读任何名字里带机密的文件。"
@@ -512,8 +512,11 @@ async def test_续跑不发提交钩子且抑制从检查点延续(env, workspac
     resp = await env.client.post(
         f"{API}/tasks/{task_id}/approval", json={"approve": True, "provider_id": provider_id}
     )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["task"]["status"] != "waiting_approval", resp.json()["task"]
+    assert resp.status_code == 202, resp.text
+    # 202 只是入队；恢复里的提交钩子是否被抑制，要等后台这一轮跑完才能读。
+    await settle()
+    task = (await env.client.get(f"{API}/tasks/{task_id}")).json()
+    assert task["status"] != "waiting_approval", task
 
     runs = counter.read_text(encoding="utf-8").count("x")
     assert runs == 1, f"审批恢复又跑了一次提交钩子（{runs} 次）：同一份提交被改写了两次"

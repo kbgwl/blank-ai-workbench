@@ -486,17 +486,21 @@ def test_call_model_reads_skill_model_from_turn_state() -> None:
 
 
 def test_call_adapter_passes_model_to_bind_tools_stream() -> None:
-    """``_call_adapter`` 把 model 透传给 ``bind_tools_stream``。
+    """``_call_adapter`` 把 model/on_tool_call 透传给 ``bind_tools_stream``。
 
     透传断在这里，适配器拿到的 model 永远是空串。只查 ``"model=model" in source``
     不够——``_call_non_stream`` 的调用里也有这串，去掉 ``bind_tools_stream`` 的
-    透传后源里仍能找到，判据不会红。这里钉 ``on_delta=relay`` 与 ``model=model``
-    出现在同一次调用的参数列表里，两者缺一即红。
+    透传后源里仍能找到，判据不会红。这里只看 ``bind_tools_stream(...)`` 这一次调用
+    的参数列表：``on_delta`` / ``on_tool_call`` / ``model`` 缺一即红。
     """
     from blank_api.services.agent.graph import AgentSession
 
     source = inspect.getsource(AgentSession._call_adapter)
-    assert "on_delta=relay, effort=effort, thinking=thinking, model=model" in source
+    start = source.index("bind_tools_stream(")
+    call = source[start : source.index(")", start)]
+    assert "on_delta=relay" in call
+    assert "on_tool_call=_on_tool_call" in call
+    assert "model=model" in call
 
 
 def test_call_non_stream_passes_model_to_bind_tools() -> None:

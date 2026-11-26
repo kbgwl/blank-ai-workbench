@@ -64,6 +64,8 @@ def _limits() -> dict:
         },
         "permission_modes": list(PERMISSION_MODES),
         "permission_mode_labels": MODE_LABELS,
+        # 金额闸的边界：0 = 不限；上限与 settings.normalize 的夹取保持一致。
+        "cost_limit": {"min": 0.0, "max": 1_000_000.0, "default": 0.0},
         # v165 §8：前端自动化模式下拉框的合法取值与中文标签。和归一化、PATCH
         # 校验共用 automation.py 的那份枚举，界面上选得到的必然存得上。
         "automation_modes": list(AUTOMATION_MODES),
@@ -101,7 +103,7 @@ def _render(payload: dict, store: SettingsStore) -> AgentSettings:
     body = {
         k: v
         for k, v in payload.items()
-        if k in ("guardian", "compaction", "permissions", "tools", "safety", "background", "output_style")
+        if k in ("guardian", "compaction", "permissions", "tools", "safety", "background", "budget", "output_style")
     }
     return AgentSettings.model_validate({**body, "path": str(store.path), "limits": _limits()})
 

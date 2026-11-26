@@ -102,11 +102,23 @@ async def _request_for(run_id: str):
         task = await session.get(Task, run.task_id)
         if task is None:
             return None
+        raw_payload = dict(run.request_payload or {})
+        resume_decision = raw_payload.get("resume_decision")
         try:
-            payload = TaskRunIn.model_validate(run.request_payload or {})
+            payload = TaskRunIn.model_validate(raw_payload)
         except Exception:
             return None
-        request = await task_routes._run_request(session, task, payload, None)
+        request = await task_routes._run_request(
+            session,
+            task,
+            payload,
+            None,
+            # 审批恢复的内部载荷：重建不出来就等于普通 run，绝不能按崩溃续跑
+            # 把用户刚点的决定悄悄丢掉。
+            resume_decision=(
+                resume_decision if isinstance(resume_decision, dict) else None
+            ),
+        )
         request.run_id = run_id
         return request
 
@@ -114,7 +126,7 @@ async def _request_for(run_id: str):
 async def expire_stale_approvals() -> int:
     """把「审批已过期、也没人再来点」的任务收敛成失败。
 
-    审批卡有有效期（默认 30 分钟，``BLANK_APPROVAL_TTL_SECONDS`` 可调）。过期之后
+    审批卡有有效期（默认 24 小时，``BLANK_APPROVAL_TTL_SECONDS`` 可调）。过期之后
     那张卡再也批不动——提交会拿到 409。但任务状态原先一直停在 ``waiting_approval``：
     界面写着「进行中」，用户既批不了、也没有重试入口，只能关掉重开一轮。真实 GUI
     验收里这个死状态连撞三次（两次是我离开工位超过 5 分钟，一次是点了才被告知过期）。
@@ -549,6 +561,12 @@ async def main() -> int:
         await asyncio.to_thread(boundary.measure)
     except Exception:  # noqa: BLE001 - 探测失败只影响记账，不该挡住认领
         log.warning("沙箱边界预热失败（不影响认领）", exc_info=True)
+    # 审批决定已落账、恢复却没入队的任务，启动时补一次；只入队，执行仍由下面
+    # 唯一的认领循环负责。
+    try:
+        await task_routes.recover_orphan_approvals(start_runner=False)
+    except Exception:  # noqa: BLE001 - 补偿失败不该挡住 worker 启动
+        log.warning("审批恢复补偿失败（不影响认领）", exc_info=True)
     while True:
         try:
             handled = await run_once(worker)

@@ -28,7 +28,7 @@ function changeLabel(value: string): string {
 function DiffLine({ text, tone, lang }: { text: string; tone: string; lang: string }) {
   const tokens = text ? tokenize(text, lang)[0] ?? [] : [];
   return (
-    <div className={`whitespace-pre-wrap break-words px-1 ${lineTone[tone] ?? "text-muted"}`}>
+    <div className={`w-full whitespace-pre px-1 ${lineTone[tone] ?? "text-muted"}`}>
       {tokens.length > 0
         ? tokens.map((token, index) => (
             <span key={index} className={TOKEN_CLASSES[token.kind] ?? ""}>
@@ -132,10 +132,12 @@ export function DiffPanel({ changes, focusPath }: { changes: ChangeItem[]; focus
                   <Notice tone="muted">后端只返回了文件路径，没有 diff 内容</Notice>
                 </div>
               ) : (
-                <div className="max-h-72 overflow-auto border-t border-line bg-surface-2 px-2.5 py-2 font-mono text-[12px] leading-relaxed">
-                  {file.lines.map((line, index) => (
-                    <DiffLine key={index} text={line.text} tone={line.tone} lang={langOf(file.path)} />
-                  ))}
+                <div data-diff-scroll className="max-h-72 overflow-auto border-t border-line bg-surface-2 px-2.5 py-2 font-mono text-[12px] leading-relaxed">
+                  <div className="w-max min-w-full">
+                    {file.lines.map((line, index) => (
+                      <DiffLine key={index} text={line.text} tone={line.tone} lang={langOf(file.path)} />
+                    ))}
+                  </div>
                 </div>
               ))}
           </div>

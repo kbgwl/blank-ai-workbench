@@ -9,11 +9,40 @@
  */
 
 import type { Provider } from "../tasks/api";
+import { configuredProviders } from "../configured-providers";
 
 /** 存过的选择只有在供应商仍然存在时才算数；认不出来就当没选过。 */
 export function usableProviderId(saved: string, ids: readonly string[]): string {
   if (!saved) return "";
   return ids.includes(saved) ? saved : "";
+}
+
+/**
+ * 「默认模型」实际会用到的型号名。
+ *
+ * 用户没显式选供应商时，后端按 settings.model.default_provider 挑；没有它才
+ * 回落到"有 key 的第一个"。前端过去直接拿列表第一项，于是设置里锁的是星火、
+ * 界面却写 deepseek-flash——看板和事实分叉。这里优先认后端标出的 is_default。
+ */
+export function defaultModelLabel(providers: readonly Provider[], providerId = ""): string {
+  const keyed = configuredProviders(providers);
+  const chosen =
+    keyed.find((provider) => providerId && provider.id === providerId) ??
+    keyed.find((provider) => provider.is_default) ??
+    keyed[0];
+  return chosen?.model || "";
+}
+
+/**
+ * 全站「当前模型」在用户没存过选择时该用哪一家。
+ *
+ * 设置页顶部那个模型切换器以前取「第一个启用的供应商」——库里的排序是名字，
+ * 于是它显示 anthropic（没 Key、也不是默认），任务实际却跑默认的 DeepSeek。
+ * 这里的口径与后端一致：先认可用（有 Key）、再认设置里的 is_default。
+ */
+export function defaultProviderId(providers: readonly Provider[]): string {
+  const keyed = configuredProviders(providers);
+  return (keyed.find((provider) => provider.is_default) ?? keyed[0])?.id ?? "";
 }
 
 /**

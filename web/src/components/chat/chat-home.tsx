@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { chatProvider } from "@/components/settings/api";
 import { createTask, fetchProjects, fetchProviders, fetchTasks, type Project, type Provider, type Task } from "@/components/tasks/api";
 import { useModel } from "@/components/model";
+import { configuredProviders } from "@/components/configured-providers";
 
 type Message = { id: string; role: "user" | "agent"; text: string; task?: Task };
 
@@ -22,7 +23,8 @@ export function ChatHome() {
     void Promise.all([fetchTasks(), fetchProjects(), fetchProviders()]).then(([nextTasks, projects, providers]) => {
       setTasks(nextTasks);
       setProject(projects.find((item) => item.workspaces.length > 0) ?? projects[0] ?? null);
-      setProvider(providers.find((item) => item.id === modelId && item.enabled) ?? providers.find((item) => item.enabled) ?? null);
+      const usable = configuredProviders(providers);
+      setProvider(usable.find((item) => item.id === modelId) ?? usable[0] ?? null);
     }).catch(() => setNotice("运行时尚未连接；可以先配置模型和工作目录。"));
   }, [modelId]);
 

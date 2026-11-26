@@ -69,6 +69,33 @@ def test_no_duplicate_note_when_delivery_already_says_it():
     assert graph._validation_note(report, state) == report
 
 
+def test_browser_check_is_reported_even_without_automated_tests():
+    """页面真验过，就不能只剩一句「未跑校验」——但也不能冒充「验证：」。"""
+    from blank_api.services.agent import graph
+
+    state = {
+        "validation": {
+            "status": "skipped",
+            "skipped_reason": "工作区没有可识别的测试配置",
+            "ui_check": {
+                "status": "passed",
+                "url": "file:///x/index.html",
+                "asserts": 3,
+                "steps": 2,
+            },
+        },
+        "tool_results": [
+            {"ok": True, "data": {"path": "index.html", "diff": "@@ -1 +1 @@\n-a\n+b"}}
+        ],
+    }
+    text = graph._delivery_text("结论\n- 做完了", state, None)
+
+    assert "browser_check 通过" in text
+    assert "file:///x/index.html" in text
+    assert "未跑校验：" in text
+    assert "验证：" not in text
+
+
 def test_graph_wires_the_skip_reason_into_the_delivery():
     """全链路：state 里的跳过原因要真的走到交付文本里，不是只测纯函数。"""
     from blank_api.services.agent import graph

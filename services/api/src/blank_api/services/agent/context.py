@@ -44,6 +44,18 @@ MICRO_TRIGGER_RATIO = 0.55
 MICRO_TOOL_RESULT_CHARS = 2_000
 MICRO_KEEP_RECENT = 8
 MICRO_DUPLICATE_MIN_CHARS = 400
+# 写类工具的参数超过这个长度才折：小改动（几十上百字）留着，模型回看时更顺。
+MICRO_ARG_CHARS = 1_200
+# 这些工具的参数里带完整文件内容/补丁。旧调用折成一句“已写入/已应用”，
+# 文件本体在磁盘上，需要时 read_file 即可；不折它们，同样的正文每步重发一遍。
+MICRO_ARG_FIELDS = {
+    "write_file": ("content",),
+    "create_file": ("content",),
+    "apply_patch": ("patch",),
+    "edit_file": ("old_string", "new_string"),
+    "notebook_edit": ("new_source",),
+    "repl": ("code",),
+}
 BASE64_PATTERN = re.compile(r"data:[^;,\s]{0,60};base64,[A-Za-z0-9+/=\s]{200,}")
 
 SUMMARY_TRANSCRIPT_CHARS = 1_200
@@ -116,7 +128,18 @@ def _clip(content: str, limit: int) -> str:
 
 
 def _chars(item: dict) -> int:
-    return len(str(item.get("content") or ""))
+    """这条消息占多少字符。
+
+    工具调用的 arguments 也是**发出去的上下文**：write_file 的正文、apply_patch
+    的补丁都挂在这里。旧实现只数 content，导致账本和压缩水位都看不见最大的一块；
+    真机 shopbench 复跑里 assistant 角色 91k 字符全是写文件参数，而水位判定认为
+    消息只有几十 k。
+    """
+    content = str(item.get("content") or "")
+    calls = item.get("tool_calls") or []
+    return len(content) + (
+        len(json.dumps(calls, ensure_ascii=False, default=str)) if calls else 0
+    )
 
 
 # 一张图折算的 token 数。见 message_tokens 里的说明。
@@ -148,6 +171,11 @@ def message_tokens(messages: Sequence[dict]) -> int:
     total = 0
     for item in messages:
         total += estimate_tokens(str(item.get("content") or "")) + 4
+        # 工具调用参数同样要进水位：write_file 的正文、apply_patch 的补丁都在这里。
+        # 漏掉它，压缩会以为上下文很小，直到供应商先撞上窗口。
+        calls = item.get("tool_calls") or []
+        if calls:
+            total += estimate_tokens(json.dumps(calls, ensure_ascii=False, default=str))
         # 图片按张计：base64 不是文本，字符启发式算出来是几十万，会把水位一次性顶爆。
         # 一张 1024×1024 在主流供应商那里约 700~1200 tokens，取 900：宁可高估。
         # 低估会让压缩晚一步触发，而晚一步的代价是整轮上下文按原样重发一遍。
@@ -162,17 +190,29 @@ class MicroStats:
     clipped: int = 0
     duplicates: int = 0
     base64_removed: int = 0
+    # 旧工具调用里的大段参数（write_file 的正文、apply_patch 的补丁）被折成一句说明。
+    args_shrunk: int = 0
+    # 旧 read_file 结果被换成「查看文件状态快照」指针的条数。
+    reads_folded: int = 0
     chars_saved: int = 0
 
     @property
     def applied(self) -> bool:
-        return bool(self.clipped or self.duplicates or self.base64_removed)
+        return bool(
+            self.clipped
+            or self.duplicates
+            or self.base64_removed
+            or self.args_shrunk
+            or self.reads_folded
+        )
 
     def as_dict(self) -> dict:
         return {
             "clipped": self.clipped,
             "duplicates": self.duplicates,
             "base64_removed": self.base64_removed,
+            "args_shrunk": self.args_shrunk,
+            "reads_folded": self.reads_folded,
             "chars_saved": self.chars_saved,
         }
 
@@ -379,16 +419,107 @@ def guardian_trail(
     }
 
 
+def _shrink_tool_call_args(
+    tool_calls: object, stats: MicroStats
+) -> tuple[object, int]:
+    """把旧工具调用里的大段参数折成一句说明。返回新的 tool_calls 与被折条数。
+
+    只处理 dict 形状（OpenAI 兼容层就是这个形状）；认不出的一律原样保留。
+    参数 JSON 解析失败也不动——宁可多占字符，不把一条合法调用改成坏调用。
+    """
+    if not isinstance(tool_calls, list):
+        return tool_calls, 0
+    out: list[dict] = []
+    changed = 0
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            out.append(call)  # type: ignore[arg-type]
+            continue
+        current = dict(call)
+        function = current.get("function")
+        if not isinstance(function, dict):
+            out.append(current)
+            continue
+        name = str(function.get("name") or "")
+        fields = MICRO_ARG_FIELDS.get(name)
+        arguments = function.get("arguments")
+        if not fields or not isinstance(arguments, str) or len(arguments) <= MICRO_ARG_CHARS:
+            out.append(current)
+            continue
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            out.append(current)
+            continue
+        if not isinstance(parsed, dict):
+            out.append(current)
+            continue
+        path = str(
+            parsed.get("path")
+            or parsed.get("file_path")
+            or parsed.get("notebook_path")
+            or ""
+        )
+        touched = False
+        for field in fields:
+            value = parsed.get(field)
+            if isinstance(value, str) and len(value) > MICRO_ARG_CHARS:
+                parsed[field] = (
+                    f"[较早的工具参数已折叠：{field} 原文 {len(value)} 字符"
+                    + (f"，已写入 {path}" if path else "")
+                    + "；需要时用 read_file 查看]"
+                )
+                touched = True
+        if not touched:
+            out.append(current)
+            continue
+        new_function = dict(function)
+        new_function["arguments"] = json.dumps(parsed, ensure_ascii=False)
+        current["function"] = new_function
+        out.append(current)
+        changed += 1
+    if changed:
+        stats.args_shrunk += changed
+    return out, changed
+
+
+def _call_paths(messages: Sequence[dict]) -> dict[str, tuple[str, str]]:
+    """tool_call_id → (工具名, 文件路径)。只给旧读取结果的折叠找目标。"""
+    index: dict[str, tuple[str, str]] = {}
+    for item in messages:
+        for call in item.get("tool_calls") or ():
+            if not isinstance(call, dict):
+                continue
+            call_id = str(call.get("id") or "")
+            function = call.get("function")
+            if not call_id or not isinstance(function, dict):
+                continue
+            name = str(function.get("name") or "")
+            path = ""
+            raw = function.get("arguments")
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                except json.JSONDecodeError:
+                    parsed = {}
+                if isinstance(parsed, dict):
+                    path = str(parsed.get("path") or parsed.get("file_path") or "")
+            index[call_id] = (name, path)
+    return index
+
+
 def _microcompact(
     messages: Sequence[dict],
     keep_recent: int = MICRO_KEEP_RECENT,
     result_chars: int = MICRO_TOOL_RESULT_CHARS,
+    snapshot_paths: set[str] | None = None,
 ) -> tuple[list[dict], MicroStats]:
     """Fine-grained trim. Never removes a message, so tool-call pairing stays valid."""
     stats = MicroStats()
     before = _total_chars(messages)
     cutoff = max(0, len(messages) - keep_recent)
     seen: dict[str, int] = {}
+    call_index = _call_paths(messages) if snapshot_paths else {}
     result: list[dict] = []
     for index, item in enumerate(messages):
         current = dict(item)
@@ -398,16 +529,35 @@ def _microcompact(
             stats.base64_removed += 1
             content = cleaned
         if current.get("role") == "tool":
-            digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-            earlier = seen.get(digest)
-            if earlier is not None and len(content) >= MICRO_DUPLICATE_MIN_CHARS:
-                content = f"[与第 {earlier} 条工具输出完全相同，已折叠]"
-                stats.duplicates += 1
+            call_id = str(current.get("tool_call_id") or "")
+            name, path = call_index.get(call_id, ("", ""))
+            if (
+                snapshot_paths
+                and index < cutoff
+                and name == "read_file"
+                and path in snapshot_paths
+            ):
+                # 完整正文已经落在工作区；快照给出当前状态，旧读取结果只留指针。
+                content = (
+                    f"[较早的读取结果已折叠：{path}（当前状态见文件状态快照；"
+                    "需要原文请重新 read_file）]"
+                )
+                stats.reads_folded += 1
             else:
-                seen[digest] = index
-            if index < cutoff and len(content) > result_chars:
-                content = _clip(content, result_chars)
-                stats.clipped += 1
+                digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                earlier = seen.get(digest)
+                if earlier is not None and len(content) >= MICRO_DUPLICATE_MIN_CHARS:
+                    content = f"[与第 {earlier} 条工具输出完全相同，已折叠]"
+                    stats.duplicates += 1
+                else:
+                    seen[digest] = index
+                if index < cutoff and len(content) > result_chars:
+                    content = _clip(content, result_chars)
+                    stats.clipped += 1
+        if current.get("role") == "assistant" and index < cutoff:
+            shrunk, count = _shrink_tool_call_args(current.get("tool_calls"), stats)
+            if count:
+                current["tool_calls"] = shrunk
         current["content"] = content
         result.append(current)
     stats.chars_saved = max(0, before - _total_chars(result))
@@ -415,12 +565,15 @@ def _microcompact(
 
 
 def microcompact(
-    messages: Sequence[dict], max_chars: int = DEFAULT_CONTEXT_CHARS
+    messages: Sequence[dict],
+    max_chars: int = DEFAULT_CONTEXT_CHARS,
+    *,
+    snapshot_paths: set[str] | None = None,
 ) -> tuple[list[dict], MicroStats]:
     """Run layer one only when the window is already past the trigger ratio."""
     if _total_chars(messages) <= int(max_chars * MICRO_TRIGGER_RATIO):
         return list(messages), MicroStats()
-    return _microcompact(messages)
+    return _microcompact(messages, snapshot_paths=snapshot_paths)
 
 
 def _normalize(messages: Sequence[dict]) -> list[dict]:
@@ -731,6 +884,7 @@ class ContextCompactor:
         author_run_id: str = "",
         steps_since_compact: int | None = None,
         idle_seconds: float | None = None,
+        snapshot_paths: set[str] | None = None,
     ) -> list[dict]:
         normalized = _normalize(messages)
         if not normalized:
@@ -763,6 +917,21 @@ class ContextCompactor:
             over_trigger = True
             triggered_by = f"idle:{idle_reason}"
         if not over_trigger:
+            # 大窗口上水位永远到不了（0.82 × 1M）；只要越过最近窗口且确实有可折
+            # 内容，就先做一次确定性瘦身。快照让模型仍能知道文件现状。
+            if token_mode:
+                trimmed, micro = _microcompact(normalized, snapshot_paths=snapshot_paths)
+                if micro.applied:
+                    self.last_report = CompactionReport(
+                        **base_report,
+                        tokens_after=self.measure(trimmed),
+                        micro=micro,
+                        boundary=0,
+                        covered=self.covered,
+                        summary_chars=len(self.summary),
+                        triggered_by="micro:below",
+                    )
+                    return trimmed
             self.last_report = CompactionReport(
                 **base_report,
                 tokens_after=tokens_before,
@@ -772,7 +941,11 @@ class ContextCompactor:
             )
             return normalized
 
-        trimmed, micro = _microcompact(normalized) if token_mode else microcompact(normalized, self.max_chars)
+        trimmed, micro = (
+            _microcompact(normalized, snapshot_paths=snapshot_paths)
+            if token_mode
+            else microcompact(normalized, self.max_chars, snapshot_paths=snapshot_paths)
+        )
         after_micro_chars = _total_chars(trimmed)
         after_micro_tokens = self.measure(trimmed)
         still_over = after_micro_tokens > trigger if token_mode else after_micro_chars > char_budget

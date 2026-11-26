@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass
 
+from blank_api.services.agent.directives import NO_TOOLS, READ_ONLY, directive_mode, listing_only
+
 INTENT_ANSWER = "answer"
 INTENT_INSPECT = "inspect"
 INTENT_EXECUTE = "execute"
@@ -59,6 +61,10 @@ class Judgement:
     needs_execution: bool = False
     needs_approval: bool = False
     needs_clarification: bool = False
+    # 用户明确要求这一轮不要碰任何工具（只回复/不要读取/不要调用工具）。
+    no_tools: bool = False
+    # 用户明确要求不要修改/执行，但可以读。
+    read_only: bool = False
     priority: str = "normal"
     confidence: float = 0.8
     message_id: str = ""
@@ -204,6 +210,37 @@ def observe(
                 needs_execution=True, confidence=0.84, **common,
             )
         return _judgement(intent, f"控制句：{text[:24]}", confidence=0.92, **common)
+
+    # 控制词之后、其它意图之前：用户明确说了「只回复 / 不要读取 / 不要改」，
+    # 这句话的边界比句子里夹着的动作词更硬。只读指令走 inspect（图里按 advise
+    # 处理，只放行读工具）；完全不许碰工具则记 no_tools，执行层据此清空工具表。
+    mode = directive_mode(text)
+    if mode == NO_TOOLS:
+        return _judgement(
+            INTENT_ANSWER,
+            "用户明确要求本轮不调用任何工具",
+            needs_execution=False,
+            no_tools=True,
+            confidence=0.94,
+            **common,
+        )
+    if mode == READ_ONLY:
+        return _judgement(
+            INTENT_EXECUTE,
+            "用户明确不要修改或执行，本轮只读执行",
+            needs_execution=True,
+            read_only=True,
+            confidence=0.9,
+            **common,
+        )
+    if listing_only(text):
+        return _judgement(
+            INTENT_EXECUTE,
+            "用户只要文件/目录清单，列目录即可",
+            needs_execution=True,
+            confidence=0.9,
+            **common,
+        )
 
     if _FORGET.search(text):
         return _judgement(INTENT_FORGET, "要求删除习惯", needs_execution=False, confidence=0.9, **common)

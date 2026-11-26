@@ -13,9 +13,13 @@ import {
   type Provider,
   type Task,
 } from "@/components/tasks/api";
+import { planIsStale } from "@/components/tasks/plan";
 import { statusMeta, taskMatchesFilter, TASK_STATUS_FILTERS, type TaskStatusFilter } from "@/components/tasks/status";
 import { diffStats, formatDateTime } from "@/components/tasks/format";
 import { HealthPill } from "@/components/health-pill";
+import { defaultProviderId } from "@/components/bot/provider-choice";
+import { configuredProviders } from "@/components/configured-providers";
+import { parseTaskFilters, writeTaskFilters } from "./filters";
 
 /**
  * 任务列表页：只负责"找任务"。
@@ -64,7 +68,11 @@ function summaryLine(task: Task): string {
 
 /** 计划进度优先（几/几步），没有计划时退回已用步数。 */
 function progressLabel(task: Task): string {
-  if (task.planProgress.total > 0) return `计划 ${task.planProgress.completed}/${task.planProgress.total}`;
+  if (task.planProgress.total > 0) {
+    // 成功但一步没回写：说“未更新”，不摆一个会被读成“什么都没做”的 0/4。
+    if (planIsStale(task.planProgress, task.status)) return "计划未更新";
+    return `计划 ${task.planProgress.completed}/${task.planProgress.total}`;
+  }
   if (task.stepsUsed !== null) return `${task.stepsUsed} 步`;
   return "";
 }
@@ -187,8 +195,32 @@ export function Workbench() {
   const [tasksError, setTasksError] = useState(false);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskStatusFilter>("all");
+  /** 地址栏里的筛选是否已经读回；读完之前不要把空筛选写回去覆盖 URL。 */
+  const [filtersReady, setFiltersReady] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // 地址栏 → 筛选：刷新/收藏/从详情返回时保留上次的搜索词与状态。
+  // 放到异步回调里读，避免 effect 内同步 setState（react-hooks/set-state-in-effect）。
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const state = parseTaskFilters(window.location.search);
+      setQuery(state.query);
+      setStatusFilter(state.status);
+      setFiltersReady(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  // 筛选 → 地址栏：replaceState，不产生历史记录；其他查询参数原样保留。
+  useEffect(() => {
+    if (!filtersReady) return;
+    const next = writeTaskFilters(window.location.href, {
+      query,
+      status: statusFilter,
+    });
+    window.history.replaceState(null, "", next);
+  }, [query, statusFilter, filtersReady]);
 
   const loadTasks = useCallback(() => {
     return fetchTasks()
@@ -305,12 +337,16 @@ export function Workbench() {
     return [...map.values()];
   })();
 
-  const provider = providers.find((item) => item.enabled) ?? providers[0] ?? null;
+  // 任务页左下角显示的是「实际会用的模型」：与后端默认一致（有 Key + is_default），
+  // 不能拿列表第一项——那会显示没 Key 的 anthropic，任务却跑 DeepSeek。
+  const usableProviders = configuredProviders(providers);
+  const provider =
+    usableProviders.find((item) => item.id === defaultProviderId(providers)) ?? null;
 
   return (
-    <div className="flex h-full min-h-0 bg-bg text-text">
+    <div className="flex h-full min-h-0 bg-transparent text-text">
       {/* ── 左栏：导航与工作区 ── */}
-      <aside className="flex w-[240px] shrink-0 flex-col border-r border-line bg-sidebar">
+      <aside className="glass-side flex w-[240px] shrink-0 flex-col">
         <div className="flex items-center gap-2 px-3 pt-3 pb-2">
           <span className="grid size-6 place-items-center rounded-[7px] bg-logo-bg">
             <span className="size-2.5 rounded-[2px] bg-logo-accent" />
@@ -370,16 +406,17 @@ export function Workbench() {
       </aside>
 
       {/* ── 主栏：全部任务 ── */}
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
-        <header className="flex h-[47px] shrink-0 items-center gap-2.5 border-b border-line bg-bg px-5">
-          <h1 className="text-[14px] font-semibold">全部任务</h1>
-          <span className="rounded-full border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-faint">
+      <main className="glass m-3 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-lg)]">
+        <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line/70 bg-transparent px-5">
+          <span className="size-1.5 shrink-0 rounded-full bg-brand" aria-hidden />
+          <h1 className="text-[15px] font-semibold tracking-[-0.01em]">全部任务</h1>
+          <span className="rounded-md border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-faint">
             {counts.all}
           </span>
           <button
             type="button"
             onClick={() => router.push("/")}
-            className="ml-auto rounded-md bg-brand px-2.5 py-1 text-[13px] font-medium text-on-brand transition-colors hover:brightness-110"
+            className="ml-auto rounded-md bg-brand px-3 py-1.5 text-[13px] font-medium text-on-brand transition-colors hover:bg-brand-hover"
           >
             新建任务
           </button>
@@ -433,7 +470,7 @@ export function Workbench() {
           )}
           {groups.map((group) => (
             <section key={group.key}>
-              <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-line bg-canvas/95 px-4 py-1.5 backdrop-blur">
+              <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-line/70 bg-surface/80 px-4 py-1.5 backdrop-blur">
                 <span className="min-w-0 truncate text-[12px] font-semibold text-muted">{group.label}</span>
                 <span className="shrink-0 font-mono text-[11px] text-faint">{group.items.length}</span>
               </div>

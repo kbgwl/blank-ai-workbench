@@ -23,13 +23,19 @@
  */
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 
 const ROOT = path.resolve(import.meta.dirname);
-const TASKS_DIR = path.join(ROOT, "tasks");
-const FIXTURES_DIR = path.join(ROOT, "fixtures");
+// 工作区固定落 E 盘：Windows 默认 os.tmpdir() 在 C 盘，评测每跑一次就复制一份
+// 工作区；本机 C 盘空间紧张。需要换位置时用 BLANK_BENCH_WORK_ROOT 覆盖。
+const WORK_ROOT = path.resolve(
+  process.env.BLANK_BENCH_WORK_ROOT ?? path.join(ROOT, "..", "..", "..", ".bench-tmp")
+);
+mkdirSync(WORK_ROOT, { recursive: true });
+// 任务与 fixture 目录可换：日常场景的题放在 benchmarks/daily，复用同一套判分。
+let TASKS_DIR = path.join(ROOT, "tasks");
+let FIXTURES_DIR = path.join(ROOT, "fixtures");
 const API = process.env.BLANK_BENCH_API ?? "http://127.0.0.1:8060/api/v1";
 const PY = process.env.BLANK_BENCH_PYTHON ?? path.join(ROOT, "..", "..", "..", "services", "api", ".venv", "Scripts", "python.exe");
 
@@ -38,6 +44,10 @@ const argOf = (name, fallback = null) => {
   const i = argv.indexOf(name);
   return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : fallback;
 };
+const TASKS_ARG = argOf("--tasks-dir");
+const FIXTURES_ARG = argOf("--fixtures-dir");
+if (TASKS_ARG) TASKS_DIR = path.resolve(TASKS_ARG);
+if (FIXTURES_ARG) FIXTURES_DIR = path.resolve(FIXTURES_ARG);
 const MOCK = argv.includes("--mock");
 const PROVIDER_ID = argOf("--provider");
 const LIMIT = Number(argOf("--limit", "0")) || Infinity;
@@ -94,7 +104,7 @@ async function startMock() {
   // MOCK_DELAY_MS：只在装置自检时用。把 mock 响应压慢，能复现「轮询窗口到期但
   // /run 还没返回」这条路径，验证不会把已成功任务记成超时（见 2026-11-16 修正）。
   const mockDelayMs = Number(process.env.MOCK_DELAY_MS ?? 0) || 0;
-  const mockFile = path.join(tmpdir(), `blank-bench-mock-${Date.now()}.mjs`);
+  const mockFile = path.join(WORK_ROOT, `blank-bench-mock-${Date.now()}.mjs`);
   const mockLog = `${mockFile}.hits`;
   const script = [
     "import http from 'node:http';",
@@ -172,11 +182,20 @@ async function ensureHealth() {
 }
 
 /* ── 工作区快照（判分用）── */
-function snapshot(dir) {
+// 递归收集相对路径（统一用 /）：日常任务会建子目录（如 整理/文本/），
+// 只看顶层会把子目录里的改动全漏掉。缓存目录跳过，否则 pytest 自己写的
+// .pytest_cache / __pycache__ 会被记成「误修改文件」。
+const SNAPSHOT_SKIP = new Set([".git", ".blank", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"]);
+function snapshot(dir, base = dir) {
   const out = {};
   for (const name of readdirSync(dir)) {
+    if (SNAPSHOT_SKIP.has(name)) continue;
     const p = path.join(dir, name);
-    if (statSync(p).isFile()) out[name] = readFileSync(p, "utf8");
+    if (statSync(p).isDirectory()) {
+      Object.assign(out, snapshot(p, base));
+    } else {
+      out[path.relative(base, p).split(path.sep).join("/")] = readFileSync(p, "utf8");
+    }
   }
   return out;
 }
@@ -268,7 +287,7 @@ function runTestCommand(def, workdir) {
  * 任一不满足 => 这次读数作废，runner 以 rc=2 退出。
  */
 function runControl(def) {
-  const base = path.join(tmpdir(), `blank-control-${def.id}-${Date.now()}`);
+  const base = path.join(WORK_ROOT, `blank-control-${def.id}-${Date.now()}`);
   cpSync(path.join(FIXTURES_DIR, def.id), base, { recursive: true });
   const hidden = hideTests(base, hiddenNames(def));
   const leaked = readdirSync(base).filter((n) => TEST_FILE_RE.test(n));
@@ -279,7 +298,7 @@ function runControl(def) {
   if (!existsSync(refDir)) {
     return { id: def.id, control: true, passed: false, error: "缺 refs/<id> 参考实现", pristineExit: pristine.exit };
   }
-  const refWork = path.join(tmpdir(), `blank-control-ref-${def.id}-${Date.now()}`);
+  const refWork = path.join(WORK_ROOT, `blank-control-ref-${def.id}-${Date.now()}`);
   cpSync(path.join(FIXTURES_DIR, def.id), refWork, { recursive: true });
   hideTests(refWork, hiddenNames(def));
   for (const name of readdirSync(refDir)) cpSync(path.join(refDir, name), path.join(refWork, name));
@@ -323,7 +342,7 @@ function plainPrompt(def) {
 
 /* ── 单任务执行 ── */
 async function runTask(def, providerId, trial = 1) {
-  const workdir = path.join(tmpdir(), `blank-bench-${def.id}-t${trial}-${Date.now()}`);
+  const workdir = path.join(WORK_ROOT, `blank-bench-${def.id}-t${trial}-${Date.now()}`);
   cpSync(path.join(FIXTURES_DIR, def.id), workdir, { recursive: true });
   // 迁移类任务先 seed data.db
   if (existsSync(path.join(workdir, "init_db.py"))) {
@@ -350,6 +369,8 @@ async function runTask(def, providerId, trial = 1) {
     title: def.id,
     goal: PLAIN_PROMPT ? plainPrompt(def) : def.goal,
     acceptance_criteria: PLAIN_PROMPT ? [] : def.acceptance,
+    // 日常题显式带 scenario；编程题保持默认 dev。
+    scenario: def.scenario || "dev",
     max_steps: 40,
     // §3.4 文件边界提示：expectedFiles 必须让模型看见才算约束（产品侧 initial_messages
     // 会把 goal_spec.constraints 渲染进首轮提示）。判分仍按 expectedFiles 硬比对，不放宽。

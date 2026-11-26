@@ -795,6 +795,50 @@ class PersonaStore:
             self.save(workspace, entries)
         return touched
 
+    def _mutate(self, workspace: str | Path, fingerprint: str, mutate) -> bool:
+        """在项目层或全局层找到一条并写回它所在的那一层。
+
+        项目层的同指纹条目会盖住全局的；所以先找项目层，找到就只改那一层，
+        不会在全局层留一条改了却永远读不到的副本。
+        """
+        for entries, save in (
+            (self.load(workspace), lambda items: self.save(workspace, items)),
+            (self.load_global(), self.save_global),
+        ):
+            for item in entries:
+                if item.fingerprint != fingerprint:
+                    continue
+                if not mutate(item):
+                    return False
+                save(entries)
+                return True
+        return False
+
+    def retire(self, workspace: str | Path, fingerprint: str) -> bool:
+        """退役不是删除：条目留在文件里、不再被注入，lint 仍能看到它。"""
+
+        def mark(item: Preference) -> bool:
+            if item.status == "retired":
+                return False
+            item.status = "retired"
+            return True
+
+        return self._mutate(workspace, fingerprint, mark)
+
+    def promote(self, workspace: str | Path, fingerprint: str) -> bool:
+        """把人确认过的一条提升为生效。冲突中的条目不提升——先解决冲突。"""
+
+        def mark(item: Preference) -> bool:
+            if item.status in ("retired", "conflict"):
+                return False
+            item.status = "active"
+            item.occurrences = max(int(item.occurrences), MIN_OCCURRENCES)
+            item.confidence = max(float(item.confidence), 0.8)
+            item.last_confirmed = _TIMESTAMP()
+            return True
+
+        return self._mutate(workspace, fingerprint, mark)
+
     def persona_block(self, workspace: str | Path) -> str:
         """给提示用的那一块。取不到就返回空串，绝不挡任务。"""
         try:

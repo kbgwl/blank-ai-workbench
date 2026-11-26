@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const path = require("node:path");
 
 /**
  * 桌面壳的「策略层」：单实例、托盘/关闭路由、全局快捷键、更新判定里
@@ -464,8 +465,21 @@ function pickInterpreterOrder({ hasEnvCmd, hasBundled, hasVenv, hasUv, hasPython
   return order;
 }
 
+/**
+ * 路径是否真的在目录内。`startsWith(root)` 会把 `web-evil` 当成 `web` 的子目录，
+ * 必须按路径分隔符对齐；静态资源协议与任何"解析后仍须在根下"的校验都走这里。
+ */
+function isPathInside(root, candidate) {
+  const base = path.resolve(String(root));
+  const target = path.resolve(String(candidate));
+  // 根目录本身以分隔符结尾（`/`、`C:\`），再拼一个就变成 `//`/`C:\\`，永远对不上。
+  const prefix = base.endsWith(path.sep) ? base : base + path.sep;
+  return target === base || target.startsWith(prefix);
+}
+
 module.exports = {
   DEFAULT_HOTKEY,
+  isPathInside,
   UPDATE_PUBKEY_PEM,
   buildTrayMenuModel,
   canonicalUpdatePayload,

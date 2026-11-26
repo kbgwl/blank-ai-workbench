@@ -1,4 +1,4 @@
-import { API_V1, ApiError, errorCode, errorMessage, jsonInit, request } from "@/lib/http";
+import { API_V1, ApiError, errorCode, errorMessage, jsonInit, parseJson, request, toApiError } from "@/lib/http";
 
 export type Workspace = {
   id: string;
@@ -35,6 +35,8 @@ export type FileContent = {
   truncated: boolean;
   content: string;
   message: string;
+  /** 后端抽取型预览：office = docx/xlsx/pptx 的文本层（markdown）。 */
+  preview?: string;
 };
 
 export { ApiError, errorMessage, errorCode };
@@ -115,6 +117,20 @@ export function fetchFile(projectId: string, path: string): Promise<FileContent>
   return request<FileContent>(`${api}/projects/${projectId}/file?path=${encodeURIComponent(path)}`, {
     cache: "no-store",
   });
+}
+
+export async function fetchFileRaw(projectId: string, path: string): Promise<Blob> {
+  let response: Response;
+  try {
+    response = await fetch(`${api}/projects/${projectId}/file/raw?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+  } catch {
+    throw new ApiError("无法连接后端服务", "network_error", 0);
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    throw toApiError(response.status, text ? parseJson(text) : null);
+  }
+  return response.blob();
 }
 
 // 后端在没有 is_active 工作区时回落到第一个工作区，这里保持一致。

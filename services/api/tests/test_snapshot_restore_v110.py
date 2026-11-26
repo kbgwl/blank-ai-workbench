@@ -43,6 +43,29 @@ def _manifest_only(monkeypatch, workspace: Path, task_id: str | None = None) -> 
     return SnapshotStore().capture(str(workspace), reason="覆盖前快照", task_id=task_id)
 
 
+def test_system_cache_copies_are_not_snapshotted_or_counted(tmp_path):
+    """系统缓存副本不是模型改动：T09 的 %SystemDrive%/...Caches 不能进快照/改动清单。"""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_text("A", encoding="utf-8")
+    cache = workspace / "%SystemDrive%" / "ProgramData" / "Microsoft" / "Windows" / "Caches"
+    cache.mkdir(parents=True)
+    (cache / "x.db").write_text("cache", encoding="utf-8")
+
+    store = SnapshotStore()
+    record = store.capture(str(workspace), reason="系统缓存过滤")
+
+    assert record["copied"] is True
+    assert all("%SystemDrive%" not in item for item in record["files"])
+    assert not (store.root / record["id"] / "tree" / "%SystemDrive%").exists()
+
+    (cache / "x.db").write_text("changed", encoding="utf-8")
+    assert store.changed_since(record["id"], str(workspace)) == []
+
+    (workspace / "a.txt").write_text("B", encoding="utf-8")
+    assert store.changed_since(record["id"], str(workspace)) == ["a.txt"]
+
+
 def test_manifest_only_snapshot_raises_typed_error(tmp_path, monkeypatch):
     workspace = _workspace(tmp_path)
     record = _manifest_only(monkeypatch, workspace)

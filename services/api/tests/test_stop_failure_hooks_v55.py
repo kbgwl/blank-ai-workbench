@@ -37,6 +37,7 @@ from tests.test_agent_v04 import (  # noqa: F401  (复用阶段3 的夹具)
     create_provider,
     create_task,
     env,
+    settle,
 )
 
 
@@ -306,7 +307,10 @@ async def test_resume_path_fires_stop_failure_when_the_model_fails_again(env, wo
     resp = await env.client.post(
         f"{API}/tasks/{task_id}/approval", json={"approve": True, "provider_id": provider_id}
     )
-    assert resp.status_code == 502, resp.text
+    # E13：审批只入队并立即返回 202；模型再次失败发生在后台恢复里，
+    # 所以这里等这一轮跑完，再看 StopFailure 是否真的发了。
+    assert resp.status_code == 202, resp.text
+    await settle()
 
     rows = _lines(log)
     fired = [row for row in rows if row["event"] == "stop_failure"]

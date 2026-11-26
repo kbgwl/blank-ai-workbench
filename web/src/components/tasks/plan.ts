@@ -167,6 +167,36 @@ export function parseProgress(source: unknown, steps: PlanStepView[]): PlanProgr
 }
 
 /**
+ * 任务已经成功、计划却一步都没回写——这不是“真的 0%”，是模型没调用
+ * `update_plan`。这时继续摆 `0/4` 会让用户以为“它什么都没做就宣布完成”。
+ * 只对 `succeeded` 判定；失败/取消时 0/4 是有效信息，不能也改成一句说明。
+ */
+export function planIsStale(
+  progress: { total: number; completed: number },
+  taskStatus: string,
+): boolean {
+  const status = (taskStatus ?? "").toLowerCase();
+  // "completed" 是老数据/外部集成会用的同义状态；不认它，老任务又会回到 0/4。
+  return (
+    (status === "succeeded" || status === "completed") &&
+    Math.max(0, progress.total) > 0 &&
+    Math.max(0, progress.completed) === 0
+  );
+}
+
+/** 计划进度的一句话。空计划返回空串，由调用方决定要不要占位。 */
+export function planProgressText(
+  progress: { total: number; completed: number },
+  taskStatus: string,
+): string {
+  const total = Math.max(0, progress.total);
+  if (total === 0) return "";
+  if (planIsStale(progress, taskStatus)) return "计划未更新";
+  const completed = Math.min(total, Math.max(0, progress.completed));
+  return `${completed}/${total}`;
+}
+
+/**
  * 把步骤按里程碑分组。没归组的排最后，标题为"未分组"。
  *
  * 空里程碑也要出现：阶段划分本身就是信息，"这个阶段还没有步骤"比"这个阶段不存在"

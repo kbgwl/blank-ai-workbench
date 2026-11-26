@@ -10,6 +10,7 @@ import {
   updateAgentSettings,
   type AgentSettings,
 } from "./api";
+import { parsePricingDraft } from "./budget";
 
 /** 后端没给 labels 时的兜底文案（v165 §8）。 */
 const AUTOMATION_LABELS: Record<string, string> = {
@@ -82,6 +83,10 @@ export function AgentRuntimePanel() {
   // 免打扰时段是自由文本，逐字提交会把「22:0」这种半成品写进设置文件，
   // 所以这里留草稿，失焦或按回车才真的保存。
   const [quietDraft, setQuietDraft] = useState("");
+  // 金额上限与价目表同理：空串与半截 JSON 不该在每次按键时落盘。
+  const [costLimitDraft, setCostLimitDraft] = useState("");
+  const [pricingDraft, setPricingDraft] = useState("");
+  const [pricingError, setPricingError] = useState("");
 
   // token 触发刷新，避免在 effect 体内同步 setState（与 feature-flags-panel 一致）。
   useEffect(() => {
@@ -91,6 +96,8 @@ export function AgentRuntimePanel() {
         if (!alive) return;
         setSettings(next);
         setQuietDraft(next.background?.quiet_hours ?? "");
+        setCostLimitDraft(String(next.budget?.cost_limit ?? 0));
+        setPricingDraft(JSON.stringify(next.budget?.pricing ?? {}, null, 2));
         setError("");
       })
       .catch((err: unknown) => {
@@ -111,6 +118,13 @@ export function AgentRuntimePanel() {
       // 这种半成品到底被接受了还是被清掉了。
       if (patch.background?.quiet_hours !== undefined) {
         setQuietDraft(next.background?.quiet_hours ?? "");
+      }
+      if (patch.budget?.cost_limit !== undefined) {
+        setCostLimitDraft(String(next.budget?.cost_limit ?? 0));
+      }
+      if (patch.budget?.pricing !== undefined) {
+        setPricingDraft(JSON.stringify(next.budget?.pricing ?? {}, null, 2));
+        setPricingError("");
       }
       const expected = patch.permissions?.default_mode;
       const expectedMode = patch.background?.automation_mode;
@@ -140,6 +154,9 @@ export function AgentRuntimePanel() {
       const next = await resetAgentSettings();
       setSettings(next);
       setQuietDraft(next.background?.quiet_hours ?? "");
+      setCostLimitDraft(String(next.budget?.cost_limit ?? 0));
+      setPricingDraft(JSON.stringify(next.budget?.pricing ?? {}, null, 2));
+      setPricingError("");
       setNotice("已恢复默认值");
       setError("");
     } catch (err) {
@@ -166,6 +183,31 @@ export function AgentRuntimePanel() {
     );
   }
 
+  /** 金额上限：0 = 不限。空输入按 0 处理，避免把「清空」读成 NaN。 */
+  function saveCostLimit() {
+    const raw = costLimitDraft.trim();
+    const value = raw === "" ? 0 : Number(raw);
+    if (!Number.isFinite(value) || value < 0) {
+      setError("金额上限必须是非负数");
+      return;
+    }
+    void apply(
+      { budget: { cost_limit: value } },
+      value > 0 ? `单任务金额上限已设为 ${value}` : "单任务金额上限已关闭（不限）",
+    );
+  }
+
+  /** 价目表：先本地挡掉写错的档位，再交给后端 normalize 做最终夹取。 */
+  function savePricing() {
+    const parsed = parsePricingDraft(pricingDraft);
+    if (!parsed.ok) {
+      setPricingError(parsed.error);
+      return;
+    }
+    setPricingError("");
+    void apply({ budget: { pricing: parsed.pricing } }, "价目表已更新");
+  }
+
   if (!settings) {
     return (
       <Panel title="执行与智能体" hint="GET /settings/agent">
@@ -189,6 +231,7 @@ export function AgentRuntimePanel() {
   const ratioLimits = limits.trigger_ratio ?? { min: 0.5, max: 0.95, default: 0.82 };
   const reserveLimits = limits.reserve_tokens ?? { min: 1024, max: 131072, default: 16384 };
   const timeoutLimits = limits.guardian_timeout ?? { min: 1, max: 60, default: 8 };
+  const costLimitLimits = limits.cost_limit ?? { min: 0, max: 1_000_000, default: 0 };
 
   return (
     <div className="grid gap-4 md:grid-cols-2">
@@ -289,6 +332,71 @@ export function AgentRuntimePanel() {
         <p className="mt-1 text-[12px] leading-relaxed text-faint">
           水位以模型回报的真实 prompt_tokens 校准：32k 窗口和 200k 窗口用的是同一套规则，只是位置不同。
           所有数值保存后对下一个任务生效，正在跑的任务不受影响。
+        </p>
+      </Panel>
+
+      <Panel title="成本与预算" hint="金额闸 · 估价不是账单">
+        <Row
+          label="单任务金额上限"
+          hint="0 = 不限；没配价目表时闸门不生效，不会凭空算钱"
+        >
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={costLimitLimits.min}
+              max={costLimitLimits.max}
+              step={0.01}
+              value={costLimitDraft}
+              disabled={busy}
+              onChange={(event) => setCostLimitDraft(event.target.value)}
+              onBlur={() => saveCostLimit()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") saveCostLimit();
+              }}
+              className="field w-24 rounded-md px-2 py-1 text-right font-mono text-[13px] outline-none"
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => saveCostLimit()}
+              className="rounded-md border border-line bg-surface px-2.5 py-1 text-[12px] text-muted hover:border-line-strong"
+            >
+              保存
+            </button>
+          </div>
+        </Row>
+        <Row
+          label="价目表"
+          hint="每百万 token 单价；键用模型名或供应商名（小写），匹配不上用 default"
+        >
+          <span className="text-[12px] text-faint">
+            {Object.keys(settings.budget?.pricing ?? {}).length} 档
+          </span>
+        </Row>
+        <textarea
+          value={pricingDraft}
+          disabled={busy}
+          onChange={(event) => setPricingDraft(event.target.value)}
+          rows={6}
+          spellCheck={false}
+          placeholder={'{\n  "default": {"input": 2, "cached_input": 0.5, "output": 8}\n}'}
+          className="field mt-1 w-full rounded-md px-2 py-1.5 font-mono text-[12px] outline-none"
+        />
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+          <span className={`text-[12px] ${pricingError ? "text-danger" : "text-faint"}`}>
+            {pricingError || "清空即不估价；保存后对下一个任务生效"}
+          </span>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => savePricing()}
+            className="rounded-md border border-line bg-surface px-2.5 py-1 text-[12px] text-muted hover:border-line-strong"
+          >
+            保存价目表
+          </button>
+        </div>
+        <p className="mt-1 text-[12px] leading-relaxed text-faint">
+          金额按「未命中缓存的输入 / 缓存读 / 输出」三段计价。估价只用于停止，不对账。
         </p>
       </Panel>
 

@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Notice } from "@/components/projects/ui";
-import type { ThreadDetail } from "./api";
+import { errorMessage, type ThreadDetail } from "./api";
 import { StatusBadge } from "./bits";
 import { clip, relativeTime } from "./format";
+import { fetchGrants, revokeAllGrants, revokeGrant, type SessionGrant } from "./grants-api";
+import { grantExpiry, grantSummary } from "./grants";
 
 type Busy = null | "continue" | "fork" | "archive";
 
@@ -28,6 +30,31 @@ type Props = {
  */
 export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onContinue, onFork, onArchive }: Props) {
   const [draft, setDraft] = useState("");
+  const [grants, setGrants] = useState<SessionGrant[]>([]);
+  const [grantsOpen, setGrantsOpen] = useState(false);
+  const [grantBusy, setGrantBusy] = useState("");
+  const [grantError, setGrantError] = useState("");
+  const [grantNonce, setGrantNonce] = useState(0);
+  const threadId = thread?.id ?? "";
+  const lastTurnStatus = thread?.turns[thread.turns.length - 1]?.status ?? "";
+  // 不切 threadId 就清空 state（effect 里同步 setState 会触发级联渲染）：
+  // 渲染时按 thread 过滤，切会话那一帧就不会把上一条会话的授权带过来。
+  const visibleGrants = grants.filter((grant) => grant.thread === threadId);
+
+  useEffect(() => {
+    if (!threadId) return;
+    let alive = true;
+    fetchGrants(threadId)
+      .then((rows) => {
+        if (alive) setGrants(rows);
+      })
+      .catch((error: unknown) => {
+        if (alive) setGrantError(errorMessage(error));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [threadId, lastTurnStatus, grantNonce]);
 
   // 会话读不到、也还没拿到过：只报错。已经拿到过就继续显示，把错误挂在上面——
   // 一次读超时不该把「分叉」「归档」一起藏起来。
@@ -43,6 +70,34 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
   const turns = thread.turns;
   const pending = busy !== null;
 
+  async function revokeOne(category: string) {
+    if (!threadId) return;
+    setGrantBusy(category);
+    setGrantError("");
+    try {
+      await revokeGrant(threadId, category);
+      setGrantNonce((value) => value + 1);
+    } catch (error) {
+      setGrantError(errorMessage(error));
+    } finally {
+      setGrantBusy("");
+    }
+  }
+
+  async function revokeAll() {
+    if (!threadId) return;
+    setGrantBusy("all");
+    setGrantError("");
+    try {
+      await revokeAllGrants(threadId);
+      setGrantNonce((value) => value + 1);
+    } catch (error) {
+      setGrantError(errorMessage(error));
+    } finally {
+      setGrantBusy("");
+    }
+  }
+
   function submit() {
     const text = draft.trim();
     if (!text || pending || archived) return;
@@ -53,7 +108,7 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
   }
 
   return (
-    <section className="mb-3 rounded-lg border border-line bg-surface">
+    <section className="glass-soft mb-3 rounded-lg">
       <header className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <span className="shrink-0 font-mono text-[11px] tracking-wide text-faint">会话</span>
         <span className="min-w-0 flex-1 truncate text-[14px] text-text">{thread.title}</span>
@@ -64,6 +119,20 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
         )}
         <span className="shrink-0 font-mono text-[11px] text-faint">{thread.turnCount} 轮</span>
         {archived && <span className="shrink-0 font-mono text-[11px] text-muted">已归档</span>}
+        {grantSummary(visibleGrants) && (
+          <button
+            type="button"
+            onClick={() => setGrantsOpen((value) => !value)}
+            title="本会话批准过的同类动作；可以按类别或全部撤销"
+            className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[11px] transition-colors ${
+              grantsOpen
+                ? "border-brand/40 bg-brand/10 text-brand"
+                : "border-line bg-surface text-muted hover:border-line-strong hover:text-text"
+            }`}
+          >
+            {grantSummary(visibleGrants)}
+          </button>
+        )}
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <button
             type="button"
@@ -85,6 +154,41 @@ export function ThreadBar({ thread, error, currentTaskId, busy, onOpenTurn, onCo
           </button>
         </div>
       </header>
+
+      {grantsOpen && visibleGrants.length > 0 && (
+        <div className="border-b border-line px-3 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-mono text-[11px] text-faint">本会话授权</span>
+            <button
+              type="button"
+              disabled={Boolean(grantBusy)}
+              onClick={() => void revokeAll()}
+              className="rounded border border-line bg-surface px-2 py-0.5 text-[11px] text-muted hover:border-line-strong disabled:opacity-40"
+            >
+              全部撤销
+            </button>
+          </div>
+          <ul className="mt-1 flex flex-col gap-1">
+            {visibleGrants.map((grant) => (
+              <li key={grant.category} className="flex items-center gap-2 text-[12px]">
+                <span className="min-w-0 flex-1 truncate text-text" title={grant.category}>
+                  {grant.label}
+                </span>
+                <span className="shrink-0 font-mono text-[10px] text-faint">{grantExpiry(grant.expires_at)}</span>
+                <button
+                  type="button"
+                  disabled={grantBusy === grant.category}
+                  onClick={() => void revokeOne(grant.category)}
+                  className="shrink-0 rounded border border-line bg-surface px-2 py-0.5 text-[11px] text-muted hover:border-line-strong disabled:opacity-40"
+                >
+                  撤销
+                </button>
+              </li>
+            ))}
+          </ul>
+          {grantError && <p className="mt-1 text-[11px] leading-relaxed text-danger">{grantError}</p>}
+        </div>
+      )}
 
       {error && (
         <p className="border-b border-line px-3 py-1 text-[11px] text-muted">刷新会话失败：{error}</p>

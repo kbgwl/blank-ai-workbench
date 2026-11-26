@@ -77,7 +77,9 @@ def _norm_text(value: str) -> str:
 # 加 page 是因为前三类都验不出「用户打开时看见什么」：一个三列空框的看板
 # 能过 path_exists，能过 command（构建成功），却过不了「首屏 .task-item ≥ 3」。
 # 没有这一维，判据写得再全，最优解仍然是交一个空壳。
-CHECK_TYPES = ("path_exists", "file_contains", "command", "page")
+# 加 file_min_chars 是因为「字数/长度」只能由机器数，模型自报的「约 8850 字」
+# 在真机 e08fc1db 里和实际 6291 字符差了两千多，靠它自评就是假成功。
+CHECK_TYPES = ("path_exists", "file_contains", "command", "page", "file_min_chars")
 
 
 def _clean_check(check: object) -> dict:
@@ -112,6 +114,16 @@ def _clean_check(check: object) -> dict:
     path = str(check.get("path") or "").strip()
     if not path:
         return {}
+    if kind == "file_min_chars":
+        try:
+            minimum = int(check.get("min") or check.get("minimum") or 0)
+        except (TypeError, ValueError):
+            return {}
+        if minimum <= 0:
+            return {}
+        # 字符数按 Unicode 码点数，不按字节：中文一个字算一个字，
+        # 与用户说的「9000 字」同一口径。
+        return {"type": kind, "path": path[:MAX_STEP_CHARS], "min": minimum}
     body = {"type": kind, "path": path[:MAX_STEP_CHARS]}
     if kind == "file_contains":
         text = str(check.get("text") or "").strip()

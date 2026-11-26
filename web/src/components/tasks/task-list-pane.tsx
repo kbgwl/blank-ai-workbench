@@ -7,6 +7,7 @@ import { Panel } from "@/components/panel";
 import { errorMessage, fetchThreads, type Project, type Provider, type Task, type TaskDraft, type Thread } from "./api";
 import { StatusBadge } from "./bits";
 import { SelectPopover } from "../ui/select-popover";
+import { configuredProviders } from "../configured-providers";
 import { formatDateTime } from "./format";
 
 type Props = {
@@ -51,14 +52,22 @@ export function TaskListPane({
   const [error, setError] = useState<string | null>(null);
 
   const usableProjects = projects ?? [];
+  const usableProviders = configuredProviders(providers ?? []);
   const chosenProject = projectId || usableProjects[0]?.id || "";
   const projectReady = usableProjects.length > 0;
+
+  // 之前选过、后来 Key 被清掉的供应商：下拉里已经不展示它了，提交时也回到
+  // 「跟随默认供应商」，不能带着一个界面上看不见的 providerId 走。
+  const effectiveProviderId = usableProviders.some((provider) => provider.id === providerId)
+    ? providerId
+    : "";
 
   // 会话属于项目，切换项目时那一串 id 就失效了，必须重新取。
   useEffect(() => {
     if (!chosenProject) return;
     let alive = true;
-    fetchThreads(chosenProject)
+    // 只取活跃会话：已归档不能续聊，列出来还会挤占 50 条窗口。
+    fetchThreads(chosenProject, { status: "active" })
       .then((rows) => {
         if (!alive) return;
         setThreads(rows);
@@ -94,7 +103,7 @@ export function TaskListPane({
         .split("\n")
         .map((line) => line.replace(/^\s*[-*\d.、)]+\s*/, "").trim())
         .filter(Boolean),
-      providerId,
+      providerId: effectiveProviderId,
       thread: threadChoice || undefined,
     };
     try {
@@ -206,17 +215,15 @@ export function TaskListPane({
           <Field label="模型供应商">
             <SelectPopover
               ariaLabel="选择模型供应商"
-              value={providerId}
+              value={effectiveProviderId}
               options={
-                providers !== null && providers.length === 0
-                  ? [{ value: "", label: "后端没有可用供应商", disabled: true }]
+                providers !== null && usableProviders.length === 0
+                  ? [{ value: "", label: "还没有配置模型", disabled: true }]
                   : [
                       { value: "", label: "跟随默认供应商" },
-                      ...(providers ?? []).map((provider) => ({
+                      ...usableProviders.map((provider) => ({
                         value: provider.id,
                         label: `${provider.name}${provider.model ? ` · ${provider.model}` : ""}`,
-                        disabled: !provider.enabled,
-                        warning: provider.enabled ? undefined : "已停用",
                       })),
                     ]
               }

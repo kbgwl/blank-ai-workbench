@@ -13,6 +13,7 @@ import {
   type Project,
   type TreeEntry,
 } from "./api";
+import { DirectoryPicker } from "./directory-picker";
 import { FileTree } from "./file-tree";
 import { FileViewer } from "./file-viewer";
 import { ActiveDot, Button, Field, Input, Notice, StateLine } from "./ui";
@@ -38,6 +39,8 @@ export function WorkspacePane({ project, onChanged }: Props) {
   const [unbindingId, setUnbindingId] = useState<string | null>(null);
   const [activatingId, setActivatingId] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
+  /** 浏览器没有原生目录框时走后端目录浏览器。 */
+  const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
   /** 已点开的那几行的真实路径。键是 workspace.id，没点开就不在表里。 */
   const [revealed, setRevealed] = useState<Record<string, string>>({});
 
@@ -65,9 +68,13 @@ export function WorkspacePane({ project, onChanged }: Props) {
   }
 
   async function browse() {
-    if (!nativePicker || picking) return;
-    setPicking(true);
+    if (picking) return;
     setFormError(null);
+    if (!nativePicker) {
+      setDirectoryPickerOpen(true);
+      return;
+    }
+    setPicking(true);
     try {
       const picked = await pickDirectory(path);
       if (!picked) return;
@@ -111,7 +118,10 @@ export function WorkspacePane({ project, onChanged }: Props) {
     setBinding(true);
     setFormError(null);
     try {
-      await bindWorkspace(project.id, { path: path.trim(), label: label.trim() });
+      const bound = await bindWorkspace(project.id, { path: path.trim(), label: label.trim() });
+      // 绑定完立刻切过去：新绑的目录如果还是灰的，用户会以为没生效——这正是
+      // 「不能更换目录」的旧症状。要保留旧活动目录，绑定后再点「切到这里」即可。
+      await activateWorkspace(project.id, bound.id);
       setPath("");
       setLabel("");
       setOpenFile(null);
@@ -215,29 +225,24 @@ export function WorkspacePane({ project, onChanged }: Props) {
 
           <form onSubmit={submitBind} className="flex flex-col gap-2 border-t border-line pt-3">
             <div className="flex flex-col gap-2 md:flex-row">
-              <Field label="工作区绝对路径">
-                <div className="flex items-center gap-2">
-                  <Input
-                    value={path}
-                    onChange={(event) => setPath(event.target.value)}
-                    placeholder="E:\kbgai\services\api"
-                    aria-label="工作区绝对路径"
-                    spellCheck={false}
-                    autoComplete="off"
-                    className="flex-1 font-mono text-[13px]"
-                    maxLength={1000}
-                  />
-                  {/* 只有桌面壳里才有系统目录对话框；浏览器里不渲染，避免点了没反应。 */}
-                  {nativePicker && (
-                    <Button
-                      type="button"
-                      onClick={() => void browse()}
-                      disabled={picking}
-                      className="shrink-0 whitespace-nowrap"
-                    >
-                      {picking ? "选择中" : "浏览…"}
-                    </Button>
-                  )}
+              <Field label="目录">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span
+                    className={`min-w-0 flex-1 truncate font-mono text-[12px] ${
+                      path ? "text-text" : "text-faint"
+                    }`}
+                    title={path || undefined}
+                  >
+                    {path || "还没有选择目录"}
+                  </span>
+                  <Button
+                    type="button"
+                    onClick={() => void browse()}
+                    disabled={picking}
+                    className="shrink-0 whitespace-nowrap"
+                  >
+                    {picking ? "选择中" : path ? "重新选择…" : "选择目录…"}
+                  </Button>
                 </div>
               </Field>
               <Field label="标签（可选）">
@@ -252,15 +257,25 @@ export function WorkspacePane({ project, onChanged }: Props) {
               </Field>
             </div>
             <p className="text-[12px] leading-relaxed text-faint">
-              {nativePicker
-                ? "点「浏览…」选一个已存在的目录；手填时必须写绝对路径。"
-                : "路径必须是运行后端的这台机器上已存在的目录，相对路径会被拒绝。"}
+              点「选择目录…」选一个已存在的目录；桌面壳走系统目录框，网页里用目录浏览器。
+              不再接受手填路径。
             </p>
             <Button type="submit" variant="primary" className="self-start" disabled={binding || !path.trim()}>
               {binding ? "绑定中" : "绑定工作区"}
             </Button>
           </form>
           {formError && <Notice>{formError}</Notice>}
+          {directoryPickerOpen && (
+            <DirectoryPicker
+              initialPath={path}
+              onClose={() => setDirectoryPickerOpen(false)}
+              onPick={(picked) => {
+                setPath(picked);
+                setLabel((current) => current.trim() || dirName(picked));
+                setDirectoryPickerOpen(false);
+              }}
+            />
+          )}
         </div>
       </Panel>
 

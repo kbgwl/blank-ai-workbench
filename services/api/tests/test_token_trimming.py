@@ -247,6 +247,26 @@ async def test_unparseable_review_does_not_loop_forever(seeded, tmp_path):
     assert route_after_review({**result, "repair_rounds": 0}, session) == "summarize_result"
 
 
+async def test_unparseable_review_with_done_when_is_not_approved(seeded, tmp_path):
+    """有 done_when 时，审查没返回 JSON 不能当通过：判据一条都没被核对过。"""
+    from blank_api.services.agent.graph import review_result_node, route_after_review
+
+    session = _session(tmp_path, [], [])
+    result = await review_result_node(
+        {
+            "messages": [{"role": "user", "content": "干活"}],
+            "goal_spec": {"done_when": ["页面能打开"]},
+        },
+        session,
+    )
+
+    assert result["review"]["approved"] is False
+    assert result["review"].get("unavailable") is True
+    assert result["review"]["done_when"][0]["status"] == "missing"
+    assert result["repair_rounds"] == 1
+    assert route_after_review({**result}, session) == "execute_action"
+
+
 async def test_review_rounds_are_capped(seeded, tmp_path):
     from blank_api.services.agent.graph import MAX_REVIEW_ROUNDS, route_after_review
 

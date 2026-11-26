@@ -79,7 +79,7 @@ class TeamMessageIn(BaseModel):
 
 class TeamApprovalIn(BaseModel):
     approve: bool
-    scope: Literal["once", "prefix", "tool"] = "once"
+    scope: Literal["once", "prefix", "session", "tool"] = "once"
 
 
 class TeamAnswerIn(BaseModel):

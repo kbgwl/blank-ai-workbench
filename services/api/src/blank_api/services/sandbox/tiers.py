@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -142,6 +143,32 @@ def _backend(policy: SandboxPolicy) -> str:
         return get_sandbox(policy).name
     except Exception:  # noqa: BLE001 - 起不来也是事实，由 available=False 表达
         return "none"
+
+
+def default_constraints(ttl: float = 3600.0) -> dict[str, Any]:
+    """任务创建响应里的沙箱约束快照：只报当前默认档位**真实**强制了什么。
+
+    ``resolve_tier`` 会现场探测边界（CPU/IO/磁盘探针在首次调用时要几秒），
+    所以结果进程内缓存 ``ttl`` 秒；任务创建是用户动作，不能每次都冻住事件循环。
+    探测失败不编造：``network_isolated`` 只写解析出来的布尔值。
+    """
+    global _CONSTRAINTS_CACHE
+    now = time.time()
+    if _CONSTRAINTS_CACHE is not None and now - _CONSTRAINTS_CACHE[0] < ttl:
+        return dict(_CONSTRAINTS_CACHE[1])
+    tier = resolve_tier("", strict=False)
+    value = {
+        "network_isolated": bool(tier.network_enforced),
+        "filesystem_isolated": bool(tier.filesystem_enforced),
+        "tier": tier.tier,
+        "backend": tier.backend,
+        "notice": tier.notice,
+    }
+    _CONSTRAINTS_CACHE = (now, value)
+    return dict(value)
+
+
+_CONSTRAINTS_CACHE: tuple[float, dict[str, Any]] | None = None
 
 
 def resolve_tier(

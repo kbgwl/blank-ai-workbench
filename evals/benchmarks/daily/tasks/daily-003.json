@@ -1,0 +1,14 @@
+{
+  "id": "daily-003",
+  "category": "daily_data_summary",
+  "workspace": "fixture",
+  "scenario": "daily",
+  "goal": "读取 data.csv（列 day,amount），生成 汇总.md：按 day 汇总 count/total/avg（avg 保留两位小数），最后给一行总计；不要修改 data.csv。",
+  "acceptance": [
+    "汇总.md 含三天明细与总计",
+    "data.csv 未被修改"
+  ],
+  "expectedFiles": ["汇总.md"],
+  "testCommand": "python -X utf8 -m pytest -q test_check.py",
+  "expectedStatus": "succeeded"
+}

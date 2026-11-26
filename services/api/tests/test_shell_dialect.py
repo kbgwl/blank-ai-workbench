@@ -17,6 +17,10 @@ def test_tool_description_states_the_real_shell():
     if shell_dialect() == "cmd":
         assert "cmd.exe" in description
         assert "ls" in description, "要明确点名不能用的命令，模型才改得过来"
+        # cmd.exe 不把 `;` 当分隔符——旧文案却教模型「失败也无所谓时用 ;」，
+        # 真机里它写 `where python; where py; ...`，得到一串「找不到 "python;"」。
+        assert "不要用 `;` 串联命令" in description
+        assert "先 ls" not in description
     else:
         assert "sh" in description
 

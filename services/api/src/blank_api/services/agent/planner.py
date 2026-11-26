@@ -240,6 +240,27 @@ def repair_hint(failure: dict[str, Any], repair_round: int) -> str:
     （v164 删掉场景模式前缀就是因为这个）。
     """
     detail = str(failure.get("detail") or failure.get("reason") or "")[:300]
+    if str(failure.get("kind") or "") == "goal_check_failed":
+        # 机器判据没过不是“测试挂了”，修法也不是改代码：多数是产物还没写够/写全。
+        # 明确要求先用命令实测（字数/行数），别让模型再凭感觉说“约 9000 字”。
+        return (
+            f"【系统：第 {repair_round} 轮自动修复】上一轮没有满足可执行验收判据："
+            f"{detail or '未提供'}。请先读回产物确认当前状态，再补足或修正；"
+            "字数/行数类判据必须用 run_shell 实测（如 wc -m / wc -l），不要凭估计；"
+            "不要声称已修复，改完必须重新核对判据。"
+        )
+    if str(failure.get("kind") or "") == "ui_unverified":
+        # 前端改完没验、或验出错：修法不是继续改代码，而是先把页面跑起来看见问题。
+        # 明确给出「打开 → 点击 → 刷新 → 控制台零错误」的动作顺序，别让它只补一句自述。
+        return (
+            f"【系统：第 {repair_round} 轮自动修复】上一轮没有通过前端浏览器自检："
+            f"{detail or '未提供'}。请先用 browser_check 打开最新页面，确认打开时有什么，"
+            "再用 steps 点一次关键交互并 reload 一次；控制台错误和失败请求必须为 0。"
+            "expect 只放打开时就存在的元素；聊天消息、点击后才出现的元素放进 steps 的 "
+            "assert（expr 或 selector/min），不要一打开就断言消息数。"
+            "页面需要本机服务时，先用 run_shell 在后台启动，再用 localhost 地址检查。"
+            "先看见问题再改，改完必须重跑 browser_check；不要只写「已修复」。"
+        )
     if str(failure.get("kind") or "") == "test_timeout":
         # 超时没有"失败证据"可修：它连一条断言的输出都没有。让它"改最小范围"只会
         # 把模型推去改一段没问题的代码，然后原样再跑一次同一条跑不完的命令。

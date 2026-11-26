@@ -5,6 +5,8 @@
 超出预算时触发。两者都要留下可解释的账。
 """
 
+import json
+
 from blank_api.services.agent.context import (
     ContextCompactor,
     estimate_tokens,
@@ -77,6 +79,82 @@ def test_microcompact_does_nothing_below_the_trigger_ratio() -> None:
     trimmed, stats = microcompact(messages, max_chars=48_000)
     assert trimmed == messages
     assert stats.applied is False
+
+
+def _write_call(index: int, content: str, name: str = "write_file") -> dict:
+    return {
+        "role": "assistant",
+        "content": "写文件",
+        "tool_calls": [
+            {
+                "id": f"call_{index}",
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(
+                        {"path": f"f{index}.txt", "content": content}, ensure_ascii=False
+                    ),
+                },
+            }
+        ],
+    }
+
+
+def test_message_tokens_counts_tool_call_arguments() -> None:
+    """工具参数也是发出去的上下文，水位不能只数 content。"""
+    message = _write_call(0, "x" * 4_000)
+    assert message_tokens([message]) > 500
+
+
+def test_microcompact_shrinks_old_write_args_but_keeps_recent_full() -> None:
+    big = "x" * 5_000
+    messages = [_write_call(index, big) for index in range(10)]
+    trimmed, stats = microcompact(messages, max_chars=1_000)
+
+    assert stats.args_shrunk == 2, stats.as_dict()
+    old_args = trimmed[0]["tool_calls"][0]["function"]["arguments"]
+    assert "已折叠" in old_args and "read_file" in old_args
+    # 最近 8 条原样保留：模型正在推理的窗口不能被抽走。
+    recent_args = trimmed[-1]["tool_calls"][0]["function"]["arguments"]
+    assert big in recent_args
+    # 不修改调用方传进来的原对象。
+    assert big in messages[0]["tool_calls"][0]["function"]["arguments"]
+    # 消息条数不变，tool_call id 还在，配对不破。
+    assert len(trimmed) == len(messages)
+    assert trimmed[0]["tool_calls"][0]["id"] == "call_0"
+
+
+def test_microcompact_shrinks_edit_file_strings() -> None:
+    big = "y" * 2_000
+    arguments = json.dumps(
+        {"path": "a.py", "old_string": big, "new_string": big + "z"}, ensure_ascii=False
+    )
+    message = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_e",
+                "type": "function",
+                "function": {"name": "edit_file", "arguments": arguments},
+            }
+        ],
+    }
+    # 填满 cut：这条要在最近窗口之外才会被折。
+    messages = [message] + [{"role": "user", "content": "继续"} for _ in range(9)]
+    trimmed, stats = microcompact(messages, max_chars=100)
+    assert stats.args_shrunk == 1
+    parsed = json.loads(trimmed[0]["tool_calls"][0]["function"]["arguments"])
+    assert parsed["old_string"].startswith("[较早的工具参数已折叠")
+    assert parsed["new_string"].startswith("[较早的工具参数已折叠")
+
+
+def test_microcompact_keeps_small_tool_args() -> None:
+    message = _write_call(0, "短内容")
+    messages = [message] + [{"role": "user", "content": "继续"} for _ in range(9)]
+    trimmed, stats = microcompact(messages, max_chars=100)
+    assert stats.args_shrunk == 0
+    assert json.loads(trimmed[0]["tool_calls"][0]["function"]["arguments"])["content"] == "短内容"
 
 
 async def test_report_accounts_tokens_boundary_and_fold() -> None:
