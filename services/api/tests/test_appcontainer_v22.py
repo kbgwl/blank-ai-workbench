@@ -32,6 +32,17 @@ from blank_api.services.sandbox.tiers import (
     resolve_tier,
 )
 
+
+def test_boundary_and_appcontainer_agree_on_security_capabilities_attribute():
+    # boundary 的能力探针与 AC 后端必须使用同一个属性号；两者分叉时探针恒假，
+    # 表现为“这台机器不支持 AppContainer”，而不是一条显眼的错误。
+    assert boundary.PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES == 0x00020009
+    assert (
+        boundary.PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES
+        == wac.PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES
+    )
+
+
 GREEN_AC = {
     "bind": "ok", "loopback": "ok", "external": "PermissionError:13",
     "secret": "PermissionError:13", "ws_write": "ws-ok",

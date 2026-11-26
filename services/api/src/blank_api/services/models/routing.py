@@ -25,6 +25,21 @@ class FallbackAdapter(ModelAdapter):
         self.adapters = tuple(adapters)
         self.last_provider = adapters[0].config.name
 
+    @property
+    def max_tokens_override(self) -> int:
+        """输出预算覆盖值：主适配器为真源，设置时广播给所有候选。
+
+        Agent 在截断恢复时会写 ``adapter.max_tokens_override``。这个属性以前
+        直接落在 FallbackAdapter 实例上，内层适配器读不到，多供应商配置下
+        输出预算扩容会静默失效；这里把它透传到每个候选。
+        """
+        return self.adapters[0].max_tokens_override
+
+    @max_tokens_override.setter
+    def max_tokens_override(self, value: int) -> None:
+        for adapter in self.adapters:
+            adapter.max_tokens_override = int(value)
+
     def _candidates(self):
         yield from self.adapters
 

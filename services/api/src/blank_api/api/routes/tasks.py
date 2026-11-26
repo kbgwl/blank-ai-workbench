@@ -439,6 +439,10 @@ async def create_task(
         turn_count=1,
     )
     db.add(thread)
+    # 先把会话行落进同一个事务：tasks.thread_id 有外键，SQLAlchemy 不会仅凭
+    # 一张裸 ForeignKey 保证「会话先于任务」的插入顺序；不 flush 时 SQLite
+    # 打开 foreign_keys 会直接报 FOREIGN KEY constraint failed。
+    await db.flush()
     # 用户输入以 `/名字 参数` 开头且命中命令/Skill 时换成正文字：这一步要在建行
     # 之前完成，落库的 goal 就是模型真正会读到的那段。标题保留用户原话。
     workspace = project.active_workspace

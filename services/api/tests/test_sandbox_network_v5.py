@@ -80,7 +80,7 @@ async def test_runtime_warns_when_network_is_not_enforced(tmp_path: Path, worksp
     monkeypatch.setattr(runtime_module, "resolve_tier", lambda *args, **kwargs: _tier(False))
     monkeypatch.setattr(docker_probe, "ensure_fresh", fake_fresh)
 
-    runtime = AgentRuntime(session_factory=None)
+    runtime = AgentRuntime(session_factory=get_session_factory())
     request = RunRequest(
         task_id="task-net-warning",
         provider_id="p",

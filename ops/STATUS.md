@@ -1,12 +1,14 @@
 # 项目状态
 
 - 更新：2026-11-26
-- 当前任务：**NEXT-DEV-v5 P0/P1/P2 收口 + P3 全量**
-- 状态：**READY_FOR_QA**（P0/P1/P2 完成；最终 HEAD 全量 **0 failed**）
-- 清单文档：dev/NEXT-DEV-v5.md
-- 说明：v4 退回项（推测执行 P1、lsp、调用≤12）已修复；最终全量
-  **5154 passed / 28 skipped / 0 failed**；真机 T09 最终采样 100 分 / 12 轮 / 283K。
-- 开发交接单：`ops/HANDOFFS/T-R2-07-claude.md`、`ops/HANDOFFS/T-R2-06-claude.md`、`ops/HANDOFFS/T-R2-05-claude.md`、`ops/HANDOFFS/T-R2-04-claude.md`、`ops/HANDOFFS/T-R2-03-claude.md`、`ops/HANDOFFS/T-R2-02-claude.md`、`ops/HANDOFFS/T-R2-01-claude.md`、`ops/HANDOFFS/T-BA-claude.md`、`ops/HANDOFFS/E12-workspace-scope.md`、`ops/HANDOFFS/E11-anti-ai-style.md`、`ops/HANDOFFS/E10-model-picker.md`、`ops/HANDOFFS/E/E9-daily-benchmark.md`、`ops/HANDOFFS/E/E8-daily-codex.md`、`ops/HANDOFFS/D/D11-panel-slim.md`
+- 当前任务：**MASTER-LAUNCH-PLAN Step 1 批次 1A（止血）**
+- 状态：**READY_FOR_QA**（全量 **5162 passed / 3 failed / 24 skipped**；
+  3 项为提权 pytest 临时目录 ACL 导致的 browser_check 环境红）
+- 清单文档：docs/MASTER-LAUNCH-PLAN.md
+- 说明：v5 已完成并作为检查点提交（`ae17635`）；批次 1A 修复 BUG-02/03/04 +
+  SQLite WAL / `synchronous=NORMAL` / `busy_timeout`；`foreign_keys=ON` 因 45 个
+  测试夹具红项后置到 ARCH-06b；BUG-01/05 留批次 1B。
+- 开发交接单：`ops/HANDOFFS/T-LAUNCH-1A-claude.md`、`ops/HANDOFFS/T-R2-07-claude.md`、`ops/HANDOFFS/T-R2-06-claude.md`、`ops/HANDOFFS/T-R2-05-claude.md`、`ops/HANDOFFS/T-R2-04-claude.md`、`ops/HANDOFFS/T-R2-03-claude.md`、`ops/HANDOFFS/T-R2-02-claude.md`、`ops/HANDOFFS/T-R2-01-claude.md`、`ops/HANDOFFS/T-BA-claude.md`、`ops/HANDOFFS/E12-workspace-scope.md`、`ops/HANDOFFS/E11-anti-ai-style.md`、`ops/HANDOFFS/E10-model-picker.md`、`ops/HANDOFFS/E/E9-daily-benchmark.md`、`ops/HANDOFFS/E/E8-daily-codex.md`、`ops/HANDOFFS/D/D11-panel-slim.md`
 - 报告：`data/batch-archive-managing-1440.png`、`data/batch-archive-archived-1440.png`、`data/model-filter-only-configured.png`、`data/e11-daily-default.png`、`data/e10-panel-clean.png`
 - E 盘绑定：基准工作区 `.bench-tmp/`、pytest TEMP `.tmp-test/`、后端 TEMP `.tmp/`、
   桌面壳/dev 子进程 TEMP `E:\env\blank-tmp`、UV 缓存 `E:\env\uv-cache`；
@@ -16,6 +18,16 @@
   `docs/validation/acceptance-2026-11-21.md`）
 - 验收记录：`docs/validation/acceptance-2026-11-21.md`（末尾「日常场景对标 Codex（E8）」「结果面板精简（D11）」）
 - 最近验证：
+  - **2026-11-26 MASTER-LAUNCH-PLAN 批次 1A（Claude）**：BUG-02 `FallbackAdapter`
+    输出预算透传、BUG-03 只读场景补禁 `write_file`/`edit_file`/`notebook_edit`、
+    BUG-04 AppContainer 属性号 `0x20009`、ARCH-06 部分（SQLite WAL /
+    `synchronous=NORMAL` / `busy_timeout`）；连带修 `create_task` 会话/任务插入顺序与
+    `runtime._prepare` 空会话工厂告警。首轮开启 `foreign_keys=ON` 全量 **63 failed**
+    （45 项测试夹具只造子行、14 项空工厂告警）；回退外键开关、修空工厂保护后，
+    定向 13 文件 **349 passed**，全量 **5162 passed / 3 failed / 24 skipped**
+    （15:56，`logs/pytest-1a-b-2026-11-26.log`）；3 项为提权 pytest 临时目录 ACL
+    导致 browser_check 读不到页面（对照探针打开仓库 HTML 与 `E:\env\blank-tmp`
+    文件均 `ok`）。交接单 `ops/HANDOFFS/T-LAUNCH-1A-claude.md`。
   - **2026-11-26 NEXT-DEV-v5 P0/P1/P2**：P0 推测执行 `speculative` 缺属性兼容，
     6 个 stream 回归全绿；P1 lsp 根因定位为「TEMP 在仓库内 → git check-ignore
     把整个临时工作区判 ignored」——产品修 `_git_ignored` 根探测，测试加
@@ -330,13 +342,19 @@
   - 会话永久删除（AgentEvent/AgentCheckpoint/SearchDoc）已修复，测试 23 passed；
     今日测试会话已永久清理。
 - 下一步：
-  1. 人工验收 B10 的 B7 成功 run（`c328c027`）：页面、17 测试、browser_check、
-     3/3 验收；AI 巡检用更长 wait 单独复核；
-  2. 跑完整后端回归并做一次 Claude 同题对照，判断“成功”是否只是本次
-     模型波动；成本 1.76M 需要单独立成本卡；
-  3. 再决定扩大真实任务集；Codex TUI 可用于人工只读审查；
-  4. B3 页面优化继续往后放；人工验收已累积的 D1–D4。
+  1. 人工验收批次 1A；建议在非提权终端复跑全量，确认 0 failed
+     （当前 3 项为 browser_check 提权临时目录环境红）。
+  2. 批次 1B：BUG-01（broker 只读图片通道）、BUG-05（CREATE_SUSPENDED 挂 Job）。
+  3. ARCH-06b：外键开启前审计 45 项只造子行的测试夹具，再打开
+     `PRAGMA foreign_keys=ON`。
+  4. 之后按 MASTER-LAUNCH-PLAN Phase 2 拆任务卡（ARCH-01/02/04/05/07）。
 - 未处理：
+  - `foreign_keys=ON` 未开启：首轮全量 63 failed 中 45 项是测试夹具只造
+    `agent_events`/`tool_calls`/`agent_runs` 子行，转 ARCH-06b；证据
+    `logs/pytest-1a-2026-11-26.log`。
+  - `browser_check` 3 个真跑用例在提权 pytest 下为环境红：pytest 临时目录 ACL
+    收紧到 owner-only，Chrome 非提权沙箱读不到页面；对照探针打开仓库 HTML 正常。
+  - BUG-01（broker 读图）与 BUG-05（CREATE_SUSPENDED 挂 Job）留批次 1B。
   - B7 只有一次成功运行、一个模型、一次 bypass 自动化；没有正常审批、没有
     Claude/Codex 同题对照；
   - B9 自动冒烟只覆盖“模型完全没跑 browser_check”；模型跑了但断言/时序

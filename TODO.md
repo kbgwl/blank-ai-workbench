@@ -4,6 +4,17 @@
 
 ## 进行中 / 待验收
 
+- [ ] **MASTER-LAUNCH-PLAN Step 1 批次 1A：止血修复** — **READY_FOR_QA**
+  - 范围：BUG-02 `FallbackAdapter` 透传输出预算；BUG-03 只读场景补齐
+    `write_file` / `edit_file` / `notebook_edit`；BUG-04 AppContainer 属性号
+    `0x20009`；ARCH-06 部分（SQLite WAL / `synchronous=NORMAL` / `busy_timeout`）；
+    连带修复 `create_task` 会话/任务插入顺序与 `runtime._prepare` 空工厂告警。
+  - 验证：定向 13 文件 **349 passed**；全量 **5162 passed / 3 failed / 24 skipped**
+    （3 项为提权 pytest 临时目录 ACL 导致 browser_check 读不到页面，已留对照证据）。
+  - 未做：BUG-01（broker 读图）、BUG-05（CREATE_SUSPENDED 挂 Job）、UP-03 测试归档、
+    `foreign_keys=ON`（转 ARCH-06b）。
+  - 交接单：`ops/HANDOFFS/T-LAUNCH-1A-claude.md`
+  - 检查点提交：`ae17635`
 - [ ] **NEXT-DEV-v5 P0/P1/P2 收口 + P3 全量** — **READY_FOR_QA**
   - P0-1：推测执行对缺 `speculative` 属性的轻量会话兼容；6 个 stream 回归全绿。
   - P1-2：lsp 根因是 TEMP 在仓库内触发 `git check-ignore` 全量过滤；
@@ -413,6 +424,16 @@
   - 验收记录：末尾「browser_check 动作可靠化（B10，2026-11-23）」一节。
 
 ## 待办池（未排期）
+- [ ] **ARCH-06b：SQLite `foreign_keys=ON` 前审计** — **BLOCKED（测试夹具）**
+  - 证据：开启外键后首轮全量 **63 failed**，其中 45 项是测试只造
+    `agent_events` / `tool_calls` / `agent_runs` 子行、不造父任务；14 项空
+    `session_factory` 告警已单独修。
+  - 做法：给事件/工具调用/运行台账的测试夹具补父任务，或明确使用独立库/关闭外键；
+    再打开 `PRAGMA foreign_keys=ON` 并全量归零。日志：
+    `logs/pytest-1a-2026-11-26.log`。
+- [ ] **MASTER-LAUNCH-PLAN 批次 1B：BUG-01 / BUG-05** — 待 1A 验收后开工
+  - BUG-01：`fs_broker.py` 增加只读二进制/图片通道，隔离模式下读图不再退化成文本。
+  - BUG-05：`sandbox/runner.py` 改 `CREATE_SUSPENDED` → 按句柄挂 Job → `ResumeThread`。
 - [ ] **NEXT-DEV-v3：压调用次数第二轮 + P1 修复** — **已转入 NEXT-DEV-v5**。主体（工具说明书瘦身、执行层并发、提示词、P1 修复、质量底线、速度）已在 v4/v5 承接；遗留「快照内容摘要与变更计数」列入 v5 P2-补。
 
 

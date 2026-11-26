@@ -194,7 +194,19 @@ DEFAULT_SCENARIO = DEV.key
 # repl 同理：它本身不写文件，但内层可以调写工具与命令；只读场景里连入口都不该有。
 # 文档/逆向没有把它加进 tool_denylist：内层 run_shell 已被场景排除，
 # 留下的读/算能力正是这两个场景需要的。
-WRITE_TOOLS = frozenset({"apply_patch", "run_shell", "run_tests", "git", "monitor", "repl"})
+WRITE_TOOLS = frozenset(
+    {
+        "apply_patch",
+        "write_file",
+        "edit_file",
+        "notebook_edit",
+        "run_shell",
+        "run_tests",
+        "git",
+        "monitor",
+        "repl",
+    }
+)
 # 逆向与日常不联网检索：分析以本地工作区为准（web 工具按需可再放开）。
 MEMORY_WRITE_TOOL = "memory_write"
 

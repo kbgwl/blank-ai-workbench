@@ -94,7 +94,15 @@ def test_readonly_scenarios_deny_write_tools():
     # 历史遗留的 brainstorm 仍是只读。
     scenario = resolve("brainstorm")
     denied = excluded_tools(scenario)
-    assert {"apply_patch", "run_shell", "run_tests", "git"} <= denied
+    assert {
+        "apply_patch",
+        "write_file",
+        "edit_file",
+        "notebook_edit",
+        "run_shell",
+        "run_tests",
+        "git",
+    } <= denied
 
 
 def test_scenario_policies_are_distinct_but_keep_the_safety_floor():

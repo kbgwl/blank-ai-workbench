@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from blank_api.db import engine_options, is_transient_db_error
+from blank_api.db import engine_options, install_sqlite_pragmas, is_transient_db_error
 
 
 def test_file_sqlite_enables_ping(tmp_path) -> None:
@@ -31,6 +31,19 @@ def test_memory_sqlite_keeps_static_pool() -> None:
     # 内存库只能有一条连接，开了 ping 反而会把库 ping 没
     assert options["pool_pre_ping"] is False
     assert "poolclass" in options
+
+
+async def test_sqlite_connections_enable_wal_and_busy_timeout(tmp_path) -> None:
+    url = f"sqlite+aiosqlite:///{tmp_path}/pragmas.db"
+    engine = create_async_engine(url, **engine_options(url))
+    install_sqlite_pragmas(engine)
+    try:
+        async with engine.connect() as conn:
+            assert (await conn.exec_driver_sql("PRAGMA journal_mode")).scalar() == "wal"
+            assert (await conn.exec_driver_sql("PRAGMA busy_timeout")).scalar() == 10000
+            assert (await conn.exec_driver_sql("PRAGMA synchronous")).scalar() == 1
+    finally:
+        await engine.dispose()
 
 
 async def test_dead_pooled_connection_is_replaced(tmp_path) -> None:

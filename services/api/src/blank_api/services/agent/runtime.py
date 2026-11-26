@@ -625,7 +625,9 @@ class AgentRuntime:
             )
         # UP-04：网络在本机后端不由系统强制时，任务一启动就把这条事实推给界面。
         # 只提示不阻断：用户仍可用，但不能以为命令已经被禁网。
-        if not sandbox.network_enforced and not no_tools:
+        # 没有持久化通道（单测/嵌入式装配）时不写事件：这条只是给界面的提示，
+        # 没有会话工厂就没有界面；硬写会变成 'NoneType' object is not callable。
+        if self.session_factory is not None and not sandbox.network_enforced and not no_tools:
             await recorder.add(
                 "sandbox.warning",
                 "receive_task",

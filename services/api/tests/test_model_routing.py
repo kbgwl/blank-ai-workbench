@@ -32,3 +32,18 @@ def test_non_retryable_model_failure_is_not_hidden():
     adapter = FallbackAdapter([FakeAdapter("primary", ModelError("bad_key", "invalid", retryable=False)), FakeAdapter("backup")])
     with pytest.raises(ModelError, match="invalid"):
         asyncio.run(adapter.invoke([ChatMessage(role="user", content="hi")]))
+
+
+def test_fallback_propagates_output_budget_override():
+    primary = FakeAdapter("primary")
+    backup = FakeAdapter("backup")
+    adapter = FallbackAdapter([primary, backup])
+
+    adapter.max_tokens_override = 4096
+    assert primary.max_tokens_override == 4096
+    assert backup.max_tokens_override == 4096
+    assert adapter.max_tokens_override == 4096
+
+    adapter.max_tokens_override = 0
+    assert primary.max_tokens_override == 0
+    assert backup.max_tokens_override == 0

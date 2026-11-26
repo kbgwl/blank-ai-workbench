@@ -39,7 +39,10 @@ CACHE_TTL_SECONDS = 60.0
 #    见 `_probe_disk_quota`；尺度变了，之前的报告与这份不可直接比。
 PROBE_VERSION = 5
 
-PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020008
+# 与 windows_appcontainer.py 的权威常量必须一致：winnt.h 的
+# ProcThreadAttributeSecurityCapabilities 是 0x00020009。写成 0x00020008
+# 时 CreateProcessW 不认这条属性，AppContainer 能力探针会恒假。
+PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
 EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 CREATE_NO_WINDOW = 0x08000000
 ALL_APPLICATION_PACKAGES = "S-1-15-2-1"
@@ -771,7 +774,10 @@ def _probe_appcontainer() -> tuple[bool, bool, str]:
     k32.LocalFree(sid)
     if ok:
         return True, True, ""
-    return False, True, "0x20008 -> win32=%s" % code
+    return False, True, "0x%08X -> win32=%s" % (
+        PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+        code,
+    )
 
 
 def _startup_spawn(k32, cmd, attributes) -> tuple[bool, str]:

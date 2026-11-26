@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
+from sqlalchemy import event
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -140,12 +141,36 @@ def engine_options(database_url: str) -> dict:
     return kwargs
 
 
+def _apply_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+    """每条 SQLite 连接建立时统一开 WAL / 忙等待。
+
+    并发写入靠 WAL 与 busy_timeout 排队，而不是立刻抛 database is locked。
+    foreign_keys=ON 暂时不在这里打开：全量跑下来有 45 个用例只造子行
+    （agent_events / tool_calls / agent_runs）不造父任务，外键一开就全红；
+    先把测试夹具收口，再单独开外键，避免用“测试全绿”掩盖数据完整性问题。
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=10000")
+    finally:
+        cursor.close()
+
+
+def install_sqlite_pragmas(engine: AsyncEngine) -> None:
+    if engine.url.get_backend_name() != "sqlite":
+        return
+    event.listens_for(engine.sync_engine, "connect")(_apply_sqlite_pragmas)
+
+
 def get_engine() -> AsyncEngine:
     global _engine, _session_factory
     if _engine is None:
         settings = get_settings()
         ensure_mysql_driver_compat(settings.database_url)
         _engine = create_async_engine(settings.database_url, **engine_options(settings.database_url))
+        install_sqlite_pragmas(_engine)
         _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     return _engine
 
