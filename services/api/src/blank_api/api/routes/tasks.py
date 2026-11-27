@@ -106,7 +106,14 @@ from blank_api.services.plan import (
     plan_progress,
     resolve_milestone_status,
 )
-from blank_api.services.orchestration.runner import _record_dispatch, persist_task
+from blank_api.services.orchestration.runner import (
+    _graph_decision,
+    _record_dispatch,
+    _record_notify_decision,
+    _record_run_failure,
+    _resume_decision_delivered,
+    persist_task,
+)
 from blank_api.services.uploads import UploadStore, load_attachments_for
 from blank_api.services.models.routing import FallbackAdapter
 from blank_api.services.sandbox import SnapshotNotRestorable, SnapshotStore
@@ -904,91 +911,6 @@ def _log_detached(done: asyncio.Task, task_id: str) -> None:
         log.error("客户端断开后后台执行失败 task=%s: %r", task_id, error)
 
 
-async def _record_run_failure(task_id: str, run_id: str, error: BaseException) -> None:
-    """把「跑不起来」写进事件流和任务状态。
-
-    之前这里只把 agent_runs 标成 failed，任务自己停在 queued、事件流里一条都没有——
-    界面上就是「输入之后没有任何返回」，用户既看不到原因也点不动。凡是异常都必须
-    变成一条 task.failed 事件 + failed 状态。
-    """
-    message = str(error) or error.__class__.__name__
-    detail = "".join(traceback.format_exception(type(error), error, error.__traceback__))[-4000:]
-    try:
-        # runtime 正常收尾时自己就会写 task.failed（带 reason），别写第二条。
-        async with get_session_factory()() as session:
-            already = (
-                await session.execute(
-                    select(AgentEvent.id).where(
-                        AgentEvent.task_id == task_id,
-                        AgentEvent.run_id == run_id,
-                        AgentEvent.type == "task.failed",
-                    )
-                )
-            ).first()
-        if already is None:
-            await EventRecorder(get_session_factory(), task_id, run_id=run_id).add(
-                "task.failed",
-                "error",
-                {
-                    "error": message,
-                    "reason": message,
-                    "error_type": error.__class__.__name__,
-                    "traceback": detail,
-                },
-            )
-    except Exception:  # 记事件本身失败也不能把进程带崩
-        log.exception("写入 task.failed 事件失败 task=%s", task_id)
-
-    async def mark_failed() -> None:
-        async with get_session_factory()() as session:
-            task = await session.get(Task, task_id)
-            if task is not None and task.status not in ("cancelled", "succeeded"):
-                task.status = "failed"
-                task.failure_reason = message[:2000]
-                await session.commit()
-
-    try:
-        # 连接池里可能躺着一条被取消打断的旧连接，换新连接重试即可
-        await db_retry(mark_failed)
-    except Exception:
-        log.exception("更新任务失败状态出错 task=%s", task_id)
-
-
-# 审批决定里真正交给 LangGraph 的字段。``approval_id`` / ``decided_seq`` 是内部
-# 记账，不能混进 Command(resume=...)，否则图的恢复载荷会多出它不认识的键。
-_RESUME_GRAPH_KEYS = ("approve", "scope", "feedback", "step_id")
-
-
-def _graph_decision(decision: dict) -> dict:
-    return {key: decision[key] for key in _RESUME_GRAPH_KEYS if key in decision}
-
-
-async def _resume_decision_delivered(task_id: str, decision: dict) -> bool:
-    """这条审批决定是否已经被投递给图。
-
-    唯一凭据是 ``task.resumed`` 事件的序号：它由 ``runtime._resume`` 在
-    ``graph.ainvoke`` 之前写，且位于对应 ``approval.decided`` 之后。没有这个
-    序号（老数据）时按“尚未投递”处理——宁可重投一次决定，也不能让用户批过的
-    任务停住；新写入的决定一定带 ``decided_seq``。
-    """
-    decided_seq = int(decision.get("decided_seq") or 0)
-    if decided_seq <= 0:
-        return False
-    async with get_session_factory()() as session:
-        row = (
-            await session.execute(
-                select(AgentEvent.id)
-                .where(
-                    AgentEvent.task_id == task_id,
-                    AgentEvent.type == "task.resumed",
-                    AgentEvent.seq > decided_seq,
-                )
-                .limit(1)
-            )
-        ).first()
-    return row is not None
-
-
 async def _execute_claimed_run(
     run_id: str,
     worker_id: str,
@@ -1068,158 +990,6 @@ async def _execute_claimed_run(
         # 收尾失败会让任务永远停在 queued（界面一直转圈），必须留下痕迹并强行置终态
         log.exception("收尾写库失败 run=%s", run_id)
         await _record_run_failure(run_request.task_id, run_id, error)
-
-
-def _notify_kind(status: str) -> str:
-    """任务终态对应哪一类通知事件。
-
-    waiting_approval 走审批（永远放行），failed/cancelled 走失败，succeeded 走交付物。
-    其余中间态算进度——策略配了 always 才会打扰。
-    """
-    if status == "waiting_approval":
-        return notify.EVENT_APPROVAL
-    if status in ("failed", "cancelled"):
-        return notify.EVENT_FAILURE
-    if status == "succeeded":
-        return notify.EVENT_DELIVERABLE
-    return notify.EVENT_PROGRESS
-
-
-async def _origin_from_trigger(session, task_id: str) -> str:
-    """快照里没有 ``intent`` 时，从触发器行反推"这一次是谁起的"。
-
-    ``super_agent_dispatch`` 关着时快照是空的（见 ``_record_notify_decision``
-    里那段注释），但"定时到点"和"盯着工作区"起的那一轮，触发器行里明明白白
-    写着 intent。不补这一步，所有桌面通知都只能写"做完了"——用户设了九点的
-    提醒，到点弹出来的却是一句"任务完成"，读起来根本不像提醒。
-
-    ``release_one`` 要求触发器必须已关联 task_id 才放行，所以这个反查是可靠的：
-    查不到的说明它不是触发器起的（人自己发的），返回空串即可。
-    """
-    try:
-        row = (
-            await session.execute(
-                select(AgentTrigger)
-                .where(AgentTrigger.task_id == task_id)
-                .order_by(AgentTrigger.created_at.desc())
-                .limit(1)
-            )
-        ).scalars().first()
-    except Exception:  # noqa: BLE001 - 反查失败只影响文案分档，不该影响通知本身
-        return ""
-    if row is None:
-        return ""
-    return str((row.payload or {}).get("intent") or "")
-
-
-async def _record_notify_decision(task_id: str, status: str) -> None:
-    """把「这一次该不该打扰用户」写成事件，并把它真的投递出去（任务书 §5）。
-
-    判断与投递分开，但**都在这里收口**：``agent/notify.py`` 只回答该不该出声，
-    ``channels/delivery.py`` 只负责发。任何一个通道发失败都不影响任务终态，
-    也不会写坏判定——判定是事实（"策略说要打扰"），投递结果另记一条事件。
-
-    v0.10.3 起这里多了一件事：IM 里问的那句话，结论要回到原会话。它不看
-    notify 策略——用户在聊天里问了一句，答案就该出现在聊天里，那不叫打扰。
-    """
-    title = goal = detail = ""
-    disturb = False
-    kind = notify.EVENT_PROGRESS
-    origin = ""
-    try:
-        async with get_session_factory()() as session:
-            task = await session.get(Task, task_id)
-            if task is None:
-                return
-            snapshot = dict(task.dispatch_snapshot or {})
-            background = SettingsStore().read().get("background") or {}
-            window = str(background.get("quiet_hours") or "")
-            quiet = quiet_hours_active(window)
-            kind = _notify_kind(status)
-            # 策略的来源顺序（2026-11-08 修）：任务快照 > 设置里的「通知时机」> approval_only。
-            #
-            # 以前只有第一档，没有就硬兜 approval_only——而 ``super_agent_dispatch``
-            # 默认是**关**的（BETA），关着时快照恒为 ``{}``。于是设置页那个「通知时机」
-            # 下拉框选了 milestone / always 也毫无作用，桌面通知永远按"只报审批"走，
-            # 用户选了"全都说"却什么都收不到。这是"设置项没人消费"的典型，
-            # 不是"默认保守"就能解释过去的。
-            policy = str(snapshot.get("notify_policy") or "").strip().lower()
-            if not policy:
-                policy = str(background.get("notify_policy") or "").strip().lower() or NOTIFY_APPROVAL_ONLY
-            decision = notify.explain(policy, kind, quiet_hours=quiet)
-            # 先把要发的内容取出来：会话关掉之后还要用它拼消息，而 Task 实例
-            # 在会话外读字段会触发一次同步懒加载。
-            title = str(task.title or "")
-            goal = str(task.goal or "")
-            detail = str(task.failure_reason or task.result_summary or "")
-            # 策略说要打扰 ≠ 可以主动发。只有"用户自己设的定时/触发器"或"他显式改了
-            # 通知策略"才允许推；默认的 approval_only 是产品兜底，不是用户的请求。
-            disturb = notify.may_push(
-                disturb=bool(decision["disturb"]), policy=policy, origin=origin
-            )
-            # 「这一次是谁起的」——定时到点、工作区变了、还是人自己发的。
-            # 桌面通知要靠它决定标题写「提醒：检查部署」还是「任务已完成」：
-            # 同一句"任务完成"扣在定时提醒上，读起来就不像提醒了。
-            origin = str(snapshot.get("intent") or "")
-            if not origin:
-                origin = await _origin_from_trigger(session, task_id)
-            await EventRecorder(get_session_factory(), task_id).add(
-                "notify.decided",
-                "finish",
-                {
-                    **decision,
-                    "status": status,
-                    "origin": origin,
-                    "would_disturb": bool(decision.get("disturb")),
-                    # 推送闸的结论单独记：事后能回答"策略说要发，为什么没发"。
-                    "allowed_to_push": bool(disturb),
-                },
-            )
-    except Exception:  # 通知判定是旁路，坏了也不能把任务的终态带走
-        log.warning("记录通知判定失败 task=%s", task_id, exc_info=True)
-        return
-
-    from blank_api.services.channels import delivery
-
-    # ── 1. 提醒推到开了推送的通道 ────────────────────────────────────────
-    results: list[dict] = []
-    if disturb:
-        try:
-            results = await delivery.fanout(
-                delivery.notification_text(title=title, goal=goal, kind=kind, detail=detail)
-            )
-        except Exception:  # noqa: BLE001 - 投递失败只影响"有没有收到"，不影响任务
-            log.warning("通道投递失败 task=%s", task_id, exc_info=True)
-    if results:
-        try:
-            await EventRecorder(get_session_factory(), task_id).add(
-                "notify.delivered",
-                "finish",
-                {
-                    "delivered": results,
-                    "ok": sum(1 for item in results if item.get("ok")),
-                    "failed": sum(1 for item in results if not item.get("ok")),
-                },
-            )
-        except Exception:
-            log.warning("记录投递结果失败 task=%s", task_id, exc_info=True)
-
-    # ── 2. 结论回到消息进来的那个会话 ────────────────────────────────────
-    if status in ("succeeded", "failed", "cancelled", "waiting_approval"):
-        try:
-            sent = await delivery.reply_to_source(
-                task_id,
-                delivery.reply_text(
-                    status=status, summary=detail if status == "succeeded" else "",
-                    failure=detail if status != "succeeded" else "", task_id=task_id,
-                ),
-            )
-            if sent is not None:
-                await EventRecorder(get_session_factory(), task_id).add(
-                    "channel.replied", "finish", sent
-                )
-        except Exception:  # noqa: BLE001
-            log.warning("回话失败 task=%s", task_id, exc_info=True)
 
 
 @router.post("/tasks/{task_id}/start", status_code=202)
