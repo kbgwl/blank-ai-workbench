@@ -4,6 +4,14 @@
 
 ## 进行中 / 待验收
 
+- [ ] **ARCH-01d：请求装配外移** — **READY_FOR_QA（全量待 ARCH-01 收口）**
+  - 范围：`_factory_from` / `_resolve_provider` / `dispatch_of` /
+    `_run_request` / `_routable` 移到 `services/orchestration/runner.py`；
+    tasks.py 保留同名导入。
+  - 验证：导入检查通过；worker/agent/threads/projects **65 passed**；
+    审批恢复/计划模式/续跑/交付快照 **88 passed**；全量待 ARCH-01 收口。
+  - 未做：launch/recover 仍在 tasks.py；runner 暂时从路由层导入 `load_project`。
+  - 交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-01d-claude.md`
 - [ ] **ARCH-01c：执行函数外移** — **READY_FOR_QA**
   - 范围：`_execute_claimed_run` 与 `LEASE_HEARTBEAT_SECONDS` 移到
     `services/orchestration/runner.py`；`test_run_lease` 的 patch 目标同步改。

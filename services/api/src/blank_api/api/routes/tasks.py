@@ -108,11 +108,16 @@ from blank_api.services.plan import (
 )
 from blank_api.services.orchestration.runner import (
     _execute_claimed_run,
+    _factory_from,
     _graph_decision,
     _record_dispatch,
     _record_notify_decision,
     _record_run_failure,
+    _resolve_provider,
     _resume_decision_delivered,
+    _routable,
+    _run_request,
+    dispatch_of,
     persist_task,
 )
 from blank_api.services.uploads import UploadStore, load_attachments_for
@@ -168,70 +173,6 @@ SSE_BACKOFF_FACTOR = 1.8
 SSE_MAX_SECONDS = 30 * 60
 # 心跳间隔：客户端 30s 收不到任何帧就重连；15s 一跳留出一整拍余量。
 SSE_PING_SECONDS = 15.0
-
-
-def _factory_from(request: Request | None):
-    """Tests embed a mock transport here; production falls back to httpx.AsyncClient."""
-    return getattr(request.app.state, "model_client_factory", None) if request is not None else None
-
-
-async def _resolve_provider(db: DbSession, task: Task, requested: str | None) -> ModelProvider:
-    provider_id = requested or task.provider_id
-    if provider_id:
-        provider = await db.get(ModelProvider, provider_id)
-        if provider is None:
-            raise ApiError(code="provider_not_found", message="模型供应商不存在", status_code=404)
-        if not provider.enabled:
-            raise ApiError(code="provider_disabled", message="该模型供应商已停用", status_code=409)
-        return provider
-    # 用户在设置里显式指定的默认供应商（settings.model.default_provider）。
-    #
-    # 没有它的时候，默认是「有 key 的第一个」——按名字排序决定。装了多家之后，
-    # 想换一家就得改排序或把别家停用，两种做法都会连带影响别的判断；而默认模型
-    # 恰恰是这条链路上影响结果最大的变量，不该由字符串序决定。
-    configured = str((SettingsStore().read().get("model") or {}).get("default_provider") or "").strip()
-    if configured:
-        provider = await db.get(ModelProvider, configured)
-        if provider is not None and provider.enabled:
-            return provider
-        # 指向不存在的供应商 / 已停用：不报 404 把任务挡死（那会让"设置写错"变成
-        # "什么都跑不了"），回落到下面的通用逻辑，但留一条日志说明为什么没照办。
-        log.warning(
-            "默认供应商 %s 不可用（%s），回落到「有 key 的第一个」 task=%s",
-            configured,
-            "不存在" if provider is None else "已停用",
-            task.id,
-        )
-    # 默认模型优先挑「配了 key 的」：只按名字取第一个启用项，很容易挑到模板里预置但
-    # 没填 key 的供应商，用户第一次发消息就是 401，还得自己猜是哪一环出的问题。
-    # 全都没配 key 时退回第一个启用项，报错仍然来自供应商，不会凭空成功。
-    provider = (
-        await db.execute(
-            select(ModelProvider)
-            .where(ModelProvider.enabled == True)  # noqa: E712
-            .order_by(
-                case((ModelProvider.api_key_encrypted != "", 0), else_=1),
-                ModelProvider.name,
-            )
-        )
-    ).scalars().first()
-    if provider is None:
-        raise ApiError(
-            code="provider_not_configured",
-            message="尚未配置可用的模型供应商，请先在设置中添加模型后运行任务",
-            status_code=409,
-        )
-    return provider
-
-
-def dispatch_of(task: Task) -> ExecutionSnapshot | None:
-    """读回任务上的快照。开关关着、或老数据没有快照时返回 None。"""
-    if not is_enabled("super_agent_dispatch"):
-        return None
-    raw = task.dispatch_snapshot or {}
-    if not isinstance(raw, dict) or not raw:
-        return None
-    return ExecutionSnapshot.from_dict(raw)
 
 
 @router.post("/projects/{project_id}/tasks", response_model=TaskOut, status_code=201)
@@ -655,212 +596,6 @@ async def restore_task_snapshot(task_id: str, snapshot_id: str, db: DbSession) -
         "skipped": report["skipped"],
         "skipped_reason": report["skipped_reason"],
     }
-
-
-async def _run_request(
-    db: DbSession,
-    task: Task,
-    payload: TaskRunIn,
-    request: Request,
-    *,
-    resume_decision: dict | None = None,
-) -> RunRequest:
-    project = await load_project(db, task.project_id)
-    workspace = project.active_workspace
-    chat_only = bool((task.goal_spec or {}).get("chat_only"))
-    no_tools = chat_only or bool((task.goal_spec or {}).get("no_tools"))
-    read_only = bool((task.goal_spec or {}).get("read_only"))
-    list_only = bool((task.goal_spec or {}).get("list_only"))
-    if chat_only or (no_tools and workspace is None):
-        # 纯聊天不碰用户目录：给运行时一个空的临时根，只用于装配上下文。
-        from blank_api.services.agent.chat import chat_root
-
-        root = str(chat_root(task.thread_id or task.id))
-    elif workspace is not None:
-        # no_tools 且有目录时仍用真实根：回答可以引用这个对话已有的上下文，
-        # 但运行时会把工具表清空，不会读/写任何文件。
-        root = workspace.path
-    else:
-        raise ApiError(code="workspace_not_bound", message="该项目尚未绑定工作区目录", status_code=409)
-    provider = await _resolve_provider(db, task, payload.provider_id)
-    task.provider_id = provider.id
-    # 场景：运行请求显式指定（用户切了场景）时覆盖存档并写回；否则用创建时的。
-    # 未知值在 resolve() 里回退开发场景，脏数据不改变默认行为。
-    scenario_key = payload.scenario or task.scenario or "dev"
-    task.scenario = scenario_key
-    await db.commit()
-    # 派发快照（v162）：执行侧的唯一权限来源。只往更严的方向收紧——
-    # 步数取「任务上限」与「快照预算」的较小者，只读就整回合禁写。
-    # 开关关着或是老数据时为 None，下面三行都不生效，行为与从前一致。
-    snapshot_of_task = dispatch_of(task)
-    max_steps = int(task.max_steps)
-    readonly = False
-    dispatch_payload: dict = {}
-    if snapshot_of_task is not None:
-        snapshot_of_task = snapshot_of_task.tightened(max_steps=max_steps)
-        max_steps = snapshot_of_task.budget.max_steps
-        readonly = snapshot_of_task.readonly
-        dispatch_payload = snapshot_of_task.as_dict()
-    client_factory = _factory_from(request)
-    adapters = [build_adapter(provider, client_factory)]
-    # 路由候选：本次任务已经选定的供应商（主用 + 兜底 + 分角色），不会扩到别处。
-    # 只在这几个里面挑，是因为「换更便宜的模型」和「换个供应商跑」是两件事，
-    # 后者必须由用户显式指定过。
-    routing_rows: dict[str, ModelProvider] = {provider.id: provider}
-    routing_adapters: dict = {provider.id: adapters[0]}
-    if payload.fallback_provider_ids:
-        fallback_rows = (
-            await db.execute(
-                select(ModelProvider).where(
-                    ModelProvider.id.in_(payload.fallback_provider_ids),
-                    ModelProvider.enabled == True,  # noqa: E712
-                )
-            )
-        ).scalars().all()
-        by_id = {row.id: row for row in fallback_rows}
-        for fallback_id in payload.fallback_provider_ids:
-            fallback = by_id.get(fallback_id)
-            if fallback is not None and fallback.id != provider.id:
-                adapters.append(build_adapter(fallback, client_factory))
-                routing_rows.setdefault(fallback.id, fallback)
-                routing_adapters.setdefault(fallback.id, adapters[-1])
-    adapter = FallbackAdapter(adapters) if len(adapters) > 1 else adapters[0]
-    role_adapters = {}
-    role_provider_ids = {}
-    if payload.role_provider_ids:
-        role_rows = (
-            await db.execute(
-                select(ModelProvider).where(
-                    ModelProvider.id.in_(list(payload.role_provider_ids.values())),
-                    ModelProvider.enabled == True,  # noqa: E712
-                )
-            )
-        ).scalars().all()
-        by_id = {row.id: row for row in role_rows}
-        for role, provider_id in payload.role_provider_ids.items():
-            role_provider = by_id.get(provider_id)
-            if role_provider is not None:
-                role_adapters[role] = build_adapter(role_provider, client_factory)
-                role_provider_ids[role] = role_provider.id
-                routing_rows.setdefault(role_provider.id, role_provider)
-                routing_adapters.setdefault(role_provider.id, role_adapters[role])
-    # 名字与正文一起取：清单（名字 + 一句话说明）进系统提示，正文留给 skill 工具
-    # 按需加载。只取正文的老形状会把每个启用 Skill 的全文注进每一轮。
-    active_skills = (
-        await db.execute(
-            select(Skill.name, Skill.instructions, Skill.metadata_json)
-            .where(Skill.status == "active")
-            .order_by(Skill.updated_at)
-        )
-    ).all()
-    # rollback 会让本事务里的 ORM 实例全部过期，之后再读属性会触发同步懒加载，
-    # 在异步会话里直接抛 MissingGreenlet。所以先把要用的字段取成普通值。
-    attachment_refs = [dict(item) for item in (task.attachments or [])]
-    # v0.10.1 §4.3：权限快照链的「任务」一环。发送栏选的档在创建时刻写进了
-    # 下发快照（goal_spec.dispatch.permission_mode），运行请求没显式带模式时
-    # 优先用它，其次才是运行时自己的回落（同任务历史模式 → 设置页默认）。
-    # 没有这一环，「任务创建后改全局默认档」会悄悄改变正在跑的任务的审批行为。
-    task_permission_mode = str(
-        ((task.goal_spec or {}).get("dispatch") or {}).get("permission_mode") or ""
-    )
-    # 读附件放到线程里：图片最多 20MB、PDF 还要解析，同步读会把事件循环按住，
-    # 这期间连 /health 都不回。
-    bundle = await anyio.to_thread.run_sync(load_attachments_for, project.id, attachment_refs)
-    if bundle.dropped:
-        # 少给了就必须说出来。用户看到 5 个附件、模型只用上 3 个而界面一个字不提，
-        # 比直接报错更糟：他会以为模型没看图，而不是"这轮塞不下"。
-        await EventRecorder(get_session_factory(), task.id).add(
-            "attachment.trimmed",
-            "receive_task",
-            bundle.summarize(),
-        )
-    snapshot = {
-        "task_id": task.id,
-        "provider_id": provider.id,
-        "provider_name": provider.name,
-        "root": root,
-        "chat_only": chat_only,
-        "no_tools": no_tools,
-        "list_only": list_only,
-        "title": task.title,
-        "goal": task.goal,
-        "acceptance_criteria": criteria_text(task.acceptance_criteria),
-        # 结构化约束（constraints/out_of_scope）随任务带进运行时：它们要进首轮提示，
-        # 光存库不进提示等于模型从没见过用户声明的边界。
-        "goal_spec": dict(task.goal_spec or {}) or None,
-        # 斜杠命令展开的事实随行带进运行时：提交钩子的 user_prompt_expansion 要读
-        # 未打码的 command_args，所以走列而不走审计事件（事件里那份打过码）。
-        "expansion": dict(task.expansion or {}) or None,
-        # 结构化的一份单独带过去：会话主体只吃字符串，但收尾判定要知道
-        # 每条验收对应哪几步——这个映射不能靠再回表读一次。
-        "acceptance_links": normalize_criteria(task.acceptance_criteria),
-        "max_steps": max_steps,
-        "images": bundle.images,
-        "texts": bundle.texts,
-        # 能不能看图取决于模型名，不只看那个开关：把模型换成 glm-4.5v 之后，
-        # 开关不会自己变，图会被静默降级。见 services/agent/vision.py。
-        "supports_vision": supports_vision(bool(provider.supports_vision), provider.default_model),
-        "skill_catalog": [
-            {
-                "name": str(row.name),
-                "instructions": str(row.instructions or ""),
-                # 提案采用时写进 metadata 的一句话说明：比从正文首行压出来的准。
-                "description": str((row.metadata_json or {}).get("description") or ""),
-            }
-            for row in active_skills
-        ],
-        # 会话上下文由运行时自己读：这里只告诉它"这一轮属于哪条会话"。
-        "thread_ref": task.thread_id or "",
-        # 场景决定系统提示附加段、工具白名单与记忆权限；只走系统提示与工具层，
-        # 绝不向用户 prompt 拼前缀（见 scenarios.py 的设计红线）。
-        "scenario": scenario_key,
-        # 空串＝沿用设置页默认档；运行时负责解析、降级与拒绝，路由层不预先猜。
-        "sandbox_tier": payload.sandbox_tier,
-        # 派发快照与它决定的只读边界。空 dict / False = 这条 run 不按快照跑。
-        "dispatch": dispatch_payload,
-        # 用户明确要求只读/只要清单时，即使是开发场景也按只读跑；
-        # 快照只能更严，不能放宽。
-        "readonly": readonly or read_only or list_only,
-        # 审批恢复载荷：由审批接口写入 run.request_payload，worker/启动恢复重建
-        # RunRequest 时原样带回。普通 run 为 None（不进入公开 API schema）。
-        "resume_decision": resume_decision,
-    }
-    # 候选必须在这里算：下面 rollback 会让 ORM 实例过期，之后读 api_key_encrypted
-    # 会触发同步懒加载，在异步会话里直接抛 MissingGreenlet。
-    routing_pool = [
-        candidate_from_provider(row) for row in routing_rows.values() if _routable(row)
-    ]
-    # The runtime owns its own sessions; end this request transaction first so a
-    # single-connection SQLite backend never interleaves them mid-run.
-    await db.rollback()
-    return RunRequest(
-        **snapshot,
-        adapter=adapter,
-        approve_high_risk=payload.approve_high_risk,
-        approved_tools=set(payload.approved_tools),
-        approved_actions=set(payload.approved_actions),
-        approved_command_prefixes=tuple(payload.approved_command_prefixes),
-        # 任务快照优先于全局默认：runtime.run 里 `if not request.permission_mode`
-        # 的回落链仍在其后兜底（同任务历史 → 设置页默认）。
-        permission_mode=payload.permission_mode or task_permission_mode,
-        memory_opt_in=payload.memory_opt_in,
-        role_adapters=role_adapters,
-        role_provider_ids=role_provider_ids,
-        routing_pool=routing_pool,
-        routing_adapters=routing_adapters,
-    )
-
-
-def _routable(provider: ModelProvider) -> bool:
-    """没配 Key 的供应商不参与路由。
-
-    它留在列表里只是占位配置（用户加了还没填密钥），把它选进来等于把任务
-    交给一个必然 401 的端点——而路由失败不会像兜底那样静默降级，是直接报错。
-    Ollama 是本机端点，本来就不需要 Key。
-    """
-    if provider.kind == "ollama":
-        return True
-    return bool(provider.api_key_encrypted)
 
 
 @router.post("/tasks/{task_id}/run")

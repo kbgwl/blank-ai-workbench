@@ -1,13 +1,13 @@
 # 项目状态
 
 - 更新：2026-11-27
-- 当前任务：**ARCH-01c（执行函数外移）**
-- 状态：**READY_FOR_QA**（全量 **5164 passed / 0 failed / 24 skipped /
-  3 deselected**，排除 3 项 browser 环境红）
+- 当前任务：**ARCH-01d（请求装配外移）**
+- 状态：**READY_FOR_QA（全量待 ARCH-01 收口）**
 - 清单文档：docs/MASTER-LAUNCH-PLAN.md
 - 说明：Step 1（1A/1B/ARCH-06b）、ARCH-05、ARCH-01a/01b/01c 已完成；
-  `_run_request`/launch/recover 仍在 tasks.py。
-- 开发交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-01c-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-01b-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-01a-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-05-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`、`ops/HANDOFFS/T-LAUNCH-1B-claude.md`、`ops/HANDOFFS/T-LAUNCH-1A-claude.md`、`ops/HANDOFFS/T-R2-07-claude.md`、`ops/HANDOFFS/T-R2-06-claude.md`、`ops/HANDOFFS/T-R2-05-claude.md`、`ops/HANDOFFS/T-R2-04-claude.md`、`ops/HANDOFFS/T-R2-03-claude.md`、`ops/HANDOFFS/T-R2-02-claude.md`、`ops/HANDOFFS/T-R2-01-claude.md`、`ops/HANDOFFS/T-BA-claude.md`、`ops/HANDOFFS/E12-workspace-scope.md`、`ops/HANDOFFS/E11-anti-ai-style.md`、`ops/HANDOFFS/E10-model-picker.md`、`ops/HANDOFFS/E/E9-daily-benchmark.md`、`ops/HANDOFFS/E/E8-daily-codex.md`、`ops/HANDOFFS/D/D11-panel-slim.md`
+  ARCH-01d 把 `_run_request` 等请求装配函数移到
+  `services/orchestration/runner.py`，launch/recover 仍在 tasks.py。
+- 开发交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-01d-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-01c-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-01b-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-01a-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-05-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`、`ops/HANDOFFS/T-LAUNCH-1B-claude.md`、`ops/HANDOFFS/T-LAUNCH-1A-claude.md`、`ops/HANDOFFS/T-R2-07-claude.md`、`ops/HANDOFFS/T-R2-06-claude.md`、`ops/HANDOFFS/T-R2-05-claude.md`、`ops/HANDOFFS/T-R2-04-claude.md`、`ops/HANDOFFS/T-R2-03-claude.md`、`ops/HANDOFFS/T-R2-02-claude.md`、`ops/HANDOFFS/T-R2-01-claude.md`、`ops/HANDOFFS/T-BA-claude.md`、`ops/HANDOFFS/E12-workspace-scope.md`、`ops/HANDOFFS/E11-anti-ai-style.md`、`ops/HANDOFFS/E10-model-picker.md`、`ops/HANDOFFS/E/E9-daily-benchmark.md`、`ops/HANDOFFS/E/E8-daily-codex.md`、`ops/HANDOFFS/D/D11-panel-slim.md`
 - 报告：`data/batch-archive-managing-1440.png`、`data/batch-archive-archived-1440.png`、`data/model-filter-only-configured.png`、`data/e11-daily-default.png`、`data/e10-panel-clean.png`
 - E 盘绑定：基准工作区 `.bench-tmp/`、pytest TEMP `.tmp-test/`、后端 TEMP `.tmp/`、
   桌面壳/dev 子进程 TEMP `E:\env\blank-tmp`、UV 缓存 `E:\env\uv-cache`；
@@ -17,6 +17,12 @@
   `docs/validation/acceptance-2026-11-21.md`）
 - 验收记录：`docs/validation/acceptance-2026-11-21.md`（末尾「日常场景对标 Codex（E8）」「结果面板精简（D11）」）
 - 最近验证：
+  - **2026-11-27 ARCH-01d 请求装配外移（Claude）**：`_factory_from`、
+    `_resolve_provider`、`dispatch_of`、`_run_request`、`_routable` 移到
+    `services/orchestration/runner.py`；tasks.py 保留同名导入。
+    worker/agent/threads/projects **65 passed**；审批恢复/计划模式/续跑/
+    交付快照 **88 passed**；全量待 ARCH-01 收口。
+    交接单 `ops/HANDOFFS/T-LAUNCH-ARCH-01d-claude.md`。
   - **2026-11-27 ARCH-01c 执行函数外移（Claude）**：`_execute_claimed_run` 与
     `LEASE_HEARTBEAT_SECONDS` 移到 `services/orchestration/runner.py`；
     `test_run_lease` 的 monkeypatch 目标同步改为 runner。导入检查通过；
