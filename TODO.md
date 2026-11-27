@@ -4,11 +4,12 @@
 
 ## 进行中 / 待验收
 
-- [ ] **ARCH-01c：执行函数外移** — **READY_FOR_QA（全量待 ARCH-01 收口）**
+- [ ] **ARCH-01c：执行函数外移** — **READY_FOR_QA**
   - 范围：`_execute_claimed_run` 与 `LEASE_HEARTBEAT_SECONDS` 移到
     `services/orchestration/runner.py`；`test_run_lease` 的 patch 目标同步改。
-  - 验证：导入检查通过；租约/worker/通知/触发器 **61 passed**；全量放在
-    ARCH-01 收口时统一跑。
+  - 验证：导入检查通过；租约/worker/通知/触发器 **61 passed**；全量
+    （排除 3 项 browser 环境红）**5164 passed / 24 skipped / 3 deselected**
+    （15:00）。
   - 未做：`_run_request`/`launch_task`/`recover_*` 仍在 tasks.py。
   - 交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-01c-claude.md`
 - [ ] **ARCH-01b：运行失败与通知决策外移** — **READY_FOR_QA**

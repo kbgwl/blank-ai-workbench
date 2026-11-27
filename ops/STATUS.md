@@ -2,11 +2,11 @@
 
 - 更新：2026-11-27
 - 当前任务：**ARCH-01c（执行函数外移）**
-- 状态：**READY_FOR_QA（全量待 ARCH-01 收口）**
+- 状态：**READY_FOR_QA**（全量 **5164 passed / 0 failed / 24 skipped /
+  3 deselected**，排除 3 项 browser 环境红）
 - 清单文档：docs/MASTER-LAUNCH-PLAN.md
-- 说明：Step 1（1A/1B/ARCH-06b）、ARCH-05、ARCH-01a/01b 已完成；
-  ARCH-01c 把 `_execute_claimed_run` 与 `LEASE_HEARTBEAT_SECONDS` 移到
-  `services/orchestration/runner.py`，`_run_request`/launch/recover 仍在 tasks.py。
+- 说明：Step 1（1A/1B/ARCH-06b）、ARCH-05、ARCH-01a/01b/01c 已完成；
+  `_run_request`/launch/recover 仍在 tasks.py。
 - 开发交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-01c-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-01b-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-01a-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-05-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`、`ops/HANDOFFS/T-LAUNCH-1B-claude.md`、`ops/HANDOFFS/T-LAUNCH-1A-claude.md`、`ops/HANDOFFS/T-R2-07-claude.md`、`ops/HANDOFFS/T-R2-06-claude.md`、`ops/HANDOFFS/T-R2-05-claude.md`、`ops/HANDOFFS/T-R2-04-claude.md`、`ops/HANDOFFS/T-R2-03-claude.md`、`ops/HANDOFFS/T-R2-02-claude.md`、`ops/HANDOFFS/T-R2-01-claude.md`、`ops/HANDOFFS/T-BA-claude.md`、`ops/HANDOFFS/E12-workspace-scope.md`、`ops/HANDOFFS/E11-anti-ai-style.md`、`ops/HANDOFFS/E10-model-picker.md`、`ops/HANDOFFS/E/E9-daily-benchmark.md`、`ops/HANDOFFS/E/E8-daily-codex.md`、`ops/HANDOFFS/D/D11-panel-slim.md`
 - 报告：`data/batch-archive-managing-1440.png`、`data/batch-archive-archived-1440.png`、`data/model-filter-only-configured.png`、`data/e11-daily-default.png`、`data/e10-panel-clean.png`
 - E 盘绑定：基准工作区 `.bench-tmp/`、pytest TEMP `.tmp-test/`、后端 TEMP `.tmp/`、
@@ -20,8 +20,10 @@
   - **2026-11-27 ARCH-01c 执行函数外移（Claude）**：`_execute_claimed_run` 与
     `LEASE_HEARTBEAT_SECONDS` 移到 `services/orchestration/runner.py`；
     `test_run_lease` 的 monkeypatch 目标同步改为 runner。导入检查通过；
-    租约/worker/通知/触发器 **61 passed**；全量待 ARCH-01 收口统一跑。
-    交接单 `ops/HANDOFFS/T-LAUNCH-ARCH-01c-claude.md`。
+    租约/worker/通知/触发器 **61 passed**；全量（排除 3 项 browser 环境红）
+    **5164 passed / 24 skipped / 3 deselected**（15:00，
+    `logs/pytest-arch01c-2026-11-27.log`）。交接单
+    `ops/HANDOFFS/T-LAUNCH-ARCH-01c-claude.md`。
   - **2026-11-27 ARCH-01b 失败与通知外移（Claude）**：把
     `_record_run_failure`、`_graph_decision`、`_resume_decision_delivered`、
     `_notify_kind`、`_origin_from_trigger`、`_record_notify_decision` 移到

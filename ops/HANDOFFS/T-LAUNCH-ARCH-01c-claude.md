@@ -39,7 +39,7 @@
 |---|---|---|
 | `import blank_api.api.routes.tasks` / `orchestration.runner` | **imports_ok** | 无循环导入 |
 | 租约/worker/通知/触发器 6 文件 | **61 passed** | 执行、心跳、失败、通知 |
-| 全量 | 未跑（ARCH-01 收口时统一跑） | 上一刀 ARCH-01b 全量已通过 |
+| 全量（排除 3 项 browser 环境红） | **5164 passed / 24 skipped / 3 deselected** | 15:00，`logs/pytest-arch01c-2026-11-27.log` |
 
 ## 风险与需要审查的点
 
@@ -48,7 +48,8 @@
   别名，行为不变。
 - **日志器名字**：执行函数日志从 `blank_api.api.routes.tasks` 变为
   `blank_api.services.orchestration.runner`。
-- **全量未跑**：本轮只跑了覆盖执行路径的 61 项；ARCH-01 收口时必须跑全量。
+- **全量已跑**：执行函数迁移后全量（排除 3 项 browser 环境红）
+  **5164 passed / 24 skipped / 3 deselected**。
 - **仍未拆薄**：`_run_request` 与 launch/recover 还在 tasks.py；不要据此宣称
   ARCH-01 完成。
 
