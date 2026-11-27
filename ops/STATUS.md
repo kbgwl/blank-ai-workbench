@@ -2,11 +2,12 @@
 
 - 更新：2026-11-27
 - 当前任务：**ARCH-06b（开启 SQLite `foreign_keys=ON` + 测试夹具收口）**
-- 状态：**BLOCKED（全量验证：系统内存不足，后台全量被停止）**
+- 状态：**READY_FOR_QA**（全量 **5163 passed / 3 failed / 24 skipped**；
+  3 项为 browser_check 提权临时目录环境红）
 - 清单文档：docs/MASTER-LAUNCH-PLAN.md
-- 说明：批次 1A/1B 已完成（5163 passed / 3 项 browser_check 环境红）；ARCH-06b
-  已开启外键并修完 18 个测试文件的父子插入顺序，已知外键子集 212 passed，
-  但全量后台任务因系统内存不足只跑到 11% 即被停止，不能宣称全量归零。
+- 说明：批次 1A/1B 已完成；ARCH-06b 已开启外键并修完 18 个测试文件的父子
+  插入顺序。首次全量因 browser_check 残留 240 个 headless Chrome 导致内存不足
+  被停止；精确清理测试进程后全量跑通，仅剩 3 项 browser_check 环境红。
 - 开发交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`、`ops/HANDOFFS/T-LAUNCH-1B-claude.md`、`ops/HANDOFFS/T-LAUNCH-1A-claude.md`、`ops/HANDOFFS/T-R2-07-claude.md`、`ops/HANDOFFS/T-R2-06-claude.md`、`ops/HANDOFFS/T-R2-05-claude.md`、`ops/HANDOFFS/T-R2-04-claude.md`、`ops/HANDOFFS/T-R2-03-claude.md`、`ops/HANDOFFS/T-R2-02-claude.md`、`ops/HANDOFFS/T-R2-01-claude.md`、`ops/HANDOFFS/T-BA-claude.md`、`ops/HANDOFFS/E12-workspace-scope.md`、`ops/HANDOFFS/E11-anti-ai-style.md`、`ops/HANDOFFS/E10-model-picker.md`、`ops/HANDOFFS/E/E9-daily-benchmark.md`、`ops/HANDOFFS/E/E8-daily-codex.md`、`ops/HANDOFFS/D/D11-panel-slim.md`
 - 报告：`data/batch-archive-managing-1440.png`、`data/batch-archive-archived-1440.png`、`data/model-filter-only-configured.png`、`data/e11-daily-default.png`、`data/e10-panel-clean.png`
 - E 盘绑定：基准工作区 `.bench-tmp/`、pytest TEMP `.tmp-test/`、后端 TEMP `.tmp/`、
@@ -21,9 +22,10 @@
     `PRAGMA foreign_keys=ON`；修 18 个测试文件的父子插入顺序/父行缺失，
     孤儿行用例改用独立 `sqlite3` 连接临时关外键造数。已知外键子集
     **212 passed**、产物生命周期 **19 passed**、TypeError 组 **8 passed**；
-    全量后台 `pytest -q` 因系统内存不足被停止（task `bwn64hh09`，日志
-    `logs/pytest-fk-2026-11-27.log` 只到 11%，期间 0 FAILED）。
-    交接单 `ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`。
+    首次全量因 browser_check 残留 240 个 headless Chrome 导致内存不足被停止，
+    精确清理测试进程后全量 **5163 passed / 3 failed / 24 skipped**
+    （23:54，`logs/pytest-fk-b-2026-11-27.log`），3 项为 browser_check
+    提权临时目录环境红。交接单 `ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`。
   - **2026-11-27 MASTER-LAUNCH-PLAN 批次 1B（Claude）**：新增
     `workspace.read_binary_file` 与 broker `read_bytes`，`read_file` 在
     broker/隔离下读图不再退化成文本；`LocalSandbox` 改
@@ -356,16 +358,16 @@
   - 会话永久删除（AgentEvent/AgentCheckpoint/SearchDoc）已修复，测试 23 passed；
     今日测试会话已永久清理。
 - 下一步：
-  1. 内存恢复后重跑全量（非提权终端），确认外键开启后除 3 项
-     browser_check 环境红外 0 failed；未跑完前 ARCH-06b 保持 BLOCKED。
-  2. 真机验收外键级联删除与团队/审批恢复路径。
+  1. 人工验收 ARCH-06b：真机创建/删除任务、线程、团队、项目，确认外键级联
+     符合预期；建议非提权终端再跑一次全量确认 0 failed。
+  2. 修 `browser_probe.mjs` 的 Windows 进程树回收（测试工具，已登记待办）。
   3. 通过后按 MASTER-LAUNCH-PLAN Phase 2 拆任务卡（ARCH-01/02/04/05/07）。
 - 未处理：
-  - ARCH-06b 全量验证未完成：后台全量因系统内存不足被停止（只到 11%），
-    已知外键子集与 TypeErrors 已通过；证据
-    `logs/pytest-fk-2026-11-27.log`。
+  - `browser_probe.mjs` 在 Windows 上只杀 Chrome 主进程，失败用例会残留
+    GPU/renderer/crashpad；本轮已人工清理 240 个测试进程，脚本未修。
+  - ARCH-06b 真机级联删除验收未做；全量已验证（5163 passed / 3 browser 环境红）。
   - `foreign_keys=ON` 首轮 63 failed 的根因是测试夹具只造子行；已修 18 个文件，
-    但全量未跑完前不要宣称数据完整性已验证。
+    全量通过，但生产删除路径仍建议真机复核。
   - `browser_check` 3 个真跑用例在提权 pytest 下为环境红：pytest 临时目录 ACL
     收紧到 owner-only，Chrome 非提权沙箱读不到页面；对照探针打开仓库 HTML 正常。
   - BUG-01（broker 读图）与 BUG-05（CREATE_SUSPENDED 挂 Job）已在批次 1B 修复，

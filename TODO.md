@@ -4,12 +4,14 @@
 
 ## 进行中 / 待验收
 
-- [ ] **ARCH-06b：开启 SQLite `foreign_keys=ON` + 测试夹具收口** — **BLOCKED（全量验证：系统内存不足）**
+- [ ] **ARCH-06b：开启 SQLite `foreign_keys=ON` + 测试夹具收口** — **READY_FOR_QA**
   - 范围：`db.py` 恢复 `PRAGMA foreign_keys=ON`；修 18 个测试文件的父子插入
     顺序与父行缺失；孤儿行用例改用独立 `sqlite3` 连接临时关外键造数。
   - 验证：已知外键子集 **212 passed**、孤儿行 **19 passed**、TypeError 组
-    **8 passed**；全量后台任务被系统以内存不足停止（日志只到 11%，0 FAILED）。
-  - 未完成：全量归零、真机级联删除验收。交接单
+    **8 passed**；清理残留 headless Chrome 后全量
+    **5163 passed / 3 failed / 24 skipped**（3 项为 browser_check 环境红，
+    `logs/pytest-fk-b-2026-11-27.log`）。
+  - 未完成：真机级联删除验收。交接单
     `ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`。
 - [ ] **MASTER-LAUNCH-PLAN Step 1 批次 1B：隔离读图 + Job 挂载竞态** — **READY_FOR_QA**
   - 范围：BUG-01 `fs_broker` 新增 `read_bytes`，`read_file` 在 broker/隔离下
@@ -438,12 +440,19 @@
   - 验收记录：末尾「browser_check 动作可靠化（B10，2026-11-23）」一节。
 
 ## 待办池（未排期）
-- [x] **ARCH-06b：SQLite `foreign_keys=ON` 前审计** — **已实现（BLOCKED：全量验证未完成）**
+- [ ] **browser_probe Windows 进程树回收** — **待修（测试工具）**
+  - 现象：`browser_probe.mjs` 的 `child.kill()` 只杀 Chrome 主进程，
+    GPU/renderer/crashpad 残留；一次失败的全量可留下 240 个 headless 进程、
+    约 7.7GB 内存，导致后续全量被系统回收。
+  - 做法：在 Windows 上按 profile/进程树回收；加一个“跑完 browser_check 后
+    没有 `blank-probe` 残留进程”的回归判据。
+- [x] **ARCH-06b：SQLite `foreign_keys=ON` 前审计** — **已实现，全量通过（仅 browser 环境红）**
   - 证据：开启外键后首轮全量 **63 failed**，其中 45 项是测试只造
     `agent_events` / `tool_calls` / `agent_runs` 子行、不造父任务；14 项空
     `session_factory` 告警已单独修。
   - 做法：给事件/工具调用/运行台账的测试夹具补父任务/加 flush；再打开
-    `PRAGMA foreign_keys=ON`。已知红项已收口，全量因系统内存不足未跑完。
+    `PRAGMA foreign_keys=ON`。清理残留 Chrome 后全量
+    **5163 passed / 3 failed / 24 skipped**。
   - 交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`
 - [x] **MASTER-LAUNCH-PLAN 批次 1B：BUG-01 / BUG-05** — **已实现（READY_FOR_QA）**
   - BUG-01：`fs_broker.py` 新增 `read_bytes`，隔离模式下读图不再退化成文本。
