@@ -12,7 +12,7 @@
 // 用法：
 //   node browser_probe.mjs --url file:///... --shot out.png --expect "canvas:1" --wait 800
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -465,6 +465,23 @@ async function main() {
       client?.close();
     } catch {
       // 忽略
+    }
+    // Windows 上 child.kill()/taskkill /T 只覆盖当前进程树；Chrome 可能
+    // 重新拉起主进程，真正的 headless 浏览器已不在 child.pid 的树里。
+    // 用这一轮独有的 --user-data-dir 做精确过滤，杀掉所有带该 profile 的
+    // Chrome 进程，避免 GPU/renderer/crashpad 残留把内存吃干。
+    if (process.platform === "win32") {
+      const marker = profile.replace(/'/g, "''");
+      const script = [
+        "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\"",
+        `Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${marker}') }`,
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+      ].join(" | ");
+      try {
+        execFileSync("powershell.exe", ["-NoProfile", "-Command", script], { stdio: "ignore" });
+      } catch {
+        // 清理失败不影响本次结论；下一次调用会按新 profile 再清
+      }
     }
     try {
       child.kill();
