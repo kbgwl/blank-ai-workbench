@@ -230,8 +230,10 @@ async def test_losing_the_lease_stops_the_execution_not_only_the_heartbeat(
                 raise
             return {"task": {"status": "succeeded"}}  # pragma: no cover - 真跑不到
 
-    monkeypatch.setattr(tasks, "AgentRuntime", HangingRuntime)
-    monkeypatch.setattr(tasks, "LEASE_HEARTBEAT_SECONDS", 0.05)
+    from blank_api.services.orchestration import runner as orchestration_runner
+
+    monkeypatch.setattr(orchestration_runner, "AgentRuntime", HangingRuntime)
+    monkeypatch.setattr(orchestration_runner, "LEASE_HEARTBEAT_SECONDS", 0.05)
     request = RunRequest(task_id=task_id, provider_id="pv", provider_name="n", adapter=None, root=".")
 
     worker = asyncio.create_task(tasks._execute_claimed_run(run_id, "owner-A", request))

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import traceback
 import uuid
@@ -24,12 +25,17 @@ from blank_api.services.agent import notify
 from blank_api.services.agent.dispatch import Budget, NOTIFY_APPROVAL_ONLY, explain, route
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.background_policy import budget_override, resolve_background
+from blank_api.services.agent.queue import finish_run, renew_run
+from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.features import is_enabled
 from blank_api.services.plan import normalize_criteria, normalize_goal
 from blank_api.services.settings import SettingsStore, quiet_hours_active
 from blank_api.services.uploads import UploadStore
 
 log = logging.getLogger(__name__)
+
+# 租约 90 秒，心跳 30 秒：允许一次心跳没写成，不让过期 worker 继续干活。
+LEASE_HEARTBEAT_SECONDS = 30
 
 
 async def persist_task(
@@ -452,3 +458,84 @@ async def _record_notify_decision(task_id: str, status: str) -> None:
                 )
         except Exception:  # noqa: BLE001
             log.warning("回话失败 task=%s", task_id, exc_info=True)
+
+
+async def _execute_claimed_run(
+    run_id: str,
+    worker_id: str,
+    run_request: RunRequest,
+    *,
+    crashed: bool = False,
+    lease_seconds: int = 90,
+) -> None:
+    """Run one claimed job and keep its database lease alive while it works.
+
+    ``crashed``：这条 run 之前已经被认领过（attempts>0），上次执行没写终态。
+    那种情况必须从检查点续跑，不能再开一个新 attempt 从头跑——工具已经执行过的
+    那一步会因此再执行一遍。
+    """
+    runtime = AgentRuntime(get_session_factory())
+    decision = run_request.resume_decision
+    if decision is not None:
+        # 审批决定一旦写进 task.resumed，就只该从检查点续跑；再投一次决定会让
+        # 已经消费过的中断错位。没投递成功（事件不存在）才重放决定。
+        delivered = await _resume_decision_delivered(run_request.task_id, decision)
+        if delivered:
+            call = runtime.resume_crash(run_request)
+        else:
+            call = runtime.resume(run_request, decision=_graph_decision(decision))
+    else:
+        call = runtime.resume_crash(run_request) if crashed else runtime.run(run_request)
+    execute = asyncio.create_task(call, name=f"blank-run-{run_id}")
+    # 心跳跟着租约走：租约收紧（实测/短租约部署）时，30 秒一跳会让租约先过期，
+    # 别人接管时我还在跑。上限仍是原来的 30 秒。
+    heartbeat_seconds = min(LEASE_HEARTBEAT_SECONDS, max(0.5, lease_seconds / 3))
+
+    async def heartbeat() -> None:
+        while True:
+            await asyncio.sleep(heartbeat_seconds)
+            try:
+                async with get_session_factory()() as session:
+                    if not await renew_run(
+                        session, run_id, worker_id, lease_seconds=lease_seconds
+                    ):
+                        # 租约不再属于我：接着跑下去就是和接管者同时往同一条 run 写账
+                        log.warning(
+                            "租约已失效，停止执行 run=%s worker=%s", run_id, worker_id
+                        )
+                        execute.cancel()
+                        return
+            except Exception:  # 续租失败不该把执行任务带走，下一轮再试
+                log.warning("续租失败 run=%s", run_id, exc_info=True)
+
+    lease_task = asyncio.create_task(heartbeat(), name=f"blank-lease-{run_id}")
+    try:
+        evidence = await execute
+        status = str((evidence.get("task") or {}).get("status") or "succeeded")
+    except asyncio.CancelledError:
+        # Keep the row running so startup recovery can safely reclaim it.
+        raise
+    except Exception as error:
+        status = "failed"
+        log.exception("任务执行失败 task=%s run=%s", run_request.task_id, run_id)
+        await _record_run_failure(run_request.task_id, run_id, error)
+    finally:
+        lease_task.cancel()
+        if not execute.done():
+            execute.cancel()  # 外面中止这一路时，执行任务不会自己停
+        await asyncio.gather(lease_task, execute, return_exceptions=True)
+
+    async def finish() -> bool:
+        async with get_session_factory()() as session:
+            return await finish_run(session, run_id, status, worker_id)
+
+    try:
+        if not await db_retry(finish):
+            # 收尾被拒=租约在这期间被人拿走了。这条 run 的账现在归接管者写，我闭嘴。
+            log.warning("收尾被拒（租约已失去）run=%s worker=%s", run_id, worker_id)
+        else:
+            await _record_notify_decision(run_request.task_id, status)
+    except Exception as error:
+        # 收尾失败会让任务永远停在 queued（界面一直转圈），必须留下痕迹并强行置终态
+        log.exception("收尾写库失败 run=%s", run_id)
+        await _record_run_failure(run_request.task_id, run_id, error)

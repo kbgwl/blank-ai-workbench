@@ -1,14 +1,13 @@
 # 项目状态
 
 - 更新：2026-11-27
-- 当前任务：**ARCH-01b（运行失败与通知决策外移）**
-- 状态：**READY_FOR_QA**（全量 **5164 passed / 0 failed / 24 skipped /
-  3 deselected**，排除 3 项 browser 环境红）
+- 当前任务：**ARCH-01c（执行函数外移）**
+- 状态：**READY_FOR_QA（全量待 ARCH-01 收口）**
 - 清单文档：docs/MASTER-LAUNCH-PLAN.md
-- 说明：Step 1（1A/1B/ARCH-06b）、ARCH-05、ARCH-01a 已完成；ARCH-01b 把
-  运行失败记账与通知决策移到 `services/orchestration/runner.py`，
-  `_execute_claimed_run` 暂留 tasks.py。
-- 开发交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-01b-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-01a-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-05-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`、`ops/HANDOFFS/T-LAUNCH-1B-claude.md`、`ops/HANDOFFS/T-LAUNCH-1A-claude.md`、`ops/HANDOFFS/T-R2-07-claude.md`、`ops/HANDOFFS/T-R2-06-claude.md`、`ops/HANDOFFS/T-R2-05-claude.md`、`ops/HANDOFFS/T-R2-04-claude.md`、`ops/HANDOFFS/T-R2-03-claude.md`、`ops/HANDOFFS/T-R2-02-claude.md`、`ops/HANDOFFS/T-R2-01-claude.md`、`ops/HANDOFFS/T-BA-claude.md`、`ops/HANDOFFS/E12-workspace-scope.md`、`ops/HANDOFFS/E11-anti-ai-style.md`、`ops/HANDOFFS/E10-model-picker.md`、`ops/HANDOFFS/E/E9-daily-benchmark.md`、`ops/HANDOFFS/E/E8-daily-codex.md`、`ops/HANDOFFS/D/D11-panel-slim.md`
+- 说明：Step 1（1A/1B/ARCH-06b）、ARCH-05、ARCH-01a/01b 已完成；
+  ARCH-01c 把 `_execute_claimed_run` 与 `LEASE_HEARTBEAT_SECONDS` 移到
+  `services/orchestration/runner.py`，`_run_request`/launch/recover 仍在 tasks.py。
+- 开发交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-01c-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-01b-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-01a-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-05-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`、`ops/HANDOFFS/T-LAUNCH-1B-claude.md`、`ops/HANDOFFS/T-LAUNCH-1A-claude.md`、`ops/HANDOFFS/T-R2-07-claude.md`、`ops/HANDOFFS/T-R2-06-claude.md`、`ops/HANDOFFS/T-R2-05-claude.md`、`ops/HANDOFFS/T-R2-04-claude.md`、`ops/HANDOFFS/T-R2-03-claude.md`、`ops/HANDOFFS/T-R2-02-claude.md`、`ops/HANDOFFS/T-R2-01-claude.md`、`ops/HANDOFFS/T-BA-claude.md`、`ops/HANDOFFS/E12-workspace-scope.md`、`ops/HANDOFFS/E11-anti-ai-style.md`、`ops/HANDOFFS/E10-model-picker.md`、`ops/HANDOFFS/E/E9-daily-benchmark.md`、`ops/HANDOFFS/E/E8-daily-codex.md`、`ops/HANDOFFS/D/D11-panel-slim.md`
 - 报告：`data/batch-archive-managing-1440.png`、`data/batch-archive-archived-1440.png`、`data/model-filter-only-configured.png`、`data/e11-daily-default.png`、`data/e10-panel-clean.png`
 - E 盘绑定：基准工作区 `.bench-tmp/`、pytest TEMP `.tmp-test/`、后端 TEMP `.tmp/`、
   桌面壳/dev 子进程 TEMP `E:\env\blank-tmp`、UV 缓存 `E:\env\uv-cache`；
@@ -18,6 +17,11 @@
   `docs/validation/acceptance-2026-11-21.md`）
 - 验收记录：`docs/validation/acceptance-2026-11-21.md`（末尾「日常场景对标 Codex（E8）」「结果面板精简（D11）」）
 - 最近验证：
+  - **2026-11-27 ARCH-01c 执行函数外移（Claude）**：`_execute_claimed_run` 与
+    `LEASE_HEARTBEAT_SECONDS` 移到 `services/orchestration/runner.py`；
+    `test_run_lease` 的 monkeypatch 目标同步改为 runner。导入检查通过；
+    租约/worker/通知/触发器 **61 passed**；全量待 ARCH-01 收口统一跑。
+    交接单 `ops/HANDOFFS/T-LAUNCH-ARCH-01c-claude.md`。
   - **2026-11-27 ARCH-01b 失败与通知外移（Claude）**：把
     `_record_run_failure`、`_graph_decision`、`_resume_decision_delivered`、
     `_notify_kind`、`_origin_from_trigger`、`_record_notify_decision` 移到
@@ -382,13 +386,13 @@
   - 会话永久删除（AgentEvent/AgentCheckpoint/SearchDoc）已修复，测试 23 passed；
     今日测试会话已永久清理。
 - 下一步：
-  1. 人工验收 ARCH-01a/01b/ARCH-05/ARCH-06b：真机创建任务、失败/通知、
+  1. ARCH-01 收口：移 `_run_request`/`launch_task`/`_enqueue_and_maybe_run`/
+     `recover_*`，然后跑一次全量（排除 3 项 browser 环境红）。
+  2. 人工验收 ARCH-01a/01b/01c/ARCH-05/ARCH-06b：真机创建任务、失败/通知、
      并发两条任务、外键级联删除；非提权终端复跑全量确认 0 failed。
-  2. 继续 Phase 2：ARCH-01c（移 `_execute_claimed_run` 与
-     `LEASE_HEARTBEAT_SECONDS`，同步改 test_run_lease 的 patch 目标）、
-     `_run_request`/`launch_task`/`recover_*`、ARCH-04（AgentRun 1:N）、
-     ARCH-02（拆 graph.py）、ARCH-03（统一入口）、ARCH-07（团队任务入库）。
-  3. browser_probe 残留已修，后续全量不再需要人工清 Chrome。
+  3. 继续 Phase 2：ARCH-04（AgentRun 1:N）、ARCH-02（拆 graph.py）、
+     ARCH-03（统一入口）、ARCH-07（团队任务入库）。
+  4. browser_probe 残留已修，后续全量不再需要人工清 Chrome。
 - 未处理：
   - ARCH-05/ARCH-06b 真机并发与外键级联删除验收未做；全量已验证。
   - `browser_check` 3 个真跑用例在提权 pytest 下仍为环境红；进程残留已修。
