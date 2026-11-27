@@ -4,6 +4,13 @@
 
 ## 进行中 / 待验收
 
+- [ ] **MASTER-LAUNCH-PLAN Step 1 批次 1B：隔离读图 + Job 挂载竞态** — **READY_FOR_QA**
+  - 范围：BUG-01 `fs_broker` 新增 `read_bytes`，`read_file` 在 broker/隔离下
+    读图不再退化成文本或跳过读图；BUG-05 `LocalSandbox` 改
+    `CREATE_SUSPENDED` → 挂 Job → 按线程恢复，消掉先起进程再挂 Job 的窗口。
+  - 验证：定向 **27 + 170 + 25 passed**；全量 **5163 passed / 3 failed / 24 skipped**
+    （3 项为 browser_check 提权临时目录环境红）。日志 `logs/pytest-1b-2026-11-27.log`。
+  - 交接单：`ops/HANDOFFS/T-LAUNCH-1B-claude.md`
 - [ ] **MASTER-LAUNCH-PLAN Step 1 批次 1A：止血修复** — **READY_FOR_QA**
   - 范围：BUG-02 `FallbackAdapter` 透传输出预算；BUG-03 只读场景补齐
     `write_file` / `edit_file` / `notebook_edit`；BUG-04 AppContainer 属性号
@@ -431,9 +438,10 @@
   - 做法：给事件/工具调用/运行台账的测试夹具补父任务，或明确使用独立库/关闭外键；
     再打开 `PRAGMA foreign_keys=ON` 并全量归零。日志：
     `logs/pytest-1a-2026-11-26.log`。
-- [ ] **MASTER-LAUNCH-PLAN 批次 1B：BUG-01 / BUG-05** — 待 1A 验收后开工
-  - BUG-01：`fs_broker.py` 增加只读二进制/图片通道，隔离模式下读图不再退化成文本。
-  - BUG-05：`sandbox/runner.py` 改 `CREATE_SUSPENDED` → 按句柄挂 Job → `ResumeThread`。
+- [x] **MASTER-LAUNCH-PLAN 批次 1B：BUG-01 / BUG-05** — **已实现（READY_FOR_QA）**
+  - BUG-01：`fs_broker.py` 新增 `read_bytes`，隔离模式下读图不再退化成文本。
+  - BUG-05：`sandbox/runner.py` 改 `CREATE_SUSPENDED` → 挂 Job → `ResumeThread`。
+  - 交接单：`ops/HANDOFFS/T-LAUNCH-1B-claude.md`
 - [ ] **NEXT-DEV-v3：压调用次数第二轮 + P1 修复** — **已转入 NEXT-DEV-v5**。主体（工具说明书瘦身、执行层并发、提示词、P1 修复、质量底线、速度）已在 v4/v5 承接；遗留「快照内容摘要与变更计数」列入 v5 P2-补。
 
 

@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import subprocess
 import sys
@@ -397,6 +398,31 @@ async def test_a_bad_regex_fails_with_the_host_message_not_a_second_wording(
     broker_binary = await _read_file(context, {"path": "blob.bin"})
     assert host_binary.message == broker_binary.message
     assert "二进制" in broker_binary.message
+
+
+async def test_image_read_goes_through_the_broker_with_the_same_bytes(
+    env, workspace: Path, monkeypatch  # noqa: F811
+):
+    """缺陷红法：图片在 broker/隔离下跳过读图分支，被当文本读或退回宿主进程 → 红。"""
+    _enable(monkeypatch, True)
+    context = await _context(env, workspace)
+    broker_image = await _read_file(context, {"path": "logo.png"})
+    assert broker_image.ok is True, broker_image.message
+    marker = _marker_of(broker_image)
+    assert marker.get("op") == "read_bytes", marker
+    assert marker.get("executed_by") == "fs_broker_subprocess", marker
+    image = broker_image.data["image"]
+    raw = (workspace / "logo.png").read_bytes()
+    assert image["media_type"] == "image/png"
+    assert image["bytes"] == len(raw)
+    assert base64.b64decode(image["data"]) == raw
+
+    # 宿主路径仍要给出同一份字节，只是不带 broker 标记。
+    _enable(monkeypatch, False)
+    host_image = await _read_file(context, {"path": "logo.png"})
+    assert host_image.ok is True, host_image.message
+    assert "fs_broker" not in host_image.data
+    assert host_image.data["image"] == image
 
 
 async def test_a_patch_through_the_broker_writes_once_with_backup(

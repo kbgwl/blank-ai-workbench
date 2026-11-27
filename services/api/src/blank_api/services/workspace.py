@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import re
@@ -552,6 +553,35 @@ def read_text_file(
         "end_line": end_line,
         "total_lines": total_lines,
         "message": message,
+    }
+
+
+def read_binary_file(root: Path | str, relative: str, *, max_bytes: int = 0) -> dict:
+    """读任意文件的原始字节，按 base64 返回。
+
+    图片这类多模态附件不走文本解码，但路径边界必须与 ``read_text_file`` 同一套：
+    ``resolve_inside`` 拒绝越界，``open_verified`` 按句柄复验最终路径。
+    超过 ``max_bytes`` 时只回尺寸和 ``too_large``，不把大文件读进内存再发出去。
+    """
+    root_path = Path(root).resolve()
+    target = resolve_inside(root_path, relative)
+    if target.is_dir():
+        raise ApiError(code="is_a_directory", message="该路径是目录，无法作为文件读取", status_code=422)
+    try:
+        with open_verified(root_path, relative, mode="rb") as handle:
+            size = int(os.fstat(handle.fileno()).st_size)
+            if max_bytes and size > max_bytes:
+                return {"path": relative, "size": size, "too_large": True, "data": ""}
+            raw = handle.read()
+    except FileNotFoundError:
+        raise ApiError(code="not_found", message=f"路径不存在：{relative or '.'}", status_code=404) from None
+    except PermissionError:
+        raise ApiError(code="path_unreadable", message="该路径无法读取", status_code=403) from None
+    return {
+        "path": relative,
+        "size": size,
+        "too_large": False,
+        "data": base64.b64encode(raw).decode("ascii"),
     }
 
 

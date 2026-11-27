@@ -1,23 +1,31 @@
 # 项目状态
 
-- 更新：2026-11-26
-- 当前任务：**MASTER-LAUNCH-PLAN Step 1 批次 1A（止血）**
-- 状态：**READY_FOR_QA**（全量 **5162 passed / 3 failed / 24 skipped**；
+- 更新：2026-11-27
+- 当前任务：**MASTER-LAUNCH-PLAN Step 1 批次 1B（隔离读图 + Job 挂载竞态）**
+- 状态：**READY_FOR_QA**（全量 **5163 passed / 3 failed / 24 skipped**；
   3 项为提权 pytest 临时目录 ACL 导致的 browser_check 环境红）
 - 清单文档：docs/MASTER-LAUNCH-PLAN.md
-- 说明：v5 已完成并作为检查点提交（`ae17635`）；批次 1A 修复 BUG-02/03/04 +
-  SQLite WAL / `synchronous=NORMAL` / `busy_timeout`；`foreign_keys=ON` 因 45 个
-  测试夹具红项后置到 ARCH-06b；BUG-01/05 留批次 1B。
-- 开发交接单：`ops/HANDOFFS/T-LAUNCH-1A-claude.md`、`ops/HANDOFFS/T-R2-07-claude.md`、`ops/HANDOFFS/T-R2-06-claude.md`、`ops/HANDOFFS/T-R2-05-claude.md`、`ops/HANDOFFS/T-R2-04-claude.md`、`ops/HANDOFFS/T-R2-03-claude.md`、`ops/HANDOFFS/T-R2-02-claude.md`、`ops/HANDOFFS/T-R2-01-claude.md`、`ops/HANDOFFS/T-BA-claude.md`、`ops/HANDOFFS/E12-workspace-scope.md`、`ops/HANDOFFS/E11-anti-ai-style.md`、`ops/HANDOFFS/E10-model-picker.md`、`ops/HANDOFFS/E/E9-daily-benchmark.md`、`ops/HANDOFFS/E/E8-daily-codex.md`、`ops/HANDOFFS/D/D11-panel-slim.md`
+- 说明：批次 1A 的 BUG-02/03/04 + SQLite WAL/busy_timeout 已完成；批次 1B
+  修复 BUG-01（`fs_broker.read_bytes` 隔离读图）与 BUG-05（`CREATE_SUSPENDED`
+  → 挂 Job → 恢复线程）；`foreign_keys=ON` 仍待 ARCH-06b。
+- 开发交接单：`ops/HANDOFFS/T-LAUNCH-1B-claude.md`、`ops/HANDOFFS/T-LAUNCH-1A-claude.md`、`ops/HANDOFFS/T-R2-07-claude.md`、`ops/HANDOFFS/T-R2-06-claude.md`、`ops/HANDOFFS/T-R2-05-claude.md`、`ops/HANDOFFS/T-R2-04-claude.md`、`ops/HANDOFFS/T-R2-03-claude.md`、`ops/HANDOFFS/T-R2-02-claude.md`、`ops/HANDOFFS/T-R2-01-claude.md`、`ops/HANDOFFS/T-BA-claude.md`、`ops/HANDOFFS/E12-workspace-scope.md`、`ops/HANDOFFS/E11-anti-ai-style.md`、`ops/HANDOFFS/E10-model-picker.md`、`ops/HANDOFFS/E/E9-daily-benchmark.md`、`ops/HANDOFFS/E/E8-daily-codex.md`、`ops/HANDOFFS/D/D11-panel-slim.md`
 - 报告：`data/batch-archive-managing-1440.png`、`data/batch-archive-archived-1440.png`、`data/model-filter-only-configured.png`、`data/e11-daily-default.png`、`data/e10-panel-clean.png`
 - E 盘绑定：基准工作区 `.bench-tmp/`、pytest TEMP `.tmp-test/`、后端 TEMP `.tmp/`、
   桌面壳/dev 子进程 TEMP `E:\env\blank-tmp`、UV 缓存 `E:\env\uv-cache`；
   均不在 C 盘。已清理 C 盘本项目临时目录 **1,347 个 / 约 1.33GB**；
   桌面壳单测 **104 passed**。
-- 同批待验收：T-R2-06、T-R2-05、T-R2-04、T-R2-03（进行中）、T-R2-02、T-R2-01、T-BA、E12、E11、E10、E9、D11、D10、D9、E7、E6、E5、E4、E3、E2、E1、D8、D7、D6、D5、K2、K1、U1、B3c、B3b、B3a、Y1、X1、B10、B2、B4、B5、B6、B7、B8、B9、T-A1、B1、C1–C6、D1–D4（见 `TODO.md` 与
+- 同批待验收：T-LAUNCH-1B、T-LAUNCH-1A、T-R2-06、T-R2-05、T-R2-04、T-R2-03（进行中）、T-R2-02、T-R2-01、T-BA、E12、E11、E10、E9、D11、D10、D9、E7、E6、E5、E4、E3、E2、E1、D8、D7、D6、D5、K2、K1、U1、B3c、B3b、B3a、Y1、X1、B10、B2、B4、B5、B6、B7、B8、B9、T-A1、B1、C1–C6、D1–D4（见 `TODO.md` 与
   `docs/validation/acceptance-2026-11-21.md`）
 - 验收记录：`docs/validation/acceptance-2026-11-21.md`（末尾「日常场景对标 Codex（E8）」「结果面板精简（D11）」）
 - 最近验证：
+  - **2026-11-27 MASTER-LAUNCH-PLAN 批次 1B（Claude）**：新增
+    `workspace.read_binary_file` 与 broker `read_bytes`，`read_file` 在
+    broker/隔离下读图不再退化成文本；`LocalSandbox` 改
+    `CREATE_SUSPENDED` → 挂 Job → `windows_job.resume_process` 枚举线程恢复，
+    消掉先起进程再挂 Job 的竞态。定向 **27 + 170 + 25 passed**；全量
+    **5163 passed / 3 failed / 24 skipped**（17:13，
+    `logs/pytest-1b-2026-11-27.log`）；3 项仍为 browser_check 提权临时目录
+    环境红。交接单 `ops/HANDOFFS/T-LAUNCH-1B-claude.md`。
   - **2026-11-26 MASTER-LAUNCH-PLAN 批次 1A（Claude）**：BUG-02 `FallbackAdapter`
     输出预算透传、BUG-03 只读场景补禁 `write_file`/`edit_file`/`notebook_edit`、
     BUG-04 AppContainer 属性号 `0x20009`、ARCH-06 部分（SQLite WAL /
@@ -342,19 +350,20 @@
   - 会话永久删除（AgentEvent/AgentCheckpoint/SearchDoc）已修复，测试 23 passed；
     今日测试会话已永久清理。
 - 下一步：
-  1. 人工验收批次 1A；建议在非提权终端复跑全量，确认 0 failed
+  1. 人工验收批次 1B；建议在非提权终端复跑全量，确认 0 failed
      （当前 3 项为 browser_check 提权临时目录环境红）。
-  2. 批次 1B：BUG-01（broker 只读图片通道）、BUG-05（CREATE_SUSPENDED 挂 Job）。
-  3. ARCH-06b：外键开启前审计 45 项只造子行的测试夹具，再打开
-     `PRAGMA foreign_keys=ON`。
-  4. 之后按 MASTER-LAUNCH-PLAN Phase 2 拆任务卡（ARCH-01/02/04/05/07）。
+  2. ARCH-06b：打开 `PRAGMA foreign_keys=ON`，逐文件修测试夹具的父子插入顺序
+     （约 13 个文件），再把外键正式打开并全量归零。
+  3. 之后按 MASTER-LAUNCH-PLAN Phase 2 拆任务卡（ARCH-01/02/04/05/07）。
 - 未处理：
   - `foreign_keys=ON` 未开启：首轮全量 63 failed 中 45 项是测试夹具只造
     `agent_events`/`tool_calls`/`agent_runs` 子行，转 ARCH-06b；证据
     `logs/pytest-1a-2026-11-26.log`。
   - `browser_check` 3 个真跑用例在提权 pytest 下为环境红：pytest 临时目录 ACL
     收紧到 owner-only，Chrome 非提权沙箱读不到页面；对照探针打开仓库 HTML 正常。
-  - BUG-01（broker 读图）与 BUG-05（CREATE_SUSPENDED 挂 Job）留批次 1B。
+  - BUG-01（broker 读图）与 BUG-05（CREATE_SUSPENDED 挂 Job）已在批次 1B 修复，
+    见 `ops/HANDOFFS/T-LAUNCH-1B-claude.md`；broker 大图 IPC 体积与恢复失败路径
+    仍需真机验收。
   - B7 只有一次成功运行、一个模型、一次 bypass 自动化；没有正常审批、没有
     Claude/Codex 同题对照；
   - B9 自动冒烟只覆盖“模型完全没跑 browser_check”；模型跑了但断言/时序

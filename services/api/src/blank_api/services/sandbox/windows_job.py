@@ -33,6 +33,9 @@ JOB_OBJECT_IO_RATE_CONTROL_ENABLE = 0x00000001
 PROCESS_SET_QUOTA = 0x00000100
 PROCESS_TERMINATE = 0x00000001
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+CREATE_SUSPENDED = 0x00000004
+THREAD_SUSPEND_RESUME = 0x0002
+TH32CS_SNAPTHREAD = 0x00000004
 
 
 @dataclass(slots=True)
@@ -155,6 +158,28 @@ if supported():
     _k32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_bool, ctypes.c_uint32]
     _k32.CloseHandle.restype = ctypes.c_bool
     _k32.CloseHandle.argtypes = [ctypes.c_void_p]
+
+    class _ThreadEntry32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", ctypes.c_uint32),
+            ("cntUsage", ctypes.c_uint32),
+            ("th32ThreadID", ctypes.c_uint32),
+            ("th32OwnerProcessID", ctypes.c_uint32),
+            ("tpBasePri", ctypes.c_long),
+            ("tpDeltaPri", ctypes.c_long),
+            ("dwFlags", ctypes.c_uint32),
+        ]
+
+    _k32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    _k32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+    _k32.Thread32First.restype = ctypes.c_bool
+    _k32.Thread32First.argtypes = [ctypes.c_void_p, ctypes.POINTER(_ThreadEntry32)]
+    _k32.Thread32Next.restype = ctypes.c_bool
+    _k32.Thread32Next.argtypes = [ctypes.c_void_p, ctypes.POINTER(_ThreadEntry32)]
+    _k32.OpenThread.restype = ctypes.c_void_p
+    _k32.OpenThread.argtypes = [ctypes.c_uint32, ctypes.c_bool, ctypes.c_uint32]
+    _k32.ResumeThread.restype = ctypes.c_uint32
+    _k32.ResumeThread.argtypes = [ctypes.c_void_p]
 
 
 def _err() -> str:
@@ -295,6 +320,47 @@ def assign_handle(job: Job, process_handle: int) -> tuple[bool, str]:
     if not _k32.AssignProcessToJobObject(job.handle, ctypes.c_void_p(process_handle)):
         return False, "AssignProcessToJobObject(handle=%#x) -> %s" % (process_handle, _err())
     return True, ""
+
+
+def resume_process(pid: int) -> tuple[bool, str]:
+    """恢复一个用 ``CREATE_SUSPENDED`` 起出来的进程。
+
+    ``asyncio.create_subprocess_*`` 不暴露主线程句柄，拿不到 ``ResumeThread`` 的入参；
+    这里枚举该进程的线程并逐个恢复。只对我们刚创建、尚未 resume 的进程调用，此时
+    通常只有主线程一条。``assign_pid`` 必须在 resume 之前完成——进程还挂起时不会
+    派生子进程，这正是消除「先起进程再挂 Job」竞态窗口的关键。
+    """
+    if not supported():
+        return False, f"本平台不是 Windows（sys.platform={sys.platform!r}）"
+    if pid <= 0:
+        return False, "进程 pid 无效"
+    snapshot = _k32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+    if snapshot == ctypes.c_void_p(-1).value:
+        return False, "CreateToolhelp32Snapshot -> " + _err()
+    try:
+        entry = _ThreadEntry32()
+        entry.dwSize = ctypes.sizeof(_ThreadEntry32)
+        if not _k32.Thread32First(snapshot, ctypes.byref(entry)):
+            return False, "Thread32First -> " + _err()
+        resumed = 0
+        while True:
+            if entry.th32OwnerProcessID == pid:
+                thread = _k32.OpenThread(THREAD_SUSPEND_RESUME, False, entry.th32ThreadID)
+                if not thread:
+                    return False, "OpenThread(%d) -> %s" % (entry.th32ThreadID, _err())
+                try:
+                    if _k32.ResumeThread(thread) == 0xFFFFFFFF:
+                        return False, "ResumeThread(%d) -> %s" % (entry.th32ThreadID, _err())
+                    resumed += 1
+                finally:
+                    _k32.CloseHandle(thread)
+            if not _k32.Thread32Next(snapshot, ctypes.byref(entry)):
+                break
+        if not resumed:
+            return False, "没有找到 pid=%d 的线程" % pid
+        return True, ""
+    finally:
+        _k32.CloseHandle(snapshot)
 
 
 def close_job(job: Job) -> None:

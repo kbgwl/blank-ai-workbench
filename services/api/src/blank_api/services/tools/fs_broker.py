@@ -173,6 +173,14 @@ def _op_dispatch(root: Path, request: dict) -> dict:
             key: int(args[key]) for key in ("offset", "limit") if args.get(key) is not None
         }
         return {"payload": read_text_file(root, str(args["path"]), **window)}
+    if op == "read_bytes":
+        from blank_api.services.workspace import read_binary_file
+
+        return {"payload": read_binary_file(
+            root,
+            str(args["path"]),
+            max_bytes=int(args.get("max_bytes") or 0),
+        )}
     if op == "glob":
         from blank_api.services.tools.filesystem import _glob_blocking
 

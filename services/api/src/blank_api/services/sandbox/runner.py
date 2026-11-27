@@ -217,7 +217,9 @@ class LocalSandbox:
             base["TEMP"] = base["TMP"] = scratch
             base["BLANK_SCRATCH"] = scratch
         started = time.perf_counter()
-        creationflags = 0x00000200 if sys.platform == "win32" else 0
+        creationflags = (
+            0x00000200 | windows_job.CREATE_SUSPENDED if sys.platform == "win32" else 0
+        )
 
         memory_bytes = windows_job.parse_size(self.policy.memory)
         job = windows_job.create_job(
@@ -235,8 +237,13 @@ class LocalSandbox:
             stderr=asyncio.subprocess.PIPE,
             creationflags=creationflags,
         )
-        # 挂 Job 必须在起进程之后立刻做：这中间它已经派生的进程不算在这条限额里（见 assign_pid 的说明）
+        # 挂 Job 必须在 resume 之前：进程此刻还挂起，不会派生任何子进程，竞态窗口为零。
+        # 旧实现先起进程再查 pid；CREATE_SUSPENDED 把这段窗口消掉。
         assigned, assign_error = (False, job.error) if not job.ok else windows_job.assign_pid(job, proc.pid)
+        # asyncio 不暴露主线程句柄，按 pid 枚举线程后逐个 ResumeThread。
+        resumed, resume_error = (
+            windows_job.resume_process(proc.pid) if sys.platform == "win32" else (True, "")
+        )
         # 必须在 close_job 之前算：关句柄会把 job.handle 置 0，之后再读 Job 就永远是"没建成"，
         # 于是这条命令明明被内核限着 48MB，账上却写成"限额未强制"——反向说谎同样是谎。
         # 变异验证：把这一行挪到 close_job 之后，本文件三条 enforcement 断言立刻变红。
@@ -245,13 +252,20 @@ class LocalSandbox:
         enforcement = await asyncio.to_thread(
             _enforcement, job, assigned, assign_error, volume, scratch
         )
+        if resume_error:
+            enforcement["resume_error"] = resume_error
         timed_out = False
         try:
-            raw_out, raw_err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except TimeoutError:
-            timed_out = True
-            await kill_process_tree(proc.pid)
-            raw_out, raw_err = b"", "命令超过时间限制，进程树已被终止".encode()
+            if not resumed:
+                await kill_process_tree(proc.pid)
+                raw_out, raw_err = b"", f"沙箱进程无法恢复执行：{resume_error}".encode()
+            else:
+                try:
+                    raw_out, raw_err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                except TimeoutError:
+                    timed_out = True
+                    await kill_process_tree(proc.pid)
+                    raw_out, raw_err = b"", "命令超过时间限制，进程树已被终止".encode()
         finally:
             # 关句柄 = 沙箱生命周期结束。挂了 KILL_ON_JOB_CLOSE 时，还活着的整棵树一起走；
             # M0 的 P6.7 证明这条在内核层生效，对照（不挂 Job）的同种进程则活得好好的。
@@ -592,6 +606,8 @@ def _enforcement(
 
 def _enforcement_notes(enforcement: dict[str, object]) -> list[str]:
     out: list[str] = []
+    if enforcement.get("resume_error"):
+        out.append("进程恢复失败：{}".format(enforcement["resume_error"]))
     if enforcement["memory_enforced"] and enforcement["pids_enforced"]:
         out.append("内存上限 {}MB、活跃进程上限 {} 由 Windows Job Object 强制（内核级，非我们数着玩）".format(
             round(int(enforcement["memory_bytes"]) / 1024 / 1024, 1), enforcement["pids_limit"]))
