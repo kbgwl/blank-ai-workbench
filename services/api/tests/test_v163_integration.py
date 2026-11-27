@@ -55,9 +55,11 @@ def _use_mock_model(monkeypatch, env) -> None:
     于是适配器会去连真实上游。这里把该模块里的 build_adapter 换成强制带 mock 工厂的版本——
     被测的是「任务有没有按快照跑完」，不是「上游通不通」。
     """
-    real = task_routes.build_adapter
+    from blank_api.services.orchestration import runner as orchestration_runner
+
+    real = orchestration_runner.build_adapter
     monkeypatch.setattr(
-        task_routes,
+        orchestration_runner,
         "build_adapter",
         lambda provider, client_factory=None, **kwargs: real(
             provider, env.mock.factory, **kwargs

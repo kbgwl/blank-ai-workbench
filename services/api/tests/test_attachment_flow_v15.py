@@ -312,7 +312,7 @@ async def test_trimmed_attachment_is_visible_in_the_event_stream(env, workspace,
     # 要换的是**路由里那个已绑定的引用**：默认值在函数定义时就求好了，改模块常量
     # 不会影响签名里的默认参数，测试会得到"什么都没发生"的假通过。
     monkeypatch.setattr(
-        "blank_api.api.routes.tasks.load_attachments_for",
+        "blank_api.services.orchestration.runner.load_attachments_for",
         partial(uploads_module.load_attachments_for, max_image_bytes=len(PNG)),
     )
 

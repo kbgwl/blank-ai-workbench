@@ -21,8 +21,9 @@
     `_resolve_provider`、`dispatch_of`、`_run_request`、`_routable` 移到
     `services/orchestration/runner.py`；tasks.py 保留同名导入。
     worker/agent/threads/projects **65 passed**；审批恢复/计划模式/续跑/
-    交付快照 **88 passed**；全量待 ARCH-01 收口。
-    交接单 `ops/HANDOFFS/T-LAUNCH-ARCH-01d-claude.md`。
+    交付快照 **88 passed**；全量首跑 **5162 passed / 2 failed**，两项均为
+    测试 patch 目标随函数迁移失效，修复后两个文件 **9 passed**；全量复跑待
+    ARCH-01 收口。交接单 `ops/HANDOFFS/T-LAUNCH-ARCH-01d-claude.md`。
   - **2026-11-27 ARCH-01c 执行函数外移（Claude）**：`_execute_claimed_run` 与
     `LEASE_HEARTBEAT_SECONDS` 移到 `services/orchestration/runner.py`；
     `test_run_lease` 的 monkeypatch 目标同步改为 runner。导入检查通过；

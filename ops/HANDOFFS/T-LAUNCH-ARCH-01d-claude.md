@@ -34,7 +34,8 @@
 | `import blank_api.api.routes.tasks` / `orchestration.runner` | **imports_ok** | 无循环导入 |
 | worker/租约/agent/threads/projects | **65 passed** | 创建、运行、线程、项目 |
 | 审批恢复/计划模式/续跑/交付快照 | **88 passed** | `_run_request` 主要分支 |
-| 全量 | 未跑（ARCH-01 收口时统一跑） | — |
+| 全量（排除 3 项 browser 环境红） | **5162 passed / 2 failed** | 两个失败都是测试 patch 目标随函数迁移失效 |
+| 修复后两个受影响文件 | **9 passed** | `test_attachment_flow_v15` + `test_v163_integration` |
 
 ## 风险与需要审查的点
 
@@ -45,7 +46,10 @@
   不变，但新代码应逐步直接导入 runner。
 - **`dispatch_of` 的剩余调用方**：launch/recover 还在 tasks.py，本轮通过导入
   继续使用；01e 迁移后要一并清理。
-- **全量未跑**：本轮只跑了 153 项覆盖请求装配的测试；ARCH-01 收口时必须跑全量。
+- **测试 patch 目标**：全量首跑 2 项失败，都是测试还在 patch
+  `tasks.load_attachments_for` / `tasks.build_adapter`；函数已移到 runner，
+  已改为 patch runner 的同名引用，两个文件复跑 **9 passed**。
+- **全量复跑**：修复后尚未再跑全量；ARCH-01 收口时必须再跑一次确认 0 failed。
 
 ## 建议人工验收
 
