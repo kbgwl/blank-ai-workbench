@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
@@ -110,6 +111,36 @@ async def test_a_queued_run_is_claimed_once_and_runs_normally(executed) -> None:
     assert executed[0]["lease_seconds"] == worker_module.LEASE_SECONDS
     row = await _row(run_id)
     assert (row["status"], row["worker_id"], row["attempts"]) == ("running", "w-1", 1), row
+
+
+async def test_two_candidates_run_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """两条 queued run 在同一轮里并发执行，长任务不再堵死整条队列。"""
+    await _new_run()
+    await _new_run()
+    events: list[tuple[str, str]] = []
+
+    async def fake_execute(run_id, worker_id, request, *, crashed=False, lease_seconds=90):
+        events.append(("start", run_id))
+        await asyncio.sleep(0.2)
+        events.append(("end", run_id))
+
+    async def fake_request(run_id: str) -> RunRequest:
+        async with get_session_factory()() as session:
+            run = await session.get(AgentRun, run_id)
+            assert run is not None
+            return RunRequest(
+                task_id=run.task_id, provider_id="pv", provider_name="n", adapter=None, root="."
+            )
+
+    monkeypatch.setattr(tasks, "_execute_claimed_run", fake_execute)
+    monkeypatch.setattr(worker_module, "_request_for", fake_request)
+    monkeypatch.setattr(worker_module, "CONCURRENCY", 2)
+
+    handled = await worker_module.run_once("w-concurrent")
+
+    assert handled == 2
+    first_end = next(index for index, item in enumerate(events) if item[0] == "end")
+    assert sum(1 for kind, _ in events[:first_end] if kind == "start") == 2, events
 
 
 async def test_a_second_claim_of_the_same_run_resumes_from_the_checkpoint(executed) -> None:

@@ -4,6 +4,13 @@
 
 ## 进行中 / 待验收
 
+- [ ] **ARCH-05：worker 有界并发** — **READY_FOR_QA**
+  - 范围：`worker.run_once()` 改 `asyncio.Semaphore(BLANK_WORKER_CONCURRENCY)`
+    有界并发（默认 2）；抽出 `_run_candidate`，单条候选异常不带走同轮其他 run。
+  - 验证：worker/调度 8 文件 **75 passed**；全量（排除 3 项 browser 环境红）
+    **5164 passed / 24 skipped / 3 deselected**（20:12）。附带修复
+    browser_probe 的 Windows 进程残留（清理后残留 0）。
+  - 交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-05-claude.md`
 - [ ] **ARCH-06b：开启 SQLite `foreign_keys=ON` + 测试夹具收口** — **READY_FOR_QA**
   - 范围：`db.py` 恢复 `PRAGMA foreign_keys=ON`；修 18 个测试文件的父子插入
     顺序与父行缺失；孤儿行用例改用独立 `sqlite3` 连接临时关外键造数。
@@ -440,12 +447,12 @@
   - 验收记录：末尾「browser_check 动作可靠化（B10，2026-11-23）」一节。
 
 ## 待办池（未排期）
-- [ ] **browser_probe Windows 进程树回收** — **待修（测试工具）**
+- [x] **browser_probe Windows 进程树回收** — **已修**
   - 现象：`browser_probe.mjs` 的 `child.kill()` 只杀 Chrome 主进程，
     GPU/renderer/crashpad 残留；一次失败的全量可留下 240 个 headless 进程、
     约 7.7GB 内存，导致后续全量被系统回收。
-  - 做法：在 Windows 上按 profile/进程树回收；加一个“跑完 browser_check 后
-    没有 `blank-probe` 残留进程”的回归判据。
+  - 做法：Windows 上按本轮唯一的 `--user-data-dir` 过滤并清理所有 Chrome
+    进程；实测 browser_check 单跑后残留 **0**。
 - [x] **ARCH-06b：SQLite `foreign_keys=ON` 前审计** — **已实现，全量通过（仅 browser 环境红）**
   - 证据：开启外键后首轮全量 **63 failed**，其中 45 项是测试只造
     `agent_events` / `tool_calls` / `agent_runs` 子行、不造父任务；14 项空

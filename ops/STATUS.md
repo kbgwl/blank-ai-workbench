@@ -1,14 +1,13 @@
 # 项目状态
 
 - 更新：2026-11-27
-- 当前任务：**ARCH-06b（开启 SQLite `foreign_keys=ON` + 测试夹具收口）**
-- 状态：**READY_FOR_QA**（全量 **5163 passed / 3 failed / 24 skipped**；
-  3 项为 browser_check 提权临时目录环境红）
+- 当前任务：**ARCH-05（worker 有界并发）**
+- 状态：**READY_FOR_QA**（全量 **5164 passed / 0 failed / 24 skipped /
+  3 deselected**，排除 3 项 browser 环境红）
 - 清单文档：docs/MASTER-LAUNCH-PLAN.md
-- 说明：批次 1A/1B 已完成；ARCH-06b 已开启外键并修完 18 个测试文件的父子
-  插入顺序。首次全量因 browser_check 残留 240 个 headless Chrome 导致内存不足
-  被停止；精确清理测试进程后全量跑通，仅剩 3 项 browser_check 环境红。
-- 开发交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`、`ops/HANDOFFS/T-LAUNCH-1B-claude.md`、`ops/HANDOFFS/T-LAUNCH-1A-claude.md`、`ops/HANDOFFS/T-R2-07-claude.md`、`ops/HANDOFFS/T-R2-06-claude.md`、`ops/HANDOFFS/T-R2-05-claude.md`、`ops/HANDOFFS/T-R2-04-claude.md`、`ops/HANDOFFS/T-R2-03-claude.md`、`ops/HANDOFFS/T-R2-02-claude.md`、`ops/HANDOFFS/T-R2-01-claude.md`、`ops/HANDOFFS/T-BA-claude.md`、`ops/HANDOFFS/E12-workspace-scope.md`、`ops/HANDOFFS/E11-anti-ai-style.md`、`ops/HANDOFFS/E10-model-picker.md`、`ops/HANDOFFS/E/E9-daily-benchmark.md`、`ops/HANDOFFS/E/E8-daily-codex.md`、`ops/HANDOFFS/D/D11-panel-slim.md`
+- 说明：Step 1（1A/1B/ARCH-06b）已完成；Phase 2 第一刀 ARCH-05 已把 worker
+  从串行改为有界并发（默认 2），并修掉 browser_probe 的 Windows 进程残留。
+- 开发交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-05-claude.md`、`ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`、`ops/HANDOFFS/T-LAUNCH-1B-claude.md`、`ops/HANDOFFS/T-LAUNCH-1A-claude.md`、`ops/HANDOFFS/T-R2-07-claude.md`、`ops/HANDOFFS/T-R2-06-claude.md`、`ops/HANDOFFS/T-R2-05-claude.md`、`ops/HANDOFFS/T-R2-04-claude.md`、`ops/HANDOFFS/T-R2-03-claude.md`、`ops/HANDOFFS/T-R2-02-claude.md`、`ops/HANDOFFS/T-R2-01-claude.md`、`ops/HANDOFFS/T-BA-claude.md`、`ops/HANDOFFS/E12-workspace-scope.md`、`ops/HANDOFFS/E11-anti-ai-style.md`、`ops/HANDOFFS/E10-model-picker.md`、`ops/HANDOFFS/E/E9-daily-benchmark.md`、`ops/HANDOFFS/E/E8-daily-codex.md`、`ops/HANDOFFS/D/D11-panel-slim.md`
 - 报告：`data/batch-archive-managing-1440.png`、`data/batch-archive-archived-1440.png`、`data/model-filter-only-configured.png`、`data/e11-daily-default.png`、`data/e10-panel-clean.png`
 - E 盘绑定：基准工作区 `.bench-tmp/`、pytest TEMP `.tmp-test/`、后端 TEMP `.tmp/`、
   桌面壳/dev 子进程 TEMP `E:\env\blank-tmp`、UV 缓存 `E:\env\uv-cache`；
@@ -18,6 +17,14 @@
   `docs/validation/acceptance-2026-11-21.md`）
 - 验收记录：`docs/validation/acceptance-2026-11-21.md`（末尾「日常场景对标 Codex（E8）」「结果面板精简（D11）」）
 - 最近验证：
+  - **2026-11-27 ARCH-05 worker 有界并发（Claude）**：`worker.run_once` 改
+    `asyncio.Semaphore(BLANK_WORKER_CONCURRENCY)`，默认 2；抽出
+    `_run_candidate`，单条候选异常不带走同轮其他 run。worker/调度 8 文件
+    **75 passed**；全量（排除 3 项 browser 环境红）
+    **5164 passed / 24 skipped / 3 deselected**（20:12，
+    `logs/pytest-worker-2026-11-27.log`）。附带修 browser_probe 的 Windows
+    进程残留，browser_check 单跑后残留 **0**。交接单
+    `ops/HANDOFFS/T-LAUNCH-ARCH-05-claude.md`。
   - **2026-11-27 ARCH-06b 外键收口（Claude）**：SQLite 连接恢复
     `PRAGMA foreign_keys=ON`；修 18 个测试文件的父子插入顺序/父行缺失，
     孤儿行用例改用独立 `sqlite3` 连接临时关外键造数。已知外键子集
@@ -358,14 +365,15 @@
   - 会话永久删除（AgentEvent/AgentCheckpoint/SearchDoc）已修复，测试 23 passed；
     今日测试会话已永久清理。
 - 下一步：
-  1. 人工验收 ARCH-06b：真机创建/删除任务、线程、团队、项目，确认外键级联
-     符合预期；建议非提权终端再跑一次全量确认 0 failed。
-  2. 修 `browser_probe.mjs` 的 Windows 进程树回收（测试工具，已登记待办）。
-  3. 通过后按 MASTER-LAUNCH-PLAN Phase 2 拆任务卡（ARCH-01/02/04/05/07）。
+  1. 人工验收 ARCH-05/ARCH-06b：真机并发两条任务、外键级联删除；
+     非提权终端复跑全量确认 0 failed。
+  2. 继续 Phase 2：ARCH-04（AgentRun 1:N）、ARCH-01/02（拆
+     tasks.py/graph.py）、ARCH-03（统一执行入口）、ARCH-07（团队任务入库），
+     每项先出可验收的小任务卡。
+  3. browser_probe 残留已修，后续全量不再需要人工清 Chrome。
 - 未处理：
-  - `browser_probe.mjs` 在 Windows 上只杀 Chrome 主进程，失败用例会残留
-    GPU/renderer/crashpad；本轮已人工清理 240 个测试进程，脚本未修。
-  - ARCH-06b 真机级联删除验收未做；全量已验证（5163 passed / 3 browser 环境红）。
+  - ARCH-05/ARCH-06b 真机并发与外键级联删除验收未做；全量已验证。
+  - `browser_check` 3 个真跑用例在提权 pytest 下仍为环境红；进程残留已修。
   - `foreign_keys=ON` 首轮 63 failed 的根因是测试夹具只造子行；已修 18 个文件，
     全量通过，但生产删除路径仍建议真机复核。
   - `browser_check` 3 个真跑用例在提权 pytest 下为环境红：pytest 临时目录 ACL

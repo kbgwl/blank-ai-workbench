@@ -9,6 +9,7 @@ HTTP 入口只负责把 run 写进 ``agent_runs``（``BLANK_INPROCESS_RUNNER=0``
     BLANK_WORKER_ONCE=1            扫一轮就退出（探针/一次性排空）
     BLANK_WORKER_POLL_SECONDS      空闲轮询间隔，默认 2 秒
     BLANK_WORKER_LEASE_SECONDS     认领租约，默认 90 秒；心跳取 min(30 秒, 租约/3)
+    BLANK_WORKER_CONCURRENCY       同时执行的 run 数，默认 2
     BLANK_WORKER_ID                固定 worker 身份（默认 主机名-随机串）
 """
 
@@ -41,6 +42,16 @@ log = logging.getLogger("blank_api.worker")
 
 POLL_SECONDS = float(os.environ.get("BLANK_WORKER_POLL_SECONDS") or 2)
 LEASE_SECONDS = int(os.environ.get("BLANK_WORKER_LEASE_SECONDS") or 90)
+
+
+def _concurrency() -> int:
+    try:
+        return max(1, int(os.environ.get("BLANK_WORKER_CONCURRENCY") or 2))
+    except ValueError:
+        return 2
+
+
+CONCURRENCY = _concurrency()
 ONCE = (os.environ.get("BLANK_WORKER_ONCE") or "0").strip().lower() in ("1", "true", "yes", "on")
 
 
@@ -191,10 +202,78 @@ async def expire_stale_approvals() -> int:
     return len(expired)
 
 
+async def _run_candidate(
+    run_id: str,
+    task_id: str,
+    attempts: int,
+    worker: str,
+    attempt_limit: int,
+) -> bool:
+    """认领并执行一条候选；返回是否真的被本进程领走。
+
+    失败/重建入参失败的 run 只要认领成功就算 handled：下一拍能不能重试由
+    attempts 与租约决定，不能因为这一次执行没跑完就把它当成没发生过。
+    """
+    if attempts >= attempt_limit:
+        metrics.inc(metrics.WORKER_ABANDONED)
+        await _give_up(
+            run_id,
+            task_id,
+            f"这条任务连续 {attempts} 次没能正常启动（上一次执行没有正常收尾），"
+            "已停止自动重试。请点「重试」重新发起。",
+        )
+        return False
+    if not await _claim(run_id, worker):
+        return False
+    crashed = attempts > 0
+    # v0.10.1 §2：独立 worker 的开跑事件与进程内 runner 同名同义，
+    # 「排队了但没人跑」和「跑起来后失败」在事件流里必须可区分。
+    try:
+        await EventRecorder(get_session_factory(), task_id).add(
+            "run.started",
+            "worker",
+            {"run_id": run_id, "worker_id": worker, "crashed": crashed},
+        )
+    except Exception:
+        log.warning("记录 run.started 失败 run=%s", run_id, exc_info=True)
+    if crashed:
+        # 上一次认领后没写终态（进程被杀/断电）。这个数就是"崩溃恢复真的发生过几次"，
+        # 没有它，"我们从崩溃里恢复得怎么样"只能靠日志翻。
+        metrics.inc(metrics.WORKER_RECOVERED)
+    try:
+        request = await _request_for(run_id)
+    except Exception as error:
+        log.exception("重建执行入参失败 run=%s", run_id)
+        await _fail_claimed(run_id, task_id, worker, f"无法恢复执行入参：{error}")
+        return True
+    if request is None:
+        await _fail_claimed(run_id, task_id, worker, "任务或运行记录已不存在，无法继续执行")
+        return True
+    try:
+        await task_routes._execute_claimed_run(
+            run_id,
+            worker,
+            request,
+            crashed=crashed,
+            lease_seconds=LEASE_SECONDS,
+        )
+    except asyncio.CancelledError:
+        # 进程被要求停下：租约留给下一个进程接管
+        raise
+    except Exception:
+        # _execute_claimed_run 自己会写 task.failed；这里只保证不把整轮循环带走
+        log.exception("执行失败 run=%s", run_id)
+    metrics.inc(metrics.WORKER_RUN_FINISHED)
+    return True
+
+
 async def run_once(worker: str | None = None) -> int:
-    """扫一轮队列，返回这一轮真正被本进程领走的 run 数量。"""
+    """扫一轮队列，返回这一轮真正被本进程领走的 run 数量。
+
+    同一轮最多 ``BLANK_WORKER_CONCURRENCY`` 条并发执行；一条长任务不再把整条
+    队列堵死。每条 run 的认领、事件、执行仍是同一套函数，并发只改变调度。
+    """
     worker = worker or worker_id()
-    handled = 0
     # 审批过期收敛（v163 验收补）：先清掉再也走不下去的等待，别让它一直挂着"进行中"。
     try:
         await expire_stale_approvals()
@@ -208,59 +287,27 @@ async def run_once(worker: str | None = None) -> int:
     # 租约能先被记一笔诊断，而不是被下一轮认领之后再也看不到。
     await inspect_runs()
     attempt_limit = task_routes.recovery_attempt_limit()
-    for run_id, task_id, attempts in await _candidates():
-        if attempts >= attempt_limit:
-            metrics.inc(metrics.WORKER_ABANDONED)
-            await _give_up(
-                run_id,
-                task_id,
-                f"这条任务连续 {attempts} 次没能正常启动（上一次执行没有正常收尾），"
-                "已停止自动重试。请点「重试」重新发起。",
-            )
-            continue
-        if not await _claim(run_id, worker):
-            continue
-        handled += 1
-        crashed = attempts > 0
-        # v0.10.1 §2：独立 worker 的开跑事件与进程内 runner 同名同义，
-        # 「排队了但没人跑」和「跑起来后失败」在事件流里必须可区分。
-        try:
-            await EventRecorder(get_session_factory(), task_id).add(
-                "run.started",
-                "worker",
-                {"run_id": run_id, "worker_id": worker, "crashed": crashed},
-            )
-        except Exception:
-            log.warning("记录 run.started 失败 run=%s", run_id, exc_info=True)
-        if crashed:
-            # 上一次认领后没写终态（进程被杀/断电）。这个数就是"崩溃恢复真的发生过几次"，
-            # 没有它，"我们从崩溃里恢复得怎么样"只能靠日志翻。
-            metrics.inc(metrics.WORKER_RECOVERED)
-        try:
-            request = await _request_for(run_id)
-        except Exception as error:
-            log.exception("重建执行入参失败 run=%s", run_id)
-            await _fail_claimed(run_id, task_id, worker, f"无法恢复执行入参：{error}")
-            continue
-        if request is None:
-            await _fail_claimed(run_id, task_id, worker, "任务或运行记录已不存在，无法继续执行")
-            continue
-        try:
-            await task_routes._execute_claimed_run(
-                run_id,
-                worker,
-                request,
-                crashed=crashed,
-                lease_seconds=LEASE_SECONDS,
-            )
-        except asyncio.CancelledError:
-            # 进程被要求停下：租约留给下一个进程接管
-            raise
-        except Exception:
-            # _execute_claimed_run 自己会写 task.failed；这里只保证不把整轮循环带走
-            log.exception("执行失败 run=%s", run_id)
-        metrics.inc(metrics.WORKER_RUN_FINISHED)
-    return handled
+    candidates = await _candidates()
+    if not candidates:
+        return 0
+    semaphore = asyncio.Semaphore(CONCURRENCY)
+
+    async def guarded(run_id: str, task_id: str, attempts: int) -> bool:
+        async with semaphore:
+            try:
+                return await _run_candidate(run_id, task_id, attempts, worker, attempt_limit)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # 一条候选的意外异常不能把同一轮的其他 run 一起带走；
+                # 下一拍仍会按租约/attempts 重新判定它。
+                log.exception("处理候选 run 失败 run=%s", run_id)
+                return False
+
+    results = await asyncio.gather(
+        *(guarded(run_id, task_id, attempts) for run_id, task_id, attempts in candidates)
+    )
+    return sum(1 for item in results if item)
 
 
 async def _task_for_trigger(session, row: AgentTrigger, body: dict) -> Task | None:
