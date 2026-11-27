@@ -375,12 +375,14 @@ async def test_enqueue_failure_stays_waiting_and_startup_scan_recovers(
     calls: list = []
     _stub_resume(monkeypatch, calls)
 
-    real_enqueue = task_routes.enqueue_run
+    from blank_api.services.orchestration import runner as orchestration_runner
+
+    real_enqueue = orchestration_runner.enqueue_run
 
     async def broken_enqueue(*args, **kwargs):
         raise RuntimeError("database is down")
 
-    monkeypatch.setattr(task_routes, "enqueue_run", broken_enqueue)
+    monkeypatch.setattr(orchestration_runner, "enqueue_run", broken_enqueue)
     try:
         with pytest.raises(RuntimeError):
             await env.client.post(
@@ -388,7 +390,7 @@ async def test_enqueue_failure_stays_waiting_and_startup_scan_recovers(
                 json={"approve": True, "approval_id": card["approval_id"]},
             )
     finally:
-        monkeypatch.setattr(task_routes, "enqueue_run", real_enqueue)
+        monkeypatch.setattr(orchestration_runner, "enqueue_run", real_enqueue)
 
     # 先落事件、后入队：决定留了痕，任务仍停在等待审批，用户可重试。
     decided = await _events(task_id, "approval.decided")

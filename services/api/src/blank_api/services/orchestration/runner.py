@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import traceback
 import uuid
 from dataclasses import replace
 
 import anyio
 from fastapi import Request
-from sqlalchemy import case, select
+from sqlalchemy import case, func, select
 
 from blank_api.api.errors import ApiError
 from blank_api.api.routes.projects import load_project
@@ -22,21 +23,39 @@ from blank_api.db import db_retry, get_session_factory
 from blank_api.deps import DbSession
 from blank_api.models.model_provider import ModelProvider
 from blank_api.models.plan_template import PlanTemplate
+from blank_api.models.run import AgentRun
 from blank_api.models.skill import Skill
 from blank_api.models.task import AgentEvent, Task
 from blank_api.models.trigger import AgentTrigger
 from blank_api.schemas.task import TaskCreate, TaskRunIn
+from blank_api.services import metrics
 from blank_api.services.agent import notify
 from blank_api.services.agent.dispatch import (
+    DISPATCH_DEFER,
+    INTENT_SCHEDULE,
+    INTENT_WATCH,
     Budget,
     ExecutionSnapshot,
     NOTIFY_APPROVAL_ONLY,
     explain,
     route,
 )
+from blank_api.services.agent.evidence import approval_is_expired
 from blank_api.services.agent.events import EventRecorder
-from blank_api.services.agent.background_policy import budget_override, resolve_background
-from blank_api.services.agent.queue import finish_run, renew_run
+from blank_api.services.agent.background_policy import (
+    budget_override,
+    recovery_limit,
+    resolve_background,
+)
+from blank_api.services.agent.manager import RunAlreadyActive, run_manager
+from blank_api.services.agent.queue import (
+    TERMINAL_RUN_STATES,
+    abandon_run,
+    claim_run,
+    enqueue_run,
+    finish_run,
+    renew_run,
+)
 from blank_api.services.agent.router import candidate_from_provider
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.agent.vision import supports_vision
@@ -824,3 +843,521 @@ def _routable(provider: ModelProvider) -> bool:
     if provider.kind == "ollama":
         return True
     return bool(provider.api_key_encrypted)
+
+
+# 自动重排队的上限：超过就不再无限重试，避免一条坏 run 在后台反复空转。
+# 这是发布时钉死的**硬上限**；设置页的 background.auto_recoveries 只能把它调小。
+MAX_RECOVERY_ATTEMPTS = 3
+
+
+def recovery_attempt_limit() -> int:
+    """本轮实际生效的自动恢复次数（v165 §14 让设置真正被消费）。
+
+    读设置失败按硬上限走：宁可多重试一次，也不要因为配置文件坏了就判死一条
+    本来能恢复的任务。设置只能收紧，不能放宽——否则一份手改的 settings.json
+    就能绕过发布闸门，把一条坏 run 重排到天荒地老。
+    """
+    try:
+        policy = resolve_background(SettingsStore().read())
+    except Exception:  # noqa: BLE001 - 设置读不出来时按硬上限
+        return MAX_RECOVERY_ATTEMPTS
+    return min(MAX_RECOVERY_ATTEMPTS, recovery_limit(policy))
+
+
+def inprocess_runner_enabled() -> bool:
+    """API 进程是否自己执行 queued run。
+
+    单机桌面形态保持默认开启；多进程部署把它关掉，run 由
+    ``python -m blank_api.worker`` 领取，否则两边会抢同一条队列。
+    """
+    raw = (os.environ.get("BLANK_INPROCESS_RUNNER") or "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+
+async def _enqueue_and_maybe_run(
+    db: DbSession,
+    task_id: str,
+    task: Task,
+    run_request: RunRequest,
+    *,
+    request_payload: dict | None = None,
+    resume_decision: dict | None = None,
+    start_runner: bool = True,
+    crashed: bool = False,
+) -> dict:
+    """把已经装配好的 RunRequest 写进队列（可顺带在进程内起跑）。
+
+    审批恢复与普通启动共用这一条入队路径：``request_payload`` 决定 worker / 启动
+    恢复能重建出什么，``resume_decision`` 是审批恢复独有的内部载荷（普通 run 为
+    None）。把两者分开传，是为了让「普通启动绝不带上旧审批决定」成为结构上的事，
+    而不是每个调用点各自记得清字段。
+
+    ``task_id`` 单独传：``_run_request`` 收尾会 rollback，调用方手里的 Task 实例
+    已经过期，再读 ``task.id`` 会触发同步懒加载（MissingGreenlet）。
+    """
+    payload = dict(request_payload or {})
+    if resume_decision is not None:
+        payload["resume_decision"] = resume_decision
+    run = await enqueue_run(db, task_id, payload)
+    run_request.run_id = run.id
+    task.status = "queued"
+    await db.commit()
+    # v0.10.1 §2：run 的两条生命周期事件。「入队」与「真正开跑」必须分开记——
+    # 排队后无人认领（独立 worker 没部署）和执行中途失败是两种完全不同的病。
+    recorder = EventRecorder(get_session_factory(), task_id)
+    await recorder.add(
+        "run.created",
+        "receive_task",
+        {"run_id": run.id, "task_id": task_id, "status": "queued"},
+    )
+
+    if not start_runner or not inprocess_runner_enabled():
+        # 队列归独立 worker：这里只落库并返回，否则本进程会先抢走它。
+        return {"task_id": task_id, "run_id": run.id, "status": "queued"}
+
+    async def runner() -> None:
+        worker_id = f"{os.environ.get('COMPUTERNAME', 'worker')}-{uuid.uuid4().hex[:8]}"
+        try:
+            async with get_session_factory()() as session:
+                if not await claim_run(session, run.id, worker_id):
+                    return
+            await recorder.add(
+                "run.started",
+                "receive_task",
+                {"run_id": run.id, "worker_id": worker_id, "crashed": crashed},
+            )
+            await _execute_claimed_run(run.id, worker_id, run_request, crashed=crashed)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            # 后台任务的异常没人接，不接住就是“任务永远 queued、界面一直转圈”
+            log.exception("启动执行失败 task=%s run=%s", task_id, run.id)
+            await _record_run_failure(task_id, run.id, error)
+
+    try:
+        await run_manager.start(run.id, runner)
+    except RunAlreadyActive:
+        # 队列里同一条 run 已经有人跑：对审批恢复来说这正是「已提交」，
+        # 不该反过来报 409 把用户挡回去。
+        return {"task_id": task_id, "run_id": run.id, "status": "running"}
+    return {"task_id": task_id, "run_id": run.id, "status": "queued"}
+
+
+async def launch_task(
+    db: DbSession,
+    task: Task,
+    payload: TaskRunIn,
+    request: Request | None,
+    *,
+    start_runner: bool = True,
+    crashed: bool = False,
+) -> dict:
+    """把一条任务推进 run 队列（可顺带在进程内起跑）。
+
+    触发器、定时到点、以及用户点「开始」走的是同一条路：入参快照、队列行、状态
+    三件事必须一起写，分开写就会出现「界面上在跑、队列里没有」这种对不上的状态。
+    """
+    task_id = task.id
+    run_request = await _run_request(db, task, payload, request)
+    return await _enqueue_and_maybe_run(
+        db,
+        task_id,
+        task,
+        run_request,
+        request_payload=payload.model_dump(mode="json"),
+        start_runner=start_runner,
+        crashed=crashed,
+    )
+
+
+def _defer_intent(task: Task) -> str:
+    """这条任务要不要「等事件再跑」。返回 ``watch`` / ``schedule`` / 空串。
+
+    正常路径读 ``task.dispatch_snapshot``；但对话轮次（``create_turn``）只把派发
+    快照写进 ``goal_spec.dispatch``，``dispatch_snapshot`` 字段一直是空的。于是
+    「盯着 X，一旦有变化就告诉我」这句：判定对了（intent=watch），却在这里读到
+    None 直接放行——任务当场跑起来，既没有登记待触发，也没有任何界面痕迹。
+
+    兜底只认 watch / schedule 两个意图，不放宽其它类型：defer 的语义是「等一个
+    现在还不存在的事件」，多认一种意图就多一条"点了没反应"的路径。
+    """
+    snapshot = dispatch_of(task)
+    if snapshot is not None:
+        return snapshot.intent if snapshot.dispatch == DISPATCH_DEFER else ""
+    dispatch = (task.goal_spec or {}).get("dispatch") or {}
+    intent = str(dispatch.get("intent") or "")
+    return intent if intent in (INTENT_WATCH, INTENT_SCHEDULE) else ""
+
+
+def _when_of(task: Task):
+    """从任务原话里解析到点时间。解析不出返回 None。
+
+    只对「定时」意图解析：「盯着构建结果」是等外部事件，它没有"几点"，
+    硬塞一个时间会在到点时把一件本来该由变化触发的事按钟表跑一遍。
+    """
+    from blank_api.services.agent import schedule
+
+    return schedule.parse_when(task.goal or "")
+
+
+async def _defer_if_needed(db: DbSession, task: Task, payload: TaskRunIn) -> dict | None:
+    """监控/定时类请求：登记为待触发，返回给调用方，而不是现在就跑。
+
+    定时意图必须解析出 ``fire_at`` 才算登记成功。解析不出就**退化为立即执行**：
+    一条 ``fire_at=None`` + ``event_type=schedule`` 的登记既不会被时间扫到、
+    也没有事件源唤醒，等于在监控页上摆一条「等一个不会到来的事件」——用户看到
+    的是"说好了提醒我，结果一声不响"，这比当场跑一次糟得多。
+
+    **不看 ``background_execution``。** 那个 flag 的语义是「后台自己发起的事」
+    （自动修复、自动继续），而「9 点提醒我」「盯着这个文件」是人明确下的指令。
+    让一个默认关闭的 BETA 开关挡住它，表现就是：用户说设个提醒，程序当场做掉了
+    一件本来该在九点做的事——而且没有任何地方告诉他"我没听你的时间"。
+    同一条判断在 IM 入站那次已经定过（见 channels/inbound.py）。
+    """
+    intent = _defer_intent(task)
+    if not intent:
+        return None
+    from blank_api.models.trigger import AgentTrigger  # 局部导入：路由与触发器互相引用
+    from blank_api.services.agent import triggers
+
+    when = _when_of(task) if intent == INTENT_SCHEDULE else None
+    if intent == INTENT_SCHEDULE and when is None:
+        # 说了"每天汇总一次"却没说几点、或整句读不出时间：现在就做一次，
+        # 并在事件里留下"没定时"这个事实，别让它变成一条永远不响的登记。
+        await EventRecorder(get_session_factory(), task.id).add(
+            "dispatch.immediate",
+            "receive_task",
+            {
+                "intent": intent,
+                "reason": "定时意图但原话里读不出到点时间，改为立即执行一次",
+                "goal": (task.goal or "")[:200],
+            },
+        )
+        return None
+
+    fire_at = when.fire_at if when is not None else None
+    repeat = when.repeat_payload() if when is not None else {}
+    from datetime import timedelta
+
+    from blank_api.services.agent import triggers as _triggers  # 已导入，仅取 utc_now
+
+    extra: dict = {}
+    if intent == INTENT_WATCH:
+        # 「盯着」靠文件变化唤醒：记下"从现在起"，巡检才有比较的起点。
+        # 没有这个时刻，第一拍只能建基线，用户刚交代就改的那一下会被吃掉。
+        extra["watch_since"] = _triggers.utc_now().isoformat()
+        # 把**登记时**的工作区路径固化下来。巡检时再按 active_workspace 现查，
+        # 用户中途切换活动目录就会让这条盯着悄悄换了地方——他明明说的是
+        # 「盯着 README」，系统去盯另一个仓库，而且看不出哪里错了。
+        from sqlalchemy import select as _select
+
+        from blank_api.models.project import Workspace as _Workspace
+
+        target = (
+            await db.execute(
+                _select(_Workspace)
+                .where(_Workspace.project_id == task.project_id)
+                .order_by(_Workspace.is_active.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if target is not None and (target.path or "").strip():
+            extra["watch_root"] = target.path
+    event = triggers.normalize(
+        event_type=triggers.EVENT_SCHEDULE,
+        source="task.start",
+        payload={
+            "task_id": task.id,
+            "goal": task.goal[:200],
+            # intent 写进 payload：监控页要能区分"等变化"（watch，合理）与
+            # "等一个没定下来的时间"（schedule 缺 fire_at，是缺陷）。
+            "intent": intent,
+            **extra,
+            **({"repeat": repeat} if repeat else {}),
+            **({"shifted": True} if when is not None and when.shifted else {}),
+        },
+        # 盯着可能要等好几天，24 小时窗口会让「盯着」在第二天自己作废。
+        expires_at=_triggers.utc_now() + timedelta(days=7) if intent == INTENT_WATCH else None,
+        dedupe_key=f"task:{task.id}",
+    )
+    row, created = await triggers.ingest(
+        db,
+        task.project_id,
+        event,
+        task_id=task.id,
+        provider_id=payload.provider_id or "",
+        run_payload=payload.model_dump(mode="json"),
+        fire_at=fire_at,
+    )
+    await db.commit()
+    await EventRecorder(get_session_factory(), task.id).add(
+        "dispatch.deferred",
+        "receive_task",
+        {
+            "trigger_id": row.id,
+            "created": created,
+            "intent": intent,
+            "fire_at": fire_at.isoformat() if fire_at else "",
+            "repeat": repeat,
+            "shifted": bool(when is not None and when.shifted),
+            "reason": (
+                "定时请求已登记，到点自动执行"
+                if fire_at is not None
+                else "监控请求已登记，等外部事件"
+            ),
+        },
+    )
+    return {
+        "task_id": task.id,
+        "trigger_id": row.id,
+        "status": "deferred",
+        "fire_at": fire_at.isoformat() if fire_at else "",
+        "repeat": repeat,
+        "reason": (
+            "已登记定时，到点执行" if fire_at is not None else "已登记待触发，等外部事件"
+        ),
+    }
+
+
+async def recover_pending_runs() -> int:
+    """Requeue tasks left queued/running when the API process was restarted."""
+    if not inprocess_runner_enabled():
+        # 独立 worker 自己会扫这张表；API 再抢一次就是两个执行者。
+        return 0
+    attempt_limit = recovery_attempt_limit()
+
+    async def load():
+        items: list[tuple[str, object]] = []
+        async with get_session_factory()() as session:
+            runs = (await session.execute(select(AgentRun).where(AgentRun.status.in_(("queued", "running"))))).scalars().all()
+        # 一次批量加载所有关联 task，避免循环内 N+1。
+        task_ids = {run.task_id for run in runs}
+        task_map: dict[str, Task] = {}
+        if task_ids:
+            async with get_session_factory()() as session:
+                existing = await session.execute(select(Task).where(Task.id.in_(task_ids)))
+                for t in existing.scalars():
+                    task_map[t.id] = t
+        for run in runs:
+            # 扫描时 attempts>0 = 上一次认领后没写终态（进程被杀/断电）。
+            crashed = int(run.attempts or 0) > 0
+            if crashed:
+                # 进程内恢复同样算一次崩溃恢复：这条 run 上次认领后没写终态。
+                metrics.inc(metrics.WORKER_RECOVERED)
+            task = task_map.get(run.task_id)
+            if task is None:
+                continue
+            if run.attempts >= attempt_limit:
+                # 反复重排同一个 run 只会无限循环（上次收尾没写成就是这种表现）。
+                # 到这里就停手，把原因交给用户，让他决定是否重试。
+                async with get_session_factory()() as failed_session:
+                    if not await abandon_run(failed_session, run.id):
+                        # 租约还新鲜=真有 worker 在跑（另一个进程），不能判它的死
+                        log.warning("跳过判死：run=%s 仍被现役 worker 持有", run.id)
+                        continue
+                await _record_run_failure(
+                    run.task_id,
+                    run.id,
+                    RuntimeError(
+                        f"这条任务连续 {run.attempts} 次没能正常启动（上一次执行没有正常收尾），"
+                        "已停止自动重试。请点「重试」重新发起。"
+                    ),
+                )
+                continue
+            try:
+                raw_payload = dict(run.request_payload or {})
+                resume_decision = raw_payload.get("resume_decision")
+                request_payload = TaskRunIn.model_validate(raw_payload)
+                async with get_session_factory()() as req_session:
+                    request = await _run_request(
+                        req_session,
+                        task,
+                        request_payload,
+                        None,
+                        resume_decision=(
+                            resume_decision if isinstance(resume_decision, dict) else None
+                        ),
+                    )
+                request.run_id = run.id
+            except Exception:
+                async with get_session_factory()() as failed_session:
+                    if not await abandon_run(failed_session, run.id):
+                        log.warning("跳过判死：run=%s 仍被现役 worker 持有", run.id)
+                        continue
+                continue
+
+            async def runner(run_id=run.id, request=request, crashed=crashed):
+                worker_id = f"recovery-{uuid.uuid4().hex[:8]}"
+                async with get_session_factory()() as claim_session:
+                    if not await claim_run(claim_session, run_id, worker_id):
+                        return
+                await _execute_claimed_run(run_id, worker_id, request, crashed=crashed)
+
+            items.append((run.id, runner))
+        return items
+
+    return await run_manager.recover(load)
+
+
+async def _launch_resume(task_id: str, decision: dict, *, start_runner: bool = True) -> bool:
+    """按已经落账的审批决定把任务重新入队。返回是否真的入队。
+
+    审批接口与启动补偿共用这条路径：两边都只相信库里的东西（决定事件 + run
+    快照），不把某次 HTTP 请求里的内存状态当成事实。
+    """
+    lock = _approval_locks.setdefault(task_id, asyncio.Lock())
+    async with lock:
+        async with get_session_factory()() as session:
+            task = await session.get(Task, task_id)
+            if task is None or task.status != "waiting_approval":
+                return False
+            existing_run = (
+                await session.execute(select(AgentRun).where(AgentRun.task_id == task_id))
+            ).scalar_one_or_none()
+            if existing_run is not None and existing_run.status not in TERMINAL_RUN_STATES:
+                return False
+            base_payload = (
+                dict(existing_run.request_payload or {}) if existing_run is not None else {}
+            )
+            base_payload.pop("resume_decision", None)
+            try:
+                run_payload = TaskRunIn.model_validate(base_payload)
+            except Exception:  # noqa: BLE001 - 旧入参形状不认识时按最小入参恢复
+                run_payload = TaskRunIn()
+            try:
+                request = await _run_request(
+                    session, task, run_payload, None, resume_decision=decision
+                )
+            except Exception:  # noqa: BLE001 - 单条补偿失败不能带走整轮扫描
+                log.exception("补偿审批恢复：重建入参失败 task=%s", task_id)
+                return False
+            fresh = await session.get(Task, task_id)
+            if fresh is not None:
+                await session.refresh(fresh)
+            if fresh is None or fresh.status != "waiting_approval":
+                return False
+            try:
+                await _enqueue_and_maybe_run(
+                    session,
+                    task_id,
+                    fresh,
+                    request,
+                    request_payload=base_payload,
+                    resume_decision=decision,
+                    start_runner=start_runner,
+                )
+            except ApiError as error:
+                if error.code != "task_running":
+                    log.warning("补偿审批恢复入队失败 task=%s: %s", task_id, error)
+                    return False
+                # 另一个进程刚入队：决定已经生效，算补偿成功。
+                return True
+            except Exception:  # noqa: BLE001 - 单条失败不影响其余任务
+                log.exception("补偿审批恢复入队失败 task=%s", task_id)
+                return False
+            return True
+
+
+async def recover_orphan_approvals(*, start_runner: bool = True) -> int:
+    """把「审批决定已落账、恢复却没入队」的任务补入队（E13）。
+
+    审批接口先落 ``approval.decided`` 再入队；两步之间进程被杀、数据库短暂
+    不可用，用户看到的是"已批准"，任务却永远停在 waiting_approval。这里按事件
+    账找回来，判据全部是库里的既成事实：
+
+    * 任务仍在 waiting_approval；
+    * 最近一次 ``approval.decided`` 之后没有 ``task.resumed``（决定没投递）；
+    * 决定之后没有新的 ``approval.required``（那是另一张卡，不能拿旧决定顶）；
+    * 卡没过期（过期的交给 ``expire_stale_approvals`` 收敛，不能恢复一个已作废的决定）。
+
+    只在进程启动时跑：它解决的是"决定落库后进程没了"，不是常驻轮询。
+    """
+    latest = (
+        select(AgentEvent.task_id.label("task_id"), func.max(AgentEvent.seq).label("seq"))
+        .where(AgentEvent.type == "approval.decided")
+        .group_by(AgentEvent.task_id)
+        .subquery()
+    )
+    pending: list[tuple[str, dict]] = []
+    async with get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                select(AgentEvent, Task)
+                .join(
+                    latest,
+                    (AgentEvent.task_id == latest.c.task_id)
+                    & (AgentEvent.seq == latest.c.seq),
+                )
+                .join(Task, Task.id == AgentEvent.task_id)
+                .where(Task.status == "waiting_approval")
+            )
+        ).all()
+        for event, task in rows:
+            body = dict(event.payload or {})
+            decided_seq = int(event.seq or 0)
+            resumed = (
+                await session.execute(
+                    select(AgentEvent.id)
+                    .where(
+                        AgentEvent.task_id == task.id,
+                        AgentEvent.type == "task.resumed",
+                        AgentEvent.seq > decided_seq,
+                    )
+                    .limit(1)
+                )
+            ).first()
+            if resumed is not None:
+                continue
+            newer_card = (
+                await session.execute(
+                    select(AgentEvent.id)
+                    .where(
+                        AgentEvent.task_id == task.id,
+                        AgentEvent.type.in_(("approval.required", "approval.requested")),
+                        AgentEvent.seq > decided_seq,
+                    )
+                    .limit(1)
+                )
+            ).first()
+            if newer_card is not None:
+                continue
+            card = (
+                await session.execute(
+                    select(AgentEvent)
+                    .where(
+                        AgentEvent.task_id == task.id,
+                        AgentEvent.type.in_(("approval.required", "approval.requested")),
+                        AgentEvent.seq <= decided_seq,
+                    )
+                    .order_by(AgentEvent.seq.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if card is not None and isinstance(card.payload, dict):
+                if approval_is_expired(card.payload.get("expires_at")):
+                    continue
+            decision = {
+                "approve": bool(body.get("approve")),
+                "scope": str(body.get("scope") or "once"),
+                "approval_id": str(body.get("approval_id") or ""),
+                "decided_seq": decided_seq,
+                **({"feedback": str(body["feedback"])} if body.get("feedback") else {}),
+                **({"step_id": str(body["step_id"])} if body.get("step_id") else {}),
+            }
+            pending.append((task.id, decision))
+    recovered = 0
+    for task_id, decision in pending:
+        try:
+            if await _launch_resume(task_id, decision, start_runner=start_runner):
+                recovered += 1
+        except Exception:  # noqa: BLE001 - 单条补偿失败不影响其余任务
+            log.exception("补偿审批恢复失败 task=%s", task_id)
+    if recovered:
+        log.info("补偿审批恢复入队 %d 条", recovered)
+    return recovered
+
+
+
+
+_approval_locks: dict[str, asyncio.Lock] = {}

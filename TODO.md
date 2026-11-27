@@ -4,6 +4,17 @@
 
 ## 进行中 / 待验收
 
+- [ ] **ARCH-01e：launch/recover 外移（ARCH-01 收口）** — **READY_FOR_QA**
+  - 范围：`_enqueue_and_maybe_run`、`launch_task`、`_defer_*`、
+    `recover_pending_runs`、`_launch_resume`、`recover_orphan_approvals`、
+    `MAX_RECOVERY_ATTEMPTS`/`_approval_locks` 移到
+    `services/orchestration/runner.py`；tasks.py 从 2665 行降到 1513 行。
+  - 验证：导入检查通过；触发/worker/租约/附件/审批/handoff 9 文件
+    **102 passed**；super agent/supervisor/watch **51 passed**；最终全量
+    （排除 3 项 browser 环境红）**5164 passed / 24 skipped / 3 deselected**
+    （14:52）。
+  - 未做：计划里的 `<400 行` 尚未达到；ARCH-02/03/04/07 未开始。
+  - 交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-01e-claude.md`
 - [ ] **ARCH-01d：请求装配外移** — **READY_FOR_QA（全量待 ARCH-01 收口）**
   - 范围：`_factory_from` / `_resolve_provider` / `dispatch_of` /
     `_run_request` / `_routable` 移到 `services/orchestration/runner.py`；

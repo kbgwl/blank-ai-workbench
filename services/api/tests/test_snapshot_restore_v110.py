@@ -62,7 +62,10 @@ def test_system_cache_copies_are_not_snapshotted_or_counted(tmp_path):
     (cache / "x.db").write_text("changed", encoding="utf-8")
     assert store.changed_since(record["id"], str(workspace)) == []
 
-    (workspace / "a.txt").write_text("B", encoding="utf-8")
+    # 改长度而不只是改同长度的内容：Windows 的 mtime 分辨率在高负载下可能
+    # 跟快照落在同一格，同尺寸写入会被 changed_since 当成没变。这里让 size
+    # 必然不同，判据只关心“a.txt 被算进改动”，不依赖时钟精度。
+    (workspace / "a.txt").write_text("B-changed", encoding="utf-8")
     assert store.changed_since(record["id"], str(workspace)) == ["a.txt"]
 
 

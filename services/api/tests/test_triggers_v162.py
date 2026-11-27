@@ -263,7 +263,9 @@ async def test_due_trigger_runs_itself_when_no_worker_will_claim_it(env, workspa
     async def fake_execute(run_id, worker_id, request, **kwargs):
         executed.append(run_id)
 
-    monkeypatch.setattr(task_routes, "_execute_claimed_run", fake_execute)
+    from blank_api.services.orchestration import runner as orchestration_runner
+
+    monkeypatch.setattr(orchestration_runner, "_execute_claimed_run", fake_execute)
 
     assert await worker_module.release_due_triggers() == 1
     for _ in range(40):
