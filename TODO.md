@@ -4,6 +4,14 @@
 
 ## 进行中 / 待验收
 
+- [ ] **ARCH-01a：tasks.py 第一批领域动作外移** — **READY_FOR_QA**
+  - 范围：新增 `services/orchestration/runner.py`，把 `persist_task` /
+    `_record_dispatch` 从路由层移出；`tasks.py` 保留同名导入，现有调用方不变。
+  - 验证：导入检查通过；建任务/线程/worker 45 passed、创建/派发/触发/IM/
+    计划模式 102 passed；全量（排除 3 项 browser 环境红）
+    **5164 passed / 24 skipped / 3 deselected**（18:18）。
+  - 未做：`launch_task` / `_execute_claimed_run` / `recover_*` 仍在 tasks.py。
+  - 交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-01a-claude.md`
 - [ ] **ARCH-05：worker 有界并发** — **READY_FOR_QA**
   - 范围：`worker.run_once()` 改 `asyncio.Semaphore(BLANK_WORKER_CONCURRENCY)`
     有界并发（默认 2）；抽出 `_run_candidate`，单条候选异常不带走同轮其他 run。
