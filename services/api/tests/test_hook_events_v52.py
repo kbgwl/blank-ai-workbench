@@ -179,15 +179,17 @@ def _marker_tool(marker: Path) -> ToolDefinition:
     )
 
 
-def _ctx(env, root: Path, perms: _Perms, hooks: _Hooks):
-    base = env.context("t52", root)
+def _ctx(env, root: Path, perms: _Perms, hooks: _Hooks, task_id: str):
+    base = env.context(task_id, root)
     return replace(base, permissions=perms, hooks=hooks, safety=None)
 
 
 async def _call(env, tmp_path: Path, perms: _Perms, hooks: _Hooks, marker: Path) -> dict:
+    project_id = await create_project(env, tmp_path)
+    task_id = await create_task(env, project_id, ["hook event"])
     gateway = ToolGateway([_marker_tool(marker)])
     return await gateway.execute(
-        "demo_write", {"path": "out.txt"}, _ctx(env, tmp_path, perms, hooks), "execute_action"
+        "demo_write", {"path": "out.txt"}, _ctx(env, tmp_path, perms, hooks, task_id), "execute_action"
     )
 
 

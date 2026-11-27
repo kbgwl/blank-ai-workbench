@@ -170,6 +170,7 @@ async def test_snapshot_validation_skipped_and_unverified(workspace):  # noqa: F
     for task_id, with_validation, expected_note in base_states:
         async with get_session_factory()() as session:
             session.add(Project(id=f"p-{task_id}", name="p"))
+            await session.flush()
             session.add(
                 Task(
                     id=task_id,
@@ -182,6 +183,7 @@ async def test_snapshot_validation_skipped_and_unverified(workspace):  # noqa: F
                     ],
                 )
             )
+            await session.flush()
             if with_validation:
                 session.add(
                     AgentEvent(

@@ -4,6 +4,13 @@
 
 ## 进行中 / 待验收
 
+- [ ] **ARCH-06b：开启 SQLite `foreign_keys=ON` + 测试夹具收口** — **BLOCKED（全量验证：系统内存不足）**
+  - 范围：`db.py` 恢复 `PRAGMA foreign_keys=ON`；修 18 个测试文件的父子插入
+    顺序与父行缺失；孤儿行用例改用独立 `sqlite3` 连接临时关外键造数。
+  - 验证：已知外键子集 **212 passed**、孤儿行 **19 passed**、TypeError 组
+    **8 passed**；全量后台任务被系统以内存不足停止（日志只到 11%，0 FAILED）。
+  - 未完成：全量归零、真机级联删除验收。交接单
+    `ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`。
 - [ ] **MASTER-LAUNCH-PLAN Step 1 批次 1B：隔离读图 + Job 挂载竞态** — **READY_FOR_QA**
   - 范围：BUG-01 `fs_broker` 新增 `read_bytes`，`read_file` 在 broker/隔离下
     读图不再退化成文本或跳过读图；BUG-05 `LocalSandbox` 改
@@ -431,13 +438,13 @@
   - 验收记录：末尾「browser_check 动作可靠化（B10，2026-11-23）」一节。
 
 ## 待办池（未排期）
-- [ ] **ARCH-06b：SQLite `foreign_keys=ON` 前审计** — **BLOCKED（测试夹具）**
+- [x] **ARCH-06b：SQLite `foreign_keys=ON` 前审计** — **已实现（BLOCKED：全量验证未完成）**
   - 证据：开启外键后首轮全量 **63 failed**，其中 45 项是测试只造
     `agent_events` / `tool_calls` / `agent_runs` 子行、不造父任务；14 项空
     `session_factory` 告警已单独修。
-  - 做法：给事件/工具调用/运行台账的测试夹具补父任务，或明确使用独立库/关闭外键；
-    再打开 `PRAGMA foreign_keys=ON` 并全量归零。日志：
-    `logs/pytest-1a-2026-11-26.log`。
+  - 做法：给事件/工具调用/运行台账的测试夹具补父任务/加 flush；再打开
+    `PRAGMA foreign_keys=ON`。已知红项已收口，全量因系统内存不足未跑完。
+  - 交接单：`ops/HANDOFFS/T-LAUNCH-ARCH-06b-claude.md`
 - [x] **MASTER-LAUNCH-PLAN 批次 1B：BUG-01 / BUG-05** — **已实现（READY_FOR_QA）**
   - BUG-01：`fs_broker.py` 新增 `read_bytes`，隔离模式下读图不再退化成文本。
   - BUG-05：`sandbox/runner.py` 改 `CREATE_SUSPENDED` → 挂 Job → `ResumeThread`。

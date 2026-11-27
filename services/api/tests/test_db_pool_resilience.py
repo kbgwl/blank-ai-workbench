@@ -33,13 +33,14 @@ def test_memory_sqlite_keeps_static_pool() -> None:
     assert "poolclass" in options
 
 
-async def test_sqlite_connections_enable_wal_and_busy_timeout(tmp_path) -> None:
+async def test_sqlite_connections_enable_wal_and_foreign_keys(tmp_path) -> None:
     url = f"sqlite+aiosqlite:///{tmp_path}/pragmas.db"
     engine = create_async_engine(url, **engine_options(url))
     install_sqlite_pragmas(engine)
     try:
         async with engine.connect() as conn:
             assert (await conn.exec_driver_sql("PRAGMA journal_mode")).scalar() == "wal"
+            assert (await conn.exec_driver_sql("PRAGMA foreign_keys")).scalar() == 1
             assert (await conn.exec_driver_sql("PRAGMA busy_timeout")).scalar() == 10000
             assert (await conn.exec_driver_sql("PRAGMA synchronous")).scalar() == 1
     finally:

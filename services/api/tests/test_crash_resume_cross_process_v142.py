@@ -158,6 +158,7 @@ async def _seed(workspace: Path, base_url: str) -> dict[str, str]:
                 enabled=True,
             )
         )
+        await session.flush()
         session.add(
             Task(
                 id=ids["task"],
@@ -169,6 +170,7 @@ async def _seed(workspace: Path, base_url: str) -> dict[str, str]:
                 max_steps=4,
             )
         )
+        await session.flush()
         session.add(
             AgentRun(
                 id=ids["run"],

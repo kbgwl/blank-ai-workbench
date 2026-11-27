@@ -12,6 +12,7 @@ import gzip
 import json
 import os
 import shutil
+import sqlite3
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -20,9 +21,10 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
+from blank_api.config import get_settings
 from blank_api.db import Base, get_engine, get_session_factory
 from blank_api.models.project import Project
-from blank_api.models.task import Task, ToolCall
+from blank_api.models.task import AgentEvent, Task, ToolCall
 from blank_api.services import maintenance
 from blank_api.services.agent.artifacts import (
     COMPRESS_ABOVE_BYTES,
@@ -345,14 +347,22 @@ def test_orphan_snapshot_purge_requires_explicit_task_list(tmp_path):
 
 async def test_orphan_rows_are_counted_and_purged():
     task_id, _ = await _seed_call("")
-    async with get_session_factory()() as session:
-        # 造一条指向不存在任务的事件：任务删除路径漏下的形状。
-        from blank_api.models.task import AgentEvent
-
-        session.add(
-            AgentEvent(id=str(uuid.uuid4()), task_id="t-gone", seq=1, type="task.created", payload={})
+    # 外键开启时 ORM 造不出孤儿行；用独立连接临时关掉外键，模拟历史库里
+    # 已经存在的孤儿行，再让产品清理逻辑按“没人指向”处理它。
+    url = get_settings().database_url
+    if ":memory:" in url:
+        pytest.skip("孤儿行造数需要文件型 SQLite；内存库下外键与连接不是同一份状态")
+    path = url.split("///", 1)[1]
+    db = sqlite3.connect(path, timeout=30)
+    try:
+        db.execute("PRAGMA foreign_keys=OFF")
+        db.execute(
+            "INSERT INTO agent_events (id, task_id, seq, type, payload) VALUES (?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), "t-gone", 1, "task.created", "{}"),
         )
-        await session.commit()
+        db.commit()
+    finally:
+        db.close()
 
     report = await maintenance.orphan_report(get_session_factory())
     assert report["orphan_events"] == 1

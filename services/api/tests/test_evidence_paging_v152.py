@@ -355,6 +355,7 @@ async def test_evidence_sql_statements_are_all_bounded():
             updated_at=base,
         )
         session.add(task)
+        await session.flush()
         for seq in range(1, seeded + 1):
             session.add(
                 AgentEvent(

@@ -142,17 +142,16 @@ def engine_options(database_url: str) -> dict:
 
 
 def _apply_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
-    """每条 SQLite 连接建立时统一开 WAL / 忙等待。
+    """每条 SQLite 连接建立时统一开 WAL / 外键 / 忙等待。
 
-    并发写入靠 WAL 与 busy_timeout 排队，而不是立刻抛 database is locked。
-    foreign_keys=ON 暂时不在这里打开：全量跑下来有 45 个用例只造子行
-    （agent_events / tool_calls / agent_runs）不造父任务，外键一开就全红；
-    先把测试夹具收口，再单独开外键，避免用“测试全绿”掩盖数据完整性问题。
+    并发写入靠 WAL 与 busy_timeout 排队，而不是立刻抛 database is locked；
+    foreign_keys=ON 让级联删除由数据库兜底，避免只靠路由层手删子表。
     """
     cursor = dbapi_connection.cursor()
     try:
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA busy_timeout=10000")
     finally:
         cursor.close()

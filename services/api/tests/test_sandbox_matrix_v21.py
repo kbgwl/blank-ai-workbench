@@ -295,6 +295,7 @@ async def test_workspace_net_is_409_instead_of_silently_degrading(local_sandbox,
 
 
 async def test_default_tier_comes_from_settings(local_sandbox, workspace, tmp_path, monkeypatch):
+    await _seed_task("task-m2-default")
     path = tmp_path / "settings.json"
     monkeypatch.setenv("BLANK_SETTINGS_FILE", str(path))
     runtime = AgentRuntime(session_factory=get_session_factory())

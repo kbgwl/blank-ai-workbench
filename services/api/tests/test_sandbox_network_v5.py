@@ -9,7 +9,8 @@ import pytest
 from sqlalchemy import select
 
 from blank_api.db import Base, get_engine, get_session_factory
-from blank_api.models.task import AgentEvent
+from blank_api.models.project import Project
+from blank_api.models.task import AgentEvent, Task
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.models.base import AdapterConfig, ModelAdapter, ModelResponse, Usage
 from blank_api.services.sandbox import tiers
@@ -73,6 +74,20 @@ def test_default_constraints_reports_the_tier_truth(monkeypatch) -> None:
 async def test_runtime_warns_when_network_is_not_enforced(tmp_path: Path, workspace: Path, monkeypatch):
     import blank_api.services.agent.runtime as runtime_module
     from blank_api.services.sandbox import docker_probe
+
+    async with get_session_factory()() as session:
+        if await session.get(Task, "task-net-warning") is None:
+            session.add(Project(id="p-task-net-warning", name="p"))
+            await session.flush()
+            session.add(
+                Task(
+                    id="task-net-warning",
+                    project_id="p-task-net-warning",
+                    title="t",
+                    goal="g",
+                )
+            )
+            await session.commit()
 
     async def fake_fresh(**kwargs):
         return SimpleNamespace(available=False, reason="test", notice="")

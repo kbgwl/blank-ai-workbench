@@ -16,6 +16,8 @@ from datetime import datetime, timedelta, timezone
 
 from blank_api.db import get_session_factory
 from blank_api.models.model_provider import ModelProvider, ModelUsage
+from blank_api.models.project import Project
+from blank_api.models.task import Task
 from blank_api.services.agent.loadstats import recent_load
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.agent.router import (
@@ -305,6 +307,11 @@ class _TinyAdapter(ModelAdapter):
 
 
 async def test_prepare_only_seeds_load_when_the_flag_is_on(client, workspace, tmp_path, monkeypatch):
+    async with get_session_factory()() as session:
+        session.add(Project(id="p-task-load", name="p"))
+        await session.flush()
+        session.add(Task(id="task-load", project_id="p-task-load", title="t", goal="g"))
+        await session.commit()
     await _providers("a")
     await _seed(_usage("a", status="error", minutes_ago=2))
     path = tmp_path / "settings.json"

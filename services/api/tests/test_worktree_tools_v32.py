@@ -25,6 +25,8 @@ from types import SimpleNamespace
 import pytest
 
 from blank_api.db import get_session_factory
+from blank_api.models.project import Project
+from blank_api.models.task import Task
 from blank_api.services import worktree_session
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.graph import READONLY_TOOLS, SYSTEM_PROMPT
@@ -571,8 +573,20 @@ class _TinyAdapter(ModelAdapter):
         return ModelResponse(text="ok", usage=Usage(1, 1), model="tiny")
 
 
+async def _seed_task(task_id: str) -> None:
+    """外键开启后，运行时写 sandbox.warning 事件前必须先有父任务。"""
+    async with get_session_factory()() as session:
+        if await session.get(Task, task_id) is not None:
+            return
+        session.add(Project(id=f"p-{task_id}", name="p"))
+        await session.flush()
+        session.add(Task(id=task_id, project_id=f"p-{task_id}", title="t", goal="g"))
+        await session.commit()
+
+
 async def test_prepare_resumes_inside_the_recorded_worktree(repo: Path) -> None:
     task_id = "q2-prepare"
+    await _seed_task(task_id)
     session = worktree_session.enter(repo, task_id, name="resume")
     runtime = AgentRuntime(session_factory=get_session_factory())
     request = RunRequest(
@@ -595,6 +609,7 @@ async def test_prepare_resumes_inside_the_recorded_worktree(repo: Path) -> None:
 
 async def test_prepare_falls_back_when_the_recorded_tree_is_gone(repo: Path) -> None:
     task_id = "q2-prepare-gone"
+    await _seed_task(task_id)
     session = worktree_session.enter(repo, task_id, name="vanished")
     shutil.rmtree(session.root)
 

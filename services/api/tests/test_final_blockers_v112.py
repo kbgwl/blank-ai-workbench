@@ -21,12 +21,23 @@ from sqlalchemy import select
 
 from blank_api.api.errors import ApiError
 from blank_api.db import get_session_factory
+from blank_api.models.project import Project
 from blank_api.models.run import AgentRun
+from blank_api.models.task import Task
 from blank_api.services.agent.events import EventRecorder
 from blank_api.services.agent.queue import claim_run, enqueue_run, finish_run
 
 from tests.test_agent_v04 import API, env  # noqa: F401 (pytest fixture)
 from tests.test_approval_identity_v101 import _pending_card, _waiting_task
+
+
+async def _seed_task(task_id: str) -> None:
+    """外键开启后，队列行/事件行必须先有父任务。"""
+    async with get_session_factory()() as session:
+        session.add(Project(id=f"p-{task_id}", name="p"))
+        await session.flush()
+        session.add(Task(id=task_id, project_id=f"p-{task_id}", title="t", goal="g"))
+        await session.commit()
 
 
 # --------------------------------------------------------------------------- #
@@ -101,6 +112,7 @@ async def test_two_pending_cards_never_cross_wire(env, workspace):  # noqa: F811
 async def test_a_task_never_owns_two_runs(env, workspace):  # noqa: F811
     """同一 task 二次入队必须复用/拒绝，绝不能多插一行 AgentRun。"""
     task_id = f"task-final-{uuid4().hex[:12]}"
+    await _seed_task(task_id)
     async with get_session_factory()() as session:
         run = await enqueue_run(session, task_id, {"from": "first"})
         run_id = run.id
@@ -122,6 +134,7 @@ async def test_queued_run_is_claimable_by_a_fresh_worker(env, workspace):  # noq
     因为旧进程消失而永远卡在 queued，且旧 worker 不能给新 owner 写终态。
     """
     task_id = f"task-final-{uuid4().hex[:12]}"
+    await _seed_task(task_id)
     async with get_session_factory()() as session:
         run = await enqueue_run(session, task_id, {"from": "before-restart"})
         run_id = run.id

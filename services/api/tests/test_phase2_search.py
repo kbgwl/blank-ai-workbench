@@ -131,6 +131,7 @@ async def test_task_summary_is_searchable(env, workspace: Path) -> None:  # noqa
     )
     async with get_session_factory()() as session:
         session.add(thread)
+        await session.flush()
         session.add(task)
         await session.flush()
         await index_task_summary(session, task, thread)

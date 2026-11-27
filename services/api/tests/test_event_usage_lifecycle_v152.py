@@ -51,6 +51,7 @@ async def _seed_task(
 ) -> None:
     async with get_session_factory()() as session:
         session.add(Project(id=f"p-{task_id}", name="p"))
+        await session.flush()
         session.add(
             Task(
                 id=task_id,
@@ -61,6 +62,7 @@ async def _seed_task(
                 updated_at=_days_ago(updated_days_ago),
             )
         )
+        await session.flush()
         for index, (event_type, payload) in enumerate(events or [], start=1):
             session.add(
                 AgentEvent(

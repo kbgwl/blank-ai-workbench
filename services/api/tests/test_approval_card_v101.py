@@ -122,9 +122,11 @@ async def _gateway_card(env, root: Path, command: str) -> dict:
 
     from blank_api.services.tools import build_default_tools
 
+    project_id = await create_project(env, root)
+    task_id = await create_task(env, project_id, ["审批卡"])
     tool = next(item for item in build_default_tools() if item.name == "run_shell")
     context = replace(
-        env.context("t101", root),
+        env.context(task_id, root),
         permissions=_policy(),
     )
     result = await ToolGateway([tool]).execute("run_shell", {"command": command}, context, "execute_action")

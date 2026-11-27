@@ -9,7 +9,7 @@ import httpx
 from sqlalchemy import select
 
 from blank_api.db import get_session_factory
-from blank_api.models.task import ToolCall
+from blank_api.models.task import Task, ToolCall
 from blank_api.models.team import TeamBot, TeamGroup, TeamMember, TeamMessage, TeamRound
 from blank_api.services.permissions import PermissionPolicy
 from blank_api.services.team import create_user_round
@@ -31,6 +31,14 @@ def _context(workspace: Path, scope: dict, *, task_id: str = "task-admin", mode:
 async def _admin_id(env: Env) -> str:  # noqa: F811
     bots = (await env.client.get(f"{API}/team/bots")).json()
     return next(bot["id"] for bot in bots if bot["is_admin"])
+
+
+async def _seed_admin_tasks(project_id: str, *task_ids: str) -> None:
+    """外键开启后，管理工具的 tool_calls 行必须先有父任务。"""
+    async with get_session_factory()() as session:
+        for task_id in task_ids:
+            session.add(Task(id=task_id, project_id=project_id, title="t", goal="g"))
+        await session.commit()
 
 
 async def test_non_team_task_never_sees_team_tools(env: Env, workspace: Path) -> None:  # noqa: F811
@@ -89,6 +97,7 @@ async def test_admin_turn_sees_team_status_and_can_call_it(env: Env, workspace: 
 
 async def test_high_risk_management_needs_approval(env: Env, workspace: Path) -> None:  # noqa: F811
     project_id, _, group_id = await make_group(env, workspace)
+    await _seed_admin_tasks(project_id, "task-admin")
     admin_id = await _admin_id(env)
     scope = {"group_id": group_id, "bot_id": admin_id, "is_admin": True, "project_id": project_id}
     gateway = ToolGateway(build_default_tools())
@@ -139,6 +148,7 @@ async def test_duplicate_bot_name_is_actionable_not_a_crash(env: Env, workspace:
 
 async def test_tool_hard_boundaries(env: Env, workspace: Path) -> None:  # noqa: F811
     project_id, _, group_id = await make_group(env, workspace)
+    await _seed_admin_tasks(project_id, "task-admin")
     admin_id = await _admin_id(env)
     scope = {"group_id": group_id, "bot_id": admin_id, "is_admin": True, "project_id": project_id}
     gateway = ToolGateway(build_default_tools())
@@ -187,6 +197,7 @@ async def test_member_limit_and_assign_task(env: Env, workspace: Path) -> None: 
     project_id, _, group_id = await make_group(
         env, workspace, members=("后端", "前端", "评审", "测试")
     )
+    await _seed_admin_tasks(project_id, "task-admin", "task-admin-assign")
     admin_id = await _admin_id(env)
     scope = {"group_id": group_id, "bot_id": admin_id, "is_admin": True, "project_id": project_id}
     gateway = ToolGateway(build_default_tools())
@@ -247,6 +258,7 @@ async def test_member_changes_apply_inside_the_running_round(env: Env, workspace
     这条判定在"本轮进行中不许调整成员"的实现下会直接变红。
     """
     project_id, _, group_id = await make_group(env, workspace, members=("后端",))
+    await _seed_admin_tasks(project_id, "task-admin")
     admin_id = await _admin_id(env)
     scope = {"group_id": group_id, "bot_id": admin_id, "is_admin": True, "project_id": project_id}
     gateway = ToolGateway(build_default_tools())

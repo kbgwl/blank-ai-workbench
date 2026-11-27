@@ -185,7 +185,17 @@ async def test_secret_bearing_patch_needs_approval_and_stays_redacted(client, wo
     from sqlalchemy import select
 
     from blank_api.db import get_session_factory
-    from blank_api.models.task import FileChange
+    from blank_api.models.project import Project
+    from blank_api.models.task import FileChange, Task
+
+    # 外键开启后，工具调用/文件变更行必须先有父任务。
+    async with get_session_factory()() as session:
+        for task_id in ("secret-denied", "secret-allowed"):
+            session.add(Project(id=f"p-{task_id}", name="p"))
+        await session.flush()
+        for task_id in ("secret-denied", "secret-allowed"):
+            session.add(Task(id=task_id, project_id=f"p-{task_id}", title="t", goal="g"))
+        await session.commit()
     from blank_api.services.tools import build_default_tools
     from blank_api.services.tools.base import ToolContext
     from blank_api.services.tools.gateway import ToolGateway

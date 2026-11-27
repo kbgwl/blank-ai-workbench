@@ -22,6 +22,19 @@ def gateway() -> ToolGateway:
     return ToolGateway(build_default_tools())
 
 
+async def _seed_task(task_id: str = "t") -> None:
+    """外键开启后，工具调用行必须先有父任务；client 夹具每例重建库。"""
+    from blank_api.db import get_session_factory
+    from blank_api.models.project import Project
+    from blank_api.models.task import Task
+
+    async with get_session_factory()() as session:
+        session.add(Project(id=f"p-{task_id}", name="p"))
+        await session.flush()
+        session.add(Task(id=task_id, project_id=f"p-{task_id}", title="t", goal="g"))
+        await session.commit()
+
+
 def test_deferred_tools_are_registered_but_invisible():
     gw = gateway()
     names = {tool.name for tool in gw.registry.visible()}
@@ -92,6 +105,7 @@ def test_defer_can_be_turned_off():
 async def test_tool_search_returns_usable_schemas(client):  # noqa: F811
     from blank_api.db import get_session_factory
 
+    await _seed_task("t")
     gw = gateway()
     context = ToolContext(
         root=".", task_id="t", session_factory=get_session_factory(), tool_registry=gw.registry
@@ -108,6 +122,7 @@ async def test_tool_search_returns_usable_schemas(client):  # noqa: F811
 async def test_tool_search_without_registry_says_so(client):  # noqa: F811
     from blank_api.db import get_session_factory
 
+    await _seed_task("t")
     gw = gateway()
     context = ToolContext(root=".", task_id="t", session_factory=get_session_factory())
     payload = await gw.execute("tool_search", {"query": "提交"}, context, "execute_action")
@@ -118,6 +133,7 @@ async def test_tool_search_without_registry_says_so(client):  # noqa: F811
 async def test_tool_search_reports_no_match_without_failing_the_task(client):  # noqa: F811
     from blank_api.db import get_session_factory
 
+    await _seed_task("t")
     gw = gateway()
     context = ToolContext(
         root=".", task_id="t", session_factory=get_session_factory(), tool_registry=gw.registry

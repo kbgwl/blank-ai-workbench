@@ -16,6 +16,8 @@ from types import SimpleNamespace
 import pytest
 
 from blank_api.db import Base, get_engine, get_session_factory
+from blank_api.models.project import Project
+from blank_api.models.task import Task
 from blank_api.services.agent.graph import initial_messages
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.models.base import AdapterConfig, ModelAdapter, ModelResponse, Usage
@@ -368,6 +370,17 @@ async def _silent(*args, **kwargs) -> None:
     return None
 
 
+async def _seed_task(task_id: str) -> None:
+    """外键开启后，子代理网关写 tool_calls 前必须先有父任务。"""
+    async with get_session_factory()() as session:
+        if await session.get(Task, task_id) is not None:
+            return
+        session.add(Project(id=f"p-{task_id}", name="p"))
+        await session.flush()
+        session.add(Task(id=task_id, project_id=f"p-{task_id}", title="t", goal="g"))
+        await session.commit()
+
+
 async def test_subagent_can_load_a_skill_from_its_own_catalog_copy(
     tmp_path, skill_schema: None
 ) -> None:
@@ -389,12 +402,14 @@ async def test_subagent_can_load_a_skill_from_its_own_catalog_copy(
         ]
     )
     parent = SkillCatalog([{"name": "deploy", "instructions": DEPLOY_BODY}])
+    task_id = "task-subagent-skill"
+    await _seed_task(task_id)
 
     result = await run_subagent(
         adapter=adapter,
         tools=skill_tools(),
         root=tmp_path,
-        task_id="",
+        task_id=task_id,
         # 网关落 ToolCall 行必须能开会话；这里用测试库的工厂，别传 None。
         session_factory=get_session_factory(),
         recorder=SimpleNamespace(add=_silent),

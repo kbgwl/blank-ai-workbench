@@ -15,7 +15,8 @@ from pathlib import Path
 import pytest
 
 from blank_api.db import get_session_factory
-from blank_api.models.task import AgentEvent
+from blank_api.models.project import Project
+from blank_api.models.task import AgentEvent, Task
 from blank_api.services.agent.artifacts import ArtifactStore
 from blank_api.services.agent.runtime import AgentRuntime, RunRequest
 from blank_api.services.models.registry import build_adapter
@@ -41,6 +42,15 @@ from tests.test_agent_v04 import (  # noqa: F401  (env 是端到端夹具)
     env,
     provider_row,
 )
+
+
+async def _seed_task(task_id: str) -> None:
+    """外键开启后，网关写 tool_calls 前必须先有父任务。"""
+    async with get_session_factory()() as session:
+        session.add(Project(id=f"p-{task_id}", name="p"))
+        await session.flush()
+        session.add(Task(id=task_id, project_id=f"p-{task_id}", title="t", goal="g"))
+        await session.commit()
 
 
 def _context(**overrides) -> ToolContext:
@@ -332,6 +342,7 @@ def _artifact(store: ArtifactStore, task_id: str, call_id: str) -> dict:
 
 
 async def test_gateway_records_the_call_and_redacts_secrets(env, tmp_path) -> None:
+    await _seed_task("task-review-gateway")
     gateway = ToolGateway(review_tools())
     secret = "sk-synthetic-review-secret"
     context = _gateway_context(
@@ -358,6 +369,7 @@ async def test_gateway_records_the_call_and_redacts_secrets(env, tmp_path) -> No
 
 
 async def test_gateway_enforces_the_required_top_level_field(env) -> None:
+    await _seed_task("task-review-missing")
     gateway = ToolGateway(review_tools())
     payload = await gateway.execute("report_findings", {}, _gateway_context("task-review-missing"))
 
